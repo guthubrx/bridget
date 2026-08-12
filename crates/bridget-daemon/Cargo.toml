@@ -1,0 +1,29 @@
+[package]
+name = "bridget-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "bridget_daemon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bridget"
+path = "src/main.rs"
+
+[dependencies]
+bridget-core = { path = "../bridget-core" }
+bridget-transport = { path = "../bridget-transport" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+rusqlite = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+signal-hook = "0.3"
+libc = "0.2"
+
+[dev-dependencies]
+bridget-core = { path = "../bridget-core" }
+bridget-transport = { path = "../bridget-transport" }

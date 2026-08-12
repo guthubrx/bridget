@@ -1,0 +1,140 @@
+//! Définitions des messages JSON du protocole daemon/wrapper.
+//!
+//! Deux directions :
+//! - WrapperToDaemon : ce que le wrapper envoie au daemon
+//! - DaemonToWrapper : ce que le daemon envoie au wrapper
+
+use bridget_core::BridgetMessage;
+use serde::{Deserialize, Serialize};
+
+/// Messages envoyés par le wrapper vers le daemon.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum WrapperToDaemon {
+    /// S'enregistrer auprès du daemon.
+    Register {
+        agent_type: String,
+        name: Option<String>,
+    },
+    /// Se désenregistrer.
+    Unregister,
+    /// Envoyer un message à un autre agent.
+    Send(BridgetMessage),
+    /// Signal de vie (périodique).
+    Heartbeat,
+    /// Demander la liste des agents connectés.
+    ListAgents,
+}
+
+/// Messages envoyés par le daemon vers le wrapper.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum DaemonToWrapper {
+    /// Confirmation d'enregistrement avec le nom final.
+    Registered {
+        name: String,
+    },
+    /// Livrer un message à l'agent.
+    Deliver(BridgetMessage),
+    /// Acquittement d'un envoi.
+    Ack {
+        id: String,
+    },
+    /// Refus d'un envoi avec raison.
+    Nack {
+        id: String,
+        reason: String,
+    },
+    /// Le daemon s'éteint.
+    Disconnect,
+    /// Réponse à ListAgents.
+    AgentList {
+        agents: Vec<AgentInfo>,
+    },
+}
+
+/// Sérialise un message en ligne JSON (newline-delimited JSON).
+pub fn encode<T: Serialize>(msg: &T) -> Result<String, serde_json::Error> {
+    serde_json::to_string(msg)
+}
+
+/// Désérialise une ligne JSON.
+pub fn decode<T: for<'de> Deserialize<'de>>(line: &str) -> Result<T, serde_json::Error> {
+    serde_json::from_str(line)
+}
+
+/// Information sur un agent connecté.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentInfo {
+    pub name: String,
+    pub agent_type: String,
+    pub connection_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encode_decode_register() {
+        let msg = WrapperToDaemon::Register {
+            agent_type: "codex".to_string(),
+            name: None,
+        };
+        let json = encode(&msg).unwrap();
+        assert!(json.contains("\"type\":\"Register\""));
+        let decoded: WrapperToDaemon = decode(&json).unwrap();
+        match decoded {
+            WrapperToDaemon::Register { agent_type, name } => {
+                assert_eq!(agent_type, "codex");
+                assert!(name.is_none());
+            }
+            _ => panic!("mauvais type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_deliver() {
+        let msg = BridgetMessage::new("claude-1", "codex-1", "hello");
+        let dtw = DaemonToWrapper::Deliver(msg.clone());
+        let json = encode(&dtw).unwrap();
+        assert!(json.contains("\"type\":\"Deliver\""));
+        let decoded: DaemonToWrapper = decode(&json).unwrap();
+        match decoded {
+            DaemonToWrapper::Deliver(m) => {
+                assert_eq!(m.from, "claude-1");
+                assert_eq!(m.body, "hello");
+            }
+            _ => panic!("mauvais type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_send() {
+        let msg = BridgetMessage::new("codex-1", "claude-1", "réponse");
+        let wtd = WrapperToDaemon::Send(msg);
+        let json = encode(&wtd).unwrap();
+        let decoded: WrapperToDaemon = decode(&json).unwrap();
+        match decoded {
+            WrapperToDaemon::Send(m) => assert_eq!(m.body, "réponse"),
+            _ => panic!("mauvais type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_nack() {
+        let dtw = DaemonToWrapper::Nack {
+            id: "abc123".to_string(),
+            reason: "agent introuvable".to_string(),
+        };
+        let json = encode(&dtw).unwrap();
+        let decoded: DaemonToWrapper = decode(&json).unwrap();
+        match decoded {
+            DaemonToWrapper::Nack { id, reason } => {
+                assert_eq!(id, "abc123");
+                assert_eq!(reason, "agent introuvable");
+            }
+            _ => panic!("mauvais type"),
+        }
+    }
+}
