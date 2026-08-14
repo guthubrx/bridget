@@ -74,6 +74,15 @@ impl FakeAgent {
         Ok(())
     }
 
+    fn rename(&mut self, name: &str) -> Result<DaemonToWrapper, String> {
+        let request = WrapperToDaemon::Rename { current_name: self.name.clone(), name: name.to_string() };
+        writeln!(self.writer, "{}", encode(&request).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        self.writer.flush().map_err(|e| e.to_string())?;
+        let response = self.read_response()?;
+        if let DaemonToWrapper::Renamed { name, .. } = &response { self.name = name.clone(); }
+        Ok(response)
+    }
+
     fn read_response(&mut self) -> Result<DaemonToWrapper, String> {
         let mut line = String::new();
         self.reader.read_line(&mut line).map_err(|e| e.to_string())?;
@@ -231,6 +240,24 @@ mod tests {
             resp
         );
 
+        std::fs::remove_file(&socket).ok();
+        std::fs::remove_file(&db_path).ok();
+    }
+
+    #[test]
+    fn test_agent_can_rename_without_reconnecting() {
+        let socket = unique_socket_path();
+        let db_path = PathBuf::from(format!("/tmp/bridget-test-rename-{}.db", std::process::id()));
+        let config = DaemonConfig { socket_path: socket.clone(), db_path: db_path.clone(), log_path: PathBuf::from("/tmp/bridget-test-rename.log"), circuit_breaker_window: 180, circuit_breaker_limit: 8, dedup_window: 180, quarantine_window: 3600, retention_days: 7 };
+        thread::spawn(move || { let _ = daemon::run(config); });
+        for _ in 0..50 { if socket.exists() { break; } thread::sleep(Duration::from_millis(50)); }
+        let mut a = FakeAgent::connect(&socket, "codex", None).unwrap();
+        let mut b = FakeAgent::connect(&socket, "claude", None).unwrap();
+        assert!(matches!(a.rename("analyse").unwrap(), DaemonToWrapper::Renamed { .. }));
+        b.send("analyse", "message après renommage").unwrap();
+        assert!(matches!(b.read_response().unwrap(), DaemonToWrapper::Ack { .. }));
+        b.send("codex-1", "ancien nom").unwrap();
+        assert!(matches!(b.read_response().unwrap(), DaemonToWrapper::Nack { .. }));
         std::fs::remove_file(&socket).ok();
         std::fs::remove_file(&db_path).ok();
     }

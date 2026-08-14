@@ -458,6 +458,28 @@ fn handle_wrapper_message(
             None
         }
 
+        WrapperToDaemon::Rename { current_name, name } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let target_conn = match st.router.get_agent(&current_name) {
+                Some(agent) => agent.connection_id.clone(),
+                None => return Some(DaemonToWrapper::Nack {
+                    id: "rename".to_string(),
+                    reason: format!("agent introuvable: {}", current_name),
+                }),
+            };
+            match st.router.rename(&target_conn, &name) {
+                Ok((old_name, new_name)) => {
+                    st.conn_names.insert(target_conn, new_name.clone());
+                    info!("agent '{}' renommé en '{}'", old_name, new_name);
+                    Some(DaemonToWrapper::Renamed { old_name, name: new_name })
+                }
+                Err(error) => Some(DaemonToWrapper::Nack {
+                    id: "rename".to_string(),
+                    reason: error.to_string(),
+                }),
+            }
+        }
+
         WrapperToDaemon::Send(mut bridge_msg) => {
             eprintln!("[BRIDGET] Send de {}: to={}, body={}", conn_id, bridge_msg.to, bridge_msg.body.chars().take(40).collect::<String>());
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
