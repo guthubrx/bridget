@@ -29,6 +29,8 @@ pub enum RouterError {
     AgentAmbiguous(String, Vec<String>),
     HopsExhausted,
     SelfSend,
+    InvalidName(String),
+    NameTaken(String),
 }
 
 impl std::fmt::Display for RouterError {
@@ -40,6 +42,8 @@ impl std::fmt::Display for RouterError {
             }
             RouterError::HopsExhausted => write!(f, "budget de sauts épuisé (hops=0)"),
             RouterError::SelfSend => write!(f, "auto-envoi interdit"),
+            RouterError::InvalidName(name) => write!(f, "nom invalide: {}", name),
+            RouterError::NameTaken(name) => write!(f, "nom déjà pris: {}", name),
         }
     }
 }
@@ -115,6 +119,28 @@ impl Router {
             .map(|(n, _)| n.clone())?;
 
         self.agents.remove(&name)
+    }
+
+    /// Remplace atomiquement le nom d'un agent identifié par sa connexion.
+    pub fn rename(&mut self, connection_id: &str, requested_name: &str) -> Result<(String, String), RouterError> {
+        let name = requested_name.trim();
+        if name.is_empty() || name != requested_name {
+            return Err(RouterError::InvalidName(requested_name.to_string()));
+        }
+        let old_name = self.agents.iter()
+            .find(|(_, agent)| agent.connection_id == connection_id)
+            .map(|(name, _)| name.clone())
+            .ok_or_else(|| RouterError::AgentNotFound(connection_id.to_string()))?;
+        if old_name == name {
+            return Ok((old_name, name.to_string()));
+        }
+        if self.agents.contains_key(name) {
+            return Err(RouterError::NameTaken(name.to_string()));
+        }
+        let mut agent = self.agents.remove(&old_name).expect("agent trouvé");
+        agent.name = name.to_string();
+        self.agents.insert(name.to_string(), agent);
+        Ok((old_name, name.to_string()))
     }
 
     /// Résout un message : vérifie le destinataire, les hops, l'auto-envoi.
@@ -240,5 +266,14 @@ mod tests {
         let removed = router.unregister_by_conn("conn-1");
         assert!(removed.is_some());
         assert_eq!(router.agent_count(), 0);
+    }
+
+    #[test]
+    fn test_rename_replaces_the_lookup_key() {
+        let mut router = Router::new();
+        router.register(Some("avant"), &AgentType::Codex, "conn-1").unwrap();
+        assert_eq!(router.rename("conn-1", "apres").unwrap(), ("avant".into(), "apres".into()));
+        assert!(router.get_agent("avant").is_none());
+        assert_eq!(router.get_agent("apres").unwrap().connection_id, "conn-1");
     }
 }

@@ -18,6 +18,8 @@ pub enum WrapperToDaemon {
     },
     /// Se désenregistrer.
     Unregister,
+    /// Renommer un agent déjà enregistré.
+    Rename { current_name: String, name: String },
     /// Envoyer un message à un autre agent.
     Send(BridgetMessage),
     /// Signal de vie (périodique).
@@ -34,6 +36,8 @@ pub enum DaemonToWrapper {
     Registered {
         name: String,
     },
+    /// Confirmation d'un renommage.
+    Renamed { old_name: String, name: String },
     /// Livrer un message à l'agent.
     Deliver(BridgetMessage),
     /// Acquittement d'un envoi.
@@ -119,6 +123,23 @@ mod tests {
             WrapperToDaemon::Send(m) => assert_eq!(m.body, "réponse"),
             _ => panic!("mauvais type"),
         }
+    }
+
+    #[test]
+    fn test_encode_decode_rename() {
+        let msg = WrapperToDaemon::Rename {
+            current_name: "codex-1".to_string(),
+            name: "analyse".to_string(),
+        };
+        let json = encode(&msg).unwrap();
+        assert!(json.contains("\"type\":\"Rename\""));
+        assert!(matches!(decode(&json).unwrap(), WrapperToDaemon::Rename { current_name, name } if current_name == "codex-1" && name == "analyse"));
+
+        let response = DaemonToWrapper::Renamed {
+            old_name: "codex-1".to_string(),
+            name: "analyse".to_string(),
+        };
+        assert!(matches!(decode(&encode(&response).unwrap()).unwrap(), DaemonToWrapper::Renamed { old_name, name } if old_name == "codex-1" && name == "analyse"));
     }
 
     #[test]

@@ -169,6 +169,16 @@ pub fn launch(
 
     // Sauvegarder le nom pour les futurs resume
     save_persistent_name(agent_type, agent_args, &my_name);
+    let name_state_path = {
+        let hash = session_hash(agent_args);
+        if hash.is_empty() {
+            socket_path().parent().unwrap().join("agent-names").join(format!("active-{}", my_name))
+        } else {
+            persistent_name_path(&hash)
+        }
+    };
+    if let Some(parent) = name_state_path.parent() { std::fs::create_dir_all(parent)?; }
+    std::fs::write(&name_state_path, &my_name)?;
 
     // 3. Détection du pane tmux
     let pane_id = get_current_pane_id().unwrap_or_else(|e| {
@@ -216,6 +226,7 @@ pub fn launch(
     let mut child = Command::new(agent_binary)
         .args(&final_args)
         .env("BRIDGET_AGENT_NAME", &my_name)
+        .env("BRIDGET_AGENT_NAME_FILE", &name_state_path)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -228,7 +239,7 @@ pub fn launch(
     let listener_stream = read_stream.try_clone()?;
     let writer_clone = writer.clone();
     let pane_for_thread = pane_id.clone();
-    let name_for_thread = my_name.clone();
+    let name_state_for_thread = name_state_path.clone();
 
     let listener_handle = thread::spawn(move || {
         let mut listener = BufReader::new(listener_stream);
@@ -258,7 +269,8 @@ pub fn launch(
                     info!("reçu de « {} »: {}", bm.from,
                         bm.body.chars().take(60).collect::<String>());
                     // Stocker le dernier expéditeur pour la commande reply
-                    let name_for_reply = name_for_thread.clone();
+                    let name_for_reply = std::fs::read_to_string(&name_state_for_thread)
+                        .unwrap_or_default().trim().to_string();
                     if !name_for_reply.is_empty() {
                         let reply_file = socket_path()
                             .parent()
@@ -302,4 +314,3 @@ pub fn launch(
     }
     std::process::exit(0);
 }
-

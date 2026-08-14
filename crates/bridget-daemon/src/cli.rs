@@ -64,6 +64,7 @@ pub fn run() {
     match cmd.as_str() {
         "daemon" => cmd_daemon(),
         "send" => cmd_send(&args[2..]),
+        "rename" => cmd_rename(&args[2..]),
         "reply" => cmd_reply(&args[2..]),
         "who" => cmd_who(),
         "agents" => cmd_agents(&args[2..]),
@@ -134,6 +135,7 @@ fn print_usage() {
          Daemon & client :\n  \
            daemon                 Lance le daemon\n  \
            send --to <N> <MSG>    Envoie un message\n  \
+           rename <N>             Renomme l'agent courant\n  \
            who                    Agents connectés\n  \
            status                 Santé du daemon\n  \
            ledger                 Historique des messages\n  \
@@ -148,6 +150,39 @@ fn print_usage() {
 
 fn socket_path() -> std::path::PathBuf {
     DaemonConfig::default().socket_path
+}
+
+fn cmd_rename(args: &[String]) {
+    if args.len() != 1 || args[0].trim().is_empty() {
+        eprintln!("usage: bridget rename <nouveau-nom>");
+        std::process::exit(2);
+    }
+    let current_name = current_agent_name();
+    if current_name == "human" {
+        eprintln!("rename indisponible hors d'un agent Bridget");
+        std::process::exit(1);
+    }
+    match send_rename_to_daemon(&current_name, &args[0]) {
+        Ok(DaemonToWrapper::Renamed { old_name, name }) => {
+            if let Ok(path) = std::env::var("BRIDGET_AGENT_NAME_FILE") { let _ = std::fs::write(path, &name); }
+            let parent = socket_path().parent().unwrap().to_path_buf();
+            let _ = std::fs::rename(parent.join(format!("last-sender-{}", old_name)), parent.join(format!("last-sender-{}", name)));
+            println!("Renommé : « {} » → « {} »", old_name, name);
+        }
+        Ok(DaemonToWrapper::Nack { reason, .. }) => { eprintln!("REJET: {}", reason); std::process::exit(1); }
+        Ok(_) => { eprintln!("réponse inattendue du daemon"); std::process::exit(1); }
+        Err(e) => { eprintln!("daemon inaccessible: {}", e); std::process::exit(1); }
+    }
+}
+
+fn current_agent_name() -> String {
+    if let Ok(path) = std::env::var("BRIDGET_AGENT_NAME_FILE") {
+        if let Ok(name) = std::fs::read_to_string(path) {
+            let name = name.trim();
+            if !name.is_empty() { return name.to_string(); }
+        }
+    }
+    std::env::var("BRIDGET_AGENT_NAME").unwrap_or_else(|_| "human".to_string())
 }
 
 fn cmd_daemon() {
@@ -220,9 +255,7 @@ fn cmd_send(args: &[String]) {
         std::process::exit(2);
     }
 
-    let sender = from.unwrap_or_else(|| {
-        std::env::var("BRIDGET_AGENT_NAME").unwrap_or_else(|_| "human".to_string())
-    });
+    let sender = from.unwrap_or_else(current_agent_name);
     let effective_reply = if sender == "human" {
         // L'humain n'est pas un agent connecté — pas de reply possible
         false
@@ -294,9 +327,27 @@ fn send_to_daemon(msg: &BridgetMessage) -> Result<DaemonToWrapper, String> {
     Ok(resp)
 }
 
+fn send_rename_to_daemon(current_name: &str, name: &str) -> Result<DaemonToWrapper, String> {
+    let stream = UnixStream::connect(socket_path()).map_err(|e| e.to_string())?;
+    let read_stream = stream.try_clone().map_err(|e| e.to_string())?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    let register = WrapperToDaemon::Register { agent_type: "cli".to_string(), name: Some(format!("cli-rename-{}", std::process::id())) };
+    writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    writer.flush().map_err(|e| e.to_string())?;
+    let mut line = String::new();
+    reader.read_line(&mut line).map_err(|e| e.to_string())?;
+    let _: DaemonToWrapper = decode(line.trim()).map_err(|e| e.to_string())?;
+    let rename = WrapperToDaemon::Rename { current_name: current_name.to_string(), name: name.to_string() };
+    writeln!(writer, "{}", encode(&rename).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    writer.flush().map_err(|e| e.to_string())?;
+    line.clear();
+    reader.read_line(&mut line).map_err(|e| e.to_string())?;
+    decode(line.trim()).map_err(|e| e.to_string())
+}
+
 fn cmd_reply(args: &[String]) {
-    let agent_name = std::env::var("BRIDGET_AGENT_NAME")
-        .unwrap_or_else(|_| "human".to_string());
+    let agent_name = current_agent_name();
 
     let reply_file = socket_path()
         .parent()
