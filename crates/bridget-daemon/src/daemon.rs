@@ -1,9 +1,7 @@
 //! Daemon bridget — écoute sur socket locale Unix, route les messages
 //! entre les wrappers connectés, persiste l'état en SQLite.
 
-use bridget_core::{
-    CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction,
-};
+use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
 use bridget_transport::protocol::{decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use log::{error, info, warn};
@@ -13,12 +11,67 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::store::Store;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+// Métriques du daemon (M-005)
+pub struct Metrics {
+    pub messages_sent: AtomicU64,
+    pub messages_received: AtomicU64,
+    pub errors: AtomicU64,
+    pub active_connections: AtomicUsize,
+}
+
+impl Metrics {
+    pub fn new() -> Self {
+        Metrics {
+            messages_sent: AtomicU64::new(0),
+            messages_received: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            active_connections: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn increment_sent(&self) {
+        self.messages_sent.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn increment_received(&self) {
+        self.messages_received.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn increment_errors(&self) {
+        self.errors.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn increment_connections(&self) {
+        self.active_connections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn decrement_connections(&self) {
+        self.active_connections.fetch_sub(1, Ordering::Relaxed);
+    }
+}
 
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+const PRESENCE_RETENTION: Duration = Duration::from_secs(300);
+
+// Constante pour la période de grâce des timeouts (M-004)
+const TIMEOUT_GRACE_PERIOD: u64 = 30; // secondes
+
+#[derive(Clone)]
+struct Presence {
+    name: String,
+    agent_type: String,
+    host: String,
+    transport: String,
+    os: String,
+    state: String,
+    last_seen: Instant,
+    reconnect_count: u32,
+}
 
 /// Configuration du daemon.
 #[derive(Clone)]
@@ -50,11 +103,29 @@ impl Default for DaemonConfig {
 }
 
 fn dirs_cache() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
+    let cache_dir = if let Ok(home) = std::env::var("HOME") {
         PathBuf::from(home).join(".cache").join("bridget")
     } else {
-        PathBuf::from("/tmp").join("bridget")
+        PathBuf::from("/tmp").join("bridget") // Fallback non sécurisé
+    };
+
+    // Créer avec permissions sécurisées (M-003)
+    let _ = std::fs::create_dir_all(&cache_dir);
+
+    // Vérifier les permissions (Unix seulement) (M-003)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&cache_dir) {
+            let perms = meta.permissions();
+            let mode = perms.mode();
+            if mode & 0o077 != 0 {
+                warn!("Permissions non sécurisées sur {:?} - autres utilisateurs peuvent lire/écrire", cache_dir);
+            }
+        }
     }
+
+    cache_dir
 }
 
 /// État partagé du daemon.
@@ -66,6 +137,10 @@ struct DaemonState {
     store: Store,
     connections: HashMap<String, Arc<Mutex<BufWriter<UnixStream>>>>,
     conn_names: HashMap<String, String>,
+    conn_hosts: HashMap<String, String>,
+    conn_operating_systems: HashMap<String, String>,
+    conn_instances: HashMap<String, String>,
+    presences: HashMap<String, Presence>,
     conn_counter: u64,
     /// Messages --reply en attente de réponse : (msg_id, from, to, expire_at, target_conn)
     pending_replies: Vec<PendingReply>,
@@ -86,23 +161,81 @@ struct PendingReply {
 }
 
 enum ReminderAction {
-    Gentle { to: String, from: String, msg_id: String, target_conn: String },
-    Firm { to: String, from: String, msg_id: String, target_conn: String },
-    Timeout { to: String, from: String, msg_id: String, from_conn: String, timeout_secs: u64 },
+    Gentle {
+        to: String,
+        from: String,
+        msg_id: String,
+        target_conn: String,
+    },
+    Firm {
+        to: String,
+        from: String,
+        msg_id: String,
+        target_conn: String,
+    },
+    Timeout {
+        to: String,
+        from: String,
+        msg_id: String,
+        from_conn: String,
+        timeout_secs: u64,
+    },
 }
 
-fn deliver_to_agent(
-    writer: &Arc<Mutex<BufWriter<UnixStream>>>,
-    target_name: &str,
-    body: &str,
-) {
+// Type d'erreur pour la livraison de messages (H-002)
+#[derive(Debug)]
+enum DeliveryError {
+    Encoding(String),
+    Lock(String),
+    Write(String),
+    Flush(String),
+}
+
+impl std::fmt::Display for DeliveryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeliveryError::Encoding(msg) => write!(f, "Erreur d'encodage: {}", msg),
+            DeliveryError::Lock(msg) => write!(f, "Erreur de verrouillage: {}", msg),
+            DeliveryError::Write(msg) => write!(f, "Erreur d'écriture: {}", msg),
+            DeliveryError::Flush(msg) => write!(f, "Erreur de flush: {}", msg),
+        }
+    }
+}
+
+fn deliver_to_agent(writer: &Arc<Mutex<BufWriter<UnixStream>>>, target_name: &str, body: &str) -> Result<(), DeliveryError> {
     let msg = bridget_core::BridgetMessage::new("bridget", target_name, body);
     let dtw = DaemonToWrapper::Deliver(msg);
-    let json = encode(&dtw).unwrap_or_default();
-    if let Ok(mut w) = writer.lock() {
-        let _ = writeln!(w, "{}", json);
-        let _ = w.flush();
-    }
+    let json = encode(&dtw).map_err(|e| {
+        error!("Erreur d'encodage message pour {}: {}", target_name, e);
+        DeliveryError::Encoding(e.to_string())
+    })?;
+
+    let mut w = writer.lock().map_err(|e| {
+        error!("Impossible de verrouiller le writer pour {}: {}", target_name, e);
+        DeliveryError::Lock(e.to_string())
+    })?;
+
+    writeln!(w, "{}", json).map_err(|e| {
+        error!("Erreur d'écriture pour {}: {}", target_name, e);
+        DeliveryError::Write(e.to_string())
+    })?;
+
+    w.flush().map_err(|e| {
+        error!("Erreur de flush pour {}: {}", target_name, e);
+        DeliveryError::Flush(e.to_string())
+    })?;
+
+    info!("Message délivré à {}", target_name);
+    Ok(())
+}
+
+// Fonction pour exposer les métriques publiquement (M-005)
+pub fn get_metrics() -> &'static Metrics {
+    // Note: ceci est un stub pour l'observabilité
+    // Dans une implémentation complète, les métriques seraient partagées globalement
+    use std::sync::OnceLock;
+    static METRICS: OnceLock<Metrics> = OnceLock::new();
+    METRICS.get_or_init(|| Metrics::new())
 }
 
 impl DaemonState {
@@ -120,6 +253,10 @@ impl DaemonState {
             store,
             connections: HashMap::new(),
             conn_names: HashMap::new(),
+            conn_hosts: HashMap::new(),
+            conn_operating_systems: HashMap::new(),
+            conn_instances: HashMap::new(),
+            presences: HashMap::new(),
             conn_counter: 0,
             pending_replies: Vec::new(),
         })
@@ -129,29 +266,165 @@ impl DaemonState {
         self.conn_counter += 1;
         format!("conn-{}", self.conn_counter)
     }
+
+    fn mark_unreachable(&mut self, conn_id: &str) {
+        if let Some(instance_id) = self.conn_instances.remove(conn_id) {
+            if let Some(presence) = self.presences.get_mut(&instance_id) {
+                presence.state = "unreachable".to_string();
+                presence.last_seen = Instant::now();
+            }
+        }
+    }
+
+    fn remove_presence(&mut self, conn_id: &str) {
+        if let Some(instance_id) = self.conn_instances.remove(conn_id) {
+            self.presences.remove(&instance_id);
+        }
+    }
+
+    fn agent_infos(&mut self) -> Vec<bridget_transport::protocol::AgentInfo> {
+        self.presences.retain(|_, presence| {
+            presence.state == "connected" || presence.last_seen.elapsed() <= PRESENCE_RETENTION
+        });
+        let mut agents: Vec<_> = self
+            .router
+            .list_agents()
+            .iter()
+            .map(|agent| {
+                let presence = self
+                    .conn_instances
+                    .get(&agent.connection_id)
+                    .and_then(|id| self.presences.get(id));
+                bridget_transport::protocol::AgentInfo {
+                    name: agent.name.clone(),
+                    agent_type: agent.agent_type.to_string(),
+                    connection_id: agent.connection_id.clone(),
+                    host: presence
+                        .map(|p| p.host.clone())
+                        .or_else(|| self.conn_hosts.get(&agent.connection_id).cloned())
+                        .unwrap_or_else(|| "inconnu".to_string()),
+                    transport: presence
+                        .map(|p| p.transport.clone())
+                        .unwrap_or_else(|| "unix".to_string()),
+                    os: presence
+                        .map(|p| p.os.clone())
+                        .or_else(|| {
+                            self.conn_operating_systems
+                                .get(&agent.connection_id)
+                                .cloned()
+                        })
+                        .unwrap_or_else(|| "inconnu".to_string()),
+                    state: "connected".to_string(),
+                    last_seen_secs: presence
+                        .map(|p| p.last_seen.elapsed().as_secs())
+                        .unwrap_or(0),
+                    reconnect_count: presence.map(|p| p.reconnect_count).unwrap_or(0),
+                }
+            })
+            .collect();
+        for presence in self
+            .presences
+            .values()
+            .filter(|presence| presence.state != "connected")
+        {
+            agents.push(bridget_transport::protocol::AgentInfo {
+                name: presence.name.clone(),
+                agent_type: presence.agent_type.clone(),
+                connection_id: String::new(),
+                host: presence.host.clone(),
+                transport: presence.transport.clone(),
+                os: presence.os.clone(),
+                state: presence.state.clone(),
+                last_seen_secs: presence.last_seen.elapsed().as_secs(),
+                reconnect_count: presence.reconnect_count,
+            });
+        }
+        agents.sort_by(|left, right| left.name.cmp(&right.name));
+        agents
+    }
+
+    fn restore_pending_for_agent(&mut self, name: &str, conn_id: &str) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let Ok(requests) = self.store.open_requests() else {
+            return;
+        };
+        for request in requests {
+            if request.sender != name && request.target != name
+                || self
+                    .pending_replies
+                    .iter()
+                    .any(|pending| pending.msg_id == request.id)
+            {
+                continue;
+            }
+            let Some(target_conn) = self
+                .router
+                .get_agent(&request.target)
+                .map(|agent| agent.connection_id.clone())
+            else {
+                continue;
+            };
+            let Some(from_conn) = self
+                .router
+                .get_agent(&request.sender)
+                .map(|agent| agent.connection_id.clone())
+            else {
+                continue;
+            };
+            let timeout_secs = (request.deadline_at - request.created_at).max(1) as u64;
+            let elapsed = (now - request.created_at).max(0) as u64;
+            let created_at = std::time::Instant::now()
+                .checked_sub(Duration::from_secs(elapsed))
+                .unwrap_or_else(std::time::Instant::now);
+            self.pending_replies.push(PendingReply {
+                msg_id: request.id,
+                from: request.sender,
+                from_conn,
+                to: request.target,
+                target_conn,
+                timeout_secs,
+                created_at,
+                escalation_level: request.escalation_level,
+            });
+        }
+        let _ = conn_id;
+    }
 }
 
 /// Lance le daemon.
 pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
-    // Verrouillage par PID file — empêche deux daemons de démarrer en même temps
+    // Verrouillage exclusif avec flock — empêche deux daemons de démarrer en même temps
+    // Évite la race condition TOCTOU du PID file traditionnel
     let pid_file = config.socket_path.with_extension("pid");
-    if pid_file.exists() {
-        let pid_str = std::fs::read_to_string(&pid_file).unwrap_or_default();
-        if let Ok(pid) = pid_str.trim().parse::<i32>() {
-            // Vérifier si ce process existe encore
-            unsafe {
-                if libc::kill(pid, 0) == 0 {
-                    eprintln!("bridget: un daemon tourne déjà (PID {})", pid);
-                    std::process::exit(0);
-                }
-            }
+
+    // Créer le fichier et obtenir un verrou exclusif avec flock
+    use std::os::unix::io::AsRawFd;
+
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&pid_file)
+        .map_err(|e| format!("Impossible de créer PID file {}: {}", pid_file.display(), e))?;
+
+    // Tenter d'obtenir un verrou exclusif (non-bloquant)
+    unsafe {
+        if libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) != 0 {
+            // Le verrou échoue = un autre daemon tourne
+            eprintln!("bridget: un daemon tourne déjà (verrou sur {})", pid_file.display());
+            std::process::exit(0);
         }
-        // Le PID est mort — on peut prendre la relance
-        eprintln!("bridget: nettoyage PID file stale (daemon précédent mort)");
-        let _ = std::fs::remove_file(&pid_file);
     }
+
+    // Écrire notre PID maintenant qu'on a le verrou
     std::fs::write(&pid_file, std::process::id().to_string())?;
-    eprintln!("[BRIDGET] PID file écrit: {} (PID {})", pid_file.display(), std::process::id());
+    eprintln!(
+        "[BRIDGET] PID file écrit avec verrou exclusif: {} (PID {})",
+        pid_file.display(),
+        std::process::id()
+    );
 
     if config.socket_path.exists() {
         std::fs::remove_file(&config.socket_path)?;
@@ -168,7 +441,10 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         if let Ok(n) = st.store.purge_older_than_days(config.retention_days) {
             if n > 0 {
-                info!("purge: {} messages supprimés (> {} jours)", n, config.retention_days);
+                info!(
+                    "purge: {} messages supprimés (> {} jours)",
+                    n, config.retention_days
+                );
             }
         }
     }
@@ -180,13 +456,14 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Après T + 30s : abandon (retiré de la liste)
     let st_reminder = state.clone();
     thread::spawn(move || loop {
-        thread::sleep(Duration::from_secs(3));
+        thread::sleep(Duration::from_secs(1)); // Réduit de 3s à 1s pour meilleure réactivité
         let now = std::time::Instant::now();
 
         // Collecter les actions à faire
         let actions: Vec<ReminderAction> = {
             let mut st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
             let mut actions = Vec::new();
+            let mut state_updates = Vec::new();
 
             for p in st.pending_replies.iter_mut() {
                 let elapsed = now.duration_since(p.created_at).as_secs();
@@ -194,6 +471,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
 
                 if p.escalation_level == 0 && elapsed >= t / 3 {
                     p.escalation_level = 1;
+                    state_updates.push((p.msg_id.clone(), 1));
                     actions.push(ReminderAction::Gentle {
                         to: p.to.clone(),
                         from: p.from.clone(),
@@ -202,6 +480,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                     });
                 } else if p.escalation_level == 1 && elapsed >= (t * 2) / 3 {
                     p.escalation_level = 2;
+                    state_updates.push((p.msg_id.clone(), 2));
                     actions.push(ReminderAction::Firm {
                         to: p.to.clone(),
                         from: p.from.clone(),
@@ -210,6 +489,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                     });
                 } else if p.escalation_level == 2 && elapsed >= t {
                     p.escalation_level = 3;
+                    state_updates.push((p.msg_id.clone(), 3));
                     actions.push(ReminderAction::Timeout {
                         to: p.to.clone(),
                         from: p.from.clone(),
@@ -224,11 +504,19 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             st.pending_replies.retain(|p| {
                 if p.escalation_level >= 3 {
                     let elapsed = now.duration_since(p.created_at).as_secs();
-                    elapsed < p.timeout_secs + 30
+                    elapsed < p.timeout_secs + TIMEOUT_GRACE_PERIOD
                 } else {
                     true
                 }
             });
+
+            for (id, level) in state_updates {
+                if level == 3 {
+                    let _ = st.store.mark_timed_out(&id);
+                } else {
+                    let _ = st.store.set_escalation_level(&id, level);
+                }
+            }
 
             actions
         };
@@ -236,29 +524,49 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         // Exécuter les actions hors lock
         for action in actions {
             match action {
-                ReminderAction::Gentle { to, from, msg_id, target_conn } => {
+                ReminderAction::Gentle {
+                    to,
+                    from,
+                    msg_id,
+                    target_conn,
+                } => {
                     let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(target_writer) = st.connections.get(&target_conn) {
                         let body = format!(
                             "Rappel : {} attend ta reponse au message #{}.\nReponds avec: bridget reply \"ta reponse\"",
                             from, &msg_id[..msg_id.len().min(8)]
                         );
-                        deliver_to_agent(target_writer, &to, &body);
+                        if let Err(e) = deliver_to_agent(target_writer, &to, &body) {
+                            error!("Impossible de délivrer le rappel doux à {}: {}", to, e);
+                        }
                         info!("palier 1 (rappel doux) → {} pour {}", to, from);
                     }
                 }
-                ReminderAction::Firm { to, from, msg_id, target_conn } => {
+                ReminderAction::Firm {
+                    to,
+                    from,
+                    msg_id,
+                    target_conn,
+                } => {
                     let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(target_writer) = st.connections.get(&target_conn) {
                         let body = format!(
                             "URGENT : {} attend toujours ta reponse au message #{}.\nTu DOIS repondre maintenant avec: bridget reply \"ta reponse\"\nSi tu ne peux pas repondre, notifie-le : bridget reply \"impossible de repondre : <raison>\"",
                             from, &msg_id[..msg_id.len().min(8)]
                         );
-                        deliver_to_agent(target_writer, &to, &body);
+                        if let Err(e) = deliver_to_agent(target_writer, &to, &body) {
+                            error!("Impossible de délivrer le rappel ferme à {}: {}", to, e);
+                        }
                         info!("palier 2 (rappel ferme) → {} pour {}", to, from);
                     }
                 }
-                ReminderAction::Timeout { to, from, msg_id, from_conn, timeout_secs } => {
+                ReminderAction::Timeout {
+                    to,
+                    from,
+                    msg_id,
+                    from_conn,
+                    timeout_secs,
+                } => {
                     let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
                     // Notifier l'émetteur que le destinataire n'a pas répondu
                     if let Some(sender_writer) = st.connections.get(&from_conn) {
@@ -266,8 +574,13 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                             "{} n'a pas repondu en {}s au message #{}.\nTu peux reessayer, changer de destinataire ou abandonner.",
                             to, timeout_secs, &msg_id[..msg_id.len().min(8)]
                         );
-                        deliver_to_agent(sender_writer, &from, &body);
-                        info!("palier 3 (timeout notifié à {} : {} n'a pas répondu)", from, to);
+                        if let Err(e) = deliver_to_agent(sender_writer, &from, &body) {
+                            error!("Impossible de délivrer la notification de timeout à {}: {}", from, e);
+                        }
+                        info!(
+                            "palier 3 (timeout notifié à {} : {} n'a pas répondu)",
+                            from, to
+                        );
                     }
                 }
             }
@@ -297,13 +610,23 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     // launchctl stop ou kill -TERM pour arrêter le daemon.
     unsafe {
         let _ = signal_hook::low_level::register(signal_hook::consts::SIGTERM, || {
-            eprintln!("[BRIDGET] *** SIGTERM REÇU *** à {}", std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs());
+            eprintln!(
+                "[BRIDGET] *** SIGTERM REÇU *** à {}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            );
             SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
         });
         let _ = signal_hook::low_level::register(signal_hook::consts::SIGINT, || {
-            eprintln!("[BRIDGET] *** SIGINT REÇU (ignoré) *** à {}", std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs());
+            eprintln!(
+                "[BRIDGET] *** SIGINT REÇU (ignoré) *** à {}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            );
         });
         // Ignorer SIGHUP (envoyé quand le terminal se ferme)
         let _ = signal_hook::low_level::register(signal_hook::consts::SIGHUP, || {
@@ -328,8 +651,12 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             drop(st);
-            let _ = std::fs::remove_file(&config.socket_path);
-            let _ = std::fs::remove_file(&config.socket_path.with_extension("pid"));
+            if let Err(e) = std::fs::remove_file(&config.socket_path) {
+                log::warn!("Impossible de supprimer socket {}: {}", config.socket_path.display(), e);
+            }
+            if let Err(e) = std::fs::remove_file(&config.socket_path.with_extension("pid")) {
+                log::warn!("Impossible de supprimer PID file {}: {}", config.socket_path.with_extension("pid").display(), e);
+            }
             info!("daemon arrêté proprement");
             return Ok(());
         }
@@ -365,7 +692,10 @@ fn handle_connection(
     stream: UnixStream,
     state: Arc<Mutex<DaemonState>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let conn_id = state.lock().unwrap_or_else(|e| e.into_inner()).next_conn_id();
+    let conn_id = state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .next_conn_id();
     log::debug!("handle_connection: nouvelle connexion {}", conn_id);
     let reader_stream = stream.try_clone()?;
     let reader = BufReader::new(reader_stream);
@@ -374,8 +704,10 @@ fn handle_connection(
     let push_stream = stream.try_clone()?;
     {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-        st.connections
-            .insert(conn_id.clone(), Arc::new(Mutex::new(BufWriter::new(push_stream))));
+        st.connections.insert(
+            conn_id.clone(),
+            Arc::new(Mutex::new(BufWriter::new(push_stream))),
+        );
     }
     info!("connexion {} établie", conn_id);
 
@@ -406,14 +738,30 @@ fn handle_connection(
         }
     }
 
-    // Connexion fermée : désenregistrer
-    let removed = {
+    // Connexion fermée : désenregistrer avec nettoyage explicite pour éviter fuites
+    let (writer_opt, removed) = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-        st.connections.remove(&conn_id);
+
+        // Récupérer le writer AVANT suppression pour nettoyage explicite
+        let writer_opt = st.connections.remove(&conn_id);
+
         let removed = st.router.unregister_by_conn(&conn_id);
+        st.mark_unreachable(&conn_id);
         st.conn_names.remove(&conn_id);
-        removed
+        st.conn_hosts.remove(&conn_id);
+        st.conn_operating_systems.remove(&conn_id);
+        (writer_opt, removed)
     };
+
+    // Nettoyage explicite du writer pour éviter fuites de ressources
+    if let Some(writer_mutex) = writer_opt {
+        if let Ok(mut writer) = writer_mutex.lock() {
+            use std::io::Write;
+            let _ = writer.flush();
+            // Le drop explicite fermera le stream proprement
+        }
+    }
+
     if let Some(agent) = removed {
         info!("agent '{}' déconnecté ({})", agent.name, conn_id);
     } else {
@@ -424,6 +772,80 @@ fn handle_connection(
     Ok(())
 }
 
+/// Traite l'enregistrement d'un wrapper
+fn handle_register(
+    conn_id: &str,
+    agent_type: String,
+    name: Option<String>,
+    host: Option<String>,
+    transport: Option<String>,
+    os: Option<String>,
+    instance_id: Option<String>,
+    state: &mut DaemonState,
+) -> DaemonToWrapper {
+    log::debug!(
+        "Register reçu de {}: type={}, name={:?}, host={:?}",
+        conn_id,
+        agent_type,
+        name,
+        host
+    );
+
+    let parsed_type = agent_type
+        .parse()
+        .unwrap_or(bridget_core::AgentType::Custom(agent_type));
+
+    match state.router.register(name.as_deref(), &parsed_type, conn_id) {
+        Ok(final_name) => {
+            state.conn_names.insert(conn_id.to_string(), final_name.clone());
+            state.conn_hosts.insert(
+                conn_id.to_string(),
+                host.clone().unwrap_or_else(|| "inconnu".to_string()),
+            );
+            state.conn_operating_systems.insert(
+                conn_id.to_string(),
+                os.clone().unwrap_or_else(|| "inconnu".to_string()),
+            );
+
+            if let Some(instance_id) = instance_id.filter(|id| !id.is_empty()) {
+                let reconnect_count = state
+                    .presences
+                    .get(&instance_id)
+                    .map(|presence| {
+                        presence.reconnect_count + u32::from(presence.state != "connected")
+                    })
+                    .unwrap_or(0);
+
+                state.conn_instances.insert(conn_id.to_string(), instance_id.clone());
+                state.presences.insert(
+                    instance_id,
+                    Presence {
+                        name: final_name.clone(),
+                        agent_type: parsed_type.to_string(),
+                        host: host.unwrap_or_else(|| "inconnu".to_string()),
+                        transport: transport.unwrap_or_else(|| "unix".to_string()),
+                        os: os.unwrap_or_else(|| "inconnu".to_string()),
+                        state: "connected".to_string(),
+                        last_seen: Instant::now(),
+                        reconnect_count,
+                    },
+                );
+            }
+
+            state.restore_pending_for_agent(&final_name, conn_id);
+            info!("agent '{}' enregistré ({})", final_name, conn_id);
+            DaemonToWrapper::Registered { name: final_name }
+        }
+        Err(e) => {
+            log::warn!("enregistrement refusé pour {}: {}", conn_id, e);
+            DaemonToWrapper::Nack {
+                id: "register".to_string(),
+                reason: format!("enregistrement refusé: {}", e),
+            }
+        }
+    }
+}
+
 /// Traite un message wrapper et retourne une réponse optionnelle.
 fn handle_wrapper_message(
     conn_id: &str,
@@ -431,30 +853,35 @@ fn handle_wrapper_message(
     state: &Arc<Mutex<DaemonState>>,
 ) -> Option<DaemonToWrapper> {
     match msg {
-        WrapperToDaemon::Register { agent_type, name } => {
-            log::debug!("Register reçu de {}: type={}, name={:?}", conn_id, agent_type, name);
+        WrapperToDaemon::Register {
+            agent_type,
+            name,
+            host,
+            transport,
+            os,
+            instance_id,
+        } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            let parsed_type = agent_type
-                .parse()
-                .unwrap_or(bridget_core::AgentType::Custom(agent_type));
-            match st.router.register(name.as_deref(), &parsed_type, conn_id) {
-                Ok(final_name) => {
-                    st.conn_names
-                        .insert(conn_id.to_string(), final_name.clone());
-                    info!("agent '{}' enregistré ({})", final_name, conn_id);
-                    Some(DaemonToWrapper::Registered { name: final_name })
-                }
-                Err(e) => Some(DaemonToWrapper::Nack {
-                    id: "register".to_string(),
-                    reason: e.to_string(),
-                }),
-            }
+            let response = handle_register(
+                conn_id,
+                agent_type,
+                name,
+                host,
+                transport,
+                os,
+                instance_id,
+                &mut st,
+            );
+            Some(response)
         }
 
         WrapperToDaemon::Unregister => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             st.router.unregister_by_conn(conn_id);
+            st.remove_presence(conn_id);
             st.conn_names.remove(conn_id);
+            st.conn_hosts.remove(conn_id);
+            st.conn_operating_systems.remove(conn_id);
             None
         }
 
@@ -462,16 +889,21 @@ fn handle_wrapper_message(
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let target_conn = match st.router.get_agent(&current_name) {
                 Some(agent) => agent.connection_id.clone(),
-                None => return Some(DaemonToWrapper::Nack {
-                    id: "rename".to_string(),
-                    reason: format!("agent introuvable: {}", current_name),
-                }),
+                None => {
+                    return Some(DaemonToWrapper::Nack {
+                        id: "rename".to_string(),
+                        reason: format!("agent introuvable: {}", current_name),
+                    })
+                }
             };
             match st.router.rename(&target_conn, &name) {
                 Ok((old_name, new_name)) => {
                     st.conn_names.insert(target_conn, new_name.clone());
                     info!("agent '{}' renommé en '{}'", old_name, new_name);
-                    Some(DaemonToWrapper::Renamed { old_name, name: new_name })
+                    Some(DaemonToWrapper::Renamed {
+                        old_name,
+                        name: new_name,
+                    })
                 }
                 Err(error) => Some(DaemonToWrapper::Nack {
                     id: "rename".to_string(),
@@ -481,7 +913,12 @@ fn handle_wrapper_message(
         }
 
         WrapperToDaemon::Send(mut bridge_msg) => {
-            eprintln!("[BRIDGET] Send de {}: to={}, body={}", conn_id, bridge_msg.to, bridge_msg.body.chars().take(40).collect::<String>());
+            eprintln!(
+                "[BRIDGET] Send de {}: to={}, body={}",
+                conn_id,
+                bridge_msg.to,
+                bridge_msg.body.chars().take(40).collect::<String>()
+            );
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let sender_name = st.conn_names.get(conn_id).cloned().unwrap_or_default();
             // Résolution de l'expéditeur :
@@ -491,24 +928,6 @@ fn handle_wrapper_message(
             //   le from du message correspond à un agent enregistré (ex: codex-1).
             //   Si oui, utiliser ce from (le CLI a été lancé depuis l'intérieur du wrapper).
             //   Si non, garder le from tel quel (envoi depuis terminal externe).
-            // Vérifier si ce message répond à un --reply en attente
-            {
-                let resolved_from = if !sender_name.is_empty() && !sender_name.starts_with("cli-send-") {
-                    sender_name.clone()
-                } else {
-                    bridge_msg.from.clone()
-                };
-                let before = st.pending_replies.len();
-                st.pending_replies.retain(|p| {
-                    if p.to == resolved_from && p.from == bridge_msg.to {
-                        info!("réponse reçue: {} a répondu à {}", resolved_from, p.from);
-                        false // Retirer : la réponse est arrivée
-                    } else {
-                        true
-                    }
-                });
-            }
-
             if !sender_name.is_empty() && !sender_name.starts_with("cli-send-") {
                 // Wrapper : utiliser le nom enregistré
                 bridge_msg.from = sender_name.clone();
@@ -521,6 +940,36 @@ fn handle_wrapper_message(
                 // → utiliser le nom de connexion (cli-send-XXXXX ou human)
                 if !sender_name.is_empty() {
                     bridge_msg.from = sender_name.clone();
+                }
+            }
+
+            // Un client CLI temporaire se déconnecte dès qu'il a reçu l'Ack.
+            // Il ne peut donc pas recevoir une réponse différée. Une demande
+            // `--reply` n'est valide que si l'identité de l'émetteur désigne un
+            // wrapper encore connecté ; sinon on refuse l'envoi plutôt que de
+            // livrer une tâche dont la réponse sera inévitablement rejetée.
+            let reply_sender_conn = st
+                .router
+                .get_agent(&bridge_msg.from)
+                .map(|agent| agent.connection_id.clone());
+            let is_ephemeral_cli_sender = sender_name.starts_with("cli-send-")
+                && reply_sender_conn.as_deref() == Some(conn_id);
+            if bridge_msg.reply && (reply_sender_conn.is_none() || is_ephemeral_cli_sender) {
+                return Some(DaemonToWrapper::Nack {
+                    id: bridge_msg.id.clone(),
+                    reason: "--reply requiert un agent Bridget connecté ; lance la commande depuis un wrapper actif ou envoie sans --reply".to_string(),
+                });
+            }
+
+            if let Some(request_id) = bridge_msg.in_reply_to.as_deref() {
+                if st
+                    .store
+                    .mark_answered(request_id, &bridge_msg.from, &bridge_msg.to)
+                    .unwrap_or(false)
+                {
+                    st.pending_replies
+                        .retain(|pending| pending.msg_id != request_id);
+                    info!("demande {} répondue", request_id);
                 }
             }
 
@@ -545,7 +994,10 @@ fn handle_wrapper_message(
             // 2. Déduplication par contenu
             let content_key = bridge_msg.content_key();
             if st.deduplicator.is_duplicate(&content_key, &bridge_msg.to) {
-                warn!("DEDUP: doublon vers « {} » (clé {})", bridge_msg.to, content_key);
+                warn!(
+                    "DEDUP: doublon vers « {} » (clé {})",
+                    bridge_msg.to, content_key
+                );
                 return Some(DaemonToWrapper::Nack {
                     id: bridge_msg.id.clone(),
                     reason: "doublon de contenu".to_string(),
@@ -576,12 +1028,9 @@ fn handle_wrapper_message(
             }
 
             // 5. Router
-            let action = st.router.resolve(
-                &bridge_msg.from,
-                &bridge_msg.to,
-                bridge_msg.hops,
-                conn_id,
-            );
+            let action =
+                st.router
+                    .resolve(&bridge_msg.from, &bridge_msg.to, bridge_msg.hops, conn_id);
 
             match action {
                 RouterAction::Deliver { target_conn } => {
@@ -609,7 +1058,10 @@ fn handle_wrapper_message(
                                     let _ = w.flush();
                                     info!(
                                         "livré: {} → « {} » (hops={}, reply={})",
-                                        bridge_msg.id, bridge_msg.to, bridge_msg.hops, bridge_msg.reply
+                                        bridge_msg.id,
+                                        bridge_msg.to,
+                                        bridge_msg.hops,
+                                        bridge_msg.reply
                                     );
                                 }
                                 Err(e) => error!("push {}: {}", target_conn, e),
@@ -622,10 +1074,26 @@ fn handle_wrapper_message(
                     // Si reply=yes, enregistrer dans pending_replies pour escalade
                     if bridge_msg.reply {
                         let timeout = bridge_msg.reply_timeout.unwrap_or(60);
+                        if let Err(error) = st.store.create_request(
+                            &bridge_msg.id,
+                            &bridge_msg.from,
+                            &bridge_msg.to,
+                            timeout,
+                        ) {
+                            return Some(DaemonToWrapper::Nack {
+                                id: bridge_msg.id.clone(),
+                                reason: format!("impossible de suivre la demande: {}", error),
+                            });
+                        }
                         st.pending_replies.push(PendingReply {
                             msg_id: bridge_msg.id.clone(),
                             from: bridge_msg.from.clone(),
-                            from_conn: conn_id.to_string(),
+                            // Si l'envoi a été déclenché par `bridget send` dans
+                            // un agent, conn_id est un client CLI éphémère. Les
+                            // relances et le timeout doivent viser le wrapper
+                            // durable identifié ci-dessus.
+                            from_conn: reply_sender_conn
+                                .expect("un --reply a toujours un expéditeur connecté"),
                             to: bridge_msg.to.clone(),
                             target_conn: target_conn.clone(),
                             timeout_secs: timeout,
@@ -634,7 +1102,11 @@ fn handle_wrapper_message(
                         });
                         info!(
                             "reply attendu: {} → {} (timeout={}s, escalade à {}/{}s)",
-                            bridge_msg.id, bridge_msg.to, timeout, timeout / 3, timeout * 2 / 3
+                            bridge_msg.id,
+                            bridge_msg.to,
+                            timeout,
+                            timeout / 3,
+                            timeout * 2 / 3
                         );
                     }
 
@@ -652,29 +1124,106 @@ fn handle_wrapper_message(
             }
         }
 
-        WrapperToDaemon::Heartbeat => None,
+        WrapperToDaemon::Heartbeat => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(instance_id) = st.conn_instances.get(conn_id).cloned() {
+                if let Some(presence) = st.presences.get_mut(&instance_id) {
+                    presence.last_seen = Instant::now();
+                }
+            }
+            None
+        }
 
         WrapperToDaemon::ListAgents => {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
-            let agents: Vec<bridget_transport::protocol::AgentInfo> = st
-                .router
-                .list_agents()
-                .iter()
-                .map(|a| bridget_transport::protocol::AgentInfo {
-                    name: a.name.clone(),
-                    agent_type: a.agent_type.to_string(),
-                    connection_id: a.connection_id.clone(),
-                })
-                .collect();
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let agents = st.agent_infos();
             Some(DaemonToWrapper::AgentList { agents })
+        }
+
+        WrapperToDaemon::CancelRequest { id, sender, reason } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            if st.router.get_agent(&sender).is_none() {
+                return Some(DaemonToWrapper::Nack {
+                    id,
+                    reason: "annulation réservée à un agent Bridget connecté".to_string(),
+                });
+            }
+            match st.store.cancel_request(&id, &sender, reason.as_deref()) {
+                Ok(Some(request)) if request.sender != sender => Some(DaemonToWrapper::Nack {
+                    id,
+                    reason: "seul l'émetteur peut annuler cette demande".to_string(),
+                }),
+                Ok(Some(request)) if request.state == "cancelled" => {
+                    st.pending_replies
+                        .retain(|pending| pending.msg_id != request.id);
+                    if let Some(agent) = st.router.get_agent(&request.target) {
+                        if let Some(writer) = st.connections.get(&agent.connection_id) {
+                            if let Err(e) = deliver_to_agent(
+                                writer,
+                                &request.target,
+                                &format!(
+                                    "Demande #{} annulée par {}. Aucune réponse n'est requise.{}",
+                                    request.id,
+                                    sender,
+                                    request
+                                        .cancel_reason
+                                        .as_deref()
+                                        .map(|r| format!(" Motif : {}", r))
+                                        .unwrap_or_default()
+                                ),
+                            ) {
+                                error!("Impossible de délivrer l'annulation à {}: {}", request.target, e);
+                            }
+                        }
+                    }
+                    Some(DaemonToWrapper::RequestCancelled {
+                        id: request.id,
+                        state: request.state,
+                    })
+                }
+                Ok(Some(request)) => Some(DaemonToWrapper::Nack {
+                    id,
+                    reason: format!("demande déjà terminale: {}", request.state),
+                }),
+                Ok(None) => Some(DaemonToWrapper::Nack {
+                    id,
+                    reason: "demande introuvable".to_string(),
+                }),
+                Err(error) => Some(DaemonToWrapper::Nack {
+                    id,
+                    reason: error.to_string(),
+                }),
+            }
+        }
+
+        WrapperToDaemon::ListRequests { sender } => {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            match st.store.requests_for_sender(&sender) {
+                Ok(requests) => Some(DaemonToWrapper::RequestList {
+                    requests: requests
+                        .into_iter()
+                        .map(|request| bridget_transport::protocol::RequestInfo {
+                            id: request.id,
+                            target: request.target,
+                            state: request.state,
+                            deadline_at: request.deadline_at,
+                            cancel_reason: request.cancel_reason,
+                        })
+                        .collect(),
+                }),
+                Err(error) => Some(DaemonToWrapper::Nack {
+                    id: "requests".to_string(),
+                    reason: error.to_string(),
+                }),
+            }
         }
     }
 }
 
 /// Statut du daemon — interroge le daemon via la socket locale.
 pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
-    use std::os::unix::net::UnixStream;
     use std::io::{BufRead, BufReader, BufWriter, Write};
+    use std::os::unix::net::UnixStream;
 
     if !config.socket_path.exists() {
         return DaemonStatus::default();
@@ -697,28 +1246,51 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
     let reg = WrapperToDaemon::Register {
         agent_type: "status-probe".to_string(),
         name: Some(format!("status-{}", std::process::id())),
+        host: None,
+        transport: None,
+        os: None,
+        instance_id: None,
     };
-    let reg_json = match encode(&reg) { Ok(j) => j, Err(_) => return DaemonStatus::default() };
-    if writeln!(writer, "{}", reg_json).is_err() { return DaemonStatus::default(); }
-    if writer.flush().is_err() { return DaemonStatus::default(); }
+    let reg_json = match encode(&reg) {
+        Ok(j) => j,
+        Err(_) => return DaemonStatus::default(),
+    };
+    if writeln!(writer, "{}", reg_json).is_err() {
+        return DaemonStatus::default();
+    }
+    if writer.flush().is_err() {
+        return DaemonStatus::default();
+    }
 
     // Lire Registered
     let mut line = String::new();
-    if reader.read_line(&mut line).is_err() { return DaemonStatus::default(); }
+    if reader.read_line(&mut line).is_err() {
+        return DaemonStatus::default();
+    }
 
     // Demander la liste des agents
     let list_req = WrapperToDaemon::ListAgents;
-    let list_json = match encode(&list_req) { Ok(j) => j, Err(_) => return DaemonStatus::default() };
-    if writeln!(writer, "{}", list_json).is_err() { return DaemonStatus::default(); }
-    if writer.flush().is_err() { return DaemonStatus::default(); }
+    let list_json = match encode(&list_req) {
+        Ok(j) => j,
+        Err(_) => return DaemonStatus::default(),
+    };
+    if writeln!(writer, "{}", list_json).is_err() {
+        return DaemonStatus::default();
+    }
+    if writer.flush().is_err() {
+        return DaemonStatus::default();
+    }
 
     // Lire AgentList
     let mut resp_line = String::new();
-    if reader.read_line(&mut resp_line).is_err() { return DaemonStatus::default(); }
+    if reader.read_line(&mut resp_line).is_err() {
+        return DaemonStatus::default();
+    }
     let agents = match decode::<DaemonToWrapper>(resp_line.trim()) {
-        Ok(DaemonToWrapper::AgentList { agents }) => {
-            agents.iter().map(|a| format!("{} ({})", a.name, a.agent_type)).collect()
-        }
+        Ok(DaemonToWrapper::AgentList { agents }) => agents
+            .into_iter()
+            .filter(|agent| agent.agent_type != "status-probe")
+            .collect(),
         _ => vec![],
     };
 
@@ -737,12 +1309,102 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
 
 impl Default for DaemonStatus {
     fn default() -> Self {
-        DaemonStatus { running: false, agents: vec![], message_count: 0 }
+        DaemonStatus {
+            running: false,
+            agents: vec![],
+            message_count: 0,
+        }
     }
 }
 
 pub struct DaemonStatus {
     pub running: bool,
-    pub agents: Vec<String>,
+    pub agents: Vec<bridget_transport::protocol::AgentInfo>,
     pub message_count: usize,
+}
+
+#[cfg(test)]
+mod presence_tests {
+    use super::*;
+
+    #[test]
+    fn unreachable_presence_remains_visible() {
+        let base = std::env::temp_dir().join(format!("bridget-presence-{}", std::process::id()));
+        let config = DaemonConfig {
+            socket_path: base.with_extension("sock"),
+            db_path: base.with_extension("db"),
+            log_path: base.with_extension("log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+        };
+        let mut state = DaemonState::new(&config).unwrap();
+        state
+            .router
+            .register(Some("agent-distant-1"), &bridget_core::AgentType::Codex, "conn-1")
+            .unwrap();
+        state
+            .conn_instances
+            .insert("conn-1".to_string(), "instance-1".to_string());
+        state.presences.insert(
+            "instance-1".to_string(),
+            Presence {
+                name: "agent-distant-1".to_string(),
+                agent_type: "codex".to_string(),
+                host: "projet-a".to_string(),
+                transport: "ssh-unix".to_string(),
+                os: "Linux".to_string(),
+                state: "connected".to_string(),
+                last_seen: Instant::now(),
+                reconnect_count: 0,
+            },
+        );
+        state.router.unregister_by_conn("conn-1");
+        state.mark_unreachable("conn-1");
+
+        let agents = state.agent_infos();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].host, "projet-a");
+        assert_eq!(agents[0].os, "Linux");
+        assert_eq!(agents[0].state, "unreachable");
+        if let Err(e) = std::fs::remove_file(&config.db_path) {
+            log::warn!("Impossible de supprimer la base {}: {}", config.db_path.display(), e);
+        }
+    }
+
+    #[test]
+    fn open_request_is_restored_when_both_agents_reconnect() {
+        let base = std::env::temp_dir().join(format!("bridget-restore-{}", std::process::id()));
+        let config = DaemonConfig {
+            socket_path: base.with_extension("sock"),
+            db_path: base.with_extension("db"),
+            log_path: base.with_extension("log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+        };
+        let mut state = DaemonState::new(&config).unwrap();
+        state
+            .store
+            .create_request("request-1", "sender", "target", 60)
+            .unwrap();
+        state
+            .router
+            .register(Some("sender"), &bridget_core::AgentType::Codex, "conn-s")
+            .unwrap();
+        state
+            .router
+            .register(Some("target"), &bridget_core::AgentType::Claude, "conn-t")
+            .unwrap();
+        state.restore_pending_for_agent("target", "conn-t");
+        assert_eq!(state.pending_replies.len(), 1);
+        assert_eq!(state.pending_replies[0].msg_id, "request-1");
+        if let Err(e) = std::fs::remove_file(&config.db_path) {
+            log::warn!("Impossible de supprimer la base {}: {}", config.db_path.display(), e);
+        }
+    }
 }

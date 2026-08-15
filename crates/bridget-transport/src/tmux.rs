@@ -95,6 +95,61 @@ impl TmuxTransport {
     }
 }
 
+/// Valide le contenu destiné à tmux pour prévenir les injections
+/// Rejette les séquences de contrôle tmux dangereuses et limite la taille
+pub fn validate_tmux_content(content: &str) -> Result<(), TransportError> {
+    // Limite de taille pour prévenir les attaques par mémoire
+    const MAX_CONTENT_SIZE: usize = 100_000;
+    if content.len() > MAX_CONTENT_SIZE {
+        return Err(TransportError::DeliveryFailed(
+            format!("Contenu trop volumineux: {} octets (max: {})", content.len(), MAX_CONTENT_SIZE)
+        ));
+    }
+
+    // Séquences de contrôle tmux potentiellement dangereuses
+    let dangerous_patterns = [
+        "bind-key",
+        "unbind-key",
+        "send-keys",
+        "run-shell",
+        "if-shell",
+        "display-message",
+        "set-option",
+        "show-options",
+        "command-prompt",
+        "confirm-before",
+        "new-window",
+        "split-window",
+        "kill-window",
+        "kill-pane",
+        "join-pane",
+        "move-pane",
+        "select-pane",
+        "select-window",
+        "swap-pane",
+        "swap-window",
+        "rename-window",
+    ];
+
+    let content_lower = content.to_lowercase();
+    for pattern in &dangerous_patterns {
+        if content_lower.contains(pattern) {
+            return Err(TransportError::DeliveryFailed(
+                format!("Séquence tmux interdite détectée: {}", pattern)
+            ));
+        }
+    }
+
+    // Vérifier les tentatives d'injection via caractères de contrôle
+    if content.contains('\x1b') && (content.contains('[') || content.contains(']')) {
+        return Err(TransportError::DeliveryFailed(
+            "Séquences ANSI ESC détectées".to_string()
+        ));
+    }
+
+    Ok(())
+}
+
 impl Transport for TmuxTransport {
     fn deliver(&mut self, msg: &BridgetMessage) -> Result<(), TransportError> {
         // Vérifier que l'agent est vivant avant d'injecter
@@ -112,6 +167,9 @@ impl Transport for TmuxTransport {
             std::process::id(),
             msg.id.chars().take(8).collect::<String>()
         );
+
+        // VALIDATION DE SÉCURITÉ contre injection tmux
+        validate_tmux_content(&envelope)?;
 
         // 1. set-buffer NOMMÉ avec stdin (vérifier le rc)
         let set_buffer = Command::new("tmux")
@@ -179,8 +237,17 @@ impl Transport for TmuxTransport {
             ));
         }
 
-        // 4. Attendre que le TUI digère le collage
-        std::thread::sleep(std::time::Duration::from_millis(600));
+        // 4. Attendre que le TUI digère le collage - polling actif au lieu de sleep fixe
+        let mut digestion_attempts = 0;
+        const MAX_DIGESTION_ATTEMPTS: u32 = 30; // 30 * 50ms = 1.5s max au lieu de 600ms fixe
+        while digestion_attempts < MAX_DIGESTION_ATTEMPTS {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            // Vérifier si le composer a du contenu = message est en train de digérer
+            if !self.composer_has_content() {
+                break;
+            }
+            digestion_attempts += 1;
+        }
 
         // 5. CR littéral (0x0d) pour soumettre
         let cr = Command::new("tmux")
@@ -200,24 +267,42 @@ impl Transport for TmuxTransport {
             _ => {}
         }
 
-        // 6. Vérifier que le message a été soumis (composer vide)
-        std::thread::sleep(std::time::Duration::from_millis(800));
+        // 6. Vérifier que le message a été soumis (composer vide) - polling actif
+        let mut verification_attempts = 0;
+        const MAX_VERIFICATION_ATTEMPTS: u32 = 16; // 16 * 50ms = 800ms max
+        while verification_attempts < MAX_VERIFICATION_ATTEMPTS {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            if !self.composer_has_content() {
+                break;
+            }
+            verification_attempts += 1;
+        }
+
         if self.composer_has_content() {
             // Le composer a encore du contenu : retenter avec Enter nommé
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            std::thread::sleep(std::time::Duration::from_millis(200)); // Réduit de 500ms à 200ms
             let _ = Command::new("tmux")
                 .args(["send-keys", "-t", pane, "Enter"])
                 .output();
-            std::thread::sleep(std::time::Duration::from_millis(800));
 
-            // Dernière vérification
+            // Vérification finale avec polling
+            let mut retry_attempts = 0;
+            const MAX_RETRY_ATTEMPTS: u32 = 10;
+            while retry_attempts < MAX_RETRY_ATTEMPTS {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if !self.composer_has_content() {
+                    break;
+                }
+                retry_attempts += 1;
+            }
+
             if self.composer_has_content() {
                 log::warn!("composer encore plein après 2 CR — message peut-être non soumis");
             }
         }
 
-        // 7. CR de sécurité systématique
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        // 7. CR de sécurité systématique - délai minimal car on a déjà polling
+        std::thread::sleep(std::time::Duration::from_millis(100)); // Réduit de 300ms à 100ms
         let _ = Command::new("tmux")
             .args(["send-keys", "-t", pane, "-l", "\r"])
             .output();
@@ -228,19 +313,13 @@ impl Transport for TmuxTransport {
     fn is_alive(&self) -> bool {
         // Vérifier que le process de l'agent CLI tourne toujours
         // kill(pid, 0) retourne 0 si le process existe
-        unsafe { libc_kill(self.agent_pid, 0) == 0 }
+        // Utilisation sûre via libc crate
+        unsafe { libc::kill(self.agent_pid as i32, 0) == 0 }
     }
 
     fn connection_id(&self) -> &str {
         &self.pane_id
     }
-}
-
-
-
-unsafe extern "C" {
-    #[link_name = "kill"]
-    fn libc_kill(pid: u32, sig: i32) -> i32;
 }
 
 #[cfg(test)]
@@ -266,5 +345,48 @@ mod tests {
         // PID 999999 n'existe probablement pas
         let t = TmuxTransport::new("%0", 999999);
         assert!(!t.is_alive());
+    }
+
+    // Tests de validation tmux
+    #[test]
+    fn test_validate_tmux_content_normal() {
+        let content = "Message normal sans rien de spécial";
+        assert!(validate_tmux_content(content).is_ok());
+    }
+
+    #[test]
+    fn test_validate_tmux_content_dangerous_bind_key() {
+        let content = "Message avec bind-key";
+        assert!(validate_tmux_content(content).is_err());
+    }
+
+    #[test]
+    fn test_validate_tmux_content_dangerous_send_keys() {
+        let content = "Message avec send-keys";
+        assert!(validate_tmux_content(content).is_err());
+    }
+
+    #[test]
+    fn test_validate_tmux_content_too_large() {
+        let large_content = "a".repeat(100_001);
+        assert!(validate_tmux_content(&large_content).is_err());
+    }
+
+    #[test]
+    fn test_validate_tmux_content_ansi_escape() {
+        let content = "Message avec \x1b[";
+        assert!(validate_tmux_content(content).is_err());
+    }
+
+    #[test]
+    fn test_validate_tmux_content_case_insensitive() {
+        let content = "Message avec BIND-KEY";
+        assert!(validate_tmux_content(content).is_err());
+    }
+
+    #[test]
+    fn test_validate_tmux_content_at_limit() {
+        let content = "a".repeat(100_000);
+        assert!(validate_tmux_content(&content).is_ok());
     }
 }

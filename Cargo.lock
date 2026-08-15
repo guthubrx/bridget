@@ -103,6 +103,7 @@ name = "bridget-transport"
 version = "0.1.0"
 dependencies = [
  "bridget-core",
+ "libc",
  "log",
  "serde",
  "serde_json",

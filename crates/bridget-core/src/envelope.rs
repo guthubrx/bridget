@@ -9,14 +9,13 @@ use std::time::{Duration, Instant};
 /// Génère le texte de l'enveloppe à injecter dans le pane de l'agent destinataire.
 /// Format compact avec instruction de réponse explicite.
 pub fn wrap_envelope(msg: &BridgetMessage) -> String {
-    let reply_str = if msg.reply { "yes" } else { "no" };
     let id_short = &msg.id[..msg.id.len().min(8)];
 
     if msg.reply {
         // reply=yes : l'expéditeur attend une réponse.
         // On rend l'instruction impossible à ignorer.
         format!(
-            "💬 {from} → {to} (reply=yes, id={id})\n{body}\n\n⚠ Tu DOIS répondre à {from} avec: bridget send --to {from} \"ta réponse\"\nNe réponds pas ici. Ne dis pas \"bien reçu\". Réponds avec du contenu utile.",
+            "💬 {from} → {to} (reply=yes, id={id})\n{body}\n\n⚠ Tu DOIS répondre à {from} avec: bridget reply \"ta réponse\"\nNe réponds pas ici. Ne dis pas \"bien reçu\". Réponds avec du contenu utile.",
             from = msg.from,
             to = msg.to,
             body = msg.body,

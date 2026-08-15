@@ -59,6 +59,9 @@ pub struct BridgetMessage {
     /// Le daemon relance le destinataire à T/3, 2T/3, puis notifie l'émetteur à T.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_timeout: Option<u64>,
+    /// Identifiant de la demande suivie à laquelle ce message répond.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_reply_to: Option<String>,
 }
 
 fn default_hops() -> i32 {
@@ -82,6 +85,7 @@ impl BridgetMessage {
             reply: false,
             hops: default_hops(),
             reply_timeout: None,
+            in_reply_to: None,
         }
     }
 

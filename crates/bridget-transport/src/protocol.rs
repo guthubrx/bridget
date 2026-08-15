@@ -15,6 +15,14 @@ pub enum WrapperToDaemon {
     Register {
         agent_type: String,
         name: Option<String>,
+        #[serde(default)]
+        host: Option<String>,
+        #[serde(default)]
+        transport: Option<String>,
+        #[serde(default)]
+        os: Option<String>,
+        #[serde(default)]
+        instance_id: Option<String>,
     },
     /// Se désenregistrer.
     Unregister,
@@ -22,6 +30,14 @@ pub enum WrapperToDaemon {
     Rename { current_name: String, name: String },
     /// Envoyer un message à un autre agent.
     Send(BridgetMessage),
+    /// Annuler une demande suivie appartenant à l'agent courant.
+    CancelRequest {
+        id: String,
+        sender: String,
+        reason: Option<String>,
+    },
+    /// Lister les demandes suivies de l'agent courant.
+    ListRequests { sender: String },
     /// Signal de vie (périodique).
     Heartbeat,
     /// Demander la liste des agents connectés.
@@ -33,28 +49,23 @@ pub enum WrapperToDaemon {
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
     /// Confirmation d'enregistrement avec le nom final.
-    Registered {
-        name: String,
-    },
+    Registered { name: String },
     /// Confirmation d'un renommage.
     Renamed { old_name: String, name: String },
     /// Livrer un message à l'agent.
     Deliver(BridgetMessage),
     /// Acquittement d'un envoi.
-    Ack {
-        id: String,
-    },
+    Ack { id: String },
     /// Refus d'un envoi avec raison.
-    Nack {
-        id: String,
-        reason: String,
-    },
+    Nack { id: String, reason: String },
     /// Le daemon s'éteint.
     Disconnect,
     /// Réponse à ListAgents.
-    AgentList {
-        agents: Vec<AgentInfo>,
-    },
+    AgentList { agents: Vec<AgentInfo> },
+    /// État final d'une annulation.
+    RequestCancelled { id: String, state: String },
+    /// Liste des demandes suivies accessibles à l'agent courant.
+    RequestList { requests: Vec<RequestInfo> },
 }
 
 /// Sérialise un message en ligne JSON (newline-delimited JSON).
@@ -73,6 +84,26 @@ pub struct AgentInfo {
     pub name: String,
     pub agent_type: String,
     pub connection_id: String,
+    pub host: String,
+    pub transport: String,
+    #[serde(default = "unknown_os")]
+    pub os: String,
+    pub state: String,
+    pub last_seen_secs: u64,
+    pub reconnect_count: u32,
+}
+
+fn unknown_os() -> String {
+    "inconnu".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestInfo {
+    pub id: String,
+    pub target: String,
+    pub state: String,
+    pub deadline_at: i64,
+    pub cancel_reason: Option<String>,
 }
 
 #[cfg(test)]
@@ -84,14 +115,29 @@ mod tests {
         let msg = WrapperToDaemon::Register {
             agent_type: "codex".to_string(),
             name: None,
+            host: Some("test-host".to_string()),
+            transport: Some("unix".to_string()),
+            os: Some("Linux".to_string()),
+            instance_id: Some("instance-test".to_string()),
         };
         let json = encode(&msg).unwrap();
         assert!(json.contains("\"type\":\"Register\""));
         let decoded: WrapperToDaemon = decode(&json).unwrap();
         match decoded {
-            WrapperToDaemon::Register { agent_type, name } => {
+            WrapperToDaemon::Register {
+                agent_type,
+                name,
+                host,
+                transport,
+                os,
+                instance_id,
+            } => {
                 assert_eq!(agent_type, "codex");
                 assert!(name.is_none());
+                assert_eq!(host.as_deref(), Some("test-host"));
+                assert_eq!(transport.as_deref(), Some("unix"));
+                assert_eq!(os.as_deref(), Some("Linux"));
+                assert_eq!(instance_id.as_deref(), Some("instance-test"));
             }
             _ => panic!("mauvais type"),
         }
@@ -133,13 +179,17 @@ mod tests {
         };
         let json = encode(&msg).unwrap();
         assert!(json.contains("\"type\":\"Rename\""));
-        assert!(matches!(decode(&json).unwrap(), WrapperToDaemon::Rename { current_name, name } if current_name == "codex-1" && name == "analyse"));
+        assert!(
+            matches!(decode(&json).unwrap(), WrapperToDaemon::Rename { current_name, name } if current_name == "codex-1" && name == "analyse")
+        );
 
         let response = DaemonToWrapper::Renamed {
             old_name: "codex-1".to_string(),
             name: "analyse".to_string(),
         };
-        assert!(matches!(decode(&encode(&response).unwrap()).unwrap(), DaemonToWrapper::Renamed { old_name, name } if old_name == "codex-1" && name == "analyse"));
+        assert!(
+            matches!(decode(&encode(&response).unwrap()).unwrap(), DaemonToWrapper::Renamed { old_name, name } if old_name == "codex-1" && name == "analyse")
+        );
     }
 
     #[test]
