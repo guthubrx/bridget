@@ -9,3 +9,4 @@ bridget-core = { path = "../bridget-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+libc = "0.2"
