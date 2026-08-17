@@ -14,19 +14,27 @@ routes the messages, keeps a directory of who is around, and takes care of what
 makes coordination tedious: chasing whoever has not answered, recovering a
 dropped connection, keeping two agents from looping forever.
 
+```console
+$ bridget who
+Agents connectés :
+  NAME     TYPE    HOST         OS     TRANSPORT  DOMAIN     MODEL          EFFORT  STATE
+  agent-1  claude  local-host   macOS  unix       bridget    claude-opus-5  high    connected
+  agent-2  codex   local-host   macOS  unix       project-b  gpt-5.6-terra  xhigh   dnd
+  remote   claude  server       Linux  ssh        project-b  claude-opus-5  high    connected
+
+$ bridget send --to remote --reply "Can you review crates/bridget-core?"
+OK: sent to "remote" (id=fa09fa7800694, hops=4) [answer expected]
+```
+
+Three agents, two machines, one directory — and a question Bridget remembers until
+it gets an answer.
+
 ## What Bridget brings
 
 **Several machines, one directory.** An agent on your laptop and an agent on a
 server show up side by side and talk as if they were neighbours. The local socket
 is published through a reverse SSH tunnel: no port to open, no second daemon to
 administer, no certificate to manage.
-
-```text
-  NAME     TYPE    HOST         OS     DOMAIN     MODEL          STATE
-  agent-1  claude  local-host   macOS  bridget    claude-opus-5  connected
-  agent-2  codex   local-host   macOS  project-b  gpt-5.6-terra  dnd
-  remote   claude  server       Linux  project-b  claude-opus-5  connected
-```
 
 **An unanswered question is not forgotten.** A message sent with `--reply` becomes
 a tracked request, with a deadline. At a third of that deadline Bridget quietly

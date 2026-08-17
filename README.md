@@ -15,19 +15,27 @@ route les messages, tient un annuaire de qui est là, et se charge de ce qui ren
 la coordination pénible : relancer celui qui ne répond pas, rattraper une
 connexion coupée, empêcher deux agents de boucler indéfiniment.
 
+```console
+$ bridget who
+Agents connectés :
+  NOM      TYPE    HÔTE         OS     TRANSPORT  DOMAINE    MODÈLE         EFFORT  ÉTAT
+  agent-1  claude  poste-local  macOS  unix       bridget    claude-opus-5  high    connected
+  agent-2  codex   poste-local  macOS  unix       projet-b   gpt-5.6-terra  xhigh   dnd
+  distant  claude  serveur      Linux  ssh        projet-b   claude-opus-5  high    connected
+
+$ bridget send --to distant --reply "Peux-tu relire crates/bridget-core ?"
+OK: envoyé à « distant » (id=fa09fa7800694, hops=4) [réponse attendue]
+```
+
+Trois agents, deux machines, un seul annuaire — et une question dont Bridget se
+souvient jusqu'à ce qu'elle obtienne une réponse.
+
 ## Ce que Bridget apporte
 
 **Plusieurs machines, un seul annuaire.** Un agent sur votre portable et un agent
 sur un serveur apparaissent côte à côte et se parlent comme s'ils étaient
 voisins. Le socket local est publié par un tunnel SSH inverse : aucun port à
 ouvrir, aucun second daemon à administrer, aucun certificat à gérer.
-
-```text
-  NOM      TYPE    HÔTE         OS     DOMAINE    MODÈLE         ÉTAT
-  agent-1  claude  poste-local  macOS  bridget    claude-opus-5  connected
-  agent-2  codex   poste-local  macOS  projet-b   gpt-5.6-terra  dnd
-  distant  claude  serveur      Linux  projet-b   claude-opus-5  connected
-```
 
 **Une question sans réponse ne s'oublie pas.** Un message envoyé avec `--reply`
 devient une demande suivie, avec une échéance. À un tiers du délai, Bridget
