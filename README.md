@@ -2,13 +2,61 @@
 
 **🇫🇷 Français** · [🇬🇧 English](README.en.md)
 
-Protocole de communication inter-agents CLI, pair-à-pair, transport-agnostique.
+> Faire travailler ensemble des agents IA en ligne de commande — sur une machine,
+> ou sur plusieurs.
 
-## Vue d'ensemble
+Vous avez ouvert Codex dans un terminal, Claude Code dans un autre, peut-être un
+troisième agent sur un serveur distant. Chacun travaille seul, et c'est vous qui
+faites le facteur : copier une question, coller une réponse, se souvenir de qui
+attend quoi.
 
-Bridget permet à des agents CLI (Codex, Claude, Gemini) de communiquer entre
-eux en temps réel via un daemon central. Le protocole est indépendant du
-transport : tmux aujourd'hui, socket réseau demain.
+Bridget donne à ces agents un moyen de se parler directement. Un daemon local
+route les messages, tient un annuaire de qui est là, et se charge de ce qui rend
+la coordination pénible : relancer celui qui ne répond pas, rattraper une
+connexion coupée, empêcher deux agents de boucler indéfiniment.
+
+## Ce que Bridget apporte
+
+**Plusieurs machines, un seul annuaire.** Un agent sur votre portable et un agent
+sur un serveur apparaissent côte à côte et se parlent comme s'ils étaient
+voisins. Le socket local est publié par un tunnel SSH inverse : aucun port à
+ouvrir, aucun second daemon à administrer, aucun certificat à gérer.
+
+```text
+  NOM      TYPE    HÔTE         OS     DOMAINE    MODÈLE         ÉTAT
+  agent-1  claude  poste-local  macOS  bridget    claude-opus-5  connected
+  agent-2  codex   poste-local  macOS  projet-b   gpt-5.6-terra  dnd
+  distant  claude  serveur      Linux  projet-b   claude-opus-5  connected
+```
+
+**Une question sans réponse ne s'oublie pas.** Un message envoyé avec `--reply`
+devient une demande suivie, avec une échéance. À un tiers du délai, Bridget
+relance discrètement le destinataire ; aux deux tiers, il insiste ; à l'échéance,
+il prévient l'émetteur que la demande a échoué. Personne n'attend indéfiniment
+une réponse qui ne viendra pas, et rien ne se perd en silence.
+
+**Les coupures ne cassent rien.** Quand le réseau tombe, l'agent distant continue
+de travailler. Son wrapper se reconnecte seul, avec un délai croissant, et
+retrouve son nom — même s'il avait été renommé entre-temps. Pendant ce temps
+l'annuaire le montre `unreachable` plutôt que disparu, ce qui distingue une perte
+de réseau d'un agent arrêté volontairement.
+
+**Vous savez à qui vous confiez quoi.** L'annuaire n'affiche pas seulement
+`claude` ou `codex`, mais le modèle réellement en service et son niveau d'effort,
+tenus à jour quand vous en changez en cours de session. Un domaine, déduit du
+dépôt de travail, dit sur quel projet chacun est occupé.
+
+**Le silence se demande.** Un agent en pleine tâche longue peut refuser les
+interruptions. Les messages qui lui sont adressés sont alors refusés avec la
+raison et le temps restant, et l'émetteur décide de la suite plutôt que
+d'attendre sans savoir.
+
+**Des garde-fous contre l'emballement.** Deux agents enthousiastes peuvent
+s'envoyer des messages jusqu'à épuisement du budget. Un disjoncteur, une
+déduplication par contenu et un budget de sauts arrêtent la boucle avant vous.
+
+Le protocole est indépendant de son transport — tmux aujourd'hui, socket réseau
+demain — et tient dans trois crates Rust sans dépendance exotique.
 
 ## Démarrage rapide
 
@@ -56,7 +104,7 @@ local. Tous les agents connectés sont considérés comme coopératifs.
 - il ne résiste pas à un processus local hostile.
 
 En conséquence, n'exposez pas le socket à un réseau ou à un compte auquel vous ne
-faites pas confiance. La fédération SSH décrite plus bas tunnelise le socket : la
+faites pas confiance. La [fédération SSH](#plusieurs-machines-et-fédération-ssh) tunnelise le socket : la
 confiance repose entièrement sur SSH, pas sur Bridget.
 
 Ces limites sont des choix de périmètre, pas des oublis. Les lever supposerait un
@@ -105,12 +153,10 @@ confiance ci-dessus.
 - **Auto-envoi interdit** — un agent ne peut pas se parler à lui-même
 - **Escalade progressive** — rappels automatiques à T/3, 2T/3 puis notification d'échec à T
 - **Timeout configurable** — `--timeout <secondes>` (défaut 60s)
-- **Demandes annulables** — une demande `--reply` possède un identifiant ; son émetteur peut l'arrêter avec `bridget cancel <id>`, ce qui supprime les rappels et libère le destinataire de toute réponse.
+- **Demandes annulables** — une demande `--reply` porte un identifiant et peut être arrêtée par son émetteur
 
-L'annulation est coopérative : elle n'interrompt ni un outil ni un modèle déjà en
-train de travailler, mais elle met fin à la demande Bridget, à ses relances et à
-l'obligation de répondre. `bridget requests` permet à l'émetteur de consulter ses
-demandes et leur état.
+Les deux derniers points sont détaillés dans
+[Demandes suivies et relances](#demandes-suivies-et-relances).
 
 ## Commandes
 
@@ -201,6 +247,52 @@ rétention d'une présence injoignable 300 s, battement de cœur 3 s, reconnexio
 en 1-2-4-8-16 puis 30 s au plus, sonde de modèle Codex toutes les 20 s,
 « ne pas déranger » 60 min par défaut, message de 10 000 caractères et nom
 d'agent de 100 caractères au maximum.
+
+## Demandes suivies et relances
+
+Un message ordinaire est une notification : il part, il est livré, l'affaire est
+close. Ajouter `--reply` en fait tout autre chose — une **demande suivie**, avec
+un identifiant, une échéance et un cycle de vie que le daemon prend en charge.
+
+```bash
+bridget send --to agent-2 --reply "Peux-tu relire crates/bridget-core ?"
+# OK: envoyé à « agent-2 » (id=fa09fa7800694, hops=4) [réponse attendue]
+```
+
+À partir de là, l'émetteur n'a plus rien à surveiller. Sur une échéance T de
+60 secondes par défaut :
+
+| Moment | Ce que fait Bridget |
+|---|---|
+| T/3 | rappel discret au destinataire : une demande l'attend |
+| 2T/3 | rappel ferme |
+| T | la demande est marquée échouée et **l'émetteur** en est averti |
+| T + 30 s | la demande quitte la liste de surveillance |
+
+C'est la différence entre un message et une demande : un message peut passer
+inaperçu, une demande ne peut pas rester lettre morte sans que quelqu'un
+l'apprenne. L'échéance s'ajuste avec `--timeout <secondes>` — quelques minutes
+pour une relecture de code, quelques secondes pour une question triviale.
+
+L'émetteur garde la main :
+
+```bash
+bridget requests                      # mes demandes et leur état
+bridget cancel <id> --reason "plus utile"
+```
+
+L'annulation est **coopérative** : elle n'interrompt ni un outil ni un modèle
+déjà au travail. Elle met fin à la demande, à ses relances, et à l'obligation de
+répondre — ce qui évite qu'un agent revienne trente minutes plus tard avec une
+réponse à une question devenue sans objet. Elle est idempotente, et un état
+terminal n'est jamais rouvert.
+
+L'état survit à un redémarrage du daemon : les demandes encore ouvertes sont
+relues depuis SQLite et leur surveillance reprend là où elle s'était arrêtée.
+
+Enfin, les relances respectent le « ne pas déranger » du destinataire : elles sont
+suspendues tant qu'il refuse les interruptions. La notification d'échec à
+l'émetteur, elle, part quand même — elle ne dérange que celui qui attend.
 
 ## Modèle et niveau d'effort des agents
 
@@ -317,7 +409,7 @@ un service systemd utilisateur. Le mode `daemon` (défaut) crée un daemon Bridg
 Le mode `client-only` installe uniquement le client ; il est requis pour un hôte fédéré afin
 de ne pas créer un second daemon et un socket concurrent.
 
-## Fédération SSH
+## Plusieurs machines et fédération SSH
 
 Pour enrôler n'importe quelle machine SSH dans le daemon local unique, sans port public :
 

@@ -2,13 +2,59 @@
 
 [🇫🇷 Français](README.md) · **🇬🇧 English**
 
-A peer-to-peer, transport-agnostic communication protocol for CLI agents.
+> Getting command-line AI agents to work together — on one machine, or on
+> several.
 
-## Overview
+You have Codex open in one terminal, Claude Code in another, maybe a third agent
+on a remote server. Each one works alone, and you are the courier: copy a
+question, paste an answer, remember who is waiting for what.
 
-Bridget lets CLI agents (Codex, Claude, Gemini) talk to each other in real time
-through a central daemon. The protocol is independent of its transport: tmux
-today, a network socket tomorrow.
+Bridget gives those agents a way to talk to each other directly. A local daemon
+routes the messages, keeps a directory of who is around, and takes care of what
+makes coordination tedious: chasing whoever has not answered, recovering a
+dropped connection, keeping two agents from looping forever.
+
+## What Bridget brings
+
+**Several machines, one directory.** An agent on your laptop and an agent on a
+server show up side by side and talk as if they were neighbours. The local socket
+is published through a reverse SSH tunnel: no port to open, no second daemon to
+administer, no certificate to manage.
+
+```text
+  NAME     TYPE    HOST         OS     DOMAIN     MODEL          STATE
+  agent-1  claude  local-host   macOS  bridget    claude-opus-5  connected
+  agent-2  codex   local-host   macOS  project-b  gpt-5.6-terra  dnd
+  remote   claude  server       Linux  project-b  claude-opus-5  connected
+```
+
+**An unanswered question is not forgotten.** A message sent with `--reply` becomes
+a tracked request, with a deadline. At a third of that deadline Bridget quietly
+nudges the recipient; at two thirds it insists; at the deadline it tells the
+sender the request failed. Nobody waits forever for an answer that will never
+come, and nothing is lost in silence.
+
+**Disconnections break nothing.** When the network drops, the remote agent keeps
+working. Its wrapper reconnects on its own, with a growing delay, and gets its
+name back — even if it had been renamed in the meantime. Meanwhile the directory
+shows it as `unreachable` rather than gone, which tells a network loss apart from
+an agent deliberately shut down.
+
+**You know who you are handing work to.** The directory shows more than `claude`
+or `codex`: it shows the model actually in service and its effort level, kept up
+to date when you change them mid-session. A domain, derived from the working
+repository, says which project each agent is busy with.
+
+**Silence can be requested.** An agent deep in a long task can refuse
+interruptions. Messages addressed to it are then refused with the reason and the
+time remaining, so the sender decides what to do instead of waiting blindly.
+
+**Guardrails against runaway loops.** Two eager agents can message each other
+until the budget runs out. A circuit breaker, content deduplication and a hop
+budget stop the loop before you have to.
+
+The protocol is independent of its transport — tmux today, a network socket
+tomorrow — and fits in three Rust crates with no exotic dependency.
 
 ## Quick start
 
@@ -56,7 +102,7 @@ to be cooperative.
 - it does not withstand a hostile local process.
 
 Consequently, do not expose the socket to a network or an account you do not
-trust. The SSH federation described below tunnels the socket: trust rests
+trust. The [SSH federation](#several-machines-and-ssh-federation) tunnels the socket: trust rests
 entirely on SSH, not on Bridget.
 
 These limits are scope decisions, not oversights. Lifting them would require a
@@ -105,11 +151,10 @@ above.
 - **No self-messaging** — an agent cannot talk to itself
 - **Progressive escalation** — automatic reminders at T/3 and 2T/3, then a failure notice at T
 - **Configurable timeout** — `--timeout <seconds>` (default 60 s)
-- **Cancellable requests** — a `--reply` request carries an identifier; its sender can stop it with `bridget cancel <id>`, which removes the reminders and releases the recipient from any obligation to answer.
+- **Cancellable requests** — a `--reply` request carries an identifier and can be stopped by its sender
 
-Cancellation is cooperative: it interrupts neither a tool nor a model already at
-work, but it ends the Bridget request, its reminders and the duty to reply.
-`bridget requests` lets a sender review their requests and their state.
+The last two points are covered in detail under
+[Tracked requests and reminders](#tracked-requests-and-reminders).
 
 ## Commands
 
@@ -199,6 +244,51 @@ Behavioural values, hard-coded in this version: circuit breaker 8 exchanges per
 unreachable presence retained 300 s, heartbeat 3 s, reconnection at 1-2-4-8-16
 then 30 s at most, Codex model probe every 20 s, do-not-disturb 60 min by
 default, messages up to 10,000 characters and agent names up to 100.
+
+## Tracked requests and reminders
+
+An ordinary message is a notification: it goes out, it is delivered, the matter is
+closed. Adding `--reply` makes it something else entirely — a **tracked request**,
+with an identifier, a deadline, and a lifecycle the daemon takes care of.
+
+```bash
+bridget send --to agent-2 --reply "Can you review crates/bridget-core?"
+# OK: sent to "agent-2" (id=fa09fa7800694, hops=4) [answer expected]
+```
+
+From then on the sender has nothing left to watch. On a default deadline T of
+60 seconds:
+
+| Moment | What Bridget does |
+|---|---|
+| T/3 | quiet reminder to the recipient: a request is waiting |
+| 2T/3 | firm reminder |
+| T | the request is marked failed and **the sender** is notified |
+| T + 30 s | the request leaves the watch list |
+
+That is the difference between a message and a request: a message can go
+unnoticed, a request cannot stay unanswered without someone finding out. Adjust
+the deadline with `--timeout <seconds>` — a few minutes for a code review, a few
+seconds for a trivial question.
+
+The sender stays in control:
+
+```bash
+bridget requests                      # my requests and their state
+bridget cancel <id> --reason "no longer needed"
+```
+
+Cancellation is **cooperative**: it interrupts neither a tool nor a model already
+at work. It ends the request, its reminders and the duty to answer — which keeps
+an agent from coming back thirty minutes later with an answer to a question that
+no longer matters. It is idempotent, and a terminal state is never reopened.
+
+The state survives a daemon restart: still-open requests are read back from
+SQLite and their supervision resumes where it left off.
+
+Finally, reminders honour the recipient's do-not-disturb: they are suspended while
+it refuses interruptions. The failure notice to the sender still goes out — it
+only disturbs the one who is waiting.
 
 ## Agent model and effort level
 
@@ -313,7 +403,7 @@ sets up a user systemd service. The `daemon` mode (default) creates a standalone
 Bridget daemon. The `client-only` mode installs the client alone; it is required
 for a federated host, so as not to create a second daemon and a competing socket.
 
-## SSH federation
+## Several machines and SSH federation
 
 To enrol any SSH machine into the single local daemon, with no public port:
 
