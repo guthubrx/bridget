@@ -875,9 +875,23 @@ mod reconnect_tests {
 
     #[test]
     fn le_domaine_derive_nomme_le_depot_courant() {
-        // Le test s'exécute dans le dépôt Bridget : la racine git doit donner
-        // son nom, sans configuration ni embellissement.
-        assert_eq!(derive_domain().as_deref(), Some("bridget"));
+        // La règle vérifiée est « nom de la racine du dépôt », et non « chemin
+        // complet » ni « répertoire courant ». On ne peut pas comparer à une
+        // chaîne en dur : le dépôt peut être cloné sous n'importe quel nom, et
+        // les tests s'exécutent aussi depuis un sous-répertoire.
+        let racine = Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .expect("git doit être disponible pour ce test");
+        let racine = PathBuf::from(String::from_utf8_lossy(&racine.stdout).trim().to_string());
+        let attendu = racine
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string());
+
+        assert_eq!(derive_domain(), attendu);
+        // Le domaine est un nom court, jamais un chemin.
+        let domaine = derive_domain().unwrap();
+        assert!(!domaine.contains('/'), "le domaine ne doit pas être un chemin");
     }
 
     #[test]
