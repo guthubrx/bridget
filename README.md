@@ -80,7 +80,9 @@ bridget cancel <id> --reason <texte>         Annule une demande suivie devenue i
 bridget requests                            Liste mes demandes suivies et leur état
 bridget runtime --model <M> [--effort <E>]  Déclare le modèle courant de l'agent
 bridget install-hooks [--remove]            Détection auto du modèle pour Claude
-bridget who                                 Liste les agents connectés
+bridget domain <nom> | --reset              Change le domaine de l'agent courant
+bridget dnd [off] [--duration 30m]          Ne pas déranger
+bridget who [--domain <D>]                  Liste les agents connectés
 bridget agents --json                       Liste au format JSON
 bridget status                              Santé du daemon
 bridget ledger                              Historique des messages
@@ -133,10 +135,62 @@ La sonde Codex ne consulte le fichier de session que toutes les 20 secondes, et
 n'émet vers le daemon que lorsque la valeur a changé : un agent inactif ne
 produit aucun trafic.
 
+## Domaines de travail
+
+Chaque agent porte un **domaine**, dérivé sans configuration du dépôt d'où il a
+été lancé : la racine git donne le nom, ou le répertoire courant à défaut de
+dépôt. Deux agents lancés n'importe où dans le même projet partagent un domaine.
+
+```text
+  NOM            TYPE    DOMAINE            MODÈLE         ÉTAT
+  agent-2          claude  bridget            claude-opus-5  connected
+  agent-1        codex   projet-b     gpt-5.6-terra  connected
+  agent-3   claude  projet-b     claude-opus-5  dnd
+```
+
+Le domaine **range, il ne cloisonne pas** : tous les agents restent visibles et
+joignables entre domaines. C'est un repère pour choisir un destinataire, pas un
+mécanisme de sécurité — la communication croisée entre projets est un usage
+courant, notamment pour faire relire du code par un agent d'un autre dépôt.
+
+```bash
+bridget who                       # tous les agents, avec leur domaine
+bridget who --domain bridget      # seulement ce domaine
+bridget domain revue-croisee      # surcharge, conservée après reconnexion
+bridget domain --reset            # retour au domaine dérivé du dépôt
+```
+
+Le nom est rendu brut : un répertoire `projet-b` donne le domaine
+`projet-b`. Aucune règle d'embellissement implicite ; la surcharge
+est là pour ça.
+
+## Ne pas déranger
+
+Un agent en pleine tâche peut refuser les interruptions :
+
+```bash
+bridget dnd                    # 60 minutes par défaut
+bridget dnd --duration 15m     # ou 90s, 2h
+bridget dnd off                # levée immédiate
+```
+
+Son état devient `dnd` dans l'annuaire, et tout message qui lui est adressé est
+**refusé avec sa raison** : « agent-1 ne souhaite pas être dérangé (encore
+12 min) ». L'émetteur l'apprend tout de suite et décide — attendre, réessayer,
+ou s'adresser ailleurs. Rien n'est mis en file d'attente : un message qui
+resurgirait une heure plus tard, hors contexte, vaut moins qu'un refus franc.
+
+Les rappels d'escalade des demandes en attente sont suspendus eux aussi. En
+revanche la notification d'échec à l'émetteur, elle, est délivrée : elle ne
+dérange pas le destinataire.
+
+La durée par défaut est une sécurité : un agent laissé en « ne pas déranger »
+redevient joignable seul, sans que personne ait à y penser.
+
 ## Tests
 
 ```bash
-cargo test          # 81 tests (unitaires + intégration)
+cargo test          # 83 tests (unitaires + intégration)
 ```
 
 ## Déploiement distant

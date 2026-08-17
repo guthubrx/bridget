@@ -82,6 +82,58 @@ fn transport_name() -> String {
         .unwrap_or_else(|| "unix".to_string())
 }
 
+/// Domaine de travail dérivé du répertoire courant.
+///
+/// La racine du dépôt git donne le regroupement le plus naturel : deux agents
+/// lancés n'importe où dans le même projet partagent un domaine. Hors dépôt, le
+/// nom du répertoire courant fait office de domaine.
+///
+/// Le nom est rendu brut, sans embellissement : un répertoire
+/// `projet-b` donne le domaine `projet-b`. Une règle
+/// de nettoyage implicite serait indevinable pour l'utilisateur, qui peut de
+/// toute façon surcharger avec `bridget domain`.
+fn derive_domain() -> Option<String> {
+    let git_root = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+
+    let base = match git_root {
+        Some(root) => root,
+        None => std::env::current_dir().ok()?,
+    };
+    base.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+/// Chemin du domaine surchargé d'un agent, en miroir de `agent-names/`.
+fn domain_state_path(agent: &str) -> PathBuf {
+    socket_path()
+        .parent()
+        .unwrap()
+        .join("agent-domains")
+        .join(agent)
+}
+
+/// Domaine effectif d'un agent : la surcharge si elle existe, le dérivé sinon.
+///
+/// Relu à chaque enregistrement, y compris après une reconnexion, pour la même
+/// raison que le nom : seule la trace sur disque connaît l'intention de
+/// l'utilisateur.
+fn effective_domain(agent: &str) -> Option<String> {
+    std::fs::read_to_string(domain_state_path(agent))
+        .map(|domain| domain.trim().to_string())
+        .ok()
+        .filter(|domain| !domain.is_empty())
+        .or_else(derive_domain)
+}
+
 /// Nom d'OS stable et lisible pour l'annuaire Bridget.
 fn operating_system() -> String {
     match std::env::consts::OS {
@@ -296,6 +348,7 @@ fn connect_and_register(
     transport: &str,
     os: &str,
     instance_id: &str,
+    domain: Option<&str>,
 ) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
     let stream = UnixStream::connect(socket_path()).map_err(|e| e.to_string())?;
     set_cloexec(&stream);
@@ -316,6 +369,7 @@ fn connect_and_register(
         transport: Some(transport.to_string()),
         os: Some(os.to_string()),
         instance_id: Some(instance_id.to_string()),
+        domain: domain.map(str::to_owned),
     };
     writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
@@ -354,6 +408,13 @@ pub fn launch(
     let transport = transport_name();
     let os = operating_system();
     let instance_id = uuid::Uuid::new_v4().to_string();
+    // Au premier enregistrement, le nom définitif n'est pas encore connu : si
+    // l'utilisateur en a demandé un, sa surcharge de domaine est déjà lisible,
+    // sinon on part du domaine dérivé.
+    let initial_domain = match effective_name.as_deref() {
+        Some(name) => effective_domain(name),
+        None => derive_domain(),
+    };
     let (reader, initial_writer, my_name) = connect_and_register(
         agent_type,
         effective_name.as_deref(),
@@ -361,6 +422,7 @@ pub fn launch(
         &transport,
         &os,
         &instance_id,
+        initial_domain.as_deref(),
     )?;
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
 
@@ -643,6 +705,7 @@ pub fn launch(
                         &transport_for_thread,
                         &os_for_thread,
                         &instance_id_for_thread,
+                        effective_domain(&wanted_name).as_deref(),
                     ) {
                         Ok((new_reader, new_writer, registered_name)) => {
                             if registered_name != wanted_name {
@@ -753,6 +816,7 @@ pub fn launch(
                             &transport_for_thread,
                             &os_for_thread,
                             &instance_id_for_thread,
+                            effective_domain(&wanted_name).as_deref(),
                         ) {
                             Ok((new_reader, new_writer, registered_name))
                                 if registered_name == wanted_name =>
@@ -808,6 +872,33 @@ pub fn launch(
 #[cfg(test)]
 mod reconnect_tests {
     use super::*;
+
+    #[test]
+    fn le_domaine_derive_nomme_le_depot_courant() {
+        // Le test s'exécute dans le dépôt Bridget : la racine git doit donner
+        // son nom, sans configuration ni embellissement.
+        assert_eq!(derive_domain().as_deref(), Some("bridget"));
+    }
+
+    #[test]
+    fn le_domaine_surcharge_prime_sur_le_derive() {
+        let path = domain_state_path("agent-de-test-domaine");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, "revue-croisee\n").unwrap();
+        assert_eq!(
+            effective_domain("agent-de-test-domaine").as_deref(),
+            Some("revue-croisee")
+        );
+
+        // Sans trace disque, on retombe sur le domaine dérivé.
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            effective_domain("agent-de-test-domaine"),
+            derive_domain()
+        );
+    }
 
     #[test]
     fn le_nom_choisi_par_l_utilisateur_survit_a_la_reconnexion() {

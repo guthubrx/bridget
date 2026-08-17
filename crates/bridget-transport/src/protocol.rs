@@ -23,6 +23,10 @@ pub enum WrapperToDaemon {
         os: Option<String>,
         #[serde(default)]
         instance_id: Option<String>,
+        /// Regroupement de travail de l'agent : nom du dépôt d'où il a été
+        /// lancé, ou domaine choisi explicitement s'il en existe un.
+        #[serde(default)]
+        domain: Option<String>,
     },
     /// Se désenregistrer.
     Unregister,
@@ -58,6 +62,25 @@ pub enum WrapperToDaemon {
         #[serde(default)]
         effort: Option<String>,
         source: RuntimeSource,
+    },
+    /// Remplacer le domaine d'un agent, ou revenir au domaine dérivé.
+    ///
+    /// `domain: None` signifie « réinitialiser » : le daemon reprend alors le
+    /// domaine annoncé à l'enregistrement.
+    Domain {
+        agent: String,
+        #[serde(default)]
+        domain: Option<String>,
+    },
+    /// Déclarer la disponibilité d'un agent.
+    ///
+    /// `until_secs` est un horodatage Unix jusqu'auquel l'agent refuse d'être
+    /// dérangé. `None` lève le statut immédiatement. Représenter une échéance
+    /// plutôt qu'un booléen rend l'expiration automatique sans tâche de fond.
+    Availability {
+        agent: String,
+        #[serde(default)]
+        until_secs: Option<u64>,
     },
 }
 
@@ -134,6 +157,9 @@ pub struct AgentInfo {
     pub state: String,
     pub last_seen_secs: u64,
     pub reconnect_count: u32,
+    /// Regroupement de travail, `None` si indéterminable.
+    #[serde(default)]
+    pub domain: Option<String>,
     /// Modèle courant, `None` tant qu'aucune observation n'a eu lieu.
     #[serde(default)]
     pub model: Option<String>,
@@ -170,6 +196,7 @@ mod tests {
             transport: Some("unix".to_string()),
             os: Some("Linux".to_string()),
             instance_id: Some("instance-test".to_string()),
+            domain: Some("bridget".to_string()),
         };
         let json = encode(&msg).unwrap();
         assert!(json.contains("\"type\":\"Register\""));
@@ -182,6 +209,7 @@ mod tests {
                 transport,
                 os,
                 instance_id,
+                domain,
             } => {
                 assert_eq!(agent_type, "codex");
                 assert!(name.is_none());
@@ -189,6 +217,7 @@ mod tests {
                 assert_eq!(transport.as_deref(), Some("unix"));
                 assert_eq!(os.as_deref(), Some("Linux"));
                 assert_eq!(instance_id.as_deref(), Some("instance-test"));
+                assert_eq!(domain.as_deref(), Some("bridget"));
             }
             _ => panic!("mauvais type"),
         }
