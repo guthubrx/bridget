@@ -71,6 +71,10 @@ struct Presence {
     state: String,
     last_seen: Instant,
     reconnect_count: u32,
+    /// Modèle courant, `None` tant qu'aucune observation n'a eu lieu.
+    model: Option<String>,
+    /// Niveau d'effort courant, `None` si jamais observé ou observé absent.
+    effort: Option<String>,
 }
 
 /// Configuration du daemon.
@@ -319,6 +323,8 @@ impl DaemonState {
                         .map(|p| p.last_seen.elapsed().as_secs())
                         .unwrap_or(0),
                     reconnect_count: presence.map(|p| p.reconnect_count).unwrap_or(0),
+                    model: presence.and_then(|p| p.model.clone()),
+                    effort: presence.and_then(|p| p.effort.clone()),
                 }
             })
             .collect();
@@ -337,6 +343,9 @@ impl DaemonState {
                 state: presence.state.clone(),
                 last_seen_secs: presence.last_seen.elapsed().as_secs(),
                 reconnect_count: presence.reconnect_count,
+                // FR-010 : un agent injoignable garde sa dernière capacité connue.
+                model: presence.model.clone(),
+                effort: presence.effort.clone(),
             });
         }
         agents.sort_by(|left, right| left.name.cmp(&right.name));
@@ -808,13 +817,17 @@ fn handle_register(
             );
 
             if let Some(instance_id) = instance_id.filter(|id| !id.is_empty()) {
-                let reconnect_count = state
-                    .presences
-                    .get(&instance_id)
+                let previous = state.presences.get(&instance_id);
+                let reconnect_count = previous
                     .map(|presence| {
                         presence.reconnect_count + u32::from(presence.state != "connected")
                     })
                     .unwrap_or(0);
+                // Une reconnexion sous la même instance conserve le runtime déjà
+                // observé : l'agent n'a pas changé de modèle en perdant le socket.
+                let (model, effort) = previous
+                    .map(|presence| (presence.model.clone(), presence.effort.clone()))
+                    .unwrap_or((None, None));
 
                 state.conn_instances.insert(conn_id.to_string(), instance_id.clone());
                 state.presences.insert(
@@ -828,6 +841,8 @@ fn handle_register(
                         state: "connected".to_string(),
                         last_seen: Instant::now(),
                         reconnect_count,
+                        model,
+                        effort,
                     },
                 );
             }
@@ -843,6 +858,93 @@ fn handle_register(
                 reason: format!("enregistrement refusé: {}", e),
             }
         }
+    }
+}
+
+/// Longueur maximale acceptée pour un identifiant de modèle ou un niveau
+/// d'effort, alignée sur la validation des noms d'agent côté CLI.
+const MAX_RUNTIME_VALUE_LENGTH: usize = 100;
+
+/// Rejette une valeur trop longue ou porteuse de caractères de contrôle, qui
+/// casserait l'alignement de l'annuaire ou l'affichage du terminal.
+fn validate_runtime_value(value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("valeur vide".to_string());
+    }
+    if value.chars().count() > MAX_RUNTIME_VALUE_LENGTH {
+        return Err(format!(
+            "valeur trop longue (max {} caractères)",
+            MAX_RUNTIME_VALUE_LENGTH
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err("valeur contenant des caractères de contrôle".to_string());
+    }
+    Ok(())
+}
+
+/// Applique une observation de runtime à la présence d'un agent nommé.
+///
+/// L'agent est désigné par son nom et non par la connexion émettrice : le hook
+/// Claude et `bridget runtime` transitent par le client CLI, dont la connexion
+/// est éphémère. Même résolution que `Rename` et `CancelRequest`.
+///
+/// Le couple `(model, effort)` remplace l'état courant **en bloc** : un effort
+/// absent efface l'effort connu, parce qu'il décrit une observation réelle et
+/// non une lacune. Sans cela, un agent passant d'un modèle qui expose l'effort
+/// à un modèle qui ne l'expose pas conserverait indéfiniment l'ancienne valeur.
+///
+/// Ce message ne traverse ni le routeur ni le disjoncteur : ce n'est pas du
+/// trafic entre agents, il ne peut ni être routé ni boucler.
+fn handle_runtime(
+    agent: &str,
+    model: String,
+    effort: Option<String>,
+    source: bridget_transport::protocol::RuntimeSource,
+    state: &mut DaemonState,
+) -> DaemonToWrapper {
+    if let Err(reason) = validate_runtime_value(&model) {
+        return DaemonToWrapper::Nack {
+            id: "runtime".to_string(),
+            reason: format!("modèle invalide: {}", reason),
+        };
+    }
+    if let Some(Err(reason)) = effort.as_deref().map(validate_runtime_value) {
+        return DaemonToWrapper::Nack {
+            id: "runtime".to_string(),
+            reason: format!("effort invalide: {}", reason),
+        };
+    }
+
+    let instance_id = state
+        .router
+        .get_agent(agent)
+        .map(|found| found.connection_id.clone())
+        .and_then(|conn| state.conn_instances.get(&conn).cloned());
+    let Some(presence) = instance_id.and_then(|id| state.presences.get_mut(&id)) else {
+        return DaemonToWrapper::Nack {
+            id: "runtime".to_string(),
+            reason: format!("agent introuvable: {}", agent),
+        };
+    };
+
+    let unchanged = presence.model.as_deref() == Some(model.as_str())
+        && presence.effort.as_deref() == effort.as_deref();
+    if !unchanged {
+        log::debug!(
+            "runtime de '{}' mis à jour par {} : modèle={} effort={:?}",
+            presence.name,
+            source,
+            model,
+            effort
+        );
+        presence.model = Some(model);
+        presence.effort = effort;
+    }
+    presence.last_seen = Instant::now();
+
+    DaemonToWrapper::Ack {
+        id: "runtime".to_string(),
     }
 }
 
@@ -1140,6 +1242,16 @@ fn handle_wrapper_message(
             Some(DaemonToWrapper::AgentList { agents })
         }
 
+        WrapperToDaemon::Runtime {
+            agent,
+            model,
+            effort,
+            source,
+        } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            Some(handle_runtime(&agent, model, effort, source, &mut st))
+        }
+
         WrapperToDaemon::CancelRequest { id, sender, reason } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             if st.router.get_agent(&sender).is_none() {
@@ -1359,6 +1471,8 @@ mod presence_tests {
                 state: "connected".to_string(),
                 last_seen: Instant::now(),
                 reconnect_count: 0,
+                model: Some("gpt-5.3-codex".to_string()),
+                effort: Some("xhigh".to_string()),
             },
         );
         state.router.unregister_by_conn("conn-1");
@@ -1369,9 +1483,165 @@ mod presence_tests {
         assert_eq!(agents[0].host, "projet-a");
         assert_eq!(agents[0].os, "Linux");
         assert_eq!(agents[0].state, "unreachable");
+        // FR-010 : la dernière capacité connue survit à la perte de connexion.
+        assert_eq!(agents[0].model.as_deref(), Some("gpt-5.3-codex"));
+        assert_eq!(agents[0].effort.as_deref(), Some("xhigh"));
         if let Err(e) = std::fs::remove_file(&config.db_path) {
             log::warn!("Impossible de supprimer la base {}: {}", config.db_path.display(), e);
         }
+    }
+
+    /// Construit un état minimal avec un agent enregistré et sa présence.
+    fn state_with_registered_agent(label: &str) -> (DaemonState, DaemonConfig) {
+        let base = std::env::temp_dir().join(format!("bridget-{}-{}", label, std::process::id()));
+        let config = DaemonConfig {
+            socket_path: base.with_extension("sock"),
+            db_path: base.with_extension("db"),
+            log_path: base.with_extension("log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+        };
+        let mut state = DaemonState::new(&config).unwrap();
+        state
+            .router
+            .register(Some("agent-2"), &bridget_core::AgentType::Claude, "conn-1")
+            .unwrap();
+        state
+            .conn_instances
+            .insert("conn-1".to_string(), "instance-1".to_string());
+        state.presences.insert(
+            "instance-1".to_string(),
+            Presence {
+                name: "agent-2".to_string(),
+                agent_type: "claude".to_string(),
+                host: "macbook".to_string(),
+                transport: "unix".to_string(),
+                os: "macOS".to_string(),
+                state: "connected".to_string(),
+                last_seen: Instant::now(),
+                reconnect_count: 0,
+                model: None,
+                effort: None,
+            },
+        );
+        (state, config)
+    }
+
+    #[test]
+    fn runtime_observation_remplace_le_couple_en_bloc() {
+        use bridget_transport::protocol::RuntimeSource;
+        let (mut state, config) = state_with_registered_agent("runtime-atomique");
+
+        // Observation initiale : un modèle qui expose son niveau d'effort.
+        let ack = handle_runtime(
+            "agent-2",
+            "claude-opus-5".to_string(),
+            Some("high".to_string()),
+            RuntimeSource::ClaudeHook,
+            &mut state,
+        );
+        assert!(matches!(ack, DaemonToWrapper::Ack { .. }));
+        let agents = state.agent_infos();
+        assert_eq!(agents[0].model.as_deref(), Some("claude-opus-5"));
+        assert_eq!(agents[0].effort.as_deref(), Some("high"));
+
+        // Bascule vers un modèle sans niveau d'effort : l'ancien effort DOIT
+        // disparaître. Le conserver afficherait « haiku + high », capacité qui
+        // n'a jamais existé. Défaut soulevé par la contre-revue « agent-1 ».
+        handle_runtime(
+            "agent-2",
+            "claude-haiku-4-5-20251001".to_string(),
+            None,
+            RuntimeSource::ClaudeHook,
+            &mut state,
+        );
+        let agents = state.agent_infos();
+        assert_eq!(agents[0].model.as_deref(), Some("claude-haiku-4-5-20251001"));
+        assert_eq!(agents[0].effort, None);
+
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    #[test]
+    fn runtime_refuse_hors_agent_enregistre_et_valeurs_invalides() {
+        use bridget_transport::protocol::RuntimeSource;
+        let (mut state, config) = state_with_registered_agent("runtime-refus");
+
+        // Connexion inconnue du daemon.
+        let nack = handle_runtime(
+            "agent-inexistant",
+            "modele".to_string(),
+            None,
+            RuntimeSource::Declared,
+            &mut state,
+        );
+        assert!(
+            matches!(nack, DaemonToWrapper::Nack { ref reason, .. } if reason.contains("introuvable"))
+        );
+
+        // Caractère de contrôle : casserait l'alignement de l'annuaire.
+        let nack = handle_runtime(
+            "agent-2",
+            "mod\u{1b}[31mele".to_string(),
+            None,
+            RuntimeSource::Declared,
+            &mut state,
+        );
+        assert!(matches!(nack, DaemonToWrapper::Nack { .. }));
+
+        // Valeur trop longue.
+        let nack = handle_runtime(
+            "agent-2",
+            "m".repeat(101),
+            None,
+            RuntimeSource::Declared,
+            &mut state,
+        );
+        assert!(matches!(nack, DaemonToWrapper::Nack { .. }));
+
+        // Aucun refus n'a pollué l'annuaire.
+        assert_eq!(state.agent_infos()[0].model, None);
+
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    #[test]
+    fn runtime_survit_a_une_reconnexion_de_la_meme_instance() {
+        use bridget_transport::protocol::RuntimeSource;
+        let (mut state, config) = state_with_registered_agent("runtime-reconnexion");
+        handle_runtime(
+            "agent-2",
+            "gpt-5.3-codex".to_string(),
+            Some("xhigh".to_string()),
+            RuntimeSource::CodexRollout,
+            &mut state,
+        );
+
+        // Coupure puis réenregistrement sous la même instance.
+        state.router.unregister_by_conn("conn-1");
+        state.mark_unreachable("conn-1");
+        let response = handle_register(
+            "conn-2",
+            "codex".to_string(),
+            Some("agent-2".to_string()),
+            Some("macbook".to_string()),
+            Some("unix".to_string()),
+            Some("macOS".to_string()),
+            Some("instance-1".to_string()),
+            &mut state,
+        );
+        assert!(matches!(response, DaemonToWrapper::Registered { .. }));
+
+        let agents = state.agent_infos();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].state, "connected");
+        assert_eq!(agents[0].model.as_deref(), Some("gpt-5.3-codex"));
+        assert_eq!(agents[0].effort.as_deref(), Some("xhigh"));
+
+        let _ = std::fs::remove_file(&config.db_path);
     }
 
     #[test]

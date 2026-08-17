@@ -78,6 +78,8 @@ bridget send --to <nom> --reply --timeout 300 <msg>  Timeout personnalisé
 bridget reply <msg>                         Répond au dernier expéditeur reçu
 bridget cancel <id> --reason <texte>         Annule une demande suivie devenue inutile
 bridget requests                            Liste mes demandes suivies et leur état
+bridget runtime --model <M> [--effort <E>]  Déclare le modèle courant de l'agent
+bridget install-hooks [--remove]            Détection auto du modèle pour Claude
 bridget who                                 Liste les agents connectés
 bridget agents --json                       Liste au format JSON
 bridget status                              Santé du daemon
@@ -86,10 +88,55 @@ bridget ledger                              Historique des messages
 
 Une annulation est coopérative : elle n'interrompt pas un outil ou un modèle déjà en train de travailler, mais elle met fin à la demande Bridget, à ses relances et à l'obligation de répondre. `bridget requests` permet à l'émetteur de consulter ses demandes et leurs états.
 
+## Modèle et niveau d'effort des agents
+
+`bridget who` affiche le modèle et le niveau d'effort courants de chaque agent,
+tenus à jour quand l'humain en change en cours de session. Le type d'agent
+(`claude`, `codex`) ne dit rien de sa capacité réelle : c'est le modèle qui
+détermine à qui confier quoi.
+
+```text
+  NOM      TYPE    HÔTE      OS     TRANSPORT  MODÈLE         EFFORT  ÉTAT
+  agent-2    claude  macbook   macOS  unix       claude-opus-5  high    connected
+  agent-1  codex   macbook   macOS  unix       gpt-5.3-codex  xhigh   connected
+  distant  claude  projet-a    Linux  ssh        —              —       unreachable
+```
+
+Un tiret cadratin signale une valeur jamais observée — Bridget n'invente jamais
+un modèle à partir d'un défaut de configuration. Certains modèles n'exposent
+aucun niveau d'effort : la colonne reste alors vide, sans hériter de la valeur
+du modèle précédent.
+
+La détection diffère selon l'agent, parce que les deux ne se comportent pas de
+la même façon :
+
+| Agent | Mécanisme | Installation |
+|-------|-----------|--------------|
+| Codex | le wrapper localise le fichier de session que le processus tient ouvert et y lit le dernier contexte de tour | aucune, actif d'office |
+| Claude Code | un hook `Stop` rapporte le modèle à la fin de chaque tour | `bridget install-hooks`, une fois |
+| Autres | déclaration explicite | `bridget runtime --model <M> --effort <E>` |
+
+### Installer la détection pour Claude Code
+
+```bash
+bridget install-hooks            # ajoute un hook Stop dans ~/.claude/settings.json
+bridget install-hooks --remove   # le retire
+```
+
+La commande **modifie un fichier hors du dépôt** : elle écrit d'abord une
+sauvegarde horodatée (`settings.json.bak-AAAAMMJJ-HHMMSS`) et en affiche le
+chemin. L'insertion est additive — les hooks déjà présents sont conservés — et
+idempotente. Le hook est inerte hors Bridget : une session Claude ordinaire n'en
+subit aucun effet. Il ne s'applique qu'aux sessions ouvertes après installation.
+
+La sonde Codex ne consulte le fichier de session que toutes les 20 secondes, et
+n'émet vers le daemon que lorsque la valeur a changé : un agent inactif ne
+produit aucun trafic.
+
 ## Tests
 
 ```bash
-cargo test          # 36 tests (unitaires + intégration)
+cargo test          # 81 tests (unitaires + intégration)
 ```
 
 ## Déploiement distant
@@ -127,7 +174,8 @@ Lorsqu'un tunnel est temporairement coupé, le processus IA distant continue son
 wrapper Bridget retire alors l'agent de l'annuaire, puis tente une reconnexion avec backoff
 exponentiel et jitter (environ 1, 2, 4, 8, 16 puis au plus 30 secondes). Après 60 secondes de
 connexion stable, ce délai est remis à son minimum. L'agent est réinscrit automatiquement sous le
-même nom dès que le socket SSH réapparaît.
+même nom dès que le socket SSH réapparaît, y compris s'il a été renommé entre-temps
+par `bridget rename`.
 
 `bridget who` affiche aussi l'hôte d'exécution, l'OS, le transport et l'état de présence dans des
 colonnes alignées. L'OS est détecté par le wrapper (`macOS`, `Linux`, etc.) afin d'aiguiller une

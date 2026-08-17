@@ -2,7 +2,7 @@
 
 use crate::daemon::{self, DaemonConfig};
 use bridget_core::BridgetMessage;
-use bridget_transport::protocol::{decode, encode};
+use bridget_transport::protocol::{decode, encode, RuntimeSource};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
@@ -20,6 +20,11 @@ fn launch_agent_wrapper(binary: &str, agent_type: &str, args: &[String]) -> ! {
 // Constantes de validation (H-001)
 const MAX_MESSAGE_LENGTH: usize = 10000;
 const MAX_AGENT_NAME_LENGTH: usize = 100;
+
+/// Délai maximal d'attente d'une réponse du daemon pour une observation de
+/// runtime. Court volontairement : l'appelant est un hook exécuté dans la
+/// boucle de l'agent, il ne doit jamais le faire patienter.
+const RUNTIME_REPLY_TIMEOUT_SECS: u64 = 2;
 
 /// Valide un nom d'agent Bridget (H-001)
 fn validate_agent_name(name: &str) -> Result<(), String> {
@@ -80,6 +85,9 @@ pub fn run() {
         "cancel" => cmd_cancel(&args[2..]),
         "requests" => cmd_requests(&args[2..]),
         "rename" => cmd_rename(&args[2..]),
+        "runtime" => cmd_runtime(&args[2..]),
+        "hook" => cmd_hook(&args[2..]),
+        "install-hooks" => cmd_install_hooks(&args[2..]),
         "reply" => cmd_reply(&args[2..]),
         "who" => cmd_who(),
         "agents" => cmd_agents(&args[2..]),
@@ -153,6 +161,8 @@ fn print_usage() {
            cancel <ID>             Annule une demande suivie\n  \
            requests                Liste mes demandes suivies\n  \
            rename <N>             Renomme l'agent courant\n  \
+           runtime --model <M>    Déclare le modèle courant [--effort <E>]\n  \
+           install-hooks          Installe la détection auto du modèle (Claude)\n  \
            who                    Agents connectés\n  \
            status                 Santé du daemon\n  \
            ledger                 Historique des messages\n  \
@@ -517,6 +527,366 @@ fn send_rename_to_daemon(current_name: &str, name: &str) -> Result<DaemonToWrapp
     decode(line.trim()).map_err(|e| e.to_string())
 }
 
+/// Transmet une observation de runtime au daemon depuis le client CLI.
+///
+/// Le client s'enregistre sous une identité éphémère : c'est le champ `agent`
+/// du message, et non cette connexion, qui désigne l'agent observé.
+fn send_runtime_to_daemon(
+    agent: &str,
+    model: &str,
+    effort: Option<&str>,
+    source: RuntimeSource,
+) -> Result<DaemonToWrapper, String> {
+    let stream = UnixStream::connect(socket_path()).map_err(|e| e.to_string())?;
+    let read_stream = stream.try_clone().map_err(|e| e.to_string())?;
+    // Sans délai borné, un daemon qui ne répond pas — par exemple un daemon
+    // d'une version antérieure qui ignore ce message — bloquerait le hook, donc
+    // la fin de tour de l'agent observé. Constaté en test réel.
+    read_stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(RUNTIME_REPLY_TIMEOUT_SECS)))
+        .map_err(|e| e.to_string())?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    let register = WrapperToDaemon::Register {
+        agent_type: "cli".to_string(),
+        name: Some(format!("cli-runtime-{}", std::process::id())),
+        host: None,
+        transport: None,
+        os: None,
+        instance_id: None,
+    };
+    writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    writer.flush().map_err(|e| e.to_string())?;
+    let mut line = String::new();
+    reader.read_line(&mut line).map_err(|e| e.to_string())?;
+    let _: DaemonToWrapper = decode(line.trim()).map_err(|e| e.to_string())?;
+
+    let runtime = WrapperToDaemon::Runtime {
+        agent: agent.to_string(),
+        model: model.to_string(),
+        effort: effort.map(str::to_owned),
+        source,
+    };
+    writeln!(writer, "{}", encode(&runtime).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    writer.flush().map_err(|e| e.to_string())?;
+    line.clear();
+    reader.read_line(&mut line).map_err(|e| e.to_string())?;
+    decode(line.trim()).map_err(|e| e.to_string())
+}
+
+fn cmd_runtime(args: &[String]) {
+    let mut model: Option<String> = None;
+    let mut effort: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--model" if i + 1 < args.len() => {
+                model = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--effort" if i + 1 < args.len() => {
+                effort = Some(args[i + 1].clone());
+                i += 2;
+            }
+            other => {
+                eprintln!("argument inconnu: {}", other);
+                eprintln!("usage: bridget runtime --model <modèle> [--effort <niveau>]");
+                std::process::exit(2);
+            }
+        }
+    }
+
+    let Some(model) = model.filter(|value| !value.trim().is_empty()) else {
+        eprintln!("usage: bridget runtime --model <modèle> [--effort <niveau>]");
+        std::process::exit(2);
+    };
+
+    let agent = current_agent_name();
+    if agent == "human" {
+        eprintln!("runtime indisponible hors d'un agent Bridget");
+        std::process::exit(1);
+    }
+
+    match send_runtime_to_daemon(&agent, &model, effort.as_deref(), RuntimeSource::Declared) {
+        Ok(DaemonToWrapper::Ack { .. }) => match effort {
+            Some(effort) => println!("Runtime déclaré : {} (effort: {})", model, effort),
+            None => println!("Runtime déclaré : {} (effort: —)", model),
+        },
+        Ok(DaemonToWrapper::Nack { reason, .. }) => {
+            eprintln!("REJET: {}", reason);
+            std::process::exit(1);
+        }
+        Ok(_) => {
+            eprintln!("réponse inattendue du daemon");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("daemon inaccessible: {}", error);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Commande appelée par un hook d'agent, jamais par un humain.
+///
+/// Contrat : sortie standard vide, code de retour toujours 0. Un hook qui
+/// écrit ou qui échoue perturberait la session de l'agent observé (FR-013).
+fn cmd_hook(args: &[String]) {
+    match args.first().map(String::as_str) {
+        Some("claude-runtime") => hook_claude_runtime(),
+        Some(other) => {
+            log::debug!("hook inconnu: {}", other);
+        }
+        None => {
+            eprintln!("usage: bridget hook claude-runtime");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn hook_claude_runtime() {
+    // Hors d'un agent Bridget, le hook est inerte : les sessions Claude
+    // ordinaires de l'utilisateur ne doivent subir aucun effet.
+    let agent = current_agent_name();
+    if agent == "human" {
+        return;
+    }
+
+    let mut payload = String::new();
+    if std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload).is_err() {
+        log::debug!("hook claude-runtime : payload illisible");
+        return;
+    }
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(&payload) else {
+        log::debug!("hook claude-runtime : payload non JSON");
+        return;
+    };
+    let Some(transcript) = payload.get("transcript_path").and_then(|v| v.as_str()) else {
+        log::debug!("hook claude-runtime : pas de transcript_path");
+        return;
+    };
+    // Journalisé pour rendre diagnosticable le cas d'une session Claude
+    // imbriquée qui hériterait du nom de l'agent parent (research.md D-002).
+    log::debug!(
+        "hook claude-runtime : agent={} session={:?}",
+        agent,
+        payload.get("session_id").and_then(|v| v.as_str())
+    );
+
+    let Some(observed) = crate::runtime::parse_claude_transcript(std::path::Path::new(transcript))
+    else {
+        log::debug!("hook claude-runtime : aucun modèle dans {}", transcript);
+        return;
+    };
+
+    match send_runtime_to_daemon(
+        &agent,
+        &observed.model,
+        observed.effort.as_deref(),
+        RuntimeSource::ClaudeHook,
+    ) {
+        Ok(DaemonToWrapper::Ack { .. }) => {}
+        Ok(other) => log::debug!("hook claude-runtime : réponse inattendue {:?}", other),
+        Err(error) => log::debug!("hook claude-runtime : daemon inaccessible: {}", error),
+    }
+}
+
+fn claude_settings_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
+        .join(".claude")
+        .join("settings.json")
+}
+
+/// Commande du hook telle qu'inscrite dans la configuration de Claude Code.
+const HOOK_COMMAND: &str = "bridget hook claude-runtime";
+
+fn cmd_install_hooks(args: &[String]) {
+    let remove = args.iter().any(|arg| arg == "--remove");
+    let path = claude_settings_path();
+
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) => {
+            eprintln!("{} illisible: {}", path.display(), error);
+            std::process::exit(1);
+        }
+    };
+    let mut settings: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("{} n'est pas un JSON valide: {}", path.display(), error);
+            std::process::exit(1);
+        }
+    };
+
+    let changed = if remove {
+        remove_bridget_hook(&mut settings)
+    } else {
+        insert_bridget_hook(&mut settings)
+    };
+
+    if !changed {
+        println!(
+            "Aucun changement : le hook Bridget est déjà {}.",
+            if remove { "absent" } else { "installé" }
+        );
+        return;
+    }
+
+    // Sauvegarde AVANT écriture : l'utilisateur doit pouvoir revenir en arrière
+    // sur un fichier qui ne nous appartient pas (FR-012).
+    let backup = path.with_extension(format!("json.bak-{}", timestamp()));
+    if let Err(error) = std::fs::copy(&path, &backup) {
+        eprintln!("sauvegarde impossible ({}) : rien n'a été modifié", error);
+        std::process::exit(1);
+    }
+
+    let serialized = match serde_json::to_string_pretty(&settings) {
+        Ok(text) => format!("{}\n", text),
+        Err(error) => {
+            eprintln!("sérialisation impossible: {}", error);
+            std::process::exit(1);
+        }
+    };
+    if let Err(error) = write_atomically(&path, &serialized) {
+        eprintln!("écriture impossible: {}", error);
+        std::process::exit(1);
+    }
+
+    println!("Sauvegarde : {}", backup.display());
+    if remove {
+        println!("Hook Bridget retiré de {}", path.display());
+    } else {
+        println!("Hook Bridget installé dans {}", path.display());
+        println!("Les sessions Claude déjà ouvertes ne sont pas affectées.");
+    }
+}
+
+/// Écrit un fichier de configuration sans jamais le laisser tronqué.
+///
+/// Un `write` direct expose à un fichier à moitié écrit si le processus meurt
+/// ou si le disque est plein. Le fichier temporaire vit dans le même
+/// répertoire pour que le `rename` soit atomique — il le serait pas entre
+/// systèmes de fichiers différents.
+fn write_atomically(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    let directory = path.parent().unwrap_or(std::path::Path::new("."));
+    let temporary = directory.join(format!(
+        ".{}.bridget-{}",
+        path.file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "settings.json".to_string()),
+        std::process::id()
+    ));
+    let mut file = std::fs::File::create(&temporary)?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+    // Conserver les permissions d'origine : le fichier de configuration de
+    // l'utilisateur ne doit pas devenir plus permissif à cause de nous.
+    if let Ok(metadata) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&temporary, metadata.permissions());
+    }
+    match std::fs::rename(&temporary, path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&temporary);
+            Err(error)
+        }
+    }
+}
+
+/// Ajoute l'entrée Bridget au tableau `hooks.Stop` sans toucher aux entrées
+/// existantes de l'utilisateur. Rend `false` si elle y était déjà, ou si la
+/// structure du fichier n'est pas celle attendue — auquel cas on préfère ne
+/// rien faire plutôt que d'écraser une configuration qu'on ne comprend pas.
+fn insert_bridget_hook(settings: &mut serde_json::Value) -> bool {
+    if hook_is_present(settings) {
+        return false;
+    }
+    let entry = serde_json::json!({
+        "hooks": [{
+            "type": "command",
+            "command": HOOK_COMMAND,
+            "timeout": 5
+        }]
+    });
+    let Some(root) = settings.as_object_mut() else {
+        eprintln!("le fichier de configuration n'est pas un objet JSON");
+        return false;
+    };
+    let hooks = root
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(hooks) = hooks.as_object_mut() else {
+        eprintln!("la section « hooks » n'est pas un objet JSON");
+        return false;
+    };
+    let stop = hooks.entry("Stop").or_insert_with(|| serde_json::json!([]));
+    match stop.as_array_mut() {
+        Some(array) => {
+            array.push(entry);
+            true
+        }
+        None => {
+            eprintln!("la section « hooks.Stop » n'est pas une liste JSON");
+            false
+        }
+    }
+}
+
+/// Retire la seule entrée dont la commande est celle de Bridget.
+fn remove_bridget_hook(settings: &mut serde_json::Value) -> bool {
+    let Some(stop) = settings
+        .get_mut("hooks")
+        .and_then(|hooks| hooks.get_mut("Stop"))
+        .and_then(|stop| stop.as_array_mut())
+    else {
+        return false;
+    };
+    let before = stop.len();
+    stop.retain(|entry| !entry_is_bridget(entry));
+    before != stop.len()
+}
+
+fn hook_is_present(settings: &serde_json::Value) -> bool {
+    settings
+        .get("hooks")
+        .and_then(|hooks| hooks.get("Stop"))
+        .and_then(|stop| stop.as_array())
+        .map(|entries| entries.iter().any(entry_is_bridget))
+        .unwrap_or(false)
+}
+
+fn entry_is_bridget(entry: &serde_json::Value) -> bool {
+    entry
+        .get("hooks")
+        .and_then(|hooks| hooks.as_array())
+        .map(|hooks| {
+            hooks.iter().any(|hook| {
+                hook.get("command").and_then(|c| c.as_str()) == Some(HOOK_COMMAND)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Horodatage `AAAAMMJJ-HHMMSS` en temps local, pour nommer une sauvegarde.
+fn timestamp() -> String {
+    let output = std::process::Command::new("date")
+        .arg("+%Y%m%d-%H%M%S")
+        .output();
+    match output {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .to_string(),
+        _ => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_else(|_| "inconnu".to_string()),
+    }
+}
+
 fn cmd_reply(args: &[String]) {
     let agent_name = current_agent_name();
 
@@ -643,12 +1013,14 @@ fn cmd_agents(args: &[String]) {
             println!("Agents connectes :");
             for agent in &status.agents {
                 println!(
-                    "  {} ({}) — {} / {} via {} [{}]",
+                    "  {} ({}) — {} / {} via {} — {} / {} [{}]",
                     agent.name,
                     agent.agent_type,
                     agent.host,
                     agent.os,
                     agent.transport,
+                    runtime_cell(agent.model.as_deref()),
+                    runtime_cell(agent.effort.as_deref()),
                     agent.state
                 );
             }
@@ -702,17 +1074,45 @@ fn cmd_who() {
             .max()
             .unwrap_or(2)
             .max(2);
+        let model_width = status
+            .agents
+            .iter()
+            .map(|agent| runtime_cell(agent.model.as_deref()).chars().count())
+            .max()
+            .unwrap_or(6)
+            .max(6);
+        let effort_width = status
+            .agents
+            .iter()
+            .map(|agent| runtime_cell(agent.effort.as_deref()).chars().count())
+            .max()
+            .unwrap_or(6)
+            .max(6);
         println!(
-            "  {:<name_width$}  {:<type_width$}  {:<host_width$}  {:<os_width$}  {:<transport_width$}  ÉTAT",
-            "NOM", "TYPE", "HÔTE", "OS", "TRANSPORT"
+            "  {:<name_width$}  {:<type_width$}  {:<host_width$}  {:<os_width$}  {:<transport_width$}  {:<model_width$}  {:<effort_width$}  ÉTAT",
+            "NOM", "TYPE", "HÔTE", "OS", "TRANSPORT", "MODÈLE", "EFFORT"
         );
         for agent in &status.agents {
             println!(
-                "  {:<name_width$}  {:<type_width$}  {:<host_width$}  {:<os_width$}  {:<transport_width$}  {}",
-                agent.name, agent.agent_type, agent.host, agent.os, agent.transport, agent.state
+                "  {:<name_width$}  {:<type_width$}  {:<host_width$}  {:<os_width$}  {:<transport_width$}  {:<model_width$}  {:<effort_width$}  {}",
+                agent.name,
+                agent.agent_type,
+                agent.host,
+                agent.os,
+                agent.transport,
+                runtime_cell(agent.model.as_deref()),
+                runtime_cell(agent.effort.as_deref()),
+                agent.state
             );
         }
     }
+}
+
+/// Rend une valeur de runtime affichable : un tiret cadratin marque une valeur
+/// jamais observée, ce qui la distingue d'une valeur vide qui casserait la
+/// lecture des colonnes.
+fn runtime_cell(value: Option<&str>) -> &str {
+    value.unwrap_or("—")
 }
 
 fn cmd_discover() {
@@ -765,5 +1165,113 @@ fn cmd_ledger() {
             eprintln!("base inaccessible: {}", e);
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod hook_tests {
+    use super::*;
+
+    /// Configuration réaliste : quatre hooks utilisateur déjà en place, dont
+    /// un sur `Stop`. L'insertion doit être additive, jamais destructive.
+    fn settings_utilisateur() -> serde_json::Value {
+        serde_json::json!({
+            "model": "opus",
+            "hooks": {
+                "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "attention.sh working"}]}],
+                "Stop": [{"hooks": [{"type": "command", "command": "attention.sh mark"}]}],
+                "PostToolUse": [{"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "auto-commit.sh"}]}],
+                "SessionEnd": [{"hooks": [{"type": "command", "command": "session-sync.sh"}]}]
+            }
+        })
+    }
+
+    #[test]
+    fn installation_additive_puis_retrait_restaure_l_original() {
+        let original = settings_utilisateur();
+        let mut settings = original.clone();
+
+        assert!(insert_bridget_hook(&mut settings));
+        let stop = settings["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2, "le hook utilisateur doit être préservé");
+        assert_eq!(
+            stop[0]["hooks"][0]["command"].as_str(),
+            Some("attention.sh mark")
+        );
+        // Les autres événements sont intacts.
+        assert_eq!(settings["hooks"]["SessionEnd"], original["hooks"]["SessionEnd"]);
+        assert_eq!(settings["model"], original["model"]);
+
+        assert!(remove_bridget_hook(&mut settings));
+        assert_eq!(settings, original, "le retrait doit rendre le fichier d'origine");
+    }
+
+    #[test]
+    fn installation_est_idempotente() {
+        let mut settings = settings_utilisateur();
+        assert!(insert_bridget_hook(&mut settings));
+        assert!(
+            !insert_bridget_hook(&mut settings),
+            "une seconde installation ne doit rien changer"
+        );
+        assert_eq!(settings["hooks"]["Stop"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn retrait_sans_installation_prealable_ne_change_rien() {
+        let mut settings = settings_utilisateur();
+        assert!(!remove_bridget_hook(&mut settings));
+        assert_eq!(settings, settings_utilisateur());
+    }
+
+    #[test]
+    fn installation_cree_la_section_hooks_absente() {
+        let mut settings = serde_json::json!({"model": "opus"});
+        assert!(insert_bridget_hook(&mut settings));
+        assert!(hook_is_present(&settings));
+        assert_eq!(settings["hooks"]["Stop"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn structure_inattendue_ne_declenche_aucune_modification() {
+        // Ni panique, ni écrasement : on refuse de toucher un fichier dont la
+        // structure n'est pas celle attendue.
+        let mut racine_non_objet = serde_json::json!(["pas", "un", "objet"]);
+        assert!(!insert_bridget_hook(&mut racine_non_objet));
+
+        let mut hooks_non_objet = serde_json::json!({"hooks": "une chaîne"});
+        assert!(!insert_bridget_hook(&mut hooks_non_objet));
+        assert_eq!(hooks_non_objet["hooks"], serde_json::json!("une chaîne"));
+
+        let mut stop_non_liste = serde_json::json!({"hooks": {"Stop": 42}});
+        assert!(!insert_bridget_hook(&mut stop_non_liste));
+        assert_eq!(stop_non_liste["hooks"]["Stop"], serde_json::json!(42));
+    }
+
+    #[test]
+    fn ecriture_atomique_preserve_le_contenu() {
+        let path = std::env::temp_dir().join(format!("bridget-atomic-{}.json", std::process::id()));
+        std::fs::write(&path, "{\"origine\":true}\n").unwrap();
+        write_atomically(&path, "{\"nouveau\":true}\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"nouveau\":true}\n");
+        // Aucun fichier temporaire ne subsiste dans le répertoire.
+        let restes = std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".bridget-")
+            })
+            .count();
+        assert_eq!(restes, 0);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn cellule_runtime_marque_une_valeur_absente() {
+        assert_eq!(runtime_cell(Some("claude-opus-5")), "claude-opus-5");
+        assert_eq!(runtime_cell(None), "—");
     }
 }
