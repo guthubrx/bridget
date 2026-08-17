@@ -25,6 +25,16 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 // SOCKET_CHECK_INTERVAL : vérification proactive de disponibilité du socket
 const SOCKET_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
+// Sonde de runtime : le fichier de session n'est relu que si sa date de
+// modification a changé, et le chemin n'est re-résolu que rarement — `lsof`
+// coûte environ 130 ms, contre quelques microsecondes pour un `stat`.
+const RUNTIME_PROBE_INTERVAL: Duration = Duration::from_secs(20);
+// Un `codex resume` ouvre un second rollout sans fermer le premier : garder le
+// chemin trop longtemps rendrait la nouvelle session invisible d'autant.
+// 60 s aligne cette latence sur l'exigence de fraîcheur de la spec, pour un
+// surcoût de 134 ms par minute.
+const RUNTIME_PATH_REFRESH: Duration = Duration::from_secs(60);
+
 fn socket_path() -> PathBuf {
     if let Ok(home) = std::env::var("HOME") {
         PathBuf::from(home)
@@ -186,6 +196,93 @@ fn reconnect_delay(attempt: u32) -> Duration {
         ^ attempt as u64;
     let jitter = (seed % (jitter_span.saturating_mul(2) + 1)) as i64 - jitter_span as i64;
     Duration::from_millis((base_ms as i64 + jitter).max(1) as u64).min(RECONNECT_MAX_DELAY)
+}
+
+/// Nom courant de l'agent, tel que `bridget rename` l'a laissé sur disque.
+///
+/// Le wrapper ne peut pas se fier au nom qu'il a obtenu à son enregistrement :
+/// l'agent a pu être renommé depuis, et seul ce fichier en garde la trace. S'y
+/// référer à chaque reconnexion évite qu'un agent renommé ne réapparaisse sous
+/// son nom d'origine après une coupure — ce qui se produit à chaque rupture de
+/// tunnel dans une installation fédérée.
+fn resolve_current_name(name_state_path: &std::path::Path, fallback: &str) -> String {
+    std::fs::read_to_string(name_state_path)
+        .map(|name| name.trim().to_string())
+        .ok()
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// Sonde qui suit le modèle et l'effort courants d'un agent Codex en observant
+/// son fichier de session.
+///
+/// Elle n'émet que sur changement effectif : un agent inactif ne produit aucun
+/// trafic vers le daemon (FR-007).
+struct RuntimeProbe {
+    pid: u32,
+    path: Option<PathBuf>,
+    path_resolved_at: Instant,
+    last_check: Instant,
+    last_mtime: Option<SystemTime>,
+    last_sent: Option<crate::runtime::RuntimeObservation>,
+}
+
+impl RuntimeProbe {
+    fn new(pid: u32) -> Self {
+        RuntimeProbe {
+            pid,
+            path: None,
+            // Forcer une première résolution au tout premier tick.
+            path_resolved_at: Instant::now() - RUNTIME_PATH_REFRESH,
+            last_check: Instant::now() - RUNTIME_PROBE_INTERVAL,
+            last_mtime: None,
+            last_sent: None,
+        }
+    }
+
+    /// Rend une observation à transmettre, ou `None` s'il n'y a rien de neuf.
+    fn poll(&mut self) -> Option<crate::runtime::RuntimeObservation> {
+        if self.last_check.elapsed() < RUNTIME_PROBE_INTERVAL {
+            return None;
+        }
+        self.last_check = Instant::now();
+
+        let stale_path = self
+            .path
+            .as_ref()
+            .map(|path| !path.exists())
+            .unwrap_or(true);
+        if stale_path || self.path_resolved_at.elapsed() >= RUNTIME_PATH_REFRESH {
+            let resolved = crate::runtime::open_session_file(self.pid);
+            // Un changement de fichier invalide la date de modification
+            // mémorisée : sans cela, un nouveau rollout dont la mtime coïncide
+            // avec celle de l'ancien ne serait jamais lu. Défaut soulevé par
+            // la contre-revue « agent-1 ».
+            if resolved != self.path {
+                debug!("sonde runtime : fichier de session {:?}", resolved);
+                self.last_mtime = None;
+            }
+            self.path = resolved;
+            self.path_resolved_at = Instant::now();
+            if self.path.is_none() {
+                debug!("sonde runtime : aucun fichier de session pour le pid {}", self.pid);
+            }
+        }
+
+        let path = self.path.as_ref()?;
+        let mtime = std::fs::metadata(path).ok()?.modified().ok()?;
+        if self.last_mtime == Some(mtime) {
+            return None;
+        }
+        self.last_mtime = Some(mtime);
+
+        let observed = crate::runtime::parse_codex_rollout(path)?;
+        if self.last_sent.as_ref() == Some(&observed) {
+            return None;
+        }
+        self.last_sent = Some(observed.clone());
+        Some(observed)
+    }
 }
 
 /// Ouvre une connexion vers le daemon et enregistre le wrapper.
@@ -385,7 +482,7 @@ pub fn launch(
     let pane_for_thread = pane_id.clone();
     let name_state_for_thread = name_state_path.clone();
     let agent_type_for_thread = agent_type.to_string();
-    let my_name_for_thread = my_name.clone();
+    let mut my_name_for_thread = my_name.clone();
     let host_for_thread = host.clone();
     let transport_for_thread = transport.clone();
     let os_for_thread = os.clone();
@@ -403,6 +500,10 @@ pub fn launch(
         let mut connected_since = Instant::now();
         let mut failed_attempts = 0_u32;
         let mut last_heartbeat = Instant::now();
+        // Seul Codex tient son fichier de session ouvert ; pour Claude, c'est
+        // le hook `Stop` qui rapporte le runtime (research.md D-002).
+        let mut runtime_probe = (agent_type_for_thread == "codex")
+            .then(|| RuntimeProbe::new(agent_pid));
 
         'connection: while !stopping_for_thread.load(Ordering::SeqCst) {
             let mut line = String::new();
@@ -437,6 +538,43 @@ pub fn launch(
                             }
                         } else {
                             error!("Impossible d'obtenir le writer pour heartbeat");
+                        }
+                    }
+
+                    // Sonde de runtime : greffée sur le même réveil que le
+                    // heartbeat, elle ne coûte qu'un `stat` la plupart du temps.
+                    if let Some(observed) = runtime_probe.as_mut().and_then(RuntimeProbe::poll) {
+                        // Le nom est relu à chaque émission : `bridget rename`
+                        // met à jour ce fichier, pas la variable capturée au
+                        // démarrage. S'adresser au nom initial vaudrait un
+                        // « agent introuvable » sur tout agent renommé.
+                        let current_name = std::fs::read_to_string(&name_state_for_thread)
+                            .map(|name| name.trim().to_string())
+                            .ok()
+                            .filter(|name| !name.is_empty())
+                            .unwrap_or_else(|| my_name_for_thread.clone());
+                        let message = WrapperToDaemon::Runtime {
+                            agent: current_name,
+                            model: observed.model.clone(),
+                            effort: observed.effort.clone(),
+                            source: bridget_transport::protocol::RuntimeSource::CodexRollout,
+                        };
+                        match encode(&message) {
+                            Ok(json) => {
+                                if let Some(writer) = writer_for_listener.lock().unwrap().as_mut() {
+                                    if let Err(e) =
+                                        writeln!(writer, "{}", json).and_then(|_| writer.flush())
+                                    {
+                                        debug!("sonde runtime : envoi impossible ({})", e);
+                                    } else {
+                                        debug!(
+                                            "sonde runtime : modèle={} effort={:?}",
+                                            observed.model, observed.effort
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => debug!("sonde runtime : encodage impossible ({})", e),
                         }
                     }
 
@@ -486,25 +624,31 @@ pub fn launch(
                     let delay = reconnect_delay(failed_attempts);
                     failed_attempts = failed_attempts.saturating_add(1);
 
+                    // Le nom choisi par l'utilisateur prime sur celui obtenu au
+                    // démarrage : sans cela, un agent renommé revient sous son
+                    // nom d'origine à chaque coupure.
+                    let wanted_name =
+                        resolve_current_name(&name_state_for_thread, &my_name_for_thread);
+
                     info!(
                         "🔄 Tentative de reconnexion {} pour « {} » (délai: {:.1}s)",
-                        failed_attempts, my_name_for_thread, delay.as_secs_f64()
+                        failed_attempts, wanted_name, delay.as_secs_f64()
                     );
 
                     thread::sleep(delay);
                     match connect_and_register(
                         &agent_type_for_thread,
-                        Some(&my_name_for_thread),
+                        Some(&wanted_name),
                         &host_for_thread,
                         &transport_for_thread,
                         &os_for_thread,
                         &instance_id_for_thread,
                     ) {
                         Ok((new_reader, new_writer, registered_name)) => {
-                            if registered_name != my_name_for_thread {
+                            if registered_name != wanted_name {
                                 warn!(
                                     "⚠️ Reconnexion refusée : nom inattendu « {} » (attendu: « {} »)",
-                                    registered_name, my_name_for_thread
+                                    registered_name, wanted_name
                                 );
                                 continue;
                             }
@@ -515,6 +659,7 @@ pub fn launch(
                             connected_since = Instant::now();
                             last_heartbeat = Instant::now();
                             failed_attempts = 0; // Reset du compteur
+                            my_name_for_thread = registered_name;
 
                             info!(
                                 "✅ Agent « {} » reconnecté au daemon avec succès !",
@@ -536,7 +681,7 @@ pub fn launch(
                         Err(error) => {
                             warn!(
                                 "❌ Reconnexion échouée pour « {} » : {} (tentative {})",
-                                my_name_for_thread, error, failed_attempts
+                                wanted_name, error, failed_attempts
                             );
                         }
                     }
@@ -599,21 +744,24 @@ pub fn launch(
                         let delay = reconnect_delay(failed_attempts);
                         failed_attempts = failed_attempts.saturating_add(1);
                         thread::sleep(delay);
+                        let wanted_name =
+                            resolve_current_name(&name_state_for_thread, &my_name_for_thread);
                         match connect_and_register(
                             &agent_type_for_thread,
-                            Some(&my_name_for_thread),
+                            Some(&wanted_name),
                             &host_for_thread,
                             &transport_for_thread,
                             &os_for_thread,
                             &instance_id_for_thread,
                         ) {
                             Ok((new_reader, new_writer, registered_name))
-                                if registered_name == my_name_for_thread =>
+                                if registered_name == wanted_name =>
                             {
                                 *writer_for_listener.lock().unwrap() = Some(new_writer);
                                 listener = new_reader;
                                 connected_since = Instant::now();
                                 last_heartbeat = Instant::now();
+                                my_name_for_thread = registered_name;
                                 continue 'connection;
                             }
                             Ok((_, _, registered_name)) => warn!(
@@ -622,7 +770,7 @@ pub fn launch(
                             ),
                             Err(error) => warn!(
                                 "reconnexion Bridget de « {} » impossible : {}",
-                                my_name_for_thread, error
+                                wanted_name, error
                             ),
                         }
                     }
@@ -660,6 +808,33 @@ pub fn launch(
 #[cfg(test)]
 mod reconnect_tests {
     use super::*;
+
+    #[test]
+    fn le_nom_choisi_par_l_utilisateur_survit_a_la_reconnexion() {
+        // `bridget rename` n'écrit que dans ce fichier ; le wrapper doit s'y
+        // référer, sinon un agent renommé revient sous son nom d'origine à
+        // chaque coupure — y compris une rupture de tunnel en fédération SSH.
+        let path = std::env::temp_dir().join(format!(
+            "bridget-nom-{}-{}",
+            std::process::id(),
+            "renomme"
+        ));
+        std::fs::write(&path, "agent-1\n").unwrap();
+        assert_eq!(resolve_current_name(&path, "codex-8"), "agent-1");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn nom_illisible_ou_vide_retombe_sur_le_nom_d_enregistrement() {
+        let absent = std::env::temp_dir().join("bridget-nom-inexistant-xyz");
+        let _ = std::fs::remove_file(&absent);
+        assert_eq!(resolve_current_name(&absent, "codex-8"), "codex-8");
+
+        let vide = std::env::temp_dir().join(format!("bridget-nom-vide-{}", std::process::id()));
+        std::fs::write(&vide, "   \n").unwrap();
+        assert_eq!(resolve_current_name(&vide, "codex-8"), "codex-8");
+        let _ = std::fs::remove_file(&vide);
+    }
 
     #[test]
     fn reconnect_delay_grows_then_stays_capped() {

@@ -165,7 +165,7 @@ mod tests {
 
         // Lancer le daemon dans un thread
         let cfg = config.clone();
-        let daemon_handle = thread::spawn(move || {
+        let _daemon_handle = thread::spawn(move || {
             let _ = daemon::run(cfg);
         });
 

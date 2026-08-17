@@ -42,6 +42,49 @@ pub enum WrapperToDaemon {
     Heartbeat,
     /// Demander la liste des agents connectés.
     ListAgents,
+    /// Rapporter le modèle et le niveau d'effort courants d'un agent.
+    ///
+    /// `agent` désigne l'agent observé, et non la connexion émettrice : le hook
+    /// Claude et `bridget runtime` passent par le client CLI, dont la connexion
+    /// est éphémère et distincte de celle de l'agent. Même motif que `Rename`.
+    ///
+    /// Une observation est atomique : le couple `(model, effort)` remplace en
+    /// bloc l'état connu. Un `effort` absent signifie « observé absent » et
+    /// efface la valeur précédente — un modèle sans réglage d'effort ne doit
+    /// pas hériter de l'effort du modèle précédent.
+    Runtime {
+        agent: String,
+        model: String,
+        #[serde(default)]
+        effort: Option<String>,
+        source: RuntimeSource,
+    },
+}
+
+/// Origine d'une observation de runtime. Énumération fermée : une valeur
+/// inconnue rend le message indécodable plutôt que d'entrer dans l'annuaire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeSource {
+    /// Lu dans le fichier rollout d'un agent Codex.
+    #[serde(rename = "codex-rollout")]
+    CodexRollout,
+    /// Rapporté par le hook Stop d'un agent Claude Code.
+    #[serde(rename = "claude-hook")]
+    ClaudeHook,
+    /// Déclaré explicitement via `bridget runtime`.
+    #[serde(rename = "declared")]
+    Declared,
+}
+
+impl std::fmt::Display for RuntimeSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            RuntimeSource::CodexRollout => "codex-rollout",
+            RuntimeSource::ClaudeHook => "claude-hook",
+            RuntimeSource::Declared => "declared",
+        };
+        f.write_str(label)
+    }
 }
 
 /// Messages envoyés par le daemon vers le wrapper.
@@ -91,6 +134,14 @@ pub struct AgentInfo {
     pub state: String,
     pub last_seen_secs: u64,
     pub reconnect_count: u32,
+    /// Modèle courant, `None` tant qu'aucune observation n'a eu lieu.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Niveau d'effort courant. `None` couvre deux cas indiscernables pour un
+    /// lecteur : jamais observé, ou observé absent (modèle sans réglage
+    /// d'effort). Les deux s'affichent de la même façon.
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 fn unknown_os() -> String {
@@ -190,6 +241,61 @@ mod tests {
         assert!(
             matches!(decode(&encode(&response).unwrap()).unwrap(), DaemonToWrapper::Renamed { old_name, name } if old_name == "codex-1" && name == "analyse")
         );
+    }
+
+    #[test]
+    fn test_encode_decode_runtime() {
+        let msg = WrapperToDaemon::Runtime {
+            agent: "agent-2".to_string(),
+            model: "claude-opus-5".to_string(),
+            effort: Some("high".to_string()),
+            source: RuntimeSource::ClaudeHook,
+        };
+        let json = encode(&msg).unwrap();
+        assert!(json.contains("\"type\":\"Runtime\""));
+        assert!(json.contains("\"source\":\"claude-hook\""));
+        match decode(&json).unwrap() {
+            WrapperToDaemon::Runtime {
+                agent,
+                model,
+                effort,
+                source,
+            } => {
+                assert_eq!(agent, "agent-2");
+                assert_eq!(model, "claude-opus-5");
+                assert_eq!(effort.as_deref(), Some("high"));
+                assert_eq!(source, RuntimeSource::ClaudeHook);
+            }
+            other => panic!("mauvais type: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_runtime_effort_absent_est_decodable() {
+        // Cas Haiku : le modèle n'expose aucun niveau d'effort.
+        let json = r#"{"type":"Runtime","agent":"agent-2","model":"claude-haiku-4-5","source":"codex-rollout"}"#;
+        match decode(json).unwrap() {
+            WrapperToDaemon::Runtime { effort, .. } => assert!(effort.is_none()),
+            other => panic!("mauvais type: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_runtime_source_inconnue_est_refusee() {
+        let json = r#"{"type":"Runtime","agent":"agent-2","model":"x","source":"inventee"}"#;
+        assert!(decode::<WrapperToDaemon>(json).is_err());
+    }
+
+    #[test]
+    fn test_agent_info_sans_runtime_reste_decodable() {
+        // Compatibilité ascendante : un daemon d'une version antérieure ne
+        // sérialise ni model ni effort.
+        let json = r#"{"name":"agent-2","agent_type":"claude","connection_id":"conn-1",
+            "host":"h","transport":"unix","os":"macOS","state":"connected",
+            "last_seen_secs":0,"reconnect_count":0}"#;
+        let info: AgentInfo = decode(json).unwrap();
+        assert!(info.model.is_none());
+        assert!(info.effort.is_none());
     }
 
     #[test]
