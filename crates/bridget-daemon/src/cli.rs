@@ -161,14 +161,16 @@ fn print_usage() {
          Daemon & client :\n  \
            daemon                 Lance le daemon\n  \
            send --to <N> <MSG>    Envoie un message\n  \
-           cancel <ID>             Annule une demande suivie\n  \
-           requests                Liste mes demandes suivies\n  \
+           reply <MSG>            Répond au dernier expéditeur\n  \
+           cancel <ID>            Annule une demande suivie [--reason <T>]\n  \
+           requests               Liste mes demandes suivies\n  \
            rename <N>             Renomme l'agent courant\n  \
            runtime --model <M>    Déclare le modèle courant [--effort <E>]\n  \
            domain <N> | --reset   Change le domaine de l'agent courant\n  \
            dnd [off]              Ne pas déranger [--duration 30m]\n  \
            install-hooks          Installe la détection auto du modèle (Claude)\n  \
            who [--domain <D>]     Agents connectés\n  \
+           agents [--json]        Idem, format machine [--domain <D>]\n  \
            status                 Santé du daemon\n  \
            ledger                 Historique des messages\n  \
            version                Version\n  \
@@ -176,7 +178,10 @@ fn print_usage() {
          Options de send :\n  \
            --to <nom>             Destinataire (requis)\n  \
            --reply                Réponse attendue\n  \
-           --hops <N>             Sauts restants (défaut: 4)"
+           --timeout <S>          Délai avant échec (défaut: 60)\n  \
+           --hops <N>             Sauts restants (défaut: 4)\n\n\
+         Usage interne :\n  \
+           hook claude-runtime    Appelé par le hook Claude Code, lit stdin"
     );
 }
 

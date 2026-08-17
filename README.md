@@ -27,6 +27,41 @@ bridget send --to codex-1 "Analyse ce fichier" --reply
 bridget who
 ```
 
+## Positionnement et modèle de confiance
+
+Bridget cherche deux choses : un **canal de communication fiable** entre agents
+CLI, et un **protocole léger**. Ce n'est pas un produit de sécurité, et il ne
+prétend pas l'être.
+
+**Hypothèses de fonctionnement.** Les agents tournent sur une même machine de
+confiance, sous un même compte utilisateur, et communiquent par un socket Unix
+local. Tous les agents connectés sont considérés comme coopératifs.
+
+**Ce que Bridget garantit :**
+
+- un message est livré, ou refusé avec une raison exploitable — jamais perdu en silence ;
+- pas de boucle entre agents, pas de doublon, pas de retransmission ;
+- une coupure de connexion est rattrapée automatiquement, sous la même identité ;
+- une demande en attente a une échéance, des rappels, et peut être annulée.
+
+**Ce que Bridget ne fait pas :**
+
+- il n'authentifie pas l'émetteur d'un message de contrôle : tout processus local
+  pouvant écrire sur le socket peut renommer un agent, changer son domaine ou sa
+  disponibilité ;
+- il ne chiffre rien et ne signe rien ;
+- il n'isole pas des agents qui se méfieraient l'un de l'autre ;
+- il ne résiste pas à un processus local hostile.
+
+En conséquence, n'exposez pas le socket à un réseau ou à un compte auquel vous ne
+faites pas confiance. La fédération SSH décrite plus bas tunnelise le socket : la
+confiance repose entièrement sur SSH, pas sur Bridget.
+
+Ces limites sont des choix de périmètre, pas des oublis. Les lever supposerait un
+modèle d'autorisation à part entière — utile le jour où des agents de confiances
+différentes devront cohabiter, inutile aujourd'hui, et coûteux en complexité pour
+un protocole qui veut rester lisible d'un bout à l'autre.
+
 ## Architecture
 
 ```
@@ -54,7 +89,11 @@ Wrapper A              Wrapper B
 | `bridget-transport` | Protocole JSON + trait Transport + implémentation tmux |
 | `bridget-daemon` | Daemon + CLI (binaire `bridget`) |
 
-## Sécurités
+## Garde-fous de fiabilité
+
+Ces mécanismes protègent la conversation d'elle-même — boucles, doublons,
+attentes sans fin. Ils ne protègent pas d'un tiers hostile : voir le modèle de
+confiance ci-dessus.
 
 - **Disjoncteur** — max 8 échanges par conversation en 180s (configurable)
 - **Déduplication par contenu** — bloque les doublons d'envoi
@@ -68,25 +107,94 @@ Wrapper A              Wrapper B
 
 ## Commandes
 
-```
-bridget daemon                              Lance le daemon
-bridget codex                               Lance Codex + connexion daemon
-bridget claude                              Lance Claude + connexion daemon
-bridget send --to <nom> <msg>               Envoie un message
-bridget send --to <nom> --reply <msg>       Envoie en attendant une réponse
-bridget send --to <nom> --reply --timeout 300 <msg>  Timeout personnalisé
-bridget reply <msg>                         Répond au dernier expéditeur reçu
-bridget cancel <id> --reason <texte>         Annule une demande suivie devenue inutile
-bridget requests                            Liste mes demandes suivies et leur état
-bridget runtime --model <M> [--effort <E>]  Déclare le modèle courant de l'agent
-bridget install-hooks [--remove]            Détection auto du modèle pour Claude
-bridget domain <nom> | --reset              Change le domaine de l'agent courant
-bridget dnd [off] [--duration 30m]          Ne pas déranger
-bridget who [--domain <D>]                  Liste les agents connectés
-bridget agents --json                       Liste au format JSON
-bridget status                              Santé du daemon
-bridget ledger                              Historique des messages
-```
+### Lancer un agent
+
+| Commande | Effet |
+|---|---|
+| `bridget codex [ARGS…]` | lance Codex et le connecte au daemon |
+| `bridget claude [ARGS…]` | lance Claude Code et le connecte au daemon |
+| `bridget gemini [ARGS…]` | lance Gemini et le connecte au daemon |
+| `bridget gclaude [ARGS…]` | variante `gclaude`, type d'agent `claude` |
+| `bridget -- <CMD> [ARGS…]` | agent personnalisé ; le binaire doit figurer dans la liste autorisée |
+| `--name <nom>` | nom initial imposé, au lieu du nom auto-incrémenté |
+
+Les arguments qui suivent sont transmis tels quels à l'agent. Pour Codex et
+Claude Code, le wrapper ajoute les options de permission nécessaires à
+l'ouverture du socket, et injecte un prompt initial expliquant à l'agent comment
+répondre — sauf si un prompt est déjà fourni.
+
+### Communiquer
+
+| Commande | Effet |
+|---|---|
+| `bridget send --to <nom> <msg>` | envoie un message |
+| `… --reply` | attend une réponse : la demande est suivie, avec échéance et rappels |
+| `… --timeout <s>` | échéance de la demande (défaut : 60 s) |
+| `… --hops <n>` | budget de sauts restant (défaut : 4) |
+| `… --from <nom>` | émetteur déclaré, pour un relais |
+| `bridget reply <msg>` | répond au dernier expéditeur reçu, sans retaper son nom |
+| `bridget cancel <id> [--reason <texte>]` | annule une demande devenue inutile : plus de rappels, destinataire libéré |
+| `bridget requests` | liste mes demandes suivies et leur état |
+
+### Observer
+
+| Commande | Effet |
+|---|---|
+| `bridget who [--domain <d>]` | annuaire lisible : nom, type, hôte, OS, transport, domaine, modèle, effort, état |
+| `bridget agents [--json] [--domain <d>]` | même annuaire, format machine |
+| `bridget discover` | alias de `who` |
+| `bridget status` | santé du daemon, chemins, nombre d'agents et de messages |
+| `bridget ledger` | vingt derniers messages enregistrés |
+| `bridget version` | version du binaire |
+| `bridget help` | aide en ligne, résumé de toutes les commandes |
+
+### Se décrire
+
+| Commande | Effet |
+|---|---|
+| `bridget rename <nom>` | renomme l'agent courant ; le nom survit aux reconnexions |
+| `bridget domain <nom>` \| `--reset` | remplace le domaine dérivé, ou y revient |
+| `bridget runtime --model <m> [--effort <e>]` | déclare le modèle courant, pour un agent sans détection automatique |
+| `bridget dnd [off] [--duration 30m]` | refuse ou accepte à nouveau les interruptions |
+| `bridget install-hooks [--remove]` | installe la détection automatique du modèle pour Claude Code |
+
+Les cinq commandes de cette section ne fonctionnent que **depuis un agent
+Bridget** : elles s'appuient sur l'identité fournie par le wrapper et échouent
+avec un message explicite dans un shell ordinaire.
+
+### Usage interne
+
+`bridget hook claude-runtime` est appelée par le hook Claude Code, lit le payload
+sur l'entrée standard et reste silencieuse. Elle n'est pas destinée à un usage
+manuel, sinon pour diagnostiquer.
+
+## Réglages et environnement
+
+| Variable | Effet |
+|---|---|
+| `BRIDGET_TRANSPORT` | nom du transport annoncé dans l'annuaire (défaut : `unix`, ou la valeur lue dans `~/.config/bridget/federation.env`) |
+| `BRIDGET_AGENT_NAME` | nom de l'agent, exporté par le wrapper vers le processus agent |
+| `BRIDGET_AGENT_NAME_FILE` | fichier portant le nom courant ; c'est lui qui fait foi après un `rename` |
+| `HOSTNAME` | hôte annoncé, à défaut la sortie de `hostname` |
+| `RUST_LOG=debug` | journalisation détaillée, notamment la source de chaque observation de modèle |
+
+Fichiers, tous sous `~/.cache/bridget/` :
+
+| Chemin | Contenu |
+|---|---|
+| `bridget.sock` | socket Unix du daemon |
+| `bridget.db` | ledger SQLite et demandes suivies |
+| `agent-names/` | noms persistants, par session ou par agent actif |
+| `agent-domains/` | domaines surchargés |
+| `last-sender-<agent>` | dernier expéditeur, pour `bridget reply` |
+
+Valeurs de comportement, en dur dans cette version : disjoncteur 8 échanges par
+180 s, déduplication 180 s, quarantaine 3600 s, purge du ledger à 7 jours,
+rétention d'une présence injoignable 300 s, battement de cœur 3 s, reconnexion
+en 1-2-4-8-16 puis 30 s au plus, sonde de modèle Codex toutes les 20 s,
+« ne pas déranger » 60 min par défaut, message de 10 000 caractères et nom
+d'agent de 100 caractères au maximum.
+
 
 Une annulation est coopérative : elle n'interrompt pas un outil ou un modèle déjà en train de travailler, mais elle met fin à la demande Bridget, à ses relances et à l'obligation de répondre. `bridget requests` permet à l'émetteur de consulter ses demandes et leurs états.
 
@@ -142,10 +250,10 @@ Chaque agent porte un **domaine**, dérivé sans configuration du dépôt d'où 
 dépôt. Deux agents lancés n'importe où dans le même projet partagent un domaine.
 
 ```text
-  NOM            TYPE    DOMAINE            MODÈLE         ÉTAT
-  agent-2          claude  bridget            claude-opus-5  connected
-  agent-1        codex   projet-b     gpt-5.6-terra  connected
-  agent-3   claude  projet-b     claude-opus-5  dnd
+  NOM      TYPE    DOMAINE    MODÈLE         ÉTAT
+  agent-1  claude  bridget    claude-opus-5  connected
+  agent-2  codex   projet-b   gpt-5.6-terra  connected
+  agent-3  claude  projet-b   claude-opus-5  dnd
 ```
 
 Le domaine **range, il ne cloisonne pas** : tous les agents restent visibles et
@@ -160,9 +268,10 @@ bridget domain revue-croisee      # surcharge, conservée après reconnexion
 bridget domain --reset            # retour au domaine dérivé du dépôt
 ```
 
-Le nom est rendu brut : un répertoire `projet-b` donne le domaine
-`projet-b`. Aucune règle d'embellissement implicite ; la surcharge
-est là pour ça.
+Le nom est rendu brut, tel que le répertoire s'appelle : un dépôt rangé sous
+`12.mon-projet` donne le domaine `12.mon-projet`, préfixe de classement compris.
+Aucune règle d'embellissement implicite, qui serait indevinable ; la surcharge
+est là pour les cas où le nom du dépôt ne convient pas.
 
 ## Ne pas déranger
 
@@ -190,7 +299,7 @@ redevient joignable seul, sans que personne ait à y penser.
 ## Tests
 
 ```bash
-cargo test          # 83 tests (unitaires + intégration)
+cargo test          # 86 tests (unitaires + intégration)
 ```
 
 ## Déploiement distant
