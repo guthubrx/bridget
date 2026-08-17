@@ -1,4 +1,6 @@
-# Décision Architecturale : Observabilité des événements inspirée d'un système tiers
+# ADR 002 — Observabilité des événements inspirée d'un système tiers
+
+**🇫🇷 Français** · [🇬🇧 English](002-event-observability.en.md)
 
 ## Contexte
 

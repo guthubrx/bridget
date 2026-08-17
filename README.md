@@ -1,5 +1,7 @@
 # Bridget
 
+**🇫🇷 Français** · [🇬🇧 English](README.en.md)
+
 Protocole de communication inter-agents CLI, pair-à-pair, transport-agnostique.
 
 ## Vue d'ensemble
@@ -103,7 +105,12 @@ confiance ci-dessus.
 - **Auto-envoi interdit** — un agent ne peut pas se parler à lui-même
 - **Escalade progressive** — rappels automatiques à T/3, 2T/3 puis notification d'échec à T
 - **Timeout configurable** — `--timeout <secondes>` (défaut 60s)
-- **Demandes annulables** — une demande `--reply` possède un identifiant ; son émetteur peut l'arrêter avec `bridget cancel <id>` afin de supprimer les rappels et de libérer le destinataire de toute réponse.
+- **Demandes annulables** — une demande `--reply` possède un identifiant ; son émetteur peut l'arrêter avec `bridget cancel <id>`, ce qui supprime les rappels et libère le destinataire de toute réponse.
+
+L'annulation est coopérative : elle n'interrompt ni un outil ni un modèle déjà en
+train de travailler, mais elle met fin à la demande Bridget, à ses relances et à
+l'obligation de répondre. `bridget requests` permet à l'émetteur de consulter ses
+demandes et leur état.
 
 ## Commandes
 
@@ -195,9 +202,6 @@ en 1-2-4-8-16 puis 30 s au plus, sonde de modèle Codex toutes les 20 s,
 « ne pas déranger » 60 min par défaut, message de 10 000 caractères et nom
 d'agent de 100 caractères au maximum.
 
-
-Une annulation est coopérative : elle n'interrompt pas un outil ou un modèle déjà en train de travailler, mais elle met fin à la demande Bridget, à ses relances et à l'obligation de répondre. `bridget requests` permet à l'émetteur de consulter ses demandes et leurs états.
-
 ## Modèle et niveau d'effort des agents
 
 `bridget who` affiche le modèle et le niveau d'effort courants de chaque agent,
@@ -206,10 +210,10 @@ tenus à jour quand l'humain en change en cours de session. Le type d'agent
 détermine à qui confier quoi.
 
 ```text
-  NOM      TYPE    HÔTE      OS     TRANSPORT  MODÈLE         EFFORT  ÉTAT
-  agent-2    claude  macbook   macOS  unix       claude-opus-5  high    connected
-  agent-1  codex   macbook   macOS  unix       gpt-5.3-codex  xhigh   connected
-  distant  claude  projet-a    Linux  ssh        —              —       unreachable
+  NOM      TYPE    HÔTE         OS     TRANSPORT  MODÈLE         EFFORT  ÉTAT
+  agent-1  claude  poste-local  macOS  unix       claude-opus-5  high    connected
+  agent-2  codex   poste-local  macOS  unix       gpt-5.6-terra  xhigh   connected
+  distant  claude  serveur      Linux  ssh        —              —       unreachable
 ```
 
 Un tiret cadratin signale une valeur jamais observée — Bridget n'invente jamais
@@ -363,4 +367,4 @@ l'hôte Linux fédéré.
 
 ## Licence
 
-MIT
+MIT — voir [LICENSE](LICENSE).

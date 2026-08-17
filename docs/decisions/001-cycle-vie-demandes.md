@@ -1,5 +1,7 @@
 # ADR 001 — Modéliser les demandes Bridget comme un cycle de vie persistant
 
+**🇫🇷 Français** · [🇬🇧 English](001-request-lifecycle.en.md)
+
 **Date** : 2026-08-14  
 **Statut** : Accepté
 
