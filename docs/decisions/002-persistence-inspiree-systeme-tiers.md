@@ -1,10 +1,10 @@
-# Décision Architecturale : Observabilité des événements inspirée de un système tiers
+# Décision Architecturale : Observabilité des événements inspirée d'un système tiers
 
 ## Contexte
 
-Suite à l'analyse du système un système tiers, nous avons identifié des patterns d'observabilité (events JSONL) qui pourraient améliorer le debugging et la traçabilité de Bridget.
+Suite à l'analyse d'un système tiers, nous avons identifié des patterns d'observabilité (events JSONL) qui pourraient améliorer le debugging et la traçabilité de Bridget.
 
-## Patterns observés chez un système tiers
+## Patterns observés sur ce système
 
 ### 1. Events JSONL pour traçabilité
 
@@ -18,9 +18,9 @@ Suite à l'analyse du système un système tiers, nous avons identifié des patt
 
 Chaque événement (création, réponse, annulation, escalation) est ajouté à `events.jsonl` pour une traçabilité complète post-mortem.
 
-### 2. Pourquoi un système tiers utilise le filesystem
+### 2. Pourquoi ce système utilise le filesystem
 
-- un système tiers n'a PAS de database persistante
+- ce système n'a PAS de database persistante
 - Le fichier JSONL est SA source de vérité pour l'historique
 - L'écriture atomique compensait l'absence de transactions
 
