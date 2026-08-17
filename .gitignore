@@ -4,3 +4,15 @@
 *.pid
 *.log
 .env
+
+# Outillage de développement local, non publié : méthode de travail,
+# spécifications, journaux de session, rapports d'audit.
+/.specify/
+/.agents/
+/specs/
+/audits/
+/AGENTS.md
+/CLAUDE.md
+AUDIT_RAPPORT.md
+*.bak
+*.bak-*
