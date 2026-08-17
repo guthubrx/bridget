@@ -47,6 +47,7 @@ impl FakeAgent {
             transport: Some("unix".to_string()),
             os: Some("Linux".to_string()),
             instance_id: None,
+            domain: None,
         };
         let reg_json = encode(&reg).map_err(|e| e.to_string())?;
 

@@ -75,6 +75,34 @@ struct Presence {
     model: Option<String>,
     /// Niveau d'effort courant, `None` si jamais observé ou observé absent.
     effort: Option<String>,
+    /// Domaine dérivé annoncé à l'enregistrement, conservé pour pouvoir revenir
+    /// dessus après une surcharge.
+    derived_domain: Option<String>,
+    /// Domaine effectif : la surcharge si elle existe, le domaine dérivé sinon.
+    domain: Option<String>,
+    /// Échéance jusqu'à laquelle l'agent refuse d'être dérangé.
+    ///
+    /// Une échéance plutôt qu'un booléen : l'expiration devient une simple
+    /// comparaison à la lecture, sans tâche de fond pour balayer les statuts.
+    dnd_until: Option<Instant>,
+}
+
+impl Presence {
+    /// Vrai tant que l'agent refuse d'être dérangé.
+    fn is_dnd(&self) -> bool {
+        self.dnd_until
+            .map(|until| Instant::now() < until)
+            .unwrap_or(false)
+    }
+
+    /// Minutes restantes de refus, arrondies au supérieur, minimum 1.
+    fn dnd_minutes_left(&self) -> u64 {
+        self.dnd_until
+            .and_then(|until| until.checked_duration_since(Instant::now()))
+            .map(|left| left.as_secs().div_ceil(60))
+            .unwrap_or(0)
+            .max(1)
+    }
 }
 
 /// Configuration du daemon.
@@ -318,11 +346,19 @@ impl DaemonState {
                                 .cloned()
                         })
                         .unwrap_or_else(|| "inconnu".to_string()),
-                    state: "connected".to_string(),
+                    // Un agent qui refuse d'être dérangé est connecté mais non
+                    // joignable : du point de vue de l'appelant, la question
+                    // « puis-je lui écrire » a la même forme que pour un agent
+                    // injoignable, d'où un état unique plutôt qu'une colonne.
+                    state: match presence {
+                        Some(presence) if presence.is_dnd() => "dnd".to_string(),
+                        _ => "connected".to_string(),
+                    },
                     last_seen_secs: presence
                         .map(|p| p.last_seen.elapsed().as_secs())
                         .unwrap_or(0),
                     reconnect_count: presence.map(|p| p.reconnect_count).unwrap_or(0),
+                    domain: presence.and_then(|p| p.domain.clone()),
                     model: presence.and_then(|p| p.model.clone()),
                     effort: presence.and_then(|p| p.effort.clone()),
                 }
@@ -343,6 +379,7 @@ impl DaemonState {
                 state: presence.state.clone(),
                 last_seen_secs: presence.last_seen.elapsed().as_secs(),
                 reconnect_count: presence.reconnect_count,
+                domain: presence.domain.clone(),
                 // FR-010 : un agent injoignable garde sa dernière capacité connue.
                 model: presence.model.clone(),
                 effort: presence.effort.clone(),
@@ -474,9 +511,24 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             let mut actions = Vec::new();
             let mut state_updates = Vec::new();
 
+            // Les destinataires qui refusent d'être dérangés ne reçoivent aucun
+            // rappel : respecter le statut à l'aller et le violer au rappel
+            // n'aurait aucun sens. La demande reste ouverte et son échéance
+            // court toujours ; seule la relance est retenue.
+            let undisturbed: std::collections::HashSet<String> = st
+                .presences
+                .values()
+                .filter(|presence| presence.is_dnd())
+                .map(|presence| presence.name.clone())
+                .collect();
+
             for p in st.pending_replies.iter_mut() {
                 let elapsed = now.duration_since(p.created_at).as_secs();
                 let t = p.timeout_secs;
+
+                if !should_remind(undisturbed.contains(&p.to), p.escalation_level) {
+                    continue;
+                }
 
                 if p.escalation_level == 0 && elapsed >= t / 3 {
                     p.escalation_level = 1;
@@ -790,6 +842,7 @@ fn handle_register(
     transport: Option<String>,
     os: Option<String>,
     instance_id: Option<String>,
+    domain: Option<String>,
     state: &mut DaemonState,
 ) -> DaemonToWrapper {
     log::debug!(
@@ -828,6 +881,13 @@ fn handle_register(
                 let (model, effort) = previous
                     .map(|presence| (presence.model.clone(), presence.effort.clone()))
                     .unwrap_or((None, None));
+                // Le domaine annoncé par le wrapper fait foi : il porte déjà la
+                // surcharge s'il en existe une, puisqu'il relit le fichier
+                // d'état avant de se réenregistrer.
+                let derived_domain = domain
+                    .clone()
+                    .or_else(|| previous.and_then(|presence| presence.derived_domain.clone()));
+                let dnd_until = previous.and_then(|presence| presence.dnd_until);
 
                 state.conn_instances.insert(conn_id.to_string(), instance_id.clone());
                 state.presences.insert(
@@ -843,6 +903,9 @@ fn handle_register(
                         reconnect_count,
                         model,
                         effort,
+                        domain: derived_domain.clone(),
+                        derived_domain,
+                        dnd_until,
                     },
                 );
             }
@@ -916,12 +979,7 @@ fn handle_runtime(
         };
     }
 
-    let instance_id = state
-        .router
-        .get_agent(agent)
-        .map(|found| found.connection_id.clone())
-        .and_then(|conn| state.conn_instances.get(&conn).cloned());
-    let Some(presence) = instance_id.and_then(|id| state.presences.get_mut(&id)) else {
+    let Some(presence) = presence_of_agent(state, agent) else {
         return DaemonToWrapper::Nack {
             id: "runtime".to_string(),
             reason: format!("agent introuvable: {}", agent),
@@ -948,6 +1006,101 @@ fn handle_runtime(
     }
 }
 
+/// Décide si un rappel d'escalade doit être délivré.
+///
+/// Un destinataire qui refuse d'être dérangé ne reçoit ni le rappel discret ni
+/// le rappel ferme : respecter le statut à l'aller pour le violer au rappel
+/// n'aurait aucun sens. La demande reste ouverte et son échéance court toujours.
+///
+/// Le palier 2 et au-delà correspond à la notification d'échec adressée à
+/// l'**émetteur** : elle ne dérange pas le destinataire et part donc toujours.
+fn should_remind(target_is_undisturbed: bool, escalation_level: u8) -> bool {
+    !target_is_undisturbed || escalation_level >= 2
+}
+
+/// Retrouve la présence d'un agent désigné par son nom.
+///
+/// Même résolution que `handle_runtime` : les commandes de contrôle arrivent par
+/// le client CLI, dont la connexion est éphémère et distincte de celle de
+/// l'agent visé.
+fn presence_of_agent<'a>(
+    state: &'a mut DaemonState,
+    agent: &str,
+) -> Option<&'a mut Presence> {
+    let instance_id = state
+        .router
+        .get_agent(agent)
+        .map(|found| found.connection_id.clone())
+        .and_then(|conn| state.conn_instances.get(&conn).cloned())?;
+    state.presences.get_mut(&instance_id)
+}
+
+/// Remplace le domaine d'un agent, ou le ramène à son domaine dérivé.
+fn handle_domain(
+    agent: &str,
+    domain: Option<String>,
+    state: &mut DaemonState,
+) -> DaemonToWrapper {
+    if let Some(Err(reason)) = domain.as_deref().map(validate_runtime_value) {
+        return DaemonToWrapper::Nack {
+            id: "domain".to_string(),
+            reason: format!("domaine invalide: {}", reason),
+        };
+    }
+    let Some(presence) = presence_of_agent(state, agent) else {
+        return DaemonToWrapper::Nack {
+            id: "domain".to_string(),
+            reason: format!("agent introuvable: {}", agent),
+        };
+    };
+    presence.domain = match domain {
+        Some(domain) => Some(domain),
+        // Réinitialisation : on retombe sur ce que le wrapper avait annoncé.
+        None => presence.derived_domain.clone(),
+    };
+    log::debug!(
+        "domaine de '{}' : {:?}",
+        presence.name,
+        presence.domain
+    );
+    DaemonToWrapper::Ack {
+        id: "domain".to_string(),
+    }
+}
+
+/// Déclare la disponibilité d'un agent.
+fn handle_availability(
+    agent: &str,
+    until_secs: Option<u64>,
+    state: &mut DaemonState,
+) -> DaemonToWrapper {
+    let Some(presence) = presence_of_agent(state, agent) else {
+        return DaemonToWrapper::Nack {
+            id: "availability".to_string(),
+            reason: format!("agent introuvable: {}", agent),
+        };
+    };
+    presence.dnd_until = until_secs.and_then(|until| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        // Une échéance déjà passée équivaut à une levée du statut.
+        until
+            .checked_sub(now)
+            .filter(|remaining| *remaining > 0)
+            .map(|remaining| Instant::now() + Duration::from_secs(remaining))
+    });
+    log::debug!(
+        "disponibilité de '{}' : dnd={}",
+        presence.name,
+        presence.is_dnd()
+    );
+    DaemonToWrapper::Ack {
+        id: "availability".to_string(),
+    }
+}
+
 /// Traite un message wrapper et retourne une réponse optionnelle.
 fn handle_wrapper_message(
     conn_id: &str,
@@ -962,6 +1115,7 @@ fn handle_wrapper_message(
             transport,
             os,
             instance_id,
+            domain,
         } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let response = handle_register(
@@ -972,6 +1126,7 @@ fn handle_wrapper_message(
                 transport,
                 os,
                 instance_id,
+                domain,
                 &mut st,
             );
             Some(response)
@@ -1129,6 +1284,31 @@ fn handle_wrapper_message(
                 });
             }
 
+            // 4 bis. Respecter le refus d'être dérangé du destinataire.
+            //
+            // Le contrôle est ici, dans le daemon, et non côté client : un
+            // client d'une version antérieure le contournerait, et il devrait
+            // interroger l'annuaire avant chaque envoi. L'émetteur reçoit la
+            // raison et le temps restant afin de décider lui-même s'il attend,
+            // insiste plus tard, ou s'adresse à quelqu'un d'autre.
+            if let Some(presence) = presence_of_agent(&mut st, &bridge_msg.to) {
+                if presence.is_dnd() {
+                    let minutes = presence.dnd_minutes_left();
+                    let target = presence.name.clone();
+                    info!(
+                        "refus DND: « {} » ne veut pas être dérangé ({} min)",
+                        target, minutes
+                    );
+                    return Some(DaemonToWrapper::Nack {
+                        id: bridge_msg.id.clone(),
+                        reason: format!(
+                            "« {} » ne souhaite pas être dérangé (encore {} min)",
+                            target, minutes
+                        ),
+                    });
+                }
+            }
+
             // 5. Router
             let action =
                 st.router
@@ -1252,6 +1432,16 @@ fn handle_wrapper_message(
             Some(handle_runtime(&agent, model, effort, source, &mut st))
         }
 
+        WrapperToDaemon::Domain { agent, domain } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            Some(handle_domain(&agent, domain, &mut st))
+        }
+
+        WrapperToDaemon::Availability { agent, until_secs } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            Some(handle_availability(&agent, until_secs, &mut st))
+        }
+
         WrapperToDaemon::CancelRequest { id, sender, reason } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             if st.router.get_agent(&sender).is_none() {
@@ -1362,6 +1552,7 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
         transport: None,
         os: None,
         instance_id: None,
+        domain: None,
     };
     let reg_json = match encode(&reg) {
         Ok(j) => j,
@@ -1473,6 +1664,9 @@ mod presence_tests {
                 reconnect_count: 0,
                 model: Some("gpt-5.3-codex".to_string()),
                 effort: Some("xhigh".to_string()),
+                derived_domain: Some("projet-a".to_string()),
+                domain: Some("projet-a".to_string()),
+                dnd_until: None,
             },
         );
         state.router.unregister_by_conn("conn-1");
@@ -1525,6 +1719,9 @@ mod presence_tests {
                 reconnect_count: 0,
                 model: None,
                 effort: None,
+                derived_domain: None,
+                domain: None,
+                dnd_until: None,
             },
         );
         (state, config)
@@ -1561,6 +1758,78 @@ mod presence_tests {
         let agents = state.agent_infos();
         assert_eq!(agents[0].model.as_deref(), Some("claude-haiku-4-5-20251001"));
         assert_eq!(agents[0].effort, None);
+
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    #[test]
+    fn les_rappels_epargnent_un_agent_qui_ne_veut_pas_etre_derange() {
+        // Destinataire joignable : tous les paliers passent.
+        assert!(should_remind(false, 0));
+        assert!(should_remind(false, 1));
+        assert!(should_remind(false, 2));
+
+        // Destinataire en « ne pas déranger » : les rappels qui lui sont
+        // adressés sont retenus…
+        assert!(!should_remind(true, 0));
+        assert!(!should_remind(true, 1));
+        // …mais pas la notification d'échec, qui part vers l'émetteur.
+        assert!(should_remind(true, 2));
+        assert!(should_remind(true, 3));
+    }
+
+    #[test]
+    fn domaine_surcharge_puis_reinitialise() {
+        let (mut state, config) = state_with_registered_agent("domaine");
+        // Domaine dérivé annoncé à l'enregistrement.
+        if let Some(presence) = state.presences.get_mut("instance-1") {
+            presence.derived_domain = Some("bridget".to_string());
+            presence.domain = Some("bridget".to_string());
+        }
+        assert_eq!(state.agent_infos()[0].domain.as_deref(), Some("bridget"));
+
+        let ack = handle_domain("agent-2", Some("revue-croisee".to_string()), &mut state);
+        assert!(matches!(ack, DaemonToWrapper::Ack { .. }));
+        assert_eq!(
+            state.agent_infos()[0].domain.as_deref(),
+            Some("revue-croisee")
+        );
+
+        // La réinitialisation revient sur le domaine dérivé, pas sur rien.
+        handle_domain("agent-2", None, &mut state);
+        assert_eq!(state.agent_infos()[0].domain.as_deref(), Some("bridget"));
+
+        let nack = handle_domain("inconnu", None, &mut state);
+        assert!(matches!(nack, DaemonToWrapper::Nack { .. }));
+
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    #[test]
+    fn dnd_expire_de_lui_meme_et_se_leve_a_la_demande() {
+        let (mut state, config) = state_with_registered_agent("dnd");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Statut actif : l'état devient « dnd » et le temps restant est annoncé.
+        handle_availability("agent-2", Some(now + 1800), &mut state);
+        assert_eq!(state.agent_infos()[0].state, "dnd");
+        let presence = state.presences.get("instance-1").unwrap();
+        assert!(presence.is_dnd());
+        assert!(presence.dnd_minutes_left() <= 30);
+
+        // Une échéance déjà passée équivaut à une absence de statut : c'est ce
+        // qui rend l'expiration automatique, sans tâche de fond.
+        handle_availability("agent-2", Some(now - 10), &mut state);
+        assert_eq!(state.agent_infos()[0].state, "connected");
+
+        handle_availability("agent-2", Some(now + 600), &mut state);
+        assert_eq!(state.agent_infos()[0].state, "dnd");
+        handle_availability("agent-2", None, &mut state);
+        assert_eq!(state.agent_infos()[0].state, "connected");
+        assert!(!state.presences.get("instance-1").unwrap().is_dnd());
 
         let _ = std::fs::remove_file(&config.db_path);
     }
@@ -1631,6 +1900,7 @@ mod presence_tests {
             Some("unix".to_string()),
             Some("macOS".to_string()),
             Some("instance-1".to_string()),
+            Some("bridget".to_string()),
             &mut state,
         );
         assert!(matches!(response, DaemonToWrapper::Registered { .. }));
