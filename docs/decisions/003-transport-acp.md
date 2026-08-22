@@ -36,6 +36,28 @@ réponses, notifications et requêtes de permission sans corruption du flux. Un
 équipier conserve une session ACP durable ; les messages Bridget constituent
 des tours FIFO successifs.
 
+## Décisions associées
+
+- **D-202 — Registre JSON** : les types d'agents restent déclarés dans
+  `agents.json`, lu avec `serde_json` déjà présent. Le registre remplace la
+  liste blanche en dur sans nouvelle dépendance.
+- **D-205 — Réponse selon `reply`** : une fin de tour normale est routée et
+  clôt la demande uniquement pour `reply=yes`. Pour `reply=no`, elle reste dans
+  le journal de session sans message de retour.
+- **D-206 — Échéances** : le daemon demeure l'autorité unique des délais et
+  expirations. Le transport ne gère que le tour actif et retire les messages
+  annulés ou expirés avant leur livraison.
+- **D-207 — Facturation** : le wrapper refuse un équipier lorsqu'une variable
+  d'API interdite est présente, sauf contournement explicite. Pour Codex, les
+  deux variables interdites sont `OPENAI_API_KEY` et `CODEX_API_KEY`.
+- **D-208 — Clôture fiable** : une demande est marquée répondue seulement après
+  livraison effective de la réponse. Le contournement DND exige une validation
+  non mutante de `in_reply_to` et de ses deux participants, afin de bloquer les
+  identifiants forgés.
+- **D-209 — Annulation et rejet typés** : `CancelDelivery` purge une livraison
+  identifiée côté wrapper ; `DeliveryRejected` remonte au daemon un rejet
+  terminal, notamment pour une file pleine ou un processus arrêté.
+
 ## Conséquences positives
 
 - La livraison et le retour de réponse sont structurés, sans injection terminal
@@ -54,4 +76,3 @@ des tours FIFO successifs.
 - Un agent ACP introduit une file et un état de tour à gérer explicitement.
 - La compatibilité dépend des versions d'adaptateur et du coeur Codex embarqué,
   vérifiés par le spike T701 avant l'implémentation.
-
