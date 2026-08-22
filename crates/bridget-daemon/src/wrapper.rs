@@ -55,12 +55,17 @@ struct PendingIdempotentDelivery {
     delivery_generation: u64,
 }
 
+enum PendingAcpDispatch {
+    Historic,
+    Idempotent(PendingIdempotentDelivery),
+}
+
 /// Raccorde l'observable ACP au reçu durable : aucun accusé n'est émis avant
 /// `PromptDispatched`, et tout état ambigu reste explicitement indéterminé.
 struct IdempotentDeliveryTracker {
     instance_id: String,
     receipts: ReceiptStore,
-    pending: BTreeMap<String, VecDeque<PendingIdempotentDelivery>>,
+    pending: BTreeMap<String, VecDeque<PendingAcpDispatch>>,
 }
 
 enum IdempotentDeliveryAction {
@@ -73,10 +78,7 @@ enum IdempotentDeliveryAction {
 
 impl IdempotentDeliveryTracker {
     fn open(home: &std::path::Path, instance_id: &str) -> Result<Self, String> {
-        let state_home = std::env::var_os("XDG_STATE_HOME")
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".local/state"));
+        let state_home = home.join(".local/state");
         Self::open_at(&state_home, instance_id)
     }
 
@@ -117,10 +119,10 @@ impl IdempotentDeliveryTracker {
                 self.pending
                     .entry(message_id)
                     .or_default()
-                    .push_back(PendingIdempotentDelivery {
+                    .push_back(PendingAcpDispatch::Idempotent(PendingIdempotentDelivery {
                         delivery_id,
                         delivery_generation,
-                    });
+                    }));
                 IdempotentDeliveryAction::Inject {
                     message,
                     delivery_id: pending_delivery_id,
@@ -135,6 +137,9 @@ impl IdempotentDeliveryTracker {
 
     fn prompt_dispatched(&mut self, message_id: &str, now: i64) -> Option<WrapperToDaemon> {
         let pending = self.take_pending_by_message(message_id)?;
+        let PendingAcpDispatch::Idempotent(pending) = pending else {
+            return None;
+        };
         let acknowledged = matches!(
             self.receipts.acknowledge(&pending.delivery_id, now),
             Ok(ReceiptDecision::Acked)
@@ -156,14 +161,14 @@ impl IdempotentDeliveryTracker {
         let message_id = self.pending.iter().find_map(|(message_id, deliveries)| {
             deliveries
                 .iter()
-                .any(|pending| pending.delivery_id == delivery_id)
+                .any(|pending| matches!(pending, PendingAcpDispatch::Idempotent(pending) if pending.delivery_id == delivery_id))
                 .then(|| message_id.clone())
         })?;
         let pending = {
             let deliveries = self.pending.get_mut(&message_id)?;
             let index = deliveries
                 .iter()
-                .position(|pending| pending.delivery_id == delivery_id)?;
+                .position(|pending| matches!(pending, PendingAcpDispatch::Idempotent(pending) if pending.delivery_id == delivery_id))?;
             deliveries.remove(index)?
         };
         if self
@@ -173,6 +178,9 @@ impl IdempotentDeliveryTracker {
         {
             self.pending.remove(&message_id);
         }
+        let PendingAcpDispatch::Idempotent(pending) = pending else {
+            return None;
+        };
         Some(WrapperToDaemon::DeliveryIndeterminate {
             delivery_id: pending.delivery_id,
             delivery_generation: pending.delivery_generation,
@@ -181,13 +189,35 @@ impl IdempotentDeliveryTracker {
 
     fn injection_rejected(&mut self, message_id: &str) -> Option<WrapperToDaemon> {
         let pending = self.take_pending_by_message(message_id)?;
+        let PendingAcpDispatch::Idempotent(pending) = pending else {
+            return None;
+        };
         Some(WrapperToDaemon::DeliveryIndeterminate {
             delivery_id: pending.delivery_id,
             delivery_generation: pending.delivery_generation,
         })
     }
 
-    fn take_pending_by_message(&mut self, message_id: &str) -> Option<PendingIdempotentDelivery> {
+    fn record_historic(&mut self, message_id: &str) {
+        self.pending
+            .entry(message_id.to_string())
+            .or_default()
+            .push_back(PendingAcpDispatch::Historic);
+    }
+
+    fn historic_injection_failed(&mut self, message_id: &str) {
+        let Some(deliveries) = self.pending.get_mut(message_id) else {
+            return;
+        };
+        if matches!(deliveries.back(), Some(PendingAcpDispatch::Historic)) {
+            deliveries.pop_back();
+        }
+        if deliveries.is_empty() {
+            self.pending.remove(message_id);
+        }
+    }
+
+    fn take_pending_by_message(&mut self, message_id: &str) -> Option<PendingAcpDispatch> {
         let pending = self.pending.get_mut(message_id)?.pop_front()?;
         if self.pending.get(message_id).is_some_and(VecDeque::is_empty) {
             self.pending.remove(message_id);
@@ -1801,7 +1831,9 @@ pub fn launch_acp_with(
             }
             Ok(_) => match decode(line.trim()) {
                 Ok(DaemonToWrapper::Deliver(message)) => {
+                    idempotent_deliveries.record_historic(&message.id);
                     if let Err(error) = transport.deliver(&message) {
+                        idempotent_deliveries.historic_injection_failed(&message.id);
                         send_wrapper_message(
                             &writer,
                             WrapperToDaemon::DeliveryRejected {
@@ -2249,6 +2281,61 @@ mod reconnect_tests {
         ));
         drop(tracker);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn historic_and_idempotent_same_message_id_keep_dispatch_order() {
+        let root = receipt_root("historic-order");
+        let instance_id = "instance_012_aaaaaaaaaaaa";
+        let message_id = "same-historic-and-idempotent";
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, instance_id).unwrap();
+        tracker.record_historic(message_id);
+        assert!(matches!(
+            tracker.receive(
+                "delivery_after_historic".to_string(),
+                instance_id.to_string(),
+                47,
+                500,
+                idempotent_message(message_id),
+                100,
+            ),
+            IdempotentDeliveryAction::Inject { .. }
+        ));
+        assert!(tracker.prompt_dispatched(message_id, 101).is_none());
+        assert!(matches!(
+            tracker.prompt_dispatched(message_id, 102),
+            Some(WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation: 47,
+            }) if delivery_id == "delivery_after_historic"
+        ));
+        drop(tracker);
+
+        let root_reverse = receipt_root("idempotent-order");
+        let mut reverse = IdempotentDeliveryTracker::open_at(&root_reverse, instance_id).unwrap();
+        assert!(matches!(
+            reverse.receive(
+                "delivery_before_historic".to_string(),
+                instance_id.to_string(),
+                53,
+                500,
+                idempotent_message(message_id),
+                100,
+            ),
+            IdempotentDeliveryAction::Inject { .. }
+        ));
+        reverse.record_historic(message_id);
+        assert!(matches!(
+            reverse.prompt_dispatched(message_id, 101),
+            Some(WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation: 53,
+            }) if delivery_id == "delivery_before_historic"
+        ));
+        assert!(reverse.prompt_dispatched(message_id, 102).is_none());
+        drop(reverse);
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(root_reverse).unwrap();
     }
 
     fn relay_emitter() -> (RelayEvents, RelayEmitter) {

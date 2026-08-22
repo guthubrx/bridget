@@ -145,6 +145,7 @@ mod tests {
     use bridget_daemon::daemon::{self, DaemonConfig};
     use bridget_daemon::registry::AgentRegistry;
     use bridget_daemon::wrapper::launch_acp_with;
+    use std::os::unix::net::UnixListener;
 
     fn registry_with_unknown_stdio_agent() -> (AgentRegistry, PathBuf) {
         let mut fixture: serde_json::Value = serde_json::from_str(include_str!(
@@ -201,6 +202,157 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
         )
         .expect("registre dynamique chargé");
         (registry, dir)
+    }
+
+    fn registry_with_counting_stdio_agent() -> (AgentRegistry, PathBuf, PathBuf) {
+        let (_, directory) = registry_with_unknown_stdio_agent();
+        let path = directory.join("agents.json");
+        let mut fixture: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let counter = directory.join("prompt-count");
+        let script = format!(
+            r#"
+read initialize
+echo '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1}}}}'
+read new_session
+echo '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"stdio-count"}}}}'
+read prompt
+printf x >> '{}'
+echo '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"stdio-count","update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"prompt-lu"}}}}}}}}'
+echo '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
+sleep 2
+"#,
+            counter.display()
+        );
+        fixture["agents"]["stdio-ouvert"]["args"] = serde_json::json!(["-c", script]);
+        std::fs::write(&path, serde_json::to_string_pretty(&fixture).unwrap()).unwrap();
+        let registry = AgentRegistry::from_json(&std::fs::read_to_string(&path).unwrap(), &path)
+            .unwrap();
+        (registry, directory, counter)
+    }
+
+    fn wait_for_report(reader: &mut BufReader<UnixStream>) -> WrapperToDaemon {
+        for _ in 0..80 {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => panic!("wrapper fermé avant son accusé idempotent"),
+                Ok(_) => match decode(line.trim()).unwrap() {
+                    report @ (WrapperToDaemon::DeliverAcked { .. }
+                    | WrapperToDaemon::DeliveryIndeterminate { .. }) => return report,
+                    _ => {}
+                },
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Err(error) => panic!("lecture wrapper impossible: {error}"),
+            }
+        }
+        panic!("accusé idempotent absent")
+    }
+
+    fn register_acp_wrapper(
+        listener: &UnixListener,
+    ) -> (BufReader<UnixStream>, BufWriter<UnixStream>, String) {
+        let (stream, _) = listener.accept().expect("connexion du wrapper ACP");
+        let read_stream = stream.try_clone().unwrap();
+        read_stream
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let mut reader = BufReader::new(read_stream);
+        let mut writer = BufWriter::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let instance_id = match decode(line.trim()).unwrap() {
+            WrapperToDaemon::Register {
+                instance_id: Some(instance_id),
+                ..
+            } => instance_id,
+            unexpected => panic!("Register ACP attendu : {unexpected:?}"),
+        };
+        writeln!(
+            writer,
+            "{}",
+            encode(&DaemonToWrapper::Registered {
+                name: "extension".to_string(),
+            })
+            .unwrap()
+        )
+        .unwrap();
+        writer.flush().unwrap();
+        (reader, writer, instance_id)
+    }
+
+    #[test]
+    fn redelivery_idempotente_apres_reconnexion_n_injecte_qu_un_prompt() {
+        let (registry, directory, counter) = registry_with_counting_stdio_agent();
+        let socket = unique_socket_path();
+        let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        let home = directory.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let wrapper_registry = registry.clone();
+        let wrapper_socket = socket.clone();
+        let wrapper = thread::spawn(move || {
+            launch_acp_with(
+                "stdio-ouvert",
+                &[],
+                Some("extension"),
+                &wrapper_registry,
+                &wrapper_socket,
+                &home,
+            )
+            .map_err(|error| error.to_string())
+        });
+
+        let (mut first_reader, mut first_writer, instance_id) = register_acp_wrapper(&listener);
+        let mut message = BridgetMessage::new("maicie", "extension", "une seule injection");
+        message.id = "idempotent-reconnect".to_string();
+        let delivery = DaemonToWrapper::DeliverIdempotent {
+            delivery_id: "delivery-reconnect".to_string(),
+            recipient_instance_id: instance_id.clone(),
+            delivery_generation: 71,
+            expires_at: i64::MAX,
+            message: message.clone(),
+        };
+        writeln!(first_writer, "{}", encode(&delivery).unwrap()).unwrap();
+        first_writer.flush().unwrap();
+        for _ in 0..80 {
+            if std::fs::read(&counter).map_or(0, |bytes| bytes.len()) == 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(std::fs::read(&counter).unwrap().len(), 1);
+        assert!(matches!(
+            wait_for_report(&mut first_reader),
+            WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation: 71,
+            } if delivery_id == "delivery-reconnect"
+        ));
+        drop(first_writer);
+        drop(first_reader);
+
+        let (mut second_reader, mut second_writer, reconnected_instance_id) =
+            register_acp_wrapper(&listener);
+        assert_eq!(reconnected_instance_id, instance_id);
+        writeln!(second_writer, "{}", encode(&delivery).unwrap()).unwrap();
+        second_writer.flush().unwrap();
+        assert!(matches!(
+            wait_for_report(&mut second_reader),
+            WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation: 71,
+            } if delivery_id == "delivery-reconnect"
+        ));
+        assert_eq!(std::fs::read(&counter).unwrap().len(), 1);
+        drop(second_writer);
+        drop(second_reader);
+        assert_eq!(wrapper.join().unwrap(), Ok(()));
+        let _ = std::fs::remove_file(socket);
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
