@@ -391,7 +391,7 @@ impl Record {
     }
 }
 
-fn validate_issuer_scope(value: &str) -> Result<(), IdempotencyError> {
+pub(crate) fn validate_issuer_scope(value: &str) -> Result<(), IdempotencyError> {
     if !(MIN_ISSUER_SCOPE_LEN..=MAX_ISSUER_SCOPE_LEN).contains(&value.len())
         || !value
             .bytes()

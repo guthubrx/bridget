@@ -2,7 +2,10 @@
 //! entre les wrappers connectés, persiste l'état en SQLite.
 
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
-use bridget_transport::protocol::{decode, encode, AttachRefusal, ConnectionRole};
+use bridget_transport::protocol::{
+    decode, encode, AttachRefusal, ClientCapability, ClientRefusal, ConnectionRole,
+    CLIENT_CONTRACT_VERSION,
+};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use log::{error, info, warn};
 use std::collections::{HashMap, VecDeque};
@@ -70,6 +73,9 @@ const ATTACH_VIEW_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 /// Chaque entrée expire aussi après `PENDING_ATTACH_SEND_TTL`.
 const MAX_PENDING_ATTACH_SENDS: usize = 1024;
 const PENDING_ATTACH_SEND_TTL: Duration = Duration::from_secs(300);
+const CLIENT_IDEMPOTENCY_HORIZON_SECS: i64 = 7 * 24 * 60 * 60;
+const CLIENT_ISSUED_AT_TOLERANCE_SECS: i64 = 60;
+const MAX_ACTIVE_ISSUER_SCOPES: usize = 4096;
 
 // Constante pour la période de grâce des timeouts (M-004)
 const TIMEOUT_GRACE_PERIOD: u64 = 30; // secondes
@@ -188,6 +194,9 @@ struct DaemonState {
     /// Les clients attach négocient ce rôle explicite ; l'absence d'entrée
     /// reste un wrapper pour préserver les agents 007 déjà connectés.
     connection_roles: HashMap<String, ConnectionRole>,
+    /// Une négociation appartient à la connexion, tandis que le scope peut
+    /// volontairement être partagé par plusieurs retries coopératifs.
+    client_negotiations: HashMap<String, NegotiatedClient>,
     /// Souscriptions attach actives, distinctes de l'annuaire des équipiers.
     attach_subscriptions: HashMap<String, AttachSubscription>,
     attach_views: HashMap<String, Arc<AttachView>>,
@@ -210,6 +219,13 @@ struct AttachSubscription {
 struct PendingAttachSend {
     conn_id: String,
     expires_at: Instant,
+}
+
+#[derive(Clone)]
+struct NegotiatedClient {
+    version: u16,
+    issuer_scope: String,
+    capabilities: Vec<ClientCapability>,
 }
 
 struct QueuedAttachMessage {
@@ -718,6 +734,7 @@ impl DaemonState {
             conn_operating_systems: HashMap::new(),
             conn_instances: HashMap::new(),
             connection_roles: HashMap::new(),
+            client_negotiations: HashMap::new(),
             attach_subscriptions: HashMap::new(),
             attach_views: HashMap::new(),
             view_closed_tx,
@@ -1200,6 +1217,7 @@ fn handle_connection(
         st.conn_hosts.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
+        st.client_negotiations.remove(&conn_id);
         (writer_opt, removed, controls, views)
     };
     let _ = execute_controls(controls);
@@ -1656,6 +1674,20 @@ fn handle_wrapper_message(
     for view in views {
         view.close_and_join();
     }
+    if matches!(msg, WrapperToDaemon::ClientHello { .. })
+        && !state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .connection_roles
+            .contains_key(conn_id)
+    {
+        // Un hello client ne doit jamais sélectionner implicitement le rôle
+        // wrapper : l'ordre public est strict et sans effet de bord.
+        return Some(DaemonToWrapper::ClientRejected {
+            reason: ClientRefusal::RoleHandshakeRequired,
+        });
+    }
+
     if !matches!(msg, WrapperToDaemon::RoleHandshake { .. }) {
         // La première commande non négociée choisit définitivement la
         // compatibilité wrapper. Une tentative d'upgrade ultérieure vers
@@ -1669,6 +1701,11 @@ fn handle_wrapper_message(
     if let WrapperToDaemon::RoleHandshake { role } = &msg {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         if st.connection_roles.contains_key(conn_id) {
+            if *role == ConnectionRole::Client {
+                return Some(DaemonToWrapper::ClientRejected {
+                    reason: ClientRefusal::ClientRoleRequired,
+                });
+            }
             return Some(DaemonToWrapper::AttachRejected {
                 subscription_id: None,
                 reason: AttachRefusal::MessageOutsideAttachRole,
@@ -1691,8 +1728,128 @@ fn handle_wrapper_message(
         });
     }
 
+    let client_refusal = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        match st.connection_roles.get(conn_id) {
+            Some(ConnectionRole::Client) => match &msg {
+                WrapperToDaemon::ClientHello { .. }
+                    if st.client_negotiations.contains_key(conn_id) =>
+                {
+                    Some(ClientRefusal::AlreadyNegotiated)
+                }
+                WrapperToDaemon::SendIdempotent { .. } | WrapperToDaemon::Lookup { .. }
+                    if !st.client_negotiations.contains_key(conn_id) =>
+                {
+                    Some(ClientRefusal::NegotiationRequired)
+                }
+                WrapperToDaemon::SendIdempotent { .. }
+                    if st
+                        .client_negotiations
+                        .get(conn_id)
+                        .is_some_and(|negotiated| {
+                            negotiated.version != CLIENT_CONTRACT_VERSION
+                                || !negotiated
+                                    .capabilities
+                                    .contains(&ClientCapability::SendIdempotent)
+                        }) =>
+                {
+                    Some(ClientRefusal::CapabilityNotNegotiated)
+                }
+                WrapperToDaemon::Lookup { .. }
+                    if st
+                        .client_negotiations
+                        .get(conn_id)
+                        .is_some_and(|negotiated| {
+                            negotiated.version != CLIENT_CONTRACT_VERSION
+                                || !negotiated.capabilities.contains(&ClientCapability::Lookup)
+                        }) =>
+                {
+                    Some(ClientRefusal::CapabilityNotNegotiated)
+                }
+                WrapperToDaemon::ClientHello { .. }
+                | WrapperToDaemon::SendIdempotent { .. }
+                | WrapperToDaemon::Lookup { .. } => None,
+                _ => Some(ClientRefusal::MessageOutsideClientRole),
+            },
+            Some(ConnectionRole::Wrapper) | None
+                if matches!(
+                    msg,
+                    WrapperToDaemon::ClientHello { .. }
+                        | WrapperToDaemon::SendIdempotent { .. }
+                        | WrapperToDaemon::Lookup { .. }
+                ) =>
+            {
+                Some(ClientRefusal::ClientRoleRequired)
+            }
+            _ => None,
+        }
+    };
+    if let Some(reason) = client_refusal {
+        return Some(DaemonToWrapper::ClientRejected { reason });
+    }
+
     match msg {
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
+        WrapperToDaemon::ClientHello {
+            contract_version,
+            issuer_scope,
+            capabilities,
+        } => {
+            if contract_version != CLIENT_CONTRACT_VERSION {
+                return Some(DaemonToWrapper::ClientRejected {
+                    reason: ClientRefusal::UnsupportedVersion {
+                        supported_versions: vec![CLIENT_CONTRACT_VERSION],
+                    },
+                });
+            }
+            if crate::idempotency::validate_issuer_scope(&issuer_scope).is_err() {
+                return Some(DaemonToWrapper::ClientRejected {
+                    reason: ClientRefusal::InvalidIssuerScope,
+                });
+            }
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let active_scopes = st
+                .client_negotiations
+                .values()
+                .map(|negotiated| negotiated.issuer_scope.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            if !active_scopes.contains(issuer_scope.as_str())
+                && active_scopes.len() >= MAX_ACTIVE_ISSUER_SCOPES
+            {
+                return Some(DaemonToWrapper::ClientRejected {
+                    reason: ClientRefusal::ActiveScopeLimit,
+                });
+            }
+            let capabilities: Vec<ClientCapability> = capabilities
+                .into_iter()
+                .filter(|capability| {
+                    matches!(capability, ClientCapability::SendIdempotent | ClientCapability::Lookup)
+                })
+                .collect();
+            st.client_negotiations.insert(
+                conn_id.to_string(),
+                NegotiatedClient {
+                    version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope,
+                    capabilities: capabilities.clone(),
+                },
+            );
+            Some(DaemonToWrapper::ClientWelcome {
+                version: CLIENT_CONTRACT_VERSION,
+                horizon_secs: CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+                capabilities,
+            })
+        }
+        WrapperToDaemon::SendIdempotent { message_id, .. } => Some(DaemonToWrapper::Nack {
+            id: message_id,
+            reason: "SendIdempotent sera activé par T1205".to_string(),
+        }),
+        WrapperToDaemon::Lookup { .. } => Some(DaemonToWrapper::Nack {
+            id: "lookup".to_string(),
+            reason: "Lookup sera activé par T1207".to_string(),
+        }),
+        WrapperToDaemon::DeliverAcked { .. } | WrapperToDaemon::DeliveryIndeterminate { .. } => None,
         WrapperToDaemon::Subscribe { agent, window } => {
             let (subscription_id, control) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -2590,6 +2747,7 @@ pub struct DaemonStatus {
 #[cfg(test)]
 mod presence_tests {
     use super::*;
+    use bridget_core::BridgetMessage;
     use std::io::Read;
 
     fn control_socket(label: &str) -> (Arc<Mutex<BufWriter<UnixStream>>>, BufReader<UnixStream>) {
@@ -2824,6 +2982,298 @@ mod presence_tests {
         ));
         assert_eq!(
             shared.lock().unwrap().connection_roles.get("conn-role"),
+            Some(&ConnectionRole::Wrapper)
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn client_negocie_un_contrat_versionne_apres_son_role() {
+        let (state, config) = state_with_registered_agent("client-negotiation");
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-1",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            })
+        ));
+        let response = handle_wrapper_message(
+            "client-1",
+            WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: "012_scope_aaaaaaaaaaaa".to_string(),
+                capabilities: vec![ClientCapability::SendIdempotent, ClientCapability::Lookup],
+            },
+            &shared,
+        );
+        assert!(matches!(
+            response,
+            Some(DaemonToWrapper::ClientWelcome {
+                version: CLIENT_CONTRACT_VERSION,
+                horizon_secs: CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+                capabilities,
+            }) if capabilities == vec![ClientCapability::SendIdempotent, ClientCapability::Lookup]
+        ));
+        let negotiated = shared
+            .lock()
+            .unwrap()
+            .client_negotiations
+            .get("client-1")
+            .cloned()
+            .unwrap();
+        assert_eq!(negotiated.version, CLIENT_CONTRACT_VERSION);
+        assert_eq!(negotiated.issuer_scope, "012_scope_aaaaaaaaaaaa");
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn client_hello_avant_role_et_depuis_attach_sont_refuses_sans_negociation() {
+        let (state, config) = state_with_registered_agent("client-order");
+        let shared = Arc::new(Mutex::new(state));
+        let hello = || WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: "012_scope_bbbbbbbbbbbb".to_string(),
+            capabilities: vec![ClientCapability::Lookup],
+        };
+        assert!(matches!(
+            handle_wrapper_message("client-before-role", hello(), &shared),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::RoleHandshakeRequired
+            })
+        ));
+        assert!(!shared
+            .lock()
+            .unwrap()
+            .connection_roles
+            .contains_key("client-before-role"));
+        assert!(matches!(
+            handle_wrapper_message(
+                "attach-client-hello",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message("attach-client-hello", hello(), &shared),
+            Some(DaemonToWrapper::AttachRejected {
+                reason: AttachRefusal::MessageOutsideAttachRole,
+                ..
+            })
+        ));
+        assert!(shared.lock().unwrap().client_negotiations.is_empty());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn send_et_lookup_avant_welcome_ne_negocient_ni_ne_reservent() {
+        let (state, config) = state_with_registered_agent("client-before-welcome");
+        let shared = Arc::new(Mutex::new(state));
+        handle_wrapper_message(
+            "client-before-welcome",
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Client,
+            },
+            &shared,
+        );
+        let message = BridgetMessage::new("client", "agent-2", "sans welcome");
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-before-welcome",
+                WrapperToDaemon::SendIdempotent {
+                    message,
+                    message_id: "message-1".to_string(),
+                    issued_at: 1,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::NegotiationRequired
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-before-welcome",
+                WrapperToDaemon::Lookup {
+                    operation_kind: "send".to_string(),
+                    idempotency_key: "message-1".to_string(),
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::NegotiationRequired
+            })
+        ));
+        assert!(shared.lock().unwrap().client_negotiations.is_empty());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn client_refuse_version_et_scope_invalides_et_capacite_non_negociee() {
+        let (state, config) = state_with_registered_agent("client-validation");
+        let shared = Arc::new(Mutex::new(state));
+        for connection in ["client-version", "client-scope", "client-capability"] {
+            handle_wrapper_message(
+                connection,
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &shared,
+            );
+        }
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-version",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION + 1,
+                    issuer_scope: "012_scope_cccccccccccc".to_string(),
+                    capabilities: vec![ClientCapability::Lookup],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::UnsupportedVersion { supported_versions }
+            }) if supported_versions == vec![CLIENT_CONTRACT_VERSION]
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-scope",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: "invalide!".to_string(),
+                    capabilities: vec![ClientCapability::Lookup],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::InvalidIssuerScope
+            })
+        ));
+        handle_wrapper_message(
+            "client-capability",
+            WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: "012_scope_dddddddddddd".to_string(),
+                capabilities: vec![ClientCapability::Lookup],
+            },
+            &shared,
+        );
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-capability",
+                WrapperToDaemon::SendIdempotent {
+                    message: BridgetMessage::new("client", "agent-2", "hors capacite"),
+                    message_id: "message-2".to_string(),
+                    issued_at: 1,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::CapabilityNotNegotiated
+            })
+        ));
+        assert!(shared.lock().unwrap().client_negotiations.contains_key("client-capability"));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn client_borne_les_scopes_actifs_sans_rejeter_un_scope_deja_actif() {
+        let (mut state, config) = state_with_registered_agent("client-scope-limit");
+        for number in 0..MAX_ACTIVE_ISSUER_SCOPES {
+            state.client_negotiations.insert(
+                format!("existing-{number}"),
+                NegotiatedClient {
+                    version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: format!("012_scope_{number:016x}"),
+                    capabilities: vec![ClientCapability::Lookup],
+                },
+            );
+        }
+        state
+            .connection_roles
+            .insert("client-limit".to_string(), ConnectionRole::Client);
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-limit",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: "012_scope_ffffffffffffffff".to_string(),
+                    capabilities: vec![ClientCapability::Lookup],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::ActiveScopeLimit
+            })
+        ));
+        shared
+            .lock()
+            .unwrap()
+            .connection_roles
+            .insert("client-retry".to_string(), ConnectionRole::Client);
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-retry",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: "012_scope_0000000000000000".to_string(),
+                    capabilities: vec![ClientCapability::Lookup],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientWelcome { .. })
+        ));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn wrapper_accepte_les_accuses_idempotents_et_register_historique_reste_wrapper() {
+        let (state, config) = state_with_registered_agent("client-wrapper-matrix");
+        let shared = Arc::new(Mutex::new(state));
+        assert!(handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::DeliverAcked {
+                delivery_id: "delivery-1".to_string(),
+                delivery_generation: 1,
+            },
+            &shared,
+        )
+        .is_none());
+        assert_eq!(
+            shared.lock().unwrap().connection_roles.get("conn-1"),
+            Some(&ConnectionRole::Wrapper)
+        );
+        assert!(matches!(
+            handle_wrapper_message(
+                "historic-register",
+                WrapperToDaemon::Register {
+                    agent_type: "codex".to_string(),
+                    name: Some("historique-012".to_string()),
+                    host: None,
+                    transport: None,
+                    os: None,
+                    instance_id: None,
+                    domain: None,
+                    turn_in_progress: false,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::Registered { .. })
+        ));
+        assert_eq!(
+            shared.lock().unwrap().connection_roles.get("historic-register"),
             Some(&ConnectionRole::Wrapper)
         );
         let _ = std::fs::remove_file(config.db_path);
