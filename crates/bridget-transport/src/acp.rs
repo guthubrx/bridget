@@ -41,6 +41,11 @@ pub enum AcpEvent {
     TurnStarted {
         message_id: String,
     },
+    /// La frame `session/prompt` a été écrite puis flushée vers l'adaptateur.
+    /// Ce n'est pas encore une fin de tour ni un accusé de résultat ACP.
+    PromptDispatched {
+        message_id: String,
+    },
     TurnFinished {
         message: BridgetMessage,
         response: String,
@@ -541,6 +546,8 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 &worker.child,
                 &worker.queue,
                 &worker.events,
+                &worker.test_observer,
+                &message.id,
                 &worker.alive,
                 worker.cancel_grace,
                 worker.poll_interval,
@@ -847,6 +854,8 @@ fn prompt_request(
     child: &Arc<Mutex<Child>>,
     queue: &Arc<(Mutex<QueueState>, Condvar)>,
     events: &Arc<Mutex<VecDeque<AcpEvent>>>,
+    test_observer: &Option<mpsc::Sender<AcpEvent>>,
+    prompt_message_id: &str,
     alive: &AtomicBool,
     cancel_grace: Duration,
     poll_interval: Duration,
@@ -877,6 +886,18 @@ fn prompt_request(
             .remove(&key);
         return Err(error);
     }
+    // Cette frontière est volontairement immédiatement après write+flush :
+    // un échec de pipe ou de flush ne produit jamais PromptDispatched.
+    let dispatched = AcpEvent::PromptDispatched {
+        message_id: prompt_message_id.to_string(),
+    };
+    if let Some(observer) = test_observer {
+        let _ = observer.send(dispatched.clone());
+    }
+    events
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .push_back(dispatched);
     let started = std::time::Instant::now();
     loop {
         let timed_out = deadline_at.is_some_and(|deadline| {
@@ -1494,6 +1515,81 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
     }
 
     #[test]
+    fn prompt_dispatched_suit_le_flush_et_le_faux_adaptateur_lit_la_frame() {
+        let script = r#"
+read initialize
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read session
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read prompt
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"prompt-lu"}}}}'
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+"#;
+        let (observer, observed_events) = mpsc::channel();
+        let mut transport = AcpTransport::spawn_with_clock_and_cancel_grace(
+            AcpOptions {
+                command: "sh".to_string(),
+                args: vec!["-c".to_string(), script.to_string()],
+                queue_capacity: 1,
+                permissions: "allow".to_string(),
+                notify_timeout_secs: 1,
+            },
+            Arc::new(SystemTime::now),
+            CANCEL_GRACE,
+            CANCEL_POLL,
+            Some(observer),
+        )
+        .unwrap();
+        transport.deliver(&message("prompt-dispatched")).unwrap();
+        assert!(matches!(
+            observed_events.recv_timeout(Duration::from_secs(2)),
+            Ok(AcpEvent::PromptDispatched { message_id }) if message_id == "prompt-dispatched"
+        ));
+        assert!(matches!(
+            observed_events.recv_timeout(Duration::from_secs(2)),
+            Ok(AcpEvent::Update { detail }) if detail == "prompt-lu"
+        ), "le faux adaptateur n'a pas lu la frame session/prompt");
+    }
+
+    #[test]
+    fn echec_avant_flush_n_emet_pas_prompt_dispatched() {
+        let script = r#"
+read initialize
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read session
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+exec 0<&-
+sleep 1
+"#;
+        let (observer, observed_events) = mpsc::channel();
+        let mut transport = AcpTransport::spawn_with_clock_and_cancel_grace(
+            AcpOptions {
+                command: "sh".to_string(),
+                args: vec!["-c".to_string(), script.to_string()],
+                queue_capacity: 1,
+                permissions: "allow".to_string(),
+                notify_timeout_secs: 1,
+            },
+            Arc::new(SystemTime::now),
+            CANCEL_GRACE,
+            CANCEL_POLL,
+            Some(observer),
+        )
+        .unwrap();
+        thread::sleep(Duration::from_millis(30));
+        transport.deliver(&message("flush-failed")).unwrap();
+        let mut dispatched = false;
+        for _ in 0..20 {
+            match observed_events.recv_timeout(Duration::from_millis(50)) {
+                Ok(AcpEvent::PromptDispatched { .. }) => dispatched = true,
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        assert!(!dispatched, "un échec avant flush ne peut pas être acquitté");
+    }
+
+    #[test]
     fn enabled_journal_records_a_complete_transport_turn() {
         let script = r#"
 read request
@@ -1749,6 +1845,10 @@ while :; do :; done
         active.deadline_at = Some(now + 1);
         transport.deliver(&active).unwrap();
         transport.deliver(&message("deadline-queued")).unwrap();
+        assert!(matches!(
+            observed_events.recv_timeout(Duration::from_secs(2)),
+            Ok(AcpEvent::PromptDispatched { message_id }) if message_id == "deadline-active"
+        ), "la frontière write+flush n'a pas été publiée");
         assert!(matches!(
             observed_events.recv_timeout(Duration::from_secs(2)),
             Ok(AcpEvent::Update { detail }) if detail == "prompt-observe"
