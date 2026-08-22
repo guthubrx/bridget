@@ -50,6 +50,14 @@ fn write_response(output: &mut impl Write, response: &Value) -> io::Result<()> {
 }
 
 fn dispatch(request: &Value, session: &mut Session) -> Option<Value> {
+    dispatch_with_identity(request, session, &crate::mcp_identity::resolve_current)
+}
+
+fn dispatch_with_identity(
+    request: &Value,
+    session: &mut Session,
+    resolve_identity: &impl Fn() -> Result<String, crate::mcp_identity::IdentityError>,
+) -> Option<Value> {
     let Some(object) = request.as_object() else {
         return Some(error(Value::Null, -32600, "requête JSON-RPC invalide"));
     };
@@ -114,13 +122,17 @@ fn dispatch(request: &Value, session: &mut Session) -> Option<Value> {
             if !tools().iter().any(|tool| tool["name"] == name) {
                 return id.map(|id| error(id, -32602, "outil inconnu"));
             }
+            let identity = match resolve_identity() {
+                Ok(identity) => identity,
+                Err(identity_error) => return id.map(|id| identity_error_result(id, &identity_error)),
+            };
             id.map(|id| {
                 result(
                     id,
                     json!({
                         "content": [{
                             "type": "text",
-                            "text": "Outil Bridget indisponible avant la connexion au daemon."
+                            "text": format!("Outil Bridget indisponible avant la connexion au daemon pour {identity}.")
                         }],
                         "isError": true
                     }),
@@ -143,6 +155,20 @@ fn result(id: Value, payload: Value) -> Value {
 
 fn error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+}
+
+fn identity_error_result(id: Value, identity_error: &crate::mcp_identity::IdentityError) -> Value {
+    result(
+        id,
+        json!({
+            "content": [{
+                "type": "text",
+                "text": format!("{}: {}", identity_error.code(), identity_error.remediation())
+            }],
+            "isError": true,
+            "code": identity_error.code()
+        }),
+    )
 }
 
 fn initialize_result() -> Value {
@@ -198,6 +224,7 @@ fn tools() -> Vec<Value> {
 mod tests {
     use super::*;
     use serde_json::Value;
+    use std::cell::Cell;
 
     const FIXTURES: &str = include_str!("../tests/fixtures/mcp/fr009.jsonl");
 
@@ -268,5 +295,38 @@ mod tests {
             assert_eq!(response["jsonrpc"], "2.0");
             assert!(response.get("result").is_some() || response.get("error").is_some());
         }
+    }
+
+    #[test]
+    fn tools_call_resout_l_identite_a_chaque_appel() {
+        let request = json!({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": { "name": "bridget_who", "arguments": {} }
+        });
+        let mut session = Session { initialize_seen: true, initialized: true };
+        let response = dispatch_with_identity(&request, &mut session, &|| {
+            Err(crate::mcp_identity::IdentityError::LegacyMarker)
+        }).unwrap();
+        assert_eq!(response["result"]["code"], "legacy_marker");
+        assert_eq!(response["result"]["isError"], true);
+    }
+
+    #[test]
+    fn deux_appels_outil_ne_partagent_pas_l_identite_resolue() {
+        let mut session = Session { initialize_seen: true, initialized: true };
+        let calls = Cell::new(0);
+        let resolver = || {
+            calls.set(calls.get() + 1);
+            Ok("agent".to_string())
+        };
+        for id in [3, 4] {
+            let request = json!({
+                "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                "params": { "name": "bridget_who", "arguments": {} }
+            });
+            let response = dispatch_with_identity(&request, &mut session, &resolver).unwrap();
+            assert_eq!(response["result"]["isError"], true);
+        }
+        assert_eq!(calls.get(), 2);
     }
 }

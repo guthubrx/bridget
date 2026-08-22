@@ -574,6 +574,7 @@ pub fn launch(
         .args(&final_args)
         .env("BRIDGET_AGENT_NAME", &my_name)
         .env("BRIDGET_AGENT_NAME_FILE", &name_state_path)
+        .env("BRIDGET_AGENT_INSTANCE_ID", &instance_id)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -1677,18 +1678,19 @@ fn launch_acp_with_status(
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&name_state_path, &my_name)?;
-    let spawn_transport = if managed_reporter.is_some() {
-        AcpTransport::spawn_inheriting_stderr
-    } else {
-        AcpTransport::spawn
-    };
-    let mut transport = spawn_transport(AcpOptions {
+    let mcp_environment = vec![(("BRIDGET_AGENT_INSTANCE_ID").into(), instance_id.clone().into())];
+    let options = AcpOptions {
         command: definition.command.clone(),
         args: definition.args.clone(),
         queue_capacity: definition.queue_capacity,
         permissions: definition.permissions.clone(),
         notify_timeout_secs: definition.notify_timeout_secs,
-    })?;
+    };
+    let mut transport = if managed_reporter.is_some() {
+        AcpTransport::spawn_inheriting_stderr_with_environment(options, &mcp_environment)
+    } else {
+        AcpTransport::spawn_with_environment(options, &mcp_environment)
+    }?;
     let marker_directory = socket.parent().unwrap().join("agent-pids");
     let adapter_pid = transport.process_id();
     crate::mcp_identity::write_marker(

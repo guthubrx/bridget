@@ -49,10 +49,12 @@ pub trait ProcessTree {
 
 pub fn resolve_current() -> Result<String, IdentityError> {
     let name_file = std::env::var_os("BRIDGET_AGENT_NAME_FILE").map(PathBuf::from);
+    let instance_id = std::env::var("BRIDGET_AGENT_INSTANCE_ID").ok();
     let home = std::env::var_os("HOME").ok_or(IdentityError::IdentityNotFound)?;
     resolve_with(
         name_file.as_deref(),
         &PathBuf::from(home).join(".cache/bridget/agent-pids"),
+        instance_id.as_deref(),
         std::process::id(),
         &SystemProcessTree,
     )
@@ -102,6 +104,7 @@ fn process_parent(pid: u32) -> std::io::Result<u32> {
 pub fn resolve_with(
     name_file: Option<&Path>,
     marker_directory: &Path,
+    expected_instance_id: Option<&str>,
     pid: u32,
     processes: &impl ProcessTree,
 ) -> Result<String, IdentityError> {
@@ -121,6 +124,7 @@ pub fn resolve_with(
                 serde_json::from_str(&raw).map_err(|_| IdentityError::LegacyMarker)?;
             if marker.pid == candidate
                 && !marker.instance_id.is_empty()
+                && expected_instance_id == Some(marker.instance_id.as_str())
                 && processes.birth(candidate) == Some(marker.birth)
                 && let Some(name) = read_name(&marker.name_file)
             {
@@ -189,43 +193,43 @@ mod tests {
             uuid::Uuid::new_v4()
         ))
     }
-    fn marker(root: &Path, pid: u32, birth: u64, name: &str) -> PathBuf {
+    fn marker(root: &Path, pid: u32, birth: u64, instance: &str, name: &str) -> PathBuf {
         let names = root.join("names");
         fs::create_dir_all(&names).unwrap();
         let path = names.join(format!("{pid}.txt"));
         fs::write(&path, name).unwrap();
-        write_marker(&root.join("agent-pids"), pid, birth, "instance-1", &path).unwrap();
+        write_marker(&root.join("agent-pids"), pid, birth, instance, &path).unwrap();
         path
     }
 
     #[test]
     fn suit_rename_et_les_ancetres_valides() {
         let root = root("rename");
-        let name = marker(&root, 12, 120, "avant");
+        let name = marker(&root, 12, 120, "instance-1", "avant");
         let tree = Fixture(BTreeMap::from([
             (42, (420, 30)),
             (30, (300, 12)),
             (12, (120, 1)),
         ]));
         assert_eq!(
-            resolve_with(Some(&name), &root.join("agent-pids"), 42, &tree),
+            resolve_with(Some(&name), &root.join("agent-pids"), Some("instance-1"), 42, &tree),
             Ok("avant".into())
         );
         fs::write(&name, "apres").unwrap();
         assert_eq!(
-            resolve_with(None, &root.join("agent-pids"), 42, &tree),
+            resolve_with(None, &root.join("agent-pids"), Some("instance-1"), 42, &tree),
             Ok("apres".into())
         );
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn distingue_chaine_npx_pid_recycle_hors_agent_et_legacy() {
+    fn premier_agent_du_meme_binaire_gagne_dans_la_filiation() {
         let root = root("chain");
         let markers = root.join("agent-pids");
         fs::create_dir_all(&markers).unwrap();
-        let _ = marker(&root, 10, 100, "agent-a");
-        let _ = marker(&root, 20, 200, "agent-b");
+        let _ = marker(&root, 10, 100, "instance-a", "agent-a");
+        let _ = marker(&root, 20, 200, "instance-b", "agent-b");
         let chain = Fixture(BTreeMap::from([
             (50, (500, 40)),
             (40, (400, 30)),
@@ -234,22 +238,55 @@ mod tests {
             (10, (100, 1)),
         ]));
         assert_eq!(
-            resolve_with(None, &markers, 50, &chain),
+            resolve_with(None, &markers, Some("instance-b"), 50, &chain),
             Ok("agent-b".into())
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn traverse_une_chaine_npx_de_trois_processus() {
+        let root = root("npx-chain");
+        let markers = root.join("agent-pids");
+        let _ = marker(&root, 20, 200, "instance-1", "agent");
+        let chain = Fixture(BTreeMap::from([
+            (70, (700, 60)),
+            (60, (600, 50)),
+            (50, (500, 40)),
+            (40, (400, 20)),
+            (20, (200, 1)),
+        ]));
+        assert_eq!(
+            resolve_with(None, &markers, Some("instance-1"), 70, &chain),
+            Ok("agent".into())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refuse_pid_recycle_hors_agent_legacy_et_instance_divergente() {
+        let root = root("negative");
+        let markers = root.join("agent-pids");
+        fs::create_dir_all(&markers).unwrap();
+        let _ = marker(&root, 20, 200, "instance-1", "agent");
         let recycled = Fixture(BTreeMap::from([(20, (201, 1))]));
         assert_eq!(
-            resolve_with(None, &markers, 20, &recycled),
+            resolve_with(None, &markers, Some("instance-1"), 20, &recycled),
             Err(IdentityError::IdentityNotFound)
         );
         assert_eq!(
-            resolve_with(None, &markers, 99, &Fixture::default()),
+            resolve_with(None, &markers, Some("instance-1"), 99, &Fixture::default()),
+            Err(IdentityError::IdentityNotFound)
+        );
+        let matching_birth = Fixture(BTreeMap::from([(20, (200, 1))]));
+        assert_eq!(
+            resolve_with(None, &markers, Some("instance-divergente"), 20, &matching_birth),
             Err(IdentityError::IdentityNotFound)
         );
         fs::write(markers.join("77"), "ancien-nom").unwrap();
         let legacy = Fixture(BTreeMap::from([(77, (770, 1))]));
         assert_eq!(
-            resolve_with(None, &markers, 77, &legacy),
+            resolve_with(None, &markers, Some("instance-1"), 77, &legacy),
             Err(IdentityError::LegacyMarker)
         );
         assert_eq!(IdentityError::LegacyMarker.code(), "legacy_marker");
@@ -264,12 +301,12 @@ mod tests {
     #[test]
     fn ignore_un_nom_invalide_avant_de_consulter_les_ancetres() {
         let root = root("invalid-name");
-        let _name = marker(&root, 12, 120, "agent-valide");
+        let _name = marker(&root, 12, 120, "instance-1", "agent-valide");
         let dynamic_name = root.join("dynamic-name");
         fs::write(&dynamic_name, "agent invalide").unwrap();
         let tree = Fixture(BTreeMap::from([(42, (420, 12)), (12, (120, 1))]));
         assert_eq!(
-            resolve_with(Some(&dynamic_name), &root.join("agent-pids"), 42, &tree),
+            resolve_with(Some(&dynamic_name), &root.join("agent-pids"), Some("instance-1"), 42, &tree),
             Ok("agent-valide".into())
         );
         fs::remove_dir_all(root).unwrap();

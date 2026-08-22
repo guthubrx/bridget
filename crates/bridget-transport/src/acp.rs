@@ -6,6 +6,7 @@ use crate::journal::JournalWriter;
 use bridget_core::BridgetMessage;
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::path::Path;
@@ -136,8 +137,32 @@ impl AcpTransport {
         Self::spawn_with_clock(options, Arc::new(SystemTime::now))
     }
 
+    /// Variante avec environnement explicite pour les processus enfants.
+    pub fn spawn_with_environment(
+        options: AcpOptions,
+        environment: &[(OsString, OsString)],
+    ) -> Result<Self, TransportError> {
+        Self::spawn_with_clock_and_cancel_grace_inner(
+            options,
+            Arc::new(SystemTime::now),
+            CANCEL_GRACE,
+            CANCEL_POLL,
+            None,
+            false,
+            environment,
+        )
+    }
+
     /// Variante supervisée : l'adaptateur conserve le stderr hérité du wrapper.
     pub fn spawn_inheriting_stderr(options: AcpOptions) -> Result<Self, TransportError> {
+        Self::spawn_inheriting_stderr_with_environment(options, &[])
+    }
+
+    /// Variante supervisée avec environnement explicite du processus enfant.
+    pub fn spawn_inheriting_stderr_with_environment(
+        options: AcpOptions,
+        environment: &[(OsString, OsString)],
+    ) -> Result<Self, TransportError> {
         Self::spawn_with_clock_and_cancel_grace_inner(
             options,
             Arc::new(SystemTime::now),
@@ -145,6 +170,7 @@ impl AcpTransport {
             CANCEL_POLL,
             None,
             true,
+            environment,
         )
     }
 
@@ -172,6 +198,7 @@ impl AcpTransport {
             poll_interval,
             test_observer,
             false,
+            &[],
         )
     }
 
@@ -182,6 +209,7 @@ impl AcpTransport {
         poll_interval: Duration,
         test_observer: Option<mpsc::Sender<AcpEvent>>,
         inherit_stderr: bool,
+        environment: &[(OsString, OsString)],
     ) -> Result<Self, TransportError> {
         if options.queue_capacity == 0 {
             return Err(TransportError::DeliveryFailed(
@@ -195,6 +223,7 @@ impl AcpTransport {
         };
         let mut child = Command::new(&options.command)
             .args(&options.args)
+            .envs(environment.iter().cloned())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(stderr)
