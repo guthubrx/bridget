@@ -282,3 +282,14 @@ ssh -N -p 2222 -o BatchMode=yes -o ControlMaster=no -o ControlPath=none -o ExitO
 - **Nettoyage** : wrapper, tunnel SSH, daemon de test et socket distant de gate
   ont été arrêtés/supprimés; la configuration persistante `federate-ssh` n'a
   pas été retirée faute d'autorisation explicite.
+
+### Diagnostic du ledger distant
+
+Le diagnostic a été rejoué sur le même socket de gate. `bridget who` local et
+distant ont tous deux répondu `Aucun agent connecté.`, ce qui confirme que le
+client distant emploie bien le socket SSH tunnelé. En revanche, pour le même
+daemon, le client local a affiché le message `cli-send-2780730 → t712-acp`
+dans son ledger alors que le client distant a affiché `Ledger vide.`. Le
+ledger est donc lu depuis une base locale distante et non projeté par le
+daemon fédéré : c'est un défaut de câblage du client fédéré, non une absence de
+réponse ACP.
