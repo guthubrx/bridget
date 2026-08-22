@@ -186,7 +186,7 @@ bout en bout (SC-001, SC-002).
   **Observable** : checklist SC-001..SC-007 (hors FR-014) pointée une à une
   dans `implementation.md` avec preuve.
 
-- [ ] **T712** **Validation fédération (gate FR-014)** : équipier ACP joignable
+- [X] **T712** **Validation fédération (gate FR-014)** : équipier ACP joignable
   à travers la fédération SSH — réutiliser `scripts/test-federate-ssh.sh`
   (boucle SSH locale) ou une machine distante réelle, et dérouler l'échange
   complet (quickstart §2) vers l'équipier distant.

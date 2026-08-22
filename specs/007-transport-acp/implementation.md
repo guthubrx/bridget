@@ -293,3 +293,18 @@ dans son ledger alors que le client distant a affiché `Ledger vide.`. Le
 ledger est donc lu depuis une base locale distante et non projeté par le
 daemon fédéré : c'est un défaut de câblage du client fédéré, non une absence de
 réponse ACP.
+
+### Correction validée
+
+Le protocole fournit désormais une projection bornée du ledger depuis le store
+du daemon. Après déploiement client-only sur `cartae.app:2222`, les deux
+commandes `bridget ledger` (maître isolé et client distant à travers le tunnel)
+ont affiché octet pour octet la même entrée :
+
+```text
+Derniers 1 messages :
+  [1787414994] cli-send-2780730 → t712-acp: Explique en une phrase le rôle du fichier crates/bridget-cor
+```
+
+La clôture de l'échange fédéré est donc consultable par le client distant ;
+T712 est validée.
