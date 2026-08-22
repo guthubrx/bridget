@@ -6,7 +6,7 @@ use crate::acp::AcpEvent;
 use crate::protocol::AttachWindow;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -215,6 +215,20 @@ pub enum JournalReadItem {
     Oversized { seq: Option<u64>, offset: u64, line: u64 },
 }
 
+/// Identité du fichier réellement ouvert pour une tranche de lecture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JournalSourceIdentity {
+    pub dev: u64,
+    pub ino: u64,
+    pub len: u64,
+}
+
+impl JournalSourceIdentity {
+    pub fn same_file(self, other: Self) -> bool {
+        self.dev == other.dev && self.ino == other.ino
+    }
+}
+
 /// Lecteur incrémental : sa mémoire est bornée par une tranche plus la seule
 /// ligne finale incomplète. Celle-ci n'est jamais interprétée avant son newline.
 pub struct IncrementalJournalReader {
@@ -245,11 +259,27 @@ impl IncrementalJournalReader {
     /// Lit au plus `max_bytes` octets nouveaux. Une queue partielle est gardée
     /// pour l'appel suivant et ne produit donc jamais un faux événement.
     pub fn read_chunk(&mut self, max_bytes: usize) -> std::io::Result<Vec<JournalReadItem>> {
+        self.read_chunk_with_source(max_bytes).map(|(items, _)| items)
+    }
+
+    /// Lit une tranche et expose l'identité du descripteur effectivement lu.
+    /// L'appelant peut ainsi rejeter une tranche issue d'un inode remplacé sans
+    /// jamais la mettre en file.
+    pub fn read_chunk_with_source(
+        &mut self,
+        max_bytes: usize,
+    ) -> std::io::Result<(Vec<JournalReadItem>, Option<JournalSourceIdentity>)> {
         assert!(max_bytes > 0, "une tranche de journal doit être non nulle");
         let mut file = match OpenOptions::new().read(true).open(&self.path) {
             Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), None)),
             Err(error) => return Err(error),
+        };
+        let metadata = file.metadata()?;
+        let source = JournalSourceIdentity {
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+            len: metadata.len(),
         };
         file.seek(SeekFrom::Start(self.next_offset))?;
         let mut chunk = vec![0; max_bytes];
@@ -262,7 +292,7 @@ impl IncrementalJournalReader {
                 self.next_line = self.next_line.saturating_add(1);
                 self.discarding = None;
                 self.pending.extend_from_slice(&chunk[end + 1..]);
-            } else { return Ok(Vec::new()); }
+            } else { return Ok((Vec::new(), Some(source))); }
         } else { self.pending.extend_from_slice(&chunk); }
 
         let mut items = Vec::new();
@@ -310,7 +340,7 @@ impl IncrementalJournalReader {
                 })),
             }
         }
-        Ok(items)
+        Ok((items, Some(source)))
     }
 }
 

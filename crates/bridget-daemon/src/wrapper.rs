@@ -3,8 +3,8 @@
 //! Appelé par le CLI quand l'utilisateur tape : bridget codex, bridget claude, etc.
 
 use bridget_transport::journal::{
-    IncrementalJournalReader, JournalReadItem, JournalWindowError, current_host_date,
-    resolve_window,
+    IncrementalJournalReader, JournalReadItem, JournalSourceIdentity, JournalWindowError,
+    current_host_date, resolve_window,
 };
 use bridget_transport::protocol::{decode, encode};
 use bridget_transport::{
@@ -15,7 +15,6 @@ use bridget_transport::{
 use log::{debug, error, info, warn};
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -1041,21 +1040,6 @@ impl RelaySubscription {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct JournalSourceIdentity {
-    dev: u64,
-    ino: u64,
-}
-
-impl JournalSourceIdentity {
-    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
-        Self {
-            dev: metadata.dev(),
-            ino: metadata.ino(),
-        }
-    }
-}
-
 #[derive(Clone)]
 struct AttachRelayHooks {
     before_command: Arc<dyn Fn() + Send + Sync>,
@@ -1256,55 +1240,15 @@ impl AttachRelayWorker {
                     {
                         continue;
                     }
-                    let path = subscription.files[subscription.file_index].clone();
-                    let metadata = match std::fs::metadata(&path) {
-                        Ok(metadata) => metadata,
-                        Err(error) => {
-                            worker_emit(WrapperToDaemon::End {
-                                subscription_id: subscription.subscription_id.clone(),
-                                reason: format!("source de journal indisponible: {error}"),
-                            });
-                            worker_control
-                                .lock()
-                                .unwrap_or_else(|poison| poison.into_inner())
-                                .active
-                                .remove(&subscription_id);
-                            subscriptions.remove(&subscription_id);
-                            continue;
-                        }
-                    };
-                    let source = JournalSourceIdentity::from_metadata(&metadata);
-                    let source_replaced = subscription
-                        .reader_source
-                        .is_some_and(|previous| previous != source);
-                    let source_truncated = subscription
+                    let prior_offset = subscription
                         .reader
                         .as_ref()
-                        .is_some_and(|reader| metadata.len() < reader.next_offset());
-                    if source_replaced || source_truncated {
-                        worker_emit(WrapperToDaemon::Gap {
-                            subscription_id: subscription.subscription_id.clone(),
-                            from_seq: subscription.through_seq.unwrap_or(0),
-                            to_seq: subscription.through_seq.unwrap_or(0),
-                            reason: Some(if source_replaced {
-                                "source_replaced"
-                            } else {
-                                "source_truncated"
-                            }
-                            .to_string()),
-                        });
-                        subscription.reader = None;
-                        subscription.reader_source = None;
-                        subscription.pending_events.clear();
-                        subscription.pending_fragment = None;
-                        continue;
-                    }
-                    subscription.reader_source.get_or_insert(source);
+                        .map_or(0, IncrementalJournalReader::next_offset);
                     let reader = subscription
                         .next_reader()
                         .expect("fichier de relais présent");
-                    let items = match reader.read_chunk(ATTACH_RELAY_READ_BYTES) {
-                        Ok(items) => items,
+                    let (items, source) = match reader.read_chunk_with_source(ATTACH_RELAY_READ_BYTES) {
+                        Ok(result) => result,
                         Err(error) => {
                             worker_emit(WrapperToDaemon::End {
                                 subscription_id: subscription.subscription_id.clone(),
@@ -1314,6 +1258,35 @@ impl AttachRelayWorker {
                             continue;
                         }
                     };
+                    let next_offset = reader.next_offset();
+                    let source_replaced = source.is_some_and(|source| {
+                        subscription
+                            .reader_source
+                            .is_some_and(|previous| !previous.same_file(source))
+                    });
+                    let source_truncated = source.is_some_and(|source| source.len < prior_offset);
+                    let source_missing = source.is_none();
+                    if source_replaced || source_truncated || source_missing {
+                        let reason = if source_replaced {
+                            "source_replaced"
+                        } else if source_truncated {
+                            "source_truncated"
+                        } else {
+                            "source de journal indisponible"
+                        };
+                        worker_emit(WrapperToDaemon::End {
+                            subscription_id: subscription.subscription_id.clone(),
+                            reason: reason.to_string(),
+                        });
+                        worker_control
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .active
+                            .remove(&subscription_id);
+                        subscriptions.remove(&subscription_id);
+                        continue;
+                    }
+                    subscription.reader_source = source;
                     for item in items {
                         match item {
                             JournalReadItem::Event(event)
@@ -1354,26 +1327,7 @@ impl AttachRelayWorker {
                             JournalReadItem::Event(_) => {}
                         }
                     }
-                    let file_finished =
-                        match std::fs::metadata(&subscription.files[subscription.file_index]) {
-                            Ok(metadata) => subscription
-                                .reader
-                                .as_ref()
-                                .is_some_and(|reader| reader.next_offset() >= metadata.len()),
-                            Err(error) => {
-                                worker_emit(WrapperToDaemon::End {
-                                    subscription_id: subscription.subscription_id.clone(),
-                                    reason: format!("source de journal indisponible: {error}"),
-                                });
-                                worker_control
-                                    .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner())
-                                    .active
-                                    .remove(&subscription_id);
-                                subscriptions.remove(&subscription_id);
-                                continue;
-                            }
-                        };
+                    let file_finished = source.is_some_and(|source| next_offset >= source.len);
                     if file_finished
                         && subscription.file_index.saturating_add(1) < subscription.files.len()
                     {
@@ -2499,7 +2453,7 @@ mod reconnect_tests {
         let root = relay_root("source-reinitialisee");
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("2026-08-22.jsonl");
-        std::fs::write(&path, b"{\"v\":1,\"seq\":100}\n").unwrap();
+        std::fs::write(&path, b"{\"v\":1,\"seq\":1,\"padding\":\"longue\"}\n").unwrap();
         let barrier = Arc::new(std::sync::Barrier::new(2));
         let arm = Arc::new(AtomicBool::new(false));
         let barrier_worker = barrier.clone();
@@ -2516,7 +2470,7 @@ mod reconnect_tests {
         let (events, emitter) = relay_emitter();
         let mut worker = AttachRelayWorker::start_with(root.clone(), "2026-08-22".to_string(), 1, emitter, hooks);
         worker.subscribe("sub-reset".to_string(), AttachWindow::Today).unwrap();
-        wait_for(|| events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { seq: 100, final_fragment: true, .. })));
+        wait_for(|| events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 1, final_fragment: true, .. } if subscription_id == "sub-reset")));
 
         arm.store(true, Ordering::SeqCst);
         barrier.wait();
@@ -2524,9 +2478,13 @@ mod reconnect_tests {
         barrier.wait();
         wait_for(|| {
             let messages = events.lock().unwrap();
-            messages.iter().any(|message| matches!(message, WrapperToDaemon::Gap { reason: Some(reason), .. } if reason == "source_truncated"))
-                && messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { seq: 2, final_fragment: true, .. }))
+            messages.iter().any(|message| matches!(message, WrapperToDaemon::End { subscription_id, reason } if subscription_id == "sub-reset" && reason == "source_truncated"))
+                && !messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 2, .. } if subscription_id == "sub-reset"))
         });
+        worker
+            .subscribe("sub-troncature-reprise".to_string(), AttachWindow::Seq(2))
+            .unwrap();
+        wait_for(|| events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 2, final_fragment: true, .. } if subscription_id == "sub-troncature-reprise")));
 
         arm.store(true, Ordering::SeqCst);
         barrier.wait();
@@ -2536,9 +2494,13 @@ mod reconnect_tests {
         barrier.wait();
         wait_for(|| {
             let messages = events.lock().unwrap();
-            messages.iter().any(|message| matches!(message, WrapperToDaemon::Gap { reason: Some(reason), .. } if reason == "source_replaced"))
-                && messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { seq: 3, final_fragment: true, .. }))
+            messages.iter().any(|message| matches!(message, WrapperToDaemon::End { subscription_id, reason } if subscription_id == "sub-troncature-reprise" && reason == "source_replaced"))
+                && !messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 3, .. } if subscription_id == "sub-troncature-reprise"))
         });
+        worker
+            .subscribe("sub-remplacement-reprise".to_string(), AttachWindow::Seq(3))
+            .unwrap();
+        wait_for(|| events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 3, final_fragment: true, .. } if subscription_id == "sub-remplacement-reprise")));
         worker.shutdown();
         std::fs::remove_dir_all(root).unwrap();
     }
