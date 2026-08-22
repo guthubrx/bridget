@@ -10,6 +10,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -188,6 +189,8 @@ struct DaemonState {
     /// Souscriptions attach actives, distinctes de l'annuaire des équipiers.
     attach_subscriptions: HashMap<String, AttachSubscription>,
     attach_views: HashMap<String, Arc<AttachView>>,
+    view_closed_tx: Sender<String>,
+    view_closed_rx: Receiver<String>,
     pending_attach_sends: HashMap<String, PendingAttachSend>,
     presences: HashMap<String, Presence>,
     conn_counter: u64,
@@ -238,7 +241,11 @@ impl AttachView {
         })
     }
 
-    fn start(subscription_id: String, writer: &Arc<Mutex<BufWriter<UnixStream>>>) -> Option<Arc<Self>> {
+    fn start(
+        subscription_id: String,
+        writer: &Arc<Mutex<BufWriter<UnixStream>>>,
+        closed_tx: Sender<String>,
+    ) -> Option<Arc<Self>> {
         let stream = writer.lock().ok()?.get_ref().try_clone().ok()?;
         let _ = stream.set_write_timeout(Some(ATTACH_VIEW_WRITE_TIMEOUT));
         let queue = Arc::new((
@@ -276,6 +283,7 @@ impl AttachView {
                     let (lock, wake) = &*worker_queue;
                     lock.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
                     wake.notify_all();
+                    let _ = closed_tx.send(worker_subscription.clone());
                     break;
                 }
             }
@@ -501,7 +509,7 @@ fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) -> Vec<Def
         .collect::<Vec<_>>();
     for (subscription_id, subscription) in affected {
         state.attach_subscriptions.remove(&subscription_id);
-        if let Some(view) = state.attach_views.remove(&subscription_id) { view.close_and_join(); }
+        if let Some(view) = state.attach_views.remove(&subscription_id) { view.close(); }
         if subscription.attach_conn == conn_id {
             defer_control(
                 state,
@@ -525,6 +533,39 @@ fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) -> Vec<Def
     controls
 }
 
+fn collect_closed_attach_views(
+    state: &mut DaemonState,
+) -> (Vec<DeferredControl>, Vec<Arc<AttachView>>) {
+    let mut controls = Vec::new();
+    let mut views = Vec::new();
+    while let Ok(subscription_id) = state.view_closed_rx.try_recv() {
+        let Some(subscription) = state.attach_subscriptions.remove(&subscription_id) else {
+            continue;
+        };
+        if let Some(view) = state.attach_views.remove(&subscription_id) {
+            views.push(view);
+        }
+        defer_control(
+            state,
+            &subscription.wrapper_conn,
+            DaemonToWrapper::Unsubscribe {
+                subscription_id: subscription_id.clone(),
+            },
+            &mut controls,
+        );
+        defer_control(
+            state,
+            &subscription.attach_conn,
+            DaemonToWrapper::End {
+                subscription_id,
+                reason: "vue trop lente".to_string(),
+            },
+            &mut controls,
+        );
+    }
+    (controls, views)
+}
+
 // Fonction pour exposer les métriques publiquement (M-005)
 pub fn get_metrics() -> &'static Metrics {
     // Note: ceci est un stub pour l'observabilité
@@ -538,6 +579,7 @@ impl DaemonState {
     fn new(config: &DaemonConfig) -> Result<Self, Box<dyn std::error::Error>> {
         std::fs::create_dir_all(config.socket_path.parent().unwrap())?;
         let store = Store::open(&config.db_path)?;
+        let (view_closed_tx, view_closed_rx) = mpsc::channel();
         Ok(DaemonState {
             router: Router::new(),
             circuit_breaker: CircuitBreaker::new(
@@ -555,6 +597,8 @@ impl DaemonState {
             connection_roles: HashMap::new(),
             attach_subscriptions: HashMap::new(),
             attach_views: HashMap::new(),
+            view_closed_tx,
+            view_closed_rx,
             pending_attach_sends: HashMap::new(),
             presences: HashMap::new(),
             conn_counter: 0,
@@ -1478,6 +1522,14 @@ fn handle_wrapper_message(
     msg: WrapperToDaemon,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Option<DaemonToWrapper> {
+    let (controls, views) = {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        collect_closed_attach_views(&mut st)
+    };
+    let _ = execute_controls(controls);
+    for view in views {
+        view.close_and_join();
+    }
     if !matches!(msg, WrapperToDaemon::RoleHandshake { .. }) {
         // La première commande non négociée choisit définitivement la
         // compatibilité wrapper. Une tentative d'upgrade ultérieure vers
@@ -1537,7 +1589,11 @@ fn handle_wrapper_message(
                 let Some(view) = st
                     .connections
                     .get(conn_id)
-                    .and_then(|writer| AttachView::start(subscription_id.clone(), writer))
+                    .and_then(|writer| AttachView::start(
+                        subscription_id.clone(),
+                        writer,
+                        st.view_closed_tx.clone(),
+                    ))
                 else {
                     return Some(DaemonToWrapper::AttachRejected {
                         subscription_id: Some(subscription_id),
@@ -1570,7 +1626,7 @@ fn handle_wrapper_message(
             } else {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                 st.attach_subscriptions.remove(&subscription_id);
-                if let Some(view) = st.attach_views.remove(&subscription_id) { view.close_and_join(); }
+                if let Some(view) = st.attach_views.remove(&subscription_id) { view.close(); }
                 Some(DaemonToWrapper::AttachRejected {
                     subscription_id: Some(subscription_id),
                     reason: AttachRefusal::WrapperUnavailable,
@@ -1631,7 +1687,7 @@ fn handle_wrapper_message(
                 let control = {
                     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                     let subscription = st.attach_subscriptions.remove(&subscription_id);
-                    if let Some(view) = st.attach_views.remove(&subscription_id) { view.close_and_join(); }
+                    if let Some(view) = st.attach_views.remove(&subscription_id) { view.close(); }
                     subscription.and_then(|subscription| {
                         st.connections.get(&subscription.wrapper_conn).map(|writer| DeferredControl {
                             writer: writer.clone(),
