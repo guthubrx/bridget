@@ -2,14 +2,18 @@
 
 use bridget_transport::fsutil::write_private_file_atomic;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fmt;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::fd::{AsRawFd, RawFd};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::time::{Duration, SystemTime};
 
 const RELEASE_FD: RawFd = 100;
 const STATUS_FD: RawFd = 101;
@@ -17,6 +21,9 @@ const FIRST_AUXILIARY_FD: RawFd = 102;
 const RELEASE_BYTE: u8 = b'R';
 const ABANDONED_EXIT_CODE: libc::c_int = 125;
 pub const MANAGED_STATUS_FD_ENV: &str = "BRIDGET_MANAGED_STATUS_FD";
+pub const MANAGED_INSTANCE_ID_ENV: &str = "BRIDGET_MANAGED_INSTANCE_ID";
+pub const MANAGED_COMMAND_ID_ENV: &str = "BRIDGET_MANAGED_COMMAND_ID";
+pub const MANAGED_GENERATION_ENV: &str = "BRIDGET_MANAGED_GENERATION";
 
 /// Identité immuable d'une génération supervisée.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,6 +122,8 @@ pub struct ManagedLaunch {
     pub identity: ManagedIdentity,
     pub wrapper_executable: PathBuf,
     pub wrapper_args: Vec<String>,
+    pub cwd: PathBuf,
+    pub env: BTreeMap<String, OsString>,
 }
 
 /// Extrémités détenues par le daemon pendant la phase de bootstrap.
@@ -148,6 +157,15 @@ pub struct RunningManagedChild {
 }
 
 impl ManagedChild {
+    pub fn set_ready_timeout(&mut self, timeout: Duration) -> io::Result<()> {
+        self.inner
+            .status
+            .as_mut()
+            .expect("canal de statut présent avant le transfert")
+            .get_mut()
+            .set_read_timeout(Some(timeout))
+    }
+
     /// Attend la preuve de création du groupe. Ce statut n'est jamais un succès.
     pub fn wait_ready(mut self) -> Result<ReadyManagedChild, ManagedProcessError> {
         let mut line = String::new();
@@ -263,11 +281,68 @@ impl RunningManagedChild {
     pub fn close_status(&mut self) {
         self.inner.status.take();
     }
+
+    pub fn status_is_open(&self) -> bool {
+        self.inner.status.is_some()
+    }
+
+    /// Le superviseur appelle cette méthode à chaque tick ; `try_wait` utilise
+    /// `waitpid(WNOHANG)` sur Unix et ne bloque donc jamais la boucle daemon.
+    pub fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+        self.inner.child.try_wait()
+    }
+
+    pub fn set_status_nonblocking(&mut self) -> io::Result<()> {
+        self.inner
+            .status
+            .as_mut()
+            .expect("canal de statut déjà fermé")
+            .get_mut()
+            .set_nonblocking(true)
+    }
+
+    /// Lit au plus un statut. Les messages sont des lignes JSON atomiques et
+    /// petites ; `WouldBlock` signifie simplement qu'aucun événement n'est
+    /// disponible à ce tick.
+    pub fn try_status(&mut self) -> Result<Option<ManagedStatus>, ManagedProcessError> {
+        let Some(reader) = self.inner.status.as_mut() else {
+            return Ok(None);
+        };
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => {
+                self.inner.status.take();
+                Ok(None)
+            }
+            Ok(_) => serde_json::from_str(line.trim_end())
+                .map(Some)
+                .map_err(|error| ManagedProcessError::InvalidStatus(error.to_string())),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub fn remove_marker(&self) -> io::Result<()> {
+        match fs::remove_file(self.marker.path()) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
 }
 
 /// Lance le sous-mode de production avec deux canaux privés.
 pub fn spawn_managed_bootstrap(
     launch: &ManagedLaunch,
+) -> Result<ManagedChild, ManagedProcessError> {
+    spawn_managed_bootstrap_with_stderr(launch, Stdio::null())
+}
+
+/// Variante de production : stderr est ouvert par le daemon avant tout spawn
+/// et seulement hérité par le bootstrap puis le wrapper.
+pub fn spawn_managed_bootstrap_with_stderr(
+    launch: &ManagedLaunch,
+    stderr: Stdio,
 ) -> Result<ManagedChild, ManagedProcessError> {
     validate_identity(&launch.identity)?;
     if launch.wrapper_executable.as_os_str().is_empty() {
@@ -287,7 +362,11 @@ pub fn spawn_managed_bootstrap(
         .arg("--")
         .arg(&launch.wrapper_executable)
         .args(&launch.wrapper_args);
-    spawn_bootstrap_command(command)
+    command
+        .current_dir(&launch.cwd)
+        .env_clear()
+        .envs(&launch.env);
+    spawn_bootstrap_command(command, stderr)
 }
 
 /// Point d'entrée du sous-mode caché `managed-bootstrap`.
@@ -397,7 +476,7 @@ fn run_bootstrap(request: BootstrapRequest) -> Result<(), ManagedProcessError> {
         command_id: request.identity.command_id,
         generation: request.identity.generation,
     };
-    write_status_line(&ManagedStatus::BootstrapReady(ready))?;
+    write_status_line(&ManagedStatus::BootstrapReady(ready.clone()))?;
 
     let mut release = [0_u8; 1];
     let read = read_one(RELEASE_FD, &mut release)?;
@@ -413,7 +492,10 @@ fn run_bootstrap(request: BootstrapRequest) -> Result<(), ManagedProcessError> {
     let mut wrapper = Command::new(request.wrapper_executable);
     wrapper
         .args(request.wrapper_args)
-        .env(MANAGED_STATUS_FD_ENV, STATUS_FD.to_string());
+        .env(MANAGED_STATUS_FD_ENV, STATUS_FD.to_string())
+        .env(MANAGED_INSTANCE_ID_ENV, &ready.instance_id)
+        .env(MANAGED_COMMAND_ID_ENV, &ready.command_id)
+        .env(MANAGED_GENERATION_ENV, ready.generation.to_string());
     let source = wrapper.exec();
     Err(ManagedProcessError::Io(source))
 }
@@ -462,10 +544,14 @@ pub fn process_birth(pid: u32) -> io::Result<u64> {
 compile_error!("managed-bootstrap exige une source de naissance de processus macOS ou Linux");
 
 fn write_status_line(status: &ManagedStatus) -> Result<(), ManagedProcessError> {
+    write_status_to_fd(STATUS_FD, status)
+}
+
+fn write_status_to_fd(fd: RawFd, status: &ManagedStatus) -> Result<(), ManagedProcessError> {
     let mut bytes = serde_json::to_vec(status)
         .map_err(|error| ManagedProcessError::InvalidStatus(error.to_string()))?;
     bytes.push(b'\n');
-    write_all_fd(STATUS_FD, &bytes)?;
+    write_all_fd(fd, &bytes)?;
     Ok(())
 }
 
@@ -513,7 +599,10 @@ fn set_fd_cloexec(fd: RawFd, enabled: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn spawn_bootstrap_command(mut command: Command) -> Result<ManagedChild, ManagedProcessError> {
+fn spawn_bootstrap_command(
+    mut command: Command,
+    stderr: Stdio,
+) -> Result<ManagedChild, ManagedProcessError> {
     let (daemon_release, bootstrap_release) = UnixStream::pair()?;
     let (daemon_status, bootstrap_status) = UnixStream::pair()?;
     let release_source = bootstrap_release.as_raw_fd();
@@ -522,7 +611,7 @@ fn spawn_bootstrap_command(mut command: Command) -> Result<ManagedChild, Managed
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(stderr);
     unsafe {
         command.pre_exec(move || {
             let release_copy =
@@ -561,6 +650,184 @@ fn spawn_bootstrap_command(mut command: Command) -> Result<ManagedChild, Managed
             status: Some(BufReader::new(daemon_status)),
         },
     })
+}
+
+/// Extrémité wrapper du canal `managed-status`. L'identité provient uniquement
+/// du bootstrap, jamais des arguments de l'adaptateur ACP.
+pub struct ManagedStatusReporter {
+    fd: Option<RawFd>,
+    identity: ManagedIdentity,
+}
+
+impl ManagedStatusReporter {
+    pub fn from_environment() -> Result<Option<Self>, ManagedProcessError> {
+        let Some(raw_fd) = std::env::var_os(MANAGED_STATUS_FD_ENV) else {
+            return Ok(None);
+        };
+        let fd = raw_fd
+            .to_str()
+            .and_then(|value| value.parse::<RawFd>().ok())
+            .filter(|fd| *fd >= 0)
+            .ok_or_else(|| {
+                ManagedProcessError::InvalidArgument("FD managed-status invalide".to_string())
+            })?;
+        if unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+        let generation = std::env::var(MANAGED_GENERATION_ENV)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .ok_or_else(|| {
+                ManagedProcessError::InvalidArgument("génération gérée absente".to_string())
+            })?;
+        let identity = ManagedIdentity {
+            instance_id: std::env::var(MANAGED_INSTANCE_ID_ENV).map_err(|_| {
+                ManagedProcessError::InvalidArgument("instance gérée absente".to_string())
+            })?,
+            command_id: std::env::var(MANAGED_COMMAND_ID_ENV).map_err(|_| {
+                ManagedProcessError::InvalidArgument("commande gérée absente".to_string())
+            })?,
+            generation,
+        };
+        validate_identity(&identity)?;
+        Ok(Some(Self {
+            fd: Some(fd),
+            identity,
+        }))
+    }
+
+    pub fn instance_id(&self) -> &str {
+        &self.identity.instance_id
+    }
+
+    pub fn startup_failed(
+        &mut self,
+        kind: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Result<(), ManagedProcessError> {
+        let Some(fd) = self.fd.take() else {
+            return Ok(());
+        };
+        let status = ManagedStatus::StartupFailed {
+            kind: kind.into(),
+            reason: reason.into(),
+            instance_id: self.identity.instance_id.clone(),
+            command_id: self.identity.command_id.clone(),
+            generation: self.identity.generation,
+        };
+        let result = write_status_to_fd(fd, &status);
+        unsafe {
+            libc::close(fd);
+        }
+        result
+    }
+
+    /// Le vrai Register et l'initialisation du transport sont terminés : la
+    /// fermeture du FD signifie « aucun StartupFailed », jamais « Connected ».
+    pub fn startup_succeeded(&mut self) {
+        if let Some(fd) = self.fd.take() {
+            unsafe {
+                libc::close(fd);
+            }
+        }
+    }
+}
+
+impl Drop for ManagedStatusReporter {
+    fn drop(&mut self) {
+        if self.fd.is_some() {
+            let _ = self.startup_failed(
+                "negotiation_failed",
+                "hook managed-status abandonné avant la fin de l'initialisation",
+            );
+        }
+    }
+}
+
+/// Journal stderr privé, distinct pour chaque instance et génération.
+pub struct ManagedStderrStore {
+    directory: PathBuf,
+}
+
+impl ManagedStderrStore {
+    pub fn for_home(home: &Path) -> Self {
+        Self::at_directory(home.join(".cache/bridget/managed-stderr"))
+    }
+
+    pub fn at_directory(directory: impl Into<PathBuf>) -> Self {
+        Self {
+            directory: directory.into(),
+        }
+    }
+
+    pub fn open(
+        &self,
+        name: &str,
+        identity: &ManagedIdentity,
+    ) -> Result<(File, PathBuf), ManagedProcessError> {
+        validate_marker_name(name)?;
+        validate_identity(identity)?;
+        private_directory(&self.directory)?;
+        let agent = self.directory.join(name);
+        private_directory(&agent)?;
+        let generation = agent.join(format!("{}-g{}", identity.instance_id, identity.generation));
+        private_directory(&generation)?;
+        let path = generation.join("stderr.log");
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(&path)?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        Ok((file, path))
+    }
+
+    pub fn purge_older_than_days(&self, days: u32) -> Result<usize, ManagedProcessError> {
+        let cutoff = SystemTime::now()
+            .checked_sub(Duration::from_secs(u64::from(days).saturating_mul(86_400)))
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let mut removed = 0;
+        let Ok(agents) = fs::read_dir(&self.directory) else {
+            return Ok(0);
+        };
+        for agent in agents.flatten().filter(|entry| entry.path().is_dir()) {
+            let Ok(generations) = fs::read_dir(agent.path()) else {
+                continue;
+            };
+            for generation in generations.flatten().filter(|entry| entry.path().is_dir()) {
+                let path = generation.path().join("stderr.log");
+                let expired = fs::metadata(&path)
+                    .and_then(|metadata| metadata.modified())
+                    .is_ok_and(|modified| modified < cutoff);
+                if expired {
+                    fs::remove_file(&path)?;
+                    let _ = fs::remove_dir(generation.path());
+                    removed += 1;
+                }
+            }
+            let _ = fs::remove_dir(agent.path());
+        }
+        Ok(removed)
+    }
+}
+
+fn private_directory(path: &Path) -> io::Result<()> {
+    fs::create_dir_all(path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+}
+
+fn validate_marker_name(name: &str) -> Result<(), ManagedProcessError> {
+    if name.is_empty()
+        || name.len() > 100
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(ManagedProcessError::InvalidArgument(
+            "nom de marqueur invalide".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Store minimal des marqueurs `~/.cache/bridget/managed/<nom>.json`.
@@ -626,16 +893,7 @@ impl ManagedMarkerStore {
     }
 
     fn marker_path(&self, name: &str) -> Result<PathBuf, ManagedProcessError> {
-        if name.is_empty()
-            || name.len() > 100
-            || !name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        {
-            return Err(ManagedProcessError::InvalidArgument(
-                "nom de marqueur invalide".to_string(),
-            ));
-        }
+        validate_marker_name(name)?;
         Ok(self.directory.join(format!("{name}.json")))
     }
 }
@@ -652,6 +910,7 @@ mod tests {
     const BOOTSTRAP_CHILD_ENV: &str = "BRIDGET_T903_BOOTSTRAP_CHILD";
     const BOOTSTRAP_REQUEST_ENV: &str = "BRIDGET_T903_BOOTSTRAP_REQUEST";
     const FD_PROBE_ENV: &str = "BRIDGET_T903_FD_PROBE";
+    const STATUS_HOOK_ENV: &str = "BRIDGET_T906_STATUS_HOOK";
     const CONTROLLER_ENV: &str = "BRIDGET_T903_CRASH_CONTROLLER";
     const CONTROLLER_STAGE_ENV: &str = "BRIDGET_T903_CRASH_STAGE";
     const CONTROLLER_ROOT_ENV: &str = "BRIDGET_T903_CRASH_ROOT";
@@ -719,7 +978,37 @@ mod tests {
                 .unwrap(),
             )
             .env(FD_PROBE_ENV, "1");
-        spawn_bootstrap_command(command).unwrap()
+        spawn_bootstrap_command(command, Stdio::null()).unwrap()
+    }
+
+    fn spawn_status_hook_bootstrap() -> ManagedChild {
+        let request = BootstrapRequest {
+            identity: identity(),
+            wrapper_executable: current_test_executable(),
+            wrapper_args: vec![
+                "--exact".to_string(),
+                "managed_process::tests::managed_status_hook_child".to_string(),
+                "--ignored".to_string(),
+                "--nocapture".to_string(),
+                "--test-threads=1".to_string(),
+            ],
+        };
+        let mut command = helper_command("managed_process::tests::bootstrap_child");
+        command
+            .env(BOOTSTRAP_CHILD_ENV, "1")
+            .env(
+                BOOTSTRAP_REQUEST_ENV,
+                serde_json::to_string(&json!({
+                    "instance_id": request.identity.instance_id,
+                    "command_id": request.identity.command_id,
+                    "generation": request.identity.generation,
+                    "wrapper_executable": request.wrapper_executable,
+                    "wrapper_args": request.wrapper_args,
+                }))
+                .unwrap(),
+            )
+            .env(STATUS_HOOK_ENV, "1");
+        spawn_bootstrap_command(command, Stdio::null()).unwrap()
     }
 
     #[test]
@@ -772,6 +1061,20 @@ mod tests {
         while read_one(STATUS_FD, &mut byte).unwrap_or(0) != 0 {}
     }
 
+    #[test]
+    #[ignore]
+    fn managed_status_hook_child() {
+        if std::env::var(STATUS_HOOK_ENV).ok().as_deref() != Some("1") {
+            return;
+        }
+        let mut reporter = ManagedStatusReporter::from_environment()
+            .unwrap()
+            .expect("FD hérité après exec");
+        reporter
+            .startup_failed("command_missing", "/adaptateur/absent")
+            .unwrap();
+    }
+
     fn read_probe(child: &mut RunningManagedChild) -> serde_json::Value {
         let mut line = String::new();
         child.status_reader().read_line(&mut line).unwrap();
@@ -799,12 +1102,76 @@ mod tests {
             .unwrap()
             .release()
             .unwrap();
+        assert!(released.try_wait().unwrap().is_none());
         let probe = read_probe(&mut released);
         assert_eq!(probe["event"], "fd_probe");
         assert_eq!(probe["status_open"], true);
         assert_eq!(probe["release_open"], false);
         released.close_status();
         assert!(released.child_mut().wait().unwrap().success());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hook_managed_status_reporte_un_echec_correle_apres_bootstrap_ready() {
+        let root = test_root("status-hook");
+        let store = ManagedMarkerStore::at_directory(root.join("managed"));
+        let ready = spawn_status_hook_bootstrap().wait_ready().unwrap();
+        assert_eq!(ready.ready().instance_id, identity().instance_id);
+        let mut running = ready
+            .persist_marker(&store, "codex-1")
+            .unwrap()
+            .release()
+            .unwrap();
+        let mut line = String::new();
+        running.status_reader().read_line(&mut line).unwrap();
+        let status: ManagedStatus = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(
+            status,
+            ManagedStatus::StartupFailed {
+                kind: "command_missing".to_string(),
+                reason: "/adaptateur/absent".to_string(),
+                instance_id: identity().instance_id,
+                command_id: identity().command_id,
+                generation: identity().generation,
+            }
+        );
+        running.close_status();
+        assert!(running.child_mut().wait().unwrap().success());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stderr_est_prive_separe_par_generation_et_purge_par_age() {
+        let root = test_root("stderr");
+        let store = ManagedStderrStore::at_directory(root.join("stderr"));
+        let (mut file, first) = store.open("codex-1", &identity()).unwrap();
+        writeln!(file, "diagnostic privé").unwrap();
+        file.flush().unwrap();
+        let second_identity = ManagedIdentity {
+            generation: identity().generation + 1,
+            ..identity()
+        };
+        let (_second, second) = store.open("codex-1", &second_identity).unwrap();
+        assert_ne!(first.parent(), second.parent());
+        for directory in [
+            first.parent().unwrap(),
+            first.parent().unwrap().parent().unwrap(),
+            first.parent().unwrap().parent().unwrap().parent().unwrap(),
+        ] {
+            assert_eq!(
+                fs::metadata(directory).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        assert_eq!(
+            fs::metadata(&first).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        drop(file);
+        assert_eq!(store.purge_older_than_days(0).unwrap(), 2);
+        assert!(!first.exists());
+        assert!(!second.exists());
         let _ = fs::remove_dir_all(root);
     }
 

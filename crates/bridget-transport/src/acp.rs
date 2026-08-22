@@ -128,6 +128,18 @@ impl AcpTransport {
         Self::spawn_with_clock(options, Arc::new(SystemTime::now))
     }
 
+    /// Variante supervisée : l'adaptateur conserve le stderr hérité du wrapper.
+    pub fn spawn_inheriting_stderr(options: AcpOptions) -> Result<Self, TransportError> {
+        Self::spawn_with_clock_and_cancel_grace_inner(
+            options,
+            Arc::new(SystemTime::now),
+            CANCEL_GRACE,
+            CANCEL_POLL,
+            None,
+            true,
+        )
+    }
+
     fn spawn_with_clock(options: AcpOptions, clock: Clock) -> Result<Self, TransportError> {
         Self::spawn_with_clock_and_cancel_grace(
             options,
@@ -145,16 +157,39 @@ impl AcpTransport {
         poll_interval: Duration,
         test_observer: Option<mpsc::Sender<AcpEvent>>,
     ) -> Result<Self, TransportError> {
+        Self::spawn_with_clock_and_cancel_grace_inner(
+            options,
+            clock,
+            cancel_grace,
+            poll_interval,
+            test_observer,
+            false,
+        )
+    }
+
+    fn spawn_with_clock_and_cancel_grace_inner(
+        options: AcpOptions,
+        clock: Clock,
+        cancel_grace: Duration,
+        poll_interval: Duration,
+        test_observer: Option<mpsc::Sender<AcpEvent>>,
+        inherit_stderr: bool,
+    ) -> Result<Self, TransportError> {
         if options.queue_capacity == 0 {
             return Err(TransportError::DeliveryFailed(
                 "queue ACP de capacité nulle".to_string(),
             ));
         }
+        let stderr = if inherit_stderr {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        };
         let mut child = Command::new(&options.command)
             .args(&options.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(stderr)
             .spawn()
             .map_err(|err| {
                 TransportError::Io(format!("impossible de lancer l'adaptateur ACP: {err}"))

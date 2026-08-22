@@ -25,6 +25,7 @@ pub type SourceEnvironment = BTreeMap<String, OsString>;
 #[derive(Debug, Clone)]
 pub struct PreparedSpawn {
     pub lease: SpawnLease,
+    pub agent_type: String,
     pub command: String,
     pub args: Vec<String>,
     pub cwd: PathBuf,
@@ -119,6 +120,7 @@ fn prepare_spawn(
     }
     Ok(PreparedSpawn {
         lease,
+        agent_type: order.agent_type.clone(),
         command: definition.command.clone(),
         args: definition.args.clone(),
         cwd: order.cwd.clone(),
@@ -167,7 +169,12 @@ fn command_exists(command: &str, env: &SourceEnvironment) -> bool {
     }
     env.get("PATH")
         .and_then(|path| path.to_str())
-        .is_some_and(|path| path.split(':').map(Path::new).map(|dir| dir.join(command)).any(|candidate| is_executable(&candidate)))
+        .is_some_and(|path| {
+            path.split(':')
+                .map(Path::new)
+                .map(|dir| dir.join(command))
+                .any(|candidate| is_executable(&candidate))
+        })
 }
 
 fn refusal_record(reason: &SpawnRefusal) -> (&'static str, String) {

@@ -43,3 +43,28 @@ Le test ciblé de la matrice couvre notamment `UnknownType`, `CommandMissing`,
 `BillingGuard`, `NameActive` et `CwdGone`, les cinq motifs proposés à
 l'inspection manuelle dans le quickstart. Chaque issue est typée et le compteur
 de générations actives reste inchangé par le refus.
+
+## T906 — Canal de statut et supervision
+
+- Le daemon libère le bootstrap seulement après le marqueur durable, puis
+  supervise chaque enfant par `Child::try_wait` au tick. `BootstrapReady` ne
+  produit aucune issue client ; le succès exige à la fois le `Register` réel et
+  la fermeture volontaire du hook `managed-status` après initialisation du
+  transport ACP, du journal et du relais attach.
+- Le wrapper émet `StartupFailed` avec l'identité, la commande et la génération
+  héritées du bootstrap. La disparition de la commande entre le préflight et le
+  spawn est remontée comme `CommandMissing` avec le chemin exact.
+- La mort spontanée reprend les terminaux 007/008 : demandes suivies rejetées,
+  présence `stopped` et `End` de chaque vue attach, y compris si l'EOF socket a
+  gagné la course sur le tick superviseur.
+- Le stderr n'est jamais décodé comme protocole. Il reste consultable sous
+  `~/.cache/bridget/managed-stderr/<nom>/<instance_id>-g<generation>/stderr.log`,
+  avec répertoires `0700`, fichier `0600` dès l'ouverture. Le bootstrap, le
+  wrapper et l'adaptateur ACP héritent tous de ce même descripteur ; le mode
+  interactif historique conserve son stderr neutralisé. La purge applique au
+  démarrage puis chaque heure la même rétention en jours que le journal du
+  daemon.
+
+Les tests exécutent le hook après un vrai `exec`, distinguent son
+`StartupFailed` du `BootstrapReady`, vérifient le polling non bloquant, les
+permissions/rétention et les trois sorties visibles d'une mort spontanée.

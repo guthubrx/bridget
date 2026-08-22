@@ -1247,17 +1247,18 @@ impl AttachRelayWorker {
                     let reader = subscription
                         .next_reader()
                         .expect("fichier de relais présent");
-                    let (items, source) = match reader.read_chunk_with_source(ATTACH_RELAY_READ_BYTES) {
-                        Ok(result) => result,
-                        Err(error) => {
-                            worker_emit(WrapperToDaemon::End {
-                                subscription_id: subscription.subscription_id.clone(),
-                                reason: format!("lecture du journal impossible: {error}"),
-                            });
-                            subscriptions.remove(&subscription_id);
-                            continue;
-                        }
-                    };
+                    let (items, source) =
+                        match reader.read_chunk_with_source(ATTACH_RELAY_READ_BYTES) {
+                            Ok(result) => result,
+                            Err(error) => {
+                                worker_emit(WrapperToDaemon::End {
+                                    subscription_id: subscription.subscription_id.clone(),
+                                    reason: format!("lecture du journal impossible: {error}"),
+                                });
+                                subscriptions.remove(&subscription_id);
+                                continue;
+                            }
+                        };
                     let next_offset = reader.next_offset();
                     let source_replaced = source.is_some_and(|source| {
                         subscription
@@ -1532,14 +1533,59 @@ fn launch_acp(
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or("HOME absent pour le journal de session ACP")?;
-    launch_acp_with(
+    launch_acp_with_status(
         agent_type,
         agent_args,
         explicit_name,
         &registry,
         &socket_path(),
         &home,
+        None,
     )
+}
+
+/// Point d'entrée du wrapper supervisé. Le FD `managed-status` est fermé
+/// uniquement après Register, transport ACP, journal et relais initialisés.
+pub fn launch_managed_acp(
+    agent_type: &str,
+    explicit_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut reporter = crate::managed_process::ManagedStatusReporter::from_environment()?
+        .ok_or("canal managed-status absent du wrapper supervisé")?;
+    let mut managed_command = None;
+    let result = (|| {
+        let registry = crate::registry::AgentRegistry::load()?;
+        managed_command = Some(registry.get(agent_type)?.command.clone());
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or("HOME absent pour le journal de session ACP")?;
+        launch_acp_with_status(
+            agent_type,
+            &[],
+            Some(explicit_name),
+            &registry,
+            &socket_path(),
+            &home,
+            Some(&mut reporter),
+        )
+    })();
+    if let Err(error) = &result {
+        let detail = error.to_string();
+        let kind = if detail.contains("impossible de lancer l'adaptateur ACP")
+            && (detail.contains("os error 2") || detail.contains("No such file"))
+        {
+            "command_missing"
+        } else {
+            "negotiation_failed"
+        };
+        let reason = if kind == "command_missing" {
+            managed_command.unwrap_or(detail)
+        } else {
+            detail
+        };
+        let _ = reporter.startup_failed(kind, reason);
+    }
+    result
 }
 
 /// Lance un équipier ACP avec ses dépendances de configuration et de chemins
@@ -1552,6 +1598,27 @@ pub fn launch_acp_with(
     registry: &crate::registry::AgentRegistry,
     socket: &std::path::Path,
     home: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    launch_acp_with_status(
+        agent_type,
+        agent_args,
+        explicit_name,
+        registry,
+        socket,
+        home,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_acp_with_status(
+    agent_type: &str,
+    agent_args: &[String],
+    explicit_name: Option<&str>,
+    registry: &crate::registry::AgentRegistry,
+    socket: &std::path::Path,
+    home: &std::path::Path,
+    mut managed_reporter: Option<&mut crate::managed_process::ManagedStatusReporter>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !agent_args.is_empty() {
         return Err("le mode --equipier n'accepte pas d'arguments d'agent".into());
@@ -1573,7 +1640,10 @@ pub fn launch_acp_with(
     let effective_name = explicit_name.map(str::to_owned);
     let host = host_name();
     let os = operating_system();
-    let instance_id = uuid::Uuid::new_v4().to_string();
+    let instance_id = managed_reporter
+        .as_ref()
+        .map(|reporter| reporter.instance_id().to_string())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let initial_domain = effective_name
         .as_deref()
         .and_then(effective_domain)
@@ -1599,7 +1669,12 @@ pub fn launch_acp_with(
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&name_state_path, &my_name)?;
-    let mut transport = AcpTransport::spawn(AcpOptions {
+    let spawn_transport = if managed_reporter.is_some() {
+        AcpTransport::spawn_inheriting_stderr
+    } else {
+        AcpTransport::spawn
+    };
+    let mut transport = spawn_transport(AcpOptions {
         command: definition.command.clone(),
         args: definition.args.clone(),
         queue_capacity: definition.queue_capacity,
@@ -1613,6 +1688,9 @@ pub fn launch_acp_with(
         journal_directory,
         Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
     );
+    if let Some(reporter) = managed_reporter.as_mut() {
+        reporter.startup_succeeded();
+    }
 
     loop {
         let events = transport.drain_events();
@@ -2429,9 +2507,13 @@ mod reconnect_tests {
         worker
             .subscribe("sub-today-vide".to_string(), AttachWindow::Today)
             .unwrap();
-        wait_for(|| events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::SnapshotCaughtUp { subscription_id, through_seq: None } if subscription_id == "sub-today-vide")));
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::SnapshotCaughtUp { subscription_id, through_seq: None } if subscription_id == "sub-today-vide"))
+        });
         std::fs::write(root.join("2026-08-22.jsonl"), b"{\"v\":1,\"seq\":2}\n").unwrap();
-        wait_for(|| events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 2, final_fragment: true, .. } if subscription_id == "sub-today-vide")));
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 2, final_fragment: true, .. } if subscription_id == "sub-today-vide"))
+        });
         assert!(!events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 1, .. } if subscription_id == "sub-today-vide")));
         worker.shutdown();
         std::fs::remove_dir_all(root).unwrap();
@@ -2457,9 +2539,19 @@ mod reconnect_tests {
             ..AttachRelayHooks::default()
         };
         let (events, emitter) = relay_emitter();
-        let mut worker = AttachRelayWorker::start_with(root.clone(), "2026-08-22".to_string(), 1, emitter, hooks);
-        worker.subscribe("sub-reset".to_string(), AttachWindow::Today).unwrap();
-        wait_for(|| events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 1, final_fragment: true, .. } if subscription_id == "sub-reset")));
+        let mut worker = AttachRelayWorker::start_with(
+            root.clone(),
+            "2026-08-22".to_string(),
+            1,
+            emitter,
+            hooks,
+        );
+        worker
+            .subscribe("sub-reset".to_string(), AttachWindow::Today)
+            .unwrap();
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 1, final_fragment: true, .. } if subscription_id == "sub-reset"))
+        });
 
         arm.store(true, Ordering::SeqCst);
         barrier.wait();
@@ -2473,7 +2565,9 @@ mod reconnect_tests {
         worker
             .subscribe("sub-troncature-reprise".to_string(), AttachWindow::Seq(2))
             .unwrap();
-        wait_for(|| events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 2, final_fragment: true, .. } if subscription_id == "sub-troncature-reprise")));
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 2, final_fragment: true, .. } if subscription_id == "sub-troncature-reprise"))
+        });
 
         arm.store(true, Ordering::SeqCst);
         barrier.wait();
@@ -2489,7 +2583,9 @@ mod reconnect_tests {
         worker
             .subscribe("sub-remplacement-reprise".to_string(), AttachWindow::Seq(3))
             .unwrap();
-        wait_for(|| events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 3, final_fragment: true, .. } if subscription_id == "sub-remplacement-reprise")));
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 3, final_fragment: true, .. } if subscription_id == "sub-remplacement-reprise"))
+        });
         worker.shutdown();
         std::fs::remove_dir_all(root).unwrap();
     }

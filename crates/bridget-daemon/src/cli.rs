@@ -88,6 +88,7 @@ pub fn run() {
     match cmd.as_str() {
         "daemon" => cmd_daemon(),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
+        "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
         "attach" => cmd_attach(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
@@ -135,6 +136,17 @@ pub fn run() {
 fn cmd_managed_bootstrap(args: &[String]) {
     if let Err(error) = crate::managed_process::run_managed_bootstrap(args) {
         eprintln!("bridget managed-bootstrap: {error}");
+        std::process::exit(1);
+    }
+}
+
+fn cmd_managed_wrapper(args: &[String]) {
+    if args.len() != 2 {
+        eprintln!("bridget managed-wrapper: type et nom requis");
+        std::process::exit(2);
+    }
+    if let Err(error) = crate::wrapper::launch_managed_acp(&args[0], &args[1]) {
+        eprintln!("bridget managed-wrapper: {error}");
         std::process::exit(1);
     }
 }

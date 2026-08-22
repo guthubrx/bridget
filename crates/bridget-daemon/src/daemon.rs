@@ -8,24 +8,31 @@ use bridget_transport::protocol::{
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use log::{error, info, warn};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::idempotency::{
-    IdempotencyKey, IdempotencyStore, LookupResult, OperationKind, Reservation,
-    ReplyTracking, SendDelivery,
+    IdempotencyKey, IdempotencyStore, LookupResult, OperationKind, ReplyTracking, Reservation,
+    SendDelivery,
 };
 use crate::store::Store;
 use crate::{
     desired_state::DesiredStateStore,
-    fleet::{FleetConfig, FleetSupervisor, SpawnOrder as FleetSpawnOrder},
-    lifecycle::{PreparedSpawn, SourceEnvironment, SpawnDecision, source_environment, submit_spawn},
+    fleet::{FleetConfig, FleetSupervisor, SpawnLease, SpawnOrder as FleetSpawnOrder},
+    lifecycle::{
+        PreparedSpawn, SourceEnvironment, SpawnDecision, source_environment, submit_spawn,
+    },
+    managed_process::{
+        ManagedIdentity, ManagedLaunch, ManagedMarkerStore, ManagedStatus, ManagedStderrStore,
+        RunningManagedChild, spawn_managed_bootstrap_with_stderr,
+    },
     registry::AgentRegistry,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -221,13 +228,14 @@ struct DaemonState {
     envelope_guard: EnvelopeGuard,
     store: Store,
     idempotency: IdempotencyStore,
-    fleet: FleetSupervisor,
+    fleet: Arc<FleetSupervisor>,
     registry: AgentRegistry,
     source_env: SourceEnvironment,
     recovering: bool,
-    /// T906 consommera cette file avec `managed-bootstrap`. Aucun succès n'est
-    /// émis tant que le Register réel corrélé n'a pas été observé.
-    pending_managed_spawns: VecDeque<PreparedSpawn>,
+    managed_tx: Sender<ManagedSupervisorCommand>,
+    managed_spawns: HashMap<String, ManagedSpawnRecord>,
+    managed_by_instance: HashMap<String, String>,
+    managed_terminal_instances: HashSet<String>,
     connections: HashMap<String, Arc<Mutex<BufWriter<UnixStream>>>>,
     conn_names: HashMap<String, String>,
     conn_hosts: HashMap<String, String>,
@@ -249,6 +257,38 @@ struct DaemonState {
     conn_counter: u64,
     /// Messages --reply en attente de réponse : (msg_id, from, to, expire_at, target_conn)
     pending_replies: Vec<PendingReply>,
+}
+
+struct ManagedSpawnRecord {
+    lease: SpawnLease,
+    requester_conns: Vec<String>,
+    wrapper_conn: Option<String>,
+}
+
+enum ManagedSupervisorCommand {
+    Start(PreparedSpawn),
+    Registered {
+        instance_id: String,
+        conn_id: String,
+        name: String,
+    },
+}
+
+enum ManagedSupervisorEvent {
+    Connected {
+        lease: SpawnLease,
+        conn_id: String,
+    },
+    Failed {
+        lease: SpawnLease,
+        kind: String,
+        reason: String,
+    },
+    Exited {
+        lease: SpawnLease,
+        conn_id: Option<String>,
+        reason: String,
+    },
 }
 
 #[derive(Clone)]
@@ -819,13 +859,422 @@ pub fn get_metrics() -> &'static Metrics {
     METRICS.get_or_init(Metrics::new)
 }
 
+struct SupervisedProcess {
+    prepared: PreparedSpawn,
+    child: RunningManagedChild,
+    registered: Option<(String, String)>,
+    connected: bool,
+    failure_sent: bool,
+}
+
+fn start_managed_supervisor(
+    fleet: Arc<FleetSupervisor>,
+    config: &DaemonConfig,
+    commands: Receiver<ManagedSupervisorCommand>,
+    events: Sender<ManagedSupervisorEvent>,
+) {
+    let marker_store = ManagedMarkerStore::at_directory(
+        config
+            .db_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("/tmp"))
+            .join("managed"),
+    );
+    let stderr_store = ManagedStderrStore::at_directory(
+        config
+            .db_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("/tmp"))
+            .join("managed-stderr"),
+    );
+    let retention_days = config.retention_days;
+    thread::spawn(move || {
+        if let Err(error) = stderr_store.purge_older_than_days(retention_days) {
+            warn!("purge stderr des équipiers impossible: {error}");
+        }
+        let mut last_stderr_purge = Instant::now();
+        let mut active = HashMap::<String, SupervisedProcess>::new();
+        loop {
+            match commands.recv_timeout(Duration::from_millis(50)) {
+                Ok(command) => handle_managed_command(
+                    command,
+                    &fleet,
+                    &marker_store,
+                    &stderr_store,
+                    &events,
+                    &mut active,
+                ),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+            while let Ok(command) = commands.try_recv() {
+                handle_managed_command(
+                    command,
+                    &fleet,
+                    &marker_store,
+                    &stderr_store,
+                    &events,
+                    &mut active,
+                );
+            }
+            poll_managed_processes(&fleet, &events, &mut active);
+            if last_stderr_purge.elapsed() >= Duration::from_secs(60 * 60) {
+                if let Err(error) = stderr_store.purge_older_than_days(retention_days) {
+                    warn!("purge stderr des équipiers impossible: {error}");
+                }
+                last_stderr_purge = Instant::now();
+            }
+        }
+    });
+}
+
+fn handle_managed_command(
+    command: ManagedSupervisorCommand,
+    fleet: &FleetSupervisor,
+    marker_store: &ManagedMarkerStore,
+    stderr_store: &ManagedStderrStore,
+    events: &Sender<ManagedSupervisorEvent>,
+    active: &mut HashMap<String, SupervisedProcess>,
+) {
+    match command {
+        ManagedSupervisorCommand::Start(prepared) => {
+            let identity = ManagedIdentity {
+                instance_id: prepared.lease.instance_id.clone(),
+                command_id: prepared.lease.command_id.clone(),
+                generation: prepared.lease.generation,
+            };
+            let start = (|| {
+                let (stderr, _) = stderr_store.open(&prepared.lease.name, &identity)?;
+                let executable = std::env::current_exe()?;
+                let launch = ManagedLaunch {
+                    bootstrap_executable: executable.clone(),
+                    identity,
+                    wrapper_executable: executable,
+                    wrapper_args: vec![
+                        "managed-wrapper".to_string(),
+                        prepared.agent_type.clone(),
+                        prepared.lease.name.clone(),
+                    ],
+                    cwd: prepared.cwd.clone(),
+                    env: prepared.env.clone(),
+                };
+                let mut child = spawn_managed_bootstrap_with_stderr(&launch, Stdio::from(stderr))?;
+                let remaining = prepared
+                    .lease
+                    .deadline_at
+                    .saturating_sub(unix_timestamp())
+                    .max(1) as u64;
+                child.set_ready_timeout(Duration::from_secs(remaining))?;
+                let ready = child.wait_ready()?;
+                if ready.ready().instance_id != prepared.lease.instance_id
+                    || ready.ready().command_id != prepared.lease.command_id
+                    || ready.ready().generation != prepared.lease.generation
+                {
+                    return Err(crate::managed_process::ManagedProcessError::InvalidStatus(
+                        "BootstrapReady non corrélé".to_string(),
+                    ));
+                }
+                let mut child = ready
+                    .persist_marker(marker_store, &prepared.lease.name)?
+                    .release()?;
+                child.set_status_nonblocking()?;
+                Ok(child)
+            })();
+            match start {
+                Ok(child) => {
+                    active.insert(
+                        prepared.lease.instance_id.clone(),
+                        SupervisedProcess {
+                            prepared,
+                            child,
+                            registered: None,
+                            connected: false,
+                            failure_sent: false,
+                        },
+                    );
+                }
+                Err(error) => {
+                    let reason = error.to_string();
+                    let _ = fleet.fail(&prepared.lease, "negotiation_failed", &reason);
+                    let _ = events.send(ManagedSupervisorEvent::Failed {
+                        lease: prepared.lease,
+                        kind: "negotiation_failed".to_string(),
+                        reason,
+                    });
+                }
+            }
+        }
+        ManagedSupervisorCommand::Registered {
+            instance_id,
+            conn_id,
+            name,
+        } => {
+            if let Some(process) = active.get_mut(&instance_id)
+                && process.prepared.lease.name == name
+            {
+                process.registered = Some((conn_id, name));
+            }
+        }
+    }
+}
+
+fn poll_managed_processes(
+    fleet: &FleetSupervisor,
+    events: &Sender<ManagedSupervisorEvent>,
+    active: &mut HashMap<String, SupervisedProcess>,
+) {
+    let mut finished = Vec::new();
+    for (instance_id, process) in active.iter_mut() {
+        let status = process.child.try_status();
+        match status {
+            Ok(Some(ManagedStatus::StartupFailed {
+                kind,
+                reason,
+                instance_id: reported_instance,
+                command_id,
+                generation,
+            })) => {
+                let correlated = reported_instance == *instance_id
+                    && command_id == process.prepared.lease.command_id
+                    && generation == process.prepared.lease.generation;
+                let (kind, reason) = if correlated {
+                    (kind, reason)
+                } else {
+                    (
+                        "negotiation_failed".to_string(),
+                        "StartupFailed non corrélé".to_string(),
+                    )
+                };
+                if !process.failure_sent {
+                    let _ = fleet.fail(&process.prepared.lease, &kind, &reason);
+                    let _ = events.send(ManagedSupervisorEvent::Failed {
+                        lease: process.prepared.lease.clone(),
+                        kind,
+                        reason,
+                    });
+                    process.failure_sent = true;
+                }
+            }
+            Ok(Some(ManagedStatus::BootstrapReady(_))) => {
+                if !process.failure_sent {
+                    let reason = "second BootstrapReady interdit".to_string();
+                    let _ = fleet.fail(&process.prepared.lease, "negotiation_failed", &reason);
+                    let _ = events.send(ManagedSupervisorEvent::Failed {
+                        lease: process.prepared.lease.clone(),
+                        kind: "negotiation_failed".to_string(),
+                        reason,
+                    });
+                    process.failure_sent = true;
+                }
+            }
+            Err(error) if !process.failure_sent => {
+                let reason = error.to_string();
+                let _ = fleet.fail(&process.prepared.lease, "negotiation_failed", &reason);
+                let _ = events.send(ManagedSupervisorEvent::Failed {
+                    lease: process.prepared.lease.clone(),
+                    kind: "negotiation_failed".to_string(),
+                    reason,
+                });
+                process.failure_sent = true;
+            }
+            Ok(None) | Err(_) => {}
+        }
+
+        let exited = match process.child.try_wait() {
+            Ok(Some(status)) => {
+                let reason = format!("équipier terminé avec {status}");
+                if process.connected {
+                    let _ = events.send(ManagedSupervisorEvent::Exited {
+                        lease: process.prepared.lease.clone(),
+                        conn_id: process.registered.as_ref().map(|value| value.0.clone()),
+                        reason,
+                    });
+                } else if !process.failure_sent {
+                    let _ = fleet.fail(&process.prepared.lease, "negotiation_failed", &reason);
+                    let _ = events.send(ManagedSupervisorEvent::Failed {
+                        lease: process.prepared.lease.clone(),
+                        kind: "negotiation_failed".to_string(),
+                        reason,
+                    });
+                }
+                let _ = process.child.remove_marker();
+                finished.push(instance_id.clone());
+                true
+            }
+            Ok(None) => false,
+            Err(error) => {
+                warn!("waitpid non bloquant impossible pour {instance_id}: {error}");
+                false
+            }
+        };
+        if exited {
+            continue;
+        }
+
+        if !process.connected
+            && !process.failure_sent
+            && !process.child.status_is_open()
+            && let Some((conn_id, _)) = process.registered.clone()
+        {
+            match fleet.register_connected(&process.prepared.lease, instance_id, unix_timestamp()) {
+                Ok(_) => {
+                    process.connected = true;
+                    let _ = events.send(ManagedSupervisorEvent::Connected {
+                        lease: process.prepared.lease.clone(),
+                        conn_id,
+                    });
+                }
+                Err(error) => {
+                    let reason = error.to_string();
+                    let _ = events.send(ManagedSupervisorEvent::Failed {
+                        lease: process.prepared.lease.clone(),
+                        kind: "negotiation_failed".to_string(),
+                        reason,
+                    });
+                    process.failure_sent = true;
+                }
+            }
+        }
+    }
+    for instance_id in finished {
+        active.remove(&instance_id);
+    }
+}
+
+fn drain_managed_events(
+    state: &Arc<Mutex<DaemonState>>,
+    events: &Receiver<ManagedSupervisorEvent>,
+) {
+    while let Ok(event) = events.try_recv() {
+        let mut controls = Vec::new();
+        let mut views = Vec::new();
+        {
+            let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
+            match event {
+                ManagedSupervisorEvent::Connected { lease, conn_id } => {
+                    if let Some(record) = st.managed_spawns.get_mut(&lease.command_id) {
+                        record.wrapper_conn = Some(conn_id);
+                        let requesters = std::mem::take(&mut record.requester_conns);
+                        for requester in requesters {
+                            defer_control(
+                                &st,
+                                &requester,
+                                DaemonToWrapper::SpawnAccepted {
+                                    command_id: lease.command_id.clone(),
+                                    name: lease.name.clone(),
+                                },
+                                &mut controls,
+                            );
+                        }
+                    }
+                }
+                ManagedSupervisorEvent::Failed {
+                    lease,
+                    kind,
+                    reason,
+                } => {
+                    let refusal = if kind == "command_missing" {
+                        SpawnRefusal::CommandMissing {
+                            command: reason.clone(),
+                            registry: "canal managed-status".to_string(),
+                        }
+                    } else {
+                        SpawnRefusal::NegotiationFailed {
+                            detail: reason.clone(),
+                        }
+                    };
+                    if let Some(record) = st.managed_spawns.remove(&lease.command_id) {
+                        st.managed_by_instance.remove(&lease.instance_id);
+                        st.managed_terminal_instances
+                            .insert(lease.instance_id.clone());
+                        for requester in record.requester_conns {
+                            defer_control(
+                                &st,
+                                &requester,
+                                DaemonToWrapper::SpawnRejected {
+                                    command_id: lease.command_id.clone(),
+                                    reason: refusal.clone(),
+                                },
+                                &mut controls,
+                            );
+                        }
+                        if let Some(conn_id) = record.wrapper_conn {
+                            let (attach_controls, attach_views) =
+                                close_attach_subscriptions(&mut st, &conn_id);
+                            controls.extend(attach_controls);
+                            views.extend(attach_views);
+                            st.router.unregister_by_conn(&conn_id);
+                            st.mark_stopped(&conn_id);
+                        }
+                        if let Some(presence) = st.presences.get_mut(&lease.instance_id) {
+                            presence.state = "stopped".to_string();
+                            presence.last_seen = Instant::now();
+                        }
+                    }
+                }
+                ManagedSupervisorEvent::Exited {
+                    lease,
+                    conn_id,
+                    reason,
+                } => {
+                    let record = st.managed_spawns.remove(&lease.command_id);
+                    st.managed_by_instance.remove(&lease.instance_id);
+                    st.managed_terminal_instances
+                        .insert(lease.instance_id.clone());
+                    let wrapper_conn =
+                        conn_id.or_else(|| record.and_then(|value| value.wrapper_conn));
+                    if let Some(wrapper_conn) = wrapper_conn {
+                        let (attach_controls, attach_views) =
+                            close_attach_subscriptions(&mut st, &wrapper_conn);
+                        controls.extend(attach_controls);
+                        views.extend(attach_views);
+                        let pending = std::mem::take(&mut st.pending_replies);
+                        for reply in pending {
+                            if reply.target_conn == wrapper_conn {
+                                defer_control(
+                                    &st,
+                                    &reply.from_conn,
+                                    DaemonToWrapper::DeliveryRejected {
+                                        id: reply.msg_id,
+                                        reason: reason.clone(),
+                                    },
+                                    &mut controls,
+                                );
+                            } else {
+                                st.pending_replies.push(reply);
+                            }
+                        }
+                        st.router.unregister_by_conn(&wrapper_conn);
+                        st.mark_stopped(&wrapper_conn);
+                    }
+                    if let Some(presence) = st.presences.get_mut(&lease.instance_id) {
+                        presence.state = "stopped".to_string();
+                        presence.last_seen = Instant::now();
+                    }
+                }
+            }
+        }
+        let _ = execute_controls(controls);
+        for view in views {
+            view.close_and_join();
+        }
+    }
+}
+
 impl DaemonState {
-    fn new(config: &DaemonConfig) -> Result<Self, Box<dyn std::error::Error>> {
+    fn new(
+        config: &DaemonConfig,
+        managed_tx: Sender<ManagedSupervisorCommand>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         std::fs::create_dir_all(config.socket_path.parent().unwrap())?;
         let store = Store::open(&config.db_path)?;
         let idempotency = IdempotencyStore::open(&config.db_path)?;
         let desired = DesiredStateStore::at_path(desired_state_path(config));
-        let fleet = FleetSupervisor::open(&config.db_path, desired, FleetConfig::default())?;
+        let fleet = Arc::new(FleetSupervisor::open(
+            &config.db_path,
+            desired,
+            FleetConfig::default(),
+        )?);
         let registry = AgentRegistry::load()?;
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
         Ok(DaemonState {
@@ -842,7 +1291,10 @@ impl DaemonState {
             registry,
             source_env: source_environment(),
             recovering: false,
-            pending_managed_spawns: VecDeque::new(),
+            managed_tx,
+            managed_spawns: HashMap::new(),
+            managed_by_instance: HashMap::new(),
+            managed_terminal_instances: HashSet::new(),
             connections: HashMap::new(),
             conn_names: HashMap::new(),
             conn_hosts: HashMap::new(),
@@ -870,9 +1322,12 @@ impl DaemonState {
         if let Some(instance_id) = self.conn_instances.remove(conn_id)
             && let Some(presence) = self.presences.get_mut(&instance_id)
         {
-                presence.state = "unreachable".to_string();
-                presence.last_seen = Instant::now();
+            if presence.state == "stopped" {
+                return;
             }
+            presence.state = "unreachable".to_string();
+            presence.last_seen = Instant::now();
+        }
     }
 
     fn mark_stopped(&mut self, conn_id: &str) {
@@ -1073,7 +1528,15 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     let listener = UnixListener::bind(&config.socket_path)?;
     info!("bridget daemon écoute sur {}", config.socket_path.display());
 
-    let state = Arc::new(Mutex::new(DaemonState::new(&config)?));
+    let (managed_tx, managed_rx) = mpsc::channel();
+    let (managed_event_tx, managed_event_rx) = mpsc::channel();
+    let state = Arc::new(Mutex::new(DaemonState::new(&config, managed_tx)?));
+    let fleet = state
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .fleet
+        .clone();
+    start_managed_supervisor(fleet, &config, managed_rx, managed_event_tx);
 
     // Purge au démarrage
     {
@@ -1237,6 +1700,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Boucle d'acceptation avec timeout pour vérifier shutdown
     listener.set_nonblocking(true)?;
     loop {
+        drain_managed_events(&state, &managed_event_rx);
         // Vérifier si shutdown demandé
         if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
             info!("shutdown demandé — notification des wrappers...");
@@ -2066,11 +2530,7 @@ fn handle_idempotent_send(
     message.id = message_id.clone();
     if message.reply && message.deadline_at.is_none() {
         let timeout = message.reply_timeout.unwrap_or(60);
-        message.deadline_at = Some(
-            issued_at
-                .saturating_add(timeout as i64)
-                .max(0) as u64,
-        );
+        message.deadline_at = Some(issued_at.saturating_add(timeout as i64).max(0) as u64);
     }
     let key = match IdempotencyKey::new(negotiated.issuer_scope, OperationKind::Send, message_id) {
         Ok(key) => key,
@@ -2104,10 +2564,8 @@ fn handle_idempotent_send(
     };
     let expires_at = match reservation {
         Reservation::Prepared { expires_at } => expires_at,
-        Reservation::Replayed(LookupResult::OutcomeUnknown { expires_at }) => match st
-            .idempotency
-            .prepared_expiry(&key, now)
-        {
+        Reservation::Replayed(LookupResult::OutcomeUnknown { expires_at }) => {
+            match st.idempotency.prepared_expiry(&key, now) {
             Ok(Some(expires_at)) => expires_at,
             Ok(None) => {
                 return issue_response(
@@ -2130,7 +2588,8 @@ fn handle_idempotent_send(
                     reason: "issue idempotente illisible".to_string(),
                 };
             }
-        },
+            }
+        }
         Reservation::Replayed(result) => match replay_issue(st, &key, result) {
             Ok(issue) => return issue_response(&key, issue),
             Err(error) => {
@@ -2141,8 +2600,12 @@ fn handle_idempotent_send(
                 };
             }
         },
-        Reservation::EnvelopeMismatch => return issue_response(&key, IdempotencyIssue::EnvelopeMismatch),
-        Reservation::IdempotencyExpired => return issue_response(&key, IdempotencyIssue::IdempotencyExpired),
+        Reservation::EnvelopeMismatch => {
+            return issue_response(&key, IdempotencyIssue::EnvelopeMismatch);
+        }
+        Reservation::IdempotencyExpired => {
+            return issue_response(&key, IdempotencyIssue::IdempotencyExpired);
+        }
     };
             // Les gardes ci-dessous peuvent consulter ou modifier les limites
             // historiques, mais seulement après la réservation d'une clé neuve.
@@ -2462,10 +2925,49 @@ fn handle_wrapper_message(
             );
             match decision {
                 Ok(SpawnDecision::Ready(prepared)) => {
-                    st.pending_managed_spawns.push_back(prepared);
+                    st.managed_by_instance.insert(
+                        prepared.lease.instance_id.clone(),
+                        prepared.lease.command_id.clone(),
+                    );
+                    st.managed_spawns.insert(
+                        prepared.lease.command_id.clone(),
+                        ManagedSpawnRecord {
+                            lease: prepared.lease.clone(),
+                            requester_conns: vec![conn_id.to_string()],
+                            wrapper_conn: None,
+                        },
+                    );
+                    if st
+                        .managed_tx
+                        .send(ManagedSupervisorCommand::Start(prepared.clone()))
+                        .is_err()
+                    {
+                        let _ = st.fleet.fail(
+                            &prepared.lease,
+                            "negotiation_failed",
+                            "superviseur de processus indisponible",
+                        );
+                        st.managed_spawns.remove(&prepared.lease.command_id);
+                        st.managed_by_instance.remove(&prepared.lease.instance_id);
+                        st.managed_terminal_instances
+                            .insert(prepared.lease.instance_id.clone());
+                        return Some(DaemonToWrapper::SpawnRejected {
+                            command_id,
+                            reason: SpawnRefusal::NegotiationFailed {
+                                detail: "superviseur de processus indisponible".to_string(),
+                            },
+                        });
+                    }
                     None
                 }
-                Ok(SpawnDecision::Await(_)) => None,
+                Ok(SpawnDecision::Await(waiter)) => {
+                    if let Some(record) = st.managed_spawns.get_mut(&waiter.command_id)
+                        && !record.requester_conns.iter().any(|id| id == conn_id)
+                    {
+                        record.requester_conns.push(conn_id.to_string());
+                    }
+                    None
+                }
                 Ok(SpawnDecision::Accepted { name }) => {
                     Some(DaemonToWrapper::SpawnAccepted { command_id, name })
                 }
@@ -2490,8 +2992,8 @@ fn handle_wrapper_message(
         WrapperToDaemon::StopOrder { name, command_id } => {
             let st = state.lock().unwrap_or_else(|error| error.into_inner());
             let outcome = if st
-                .pending_managed_spawns
-                .iter()
+                .managed_spawns
+                .values()
                 .any(|spawn| spawn.lease.name == name)
             {
                 StopOutcome::Timeout {
@@ -2814,6 +3316,16 @@ fn handle_wrapper_message(
             turn_in_progress,
         } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            if instance_id
+                .as_ref()
+                .is_some_and(|id| st.managed_terminal_instances.contains(id))
+            {
+                return Some(DaemonToWrapper::Nack {
+                    id: "register".to_string(),
+                    reason: "génération gérée déjà terminale".to_string(),
+                });
+            }
+            let managed_instance = instance_id.clone();
             let response = handle_register(
                 conn_id,
                 agent_type,
@@ -2826,6 +3338,18 @@ fn handle_wrapper_message(
                 turn_in_progress,
                 &mut st,
             );
+            if let (Some(instance_id), DaemonToWrapper::Registered { name: final_name }) =
+                (managed_instance, &response)
+                && let Some(command_id) = st.managed_by_instance.get(&instance_id).cloned()
+                && let Some(record) = st.managed_spawns.get_mut(&command_id)
+            {
+                record.wrapper_conn = Some(conn_id.to_string());
+                let _ = st.managed_tx.send(ManagedSupervisorCommand::Registered {
+                    instance_id,
+                    conn_id: conn_id.to_string(),
+                    name: final_name.clone(),
+                });
+            }
             Some(response)
         }
 
@@ -2986,10 +3510,7 @@ fn handle_wrapper_message(
                                     delivery_succeeded = true;
                                     info!(
                                         "livré: {} → « {} » (hops={}, reply={})",
-                                        bridge_msg.id,
-                                        bridge_msg.to,
-                                        bridge_msg.hops,
-                                        bridge_msg.reply
+                                bridge_msg.id, bridge_msg.to, bridge_msg.hops, bridge_msg.reply
                                     );
                                 }
                                 Ok(_) => error!("push {}: flush échoué", target_conn),
@@ -3435,7 +3956,8 @@ mod presence_tests {
             quarantine_window: 3600,
             retention_days: 7,
         };
-        let mut state = DaemonState::new(&config).unwrap();
+        let (managed_tx, _managed_rx) = mpsc::channel();
+        let mut state = DaemonState::new(&config, managed_tx).unwrap();
         state
             .router
             .register(
@@ -3505,7 +4027,8 @@ mod presence_tests {
             quarantine_window: 3600,
             retention_days: 7,
         };
-        let mut state = DaemonState::new(&config).unwrap();
+        let (managed_tx, _managed_rx) = mpsc::channel();
+        let mut state = DaemonState::new(&config, managed_tx).unwrap();
         state
             .router
             .register(Some("agent-2"), &bridget_core::AgentType::Claude, "conn-1")
@@ -3919,7 +4442,10 @@ mod presence_tests {
                 .get("historic-register"),
             Some(&ConnectionRole::Wrapper)
         );
-        assert_eq!(shared.lock().unwrap().idempotency.record_count().unwrap(), 0);
+        assert_eq!(
+            shared.lock().unwrap().idempotency.record_count().unwrap(),
+            0
+        );
         let _ = std::fs::remove_file(config.db_path);
     }
 
@@ -4024,11 +4550,23 @@ mod presence_tests {
             }) if delivery_id != first_delivery
         ));
         let state = shared.lock().unwrap();
-        let first_key = IdempotencyKey::new(scope_a, OperationKind::Send, "message-identique").unwrap();
-        let second_key = IdempotencyKey::new(scope_b, OperationKind::Send, "message-identique").unwrap();
+        let first_key =
+            IdempotencyKey::new(scope_a, OperationKind::Send, "message-identique").unwrap();
+        let second_key =
+            IdempotencyKey::new(scope_b, OperationKind::Send, "message-identique").unwrap();
         assert_ne!(
-            state.idempotency.send_delivery(&first_key).unwrap().unwrap().delivery_generation,
-            state.idempotency.send_delivery(&second_key).unwrap().unwrap().delivery_generation
+            state
+                .idempotency
+                .send_delivery(&first_key)
+                .unwrap()
+                .unwrap()
+                .delivery_generation,
+            state
+                .idempotency
+                .send_delivery(&second_key)
+                .unwrap()
+                .unwrap()
+                .delivery_generation
         );
         drop(state);
         // Un rejeu est jugé avant tout routage : retirer ou renommer la cible
@@ -4073,10 +4611,7 @@ mod presence_tests {
             })
         ));
         let state = shared.lock().unwrap();
-        assert_eq!(
-            state.idempotency.record_count().unwrap(),
-            2
-        );
+        assert_eq!(state.idempotency.record_count().unwrap(), 2);
         let _ = std::fs::remove_file(config.db_path);
     }
 
@@ -5376,7 +5911,8 @@ mod presence_tests {
             quarantine_window: 3600,
             retention_days: 7,
         };
-        let mut state = DaemonState::new(&config).unwrap();
+        let (managed_tx, _managed_rx) = mpsc::channel();
+        let mut state = DaemonState::new(&config, managed_tx).unwrap();
         state
             .store
             .create_request("request-1", "sender", "target", 60)
@@ -5399,5 +5935,127 @@ mod presence_tests {
                 e
             );
         }
+    }
+
+    fn managed_test_lease(command_id: &str) -> SpawnLease {
+        SpawnLease {
+            command_id: command_id.to_string(),
+            name: "agent-2".to_string(),
+            instance_id: "instance-1".to_string(),
+            generation: 1,
+            deadline_at: unix_timestamp() + 60,
+            persistent: false,
+        }
+    }
+
+    #[test]
+    fn startup_failed_commande_absente_repond_le_motif_du_canal_sans_residu() {
+        let (mut state, config) = state_with_registered_agent("managed-startup-failed");
+        state.router.unregister_by_conn("conn-1");
+        state.conn_instances.remove("conn-1");
+        state.presences.remove("instance-1");
+        let (requester, mut requester_reader) = control_socket("managed-requester");
+        state.connections.insert("requester".to_string(), requester);
+        let lease = managed_test_lease("command-missing");
+        state
+            .managed_by_instance
+            .insert(lease.instance_id.clone(), lease.command_id.clone());
+        state.managed_spawns.insert(
+            lease.command_id.clone(),
+            ManagedSpawnRecord {
+                lease: lease.clone(),
+                requester_conns: vec!["requester".to_string()],
+                wrapper_conn: None,
+            },
+        );
+        let shared = Arc::new(Mutex::new(state));
+        let (event_tx, event_rx) = mpsc::channel();
+        event_tx
+            .send(ManagedSupervisorEvent::Failed {
+                lease: lease.clone(),
+                kind: "command_missing".to_string(),
+                reason: "/adaptateur/disparu".to_string(),
+            })
+            .unwrap();
+        drain_managed_events(&shared, &event_rx);
+        assert!(matches!(
+            read_control(&mut requester_reader),
+            DaemonToWrapper::SpawnRejected {
+                command_id,
+                reason: SpawnRefusal::CommandMissing { command, registry }
+            } if command_id == lease.command_id
+                && command == "/adaptateur/disparu"
+                && registry == "canal managed-status"
+        ));
+        let state = shared.lock().unwrap();
+        assert!(state.managed_spawns.is_empty());
+        assert!(state.managed_by_instance.is_empty());
+        assert!(state.managed_terminal_instances.contains("instance-1"));
+        drop(state);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn mort_spontanee_rejette_les_demandes_marque_stopped_et_termine_les_vues() {
+        let (mut state, config) = state_with_registered_agent("managed-exit");
+        let (sender_writer, mut sender_reader) = control_socket("managed-sender");
+        let (attach_writer, mut attach_reader) = control_socket("managed-attach");
+        state
+            .connections
+            .insert("sender-conn".to_string(), sender_writer);
+        state
+            .connections
+            .insert("attach-conn".to_string(), attach_writer.clone());
+        install_attach_view(&mut state, "managed-sub", "attach-conn", &attach_writer);
+        state.pending_replies.push(PendingReply {
+            msg_id: "managed-request".to_string(),
+            from: "sender".to_string(),
+            from_conn: "sender-conn".to_string(),
+            to: "agent-2".to_string(),
+            target_conn: "conn-1".to_string(),
+            timeout_secs: 60,
+            created_at: Instant::now(),
+            escalation_level: 0,
+            deferred_level: None,
+        });
+        let lease = managed_test_lease("command-exit");
+        state
+            .managed_by_instance
+            .insert(lease.instance_id.clone(), lease.command_id.clone());
+        state.managed_spawns.insert(
+            lease.command_id.clone(),
+            ManagedSpawnRecord {
+                lease: lease.clone(),
+                requester_conns: Vec::new(),
+                wrapper_conn: Some("conn-1".to_string()),
+            },
+        );
+        let shared = Arc::new(Mutex::new(state));
+        let (event_tx, event_rx) = mpsc::channel();
+        event_tx
+            .send(ManagedSupervisorEvent::Exited {
+                lease,
+                conn_id: Some("conn-1".to_string()),
+                reason: "équipier terminé avec exit status: 7".to_string(),
+            })
+            .unwrap();
+        drain_managed_events(&shared, &event_rx);
+        assert!(matches!(
+            read_control(&mut sender_reader),
+            DaemonToWrapper::DeliveryRejected { id, reason }
+                if id == "managed-request" && reason.contains("exit status: 7")
+        ));
+        assert!(matches!(
+            read_control(&mut attach_reader),
+            DaemonToWrapper::End { subscription_id, reason }
+                if subscription_id == "managed-sub" && reason == "wrapper indisponible"
+        ));
+        let state = shared.lock().unwrap();
+        assert_eq!(state.presences["instance-1"].state, "stopped");
+        assert!(state.pending_replies.is_empty());
+        assert!(state.attach_subscriptions.is_empty());
+        assert!(state.router.get_agent("agent-2").is_none());
+        drop(state);
+        let _ = std::fs::remove_file(config.db_path);
     }
 }
