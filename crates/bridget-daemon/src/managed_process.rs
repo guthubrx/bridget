@@ -13,7 +13,7 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 const RELEASE_FD: RawFd = 100;
 const STATUS_FD: RawFd = 101;
@@ -88,6 +88,13 @@ pub enum ManagedProcessError {
     Io(io::Error),
     InvalidArgument(String),
     InvalidStatus(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManagedStopResult {
+    Stopped,
+    StoppedForced { survivors_killed: usize },
+    Timeout,
 }
 
 impl fmt::Display for ManagedProcessError {
@@ -197,6 +204,67 @@ impl ManagedChild {
                 self.inner.release.take();
                 let _ = self.inner.child.wait();
                 Err(error)
+            }
+        }
+    }
+
+    /// Variante annulable utilisée par `stop` pendant le bootstrap. Le poll
+    /// court borne la prise en compte sans rendre le superviseur bloquant
+    /// jusqu'à l'échéance complète du spawn.
+    pub fn wait_ready_or_cancel(
+        mut self,
+        cancelled: impl Fn() -> bool,
+        poll_interval: Duration,
+    ) -> Result<Option<ReadyManagedChild>, ManagedProcessError> {
+        self.inner
+            .status
+            .as_mut()
+            .expect("canal de statut présent avant le transfert")
+            .get_mut()
+            .set_read_timeout(Some(poll_interval))?;
+        loop {
+            if cancelled() {
+                self.inner.release.take();
+                self.inner.status.take();
+                terminate_bootstrap(&mut self.inner.child, poll_interval)?;
+                return Ok(None);
+            }
+            let mut line = String::new();
+            match self
+                .inner
+                .status
+                .as_mut()
+                .expect("canal de statut présent avant le transfert")
+                .read_line(&mut line)
+            {
+                Ok(0) => {
+                    return Err(ManagedProcessError::InvalidStatus(
+                        "EOF avant BootstrapReady".to_string(),
+                    ));
+                }
+                Ok(_) => {
+                    let ready = match serde_json::from_str::<ManagedStatus>(line.trim_end()) {
+                        Ok(ManagedStatus::BootstrapReady(ready)) => ready,
+                        Ok(ManagedStatus::StartupFailed { .. }) => {
+                            return Err(ManagedProcessError::InvalidStatus(
+                                "StartupFailed reçu avant BootstrapReady".to_string(),
+                            ));
+                        }
+                        Err(error) => {
+                            return Err(ManagedProcessError::InvalidStatus(error.to_string()));
+                        }
+                    };
+                    return Ok(Some(ReadyManagedChild {
+                        inner: self.inner,
+                        ready,
+                    }));
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) => {}
+                Err(error) => return Err(error.into()),
             }
         }
     }
@@ -329,6 +397,184 @@ impl RunningManagedChild {
             Err(error) => Err(error),
         }
     }
+
+    /// Attend d'abord le chemin coopératif du wrapper, puis termine le groupe
+    /// entier au SIGTERM si un descendant survit. Aucun SIGKILL n'est utilisé.
+    pub fn stop_group(
+        &mut self,
+        cooperative_grace: Duration,
+        forced_grace: Duration,
+        poll_interval: Duration,
+    ) -> Result<ManagedStopResult, ManagedProcessError> {
+        let pgid = self.marker.marker().pgid;
+        if self.wait_group_gone_reaping(pgid, cooperative_grace, poll_interval)? {
+            self.remove_marker()?;
+            return Ok(ManagedStopResult::Stopped);
+        }
+        let survivors_killed = group_member_count(pgid)?.max(1);
+        signal_group(pgid, libc::SIGTERM)?;
+        if self.wait_group_gone_reaping(pgid, forced_grace, poll_interval)? {
+            self.remove_marker()?;
+            return Ok(ManagedStopResult::StoppedForced {
+                survivors_killed,
+            });
+        }
+        Ok(ManagedStopResult::Timeout)
+    }
+
+    fn wait_group_gone_reaping(
+        &mut self,
+        pgid: u32,
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> io::Result<bool> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            // Récolter le leader évite qu'un zombie fasse croire à tort que
+            // le groupe est encore vivant. Les descendants restent sondés
+            // par kill(-pgid, 0), y compris lorsqu'ils ne sont pas enfants.
+            let _ = self.inner.child.try_wait()?;
+            if !group_exists(pgid)? {
+                return Ok(true);
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            std::thread::sleep(poll_interval);
+        }
+    }
+}
+
+fn terminate_bootstrap(child: &mut Child, poll_interval: Duration) -> io::Result<()> {
+    if child.try_wait()?.is_some() {
+        return Ok(());
+    }
+    let pid = child.id() as libc::pid_t;
+    let result = unsafe { libc::kill(pid, libc::SIGTERM) };
+    if result != 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            return Err(error);
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        if child.try_wait()?.is_some() {
+            return Ok(());
+        }
+        std::thread::sleep(poll_interval);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        "bootstrap encore vivant après SIGTERM",
+    ))
+}
+
+pub fn group_exists(pgid: u32) -> io::Result<bool> {
+    if pgid == 0 || pgid > libc::pid_t::MAX as u32 {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "pgid invalide"));
+    }
+    let result = unsafe { libc::kill(-(pgid as libc::pid_t), 0) };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::ESRCH) => Ok(false),
+        Some(libc::EPERM) => Ok(true),
+        _ => Err(error),
+    }
+}
+
+pub fn signal_group(pgid: u32, signal: libc::c_int) -> io::Result<()> {
+    if !group_exists(pgid)? {
+        return Ok(());
+    }
+    let result = unsafe { libc::killpg(pgid as libc::pid_t, signal) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
+
+pub fn wait_group_gone(
+    pgid: u32,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> io::Result<bool> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !group_exists(pgid)? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(poll_interval);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn group_member_count(pgid: u32) -> io::Result<usize> {
+    const PROC_PGRP_ONLY: u32 = 2;
+    let required = unsafe { libc::proc_listpids(PROC_PGRP_ONLY, pgid, std::ptr::null_mut(), 0) };
+    if required < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let capacity = (required as usize)
+        .div_ceil(std::mem::size_of::<libc::pid_t>())
+        .saturating_add(8);
+    let mut pids = vec![0 as libc::pid_t; capacity];
+    let written = unsafe {
+        libc::proc_listpids(
+            PROC_PGRP_ONLY,
+            pgid,
+            pids.as_mut_ptr().cast(),
+            (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int,
+        )
+    };
+    if written < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(pids
+        .into_iter()
+        .take(written as usize / std::mem::size_of::<libc::pid_t>())
+        .filter(|pid| *pid > 0)
+        .count())
+}
+
+#[cfg(target_os = "linux")]
+fn group_member_count(pgid: u32) -> io::Result<usize> {
+    let mut count = 0;
+    for entry in fs::read_dir("/proc")? {
+        let Ok(entry) = entry else { continue };
+        if entry
+            .file_name()
+            .to_str()
+            .is_none_or(|name| !name.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            continue;
+        }
+        let Ok(stat) = fs::read_to_string(entry.path().join("stat")) else {
+            continue;
+        };
+        let Some((_, tail)) = stat.rsplit_once(')') else {
+            continue;
+        };
+        let member_pgid = tail
+            .split_whitespace()
+            .nth(2)
+            .and_then(|value| value.parse::<u32>().ok());
+        if member_pgid == Some(pgid) {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 /// Lance le sous-mode de production avec deux canaux privés.
@@ -850,6 +1096,7 @@ fn validate_marker_name(name: &str) -> Result<(), ManagedProcessError> {
 }
 
 /// Store minimal des marqueurs `~/.cache/bridget/managed/<nom>.json`.
+#[derive(Clone)]
 pub struct ManagedMarkerStore {
     directory: PathBuf,
 }
@@ -900,6 +1147,48 @@ impl ManagedMarkerStore {
         let bytes = fs::read(&path)?;
         serde_json::from_slice(&bytes)
             .map_err(|error| ManagedProcessError::InvalidStatus(error.to_string()))
+    }
+
+    /// Arrête un groupe retrouvé uniquement par son marqueur après perte de
+    /// la table superviseur. Un marqueur dont le leader a disparu ou dont la
+    /// naissance ne correspond plus est retiré sans signaler le PID recyclé.
+    pub fn stop_current_group(
+        &self,
+        name: &str,
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> Result<Option<ManagedStopResult>, ManagedProcessError> {
+        let marker = match self.load(name) {
+            Ok(marker) => marker,
+            Err(ManagedProcessError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let current_birth = match process_birth(marker.pgid) {
+            Ok(birth) => birth,
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound
+                    || error.raw_os_error() == Some(libc::ESRCH) =>
+            {
+                self.remove(name)?;
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if current_birth != marker.birth || !group_exists(marker.pgid)? {
+            self.remove(name)?;
+            return Ok(None);
+        }
+        let survivors_killed = group_member_count(marker.pgid)?.max(1);
+        signal_group(marker.pgid, libc::SIGTERM)?;
+        if wait_group_gone(marker.pgid, timeout, poll_interval)? {
+            self.remove(name)?;
+            return Ok(Some(ManagedStopResult::StoppedForced {
+                survivors_killed,
+            }));
+        }
+        Ok(Some(ManagedStopResult::Timeout))
     }
 
     pub fn remove(&self, name: &str) -> Result<(), ManagedProcessError> {
@@ -970,17 +1259,31 @@ mod tests {
     }
 
     fn spawn_test_bootstrap() -> ManagedChild {
-        let request = BootstrapRequest {
-            identity: identity(),
-            wrapper_executable: current_test_executable(),
-            wrapper_args: vec![
+        spawn_test_bootstrap_with_wrapper(
+            current_test_executable(),
+            vec![
                 "--exact".to_string(),
                 "managed_process::tests::fd_probe_child".to_string(),
                 "--ignored".to_string(),
                 "--nocapture".to_string(),
                 "--test-threads=1".to_string(),
             ],
+        )
+    }
+
+    fn spawn_test_bootstrap_with_wrapper(
+        wrapper_executable: PathBuf,
+        wrapper_args: Vec<String>,
+    ) -> ManagedChild {
+        let request = BootstrapRequest {
+            identity: identity(),
+            wrapper_executable,
+            wrapper_args,
         };
+        let needs_fd_probe = request
+            .wrapper_args
+            .iter()
+            .any(|argument| argument == "managed_process::tests::fd_probe_child");
         let mut command = helper_command("managed_process::tests::bootstrap_child");
         command
             .env(BOOTSTRAP_CHILD_ENV, "1")
@@ -994,8 +1297,10 @@ mod tests {
                     "wrapper_args": request.wrapper_args,
                 }))
                 .unwrap(),
-            )
-            .env(FD_PROBE_ENV, "1");
+            );
+        if needs_fd_probe {
+            command.env(FD_PROBE_ENV, "1");
+        }
         spawn_bootstrap_command(command, Stdio::null()).unwrap()
     }
 
@@ -1083,6 +1388,101 @@ mod tests {
         assert_eq!(probe["release_open"], false);
         released.close_status();
         assert!(released.child_mut().wait().unwrap().success());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn annulation_avant_marqueur_termine_le_bootstrap_sans_exec() {
+        let child = spawn_test_bootstrap();
+        let pid = child.inner.child.id();
+        let outcome = child
+            .wait_ready_or_cancel(|| true, Duration::from_millis(10))
+            .unwrap();
+
+        assert!(outcome.is_none());
+        wait_pid_gone(pid);
+    }
+
+    #[test]
+    fn stop_force_termine_l_intermediaire_npx_qui_ignore_l_annulation_et_son_descendant() {
+        let root = test_root("stop-group");
+        fs::create_dir_all(&root).unwrap();
+        let descendant_path = root.join("descendant.pid");
+        let fake_npx = root.join("npx");
+        fs::write(
+            &fake_npx,
+            "#!/bin/sh\nsleep 30 &\necho $! > \"$1\"\nwait\n",
+        )
+        .unwrap();
+        fs::set_permissions(&fake_npx, fs::Permissions::from_mode(0o700)).unwrap();
+        let store = ManagedMarkerStore::at_directory(root.join("managed"));
+        let mut child = spawn_test_bootstrap_with_wrapper(
+            fake_npx,
+            vec![descendant_path.to_string_lossy().into_owned()],
+        )
+        .wait_ready()
+        .unwrap()
+        .persist_marker(&store, "codex-1")
+        .unwrap()
+        .release()
+        .unwrap();
+        wait_for_path(&descendant_path);
+        let descendant = fs::read_to_string(&descendant_path)
+            .unwrap()
+            .trim()
+            .parse::<u32>()
+            .unwrap();
+
+        assert!(matches!(
+            child
+                .stop_group(
+                    Duration::ZERO,
+                    Duration::from_secs(2),
+                    Duration::from_millis(10),
+                )
+                .unwrap(),
+            ManagedStopResult::StoppedForced { survivors_killed }
+                if survivors_killed >= 2
+        ));
+        assert!(matches!(
+            store.load("codex-1"),
+            Err(ManagedProcessError::Io(ref error))
+                if error.kind() == io::ErrorKind::NotFound
+        ));
+        wait_pid_gone(descendant);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn marqueur_perime_est_retire_sans_signaler_le_pid_recycle() {
+        let root = test_root("stale-marker");
+        let store = ManagedMarkerStore::at_directory(root.join("managed"));
+        let pid = std::process::id();
+        let ready = BootstrapReady {
+            pid,
+            pgid: unsafe { libc::getpgrp() } as u32,
+            birth: process_birth(pid).unwrap().saturating_add(1),
+            instance_id: identity().instance_id,
+            command_id: identity().command_id,
+            generation: identity().generation,
+        };
+        store.persist("codex-1", &ready).unwrap();
+
+        assert_eq!(
+            store
+                .stop_current_group(
+                    "codex-1",
+                    Duration::from_millis(50),
+                    Duration::from_millis(5),
+                )
+                .unwrap(),
+            None
+        );
+        assert!(matches!(
+            store.load("codex-1"),
+            Err(ManagedProcessError::Io(ref error))
+                if error.kind() == io::ErrorKind::NotFound
+        ));
         let _ = fs::remove_dir_all(root);
     }
 

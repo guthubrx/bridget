@@ -479,6 +479,52 @@ impl FleetSupervisor {
         self.finish_non_success(lease, issue)
     }
 
+    /// Invalide la génération avant toute E/S d'arrêt. Une génération encore
+    /// en lancement devient `Cancelled`; une génération déjà `Connected`
+    /// conserve son issue de spawn mais est retirée durablement de l'état
+    /// désiré afin qu'aucun redémarrage ne puisse la ressusciter.
+    pub fn invalidate_for_stop(&self, lease: &SpawnLease) -> Result<(), FleetError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if let Some(active) = inner.active_by_command.get(&lease.command_id).cloned() {
+            if active.generation != lease.generation || active.name != lease.name {
+                return Err(FleetError::StaleGeneration);
+            }
+            if active.persistent {
+                self.desired.remove(&active.name)?;
+            }
+            let issue = SpawnCommandIssue::Cancelled {
+                reason: "arrêt demandé".to_string(),
+            };
+            let key = spawn_key(&inner, &active.command_id)?;
+            inner
+                .idempotency
+                .finish_spawn(&key, active.generation, &issue)?;
+            complete_locked(&mut inner, &active, issue);
+            self.terminal_changed.notify_all();
+            return Ok(());
+        }
+        let connected = matches!(
+            inner.completed.get(&lease.command_id),
+            Some(SpawnCommandIssue::Connected {
+                name,
+                generation,
+                instance_id,
+            }) if name == &lease.name
+                && generation == &lease.generation
+                && instance_id == &lease.instance_id
+        );
+        if !connected {
+            return Err(FleetError::StaleGeneration);
+        }
+        if lease.persistent {
+            self.desired.remove(&lease.name)?;
+        }
+        Ok(())
+    }
+
     fn finish_non_success(
         &self,
         lease: &SpawnLease,
@@ -982,6 +1028,58 @@ mod tests {
             SpawnSubmission::IdempotencyExpired
         );
         drop(supervisor);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stop_invalide_un_lancement_avant_toute_io_et_rejoue_cancelled() {
+        let root = test_root("stop-starting");
+        let supervisor = open(&root);
+        let spawn = order("command-stop-starting", Some("codex-stop"), true);
+        let lease = start(&supervisor, &spawn);
+        supervisor.mark_starting(&lease, NOW).unwrap();
+
+        supervisor.invalidate_for_stop(&lease).unwrap();
+
+        assert!(matches!(
+            supervisor.request_spawn(&spawn, NOW + 1).unwrap(),
+            SpawnSubmission::Terminal(SpawnCommandIssue::Cancelled { ref reason })
+                if reason == "arrêt demandé"
+        ));
+        assert!(
+            DesiredStateStore::at_path(root.join("fleet.json"))
+                .load()
+                .unwrap()
+                .equipiers
+                .is_empty()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stop_connecte_preserve_l_issue_spawn_mais_retire_l_etat_desire() {
+        let root = test_root("stop-connected");
+        let supervisor = open(&root);
+        let spawn = order("command-stop-connected", Some("codex-stop"), true);
+        let lease = start(&supervisor, &spawn);
+        supervisor.mark_starting(&lease, NOW).unwrap();
+        let connected = supervisor
+            .register_connected(&lease, &lease.instance_id, NOW + 1)
+            .unwrap();
+
+        supervisor.invalidate_for_stop(&lease).unwrap();
+
+        assert_eq!(
+            supervisor.request_spawn(&spawn, NOW + 2).unwrap(),
+            SpawnSubmission::Terminal(connected)
+        );
+        assert!(
+            DesiredStateStore::at_path(root.join("fleet.json"))
+                .load()
+                .unwrap()
+                .equipiers
+                .is_empty()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -31,7 +31,7 @@ use crate::{
     },
     managed_process::{
         ManagedIdentity, ManagedLaunch, ManagedMarkerStore, ManagedStatus, ManagedStderrStore,
-        RunningManagedChild, spawn_managed_bootstrap_with_stderr,
+        ManagedStopResult, RunningManagedChild, spawn_managed_bootstrap_with_stderr,
     },
     registry::AgentRegistry,
 };
@@ -91,6 +91,10 @@ const ATTACH_VIEW_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 /// Chaque entrée expire aussi après `PENDING_ATTACH_SEND_TTL`.
 const MAX_PENDING_ATTACH_SENDS: usize = 1024;
 const PENDING_ATTACH_SEND_TTL: Duration = Duration::from_secs(300);
+const MANAGED_STOP_COOPERATIVE_GRACE: Duration = Duration::from_millis(500);
+const MANAGED_STOP_FORCED_GRACE: Duration = Duration::from_secs(1);
+const MANAGED_STOP_POLL: Duration = Duration::from_millis(20);
+const MANAGED_STOP_REPLY_TIMEOUT: Duration = Duration::from_secs(3);
 const CLIENT_IDEMPOTENCY_HORIZON_SECS: i64 = 7 * 24 * 60 * 60;
 const CLIENT_ISSUED_AT_TOLERANCE_SECS: i64 = 60;
 const MAX_ACTIVE_ISSUER_SCOPES: usize = 4096;
@@ -233,6 +237,7 @@ struct DaemonState {
     source_env: SourceEnvironment,
     recovering: bool,
     managed_tx: Sender<ManagedSupervisorCommand>,
+    marker_store: ManagedMarkerStore,
     managed_spawns: HashMap<String, ManagedSpawnRecord>,
     managed_by_instance: HashMap<String, String>,
     managed_terminal_instances: HashSet<String>,
@@ -263,10 +268,77 @@ struct ManagedSpawnRecord {
     lease: SpawnLease,
     requester_conns: Vec<String>,
     wrapper_conn: Option<String>,
+    stop: Arc<ManagedStopControl>,
+}
+
+struct ManagedStopControl {
+    requested: AtomicBool,
+    handshake_complete: AtomicBool,
+    waiters: Mutex<Vec<Sender<StopOutcome>>>,
+}
+
+impl ManagedStopControl {
+    fn new() -> Self {
+        Self {
+            requested: AtomicBool::new(false),
+            handshake_complete: AtomicBool::new(false),
+            waiters: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn request(&self) -> Receiver<StopOutcome> {
+        let (sender, receiver) = mpsc::channel();
+        self.waiters
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push(sender);
+        self.requested.store(true, Ordering::SeqCst);
+        receiver
+    }
+
+    fn is_requested(&self) -> bool {
+        self.requested.load(Ordering::SeqCst)
+    }
+
+    fn mark_handshake_complete(&self) {
+        self.handshake_complete.store(true, Ordering::SeqCst);
+    }
+
+    fn is_actionable(&self) -> bool {
+        self.is_requested() && self.handshake_complete.load(Ordering::SeqCst)
+    }
+
+    fn complete(&self, outcome: StopOutcome) {
+        let waiters = std::mem::take(
+            &mut *self
+                .waiters
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()),
+        );
+        for waiter in waiters {
+            let _ = waiter.send(outcome.clone());
+        }
+    }
+}
+
+enum ManagedStopTarget {
+    Supervised {
+        receiver: Receiver<StopOutcome>,
+        completion: Arc<ManagedStopControl>,
+        wrapper: Option<Arc<Mutex<BufWriter<UnixStream>>>>,
+    },
+    Marker {
+        store: ManagedMarkerStore,
+        fallback: StopOutcome,
+    },
+    Immediate(StopOutcome),
 }
 
 enum ManagedSupervisorCommand {
-    Start(PreparedSpawn),
+    Start {
+        prepared: PreparedSpawn,
+        stop: Arc<ManagedStopControl>,
+    },
     Registered {
         instance_id: String,
         conn_id: String,
@@ -288,6 +360,12 @@ enum ManagedSupervisorEvent {
         lease: SpawnLease,
         conn_id: Option<String>,
         reason: String,
+    },
+    Stopped {
+        lease: SpawnLease,
+        conn_id: Option<String>,
+        outcome: StopOutcome,
+        completion: Arc<ManagedStopControl>,
     },
 }
 
@@ -865,6 +943,7 @@ struct SupervisedProcess {
     registered: Option<(String, String)>,
     connected: bool,
     failure_sent: bool,
+    stop: Arc<ManagedStopControl>,
 }
 
 fn start_managed_supervisor(
@@ -937,7 +1016,7 @@ fn handle_managed_command(
     active: &mut HashMap<String, SupervisedProcess>,
 ) {
     match command {
-        ManagedSupervisorCommand::Start(prepared) => {
+        ManagedSupervisorCommand::Start { prepared, stop } => {
             let identity = ManagedIdentity {
                 instance_id: prepared.lease.instance_id.clone(),
                 command_id: prepared.lease.command_id.clone(),
@@ -958,14 +1037,13 @@ fn handle_managed_command(
                     cwd: prepared.cwd.clone(),
                     env: prepared.env.clone(),
                 };
-                let mut child = spawn_managed_bootstrap_with_stderr(&launch, Stdio::from(stderr))?;
-                let remaining = prepared
-                    .lease
-                    .deadline_at
-                    .saturating_sub(unix_timestamp())
-                    .max(1) as u64;
-                child.set_ready_timeout(Duration::from_secs(remaining))?;
-                let ready = child.wait_ready()?;
+                let child = spawn_managed_bootstrap_with_stderr(&launch, Stdio::from(stderr))?;
+                let Some(ready) = child.wait_ready_or_cancel(
+                    || stop.is_actionable() || unix_timestamp() >= prepared.lease.deadline_at,
+                    MANAGED_STOP_POLL,
+                )? else {
+                    return Ok(None);
+                };
                 if ready.ready().instance_id != prepared.lease.instance_id
                     || ready.ready().command_id != prepared.lease.command_id
                     || ready.ready().generation != prepared.lease.generation
@@ -978,10 +1056,10 @@ fn handle_managed_command(
                     .persist_marker(marker_store, &prepared.lease.name)?
                     .release()?;
                 child.set_status_nonblocking()?;
-                Ok(child)
+                Ok(Some(child))
             })();
             match start {
-                Ok(child) => {
+                Ok(Some(child)) => {
                     active.insert(
                         prepared.lease.instance_id.clone(),
                         SupervisedProcess {
@@ -990,10 +1068,37 @@ fn handle_managed_command(
                             registered: None,
                             connected: false,
                             failure_sent: false,
+                            stop,
                         },
                     );
                 }
+                Ok(None) if stop.is_actionable() => {
+                    let _ = events.send(ManagedSupervisorEvent::Stopped {
+                        lease: prepared.lease,
+                        conn_id: None,
+                        outcome: StopOutcome::Stopped,
+                        completion: stop,
+                    });
+                }
+                Ok(None) => {
+                    let reason = "délai absolu dépassé avant BootstrapReady".to_string();
+                    let _ = fleet.fail(&prepared.lease, "spawn_timeout", &reason);
+                    let _ = events.send(ManagedSupervisorEvent::Failed {
+                        lease: prepared.lease,
+                        kind: "spawn_timeout".to_string(),
+                        reason,
+                    });
+                }
                 Err(error) => {
+                    if stop.is_actionable() {
+                        let _ = events.send(ManagedSupervisorEvent::Stopped {
+                            lease: prepared.lease,
+                            conn_id: None,
+                            outcome: StopOutcome::Stopped,
+                            completion: stop,
+                        });
+                        return;
+                    }
                     let reason = error.to_string();
                     let _ = fleet.fail(&prepared.lease, "negotiation_failed", &reason);
                     let _ = events.send(ManagedSupervisorEvent::Failed {
@@ -1025,6 +1130,32 @@ fn poll_managed_processes(
 ) {
     let mut finished = Vec::new();
     for (instance_id, process) in active.iter_mut() {
+        if process.stop.is_actionable() {
+            let outcome = match process.child.stop_group(
+                MANAGED_STOP_COOPERATIVE_GRACE,
+                MANAGED_STOP_FORCED_GRACE,
+                MANAGED_STOP_POLL,
+            ) {
+                Ok(ManagedStopResult::Stopped) => StopOutcome::Stopped,
+                Ok(ManagedStopResult::StoppedForced { survivors_killed }) => {
+                    StopOutcome::StoppedForced { survivors_killed }
+                }
+                Ok(ManagedStopResult::Timeout) => StopOutcome::Timeout {
+                    state: "groupe encore vivant".to_string(),
+                },
+                Err(error) => StopOutcome::Timeout {
+                    state: error.to_string(),
+                },
+            };
+            let _ = events.send(ManagedSupervisorEvent::Stopped {
+                lease: process.prepared.lease.clone(),
+                conn_id: process.registered.as_ref().map(|value| value.0.clone()),
+                outcome,
+                completion: Arc::clone(&process.stop),
+            });
+            finished.push(instance_id.clone());
+            continue;
+        }
         let status = process.child.try_status();
         match status {
             Ok(Some(ManagedStatus::StartupFailed {
@@ -1148,6 +1279,7 @@ fn drain_managed_events(
     while let Ok(event) = events.try_recv() {
         let mut controls = Vec::new();
         let mut views = Vec::new();
+        let mut stop_completion = None;
         {
             let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
             match event {
@@ -1184,6 +1316,9 @@ fn drain_managed_events(
                         }
                     };
                     if let Some(record) = st.managed_spawns.remove(&lease.command_id) {
+                        if record.stop.is_requested() {
+                            stop_completion = Some((Arc::clone(&record.stop), StopOutcome::Stopped));
+                        }
                         st.managed_by_instance.remove(&lease.instance_id);
                         st.managed_terminal_instances
                             .insert(lease.instance_id.clone());
@@ -1221,8 +1356,16 @@ fn drain_managed_events(
                     st.managed_by_instance.remove(&lease.instance_id);
                     st.managed_terminal_instances
                         .insert(lease.instance_id.clone());
-                    let wrapper_conn =
-                        conn_id.or_else(|| record.and_then(|value| value.wrapper_conn));
+                    if let Some(record) = record.as_ref()
+                        && record.stop.is_requested()
+                    {
+                        stop_completion = Some((Arc::clone(&record.stop), StopOutcome::Stopped));
+                    }
+                    let wrapper_conn = conn_id.or_else(|| {
+                        record
+                            .as_ref()
+                            .and_then(|value| value.wrapper_conn.clone())
+                    });
                     if let Some(wrapper_conn) = wrapper_conn {
                         let (attach_controls, attach_views) =
                             close_attach_subscriptions(&mut st, &wrapper_conn);
@@ -1252,11 +1395,74 @@ fn drain_managed_events(
                         presence.last_seen = Instant::now();
                     }
                 }
+                ManagedSupervisorEvent::Stopped {
+                    lease,
+                    conn_id,
+                    outcome,
+                    completion,
+                } => {
+                    let record = st.managed_spawns.remove(&lease.command_id);
+                    st.managed_by_instance.remove(&lease.instance_id);
+                    st.managed_terminal_instances
+                        .insert(lease.instance_id.clone());
+                    let wrapper_conn = conn_id.or_else(|| {
+                        record
+                            .as_ref()
+                            .and_then(|value| value.wrapper_conn.clone())
+                    });
+                    if let Some(record) = record {
+                        for requester in record.requester_conns {
+                            defer_control(
+                                &st,
+                                &requester,
+                                DaemonToWrapper::SpawnRejected {
+                                    command_id: lease.command_id.clone(),
+                                    reason: SpawnRefusal::NegotiationFailed {
+                                        detail: "lancement annulé par stop".to_string(),
+                                    },
+                                },
+                                &mut controls,
+                            );
+                        }
+                    }
+                    if let Some(wrapper_conn) = wrapper_conn {
+                        let (attach_controls, attach_views) =
+                            close_attach_subscriptions(&mut st, &wrapper_conn);
+                        controls.extend(attach_controls);
+                        views.extend(attach_views);
+                        let pending = std::mem::take(&mut st.pending_replies);
+                        for reply in pending {
+                            if reply.target_conn == wrapper_conn {
+                                defer_control(
+                                    &st,
+                                    &reply.from_conn,
+                                    DaemonToWrapper::DeliveryRejected {
+                                        id: reply.msg_id,
+                                        reason: "équipier arrêté".to_string(),
+                                    },
+                                    &mut controls,
+                                );
+                            } else {
+                                st.pending_replies.push(reply);
+                            }
+                        }
+                        st.router.unregister_by_conn(&wrapper_conn);
+                        st.mark_stopped(&wrapper_conn);
+                    }
+                    if let Some(presence) = st.presences.get_mut(&lease.instance_id) {
+                        presence.state = "stopped".to_string();
+                        presence.last_seen = Instant::now();
+                    }
+                    stop_completion = Some((completion, outcome));
+                }
             }
         }
         let _ = execute_controls(controls);
         for view in views {
             view.close_and_join();
+        }
+        if let Some((completion, outcome)) = stop_completion {
+            completion.complete(outcome);
         }
     }
 }
@@ -1292,6 +1498,13 @@ impl DaemonState {
             source_env: source_environment(),
             recovering: false,
             managed_tx,
+            marker_store: ManagedMarkerStore::at_directory(
+                config
+                    .db_path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("/tmp"))
+                    .join("managed"),
+            ),
             managed_spawns: HashMap::new(),
             managed_by_instance: HashMap::new(),
             managed_terminal_instances: HashSet::new(),
@@ -2925,6 +3138,7 @@ fn handle_wrapper_message(
             );
             match decision {
                 Ok(SpawnDecision::Ready(prepared)) => {
+                    let stop = Arc::new(ManagedStopControl::new());
                     st.managed_by_instance.insert(
                         prepared.lease.instance_id.clone(),
                         prepared.lease.command_id.clone(),
@@ -2935,11 +3149,15 @@ fn handle_wrapper_message(
                             lease: prepared.lease.clone(),
                             requester_conns: vec![conn_id.to_string()],
                             wrapper_conn: None,
+                            stop: Arc::clone(&stop),
                         },
                     );
                     if st
                         .managed_tx
-                        .send(ManagedSupervisorCommand::Start(prepared.clone()))
+                        .send(ManagedSupervisorCommand::Start {
+                            prepared: prepared.clone(),
+                            stop,
+                        })
                         .is_err()
                     {
                         let _ = st.fleet.fail(
@@ -2990,17 +3208,84 @@ fn handle_wrapper_message(
             }
         }
         WrapperToDaemon::StopOrder { name, command_id } => {
-            let st = state.lock().unwrap_or_else(|error| error.into_inner());
-            let outcome = if st
-                .managed_spawns
-                .values()
-                .any(|spawn| spawn.lease.name == name)
-            {
-                StopOutcome::Timeout {
-                    state: "starting".to_string(),
+            let target = {
+                let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                let record = st
+                    .managed_spawns
+                    .values()
+                    .find(|spawn| spawn.lease.name == name);
+                match record {
+                    Some(record) => {
+                        let lease = record.lease.clone();
+                        let completion = Arc::clone(&record.stop);
+                        let wrapper = record
+                            .wrapper_conn
+                            .as_ref()
+                            .and_then(|conn_id| st.connections.get(conn_id))
+                            .cloned();
+                        if !completion.is_requested()
+                            && let Err(error) = st.fleet.invalidate_for_stop(&lease)
+                        {
+                            ManagedStopTarget::Immediate(StopOutcome::Timeout {
+                                state: error.to_string(),
+                            })
+                        } else {
+                            st.managed_terminal_instances
+                                .insert(lease.instance_id.clone());
+                            if wrapper.is_none() {
+                                completion.mark_handshake_complete();
+                            }
+                            ManagedStopTarget::Supervised {
+                                receiver: completion.request(),
+                                completion,
+                                wrapper,
+                            }
+                        }
+                    }
+                    None => ManagedStopTarget::Marker {
+                        store: st.marker_store.clone(),
+                        fallback: if st.router.get_agent(&name).is_some() {
+                            StopOutcome::NotManaged
+                        } else {
+                            StopOutcome::NotFound
+                        },
+                    },
                 }
-            } else {
-                StopOutcome::NotFound
+            };
+            let outcome = match target {
+                ManagedStopTarget::Supervised {
+                    receiver,
+                    completion,
+                    wrapper,
+                } => {
+                    if let Some(writer) = wrapper {
+                        let _ = push_control_message(&writer, &DaemonToWrapper::Disconnect);
+                    }
+                    completion.mark_handshake_complete();
+                    receiver
+                        .recv_timeout(MANAGED_STOP_REPLY_TIMEOUT)
+                        .unwrap_or(StopOutcome::Timeout {
+                            state: "superviseur sans issue dans le délai".to_string(),
+                        })
+                }
+                ManagedStopTarget::Marker { store, fallback } => match store.stop_current_group(
+                    &name,
+                    MANAGED_STOP_FORCED_GRACE,
+                    MANAGED_STOP_POLL,
+                ) {
+                    Ok(Some(ManagedStopResult::Stopped)) => StopOutcome::Stopped,
+                    Ok(Some(ManagedStopResult::StoppedForced { survivors_killed })) => {
+                        StopOutcome::StoppedForced { survivors_killed }
+                    }
+                    Ok(Some(ManagedStopResult::Timeout)) => StopOutcome::Timeout {
+                        state: "groupe du marqueur encore vivant".to_string(),
+                    },
+                    Ok(None) => fallback,
+                    Err(error) => StopOutcome::Timeout {
+                        state: error.to_string(),
+                    },
+                },
+                ManagedStopTarget::Immediate(outcome) => outcome,
             };
             Some(DaemonToWrapper::StopResult {
                 command_id,
@@ -5948,6 +6233,216 @@ mod presence_tests {
         }
     }
 
+    fn install_managed_test_spawn(
+        state: &mut DaemonState,
+        command_id: &str,
+        connected: bool,
+    ) -> (SpawnLease, Arc<ManagedStopControl>) {
+        let now = unix_timestamp();
+        let order = FleetSpawnOrder {
+            agent_type: "fixture".to_string(),
+            requested_name: Some("agent-2".to_string()),
+            cwd: PathBuf::from("/tmp"),
+            persistent: false,
+            command_id: command_id.to_string(),
+            issued_at: now,
+            deadline_at: now + 60,
+        };
+        let lease = match state.fleet.request_spawn(&order, now).unwrap() {
+            crate::fleet::SpawnSubmission::Start(lease) => lease,
+            other => panic!("spawn de test non démarré: {other:?}"),
+        };
+        state.fleet.mark_starting(&lease, now).unwrap();
+        if connected {
+            state
+                .fleet
+                .register_connected(&lease, &lease.instance_id, now + 1)
+                .unwrap();
+        }
+        let stop = Arc::new(ManagedStopControl::new());
+        state
+            .managed_by_instance
+            .insert(lease.instance_id.clone(), lease.command_id.clone());
+        state.managed_spawns.insert(
+            lease.command_id.clone(),
+            ManagedSpawnRecord {
+                lease: lease.clone(),
+                requester_conns: Vec::new(),
+                wrapper_conn: connected.then(|| "conn-1".to_string()),
+                stop: Arc::clone(&stop),
+            },
+        );
+        (lease, stop)
+    }
+
+    #[test]
+    fn stop_refuse_structurellement_un_wrapper_terminal() {
+        let (state, config) = state_with_registered_agent("stop-not-managed");
+        let shared = Arc::new(Mutex::new(state));
+
+        assert!(matches!(
+            handle_wrapper_message(
+                "control",
+                WrapperToDaemon::StopOrder {
+                    name: "agent-2".to_string(),
+                    command_id: "stop-terminal".to_string(),
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::StopResult {
+                command_id,
+                outcome: StopOutcome::NotManaged,
+            }) if command_id == "stop-terminal"
+        ));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn stop_avant_marqueur_annule_la_generation_et_repond_apres_nettoyage() {
+        let (mut state, config) = state_with_registered_agent("stop-before-marker");
+        let (lease, stop) = install_managed_test_spawn(&mut state, "spawn-before-marker", false);
+        let shared = Arc::new(Mutex::new(state));
+        let caller_state = Arc::clone(&shared);
+        let caller = thread::spawn(move || {
+            handle_wrapper_message(
+                "control",
+                WrapperToDaemon::StopOrder {
+                    name: "agent-2".to_string(),
+                    command_id: "stop-before-marker".to_string(),
+                },
+                &caller_state,
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !stop.is_requested() {
+            assert!(Instant::now() < deadline, "stop non transmis au superviseur");
+            thread::yield_now();
+        }
+        assert!(
+            stop.is_actionable(),
+            "un lancement sans wrapper doit être annulable immédiatement"
+        );
+        let (event_tx, event_rx) = mpsc::channel();
+        event_tx
+            .send(ManagedSupervisorEvent::Stopped {
+                lease,
+                conn_id: None,
+                outcome: StopOutcome::Stopped,
+                completion: stop,
+            })
+            .unwrap();
+        drain_managed_events(&shared, &event_rx);
+
+        assert!(matches!(
+            caller.join().unwrap(),
+            Some(DaemonToWrapper::StopResult {
+                command_id,
+                outcome: StopOutcome::Stopped,
+            }) if command_id == "stop-before-marker"
+        ));
+        assert!(shared.lock().unwrap().managed_spawns.is_empty());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn stop_apres_register_envoie_disconnect_puis_attend_la_fin_du_groupe() {
+        let (mut state, config) = state_with_registered_agent("stop-connected");
+        let (wrapper_writer, mut wrapper_reader) = control_socket("stop-wrapper");
+        state
+            .connections
+            .insert("conn-1".to_string(), wrapper_writer);
+        let (lease, stop) = install_managed_test_spawn(&mut state, "spawn-connected", true);
+        let shared = Arc::new(Mutex::new(state));
+        let caller_state = Arc::clone(&shared);
+        let caller = thread::spawn(move || {
+            handle_wrapper_message(
+                "control",
+                WrapperToDaemon::StopOrder {
+                    name: "agent-2".to_string(),
+                    command_id: "stop-connected".to_string(),
+                },
+                &caller_state,
+            )
+        });
+
+        assert!(matches!(
+            read_control(&mut wrapper_reader),
+            DaemonToWrapper::Disconnect
+        ));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !stop.is_actionable() {
+            assert!(
+                Instant::now() < deadline,
+                "le handshake écrit n'a pas libéré le superviseur"
+            );
+            thread::yield_now();
+        }
+        let (event_tx, event_rx) = mpsc::channel();
+        event_tx
+            .send(ManagedSupervisorEvent::Stopped {
+                lease,
+                conn_id: Some("conn-1".to_string()),
+                outcome: StopOutcome::Stopped,
+                completion: stop,
+            })
+            .unwrap();
+        drain_managed_events(&shared, &event_rx);
+
+        assert!(matches!(
+            caller.join().unwrap(),
+            Some(DaemonToWrapper::StopResult {
+                command_id,
+                outcome: StopOutcome::Stopped,
+            }) if command_id == "stop-connected"
+        ));
+        let state = shared.lock().unwrap();
+        assert!(state.router.get_agent("agent-2").is_none());
+        assert_eq!(state.presences["instance-1"].state, "stopped");
+        drop(state);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn stop_marqueur_perime_retombe_sur_not_managed_sans_tuer_le_wrapper_terminal() {
+        let (state, config) = state_with_registered_agent("stop-stale-fallback");
+        state
+            .marker_store
+            .persist(
+                "agent-2",
+                &crate::managed_process::BootstrapReady {
+                    pid: std::process::id(),
+                    pgid: unsafe { libc::getpgrp() } as u32,
+                    birth: u64::MAX,
+                    instance_id: "ancienne-instance".to_string(),
+                    command_id: "ancienne-commande".to_string(),
+                    generation: 1,
+                },
+            )
+            .unwrap();
+        let marker_store = state.marker_store.clone();
+        let shared = Arc::new(Mutex::new(state));
+
+        assert!(matches!(
+            handle_wrapper_message(
+                "control",
+                WrapperToDaemon::StopOrder {
+                    name: "agent-2".to_string(),
+                    command_id: "stop-stale-fallback".to_string(),
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::StopResult {
+                outcome: StopOutcome::NotManaged,
+                ..
+            })
+        ));
+        assert!(marker_store.load("agent-2").is_err());
+        assert!(shared.lock().unwrap().router.get_agent("agent-2").is_some());
+        let marker_directory = config.db_path.parent().unwrap().join("managed");
+        let _ = std::fs::remove_file(config.db_path);
+        let _ = std::fs::remove_dir_all(marker_directory);
+    }
+
     #[test]
     fn startup_failed_commande_absente_repond_le_motif_du_canal_sans_residu() {
         let (mut state, config) = state_with_registered_agent("managed-startup-failed");
@@ -5966,6 +6461,7 @@ mod presence_tests {
                 lease: lease.clone(),
                 requester_conns: vec!["requester".to_string()],
                 wrapper_conn: None,
+                stop: Arc::new(ManagedStopControl::new()),
             },
         );
         let shared = Arc::new(Mutex::new(state));
@@ -6028,6 +6524,7 @@ mod presence_tests {
                 lease: lease.clone(),
                 requester_conns: Vec::new(),
                 wrapper_conn: Some("conn-1".to_string()),
+                stop: Arc::new(ManagedStopControl::new()),
             },
         );
         let executable = std::env::current_exe()
@@ -6079,6 +6576,7 @@ mod presence_tests {
                 registered: Some(("conn-1".to_string(), "agent-2".to_string())),
                 connected: true,
                 failure_sent: false,
+                stop: Arc::new(ManagedStopControl::new()),
             },
         )]);
         let (observed_tx, observed_rx) = mpsc::channel();

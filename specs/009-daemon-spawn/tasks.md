@@ -95,7 +95,7 @@ push ; tests de crash RÉELS (processus tués), jamais simulés.
 
 ## Phase 2 — Arrêt et réconciliation *(gate daemon)*
 
-- [ ] **T907** `stop` de groupe : résolution primaire par table superviseur
+- [x] **T907** `stop` de groupe : résolution primaire par table superviseur
   nom→génération (`Reserved`/`Starting` couverts), invalidation de génération
   d'abord, handshake d'arrêt wrapper (chemin 007) → attente bornée → escalade
   `killpg` → polling `kill(-pgid,0)` → `StopOutcome` ; refus `NotManaged`
