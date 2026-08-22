@@ -629,7 +629,14 @@ fn run_with_input(
             }
         };
         connected_once = true;
-        if !drive_interactive(connection, &mut state, agent, socket_path, raw_terminal)? {
+        if !drive_interactive(
+            connection,
+            &mut state,
+            agent,
+            socket_path,
+            libc::STDIN_FILENO,
+            raw_terminal,
+        )? {
             return Ok(());
         }
 
@@ -686,6 +693,7 @@ fn drive_interactive(
     client_state: &mut AttachClientState,
     agent: &str,
     socket_path: &Path,
+    input_fd: RawFd,
     raw_terminal: bool,
 ) -> Result<bool, String> {
     let AttachConnection { reader, writer } = connection;
@@ -723,7 +731,7 @@ fn drive_interactive(
         }
 
         let mut pollfd = libc::pollfd {
-            fd: libc::STDIN_FILENO,
+            fd: input_fd,
             events: libc::POLLIN,
             revents: 0,
         };
@@ -740,6 +748,51 @@ fn drive_interactive(
             render_expired_sends(&shared_state, &input, &screen, agent, raw_terminal);
             continue;
         }
+        if pollfd.revents & libc::POLLIN != 0 {
+            // Un pseudo-terminal peut signaler POLLIN|POLLHUP pour ses
+            // derniers octets. Les consommer avant de conclure à EOF évite de
+            // perdre le dernier Send d'une saisie terminée par fermeture.
+            loop {
+                let mut byte = 0_u8;
+                let read = unsafe {
+                    libc::read(input_fd, (&mut byte as *mut u8).cast::<libc::c_void>(), 1)
+                };
+                if read == 0 {
+                    reconnect = false;
+                    break;
+                }
+                if read < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() != std::io::ErrorKind::Interrupted {
+                        reconnect = false;
+                    }
+                    break;
+                }
+                if !handle_input_byte(
+                    byte,
+                    &shared_state,
+                    &input,
+                    &screen,
+                    &writer,
+                    agent,
+                    raw_terminal,
+                )? {
+                    reconnect = false;
+                    break;
+                }
+                let mut more = libc::pollfd {
+                    fd: input_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                if unsafe { libc::poll(&mut more, 1, 0) } <= 0 || more.revents & libc::POLLIN == 0 {
+                    break;
+                }
+            }
+            if !reconnect {
+                break;
+            }
+        }
         if pollfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
             // Hors TTY, stdin peut être fermé par le lanceur sans que la vue
             // elle-même soit terminée : le flux socket reste alors observable.
@@ -750,42 +803,6 @@ fn drive_interactive(
             }
             render_expired_sends(&shared_state, &input, &screen, agent, raw_terminal);
             continue;
-        }
-        if pollfd.revents & libc::POLLIN == 0 {
-            continue;
-        }
-
-        let mut byte = 0_u8;
-        let read = unsafe {
-            libc::read(
-                libc::STDIN_FILENO,
-                (&mut byte as *mut u8).cast::<libc::c_void>(),
-                1,
-            )
-        };
-        if read == 0 {
-            reconnect = false;
-            break;
-        }
-        if read < 0 {
-            let error = std::io::Error::last_os_error();
-            if error.kind() == std::io::ErrorKind::Interrupted {
-                continue;
-            }
-            reconnect = false;
-            break;
-        }
-        if !handle_input_byte(
-            byte,
-            &shared_state,
-            &input,
-            &screen,
-            &writer,
-            agent,
-            raw_terminal,
-        )? {
-            reconnect = false;
-            break;
         }
         render_expired_sends(&shared_state, &input, &screen, agent, raw_terminal);
     }
@@ -1942,6 +1959,82 @@ mod tests {
         assert!(
             !handle_input_byte(0x04, &state, &input, &screen, &writer, "codex-1", false,).unwrap()
         );
+    }
+
+    #[test]
+    fn pseudo_tty_polin_hup_livre_le_dernier_send_et_restaure_le_terminal() {
+        let mut pseudo_tty = PseudoTerminal::open();
+        let before = pseudo_tty.attrs();
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let connection = AttachConnection {
+            reader: BufReader::new(client_stream.try_clone().unwrap()),
+            writer: Arc::new(Mutex::new(BufWriter::new(client_stream))),
+        };
+        let (sent_tx, sent_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let mut reader = BufReader::new(server_stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(server_stream);
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::JournalFragment {
+                    subscription_id: "sub-pty".to_string(),
+                    seq: 7,
+                    offset: 0,
+                    final_fragment: true,
+                    bytes: br#"{"v":1,"seq":7,"event":"update"}"#.to_vec(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let message = decode::<WrapperToDaemon>(line.trim_end()).unwrap();
+            sent_tx.send(()).unwrap();
+            message
+        });
+
+        let master = pseudo_tty.master;
+        pseudo_tty.master = -1;
+        let input_writer = thread::spawn(move || {
+            assert_eq!(
+                unsafe { libc::write(master, b"dernier envoi\n".as_ptr().cast(), 14) },
+                14
+            );
+            sent_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(unsafe { libc::close(master) }, 0);
+        });
+        let mut state = AttachClientState::new(AttachWindow::Today);
+        state.subscription_requested();
+        state
+            .dispatch(DaemonToWrapper::Subscribed {
+                subscription_id: "sub-pty".to_string(),
+            })
+            .unwrap();
+
+        let result = with_raw_terminal(pseudo_tty.slave, |raw_terminal| {
+            drive_interactive(
+                connection,
+                &mut state,
+                "codex-1",
+                Path::new("/tmp/bridget-attach-pty-unused.sock"),
+                pseudo_tty.slave,
+                raw_terminal,
+            )
+        });
+        assert!(result.is_ok());
+        input_writer.join().unwrap();
+        assert_terminal_restored(&before, &pseudo_tty.attrs());
+        assert_eq!(state.last_seq, Some(7), "l'événement est traité avant EOF");
+        assert!(matches!(
+            server.join().unwrap(),
+            WrapperToDaemon::Send(message)
+                if message.body == "dernier envoi"
+                    && message.to == "codex-1"
+                    && !message.reply
+        ));
     }
 
     #[test]
