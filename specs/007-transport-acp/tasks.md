@@ -99,7 +99,7 @@ valide chaque tâche avant coche. Ne jamais committer automatiquement.
   et échec motivé chez l'émetteur, mort du processus avec N messages en file →
   N échecs motivés.
 
-- [ ] **T706** [US1] **Journal de session JSONL — schéma versionné v1** :
+- [X] **T706** [US1] **Journal de session JSONL — schéma versionné v1** :
   `~/.cache/bridget/sessions/<agent>/<date>.jsonl`, **schéma v1 complet de
   `data-model.md`** (enrichi sur exigence de la contre-revue 008 : `v`, `seq`
   strictement croissant traversant la rotation, `session_id`, `payload` typé
