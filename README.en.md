@@ -248,8 +248,14 @@ already supplied.
 | `bridget discover` | alias for `who` |
 | `bridget status` | daemon health, paths, agent and message counts |
 | `bridget ledger` | last twenty recorded messages |
+| `bridget attach <teammate> [--today \| --date YYYY-MM-DD \| --from-seq N]` | opens an interactive view of an ACP teammate: history, live follow-up, and ordinary-message input |
 | `bridget version` | binary version |
 | `bridget help` | inline help, summary of every command |
+
+An `attach` view is not added to the directory and cannot impersonate a
+teammate. It first replays the selected window, then follows the live journal.
+Control sequences in responses are displayed visibly and input is preserved
+while an event arrives.
 
 ### Describing yourself
 

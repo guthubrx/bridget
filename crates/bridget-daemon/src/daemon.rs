@@ -385,6 +385,7 @@ struct AttachSubscription {
     agent: String,
     attach_conn: String,
     wrapper_conn: String,
+    caught_up: bool,
 }
 
 struct PendingAttachSend {
@@ -3573,6 +3574,7 @@ fn handle_wrapper_message(
                         agent: agent.clone(),
                         attach_conn: conn_id.to_string(),
                         wrapper_conn,
+                        caught_up: false,
                     },
                 );
                 st.attach_views.insert(subscription_id.clone(), view);
@@ -3795,16 +3797,53 @@ fn handle_wrapper_message(
             }
             None
         }
+        WrapperToDaemon::LiveJournalFragment {
+            seq,
+            offset,
+            final_fragment,
+            bytes,
+        } => {
+            let views = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                st.attach_subscriptions
+                    .iter()
+                    .filter(|(_, subscription)| {
+                        subscription.wrapper_conn == conn_id && subscription.caught_up
+                    })
+                    .filter_map(|(subscription_id, _)| {
+                        st.attach_views
+                            .get(subscription_id)
+                            .cloned()
+                            .map(|view| (subscription_id.clone(), view))
+                    })
+                    .collect::<Vec<_>>()
+            };
+            for (subscription_id, view) in views {
+                let _ = view.enqueue(DaemonToWrapper::JournalFragment {
+                    subscription_id,
+                    seq,
+                    offset,
+                    final_fragment,
+                    bytes: bytes.clone(),
+                });
+            }
+            None
+        }
         WrapperToDaemon::SnapshotCaughtUp {
             subscription_id,
             through_seq,
         } => {
             let view = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
-                st.attach_subscriptions
-                    .get(&subscription_id)
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let accepted = st
+                    .attach_subscriptions
+                    .get_mut(&subscription_id)
                     .filter(|subscription| subscription.wrapper_conn == conn_id)
-                    .and_then(|_| st.attach_views.get(&subscription_id).cloned())
+                    .map(|subscription| subscription.caught_up = true)
+                    .is_some();
+                accepted
+                    .then(|| st.attach_views.get(&subscription_id).cloned())
+                    .flatten()
             };
             if let Some(view) = view {
                 let _ = view.enqueue(DaemonToWrapper::SnapshotCaughtUp {
@@ -3821,11 +3860,20 @@ fn handle_wrapper_message(
             reason,
         } => {
             let view = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
-                st.attach_subscriptions
-                    .get(&subscription_id)
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let accepted = st
+                    .attach_subscriptions
+                    .get_mut(&subscription_id)
                     .filter(|subscription| subscription.wrapper_conn == conn_id)
-                    .and_then(|_| st.attach_views.get(&subscription_id).cloned())
+                    .map(|subscription| {
+                        if reason.as_deref() == Some("live_feed_overrun") {
+                            subscription.caught_up = false;
+                        }
+                    })
+                    .is_some();
+                accepted
+                    .then(|| st.attach_views.get(&subscription_id).cloned())
+                    .flatten()
             };
             if let Some(view) = view {
                 let _ = view.enqueue(DaemonToWrapper::Gap {
@@ -4296,6 +4344,70 @@ fn handle_wrapper_message(
                 }),
             }
         }
+
+        WrapperToDaemon::LedgerProjection { scope, limit } => {
+            const MAX_LEDGER_PROJECTION: usize = 100;
+            let limit = usize::from(limit).clamp(1, MAX_LEDGER_PROJECTION);
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let wants_messages = matches!(scope, bridget_transport::protocol::LedgerScope::Messages | bridget_transport::protocol::LedgerScope::Both);
+            let wants_requests = matches!(scope, bridget_transport::protocol::LedgerScope::Requests | bridget_transport::protocol::LedgerScope::Both);
+
+            let messages = if wants_messages {
+                match st.store.recent_messages(limit) {
+                    Ok(entries) => entries
+                        .into_iter()
+                        .map(|entry| bridget_transport::protocol::LedgerMessage {
+                            id: entry.id,
+                            ts: entry.ts,
+                            sender: entry.sender,
+                            target: entry.target,
+                            body: entry.body,
+                        })
+                        .collect(),
+                    Err(error) => return Some(DaemonToWrapper::Nack {
+                        id: "ledger".to_string(),
+                        reason: error.to_string(),
+                    }),
+                }
+            } else {
+                Vec::new()
+            };
+
+            let requests = if wants_requests {
+                match st.store.recent_requests(limit) {
+                    Ok(entries) => match entries
+                        .into_iter()
+                        .map(|request| -> Result<_, crate::store::StoreError> {
+                            let deferred = st.store.latest_deferred_reminder(&request.id)?;
+                            Ok(bridget_transport::protocol::RequestInfo {
+                                id: request.id,
+                                target: request.target,
+                                state: request.state,
+                                deadline_at: request.deadline_at,
+                                cancel_reason: request.cancel_reason,
+                                deferred_reminder_level: deferred.map(|event| event.0),
+                                deferred_reminder_at: deferred.map(|event| event.1),
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                    {
+                        Ok(requests) => requests,
+                        Err(error) => return Some(DaemonToWrapper::Nack {
+                            id: "ledger".to_string(),
+                            reason: error.to_string(),
+                        }),
+                    },
+                    Err(error) => return Some(DaemonToWrapper::Nack {
+                        id: "ledger".to_string(),
+                        reason: error.to_string(),
+                    }),
+                }
+            } else {
+                Vec::new()
+            };
+
+            Some(DaemonToWrapper::LedgerProjection { messages, requests })
+        }
     }
 }
 
@@ -4478,6 +4590,7 @@ mod presence_tests {
                 agent: "agent-2".to_string(),
                 attach_conn: attach_conn.to_string(),
                 wrapper_conn: "conn-1".to_string(),
+                caught_up: false,
             },
         );
         state.attach_views.insert(subscription_id.to_string(), view);
@@ -6199,7 +6312,8 @@ mod presence_tests {
             AttachSubscription {
                 agent: "agent-2".to_string(),
                 attach_conn: "attach-1".to_string(),
-            wrapper_conn: "conn-1".to_string(),
+                wrapper_conn: "conn-1".to_string(),
+                caught_up: false,
             },
         );
         state
@@ -6922,6 +7036,36 @@ mod presence_tests {
         state.router.unregister_by_conn("conn-2");
         state.mark_stopped("conn-2");
         assert_eq!(state.agent_infos()[0].state, "stopped");
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    #[test]
+    fn projection_ledger_est_bornee_et_lit_le_store_du_daemon() {
+        let (state, config) = state_with_registered_agent("ledger-projection");
+        let mut first = bridget_core::BridgetMessage::new("alice", "bob", "bonjour");
+        first.id = "m-1".to_string();
+        let mut second = bridget_core::BridgetMessage::new("alice", "bob", "salut");
+        second.id = "m-2".to_string();
+        state.store.record_message(&first, "alice:bob").unwrap();
+        state.store.record_message(&second, "alice:bob").unwrap();
+        let shared = Arc::new(Mutex::new(state));
+
+        let response = handle_wrapper_message(
+            "conn-cli",
+            WrapperToDaemon::LedgerProjection {
+                scope: bridget_transport::protocol::LedgerScope::Messages,
+                limit: u16::MAX,
+            },
+            &shared,
+        );
+
+        assert!(matches!(
+            response,
+            Some(DaemonToWrapper::LedgerProjection { messages, requests })
+                if messages.len() == 2
+                    && messages.iter().any(|message| message.id == "m-1")
+                    && requests.is_empty()
+        ));
         let _ = std::fs::remove_file(&config.db_path);
     }
 

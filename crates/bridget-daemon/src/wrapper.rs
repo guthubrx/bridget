@@ -2,9 +2,11 @@
 //!
 //! Appelé par le CLI quand l'utilisateur tape : bridget codex, bridget claude, etc.
 
+#[cfg(test)]
+use bridget_transport::journal::JournalWriter;
 use bridget_transport::journal::{
-    IncrementalJournalReader, JournalReadItem, JournalSourceIdentity, JournalWindowError,
-    current_host_date, resolve_window,
+    IncrementalJournalReader, JournalLiveFeed, JournalReadItem, JournalSourceIdentity,
+    JournalWindowError, current_host_date, resolve_window,
 };
 use bridget_transport::protocol::{decode, encode};
 use bridget_transport::{
@@ -965,6 +967,7 @@ struct RelaySubscription {
     reader_source: Option<JournalSourceIdentity>,
     caught_up: bool,
     through_seq: Option<u64>,
+    live_floor: Option<u64>,
     pending_events: VecDeque<(u64, Vec<u8>)>,
     pending_fragment: Option<(u64, Vec<u8>, usize)>,
 }
@@ -975,12 +978,19 @@ impl RelaySubscription {
         window: AttachWindow,
         directory: &std::path::Path,
         host_today: &str,
+        live_floor: Option<u64>,
     ) -> Result<Self, JournalWindowError> {
         let resolved = resolve_window(directory, &window, host_today)?;
         let follow_after = resolve_window(directory, &AttachWindow::Seq(0), host_today)?
             .files
             .last()
             .cloned();
+        let live_floor = match (live_floor, resolved.from_seq) {
+            (Some(floor), Some(from_seq)) => Some(floor.max(from_seq.saturating_sub(1))),
+            (Some(floor), None) => Some(floor),
+            (None, Some(from_seq)) => Some(from_seq.saturating_sub(1)),
+            (None, None) => None,
+        };
         Ok(Self {
             subscription_id,
             window,
@@ -992,6 +1002,7 @@ impl RelaySubscription {
             reader_source: None,
             caught_up: false,
             through_seq: None,
+            live_floor,
             pending_events: VecDeque::new(),
             pending_fragment: None,
         })
@@ -1038,6 +1049,40 @@ impl RelaySubscription {
     fn has_pending_output(&self) -> bool {
         self.pending_fragment.is_some() || !self.pending_events.is_empty()
     }
+
+    fn restart_from_seq(
+        &mut self,
+        directory: &std::path::Path,
+        host_today: &str,
+        from_seq: u64,
+    ) -> Result<(), JournalWindowError> {
+        let resolved = resolve_window(directory, &AttachWindow::Seq(from_seq), host_today)?;
+        self.window = AttachWindow::Seq(from_seq);
+        self.from_seq = Some(from_seq);
+        self.files = resolved.files;
+        self.follow_after = self.files.last().cloned();
+        self.file_index = 0;
+        self.reader = None;
+        self.reader_source = None;
+        self.caught_up = false;
+        self.pending_events.clear();
+        self.pending_fragment = None;
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct LiveFanout {
+    cursor: Option<u64>,
+    pending_events: VecDeque<(u64, Vec<u8>)>,
+    pending_fragment: Option<(u64, Vec<u8>, usize)>,
+}
+
+impl LiveFanout {
+    fn reset_pending(&mut self) {
+        self.pending_events.clear();
+        self.pending_fragment = None;
+    }
 }
 
 #[derive(Clone)]
@@ -1077,11 +1122,12 @@ type RelayEmitter = Arc<dyn Fn(WrapperToDaemon) + Send + Sync>;
 type RelayEvents = Arc<Mutex<Vec<WrapperToDaemon>>>;
 
 impl AttachRelayWorker {
-    fn start(directory: PathBuf, emit: RelayEmitter) -> Self {
+    fn start(directory: PathBuf, live_feed: JournalLiveFeed, emit: RelayEmitter) -> Self {
         Self::start_with_clock(
             directory,
             Arc::new(current_host_date),
             ATTACH_RELAY_COMMAND_CAPACITY,
+            Some(live_feed),
             emit,
             AttachRelayHooks::default(),
         )
@@ -1096,13 +1142,27 @@ impl AttachRelayWorker {
         hooks: AttachRelayHooks,
     ) -> Self {
         let clock: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || host_today.clone());
-        Self::start_with_clock(directory, clock, capacity, emit, hooks)
+        Self::start_with_clock(directory, clock, capacity, None, emit, hooks)
+    }
+
+    #[cfg(test)]
+    fn start_with_live(
+        directory: PathBuf,
+        host_today: String,
+        capacity: usize,
+        live_feed: JournalLiveFeed,
+        emit: RelayEmitter,
+        hooks: AttachRelayHooks,
+    ) -> Self {
+        let clock: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || host_today.clone());
+        Self::start_with_clock(directory, clock, capacity, Some(live_feed), emit, hooks)
     }
 
     fn start_with_clock(
         directory: PathBuf,
         host_today: Arc<dyn Fn() -> String + Send + Sync>,
         capacity: usize,
+        live_feed: Option<JournalLiveFeed>,
         emit: RelayEmitter,
         hooks: AttachRelayHooks,
     ) -> Self {
@@ -1121,11 +1181,15 @@ impl AttachRelayWorker {
         let worker_emit = emit.clone();
         let worker = thread::spawn(move || {
             let mut subscriptions = BTreeMap::<String, RelaySubscription>::new();
+            let mut live_fanout = LiveFanout::default();
+            let mut had_live_subscriptions = false;
             let mut seen_generation = 0;
             while !worker_stopped.load(Ordering::SeqCst) {
                 let current_generation = worker_generation.load(Ordering::SeqCst);
                 if current_generation != seen_generation {
                     subscriptions.clear();
+                    live_fanout = LiveFanout::default();
+                    had_live_subscriptions = false;
                     worker_control
                         .lock()
                         .unwrap_or_else(|poison| poison.into_inner())
@@ -1175,6 +1239,7 @@ impl AttachRelayWorker {
                         window,
                         &directory,
                         &host_today(),
+                        live_feed.as_ref().and_then(JournalLiveFeed::latest_seq),
                     ) {
                         Ok(subscription) => {
                             worker_emit(WrapperToDaemon::Subscribed {
@@ -1218,6 +1283,9 @@ impl AttachRelayWorker {
                         continue;
                     };
                     if emit_one_fragment(&worker_emit, subscription) {
+                        continue;
+                    }
+                    if subscription.caught_up && live_feed.is_some() {
                         continue;
                     }
                     subscription.refresh_files(&directory, &host_today());
@@ -1344,6 +1412,66 @@ impl AttachRelayWorker {
                             through_seq: subscription.through_seq,
                         });
                         subscription.caught_up = true;
+                    }
+                }
+                if let Some(feed) = &live_feed {
+                    let live_ids = subscriptions
+                        .iter()
+                        .filter(|(_, subscription)| subscription.caught_up)
+                        .map(|(id, _)| id.clone())
+                        .collect::<Vec<_>>();
+                    if live_ids.is_empty() {
+                        had_live_subscriptions = false;
+                        live_fanout.reset_pending();
+                    } else {
+                        if !had_live_subscriptions {
+                            live_fanout.cursor = live_ids
+                                .iter()
+                                .filter_map(|id| subscriptions.get(id))
+                                .filter_map(|subscription| {
+                                    match (subscription.through_seq, subscription.live_floor) {
+                                        (Some(through), Some(floor)) => Some(through.max(floor)),
+                                        (through, floor) => through.or(floor),
+                                    }
+                                })
+                                .max();
+                            live_fanout.reset_pending();
+                            had_live_subscriptions = true;
+                        }
+                        if live_fanout.pending_fragment.is_none()
+                            && live_fanout.pending_events.is_empty()
+                        {
+                            let batch = feed.after(live_fanout.cursor);
+                            if let Some((from_seq, to_seq)) = batch.gap {
+                                for subscription_id in live_ids {
+                                    worker_emit(WrapperToDaemon::Gap {
+                                        subscription_id: subscription_id.clone(),
+                                        from_seq,
+                                        to_seq,
+                                        reason: Some("live_feed_overrun".to_string()),
+                                    });
+                                    if let Some(subscription) =
+                                        subscriptions.get_mut(&subscription_id)
+                                    {
+                                        let _ = subscription.restart_from_seq(
+                                            &directory,
+                                            &host_today(),
+                                            from_seq,
+                                        );
+                                    }
+                                }
+                                had_live_subscriptions = false;
+                                live_fanout.reset_pending();
+                            } else {
+                                for event in batch.events {
+                                    live_fanout.cursor = Some(event.seq);
+                                    live_fanout
+                                        .pending_events
+                                        .push_back((event.seq, event.bytes));
+                                }
+                            }
+                        }
+                        while emit_one_live_fragment(&worker_emit, &mut live_fanout) {}
                     }
                 }
                 if subscriptions.values().all(|subscription| {
@@ -1524,6 +1652,54 @@ fn emit_one_fragment(emit: &RelayEmitter, subscription: &mut RelaySubscription) 
     true
 }
 
+fn emit_one_live_fragment(emit: &RelayEmitter, fanout: &mut LiveFanout) -> bool {
+    if fanout.pending_fragment.is_none()
+        && let Some((seq, bytes)) = fanout.pending_events.pop_front()
+    {
+        fanout.pending_fragment = Some((seq, bytes, 0));
+    }
+    let Some((seq, bytes, offset)) = fanout.pending_fragment.as_ref() else {
+        return false;
+    };
+    let seq = *seq;
+    let offset = *offset;
+    let remaining = bytes.len().saturating_sub(offset);
+    if remaining == 0 {
+        fanout.pending_fragment = None;
+        return false;
+    }
+    let mut low = 1_usize;
+    let mut high = remaining.min(MAX_ATTACH_FRAGMENT_BYTES);
+    while low < high {
+        let candidate = (low + high).div_ceil(2);
+        let frame = WrapperToDaemon::LiveJournalFragment {
+            seq,
+            offset: offset as u64,
+            final_fragment: candidate == remaining,
+            bytes: bytes[offset..offset + candidate].to_vec(),
+        };
+        if encode(&frame).is_ok_and(|json| json.len() <= MAX_ATTACH_SERIALIZED_FRAME_BYTES) {
+            low = candidate;
+        } else {
+            high = candidate.saturating_sub(1);
+        }
+    }
+    let length = low;
+    let final_fragment = length == remaining;
+    emit(WrapperToDaemon::LiveJournalFragment {
+        seq,
+        offset: offset as u64,
+        final_fragment,
+        bytes: bytes[offset..offset + length].to_vec(),
+    });
+    if final_fragment {
+        fanout.pending_fragment = None;
+    } else if let Some((_, _, next_offset)) = fanout.pending_fragment.as_mut() {
+        *next_offset = offset.saturating_add(length);
+    }
+    true
+}
+
 fn launch_acp(
     agent_type: &str,
     agent_args: &[String],
@@ -1681,11 +1857,17 @@ fn launch_acp_with_status(
         permissions: definition.permissions.clone(),
         notify_timeout_secs: definition.notify_timeout_secs,
     })?;
-    transport.enable_journal(home.join(".cache/bridget/sessions"), &my_name)?;
+    let live_feed = JournalLiveFeed::default();
+    transport.enable_journal_with_live_feed(
+        home.join(".cache/bridget/sessions"),
+        &my_name,
+        Some(live_feed.clone()),
+    )?;
     let journal_directory = home.join(".cache/bridget/sessions").join(&my_name);
     let relay_writer = writer.clone();
     let mut relay = AttachRelayWorker::start(
         journal_directory,
+        live_feed,
         Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
     );
     if let Some(reporter) = managed_reporter.as_mut() {
@@ -2151,6 +2333,171 @@ mod reconnect_tests {
     }
 
     #[test]
+    fn bascule_snapshot_vers_live_preserve_la_continuite_sans_doublon() {
+        let journal_root = relay_root("bascule-live");
+        let root = journal_root.join("agent-live");
+        std::fs::create_dir_all(&root).unwrap();
+        let date = current_host_date();
+        std::fs::write(root.join(format!("{date}.jsonl")), b"{\"v\":1,\"seq\":1}\n").unwrap();
+        let feed = JournalLiveFeed::default();
+        let journal_events = Arc::new(Mutex::new(VecDeque::new()));
+        let writer = JournalWriter::start_with_live_feed(
+            &journal_root,
+            "agent-live",
+            "session-live",
+            journal_events,
+            Some(feed.clone()),
+        )
+        .unwrap();
+        let (events, emitter) = relay_emitter();
+        let mut worker = AttachRelayWorker::start_with_live(
+            root.clone(),
+            date,
+            4,
+            feed.clone(),
+            emitter,
+            AttachRelayHooks::default(),
+        );
+        worker
+            .subscribe("sub-live".to_string(), AttachWindow::Seq(0))
+            .unwrap();
+        wait_for(|| {
+            let messages = events.lock().unwrap();
+            messages.iter().any(|message| {
+                matches!(message, WrapperToDaemon::SnapshotCaughtUp { subscription_id, through_seq: Some(1) } if subscription_id == "sub-live")
+            })
+        });
+
+        writer
+            .enqueue("update", None, serde_json::json!({"content":"live"}))
+            .unwrap();
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| {
+                matches!(
+                    message,
+                    WrapperToDaemon::LiveJournalFragment {
+                        seq: 2,
+                        final_fragment: true,
+                        ..
+                    }
+                )
+            })
+        });
+
+        let seqs = events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|message| match message {
+                WrapperToDaemon::JournalFragment {
+                    subscription_id,
+                    seq,
+                    final_fragment: true,
+                    ..
+                } if subscription_id == "sub-live" => Some(*seq),
+                WrapperToDaemon::LiveJournalFragment {
+                    seq,
+                    final_fragment: true,
+                    ..
+                } => Some(*seq),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(seqs, vec![1, 2]);
+        assert!(!events.lock().unwrap().iter().any(|message| matches!(
+            message,
+            WrapperToDaemon::Gap { subscription_id, .. } if subscription_id == "sub-live"
+        )));
+        writer.stop();
+        worker.shutdown();
+        std::fs::remove_dir_all(journal_root).unwrap();
+    }
+
+    #[test]
+    fn perte_du_flux_live_signale_un_gap_puis_rattrape_le_journal() {
+        let journal_root = relay_root("gap-live");
+        let root = journal_root.join("agent-gap");
+        std::fs::create_dir_all(&root).unwrap();
+        let date = current_host_date();
+        let path = root.join(format!("{date}.jsonl"));
+        std::fs::write(&path, b"{\"v\":1,\"seq\":1}\n").unwrap();
+        let feed = JournalLiveFeed::new(1);
+        let journal_events = Arc::new(Mutex::new(VecDeque::new()));
+        let writer = JournalWriter::start_with_live_feed(
+            &journal_root,
+            "agent-gap",
+            "session-gap",
+            journal_events,
+            Some(feed.clone()),
+        )
+        .unwrap();
+        let (events, emitter) = relay_emitter();
+        let mut worker = AttachRelayWorker::start_with_live(
+            root.clone(),
+            date,
+            4,
+            feed.clone(),
+            emitter,
+            AttachRelayHooks::default(),
+        );
+        worker
+            .subscribe("sub-gap".to_string(), AttachWindow::Seq(0))
+            .unwrap();
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| {
+                matches!(message, WrapperToDaemon::SnapshotCaughtUp { subscription_id, through_seq: Some(1) } if subscription_id == "sub-gap")
+            })
+        });
+
+        writer
+            .enqueue("update", None, serde_json::json!({"content":"deux"}))
+            .unwrap();
+        writer
+            .enqueue("update", None, serde_json::json!({"content":"trois"}))
+            .unwrap();
+        writer.stop();
+
+        wait_for(|| {
+            let messages = events.lock().unwrap();
+            messages.iter().any(|message| {
+                matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 3, final_fragment: true, .. } if subscription_id == "sub-gap")
+            })
+        });
+        let messages = events.lock().unwrap();
+        let gaps = messages
+            .iter()
+            .filter(|message| {
+                matches!(
+                    message,
+                    WrapperToDaemon::Gap {
+                        subscription_id,
+                        from_seq: 2,
+                        to_seq: 3,
+                        reason: Some(reason),
+                    } if subscription_id == "sub-gap" && reason == "live_feed_overrun"
+                )
+            })
+            .count();
+        assert_eq!(gaps, 1, "la perte mémoire doit être coalescée");
+        let seqs = messages
+            .iter()
+            .filter_map(|message| match message {
+                WrapperToDaemon::JournalFragment {
+                    subscription_id,
+                    seq,
+                    final_fragment: true,
+                    ..
+                } if subscription_id == "sub-gap" => Some(*seq),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(seqs, vec![1, 2, 3]);
+        drop(messages);
+        worker.shutdown();
+        std::fs::remove_dir_all(journal_root).unwrap();
+    }
+
+    #[test]
     fn relais_refuse_la_saturation_et_le_controle_passe_pendant_un_rejeu_suspendu() {
         let root = relay_root("controle");
         std::fs::create_dir_all(&root).unwrap();
@@ -2460,6 +2807,7 @@ mod reconnect_tests {
             root.clone(),
             clock,
             4,
+            None,
             emitter,
             AttachRelayHooks::default(),
         );

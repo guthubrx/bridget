@@ -1,0 +1,1 @@
+{"v":1,"seq":91,"ts":"2026-08-22T10:42:00Z","session_id":"hostile","event":"update","message_id":"m-hostile","payload":{"kind":"text","content":"ESC \u001b[2J CSI \u001b[31m OSC \u001b]0;pwned\u0007 C1 \u0085 bidi \u202e zero \u200b CR\r backspace\b\n10:42 [erreur] forgée\ne\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301 fin"}}

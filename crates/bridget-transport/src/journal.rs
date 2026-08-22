@@ -1,20 +1,44 @@
 //! Journal JSONL versionné des sessions ACP.
 
-use serde::Serialize;
-use serde_json::Value;
 use crate::acp::AcpEvent;
 use crate::fsutil::create_private_dir;
 use crate::protocol::AttachWindow;
-use std::fs::{self, OpenOptions};
+use serde::Serialize;
+use serde_json::Value;
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+#[cfg(any(test, feature = "test-support"))]
+use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(feature = "test-support")]
+use std::collections::HashMap;
+#[cfg(feature = "test-support")]
+use std::sync::{OnceLock, Weak};
+
+#[cfg(feature = "test-support")]
+type AppendSamples = Arc<Mutex<Vec<AppendLatencySample>>>;
+#[cfg(feature = "test-support")]
+type AppendProbeRegistry = Mutex<HashMap<PathBuf, Weak<Mutex<Vec<AppendLatencySample>>>>>;
+
+/// Observation post-flush limitée aux bancs d'intégration. `completed_at` est
+/// pris immédiatement après l'écriture complète de la ligne JSONL.
+#[cfg(feature = "test-support")]
+#[derive(Debug, Clone, Copy)]
+pub struct AppendLatencySample {
+    pub seq: u64,
+    pub completed_at: Instant,
+    pub elapsed: Duration,
+}
 
 const WRITER_QUEUE_CAPACITY: usize = 256;
 const MAX_INCREMENTAL_LINE_BYTES: usize = 4 * 1024 * 1024;
+const LIVE_FEED_CAPACITY_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
 pub struct JournalEntry {
@@ -47,6 +71,101 @@ enum WriterCommand {
     Stop(mpsc::Sender<()>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalLiveEvent {
+    pub seq: u64,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalLiveBatch {
+    pub gap: Option<(u64, u64)>,
+    pub events: Vec<JournalLiveEvent>,
+}
+
+/// Tampon borné des entrées confirmées après leur flush. Le journal reste la
+/// source du rejeu ; ce flux évite seulement de relire son fichier en régime
+/// live. Une perte par saturation reste observable comme une plage `gap`.
+#[derive(Clone)]
+pub struct JournalLiveFeed {
+    sender: mpsc::SyncSender<JournalLiveEvent>,
+    receiver: Arc<Mutex<mpsc::Receiver<JournalLiveEvent>>>,
+    queued_bytes: Arc<AtomicUsize>,
+    dropped_through: Arc<AtomicU64>,
+    latest_seq: Arc<AtomicU64>,
+    capacity_bytes: usize,
+}
+
+impl Default for JournalLiveFeed {
+    fn default() -> Self {
+        Self::new(LIVE_FEED_CAPACITY_BYTES)
+    }
+}
+
+impl JournalLiveFeed {
+    pub fn new(capacity_bytes: usize) -> Self {
+        assert!(
+            capacity_bytes > 0,
+            "le relais live doit avoir une capacité non nulle"
+        );
+        let (sender, receiver) = mpsc::sync_channel(WRITER_QUEUE_CAPACITY);
+        Self {
+            sender,
+            receiver: Arc::new(Mutex::new(receiver)),
+            queued_bytes: Arc::new(AtomicUsize::new(0)),
+            dropped_through: Arc::new(AtomicU64::new(0)),
+            latest_seq: Arc::new(AtomicU64::new(0)),
+            capacity_bytes,
+        }
+    }
+
+    fn publish(&self, event: JournalLiveEvent) {
+        self.latest_seq.fetch_max(event.seq, Ordering::SeqCst);
+        let length = event.bytes.len();
+        let reserved = self
+            .queued_bytes
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |queued| {
+                queued
+                    .checked_add(length)
+                    .filter(|total| *total <= self.capacity_bytes)
+            })
+            .is_ok();
+        if !reserved {
+            self.dropped_through.fetch_max(event.seq, Ordering::SeqCst);
+            return;
+        }
+        if self.sender.try_send(event).is_err() {
+            self.queued_bytes.fetch_sub(length, Ordering::SeqCst);
+            self.dropped_through
+                .fetch_max(self.latest_seq.load(Ordering::SeqCst), Ordering::SeqCst);
+        }
+    }
+
+    pub fn latest_seq(&self) -> Option<u64> {
+        let latest = self.latest_seq.load(Ordering::SeqCst);
+        (latest > 0).then_some(latest)
+    }
+
+    pub fn after(&self, cursor: Option<u64>) -> JournalLiveBatch {
+        let receiver = self
+            .receiver
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let expected = cursor.map_or(1, |seq| seq.saturating_add(1));
+        let dropped = self.dropped_through.load(Ordering::SeqCst);
+        let gap = (dropped >= expected).then_some((expected, dropped));
+        let mut events = Vec::new();
+        while let Ok(event) = receiver.try_recv() {
+            self.queued_bytes
+                .fetch_sub(event.bytes.len(), Ordering::SeqCst);
+            if cursor.is_none_or(|seq| event.seq > seq) {
+                events.push(event);
+            }
+        }
+        JournalLiveBatch { gap, events }
+    }
+}
+
 /// Propriétaire unique des E/S du journal. Les threads ACP n'y déposent que
 /// des événements, afin qu'un disque lent ne bloque jamais stdout ou un tour.
 #[derive(Clone)]
@@ -54,6 +173,81 @@ pub struct JournalWriter {
     sender: mpsc::SyncSender<WriterCommand>,
     failure: Arc<Mutex<Option<String>>>,
     handle: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
+    #[cfg(test)]
+    append_latencies: Arc<Mutex<Vec<Duration>>>,
+}
+
+#[cfg(feature = "test-support")]
+fn append_probes() -> &'static AppendProbeRegistry {
+    static PROBES: OnceLock<AppendProbeRegistry> = OnceLock::new();
+    PROBES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Sonde de test ciblée par racine de journal. Elle n'existe pas dans les
+/// builds de production et n'intercepte donc aucun autre journal concurrent.
+#[cfg(feature = "test-support")]
+pub struct AppendLatencyProbe {
+    root: PathBuf,
+    samples: AppendSamples,
+}
+
+#[cfg(feature = "test-support")]
+impl AppendLatencyProbe {
+    pub fn install(root: impl AsRef<Path>) -> Self {
+        let root = root.as_ref().to_path_buf();
+        let samples = Arc::new(Mutex::new(Vec::new()));
+        append_probes()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(root.clone(), Arc::downgrade(&samples));
+        Self { root, samples }
+    }
+
+    pub fn sample_count(&self) -> usize {
+        self.samples
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .len()
+    }
+
+    pub fn take(&self) -> Vec<Duration> {
+        std::mem::take(
+            &mut *self
+                .samples
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()),
+        )
+        .into_iter()
+        .map(|sample| sample.elapsed)
+        .collect()
+    }
+
+    /// Prélève les observations complètes, dont la borne temporelle après le
+    /// flush, pour corréler append et rendu dans les bancs attach.
+    pub fn take_samples(&self) -> Vec<AppendLatencySample> {
+        std::mem::take(
+            &mut *self
+                .samples
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()),
+        )
+    }
+}
+
+#[cfg(feature = "test-support")]
+impl Drop for AppendLatencyProbe {
+    fn drop(&mut self) {
+        let mut probes = append_probes()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if probes
+            .get(&self.root)
+            .and_then(Weak::upgrade)
+            .is_some_and(|samples| Arc::ptr_eq(&samples, &self.samples))
+        {
+            probes.remove(&self.root);
+        }
+    }
 }
 
 impl JournalWriter {
@@ -63,22 +257,79 @@ impl JournalWriter {
         session_id: &str,
         events: Arc<Mutex<std::collections::VecDeque<AcpEvent>>>,
     ) -> std::io::Result<Self> {
+        Self::start_with_live_feed(root, agent, session_id, events, None)
+    }
+
+    pub fn start_with_live_feed(
+        root: impl AsRef<Path>,
+        agent: &str,
+        session_id: &str,
+        events: Arc<Mutex<std::collections::VecDeque<AcpEvent>>>,
+        live_feed: Option<JournalLiveFeed>,
+    ) -> std::io::Result<Self> {
+        let root = root.as_ref();
         let mut journal = SessionJournal::new(root, agent, session_id)?;
         let (sender, receiver) = mpsc::sync_channel(WRITER_QUEUE_CAPACITY);
         let failure = Arc::new(Mutex::new(None));
         let thread_failure = failure.clone();
+        #[cfg(test)]
+        let append_latencies = Arc::new(Mutex::new(Vec::new()));
+        #[cfg(test)]
+        let thread_append_latencies = append_latencies.clone();
+        #[cfg(feature = "test-support")]
+        let thread_probe = append_probes()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(root)
+            .and_then(Weak::upgrade);
         let handle = thread::spawn(move || {
             while let Ok(command) = receiver.recv() {
                 match command {
                     WriterCommand::Entry(entry) => {
-                        if let Err(error) = journal.append_entry(entry) {
-                            let detail = format!("écriture du journal ACP impossible: {error}");
-                            *thread_failure.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(detail.clone());
-                            events
+                        #[cfg(any(test, feature = "test-support"))]
+                        let started = Instant::now();
+                        #[cfg(feature = "test-support")]
+                        let is_turn_boundary =
+                            matches!(entry.event.as_str(), "turn_start" | "turn_end");
+                        let live_event = match journal.append_entry(entry) {
+                            Ok(event) => event,
+                            Err(error) => {
+                                let detail = format!("écriture du journal ACP impossible: {error}");
+                                *thread_failure
+                                    .lock()
+                                    .unwrap_or_else(|poison| poison.into_inner()) =
+                                    Some(detail.clone());
+                                events
+                                    .lock()
+                                    .unwrap_or_else(|poison| poison.into_inner())
+                                    .push_back(AcpEvent::JournalFailed { detail });
+                                break;
+                            }
+                        };
+                        #[cfg(any(test, feature = "test-support"))]
+                        let append_elapsed = started.elapsed();
+                        #[cfg(feature = "test-support")]
+                        let completed_at = Instant::now();
+                        #[cfg(feature = "test-support")]
+                        let sequence = live_event.seq;
+                        if let Some(feed) = &live_feed {
+                            feed.publish(live_event);
+                        }
+                        #[cfg(test)]
+                        thread_append_latencies
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .push(append_elapsed);
+                        #[cfg(feature = "test-support")]
+                        if is_turn_boundary && let Some(samples) = &thread_probe {
+                            samples
                                 .lock()
                                 .unwrap_or_else(|poison| poison.into_inner())
-                                .push_back(AcpEvent::JournalFailed { detail });
-                            break;
+                                .push(AppendLatencySample {
+                                    seq: sequence,
+                                    completed_at,
+                                    elapsed: append_elapsed,
+                                });
                         }
                     }
                     WriterCommand::Stop(done) => {
@@ -92,6 +343,8 @@ impl JournalWriter {
             sender,
             failure,
             handle: Arc::new(Mutex::new(Some(handle))),
+            #[cfg(test)]
+            append_latencies,
         })
     }
 
@@ -128,7 +381,18 @@ impl JournalWriter {
             sender,
             failure: Arc::new(Mutex::new(None)),
             handle: Arc::new(Mutex::new(None)),
+            append_latencies: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_append_latencies(&self) -> Vec<Duration> {
+        std::mem::take(
+            &mut *self
+                .append_latencies
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()),
+        )
     }
 }
 
@@ -136,6 +400,7 @@ pub struct SessionJournal {
     directory: PathBuf,
     session_id: String,
     next_seq: u64,
+    open_file: Option<(String, File)>,
 }
 
 impl SessionJournal {
@@ -148,45 +413,82 @@ impl SessionJournal {
             next_seq: last_sequence(&directory).saturating_add(1),
             directory,
             session_id: session_id.to_string(),
+            open_file: None,
         })
     }
 
-    pub fn append(&mut self, event: &str, message_id: Option<&str>, payload: Value) -> std::io::Result<u64> {
+    pub fn append(
+        &mut self,
+        event: &str,
+        message_id: Option<&str>,
+        payload: Value,
+    ) -> std::io::Result<u64> {
         let (date, timestamp) = now_date_and_timestamp();
         self.append_at(&date, &timestamp, event, message_id, payload)
     }
 
-    pub fn append_at(&mut self, date: &str, timestamp: &str, event: &str, message_id: Option<&str>, payload: Value) -> std::io::Result<u64> {
+    pub fn append_at(
+        &mut self,
+        date: &str,
+        timestamp: &str,
+        event: &str,
+        message_id: Option<&str>,
+        payload: Value,
+    ) -> std::io::Result<u64> {
         let sequence = self.next_seq;
-        let entry = JournalEntry::new(sequence, timestamp, &self.session_id, event, message_id, payload);
+        let entry = JournalEntry::new(
+            sequence,
+            timestamp,
+            &self.session_id,
+            event,
+            message_id,
+            payload,
+        );
         self.append_entry_at(date, entry)?;
         self.next_seq = sequence.saturating_add(1);
         Ok(sequence)
     }
 
-    fn append_entry(&mut self, mut entry: JournalEntry) -> std::io::Result<()> {
+    fn append_entry(&mut self, mut entry: JournalEntry) -> std::io::Result<JournalLiveEvent> {
         let (date, timestamp) = now_date_and_timestamp();
         entry.seq = self.next_seq;
         entry.ts = timestamp;
         entry.session_id.clone_from(&self.session_id);
-        self.append_entry_at(&date, entry)?;
+        let seq = entry.seq;
+        let bytes = self.append_entry_at(&date, entry)?;
         self.next_seq = self.next_seq.saturating_add(1);
-        Ok(())
+        Ok(JournalLiveEvent { seq, bytes })
     }
 
-    fn append_entry_at(&mut self, date: &str, entry: JournalEntry) -> std::io::Result<()> {
-        let path = self.directory.join(format!("{date}.jsonl"));
-        isolate_partial_tail(&path)?;
-        let mut file = OpenOptions::new().create(true).append(true).mode(0o600).open(&path)?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-        writeln!(file, "{}", serde_json::to_string(&entry)?)?;
+    fn append_entry_at(&mut self, date: &str, entry: JournalEntry) -> std::io::Result<Vec<u8>> {
+        let bytes = serde_json::to_vec(&entry)?;
+        if self
+            .open_file
+            .as_ref()
+            .is_none_or(|(open_date, _)| open_date != date)
+        {
+            let path = self.directory.join(format!("{date}.jsonl"));
+            isolate_partial_tail(&path)?;
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .mode(0o600)
+                .open(&path)?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+            self.open_file = Some((date.to_string(), file));
+        }
+        let file = &mut self.open_file.as_mut().expect("fichier journal ouvert").1;
+        file.write_all(&bytes)?;
+        file.write_all(b"\n")?;
         file.flush()?;
-        Ok(())
+        Ok(bytes)
     }
 }
 
 pub fn valid_events(path: &Path) -> Vec<Value> {
-    fs::read_to_string(path).ok().into_iter()
+    fs::read_to_string(path)
+        .ok()
+        .into_iter()
         .flat_map(|content| content.lines().map(str::to_owned).collect::<Vec<_>>())
         .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
         .filter(|value| value.get("v").and_then(Value::as_u64) == Some(1))

@@ -1,23 +1,116 @@
-//! Client de vue attach : connexion persistante et état de reprise en mémoire.
+//! Client de vue attach : connexion persistante, reprise et rendu sûr du journal.
 
+use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     AttachRefusal, AttachWindow, ConnectionRole, DaemonToWrapper,
     MAX_ATTACH_SERIALIZED_FRAME_BYTES, WrapperToDaemon, decode, encode,
 };
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::mem::MaybeUninit;
+use std::net::Shutdown;
+use std::os::fd::RawFd;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MAX_REASSEMBLY_BYTES: usize = 4 * 1024 * 1024;
+const MAX_RENDERED_EVENT_CHARS: usize = 16 * 1024;
+const MAX_RENDERED_LABEL_CHARS: usize = 160;
+const MAX_CONSECUTIVE_COMBINING_MARKS: usize = 8;
 const RECONNECT_DELAY: Duration = Duration::from_millis(250);
 const RETIRED_SUBSCRIPTIONS_LIMIT: usize = 64;
+const SEND_ISSUE_TIMEOUT: Duration = Duration::from_secs(60);
+const INPUT_POLL_TIMEOUT_MILLIS: i32 = 100;
 
-/// Événements neutres produits par la couche de transport. Le rendu sécurisé
-/// est volontairement laissé à T805b.
+/// Garde minimale du terminal d'entrée. Le mode désactive le traitement des
+/// signaux afin que Ctrl-C arrive comme l'octet `0x03` à la boucle de saisie.
+/// Ainsi la boucle peut restaurer le terminal avant de quitter.
+#[allow(dead_code)] // La boucle de saisie T806b en devient le propriétaire.
+struct RawTerminal {
+    fd: RawFd,
+    original: libc::termios,
+    restored: bool,
+}
+
+#[allow(dead_code)] // API utilisée par la boucle T806b et les pseudo-TTY de T806a.
+impl RawTerminal {
+    fn enable_for_fd(fd: RawFd) -> Result<Option<Self>, String> {
+        let is_tty = unsafe { libc::isatty(fd) };
+        if is_tty == 0 {
+            return Ok(None);
+        }
+        if is_tty < 0 {
+            return Err(format!(
+                "détection du terminal impossible: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let mut original = MaybeUninit::<libc::termios>::uninit();
+        if unsafe { libc::tcgetattr(fd, original.as_mut_ptr()) } != 0 {
+            return Err(format!(
+                "lecture termios impossible: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let original = unsafe { original.assume_init() };
+        let mut raw = original;
+        let disabled = (libc::ICANON | libc::ECHO | libc::ISIG) as libc::tcflag_t;
+        raw.c_lflag &= !disabled;
+        raw.c_cc[libc::VMIN] = 1;
+        raw.c_cc[libc::VTIME] = 0;
+        if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
+            return Err(format!(
+                "activation du mode raw impossible: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(Some(Self {
+            fd,
+            original,
+            restored: false,
+        }))
+    }
+
+    fn restore(&mut self) -> Result<(), String> {
+        if self.restored {
+            return Ok(());
+        }
+        if unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &self.original) } != 0 {
+            return Err(format!(
+                "restauration termios impossible: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for RawTerminal {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
+#[allow(dead_code)] // Le mode dégradé sera appelé par la boucle T806b.
+fn with_raw_terminal<T>(
+    fd: RawFd,
+    operation: impl FnOnce(bool) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut terminal = RawTerminal::enable_for_fd(fd)?;
+    let result = operation(terminal.is_some());
+    if let Some(raw) = terminal.as_mut() {
+        raw.restore()?;
+    }
+    result
+}
+
+/// Événements neutres produits par la couche de transport puis projetés par le
+/// renderer sécurisé de ce module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AttachEvent {
     Subscribed {
@@ -40,13 +133,16 @@ pub enum AttachEvent {
         line: u64,
         offset: u64,
     },
-    End,
+    End {
+        reason: String,
+    },
     SendAcknowledged {
         message_id: String,
     },
     SendRejected {
         message_id: String,
         delayed: bool,
+        reason: String,
     },
 }
 
@@ -87,7 +183,10 @@ struct AttachClientState {
     last_seq: Option<u64>,
     caught_up: bool,
     pending_send: HashMap<String, String>,
+    pending_send_expirations: HashMap<String, Instant>,
     reassembly: Option<Reassembly>,
+    #[cfg(test)]
+    event_observer: Option<mpsc::Sender<()>>,
 }
 
 impl AttachClientState {
@@ -100,7 +199,10 @@ impl AttachClientState {
             last_seq: None,
             caught_up: false,
             pending_send: HashMap::new(),
+            pending_send_expirations: HashMap::new(),
             reassembly: None,
+            #[cfg(test)]
+            event_observer: None,
         }
     }
 
@@ -126,6 +228,7 @@ impl AttachClientState {
         self.caught_up = false;
         self.reassembly = None;
         self.pending_send.clear();
+        self.pending_send_expirations.clear();
     }
 
     fn is_current(&self, subscription_id: &str) -> bool {
@@ -205,14 +308,15 @@ impl AttachClientState {
                     .push(AttachEvent::JournalReadError { line, offset });
             }
             DaemonToWrapper::End {
-                subscription_id, ..
+                subscription_id,
+                reason,
             } if self.is_current(&subscription_id) => {
                 self.retire(subscription_id);
                 self.subscription_id = None;
                 self.waiting_for_subscription = true;
                 self.caught_up = false;
                 self.reassembly = None;
-                outcome.events.push(AttachEvent::End);
+                outcome.events.push(AttachEvent::End { reason });
                 outcome.resubscribe = Some(self.resume_window());
             }
             DaemonToWrapper::AttachRejected {
@@ -231,18 +335,18 @@ impl AttachClientState {
                     .events
                     .push(AttachEvent::SendAcknowledged { message_id: id });
             }
-            DaemonToWrapper::Nack { id, .. } if self.pending_send.remove(&id).is_some() => {
+            DaemonToWrapper::Nack { id, reason } if self.remove_pending_send(&id) => {
                 outcome.events.push(AttachEvent::SendRejected {
                     message_id: id,
                     delayed: false,
+                    reason,
                 });
             }
-            DaemonToWrapper::DeliveryRejected { id, .. }
-                if self.pending_send.remove(&id).is_some() =>
-            {
+            DaemonToWrapper::DeliveryRejected { id, reason } if self.remove_pending_send(&id) => {
                 outcome.events.push(AttachEvent::SendRejected {
                     message_id: id,
                     delayed: true,
+                    reason,
                 });
             }
             DaemonToWrapper::Disconnect => outcome.reconnect = true,
@@ -250,6 +354,37 @@ impl AttachClientState {
             _ => return Err("message interdit sur une connexion attach".to_string()),
         }
         Ok(outcome)
+    }
+
+    fn track_send(&mut self, message_id: String, body: String, now: Instant) {
+        self.pending_send.insert(message_id.clone(), body);
+        self.pending_send_expirations
+            .insert(message_id, now + SEND_ISSUE_TIMEOUT);
+    }
+
+    fn remove_pending_send(&mut self, message_id: &str) -> bool {
+        self.pending_send_expirations.remove(message_id);
+        self.pending_send.remove(message_id).is_some()
+    }
+
+    fn expire_pending_sends(&mut self, now: Instant) -> Vec<AttachEvent> {
+        let expired = self
+            .pending_send_expirations
+            .iter()
+            .filter(|(_, expires_at)| **expires_at <= now)
+            .map(|(message_id, _)| message_id.clone())
+            .collect::<Vec<_>>();
+        expired
+            .into_iter()
+            .filter_map(|message_id| {
+                self.remove_pending_send(&message_id)
+                    .then_some(AttachEvent::SendRejected {
+                        message_id,
+                        delayed: true,
+                        reason: "délai d'issue dépassé".to_string(),
+                    })
+            })
+            .collect()
     }
 
     /// Assemble une charge en O(nombre d'octets), avec une rétention bornée à
@@ -362,19 +497,7 @@ impl AttachConnection {
     }
 
     fn read(&mut self) -> Result<Option<DaemonToWrapper>, String> {
-        loop {
-            let Some(frame) = read_bounded_frame(&mut self.reader)? else {
-                return Ok(None);
-            };
-            let line =
-                std::str::from_utf8(&frame).map_err(|_| "réponse attach non UTF-8".to_string())?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            return decode(line)
-                .map(Some)
-                .map_err(|error| format!("réponse attach invalide: {error}"));
-        }
+        read_daemon_message(&mut self.reader)
     }
 
     fn accept_role(&mut self) -> Result<(), String> {
@@ -480,6 +603,17 @@ fn discard_until_newline(reader: &mut BufReader<UnixStream>) -> Result<(), Strin
 /// Lance une vue attach persistante. La mémoire croît au plus comme un
 /// événement réassemblé (4 Mio) plus la petite table des envois de l'invocation.
 pub fn run(agent: &str, initial_window: AttachWindow, socket_path: &Path) -> Result<(), String> {
+    with_raw_terminal(libc::STDIN_FILENO, |raw_terminal| {
+        run_with_input(agent, initial_window, socket_path, raw_terminal)
+    })
+}
+
+fn run_with_input(
+    agent: &str,
+    initial_window: AttachWindow,
+    socket_path: &Path,
+    raw_terminal: bool,
+) -> Result<(), String> {
     let mut state = AttachClientState::new(initial_window);
     let mut connected_once = false;
 
@@ -490,7 +624,7 @@ pub fn run(agent: &str, initial_window: AttachWindow, socket_path: &Path) -> Res
             connection.subscribe(agent, window)?;
             Ok(connection)
         });
-        let mut connection = match attempt {
+        let connection = match attempt {
             Ok(connection) => connection,
             Err(error) if !connected_once => return Err(error),
             Err(_) => {
@@ -499,22 +633,432 @@ pub fn run(agent: &str, initial_window: AttachWindow, socket_path: &Path) -> Res
             }
         };
         connected_once = true;
-        drive_connection(
-            &mut connection,
+        if !drive_interactive(
+            connection,
             &mut state,
             agent,
-            &mut print_transport_event,
-        )?;
+            socket_path,
+            libc::STDIN_FILENO,
+            raw_terminal,
+        )? {
+            return Ok(());
+        }
 
         state.connection_closed();
         thread::sleep(RECONNECT_DELAY);
     }
 }
 
+#[derive(Debug)]
+enum ReaderStatus {
+    Closed,
+    Failed(String),
+}
+
+#[derive(Debug, Default)]
+struct InputBuffer {
+    bytes: Vec<u8>,
+}
+
+impl InputBuffer {
+    fn push(&mut self, byte: u8) {
+        self.bytes.push(byte);
+    }
+
+    fn erase_last(&mut self) -> bool {
+        let Some(last_start) = std::str::from_utf8(&self.bytes)
+            .ok()
+            .and_then(|text| text.char_indices().next_back().map(|(index, _)| index))
+        else {
+            return self.bytes.pop().is_some();
+        };
+        self.bytes.truncate(last_start);
+        true
+    }
+
+    fn take(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.bytes)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    fn display(&self) -> String {
+        String::from_utf8_lossy(&self.bytes).into_owned()
+    }
+}
+
+/// Maintient la saisie locale pendant qu'un seul lecteur socket traite le flux
+/// attach. Le writer reste partagé et sérialisé avec les resouscriptions du
+/// lecteur ; ainsi `Send` et les issues différées passent par la même connexion.
+fn drive_interactive(
+    connection: AttachConnection,
+    client_state: &mut AttachClientState,
+    agent: &str,
+    socket_path: &Path,
+    input_fd: RawFd,
+    raw_terminal: bool,
+) -> Result<bool, String> {
+    let AttachConnection { reader, writer } = connection;
+    let shared_state = Arc::new(Mutex::new(std::mem::replace(
+        client_state,
+        AttachClientState::new(AttachWindow::Today),
+    )));
+    let input = Arc::new(Mutex::new(InputBuffer::default()));
+    let screen = Arc::new(Mutex::new(()));
+    let (status_tx, status_rx) = mpsc::channel();
+    let reader_handle = spawn_attach_reader(
+        reader,
+        writer.clone(),
+        shared_state.clone(),
+        input.clone(),
+        screen.clone(),
+        agent.to_string(),
+        socket_path.to_path_buf(),
+        status_tx,
+        raw_terminal,
+    );
+
+    let mut reconnect = true;
+    let mut reader_failure = None;
+    loop {
+        match status_rx.try_recv() {
+            Ok(ReaderStatus::Closed) => break,
+            Ok(ReaderStatus::Failed(error)) => {
+                reconnect = false;
+                reader_failure = Some(error);
+                break;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => break,
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+
+        let mut pollfd = libc::pollfd {
+            fd: input_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let poll_result = unsafe { libc::poll(&mut pollfd, 1, INPUT_POLL_TIMEOUT_MILLIS) };
+        if poll_result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                reconnect = false;
+                break;
+            }
+            continue;
+        }
+        if poll_result == 0 {
+            render_expired_sends(&shared_state, &input, &screen, agent, raw_terminal);
+            continue;
+        }
+        if pollfd.revents & libc::POLLIN != 0 {
+            // Un pseudo-terminal peut signaler POLLIN|POLLHUP pour ses
+            // derniers octets. Les consommer avant de conclure à EOF évite de
+            // perdre le dernier Send d'une saisie terminée par fermeture.
+            loop {
+                let mut byte = 0_u8;
+                let read = unsafe {
+                    libc::read(input_fd, (&mut byte as *mut u8).cast::<libc::c_void>(), 1)
+                };
+                if read == 0 {
+                    reconnect = false;
+                    break;
+                }
+                if read < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() != std::io::ErrorKind::Interrupted {
+                        reconnect = false;
+                    }
+                    break;
+                }
+                if !handle_input_byte(
+                    byte,
+                    &shared_state,
+                    &input,
+                    &screen,
+                    &writer,
+                    agent,
+                    raw_terminal,
+                )? {
+                    reconnect = false;
+                    break;
+                }
+                let mut more = libc::pollfd {
+                    fd: input_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                if unsafe { libc::poll(&mut more, 1, 0) } <= 0 || more.revents & libc::POLLIN == 0 {
+                    break;
+                }
+            }
+            if !reconnect {
+                break;
+            }
+        }
+        if pollfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+            // Hors TTY, stdin peut être fermé par le lanceur sans que la vue
+            // elle-même soit terminée : le flux socket reste alors observable.
+            // En raw mode, Ctrl-D est traité comme un octet avant ce palier.
+            if raw_terminal {
+                reconnect = false;
+                break;
+            }
+            render_expired_sends(&shared_state, &input, &screen, agent, raw_terminal);
+            continue;
+        }
+        render_expired_sends(&shared_state, &input, &screen, agent, raw_terminal);
+    }
+
+    close_attach_socket(&writer);
+    let _ = reader_handle.join();
+    let mut recovered = Arc::try_unwrap(shared_state)
+        .map_err(|_| "état attach encore partagé à la fermeture".to_string())?
+        .into_inner()
+        .map_err(|_| "état attach empoisonné".to_string())?;
+    recovered.connection_closed();
+    *client_state = recovered;
+    match reader_failure {
+        Some(error) => Err(error),
+        None => Ok(reconnect),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_attach_reader(
+    mut reader: BufReader<UnixStream>,
+    writer: Arc<Mutex<BufWriter<UnixStream>>>,
+    state: Arc<Mutex<AttachClientState>>,
+    input: Arc<Mutex<InputBuffer>>,
+    screen: Arc<Mutex<()>>,
+    agent: String,
+    socket_path: std::path::PathBuf,
+    status_tx: mpsc::Sender<ReaderStatus>,
+    raw_terminal: bool,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        loop {
+            let message = match read_daemon_message(&mut reader) {
+                Ok(Some(message)) => message,
+                Ok(None) => {
+                    let _ = status_tx.send(ReaderStatus::Closed);
+                    return;
+                }
+                Err(error) => {
+                    let _ = status_tx.send(ReaderStatus::Failed(error));
+                    return;
+                }
+            };
+            #[cfg(test)]
+            let journal_rendered = matches!(&message, DaemonToWrapper::JournalFragment { .. });
+            let outcome = match state
+                .lock()
+                .map_err(|_| "état attach empoisonné".to_string())
+                .and_then(|mut state| state.dispatch(message))
+            {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    let _ = status_tx.send(ReaderStatus::Failed(error));
+                    return;
+                }
+            };
+            for event in outcome.events {
+                print_interactive_event(&event, &input, &screen, &agent, raw_terminal);
+            }
+            #[cfg(test)]
+            if journal_rendered
+                && let Some(observer) = state
+                    .lock()
+                    .ok()
+                    .and_then(|state| state.event_observer.clone())
+            {
+                let _ = observer.send(());
+            }
+            if let Some(reason) = outcome.rejected {
+                let attachable_agents = if reason == AttachRefusal::AgentUnknown {
+                    list_attachable_agents(&socket_path)
+                } else {
+                    Vec::new()
+                };
+                let _ = status_tx.send(ReaderStatus::Failed(attach_refusal_message(
+                    &reason,
+                    &agent,
+                    &attachable_agents,
+                )));
+                return;
+            }
+            if let Some(window) = outcome.resubscribe
+                && let Err(error) = write_socket_message(
+                    &writer,
+                    &WrapperToDaemon::Subscribe {
+                        agent: agent.clone(),
+                        window,
+                    },
+                )
+            {
+                let _ = status_tx.send(ReaderStatus::Failed(error));
+                return;
+            }
+            if outcome.reconnect {
+                let _ = status_tx.send(ReaderStatus::Closed);
+                return;
+            }
+        }
+    })
+}
+
+fn read_daemon_message(
+    reader: &mut BufReader<UnixStream>,
+) -> Result<Option<DaemonToWrapper>, String> {
+    loop {
+        let Some(frame) = read_bounded_frame(reader)? else {
+            return Ok(None);
+        };
+        let line =
+            std::str::from_utf8(&frame).map_err(|_| "réponse attach non UTF-8".to_string())?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        return decode(line)
+            .map(Some)
+            .map_err(|error| format!("réponse attach invalide: {error}"));
+    }
+}
+
+fn handle_input_byte(
+    byte: u8,
+    state: &Arc<Mutex<AttachClientState>>,
+    input: &Arc<Mutex<InputBuffer>>,
+    screen: &Arc<Mutex<()>>,
+    writer: &Arc<Mutex<BufWriter<UnixStream>>>,
+    agent: &str,
+    raw_terminal: bool,
+) -> Result<bool, String> {
+    match byte {
+        0x03 => return Ok(false),
+        0x04 => {
+            if input
+                .lock()
+                .map_err(|_| "saisie attach empoisonnée".to_string())?
+                .is_empty()
+            {
+                return Ok(false);
+            }
+        }
+        b'\r' | b'\n' => {
+            let bytes = input
+                .lock()
+                .map_err(|_| "saisie attach empoisonnée".to_string())?
+                .take();
+            if raw_terminal {
+                write_input_bytes(screen, b"\r\n");
+            }
+            if bytes.is_empty() {
+                return Ok(true);
+            }
+            let body = String::from_utf8(bytes)
+                .map_err(|_| "saisie invalide : UTF-8 attendu".to_string())?;
+            let message = BridgetMessage::new("humain", agent, body.clone());
+            let message_id = message.id.clone();
+            {
+                let mut state = state
+                    .lock()
+                    .map_err(|_| "état attach empoisonné".to_string())?;
+                state.track_send(message_id.clone(), body, Instant::now());
+            }
+            if let Err(error) = write_socket_message(writer, &WrapperToDaemon::Send(message)) {
+                let _ = state
+                    .lock()
+                    .map(|mut state| state.remove_pending_send(&message_id));
+                return Err(error);
+            }
+            return Ok(true);
+        }
+        0x08 | 0x7f => {
+            let erased = input
+                .lock()
+                .map_err(|_| "saisie attach empoisonnée".to_string())?
+                .erase_last();
+            if erased && raw_terminal {
+                write_input_bytes(screen, b"\x08 \x08");
+            }
+        }
+        byte if byte >= 0x20 => {
+            input
+                .lock()
+                .map_err(|_| "saisie attach empoisonnée".to_string())?
+                .push(byte);
+            if raw_terminal {
+                write_input_bytes(screen, &[byte]);
+            }
+        }
+        _ => {}
+    }
+    Ok(true)
+}
+
+fn render_expired_sends(
+    state: &Arc<Mutex<AttachClientState>>,
+    input: &Arc<Mutex<InputBuffer>>,
+    screen: &Arc<Mutex<()>>,
+    agent: &str,
+    raw_terminal: bool,
+) {
+    let events = state
+        .lock()
+        .map(|mut state| state.expire_pending_sends(Instant::now()))
+        .unwrap_or_default();
+    for event in events {
+        print_interactive_event(&event, input, screen, agent, raw_terminal);
+    }
+}
+
+fn print_interactive_event(
+    event: &AttachEvent,
+    input: &Arc<Mutex<InputBuffer>>,
+    screen: &Arc<Mutex<()>>,
+    agent: &str,
+    raw_terminal: bool,
+) {
+    let rendered = render_attach_event(event, agent);
+    let input = input
+        .lock()
+        .map(|input| input.display())
+        .unwrap_or_default();
+    if let Ok(_screen) = screen.lock() {
+        let mut output = std::io::stdout().lock();
+        if raw_terminal {
+            let _ = output.write_all(b"\r\n");
+        }
+        let _ = writeln!(output, "{rendered}");
+        if raw_terminal {
+            let _ = write!(output, "> {input}");
+        }
+        let _ = output.flush();
+    }
+}
+
+fn write_input_bytes(screen: &Arc<Mutex<()>>, bytes: &[u8]) {
+    if let Ok(_screen) = screen.lock() {
+        let mut output = std::io::stdout().lock();
+        let _ = output.write_all(bytes);
+        let _ = output.flush();
+    }
+}
+
+fn close_attach_socket(writer: &Arc<Mutex<BufWriter<UnixStream>>>) {
+    if let Ok(writer) = writer.lock() {
+        let _ = writer.get_ref().shutdown(Shutdown::Both);
+    }
+}
+
+#[cfg(test)]
 fn drive_connection(
     connection: &mut AttachConnection,
     state: &mut AttachClientState,
     agent: &str,
+    socket_path: &Path,
     on_event: &mut impl FnMut(&AttachEvent),
 ) -> Result<(), String> {
     while let Ok(Some(message)) = connection.read() {
@@ -523,7 +1067,12 @@ fn drive_connection(
             on_event(&event);
         }
         if let Some(reason) = outcome.rejected {
-            return Err(format!("abonnement attach refusé: {reason:?}"));
+            let attachable_agents = if reason == AttachRefusal::AgentUnknown {
+                list_attachable_agents(socket_path)
+            } else {
+                Vec::new()
+            };
+            return Err(attach_refusal_message(&reason, agent, &attachable_agents));
         }
         if let Some(window) = outcome.resubscribe
             && connection.subscribe(agent, window).is_err()
@@ -537,35 +1086,447 @@ fn drive_connection(
     Ok(())
 }
 
-fn print_transport_event(event: &AttachEvent) {
+/// Rend un événement sans jamais laisser les données du journal produire des
+/// contrôles de terminal. Les séquences ANSI éventuelles appartiendront au
+/// renderer lui-même, jamais au contenu reçu.
+fn render_attach_event(event: &AttachEvent, agent: &str) -> String {
     match event {
-        AttachEvent::Subscribed { .. } => eprintln!("attach: abonnement actif"),
-        AttachEvent::Journal { seq, bytes, live } => {
-            let phase = if *live { "suivi" } else { "rejeu" };
-            println!("[{phase} seq={seq}] {} octets", bytes.len());
+        AttachEvent::Subscribed { .. } => "attach: abonnement actif".to_string(),
+        AttachEvent::Journal { bytes, .. } => render_journal_event(bytes, agent),
+        AttachEvent::SnapshotCaughtUp {
+            through_seq: Some(seq),
+        } => {
+            format!("attach: historique rattrapé jusqu’à {seq}")
         }
-        AttachEvent::SnapshotCaughtUp { through_seq } => match through_seq {
-            Some(seq) => eprintln!("attach: historique rattrapé jusqu'à {seq}"),
-            None => eprintln!("attach: en attente du premier événement"),
-        },
+        AttachEvent::SnapshotCaughtUp { through_seq: None } => {
+            "attach: en attente du premier événement".to_string()
+        }
         AttachEvent::Gap {
-            from_seq, to_seq, ..
-        } => eprintln!("attach: lacune {from_seq}..{to_seq}"),
-        AttachEvent::JournalReadError { line, offset } => {
-            eprintln!("attach: ligne {line} illisible à l'octet {offset}")
+            from_seq,
+            to_seq,
+            reason,
+        } => {
+            let count = to_seq.saturating_sub(*from_seq).saturating_add(1);
+            let reason = reason
+                .as_deref()
+                .map(|value| format!(" — {}", sanitize_inline(value)))
+                .unwrap_or_default();
+            format!(
+                "attach: +{count} événement(s) non affiché(s), rejouables (seq {from_seq}→{to_seq}){reason}"
+            )
         }
-        AttachEvent::End => eprintln!("attach: abonnement terminé, resynchronisation"),
+        AttachEvent::JournalReadError { line, offset } => {
+            format!("attach: ligne {line}, offset {offset} : illisible, seq inconnu")
+        }
+        AttachEvent::End { reason } => format!(
+            "attach: abonnement terminé ({}) — resynchronisation",
+            sanitize_inline(reason)
+        ),
         AttachEvent::SendAcknowledged { message_id } => {
-            eprintln!("attach: envoi {message_id} accepté")
+            format!("attach: envoi {} accepté", sanitize_inline(message_id))
         }
         AttachEvent::SendRejected {
             message_id,
             delayed,
+            reason,
         } => {
             let phase = if *delayed { "différé" } else { "immédiat" };
-            eprintln!("attach: envoi {message_id} rejeté ({phase})");
+            format!(
+                "attach: envoi {} rejeté ({phase}) : {}",
+                sanitize_inline(message_id),
+                sanitize_inline(reason)
+            )
         }
     }
+}
+
+fn render_journal_event(bytes: &[u8], agent: &str) -> String {
+    let value = match serde_json::from_slice::<serde_json::Value>(bytes) {
+        Ok(value) => value,
+        Err(_) => return "??:?? [erreur] événement journal illisible".to_string(),
+    };
+    if value.get("v").and_then(serde_json::Value::as_u64) != Some(1) {
+        return "??:?? [erreur] version de journal non prise en charge".to_string();
+    }
+
+    let timestamp = short_timestamp(value.get("ts").and_then(serde_json::Value::as_str));
+    let event = value
+        .get("event")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("inconnu");
+    let payload = value.get("payload").unwrap_or(&serde_json::Value::Null);
+    let (label, content) = match event {
+        "turn_start" => (
+            format!(
+                "{} →",
+                payload
+                    .get("from")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("humain")
+            ),
+            payload
+                .get("body")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("message sans corps")
+                .to_string(),
+        ),
+        "update" if payload.get("kind").and_then(serde_json::Value::as_str) == Some("text") => (
+            format!("{agent} →"),
+            payload
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        ),
+        "update"
+            if payload.get("kind").and_then(serde_json::Value::as_str) == Some("tool_call") =>
+        {
+            (
+                format!(
+                    "[outil] {}",
+                    payload
+                        .get("tool")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("inconnu")
+                ),
+                payload
+                    .get("summary")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|summary| !summary.is_empty())
+                    .unwrap_or("appel demandé")
+                    .to_string(),
+            )
+        }
+        "permission" => (
+            format!(
+                "[permission] {}",
+                payload
+                    .get("tool")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("outil inconnu")
+            ),
+            permission_summary(payload),
+        ),
+        "turn_end" => ("[fin]".to_string(), turn_end_summary(payload)),
+        "error" => (
+            "[erreur]".to_string(),
+            payload
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("erreur sans motif")
+                .to_string(),
+        ),
+        _ => (
+            format!("[événement] {event}"),
+            "payload v1 non pris en charge".to_string(),
+        ),
+    };
+
+    render_prefixed(&format!("{timestamp} {label}"), &content)
+}
+
+fn permission_summary(payload: &serde_json::Value) -> String {
+    match payload
+        .pointer("/decision/outcome")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("selected") => format!(
+            "autorisation décidée : {}",
+            payload
+                .pointer("/decision/option_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("option inconnue")
+        ),
+        Some("cancelled") => "autorisation refusée".to_string(),
+        Some(outcome) => format!("décision : {outcome}"),
+        None => "décision absente".to_string(),
+    }
+}
+
+fn turn_end_summary(payload: &serde_json::Value) -> String {
+    let stop_reason = payload
+        .get("stop_reason")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("inconnu");
+    match payload.get("routed_to").and_then(serde_json::Value::as_str) {
+        Some(target) => format!("tour terminé : {stop_reason} — réponse vers {target}"),
+        None => format!("tour terminé : {stop_reason}"),
+    }
+}
+
+fn short_timestamp(timestamp: Option<&str>) -> &str {
+    timestamp
+        .and_then(|value| value.get(11..16))
+        .filter(|value| {
+            value.as_bytes().get(2) == Some(&b':')
+                && value
+                    .bytes()
+                    .enumerate()
+                    .all(|(index, byte)| index == 2 || byte.is_ascii_digit())
+        })
+        .unwrap_or("??:??")
+}
+
+#[derive(Debug)]
+struct SanitizedText {
+    text: String,
+    truncated: bool,
+}
+
+fn sanitize_data(value: &str, limit: usize) -> SanitizedText {
+    let mut text = String::new();
+    let mut output_chars = 0usize;
+    let mut combining_run = 0usize;
+    let mut combining_overflow_visible = false;
+    let mut truncated = false;
+
+    for character in value.chars() {
+        let representation = if character == '\n' || character == '\t' {
+            combining_run = 0;
+            combining_overflow_visible = false;
+            character.to_string()
+        } else if is_combining_mark(character) {
+            combining_run += 1;
+            if combining_run <= MAX_CONSECUTIVE_COMBINING_MARKS {
+                character.to_string()
+            } else if !combining_overflow_visible {
+                combining_overflow_visible = true;
+                "·".to_string()
+            } else {
+                continue;
+            }
+        } else {
+            combining_run = 0;
+            combining_overflow_visible = false;
+            visible_character(character)
+        };
+        let representation_chars = representation.chars().count();
+        if output_chars.saturating_add(representation_chars) > limit {
+            truncated = true;
+            break;
+        }
+        text.push_str(&representation);
+        output_chars += representation_chars;
+    }
+
+    SanitizedText { text, truncated }
+}
+
+fn visible_character(character: char) -> String {
+    match character {
+        '\u{001b}' => "␛".to_string(),
+        '\u{0008}' => "␈".to_string(),
+        '\r' => "␍".to_string(),
+        '\u{007f}' => "␡".to_string(),
+        character if is_format_character(character) => "·".to_string(),
+        character if character.is_control() && (character as u32) <= 0x1f => {
+            char::from_u32(0x2400 + character as u32)
+                .unwrap_or('�')
+                .to_string()
+        }
+        character if character.is_control() => format!("<U+{:04X}>", character as u32),
+        character => character.to_string(),
+    }
+}
+
+fn is_format_character(character: char) -> bool {
+    matches!(
+        character,
+        '\u{00ad}'
+            | '\u{061c}'
+            | '\u{06dd}'
+            | '\u{070f}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08e2}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206f}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+            | '\u{110bd}'
+            | '\u{110cd}'
+            | '\u{13430}'..='\u{1345f}'
+            | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0001}'
+            | '\u{e0020}'..='\u{e007f}'
+            | '\u{fe00}'..='\u{fe0f}'
+            | '\u{e0100}'..='\u{e01ef}'
+    ) || matches!(character, '\u{0600}'..='\u{0605}' | '\u{2065}')
+}
+
+fn is_combining_mark(character: char) -> bool {
+    matches!(
+        character,
+        '\u{0300}'..='\u{036f}'
+            | '\u{1ab0}'..='\u{1aff}'
+            | '\u{1dc0}'..='\u{1dff}'
+            | '\u{20d0}'..='\u{20ff}'
+            | '\u{fe20}'..='\u{fe2f}'
+    )
+}
+
+fn sanitize_inline(value: &str) -> String {
+    let sanitized = sanitize_data(value, MAX_RENDERED_LABEL_CHARS);
+    let mut text = sanitized.text.replace('\n', "↵").replace('\t', "⇥");
+    if sanitized.truncated {
+        text.push('…');
+    }
+    text
+}
+
+fn render_prefixed(prefix: &str, content: &str) -> String {
+    let prefix = sanitize_inline(prefix);
+    let indent = " ".repeat(prefix.chars().count().saturating_add(1));
+    let sanitized = sanitize_data(content, MAX_RENDERED_EVENT_CHARS);
+    let truncation_marker = "… [affichage tronqué]";
+    let reserved = truncation_marker.chars().count();
+    let content_limit = MAX_RENDERED_EVENT_CHARS.saturating_sub(reserved);
+    let mut rendered = format!("{prefix} ");
+    let mut rendered_chars = rendered.chars().count();
+    let mut truncated = sanitized.truncated;
+
+    for character in sanitized.text.chars() {
+        let addition = if character == '\n' {
+            format!("\n{indent}")
+        } else {
+            character.to_string()
+        };
+        let addition_chars = addition.chars().count();
+        if rendered_chars.saturating_add(addition_chars) > content_limit {
+            truncated = true;
+            break;
+        }
+        rendered.push_str(&addition);
+        rendered_chars += addition_chars;
+    }
+    if truncated {
+        rendered.push_str(truncation_marker);
+    }
+    rendered
+}
+
+fn attach_refusal_message(
+    reason: &AttachRefusal,
+    agent: &str,
+    attachable_agents: &[String],
+) -> String {
+    match reason {
+        AttachRefusal::AgentUnknown => {
+            if attachable_agents.is_empty() {
+                format!(
+                    "équipier « {} » inconnu ; aucun équipier ACP n’est actuellement attachable",
+                    sanitize_inline(agent)
+                )
+            } else {
+                format!(
+                    "équipier « {} » inconnu ; équipiers attachables : {}",
+                    sanitize_inline(agent),
+                    attachable_agents
+                        .iter()
+                        .map(|name| sanitize_inline(name))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+        }
+        AttachRefusal::AgentNotAcp => format!(
+            "« {} » est un agent interactif tmux ; ouvrez son pane dans la session tmux au lieu d’utiliser attach",
+            sanitize_inline(agent)
+        ),
+        AttachRefusal::WrapperUnavailable => format!(
+            "le wrapper ACP de « {} » est indisponible",
+            sanitize_inline(agent)
+        ),
+        AttachRefusal::CommandQueueSaturated => {
+            "le relais de journal est saturé ; réessayez dans un instant".to_string()
+        }
+        AttachRefusal::InvalidDate => {
+            "date attach invalide (format attendu : AAAA-MM-JJ)".to_string()
+        }
+        AttachRefusal::FutureDate => {
+            "la date attach est dans le futur sur l’hôte du journal".to_string()
+        }
+        AttachRefusal::DateOutsideRetention => {
+            "la date attach est hors de la rétention du journal".to_string()
+        }
+        AttachRefusal::ReplyNotAllowed => {
+            "les envois depuis attach doivent utiliser reply=false".to_string()
+        }
+        AttachRefusal::MessageOutsideAttachRole => {
+            "message interdit pour une connexion attach".to_string()
+        }
+    }
+}
+
+fn list_attachable_agents(socket_path: &Path) -> Vec<String> {
+    let Ok(stream) = UnixStream::connect(socket_path) else {
+        return Vec::new();
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+    let Ok(read_stream) = stream.try_clone() else {
+        return Vec::new();
+    };
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    let probe_name = format!("attach-list-{}", std::process::id());
+    let register = WrapperToDaemon::Register {
+        agent_type: "attach-list".to_string(),
+        name: Some(probe_name),
+        host: None,
+        transport: None,
+        os: None,
+        instance_id: None,
+        domain: None,
+        turn_in_progress: false,
+    };
+    if write_plain_message(&mut writer, &register).is_err() {
+        return Vec::new();
+    }
+    let mut line = String::new();
+    if reader
+        .read_line(&mut line)
+        .ok()
+        .filter(|read| *read > 0)
+        .is_none()
+    {
+        return Vec::new();
+    }
+    line.clear();
+    if write_plain_message(&mut writer, &WrapperToDaemon::ListAgents).is_err()
+        || reader
+            .read_line(&mut line)
+            .ok()
+            .filter(|read| *read > 0)
+            .is_none()
+    {
+        return Vec::new();
+    }
+    let mut agents = match decode::<DaemonToWrapper>(line.trim_end()) {
+        Ok(DaemonToWrapper::AgentList { agents }) => agents
+            .into_iter()
+            .filter(|agent| agent.transport == "acp" && agent.state != "unreachable")
+            .map(|agent| agent.name)
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    let _ = write_plain_message(&mut writer, &WrapperToDaemon::Unregister);
+    agents.sort();
+    agents.dedup();
+    agents
+}
+
+fn write_plain_message(
+    writer: &mut BufWriter<UnixStream>,
+    message: &WrapperToDaemon,
+) -> Result<(), String> {
+    let line = encode(message).map_err(|error| error.to_string())?;
+    writeln!(writer, "{line}")
+        .and_then(|()| writer.flush())
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -573,8 +1534,74 @@ mod tests {
     use super::*;
     use bridget_transport::protocol::MAX_ATTACH_FRAGMENT_BYTES;
     use std::io::{BufRead, BufReader, Write};
+    use std::os::fd::{AsRawFd, RawFd};
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;
+
+    struct PseudoTerminal {
+        master: RawFd,
+        slave: RawFd,
+    }
+
+    impl PseudoTerminal {
+        fn open() -> Self {
+            let mut master = -1;
+            let mut slave = -1;
+            assert_eq!(
+                unsafe {
+                    libc::openpty(
+                        &mut master,
+                        &mut slave,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                },
+                0,
+                "openpty: {}",
+                std::io::Error::last_os_error()
+            );
+            Self { master, slave }
+        }
+
+        fn attrs(&self) -> libc::termios {
+            let mut attributes = MaybeUninit::<libc::termios>::uninit();
+            assert_eq!(
+                unsafe { libc::tcgetattr(self.slave, attributes.as_mut_ptr()) },
+                0,
+                "tcgetattr: {}",
+                std::io::Error::last_os_error()
+            );
+            unsafe { attributes.assume_init() }
+        }
+
+        fn close_master(&mut self) {
+            if self.master >= 0 {
+                assert_eq!(unsafe { libc::close(self.master) }, 0);
+                self.master = -1;
+            }
+        }
+    }
+
+    impl Drop for PseudoTerminal {
+        fn drop(&mut self) {
+            for fd in [self.master, self.slave] {
+                if fd >= 0 {
+                    unsafe { libc::close(fd) };
+                }
+            }
+        }
+    }
+
+    fn assert_terminal_restored(before: &libc::termios, after: &libc::termios) {
+        // Le pilote pseudo-TTY macOS peut rétablir ses bits ECHOCTL propres
+        // après une lecture. Les seuls bits mutés par notre garde doivent
+        // donc retrouver leur valeur initiale ; ils prouvent la restauration.
+        let raw_bits = (libc::ICANON | libc::ECHO | libc::ISIG) as libc::tcflag_t;
+        assert_eq!(after.c_lflag & raw_bits, before.c_lflag & raw_bits);
+        assert_eq!(after.c_cc[libc::VMIN], before.c_cc[libc::VMIN]);
+        assert_eq!(after.c_cc[libc::VTIME], before.c_cc[libc::VTIME]);
+    }
 
     fn fragment(
         subscription_id: &str,
@@ -819,9 +1846,221 @@ mod tests {
             vec![AttachEvent::SendRejected {
                 message_id: "message-1".to_string(),
                 delayed: true,
+                reason: "transport arrêté".to_string(),
             }]
         );
         assert!(state.pending_send.is_empty());
+    }
+
+    #[test]
+    fn saisie_attach_envoie_reply_false_et_conserve_la_correlation_jusqu_au_rejet_tardif() {
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let screen = Arc::new(Mutex::new(()));
+
+        for byte in b"bonjour\n" {
+            assert!(
+                handle_input_byte(*byte, &state, &input, &screen, &writer, "codex-1", false,)
+                    .unwrap()
+            );
+        }
+
+        let mut reader = BufReader::new(read_stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let WrapperToDaemon::Send(message) = decode(line.trim_end()).unwrap() else {
+            panic!("Send attendu sur la connexion attach");
+        };
+        assert_eq!(message.from, "humain");
+        assert_eq!(message.to, "codex-1");
+        assert_eq!(message.body, "bonjour");
+        assert!(!message.reply);
+        let message_id = message.id;
+
+        let acknowledged = state
+            .lock()
+            .unwrap()
+            .dispatch(DaemonToWrapper::Ack {
+                id: message_id.clone(),
+            })
+            .unwrap();
+        assert_eq!(
+            acknowledged.events,
+            vec![AttachEvent::SendAcknowledged {
+                message_id: message_id.clone()
+            }]
+        );
+        assert!(state.lock().unwrap().pending_send.contains_key(&message_id));
+
+        state
+            .lock()
+            .unwrap()
+            .dispatch(DaemonToWrapper::End {
+                subscription_id: "ancienne-generation".to_string(),
+                reason: "wrapper parti".to_string(),
+            })
+            .unwrap();
+        let rejected = state
+            .lock()
+            .unwrap()
+            .dispatch(DaemonToWrapper::DeliveryRejected {
+                id: message_id.clone(),
+                reason: "file ACP pleine".to_string(),
+            })
+            .unwrap();
+        assert_eq!(
+            rejected.events,
+            vec![AttachEvent::SendRejected {
+                message_id: message_id.clone(),
+                delayed: true,
+                reason: "file ACP pleine".to_string(),
+            }]
+        );
+        assert!(!state.lock().unwrap().pending_send.contains_key(&message_id));
+    }
+
+    #[test]
+    fn evenement_hostile_ne_modifie_jamais_la_saisie_partielle() {
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"r\xc3\xa9ponse en cours".to_vec(),
+        }));
+        let screen = Arc::new(Mutex::new(()));
+        let hostile = include_bytes!("../tests/fixtures/attach-hostile.jsonl");
+        let event = AttachEvent::Journal {
+            seq: 9,
+            bytes: hostile.strip_suffix(b"\n").unwrap().to_vec(),
+            live: true,
+        };
+        let expected = input.lock().unwrap().bytes.clone();
+        let event_input = input.clone();
+        let event_screen = screen.clone();
+        let worker = thread::spawn(move || {
+            print_interactive_event(&event, &event_input, &event_screen, "codex-1", true);
+        });
+        worker.join().unwrap();
+        assert_eq!(input.lock().unwrap().bytes, expected);
+    }
+
+    #[test]
+    fn expiration_d_un_envoi_est_terminale_et_affiche_son_motif() {
+        let mut state = AttachClientState::new(AttachWindow::Today);
+        let now = Instant::now();
+        state.track_send("message-expire".to_string(), "texte".to_string(), now);
+        let events =
+            state.expire_pending_sends(now + SEND_ISSUE_TIMEOUT + Duration::from_millis(1));
+        assert_eq!(
+            events,
+            vec![AttachEvent::SendRejected {
+                message_id: "message-expire".to_string(),
+                delayed: true,
+                reason: "délai d'issue dépassé".to_string(),
+            }]
+        );
+        assert!(state.pending_send.is_empty());
+    }
+
+    #[test]
+    fn ctrl_c_et_eof_sur_tampon_vide_quittent_proprement_la_boucle_de_saisie() {
+        let (write_stream, _) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let screen = Arc::new(Mutex::new(()));
+        assert!(
+            !handle_input_byte(0x03, &state, &input, &screen, &writer, "codex-1", false,).unwrap()
+        );
+        assert!(
+            !handle_input_byte(0x04, &state, &input, &screen, &writer, "codex-1", false,).unwrap()
+        );
+    }
+
+    #[test]
+    fn pseudo_tty_polin_hup_livre_le_dernier_send_et_restaure_le_terminal() {
+        let pseudo_tty = PseudoTerminal::open();
+        let before = pseudo_tty.attrs();
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let connection = AttachConnection {
+            reader: BufReader::new(client_stream.try_clone().unwrap()),
+            writer: Arc::new(Mutex::new(BufWriter::new(client_stream))),
+        };
+        let (sent_tx, sent_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let mut reader = BufReader::new(server_stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(server_stream);
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::JournalFragment {
+                    subscription_id: "sub-pty".to_string(),
+                    seq: 7,
+                    offset: 0,
+                    final_fragment: true,
+                    bytes: br#"{"v":1,"seq":7,"event":"update"}"#.to_vec(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let message = decode::<WrapperToDaemon>(line.trim_end()).unwrap();
+            sent_tx.send(()).unwrap();
+            message
+        });
+
+        let (mut input_writer, input_reader) = UnixStream::pair().unwrap();
+        let (input_start_tx, input_start_rx) = mpsc::channel();
+        let (event_rendered_tx, event_rendered_rx) = mpsc::channel();
+        let input_writer = thread::spawn(move || {
+            input_start_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            event_rendered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(input_writer.write(b"dernier envoi\n").unwrap(), 14);
+            input_writer.shutdown(Shutdown::Write).unwrap();
+        });
+        let mut state = AttachClientState::new(AttachWindow::Today);
+        state.event_observer = Some(event_rendered_tx);
+        state.subscription_requested();
+        state
+            .dispatch(DaemonToWrapper::Subscribed {
+                subscription_id: "sub-pty".to_string(),
+            })
+            .unwrap();
+
+        let result = with_raw_terminal(pseudo_tty.slave, |raw_terminal| {
+            input_start_tx.send(()).unwrap();
+            drive_interactive(
+                connection,
+                &mut state,
+                "codex-1",
+                Path::new("/tmp/bridget-attach-pty-unused.sock"),
+                input_reader.as_raw_fd(),
+                raw_terminal,
+            )
+        });
+        assert!(result.is_ok());
+        input_writer.join().unwrap();
+        sent_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_terminal_restored(&before, &pseudo_tty.attrs());
+        assert_eq!(state.last_seq, Some(7), "l'événement est traité avant EOF");
+        assert!(matches!(
+            server.join().unwrap(),
+            WrapperToDaemon::Send(message)
+                if message.body == "dernier envoi"
+                    && message.to == "codex-1"
+                    && !message.reply
+        ));
+    }
+
+    #[test]
+    fn retour_arriere_retire_un_scalaire_utf8_entier() {
+        let mut input = InputBuffer {
+            bytes: "réponse".as_bytes().to_vec(),
+        };
+        assert!(input.erase_last());
+        assert_eq!(input.display(), "répons");
     }
 
     #[test]
@@ -971,9 +2210,15 @@ mod tests {
         let window = state.subscription_requested();
         connection.subscribe("codex-1", window).unwrap();
         let mut events = Vec::new();
-        drive_connection(&mut connection, &mut state, "codex-1", &mut |event| {
-            events.push(event.clone());
-        })
+        drive_connection(
+            &mut connection,
+            &mut state,
+            "codex-1",
+            &socket_path,
+            &mut |event| {
+                events.push(event.clone());
+            },
+        )
         .unwrap();
 
         assert_eq!(
@@ -1069,7 +2314,7 @@ mod tests {
         });
 
         let error = run("codex-1", AttachWindow::Today, &socket_path).unwrap_err();
-        assert!(error.contains("WrapperUnavailable"));
+        assert!(error.contains("wrapper ACP de « codex-1 » est indisponible"));
         server.join().unwrap();
         std::fs::remove_file(socket_path).unwrap();
     }
@@ -1110,5 +2355,168 @@ mod tests {
                 .retired_subscriptions
                 .contains(&format!("sub-{}", RETIRED_SUBSCRIPTIONS_LIMIT + 9))
         );
+    }
+
+    #[test]
+    fn rend_les_payloads_v1_des_fixtures_gelee_sans_json_brut() {
+        let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../bridget-transport/tests/fixtures/journal");
+        let complete = std::fs::read_to_string(fixture_root.join("complete-turn.jsonl")).unwrap();
+        let rendered = complete
+            .lines()
+            .map(|line| render_journal_event(line.as_bytes(), "codex-1"))
+            .collect::<Vec<_>>();
+        assert_eq!(rendered[0], "00:00 alice → bonjour intégral");
+        assert_eq!(rendered[1], "00:00 codex-1 → réponse");
+        assert_eq!(
+            rendered[2],
+            "00:00 [fin] tour terminé : end_turn — réponse vers alice"
+        );
+
+        let permission = std::fs::read_to_string(fixture_root.join("permission.jsonl")).unwrap();
+        assert_eq!(
+            render_journal_event(permission.trim_end().as_bytes(), "codex-1"),
+            "00:00 [permission] écrire autorisation décidée : allow-1"
+        );
+        let error = std::fs::read_to_string(fixture_root.join("error.jsonl")).unwrap();
+        assert_eq!(
+            render_journal_event(error.trim_end().as_bytes(), "codex-1"),
+            "00:00 [erreur] équipier arrêté"
+        );
+    }
+
+    #[test]
+    fn neutralise_la_fixture_hostile_et_indente_les_fausses_lignes() {
+        let hostile = include_bytes!("../tests/fixtures/attach-hostile.jsonl");
+        let rendered = render_journal_event(hostile.strip_suffix(b"\n").unwrap(), "codex-1");
+
+        assert!(rendered.contains("␛[2J"));
+        assert!(rendered.contains("␛]0;pwned␇"));
+        assert!(rendered.contains("<U+0085>"));
+        assert!(rendered.contains("bidi ·"));
+        assert!(rendered.contains("zero ·"));
+        assert!(rendered.contains("CR␍"));
+        assert!(rendered.contains("backspace␈"));
+        assert!(!rendered.contains('\u{001b}'));
+        assert!(!rendered.contains('\u{0085}'));
+        assert!(!rendered.contains('\u{202e}'));
+        assert!(!rendered.contains('\u{200b}'));
+        assert!(!rendered.contains('\r'));
+        assert!(!rendered.contains('\u{0008}'));
+        let continuation_indent = " ".repeat("10:42 codex-1 →".chars().count() + 1);
+        assert!(rendered.lines().nth(1).is_some_and(|line| {
+            line.starts_with(&continuation_indent) && line.contains("10:42 [erreur] forgée")
+        }));
+        assert!(rendered.contains(&format!("e{}· fin", "\u{0301}".repeat(8))));
+        assert!(
+            rendered
+                .chars()
+                .all(|character| character == '\n' || character == '\t' || !character.is_control())
+        );
+    }
+
+    #[test]
+    fn borne_et_signale_la_longueur_rendue() {
+        let value = serde_json::json!({
+            "v": 1,
+            "seq": 1,
+            "ts": "2026-08-22T10:42:00Z",
+            "session_id": "session",
+            "event": "update",
+            "payload": { "kind": "text", "content": "x".repeat(MAX_RENDERED_EVENT_CHARS * 4) }
+        });
+        let rendered = render_journal_event(value.to_string().as_bytes(), "codex-1");
+        assert!(rendered.chars().count() <= MAX_RENDERED_EVENT_CHARS);
+        assert!(rendered.ends_with("… [affichage tronqué]"));
+    }
+
+    #[test]
+    fn explique_les_refus_non_acp_et_nom_inconnu() {
+        let non_acp = attach_refusal_message(&AttachRefusal::AgentNotAcp, "claude-1", &[]);
+        assert!(non_acp.contains("interactif tmux"));
+        assert!(non_acp.contains("pane"));
+
+        let unknown = attach_refusal_message(
+            &AttachRefusal::AgentUnknown,
+            "absent",
+            &["claude-acp".to_string(), "codex-acp".to_string()],
+        );
+        assert!(unknown.contains("équipier « absent » inconnu"));
+        assert!(unknown.contains("claude-acp, codex-acp"));
+    }
+
+    #[test]
+    fn raw_mode_lit_ctrl_c_comme_octet_et_restaure_le_pseudo_tty() {
+        let pseudo_tty = PseudoTerminal::open();
+        let before = pseudo_tty.attrs();
+        let mut raw = RawTerminal::enable_for_fd(pseudo_tty.slave)
+            .unwrap()
+            .expect("pseudo-TTY détecté");
+        let active = pseudo_tty.attrs();
+        assert_eq!(active.c_lflag & (libc::ICANON | libc::ECHO | libc::ISIG), 0);
+
+        assert_eq!(
+            unsafe { libc::write(pseudo_tty.master, [0x03_u8].as_ptr().cast(), 1) },
+            1
+        );
+        let mut byte = 0_u8;
+        assert_eq!(
+            unsafe { libc::read(pseudo_tty.slave, (&mut byte as *mut u8).cast(), 1) },
+            1
+        );
+        assert_eq!(byte, 0x03, "Ctrl-C doit arriver à la boucle de saisie");
+
+        raw.restore().unwrap();
+        assert_terminal_restored(&before, &pseudo_tty.attrs());
+    }
+
+    #[test]
+    fn raw_mode_restaure_le_terminal_apres_eof_du_pseudo_tty() {
+        let mut pseudo_tty = PseudoTerminal::open();
+        let before = pseudo_tty.attrs();
+        let raw = RawTerminal::enable_for_fd(pseudo_tty.slave)
+            .unwrap()
+            .expect("pseudo-TTY détecté");
+        pseudo_tty.close_master();
+        let mut byte = 0_u8;
+        let read = unsafe { libc::read(pseudo_tty.slave, (&mut byte as *mut u8).cast(), 1) };
+        assert!(read <= 0, "le pseudo-TTY fermé doit signaler EOF ou EIO");
+        drop(raw);
+        assert_terminal_restored(&before, &pseudo_tty.attrs());
+    }
+
+    #[test]
+    fn garde_raw_restaure_le_terminal_sur_erreur_et_degrade_un_pipe() {
+        let pseudo_tty = PseudoTerminal::open();
+        let before = pseudo_tty.attrs();
+        let result = with_raw_terminal(pseudo_tty.slave, |interactive| {
+            assert!(interactive);
+            Err::<(), _>("erreur de boucle simulée".to_string())
+        });
+        assert_eq!(result.unwrap_err(), "erreur de boucle simulée");
+        assert_terminal_restored(&before, &pseudo_tty.attrs());
+
+        let mut pipe = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        let result = with_raw_terminal(pipe[0], |interactive| {
+            assert!(!interactive, "un pipe ne passe jamais en raw mode");
+            Ok::<_, String>(())
+        });
+        assert!(result.is_ok());
+        assert_eq!(unsafe { libc::close(pipe[0]) }, 0);
+        assert_eq!(unsafe { libc::close(pipe[1]) }, 0);
+    }
+
+    #[test]
+    fn garde_raw_restaure_le_terminal_apres_panic() {
+        let pseudo_tty = PseudoTerminal::open();
+        let before = pseudo_tty.attrs();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = with_raw_terminal(pseudo_tty.slave, |_interactive| -> Result<(), String> {
+                panic!("panic de boucle simulée")
+            });
+        }));
+        assert!(panic.is_err());
+        assert_terminal_restored(&before, &pseudo_tty.attrs());
     }
 }

@@ -26,4 +26,4 @@ libc = "0.2"
 
 [dev-dependencies]
 bridget-core = { path = "../bridget-core" }
-bridget-transport = { path = "../bridget-transport" }
+bridget-transport = { path = "../bridget-transport", features = ["test-support"] }

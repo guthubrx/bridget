@@ -257,6 +257,16 @@ pub enum WrapperToDaemon {
         #[serde(with = "base64_bytes")]
         bytes: Vec<u8>,
     },
+    /// Fragment live indépendant des vues ; le daemon le multiplexe vers les
+    /// abonnements dont le rejeu est terminé.
+    LiveJournalFragment {
+        seq: u64,
+        offset: u64,
+        #[serde(rename = "final")]
+        final_fragment: bool,
+        #[serde(with = "base64_bytes")]
+        bytes: Vec<u8>,
+    },
     /// Marque la frontière entre le rejeu et le suivi continu.
     SnapshotCaughtUp {
         subscription_id: String,
@@ -327,6 +337,12 @@ pub enum WrapperToDaemon {
     },
     /// Lister les demandes suivies de l'agent courant.
     ListRequests { sender: String },
+    /// Projeter le ledger détenu par le daemon, pour un client fédéré qui ne
+    /// possède pas sa base SQLite locale.
+    LedgerProjection {
+        scope: LedgerScope,
+        limit: u16,
+    },
     /// Signal de vie (périodique).
     Heartbeat,
     /// Demander la liste des agents connectés.
@@ -510,6 +526,29 @@ pub enum DaemonToWrapper {
     RequestCancelled { id: String, state: String },
     /// Liste des demandes suivies accessibles à l'agent courant.
     RequestList { requests: Vec<RequestInfo> },
+    /// Projection bornée du ledger, indépendante de tout rendu CLI.
+    LedgerProjection {
+        messages: Vec<LedgerMessage>,
+        requests: Vec<RequestInfo>,
+    },
+}
+
+/// Sous-ensembles fermés de la projection de lecture du ledger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LedgerScope {
+    Messages,
+    Requests,
+    Both,
+}
+
+/// Échange stocké par le daemon et exposé aux clients de lecture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LedgerMessage {
+    pub id: String,
+    pub ts: i64,
+    pub sender: String,
+    pub target: String,
+    pub body: String,
 }
 
 impl WrapperToDaemon {
@@ -948,6 +987,12 @@ mod tests {
                 final_fragment: true,
                 bytes: b"{\"v\":1}\n".to_vec(),
             },
+            WrapperToDaemon::LiveJournalFragment {
+                seq: 8,
+                offset: 0,
+                final_fragment: true,
+                bytes: b"{\"v\":1,\"seq\":8}".to_vec(),
+            },
             WrapperToDaemon::SnapshotCaughtUp {
                 subscription_id: "sub-1".to_string(),
                 through_seq: Some(7),
@@ -1139,6 +1184,34 @@ mod tests {
         assert!(matches!(
             decode::<WrapperToDaemon>(json).unwrap(),
             WrapperToDaemon::Register { agent_type, .. } if agent_type == "codex"
+        ));
+    }
+
+    #[test]
+    fn test_encode_decode_bounded_ledger_projection() {
+        let request = WrapperToDaemon::LedgerProjection {
+            scope: LedgerScope::Both,
+            limit: 20,
+        };
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encode(&request).unwrap()).unwrap(),
+            WrapperToDaemon::LedgerProjection { scope: LedgerScope::Both, limit: 20 }
+        ));
+
+        let response = DaemonToWrapper::LedgerProjection {
+            messages: vec![LedgerMessage {
+                id: "m-1".to_string(),
+                ts: 42,
+                sender: "alice".to_string(),
+                target: "bob".to_string(),
+                body: "bonjour".to_string(),
+            }],
+            requests: Vec::new(),
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(&encode(&response).unwrap()).unwrap(),
+            DaemonToWrapper::LedgerProjection { messages, requests }
+                if messages.len() == 1 && messages[0].id == "m-1" && requests.is_empty()
         ));
     }
 }
