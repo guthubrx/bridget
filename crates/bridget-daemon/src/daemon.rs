@@ -66,6 +66,8 @@ static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 const PRESENCE_RETENTION: Duration = Duration::from_secs(300);
 const ATTACH_VIEW_BUFFER_BYTES: usize = 1024 * 1024;
 const ATTACH_VIEW_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
+/// Plafond global (toutes connexions attach confondues) des accusés tardifs.
+/// Chaque entrée expire aussi après `PENDING_ATTACH_SEND_TTL`.
 const MAX_PENDING_ATTACH_SENDS: usize = 1024;
 const PENDING_ATTACH_SEND_TTL: Duration = Duration::from_secs(300);
 
@@ -213,31 +215,59 @@ struct PendingAttachSend {
 struct QueuedAttachMessage {
     encoded: String,
     seq: Option<u64>,
+    terminal: bool,
 }
 
 struct AttachViewBuffer {
     messages: VecDeque<QueuedAttachMessage>,
     bytes: usize,
     gap: Option<(u64, u64, Option<String>)>,
+    /// Séquence évincée dont les fragments suivants doivent encore être
+    /// ignorés jusqu'à sa frontière finale.
+    dropping_seq: Option<u64>,
+    terminal_enqueued: bool,
     closed: bool,
+    close_notified: bool,
 }
 
 struct AttachView {
     queue: Arc<(Mutex<AttachViewBuffer>, Condvar)>,
     worker: Mutex<Option<thread::JoinHandle<()>>>,
+    subscription_id: String,
+    closed_tx: Sender<String>,
 }
 
 impl AttachView {
     #[cfg(test)]
     fn suspended(_subscription_id: impl Into<String>) -> Arc<Self> {
+        Self::suspended_with_notifications(_subscription_id).0
+    }
+
+    #[cfg(test)]
+    fn suspended_with_notifications(
+        subscription_id: impl Into<String>,
+    ) -> (Arc<Self>, Receiver<String>) {
+        let (closed_tx, closed_rx) = mpsc::channel();
+        (Self::suspended_with_sender(subscription_id, closed_tx), closed_rx)
+    }
+
+    #[cfg(test)]
+    fn suspended_with_sender(
+        subscription_id: impl Into<String>,
+        closed_tx: Sender<String>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             queue: Arc::new((
                 Mutex::new(AttachViewBuffer {
-                    messages: VecDeque::new(), bytes: 0, gap: None, closed: false,
+                    messages: VecDeque::new(), bytes: 0, gap: None, dropping_seq: None,
+                    terminal_enqueued: false,
+                    closed: false, close_notified: false,
                 }),
                 Condvar::new(),
             )),
             worker: Mutex::new(None),
+            subscription_id: subscription_id.into(),
+            closed_tx,
         })
     }
 
@@ -246,19 +276,31 @@ impl AttachView {
         writer: &Arc<Mutex<BufWriter<UnixStream>>>,
         closed_tx: Sender<String>,
     ) -> Option<Arc<Self>> {
-        let stream = writer.lock().ok()?.get_ref().try_clone().ok()?;
-        let _ = stream.set_write_timeout(Some(ATTACH_VIEW_WRITE_TIMEOUT));
+        // Tous les producteurs d'une même connexion (worker de vue et messages
+        // de contrôle) partagent ce writer : le mutex sérialise les frames JSONL.
+        let _ = writer
+            .lock()
+            .ok()?
+            .get_ref()
+            .set_write_timeout(Some(ATTACH_VIEW_WRITE_TIMEOUT));
         let queue = Arc::new((
             Mutex::new(AttachViewBuffer {
-                messages: VecDeque::new(), bytes: 0, gap: None, closed: false,
+                messages: VecDeque::new(), bytes: 0, gap: None, dropping_seq: None,
+                terminal_enqueued: false,
+                closed: false, close_notified: false,
             }),
             Condvar::new(),
         ));
-        let view = Arc::new(Self { queue: queue.clone(), worker: Mutex::new(None) });
+        let view = Arc::new(Self {
+            queue: queue.clone(),
+            worker: Mutex::new(None),
+            subscription_id: subscription_id.clone(),
+            closed_tx: closed_tx.clone(),
+        });
         let worker_queue = queue.clone();
         let worker_subscription = subscription_id;
+        let worker_writer = writer.clone();
         let handle = thread::spawn(move || {
-            let mut writer = BufWriter::new(stream);
             loop {
                 let next = {
                     let (lock, wake) = &*worker_queue;
@@ -269,21 +311,37 @@ impl AttachView {
                     if let Some((from_seq, to_seq, reason)) = buffer.gap.take() {
                         encode(&DaemonToWrapper::Gap {
                             subscription_id: worker_subscription.clone(), from_seq, to_seq, reason,
-                        }).ok()
+                        }).ok().map(|encoded| (encoded, false))
                     } else if let Some(message) = buffer.messages.pop_front() {
                         buffer.bytes = buffer.bytes.saturating_sub(message.encoded.len());
-                        Some(message.encoded)
+                        Some((message.encoded, message.terminal))
                     } else { None }
                 };
-                let Some(next) = next else {
+                let Some((next, terminal)) = next else {
                     if worker_queue.0.lock().unwrap_or_else(|e| e.into_inner()).closed { break; }
                     continue;
                 };
-                if writeln!(writer, "{next}").and_then(|_| writer.flush()).is_err() {
+                let write_failed = worker_writer
+                    .lock()
+                    .map(|mut writer| writeln!(writer, "{next}").and_then(|_| writer.flush()).is_err())
+                    .unwrap_or(true);
+                if write_failed {
+                    let (lock, wake) = &*worker_queue;
+                    let mut buffer = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    buffer.closed = true;
+                    let notify = !buffer.close_notified;
+                    buffer.close_notified = true;
+                    drop(buffer);
+                    wake.notify_all();
+                    if notify {
+                        let _ = closed_tx.send(worker_subscription.clone());
+                    }
+                    break;
+                }
+                if terminal {
                     let (lock, wake) = &*worker_queue;
                     lock.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
                     wake.notify_all();
-                    let _ = closed_tx.send(worker_subscription.clone());
                     break;
                 }
             }
@@ -293,14 +351,40 @@ impl AttachView {
     }
 
     fn enqueue(&self, message: DaemonToWrapper) -> bool {
-        let Ok(encoded) = encode(&message) else { return false; };
-        let seq = match message { DaemonToWrapper::JournalFragment { seq, .. } => Some(seq), _ => None };
+        let (seq, final_fragment, terminal) = match &message {
+            DaemonToWrapper::JournalFragment { seq, final_fragment, .. } => (Some(*seq), *final_fragment, false),
+            DaemonToWrapper::End { .. } => (None, false, true),
+            _ => (None, false, false),
+        };
+        let Ok(encoded) = encode(&message) else {
+            self.close_and_notify();
+            return false;
+        };
         let (lock, wake) = &*self.queue;
         let mut buffer = lock.lock().unwrap_or_else(|e| e.into_inner());
-        if buffer.closed { return false; }
+        if buffer.closed || buffer.terminal_enqueued { return false; }
+        if terminal {
+            // Le terminal clôt la file : les données restées en attente sont
+            // explicitement abandonnées avant End, jamais écrites après lui.
+            buffer.messages.clear();
+            buffer.bytes = 0;
+            buffer.gap = None;
+            buffer.dropping_seq = None;
+            buffer.terminal_enqueued = true;
+            buffer.messages.push_back(QueuedAttachMessage { encoded, seq: None, terminal: true });
+            wake.notify_one();
+            return true;
+        }
         if let Some(seq) = seq {
+            if buffer.dropping_seq == Some(seq) {
+                if final_fragment {
+                    buffer.dropping_seq = None;
+                }
+                return false;
+            }
             while buffer.bytes.saturating_add(encoded.len()) > ATTACH_VIEW_BUFFER_BYTES {
                 let Some(dropped_seq) = buffer.messages.iter().find_map(|item| item.seq) else {
+                    buffer.dropping_seq = Some(seq);
                     buffer.gap = Some((seq, seq, Some("vue trop lente".to_string())));
                     wake.notify_one();
                     return false;
@@ -311,18 +395,31 @@ impl AttachView {
                     else { retained.push_back(item); }
                 }
                 buffer.messages = retained;
+                buffer.dropping_seq = Some(dropped_seq);
                 buffer.gap = Some(match buffer.gap.take() {
                     Some((from, to, reason)) => (from.min(dropped_seq), to.max(dropped_seq), reason),
                     None => (dropped_seq, dropped_seq, Some("vue trop lente".to_string())),
                 });
             }
+            if buffer.dropping_seq == Some(seq) {
+                if final_fragment {
+                    buffer.dropping_seq = None;
+                }
+                return false;
+            }
         } else if buffer.bytes.saturating_add(encoded.len()) > ATTACH_VIEW_BUFFER_BYTES {
             buffer.closed = true;
+            let notify = !buffer.close_notified;
+            buffer.close_notified = true;
+            drop(buffer);
             wake.notify_all();
+            if notify {
+                let _ = self.closed_tx.send(self.subscription_id.clone());
+            }
             return false;
         }
         buffer.bytes += encoded.len();
-        buffer.messages.push_back(QueuedAttachMessage { encoded, seq });
+        buffer.messages.push_back(QueuedAttachMessage { encoded, seq, terminal: false });
         wake.notify_one();
         true
     }
@@ -331,6 +428,22 @@ impl AttachView {
         let (lock, wake) = &*self.queue;
         lock.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
         wake.notify_all();
+    }
+
+    fn close_and_notify(&self) {
+        let (lock, wake) = &*self.queue;
+        let mut buffer = lock.lock().unwrap_or_else(|e| e.into_inner());
+        if buffer.closed {
+            return;
+        }
+        buffer.closed = true;
+        let notify = !buffer.close_notified;
+        buffer.close_notified = true;
+        drop(buffer);
+        wake.notify_all();
+        if notify {
+            let _ = self.closed_tx.send(self.subscription_id.clone());
+        }
     }
 
     fn close_and_join(&self) {
@@ -436,9 +549,15 @@ fn push_control_message(
     let Ok(mut writer) = writer.lock() else {
         return false;
     };
-    writeln!(writer, "{json}")
+    let written = writeln!(writer, "{json}")
         .and_then(|_| writer.flush())
-        .is_ok()
+        .is_ok();
+    if !written && matches!(message, DaemonToWrapper::End { .. }) {
+        // Une vue ne doit jamais rester suspendue après l'échec du terminal :
+        // l'EOF de la connexion est alors son signal de clôture garanti.
+        let _ = writer.get_ref().shutdown(std::net::Shutdown::Both);
+    }
+    written
 }
 
 struct DeferredControl {
@@ -497,8 +616,14 @@ fn attach_refusal_for_subscription(
     Ok(registered.connection_id.clone())
 }
 
-fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) -> Vec<DeferredControl> {
+/// Retire les souscriptions affectées sous le verrou. Les E/S et les `join`
+/// retournés doivent impérativement être exécutés après l'avoir relâché.
+fn close_attach_subscriptions(
+    state: &mut DaemonState,
+    conn_id: &str,
+) -> (Vec<DeferredControl>, Vec<Arc<AttachView>>) {
     let mut controls = Vec::new();
+    let mut views = Vec::new();
     let affected = state
         .attach_subscriptions
         .iter()
@@ -509,7 +634,7 @@ fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) -> Vec<Def
         .collect::<Vec<_>>();
     for (subscription_id, subscription) in affected {
         state.attach_subscriptions.remove(&subscription_id);
-        if let Some(view) = state.attach_views.remove(&subscription_id) { view.close(); }
+        let view = state.attach_views.remove(&subscription_id);
         if subscription.attach_conn == conn_id {
             defer_control(
                 state,
@@ -517,20 +642,18 @@ fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) -> Vec<Def
                 DaemonToWrapper::Unsubscribe { subscription_id },
                 &mut controls,
             );
-        } else {
-            defer_control(
-                state,
-                &subscription.attach_conn,
-                DaemonToWrapper::End {
-                    subscription_id,
-                    reason: "wrapper indisponible".to_string(),
-                },
-                &mut controls,
-            );
+        } else if let Some(view) = &view {
+            let _ = view.enqueue(DaemonToWrapper::End {
+                subscription_id,
+                reason: "wrapper indisponible".to_string(),
+            });
+        }
+        if let Some(view) = view {
+            views.push(view);
         }
     }
     state.pending_attach_sends.retain(|_, pending| pending.conn_id != conn_id);
-    controls
+    (controls, views)
 }
 
 fn collect_closed_attach_views(
@@ -1064,9 +1187,9 @@ fn handle_connection(
     }
 
     // Connexion fermée : désenregistrer avec nettoyage explicite pour éviter fuites
-    let (writer_opt, removed, controls) = {
+    let (writer_opt, removed, controls, views) = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-        let controls = close_attach_subscriptions(&mut st, &conn_id);
+        let (controls, views) = close_attach_subscriptions(&mut st, &conn_id);
 
         // Récupérer le writer AVANT suppression pour nettoyage explicite
         let writer_opt = st.connections.remove(&conn_id);
@@ -1077,9 +1200,12 @@ fn handle_connection(
         st.conn_hosts.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
-        (writer_opt, removed, controls)
+        (writer_opt, removed, controls, views)
     };
     let _ = execute_controls(controls);
+    for view in views {
+        view.close_and_join();
+    }
 
     // Nettoyage explicite du writer pour éviter fuites de ressources
     if let Some(writer_mutex) = writer_opt
@@ -1624,9 +1750,14 @@ fn handle_wrapper_message(
             if accepted {
                 None
             } else {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-                st.attach_subscriptions.remove(&subscription_id);
-                if let Some(view) = st.attach_views.remove(&subscription_id) { view.close(); }
+                let view = {
+                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    st.attach_subscriptions.remove(&subscription_id);
+                    st.attach_views.remove(&subscription_id)
+                };
+                if let Some(view) = view {
+                    view.close_and_join();
+                }
                 Some(DaemonToWrapper::AttachRejected {
                     subscription_id: Some(subscription_id),
                     reason: AttachRefusal::WrapperUnavailable,
@@ -1634,7 +1765,7 @@ fn handle_wrapper_message(
             }
         }
         WrapperToDaemon::Unsubscribe { subscription_id } => {
-            let control = {
+            let (control, view) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(subscription) = st.attach_subscriptions.get(&subscription_id).cloned() else {
                     // Une fin d'ancienne génération n'a pas le droit de toucher
@@ -1648,20 +1779,25 @@ fn handle_wrapper_message(
                     });
                 }
                 st.attach_subscriptions.remove(&subscription_id);
-                st.connections.get(&subscription.wrapper_conn).map(|writer| DeferredControl {
+                let control = st.connections.get(&subscription.wrapper_conn).map(|writer| DeferredControl {
                     writer: writer.clone(),
                     message: DaemonToWrapper::Unsubscribe {
                         subscription_id: subscription_id.clone(),
                     },
-                })
+                });
+                (control, st.attach_views.remove(&subscription_id))
             };
             if let Some(control) = control {
                 let _ = execute_controls(vec![control]);
             }
-            Some(DaemonToWrapper::End {
-                subscription_id,
-                reason: "désabonnement demandé".to_string(),
-            })
+            if let Some(view) = view {
+                let _ = view.enqueue(DaemonToWrapper::End {
+                    subscription_id,
+                    reason: "désabonnement demandé".to_string(),
+                });
+                view.close_and_join();
+            }
+            None
         }
         WrapperToDaemon::Subscribed { subscription_id } => {
             let control = {
@@ -1684,21 +1820,24 @@ fn handle_wrapper_message(
             };
             let delivered = control.is_some_and(|control| execute_controls(vec![control]).is_empty());
             if !delivered {
-                let control = {
+                let (control, view) = {
                     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                     let subscription = st.attach_subscriptions.remove(&subscription_id);
-                    if let Some(view) = st.attach_views.remove(&subscription_id) { view.close(); }
-                    subscription.and_then(|subscription| {
+                    let control = subscription.and_then(|subscription| {
                         st.connections.get(&subscription.wrapper_conn).map(|writer| DeferredControl {
                             writer: writer.clone(),
                             message: DaemonToWrapper::Unsubscribe {
                                 subscription_id: subscription_id.clone(),
                             },
                         })
-                    })
+                    });
+                    (control, st.attach_views.remove(&subscription_id))
                 };
                 if let Some(control) = control {
                     let _ = execute_controls(vec![control]);
+                }
+                if let Some(view) = view {
+                    view.close_and_join();
                 }
             }
             None
@@ -1707,7 +1846,7 @@ fn handle_wrapper_message(
             subscription_id,
             reason,
         } => {
-            let control = {
+            let (control, view) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                 let subscription_id = subscription_id?;
                 let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
@@ -1722,10 +1861,13 @@ fn handle_wrapper_message(
                     },
                 });
                 st.attach_subscriptions.remove(&subscription_id);
-                control
+                (control, st.attach_views.remove(&subscription_id))
             };
             if let Some(control) = control {
                 let _ = execute_controls(vec![control]);
+            }
+            if let Some(view) = view {
+                view.close_and_join();
             }
             None
         }
@@ -1733,24 +1875,18 @@ fn handle_wrapper_message(
             subscription_id,
             reason,
         } => {
-            let control = {
+            let view = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                 let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
                 if subscription.wrapper_conn != conn_id {
                     return None;
                 }
-                let control = st.connections.get(&subscription.attach_conn).map(|writer| DeferredControl {
-                    writer: writer.clone(),
-                    message: DaemonToWrapper::End {
-                        subscription_id: subscription_id.clone(),
-                        reason,
-                    },
-                });
                 st.attach_subscriptions.remove(&subscription_id);
-                control
+                st.attach_views.remove(&subscription_id)
             };
-            if let Some(control) = control {
-                let _ = execute_controls(vec![control]);
+            if let Some(view) = view {
+                let _ = view.enqueue(DaemonToWrapper::End { subscription_id, reason });
+                view.close_and_join();
             }
             None
         }
@@ -1760,24 +1896,21 @@ fn handle_wrapper_message(
             offset,
             reason,
         } => {
-            let control = {
+            let view = {
                 let st = state.lock().unwrap_or_else(|e| e.into_inner());
                 let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
                 if subscription.wrapper_conn != conn_id {
                     return None;
                 }
-                st.connections.get(&subscription.attach_conn).map(|writer| DeferredControl {
-                    writer: writer.clone(),
-                    message: DaemonToWrapper::JournalReadError {
-                        subscription_id,
-                        line,
-                        offset,
-                        reason,
-                    },
-                })
+                st.attach_views.get(&subscription_id).cloned()
             };
-            if let Some(control) = control {
-                let _ = execute_controls(vec![control]);
+            if let Some(view) = view {
+                let _ = view.enqueue(DaemonToWrapper::JournalReadError {
+                    subscription_id,
+                    line,
+                    offset,
+                    reason,
+                });
             }
             None
         }
@@ -1846,17 +1979,20 @@ fn handle_wrapper_message(
         }
 
         WrapperToDaemon::Unregister => {
-            let controls = {
+            let (controls, views) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-                let controls = close_attach_subscriptions(&mut st, conn_id);
+                let (controls, views) = close_attach_subscriptions(&mut st, conn_id);
                 st.router.unregister_by_conn(conn_id);
                 st.mark_stopped(conn_id);
                 st.conn_names.remove(conn_id);
                 st.conn_hosts.remove(conn_id);
                 st.conn_operating_systems.remove(conn_id);
-                controls
+                (controls, views)
             };
             let _ = execute_controls(controls);
+            for view in views {
+                view.close_and_join();
+            }
             None
         }
 
@@ -2454,6 +2590,7 @@ pub struct DaemonStatus {
 #[cfg(test)]
 mod presence_tests {
     use super::*;
+    use std::io::Read;
 
     fn control_socket(label: &str) -> (Arc<Mutex<BufWriter<UnixStream>>>, BufReader<UnixStream>) {
         let path = std::env::temp_dir().join(format!(
@@ -2471,6 +2608,45 @@ mod presence_tests {
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
         decode(line.trim()).unwrap()
+    }
+
+    fn normalized_attach_frame(mut message: DaemonToWrapper) -> String {
+        match &mut message {
+            DaemonToWrapper::JournalFragment { subscription_id, .. }
+            | DaemonToWrapper::SnapshotCaughtUp { subscription_id, .. }
+            | DaemonToWrapper::Gap { subscription_id, .. }
+            | DaemonToWrapper::JournalReadError { subscription_id, .. }
+            | DaemonToWrapper::End { subscription_id, .. }
+            | DaemonToWrapper::Subscribed { subscription_id }
+            | DaemonToWrapper::Subscribe { subscription_id, .. }
+            | DaemonToWrapper::Unsubscribe { subscription_id } => subscription_id.clear(),
+            DaemonToWrapper::AttachRejected { subscription_id, .. } => *subscription_id = None,
+            _ => {}
+        }
+        encode(&message).unwrap()
+    }
+
+    fn install_attach_view(
+        state: &mut DaemonState,
+        subscription_id: &str,
+        attach_conn: &str,
+        writer: &Arc<Mutex<BufWriter<UnixStream>>>,
+    ) {
+        let view = AttachView::start(
+            subscription_id.to_string(),
+            writer,
+            state.view_closed_tx.clone(),
+        )
+        .unwrap();
+        state.attach_subscriptions.insert(
+            subscription_id.to_string(),
+            AttachSubscription {
+                agent: "agent-2".to_string(),
+                attach_conn: attach_conn.to_string(),
+                wrapper_conn: "conn-1".to_string(),
+            },
+        );
+        state.attach_views.insert(subscription_id.to_string(), view);
     }
 
     #[test]
@@ -2797,13 +2973,16 @@ mod presence_tests {
         ));
         assert!(shared.lock().unwrap().attach_subscriptions.contains_key(&second_id));
 
-        let controls = {
+        let (controls, views) = {
             let mut state = shared.lock().unwrap();
-            let controls = close_attach_subscriptions(&mut state, "attach-1");
+            let (controls, views) = close_attach_subscriptions(&mut state, "attach-1");
             assert!(state.attach_subscriptions.is_empty());
-            controls
+            (controls, views)
         };
         assert!(execute_controls(controls).is_empty());
+        for view in views {
+            view.close_and_join();
+        }
         assert!(matches!(
             read_control(&mut wrapper_reader),
             DaemonToWrapper::Unsubscribe { subscription_id } if subscription_id == second_id
@@ -2911,6 +3090,163 @@ mod presence_tests {
     }
 
     #[test]
+    fn eviction_ignore_les_fragments_restants_de_la_sequence_lachee() {
+        let view = AttachView::suspended("sub-fragments");
+        let bytes = vec![b'x'; 600 * 1024];
+        assert!(view.enqueue(DaemonToWrapper::JournalFragment {
+            subscription_id: "sub-fragments".to_string(), seq: 41, offset: 0,
+            final_fragment: false, bytes: bytes.clone(),
+        }));
+        assert!(!view.enqueue(DaemonToWrapper::JournalFragment {
+            subscription_id: "sub-fragments".to_string(), seq: 41, offset: 1,
+            final_fragment: false, bytes: bytes.clone(),
+        }));
+        assert!(!view.enqueue(DaemonToWrapper::JournalFragment {
+            subscription_id: "sub-fragments".to_string(), seq: 41, offset: 2,
+            final_fragment: false, bytes: b"continuation evincee".to_vec(),
+        }));
+        assert!(!view.enqueue(DaemonToWrapper::JournalFragment {
+            subscription_id: "sub-fragments".to_string(), seq: 41, offset: 3,
+            final_fragment: true, bytes: b"frontiere evincee".to_vec(),
+        }));
+        assert!(view.enqueue(DaemonToWrapper::JournalFragment {
+            subscription_id: "sub-fragments".to_string(), seq: 42, offset: 4,
+            final_fragment: true, bytes: b"sequence suivante admise".to_vec(),
+        }));
+        let queue = view.queue.0.lock().unwrap();
+        assert_eq!(queue.dropping_seq, None);
+        assert!(queue.messages.iter().all(|message| message.seq != Some(41)));
+        assert_eq!(queue.gap.as_ref().map(|gap| (gap.0, gap.1)), Some((41, 41)));
+        assert_eq!(queue.messages.iter().filter(|message| message.seq == Some(42)).count(), 1);
+    }
+
+    #[test]
+    fn saturation_non_sequencee_notifie_et_recolte_la_vue_exactement_une_fois() {
+        let (mut state, config) = state_with_registered_agent("attach-non-seq-close");
+        let (wrapper_writer, _wrapper_reader) = control_socket("attach-non-seq-wrapper");
+        let (attach_writer, _attach_reader) = control_socket("attach-non-seq-view");
+        let view = AttachView::suspended_with_sender("sub-non-seq", state.view_closed_tx.clone());
+        state.connections.insert("conn-1".to_string(), wrapper_writer);
+        state.connections.insert("attach-1".to_string(), attach_writer);
+        state.attach_subscriptions.insert("sub-non-seq".to_string(), AttachSubscription {
+            agent: "agent-2".to_string(), attach_conn: "attach-1".to_string(),
+            wrapper_conn: "conn-1".to_string(),
+        });
+        state.attach_views.insert("sub-non-seq".to_string(), view.clone());
+        {
+            let mut queue = view.queue.0.lock().unwrap();
+            queue.bytes = ATTACH_VIEW_BUFFER_BYTES;
+        }
+        assert!(!view.enqueue(DaemonToWrapper::SnapshotCaughtUp {
+            subscription_id: "sub-non-seq".to_string(), through_seq: Some(7),
+        }));
+        assert!(!view.enqueue(DaemonToWrapper::Gap {
+            subscription_id: "sub-non-seq".to_string(), from_seq: 8, to_seq: 9, reason: None,
+        }));
+        let (controls, views) = collect_closed_attach_views(&mut state);
+        let _ = execute_controls(controls);
+        for view in views {
+            view.close_and_join();
+        }
+        assert!(state.attach_subscriptions.is_empty());
+        assert!(state.attach_views.is_empty());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn end_abandonne_la_file_et_interdit_toute_frame_ulterieure() {
+        let view = AttachView::suspended("sub-terminal");
+        assert!(view.enqueue(DaemonToWrapper::JournalFragment {
+            subscription_id: "sub-terminal".to_string(), seq: 5, offset: 0,
+            final_fragment: true, bytes: b"avant-end".to_vec(),
+        }));
+        assert!(view.enqueue(DaemonToWrapper::End {
+            subscription_id: "sub-terminal".to_string(), reason: "fin".to_string(),
+        }));
+        assert!(!view.enqueue(DaemonToWrapper::JournalReadError {
+            subscription_id: "sub-terminal".to_string(), line: 7, offset: 42,
+            reason: "trop tard".to_string(),
+        }));
+        let queue = view.queue.0.lock().unwrap();
+        assert_eq!(queue.messages.len(), 1);
+        assert!(queue.messages.front().is_some_and(|message| message.terminal));
+        assert!(queue.messages.iter().all(|message| message.seq.is_none()));
+    }
+
+    #[test]
+    fn producteurs_de_vue_et_controle_partagent_des_lignes_json_decodables() {
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(writer_stream)));
+        let (closed_tx, _closed_rx) = mpsc::channel();
+        let view = AttachView::start("sub-serialise".to_string(), &writer, closed_tx).unwrap();
+        let reader = thread::spawn(move || {
+            let mut reader = BufReader::new(reader_stream);
+            (0..33)
+                .map(|_| {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    decode::<DaemonToWrapper>(line.trim()).is_ok()
+                })
+                .collect::<Vec<_>>()
+        });
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let control_barrier = barrier.clone();
+        let control_writer = writer.clone();
+        let controls = thread::spawn(move || {
+            control_barrier.wait();
+            let controls = (0..16)
+                .map(|number| DeferredControl {
+                    writer: control_writer.clone(),
+                    message: DaemonToWrapper::Ack { id: format!("ack-{number}") },
+                })
+                .chain(std::iter::once(DeferredControl {
+                    writer: control_writer.clone(),
+                    message: DaemonToWrapper::End {
+                        subscription_id: "sub-serialise".to_string(), reason: "fin".to_string(),
+                    },
+                }))
+                .collect();
+            execute_controls(controls)
+        });
+        for seq in 0..16 {
+            assert!(view.enqueue(DaemonToWrapper::JournalFragment {
+                subscription_id: "sub-serialise".to_string(), seq, offset: seq,
+                final_fragment: true, bytes: vec![b'x'; 2048],
+            }));
+        }
+        barrier.wait();
+        assert!(controls.join().unwrap().is_empty());
+        assert!(reader.join().unwrap().into_iter().all(|decoded| decoded));
+        view.close_and_join();
+    }
+
+    #[test]
+    fn end_indelivrable_force_l_eof_de_la_vue() {
+        let (writer_stream, mut peer) = UnixStream::pair().unwrap();
+        writer_stream.set_write_timeout(Some(Duration::from_millis(50))).unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(writer_stream)));
+        // Remplir le tampon noyau sans lire le pair, puis échouer sur End.
+        let payload = "x".repeat(16 * 1024);
+        while push_control_message(&writer, &DaemonToWrapper::Ack { id: payload.clone() }) {}
+        assert!(!push_control_message(&writer, &DaemonToWrapper::End {
+            subscription_id: "sub-eof".to_string(), reason: "vue trop lente".to_string(),
+        }));
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut bytes = [0_u8; 1024];
+        loop {
+            match peer.read(&mut bytes) {
+                Ok(0) => break,
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut => {
+                        panic!("End ni EOF recus par la vue")
+                    }
+                Err(error) => panic!("lecture pair: {error}"),
+            }
+        }
+    }
+
+    #[test]
     fn rejet_tardif_attach_est_reroute_puis_purge() {
         let (mut state, config) = state_with_registered_agent("attach-late-reject");
         let (writer, mut reader) = control_socket("attach-late-reject");
@@ -2946,9 +3282,160 @@ mod presence_tests {
         state.pending_attach_sends.insert("live".to_string(), PendingAttachSend {
             conn_id: "attach-1".to_string(), expires_at: Instant::now() + Duration::from_secs(60),
         });
-        let controls = close_attach_subscriptions(&mut state, "attach-1");
+        let (controls, views) = close_attach_subscriptions(&mut state, "attach-1");
         assert!(controls.is_empty());
+        for view in views {
+            view.close_and_join();
+        }
         assert!(state.pending_attach_sends.is_empty());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn deux_vues_attach_recoivent_le_meme_flux_et_sont_recoltees() {
+        let (mut state, config) = state_with_registered_agent("attach-two-views");
+        let (wrapper_writer, _wrapper_reader) = control_socket("attach-two-wrapper");
+        let (first_writer, mut first_reader) = control_socket("attach-two-first");
+        let (second_writer, mut second_reader) = control_socket("attach-two-second");
+        state.connections.insert("conn-1".to_string(), wrapper_writer);
+        state.connections.insert("attach-1".to_string(), first_writer.clone());
+        state.connections.insert("attach-2".to_string(), second_writer.clone());
+        install_attach_view(&mut state, "sub-first", "attach-1", &first_writer);
+        install_attach_view(&mut state, "sub-second", "attach-2", &second_writer);
+        let shared = Arc::new(Mutex::new(state));
+
+        for subscription_id in ["sub-first", "sub-second"] {
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::JournalFragment {
+                    subscription_id: subscription_id.to_string(),
+                    seq: 7,
+                    offset: 12,
+                    final_fragment: true,
+                    bytes: b"ligne complete".to_vec(),
+                },
+                &shared,
+            );
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::SnapshotCaughtUp {
+                    subscription_id: subscription_id.to_string(),
+                    through_seq: Some(7),
+                },
+                &shared,
+            );
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::Gap {
+                    subscription_id: subscription_id.to_string(),
+                    from_seq: 8,
+                    to_seq: 9,
+                    reason: Some("retard".to_string()),
+                },
+                &shared,
+            );
+        }
+
+        let first = (0..3).map(|_| normalized_attach_frame(read_control(&mut first_reader))).collect::<Vec<_>>();
+        let second = (0..3).map(|_| normalized_attach_frame(read_control(&mut second_reader))).collect::<Vec<_>>();
+        assert_eq!(first, second, "les deux vues doivent recevoir les memes trames");
+
+        let (controls, views) = {
+            let mut state = shared.lock().unwrap();
+            let (controls, views) = close_attach_subscriptions(&mut state, "attach-1");
+            let (second_controls, second_views) = close_attach_subscriptions(&mut state, "attach-2");
+            assert!(state.attach_subscriptions.is_empty());
+            assert!(state.attach_views.is_empty());
+            (controls.into_iter().chain(second_controls).collect::<Vec<_>>(),
+             views.into_iter().chain(second_views).collect::<Vec<_>>())
+        };
+        let _ = execute_controls(controls);
+        for view in &views {
+            view.close_and_join();
+            assert!(view.worker.lock().unwrap().is_none());
+        }
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn vue_lente_est_recoltee_sans_bloquer_le_daemon_ni_les_autres_vues() {
+        let (mut state, config) = state_with_registered_agent("attach-slow-view");
+        let (wrapper_stream, _wrapper_peer) = UnixStream::pair().unwrap();
+        let (slow_stream, _slow_peer) = UnixStream::pair().unwrap();
+        let (fast_stream, fast_peer) = UnixStream::pair().unwrap();
+        fast_peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let wrapper_writer = Arc::new(Mutex::new(BufWriter::new(wrapper_stream)));
+        let slow_writer = Arc::new(Mutex::new(BufWriter::new(slow_stream)));
+        let fast_writer = Arc::new(Mutex::new(BufWriter::new(fast_stream)));
+        state.connections.insert("conn-1".to_string(), wrapper_writer);
+        state.connections.insert("attach-slow".to_string(), slow_writer.clone());
+        state.connections.insert("attach-fast".to_string(), fast_writer.clone());
+        install_attach_view(&mut state, "sub-slow", "attach-slow", &slow_writer);
+        install_attach_view(&mut state, "sub-fast", "attach-fast", &fast_writer);
+        let shared = Arc::new(Mutex::new(state));
+
+        handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::JournalFragment {
+                subscription_id: "sub-fast".to_string(),
+                seq: 1,
+                offset: 0,
+                final_fragment: true,
+                bytes: b"temoin".to_vec(),
+            },
+            &shared,
+        );
+        let mut fast_reader = BufReader::new(fast_peer);
+        assert!(matches!(
+            read_control(&mut fast_reader),
+            DaemonToWrapper::JournalFragment { subscription_id, seq: 1, .. } if subscription_id == "sub-fast"
+        ));
+
+        // Le pair lent n'est jamais lu : le worker doit atteindre son timeout
+        // d'écriture, tandis que le chemin daemon garde le verrou disponible.
+        for seq in 1..=512 {
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::JournalFragment {
+                    subscription_id: "sub-slow".to_string(),
+                    seq,
+                    offset: seq * 4096,
+                    final_fragment: true,
+                    bytes: vec![b'x'; 4096],
+                },
+                &shared,
+            );
+        }
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let observer_state = shared.clone();
+        thread::spawn(move || {
+            let count = observer_state.lock().unwrap().agent_infos().len();
+            let _ = observed_tx.send(count);
+        });
+        assert_eq!(observed_rx.recv_timeout(Duration::from_millis(100)).unwrap(), 1);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            handle_wrapper_message("conn-1", WrapperToDaemon::Heartbeat, &shared);
+            if !shared.lock().unwrap().attach_subscriptions.contains_key("sub-slow") {
+                break;
+            }
+            assert!(Instant::now() < deadline, "la vue lente doit etre fermee dans la borne");
+            thread::sleep(Duration::from_millis(10));
+        }
+        let state = shared.lock().unwrap();
+        assert!(!state.attach_views.contains_key("sub-slow"));
+        assert!(state.attach_subscriptions.contains_key("sub-fast"));
+        drop(state);
+
+        let (controls, views) = {
+            let mut state = shared.lock().unwrap();
+            close_attach_subscriptions(&mut state, "attach-fast")
+        };
+        let _ = execute_controls(controls);
+        for view in views {
+            view.close_and_join();
+        }
         let _ = std::fs::remove_file(config.db_path);
     }
 

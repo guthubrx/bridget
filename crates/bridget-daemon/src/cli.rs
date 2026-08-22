@@ -2,7 +2,7 @@
 
 use crate::daemon::{self, DaemonConfig};
 use bridget_core::BridgetMessage;
-use bridget_transport::protocol::{decode, encode, AgentInfo, RuntimeSource};
+use bridget_transport::protocol::{AgentInfo, AttachWindow, RuntimeSource, decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
@@ -87,6 +87,7 @@ pub fn run() {
     // --- Sous-commandes daemon / client ---
     match cmd.as_str() {
         "daemon" => cmd_daemon(),
+        "attach" => cmd_attach(&args[2..]),
         "send" => cmd_send(&args[2..]),
         "cancel" => cmd_cancel(&args[2..]),
         "requests" => cmd_requests(&args[2..]),
@@ -173,6 +174,7 @@ fn print_usage() {
            -- <CMD> [ARGS...]     Agent personnalisé\n\n\
          Daemon & client :\n  \
            daemon                 Lance le daemon\n  \
+           attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            send --to <N> <MSG>    Envoie un message\n  \
            reply <MSG>            Répond au dernier expéditeur\n  \
            cancel <ID>            Annule une demande suivie [--reason <T>]\n  \
@@ -200,6 +202,40 @@ fn print_usage() {
 
 fn socket_path() -> std::path::PathBuf {
     DaemonConfig::default().socket_path
+}
+
+fn cmd_attach(args: &[String]) {
+    let (agent, window) = match parse_attach_args(args) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            eprintln!("usage: bridget attach <nom> [--from-seq N | --date AAAA-MM-JJ]");
+            eprintln!("erreur: {error}");
+            std::process::exit(2);
+        }
+    };
+    if let Err(error) = crate::attach::run(&agent, window, &socket_path()) {
+        eprintln!("bridget attach: {error}");
+        std::process::exit(1);
+    }
+}
+
+fn parse_attach_args(args: &[String]) -> Result<(String, AttachWindow), String> {
+    let Some(agent) = args.first() else {
+        return Err("nom d'équipier manquant".to_string());
+    };
+    validate_agent_name(agent)?;
+    let window = match args.get(1).map(String::as_str) {
+        None => AttachWindow::Today,
+        Some("--from-seq") if args.len() == 3 => {
+            let seq = args[2]
+                .parse::<u64>()
+                .map_err(|_| "--from-seq exige un entier positif ou nul".to_string())?;
+            AttachWindow::Seq(seq)
+        }
+        Some("--date") if args.len() == 3 => AttachWindow::Date(args[2].clone()),
+        Some(_) => return Err("options attach invalides ou incompatibles".to_string()),
+    };
+    Ok((agent.clone(), window))
 }
 
 fn cmd_rename(args: &[String]) {
@@ -1461,5 +1497,61 @@ mod hook_tests {
     fn cellule_runtime_marque_une_valeur_absente() {
         assert_eq!(cell(Some("claude-opus-5")), "claude-opus-5");
         assert_eq!(cell(None), "—");
+    }
+
+    #[test]
+    fn arguments_attach_resolvent_les_trois_fenetres() {
+        assert_eq!(
+            parse_attach_args(&["codex-1".to_string()]).unwrap(),
+            ("codex-1".to_string(), AttachWindow::Today)
+        );
+        assert_eq!(
+            parse_attach_args(&[
+                "codex-1".to_string(),
+                "--from-seq".to_string(),
+                "42".to_string(),
+            ])
+            .unwrap(),
+            ("codex-1".to_string(), AttachWindow::Seq(42))
+        );
+        assert_eq!(
+            parse_attach_args(&[
+                "codex-1".to_string(),
+                "--date".to_string(),
+                "2026-08-22".to_string(),
+            ])
+            .unwrap(),
+            (
+                "codex-1".to_string(),
+                AttachWindow::Date("2026-08-22".to_string())
+            )
+        );
+    }
+
+    #[test]
+    fn arguments_attach_refusent_les_formes_ambigues() {
+        assert!(parse_attach_args(&[]).is_err());
+        assert!(
+            parse_attach_args(&["nom invalide".to_string()]).is_err(),
+            "la validation des noms existante reste appliquée"
+        );
+        assert!(
+            parse_attach_args(&[
+                "codex-1".to_string(),
+                "--from-seq".to_string(),
+                "pas-un-entier".to_string(),
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_attach_args(&[
+                "codex-1".to_string(),
+                "--date".to_string(),
+                "2026-08-22".to_string(),
+                "--from-seq".to_string(),
+                "1".to_string(),
+            ])
+            .is_err()
+        );
     }
 }
