@@ -1851,4 +1851,17 @@ mod tests {
         assert_eq!(unsafe { libc::close(pipe[0]) }, 0);
         assert_eq!(unsafe { libc::close(pipe[1]) }, 0);
     }
+
+    #[test]
+    fn garde_raw_restaure_le_terminal_apres_panic() {
+        let pseudo_tty = PseudoTerminal::open();
+        let before = pseudo_tty.attrs();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = with_raw_terminal(pseudo_tty.slave, |_interactive| -> Result<(), String> {
+                panic!("panic de boucle simulée")
+            });
+        }));
+        assert!(panic.is_err());
+        assert_terminal_restored(&before, &pseudo_tty.attrs());
+    }
 }
