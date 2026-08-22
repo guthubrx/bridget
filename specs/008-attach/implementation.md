@@ -3,27 +3,39 @@
 ## T808 — Budget d'observation SC-005
 
 - **Date** : 2026-08-22
-- **Banc** : `acp::tests::sc005_deux_vues_ne_degradent_pas_le_p95_d_append_de_plus_de_cinq_pourcent`.
+- **Banc réel** : `sc005_attach_budget::sc005_deux_vues_reelles_ne_degradent_pas_le_p95_d_append_de_plus_de_cinq_pourcent`.
 - **Adaptateur** : faux adaptateur ACP stdio déterministe, selon le mécanisme
-  introduit par T704 ; chaque campagne exécute 200 tours identiques.
+  introduit par T704 ; chaque phase exécute 20 tours de chauffe puis 200 tours
+  identiques mesurés. Les phases sont appariées dans le même daemon et le même
+  wrapper ; la charge avance sur la frontière d'append, sans être cadencée par
+  la réception des vues.
 - **Métrique** : durée physique de `SessionJournal::append_entry`, relevée dans
-  le thread écrivain du journal par une instrumentation limitée aux tests. Les
-  deux vues simulées consomment la projection des tours après leur clôture et
-  n'entrent donc pas dans le chemin d'append JSONL.
+  le thread écrivain du journal par une instrumentation limitée aux tests et
+  aux événements `turn_start`/`turn_end`. Dans le cas observé, deux connexions
+  Unix réelles négocient `RoleHandshake(Attach)`, obtiennent `Subscribed` et
+  consomment chaque frame pendant les 200 tours.
 
-Résultat reproductible de la campagne :
+Le correctif remplace les tails JSONL redondants par un flux mémoire unique,
+publié sans blocage après le flush puis multiplexé par le daemon. Le journal
+reste l'autorité du rejeu ; une saturation mémoire produit un `Gap` coalescé
+et un rattrapage disque. Le fichier du jour reste ouvert jusqu'à sa rotation.
 
-| Vues attach simulées | Échantillons d'append | p95 |
-| --- | ---: | ---: |
-| 0 | 400 | 125,959 µs |
-| 2 | 400 | 112,333 µs |
+Résultat reproductible de deux exécutions complètes :
 
-La variation observée est de -10,82 % ; elle est donc strictement sous la
-limite de dégradation de 5 % fixée par SC-005.
+| Campagne | Vues attach réelles | Échantillons d'append | p95 |
+| --- | ---: | ---: | ---: |
+| 1 | 0 | 400 | 30,792 µs |
+| 1 | 2 | 400 | 30,333 µs |
+| 2 | 0 | 400 | 38,292 µs |
+| 2 | 2 | 400 | 28,208 µs |
 
-**Dérogation T806a** : cette tâche est commitée alors que le seul test rouge
-du workspace est ce banc SC-005 invalidé par STOP-T808 (vues simulées) ; sa
-correction immédiate remplace le banc par deux vues attach réelles.
+Le critère SC-005 (< 5 %) passe dans les deux exécutions : les variations
+mesurées sont respectivement de -1,5 % et -26,3 %. Le timeout global de
+30 secondes et le seuil contractuel restent inchangés.
+
+**Dérogation T806a** : cette tâche a été commitée tandis que l'ancien banc à
+  vues simulées était invalidé. Le banc réel qui le remplace est maintenant
+  vert après correction du chemin produit.
 
 ## T809 — Gate distant fédéré
 
