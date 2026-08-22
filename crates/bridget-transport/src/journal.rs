@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use std::time::{Duration, Instant};
 
 const WRITER_QUEUE_CAPACITY: usize = 256;
 const MAX_INCREMENTAL_LINE_BYTES: usize = 4 * 1024 * 1024;
@@ -53,6 +55,8 @@ pub struct JournalWriter {
     sender: mpsc::SyncSender<WriterCommand>,
     failure: Arc<Mutex<Option<String>>>,
     handle: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
+    #[cfg(test)]
+    append_latencies: Arc<Mutex<Vec<Duration>>>,
 }
 
 impl JournalWriter {
@@ -66,10 +70,16 @@ impl JournalWriter {
         let (sender, receiver) = mpsc::sync_channel(WRITER_QUEUE_CAPACITY);
         let failure = Arc::new(Mutex::new(None));
         let thread_failure = failure.clone();
+        #[cfg(test)]
+        let append_latencies = Arc::new(Mutex::new(Vec::new()));
+        #[cfg(test)]
+        let thread_append_latencies = append_latencies.clone();
         let handle = thread::spawn(move || {
             while let Ok(command) = receiver.recv() {
                 match command {
                     WriterCommand::Entry(entry) => {
+                        #[cfg(test)]
+                        let started = Instant::now();
                         if let Err(error) = journal.append_entry(entry) {
                             let detail = format!("écriture du journal ACP impossible: {error}");
                             *thread_failure.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(detail.clone());
@@ -79,6 +89,11 @@ impl JournalWriter {
                                 .push_back(AcpEvent::JournalFailed { detail });
                             break;
                         }
+                        #[cfg(test)]
+                        thread_append_latencies
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .push(started.elapsed());
                     }
                     WriterCommand::Stop(done) => {
                         let _ = done.send(());
@@ -91,6 +106,8 @@ impl JournalWriter {
             sender,
             failure,
             handle: Arc::new(Mutex::new(Some(handle))),
+            #[cfg(test)]
+            append_latencies,
         })
     }
 
@@ -127,7 +144,18 @@ impl JournalWriter {
             sender,
             failure: Arc::new(Mutex::new(None)),
             handle: Arc::new(Mutex::new(None)),
+            append_latencies: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_append_latencies(&self) -> Vec<Duration> {
+        std::mem::take(
+            &mut *self
+                .append_latencies
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()),
+        )
     }
 }
 

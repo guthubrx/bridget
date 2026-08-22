@@ -71,7 +71,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
   fin tardive d'ancienne génération ignorée, zéro état résiduel après
   déconnexion.
 
-- [ ] **T804b** [US1] **Daemon : tampons, écrivains, Gap et corrélation des
+- [x] **T804b** [US1] **Daemon : tampons, écrivains, Gap et corrélation des
   envois** : handler qui ne fait qu'enfiler (aucune E/S sous verrou global —
   interdiction du motif `daemon.rs:1334`), écrivain dédié par vue à délai
   borné (fermeture motivée de la vue lente), tampon en octets (1 Mio) avec
@@ -139,7 +139,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
   **Observable** : bancs reproductibles en test, chiffres dans
   `implementation.md`.
 
-- [ ] **T808** [US3] **Banc SC-005 (budget d'observation)** : faux adaptateur
+- [x] **T808** [US3] **Banc SC-005 (budget d'observation)** : faux adaptateur
   déterministe (réutiliser 007-T704), N ≥ 200 tours identiques, dégradation
   p95 de latence d'append < 5 % avec 2 vues vs 0 vue.
   **Observable** : banc en test, chiffres consignés.
