@@ -43,6 +43,24 @@ paquet quand `npx` le permet).
 Note : les adaptateurs Zed sont explicitement publiés pour usage hors Zed
 (source : zed.dev/blog/codex-is-live-in-zed, consulté 2026-08-22).
 
+### Constat spike T701 — 2026-08-22
+
+Le protocole ACP 1 est négocié avec `codex-acp` 0.16.0, sans demande de clé
+API : la méthode `initialize` annonce explicitement l'authentification ChatGPT
+par abonnement. Deux conditions de lancement ont été testées :
+
+1. `-c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"high\"` : `initialize`
+   et `session/new` réussissent, mais `session/prompt` échoue avec « The
+   'gpt-5.6-sol' model requires a newer version of Codex ».
+2. `CODEX_HOME` isolé, contenant uniquement `auth.json`, sans options `-c` :
+   `initialize`, `session/new`, `session/prompt` réussissent ; la réponse de
+   tour porte `stopReason: "end_turn"` et le texte `SPIKE_ACP_OK`.
+
+Conclusion : l'adaptateur 0.16.0 ne peut pas utiliser les modèles récents
+configurés dans le home Codex courant. Le registre conserve donc ses arguments
+par défaut ; l'isolation du home devra être modélisée explicitement avant le
+lancement d'équipiers, plutôt que de déduire un modèle non vérifié.
+
 ## R-003 — Facturation : abonnements, jamais de clé API
 
 Constats (sources : zed.dev/acp/agent/codex-cli, README claude-code-acp,

@@ -13,7 +13,7 @@ valide chaque tâche avant coche. Ne jamais committer automatiquement.
 
 ## Phase 0 : Fondations
 
-- [ ] **T701** [Fondation] **Spike adaptateur Codex hors Bridget** (quickstart §0) :
+- [X] **T701** [Fondation] **Spike adaptateur Codex hors Bridget** (quickstart §0) :
   script jetable qui lance `npx @zed-industries/codex-acp@0.16.0`, envoie
   `initialize` + `session/new` + un `session/prompt` trivial, et transcrit les
   échanges bruts. Vérifier : login abonnement (aucune demande de clé API),

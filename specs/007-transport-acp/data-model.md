@@ -35,6 +35,14 @@ surcharge. Les valeurs par défaut suivent research R-002.
 }
 ```
 
+**Constat du spike T701 (2026-08-22).** La commande par défaut ci-dessus est
+validée avec un `CODEX_HOME` isolé qui ne contient que l'authentification
+abonnement. Les surcharges `-c model=\"gpt-5.6-sol\"` et
+`-c model_reasoning_effort=\"high\"` ne sont pas retenues : le coeur Codex
+embarqué par l'adaptateur 0.16.0 les refuse comme trop récentes. L'isolation du
+home est une condition de validation du spike, pas encore un champ du registre
+à implémenter ; l'ajouter exige une décision et une tâche dédiées.
+
 `protocol` vaut `acp` ou `tmux` ; `forbidden_env` porte la garde de facturation
 (FR-011) ; `permissions` la réponse automatique aux `session/request_permission`
 (R-005).
