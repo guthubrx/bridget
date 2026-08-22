@@ -1851,6 +1851,31 @@ fn replay_issue(
     }
 }
 
+fn handle_idempotency_lookup(
+    conn_id: &str,
+    operation_kind: String,
+    idempotency_key: String,
+    st: &DaemonState,
+) -> DaemonToWrapper {
+    let Some(negotiated) = st.client_negotiations.get(conn_id) else {
+        return DaemonToWrapper::ClientRejected { reason: ClientRefusal::NegotiationRequired };
+    };
+    if operation_kind != "send" {
+        return DaemonToWrapper::Nack { id: idempotency_key, reason: "opération idempotente inconnue".to_string() };
+    }
+    let key = match IdempotencyKey::new(negotiated.issuer_scope.clone(), OperationKind::Send, idempotency_key) {
+        Ok(key) => key,
+        Err(error) => return DaemonToWrapper::Nack { id: "lookup".to_string(), reason: error.to_string() },
+    };
+    match st.idempotency.lookup(&key, unix_now_secs()) {
+        Ok(result) => match replay_issue(st, &key, result) {
+            Ok(issue) => issue_response(&key, issue),
+            Err(error) => DaemonToWrapper::Nack { id: key.idempotency_key, reason: error },
+        },
+        Err(error) => DaemonToWrapper::Nack { id: key.idempotency_key, reason: error.to_string() },
+    }
+}
+
 fn reject_idempotent_send(
     st: &mut DaemonState,
     key: &IdempotencyKey,
@@ -2392,10 +2417,10 @@ fn handle_wrapper_message(
                 conn_id, message, message_id, issued_at, &mut st,
             ))
         }
-        WrapperToDaemon::Lookup { .. } => Some(DaemonToWrapper::Nack {
-            id: "lookup".to_string(),
-            reason: "Lookup sera activé par T1207".to_string(),
-        }),
+        WrapperToDaemon::Lookup { operation_kind, idempotency_key } => {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            Some(handle_idempotency_lookup(conn_id, operation_kind, idempotency_key, &st))
+        }
         WrapperToDaemon::DeliverAcked { .. } | WrapperToDaemon::DeliveryIndeterminate { .. } => {
             None
         }
