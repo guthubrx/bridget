@@ -201,6 +201,22 @@ final inclus, sans normalisation Unicode. Résultat : **793 caractères avant**,
 `prompt_reduction_test` verrouille le seuil de 60 % et l'absence des règles de
 syntaxe supprimées.
 
-La phase B branchera exactement la fixture réduite dans le wrapper puis
-rejouera la matrice quickstart 007 §1 à §4 dès que T1005 et T1006 seront
-intégrées.
+### Phase B — Branchement et matrice comportementale
+
+Le wrapper choisit désormais le bloc réduit uniquement lorsque le registre
+active MCP pour la session interactive. Le repli `none`/`unsupported` conserve
+le bloc historique octet pour octet. Deux tests unitaires comparent directement
+les chaînes produites aux fixtures versionnées : une reformulation non mesurée
+ne peut donc pas entrer par un second chemin.
+
+La matrice `managed_parity_test::matrice_fr008_compare_le_meme_corpus_et_les_frames_attach`
+rejoue le quickstart 007 §1 à §4 trois fois dans chacun des deux modes de
+lancement. Les oracles restent indépendants de la simple parité : présence ACP
+et état `connected`, demande suivie répondue et close, corps riche exact au
+`turn_start`, FIFO pendant le tour lent, relance différée persistée, coupure
+réelle du socket wrapper puis reconnexion conservant `busy`. La fixture réduite
+est liée à ce banc et ne contient plus la syntaxe `bridget send`.
+
+Validation ciblée : **2/2** tests d'identité de prompt, **2/2** tests statiques
+de réduction, puis matrice comportementale **1/1** au vert en **32,61 s**
+(trois campagnes par mode, quatre tours par campagne).

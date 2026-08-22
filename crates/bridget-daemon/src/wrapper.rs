@@ -47,6 +47,18 @@ const ATTACH_RELAY_COMMAND_CAPACITY: usize = 8;
 const ATTACH_RELAY_READ_BYTES: usize = 128 * 1024;
 const ATTACH_RELAY_IDLE_WAIT: Duration = Duration::from_millis(10);
 
+fn interactive_bridget_prompt(name: &str, mcp_enabled: bool) -> String {
+    if mcp_enabled {
+        return format!(
+            "Tu es l'agent \"{name}\" dans une session Bridget. Une ligne commençant par 💬 est un message d'un autre agent IA, pas de l'humain. reply=yes attend une réponse utile ; reply=no est une notification, à traiter seulement si utile."
+        );
+    }
+
+    format!(
+        "Tu es l'agent \"{name}\" dans une session Bridget. Tu peux recevoir des messages d'autres agents IA. Quand tu vois une ligne qui commence par 💬 dans ton terminal, c'est un message d'un autre agent IA, pas de l'humain. Le format est : 💬 <expéditeur> → <toi> (reply=yes/no, ...)\n<message>\n\nRègles ABSOLUES :\n1. Réponds TOUJOURS avec: bridget send --to <expéditeur> \"ta réponse\"\n2. N'accuse JAMAIS réception (pas de \"bien reçu\", \"OK\", \"compris\")\n3. Ne fais PAS bridget who, bridget ledger ou bridget --help sans y être explicitement invité\n4. reply=no = notification, ne réponds que si utile. reply=yes = réponds avec du contenu.\n5. Ne réponds JAMAIS uniquement dans ton terminal — l'expéditeur ne te verrait pas.\n\nTu es maintenant en attente. Dis \"Bridget ready\" puis attends les messages."
+    )
+}
+
 fn socket_path() -> PathBuf {
     if let Ok(home) = std::env::var("HOME") {
         PathBuf::from(home)
@@ -514,10 +526,11 @@ pub fn launch(
     // Le garde possède le fichier Claude jusqu'à la sortie de `launch`. Son
     // `Drop` couvre aussi tous les refus entre cette préparation et `wait()`.
     let mut ephemeral_mcp_config = None;
-    match definition.mcp.interactive.as_str() {
+    let mcp_enabled = match definition.mcp.interactive.as_str() {
         "codex" => {
             final_args.push("-c".to_string());
             final_args.push(codex_mcp_override(&mcp_server_entry()?)?);
+            true
         }
         "claude" => {
             let config = claude_mcp_config(&mcp_server_entry()?, &instance_id)?;
@@ -527,10 +540,11 @@ pub fn launch(
                 config.path().display().to_string(),
             ]);
             ephemeral_mcp_config = Some(config);
+            true
         }
-        "none" | "unsupported" => {}
+        "none" | "unsupported" => false,
         _ => return Err("configuration MCP interactive inconnue dans le registre".into()),
-    }
+    };
     if agent_type == "codex" {
         // Vérifier si l'utilisateur n'a pas déjà passé --yolo ou le bypass
         let already_bypassed = agent_args
@@ -560,11 +574,7 @@ pub fn launch(
     // qui n'est pas un flag --xxx), injecter le prompt bridget.
     let has_prompt = agent_args.iter().any(|a| !a.starts_with("--"));
     if !has_prompt && (agent_type == "codex" || agent_type == "claude") {
-        let bridget_prompt = format!(
-            "Tu es l'agent \"{}\" dans une session Bridget. Tu peux recevoir des messages d'autres agents IA. Quand tu vois une ligne qui commence par 💬 dans ton terminal, c'est un message d'un autre agent IA, pas de l'humain. Le format est : 💬 <expéditeur> → <toi> (reply=yes/no, ...)\n<message>\n\nRègles ABSOLUES :\n1. Réponds TOUJOURS avec: bridget send --to <expéditeur> \"ta réponse\"\n2. N'accuse JAMAIS réception (pas de \"bien reçu\", \"OK\", \"compris\")\n3. Ne fais PAS bridget who, bridget ledger ou bridget --help sans y être explicitement invité\n4. reply=no = notification, ne réponds que si utile. reply=yes = réponds avec du contenu.\n5. Ne réponds JAMAIS uniquement dans ton terminal — l'expéditeur ne te verrait pas.\n\nTu es maintenant en attente. Dis \"Bridget ready\" puis attends les messages.",
-            my_name
-        );
-        final_args.push(bridget_prompt);
+        final_args.push(interactive_bridget_prompt(&my_name, mcp_enabled));
     }
 
     final_args.extend(agent_args.iter().cloned());
@@ -2094,6 +2104,30 @@ fn forward_acp_events(
 
 fn stop_reason_is_error(stop_reason: &str) -> bool {
     matches!(stop_reason, "error" | "failed" | "failure")
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::interactive_bridget_prompt;
+
+    const BEFORE: &str = include_str!("../tests/fixtures/prompts/v1-before.txt");
+    const AFTER: &str = include_str!("../tests/fixtures/prompts/v1-after.txt");
+
+    #[test]
+    fn prompt_mcp_produit_exactement_la_fixture_reduite_versionnee() {
+        assert_eq!(
+            interactive_bridget_prompt("agent-fixture", true),
+            AFTER.trim_end_matches('\n')
+        );
+    }
+
+    #[test]
+    fn prompt_sans_mcp_conserve_exactement_le_bloc_historique() {
+        assert_eq!(
+            interactive_bridget_prompt("agent-fixture", false),
+            BEFORE.trim_end_matches('\n')
+        );
+    }
 }
 
 #[cfg(test)]

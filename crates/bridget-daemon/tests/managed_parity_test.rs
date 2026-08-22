@@ -14,6 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MATRIX_VERSION: &str = "fr-008-v1";
+const REDUCED_PROMPT: &str = include_str!("fixtures/prompts/v1-after.txt");
 const MATRIX_RUNS_PER_MODE: usize = 3;
 const MATRIX_EXPECTED_TURNS: usize = 4;
 const MATRIX_TIMEOUT: Duration = Duration::from_secs(10);
@@ -539,16 +540,21 @@ fn collect_journal(socket: &Path, agent: &str) -> Vec<String> {
 
 fn run_corpus(socket: &Path, agent: &str, run: usize, proxy: &CutProxy) -> ModeObservables {
     let mut peer = Peer::register(socket, &format!("parity-sender-{run}"));
+    // Quickstart 007 §1 : l'équipier est visible en ACP, prêt à recevoir.
     let initial_agent = wait_agent(&mut peer, agent);
     assert_eq!(initial_agent.transport, "acp");
     assert_eq!(initial_agent.state, "connected");
 
+    // Quickstart 007 §2 : une demande suivie reçoit sa réponse et se clôt.
     let first = send_tracked(&mut peer, agent, "TRACKED");
     let mut replies = receive_replies(&mut peer, &[first]);
+    // Quickstart 007 §3 : le corps riche traverse le transport octet pour octet.
     let exact = "l'apostrophe d'usage, \"guillemets\", $VAR, `backticks`,\net ce saut de ligne.";
     let second = send_tracked(&mut peer, agent, exact);
     replies.extend(receive_replies(&mut peer, &[second]));
 
+    // Quickstart 007 §4 : FIFO pendant un tour, relance différée et
+    // reconnexion conservant l'état busy.
     let slow = send_tracked(&mut peer, agent, "QUEUE-SLOW");
     let next = send_tracked(&mut peer, agent, "QUEUE-NEXT");
     let busy = wait_agent(&mut peer, agent);
@@ -633,6 +639,9 @@ fn stop_managed(control: &mut Peer, name: &str, run: usize) {
 fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
     assert_eq!(MATRIX_VERSION, "fr-008-v1");
     assert_eq!(MATRIX_RUNS_PER_MODE, 3);
+    assert!(REDUCED_PROMPT.contains("reply=yes"));
+    assert!(REDUCED_PROMPT.contains("reply=no"));
+    assert!(!REDUCED_PROMPT.contains("bridget send"));
     for run in 0..MATRIX_RUNS_PER_MODE {
         let root = test_root(&format!("matrix-{run}"));
         let adapter = write_fixture(&root);
