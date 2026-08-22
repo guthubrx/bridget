@@ -497,8 +497,14 @@ fn attach_refusal_for_subscription(
     Ok(registered.connection_id.clone())
 }
 
-fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) -> Vec<DeferredControl> {
+/// Retire les souscriptions affectées sous le verrou. Les E/S et les `join`
+/// retournés doivent impérativement être exécutés après l'avoir relâché.
+fn close_attach_subscriptions(
+    state: &mut DaemonState,
+    conn_id: &str,
+) -> (Vec<DeferredControl>, Vec<Arc<AttachView>>) {
     let mut controls = Vec::new();
+    let mut views = Vec::new();
     let affected = state
         .attach_subscriptions
         .iter()
@@ -509,7 +515,9 @@ fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) -> Vec<Def
         .collect::<Vec<_>>();
     for (subscription_id, subscription) in affected {
         state.attach_subscriptions.remove(&subscription_id);
-        if let Some(view) = state.attach_views.remove(&subscription_id) { view.close(); }
+        if let Some(view) = state.attach_views.remove(&subscription_id) {
+            views.push(view);
+        }
         if subscription.attach_conn == conn_id {
             defer_control(
                 state,
@@ -530,7 +538,7 @@ fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) -> Vec<Def
         }
     }
     state.pending_attach_sends.retain(|_, pending| pending.conn_id != conn_id);
-    controls
+    (controls, views)
 }
 
 fn collect_closed_attach_views(
@@ -1064,9 +1072,9 @@ fn handle_connection(
     }
 
     // Connexion fermée : désenregistrer avec nettoyage explicite pour éviter fuites
-    let (writer_opt, removed, controls) = {
+    let (writer_opt, removed, controls, views) = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-        let controls = close_attach_subscriptions(&mut st, &conn_id);
+        let (controls, views) = close_attach_subscriptions(&mut st, &conn_id);
 
         // Récupérer le writer AVANT suppression pour nettoyage explicite
         let writer_opt = st.connections.remove(&conn_id);
@@ -1077,9 +1085,12 @@ fn handle_connection(
         st.conn_hosts.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
-        (writer_opt, removed, controls)
+        (writer_opt, removed, controls, views)
     };
     let _ = execute_controls(controls);
+    for view in views {
+        view.close_and_join();
+    }
 
     // Nettoyage explicite du writer pour éviter fuites de ressources
     if let Some(writer_mutex) = writer_opt
@@ -1624,9 +1635,14 @@ fn handle_wrapper_message(
             if accepted {
                 None
             } else {
-                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-                st.attach_subscriptions.remove(&subscription_id);
-                if let Some(view) = st.attach_views.remove(&subscription_id) { view.close(); }
+                let view = {
+                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    st.attach_subscriptions.remove(&subscription_id);
+                    st.attach_views.remove(&subscription_id)
+                };
+                if let Some(view) = view {
+                    view.close_and_join();
+                }
                 Some(DaemonToWrapper::AttachRejected {
                     subscription_id: Some(subscription_id),
                     reason: AttachRefusal::WrapperUnavailable,
@@ -1634,7 +1650,7 @@ fn handle_wrapper_message(
             }
         }
         WrapperToDaemon::Unsubscribe { subscription_id } => {
-            let control = {
+            let (control, view) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(subscription) = st.attach_subscriptions.get(&subscription_id).cloned() else {
                     // Une fin d'ancienne génération n'a pas le droit de toucher
@@ -1648,15 +1664,19 @@ fn handle_wrapper_message(
                     });
                 }
                 st.attach_subscriptions.remove(&subscription_id);
-                st.connections.get(&subscription.wrapper_conn).map(|writer| DeferredControl {
+                let control = st.connections.get(&subscription.wrapper_conn).map(|writer| DeferredControl {
                     writer: writer.clone(),
                     message: DaemonToWrapper::Unsubscribe {
                         subscription_id: subscription_id.clone(),
                     },
-                })
+                });
+                (control, st.attach_views.remove(&subscription_id))
             };
             if let Some(control) = control {
                 let _ = execute_controls(vec![control]);
+            }
+            if let Some(view) = view {
+                view.close_and_join();
             }
             Some(DaemonToWrapper::End {
                 subscription_id,
@@ -1684,21 +1704,24 @@ fn handle_wrapper_message(
             };
             let delivered = control.is_some_and(|control| execute_controls(vec![control]).is_empty());
             if !delivered {
-                let control = {
+                let (control, view) = {
                     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                     let subscription = st.attach_subscriptions.remove(&subscription_id);
-                    if let Some(view) = st.attach_views.remove(&subscription_id) { view.close(); }
-                    subscription.and_then(|subscription| {
+                    let control = subscription.and_then(|subscription| {
                         st.connections.get(&subscription.wrapper_conn).map(|writer| DeferredControl {
                             writer: writer.clone(),
                             message: DaemonToWrapper::Unsubscribe {
                                 subscription_id: subscription_id.clone(),
                             },
                         })
-                    })
+                    });
+                    (control, st.attach_views.remove(&subscription_id))
                 };
                 if let Some(control) = control {
                     let _ = execute_controls(vec![control]);
+                }
+                if let Some(view) = view {
+                    view.close_and_join();
                 }
             }
             None
@@ -1707,7 +1730,7 @@ fn handle_wrapper_message(
             subscription_id,
             reason,
         } => {
-            let control = {
+            let (control, view) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                 let subscription_id = subscription_id?;
                 let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
@@ -1722,10 +1745,13 @@ fn handle_wrapper_message(
                     },
                 });
                 st.attach_subscriptions.remove(&subscription_id);
-                control
+                (control, st.attach_views.remove(&subscription_id))
             };
             if let Some(control) = control {
                 let _ = execute_controls(vec![control]);
+            }
+            if let Some(view) = view {
+                view.close_and_join();
             }
             None
         }
@@ -1733,7 +1759,7 @@ fn handle_wrapper_message(
             subscription_id,
             reason,
         } => {
-            let control = {
+            let (control, view) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                 let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
                 if subscription.wrapper_conn != conn_id {
@@ -1747,10 +1773,13 @@ fn handle_wrapper_message(
                     },
                 });
                 st.attach_subscriptions.remove(&subscription_id);
-                control
+                (control, st.attach_views.remove(&subscription_id))
             };
             if let Some(control) = control {
                 let _ = execute_controls(vec![control]);
+            }
+            if let Some(view) = view {
+                view.close_and_join();
             }
             None
         }
@@ -1846,17 +1875,20 @@ fn handle_wrapper_message(
         }
 
         WrapperToDaemon::Unregister => {
-            let controls = {
+            let (controls, views) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-                let controls = close_attach_subscriptions(&mut st, conn_id);
+                let (controls, views) = close_attach_subscriptions(&mut st, conn_id);
                 st.router.unregister_by_conn(conn_id);
                 st.mark_stopped(conn_id);
                 st.conn_names.remove(conn_id);
                 st.conn_hosts.remove(conn_id);
                 st.conn_operating_systems.remove(conn_id);
-                controls
+                (controls, views)
             };
             let _ = execute_controls(controls);
+            for view in views {
+                view.close_and_join();
+            }
             None
         }
 
@@ -2473,6 +2505,45 @@ mod presence_tests {
         decode(line.trim()).unwrap()
     }
 
+    fn normalized_attach_frame(mut message: DaemonToWrapper) -> String {
+        match &mut message {
+            DaemonToWrapper::JournalFragment { subscription_id, .. }
+            | DaemonToWrapper::SnapshotCaughtUp { subscription_id, .. }
+            | DaemonToWrapper::Gap { subscription_id, .. }
+            | DaemonToWrapper::JournalReadError { subscription_id, .. }
+            | DaemonToWrapper::End { subscription_id, .. }
+            | DaemonToWrapper::Subscribed { subscription_id }
+            | DaemonToWrapper::Subscribe { subscription_id, .. }
+            | DaemonToWrapper::Unsubscribe { subscription_id } => subscription_id.clear(),
+            DaemonToWrapper::AttachRejected { subscription_id, .. } => *subscription_id = None,
+            _ => {}
+        }
+        encode(&message).unwrap()
+    }
+
+    fn install_attach_view(
+        state: &mut DaemonState,
+        subscription_id: &str,
+        attach_conn: &str,
+        writer: &Arc<Mutex<BufWriter<UnixStream>>>,
+    ) {
+        let view = AttachView::start(
+            subscription_id.to_string(),
+            writer,
+            state.view_closed_tx.clone(),
+        )
+        .unwrap();
+        state.attach_subscriptions.insert(
+            subscription_id.to_string(),
+            AttachSubscription {
+                agent: "agent-2".to_string(),
+                attach_conn: attach_conn.to_string(),
+                wrapper_conn: "conn-1".to_string(),
+            },
+        );
+        state.attach_views.insert(subscription_id.to_string(), view);
+    }
+
     #[test]
     fn unreachable_presence_remains_visible() {
         let base = std::env::temp_dir().join(format!("bridget-presence-{}", std::process::id()));
@@ -2797,13 +2868,16 @@ mod presence_tests {
         ));
         assert!(shared.lock().unwrap().attach_subscriptions.contains_key(&second_id));
 
-        let controls = {
+        let (controls, views) = {
             let mut state = shared.lock().unwrap();
-            let controls = close_attach_subscriptions(&mut state, "attach-1");
+            let (controls, views) = close_attach_subscriptions(&mut state, "attach-1");
             assert!(state.attach_subscriptions.is_empty());
-            controls
+            (controls, views)
         };
         assert!(execute_controls(controls).is_empty());
+        for view in views {
+            view.close_and_join();
+        }
         assert!(matches!(
             read_control(&mut wrapper_reader),
             DaemonToWrapper::Unsubscribe { subscription_id } if subscription_id == second_id
@@ -2946,9 +3020,160 @@ mod presence_tests {
         state.pending_attach_sends.insert("live".to_string(), PendingAttachSend {
             conn_id: "attach-1".to_string(), expires_at: Instant::now() + Duration::from_secs(60),
         });
-        let controls = close_attach_subscriptions(&mut state, "attach-1");
+        let (controls, views) = close_attach_subscriptions(&mut state, "attach-1");
         assert!(controls.is_empty());
+        for view in views {
+            view.close_and_join();
+        }
         assert!(state.pending_attach_sends.is_empty());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn deux_vues_attach_recoivent_le_meme_flux_et_sont_recoltees() {
+        let (mut state, config) = state_with_registered_agent("attach-two-views");
+        let (wrapper_writer, _wrapper_reader) = control_socket("attach-two-wrapper");
+        let (first_writer, mut first_reader) = control_socket("attach-two-first");
+        let (second_writer, mut second_reader) = control_socket("attach-two-second");
+        state.connections.insert("conn-1".to_string(), wrapper_writer);
+        state.connections.insert("attach-1".to_string(), first_writer.clone());
+        state.connections.insert("attach-2".to_string(), second_writer.clone());
+        install_attach_view(&mut state, "sub-first", "attach-1", &first_writer);
+        install_attach_view(&mut state, "sub-second", "attach-2", &second_writer);
+        let shared = Arc::new(Mutex::new(state));
+
+        for subscription_id in ["sub-first", "sub-second"] {
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::JournalFragment {
+                    subscription_id: subscription_id.to_string(),
+                    seq: 7,
+                    offset: 12,
+                    final_fragment: true,
+                    bytes: b"ligne complete".to_vec(),
+                },
+                &shared,
+            );
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::SnapshotCaughtUp {
+                    subscription_id: subscription_id.to_string(),
+                    through_seq: Some(7),
+                },
+                &shared,
+            );
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::Gap {
+                    subscription_id: subscription_id.to_string(),
+                    from_seq: 8,
+                    to_seq: 9,
+                    reason: Some("retard".to_string()),
+                },
+                &shared,
+            );
+        }
+
+        let first = (0..3).map(|_| normalized_attach_frame(read_control(&mut first_reader))).collect::<Vec<_>>();
+        let second = (0..3).map(|_| normalized_attach_frame(read_control(&mut second_reader))).collect::<Vec<_>>();
+        assert_eq!(first, second, "les deux vues doivent recevoir les memes trames");
+
+        let (controls, views) = {
+            let mut state = shared.lock().unwrap();
+            let (controls, views) = close_attach_subscriptions(&mut state, "attach-1");
+            let (second_controls, second_views) = close_attach_subscriptions(&mut state, "attach-2");
+            assert!(state.attach_subscriptions.is_empty());
+            assert!(state.attach_views.is_empty());
+            (controls.into_iter().chain(second_controls).collect::<Vec<_>>(),
+             views.into_iter().chain(second_views).collect::<Vec<_>>())
+        };
+        let _ = execute_controls(controls);
+        for view in &views {
+            view.close_and_join();
+            assert!(view.worker.lock().unwrap().is_none());
+        }
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn vue_lente_est_recoltee_sans_bloquer_le_daemon_ni_les_autres_vues() {
+        let (mut state, config) = state_with_registered_agent("attach-slow-view");
+        let (wrapper_stream, _wrapper_peer) = UnixStream::pair().unwrap();
+        let (slow_stream, _slow_peer) = UnixStream::pair().unwrap();
+        let (fast_stream, fast_peer) = UnixStream::pair().unwrap();
+        fast_peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let wrapper_writer = Arc::new(Mutex::new(BufWriter::new(wrapper_stream)));
+        let slow_writer = Arc::new(Mutex::new(BufWriter::new(slow_stream)));
+        let fast_writer = Arc::new(Mutex::new(BufWriter::new(fast_stream)));
+        state.connections.insert("conn-1".to_string(), wrapper_writer);
+        state.connections.insert("attach-slow".to_string(), slow_writer.clone());
+        state.connections.insert("attach-fast".to_string(), fast_writer.clone());
+        install_attach_view(&mut state, "sub-slow", "attach-slow", &slow_writer);
+        install_attach_view(&mut state, "sub-fast", "attach-fast", &fast_writer);
+        let shared = Arc::new(Mutex::new(state));
+
+        handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::JournalFragment {
+                subscription_id: "sub-fast".to_string(),
+                seq: 1,
+                offset: 0,
+                final_fragment: true,
+                bytes: b"temoin".to_vec(),
+            },
+            &shared,
+        );
+        let mut fast_reader = BufReader::new(fast_peer);
+        assert!(matches!(
+            read_control(&mut fast_reader),
+            DaemonToWrapper::JournalFragment { subscription_id, seq: 1, .. } if subscription_id == "sub-fast"
+        ));
+
+        // Le pair lent n'est jamais lu : le worker doit atteindre son timeout
+        // d'écriture, tandis que le chemin daemon garde le verrou disponible.
+        for seq in 1..=512 {
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::JournalFragment {
+                    subscription_id: "sub-slow".to_string(),
+                    seq,
+                    offset: seq * 4096,
+                    final_fragment: true,
+                    bytes: vec![b'x'; 4096],
+                },
+                &shared,
+            );
+        }
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let observer_state = shared.clone();
+        thread::spawn(move || {
+            let count = observer_state.lock().unwrap().agent_infos().len();
+            let _ = observed_tx.send(count);
+        });
+        assert_eq!(observed_rx.recv_timeout(Duration::from_millis(100)).unwrap(), 1);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            handle_wrapper_message("conn-1", WrapperToDaemon::Heartbeat, &shared);
+            if !shared.lock().unwrap().attach_subscriptions.contains_key("sub-slow") {
+                break;
+            }
+            assert!(Instant::now() < deadline, "la vue lente doit etre fermee dans la borne");
+            thread::sleep(Duration::from_millis(10));
+        }
+        let state = shared.lock().unwrap();
+        assert!(!state.attach_views.contains_key("sub-slow"));
+        assert!(state.attach_subscriptions.contains_key("sub-fast"));
+        drop(state);
+
+        let (controls, views) = {
+            let mut state = shared.lock().unwrap();
+            close_attach_subscriptions(&mut state, "attach-fast")
+        };
+        let _ = execute_controls(controls);
+        for view in views {
+            view.close_and_join();
+        }
         let _ = std::fs::remove_file(config.db_path);
     }
 
