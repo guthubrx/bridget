@@ -215,6 +215,7 @@ struct PendingAttachSend {
 struct QueuedAttachMessage {
     encoded: String,
     seq: Option<u64>,
+    terminal: bool,
 }
 
 struct AttachViewBuffer {
@@ -224,6 +225,7 @@ struct AttachViewBuffer {
     /// Séquence évincée dont les fragments suivants doivent encore être
     /// ignorés jusqu'à sa frontière finale.
     dropping_seq: Option<u64>,
+    terminal_enqueued: bool,
     closed: bool,
     close_notified: bool,
 }
@@ -258,6 +260,7 @@ impl AttachView {
             queue: Arc::new((
                 Mutex::new(AttachViewBuffer {
                     messages: VecDeque::new(), bytes: 0, gap: None, dropping_seq: None,
+                    terminal_enqueued: false,
                     closed: false, close_notified: false,
                 }),
                 Condvar::new(),
@@ -283,6 +286,7 @@ impl AttachView {
         let queue = Arc::new((
             Mutex::new(AttachViewBuffer {
                 messages: VecDeque::new(), bytes: 0, gap: None, dropping_seq: None,
+                terminal_enqueued: false,
                 closed: false, close_notified: false,
             }),
             Condvar::new(),
@@ -307,13 +311,13 @@ impl AttachView {
                     if let Some((from_seq, to_seq, reason)) = buffer.gap.take() {
                         encode(&DaemonToWrapper::Gap {
                             subscription_id: worker_subscription.clone(), from_seq, to_seq, reason,
-                        }).ok()
+                        }).ok().map(|encoded| (encoded, false))
                     } else if let Some(message) = buffer.messages.pop_front() {
                         buffer.bytes = buffer.bytes.saturating_sub(message.encoded.len());
-                        Some(message.encoded)
+                        Some((message.encoded, message.terminal))
                     } else { None }
                 };
-                let Some(next) = next else {
+                let Some((next, terminal)) = next else {
                     if worker_queue.0.lock().unwrap_or_else(|e| e.into_inner()).closed { break; }
                     continue;
                 };
@@ -334,6 +338,12 @@ impl AttachView {
                     }
                     break;
                 }
+                if terminal {
+                    let (lock, wake) = &*worker_queue;
+                    lock.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
+                    wake.notify_all();
+                    break;
+                }
             }
         });
         *view.worker.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
@@ -341,9 +351,10 @@ impl AttachView {
     }
 
     fn enqueue(&self, message: DaemonToWrapper) -> bool {
-        let (seq, final_fragment) = match &message {
-            DaemonToWrapper::JournalFragment { seq, final_fragment, .. } => (Some(*seq), *final_fragment),
-            _ => (None, false),
+        let (seq, final_fragment, terminal) = match &message {
+            DaemonToWrapper::JournalFragment { seq, final_fragment, .. } => (Some(*seq), *final_fragment, false),
+            DaemonToWrapper::End { .. } => (None, false, true),
+            _ => (None, false, false),
         };
         let Ok(encoded) = encode(&message) else {
             self.close_and_notify();
@@ -351,7 +362,19 @@ impl AttachView {
         };
         let (lock, wake) = &*self.queue;
         let mut buffer = lock.lock().unwrap_or_else(|e| e.into_inner());
-        if buffer.closed { return false; }
+        if buffer.closed || buffer.terminal_enqueued { return false; }
+        if terminal {
+            // Le terminal clôt la file : les données restées en attente sont
+            // explicitement abandonnées avant End, jamais écrites après lui.
+            buffer.messages.clear();
+            buffer.bytes = 0;
+            buffer.gap = None;
+            buffer.dropping_seq = None;
+            buffer.terminal_enqueued = true;
+            buffer.messages.push_back(QueuedAttachMessage { encoded, seq: None, terminal: true });
+            wake.notify_one();
+            return true;
+        }
         if let Some(seq) = seq {
             if buffer.dropping_seq == Some(seq) {
                 if final_fragment {
@@ -361,6 +384,7 @@ impl AttachView {
             }
             while buffer.bytes.saturating_add(encoded.len()) > ATTACH_VIEW_BUFFER_BYTES {
                 let Some(dropped_seq) = buffer.messages.iter().find_map(|item| item.seq) else {
+                    buffer.dropping_seq = Some(seq);
                     buffer.gap = Some((seq, seq, Some("vue trop lente".to_string())));
                     wake.notify_one();
                     return false;
@@ -377,6 +401,12 @@ impl AttachView {
                     None => (dropped_seq, dropped_seq, Some("vue trop lente".to_string())),
                 });
             }
+            if buffer.dropping_seq == Some(seq) {
+                if final_fragment {
+                    buffer.dropping_seq = None;
+                }
+                return false;
+            }
         } else if buffer.bytes.saturating_add(encoded.len()) > ATTACH_VIEW_BUFFER_BYTES {
             buffer.closed = true;
             let notify = !buffer.close_notified;
@@ -389,7 +419,7 @@ impl AttachView {
             return false;
         }
         buffer.bytes += encoded.len();
-        buffer.messages.push_back(QueuedAttachMessage { encoded, seq });
+        buffer.messages.push_back(QueuedAttachMessage { encoded, seq, terminal: false });
         wake.notify_one();
         true
     }
@@ -604,9 +634,7 @@ fn close_attach_subscriptions(
         .collect::<Vec<_>>();
     for (subscription_id, subscription) in affected {
         state.attach_subscriptions.remove(&subscription_id);
-        if let Some(view) = state.attach_views.remove(&subscription_id) {
-            views.push(view);
-        }
+        let view = state.attach_views.remove(&subscription_id);
         if subscription.attach_conn == conn_id {
             defer_control(
                 state,
@@ -614,16 +642,14 @@ fn close_attach_subscriptions(
                 DaemonToWrapper::Unsubscribe { subscription_id },
                 &mut controls,
             );
-        } else {
-            defer_control(
-                state,
-                &subscription.attach_conn,
-                DaemonToWrapper::End {
-                    subscription_id,
-                    reason: "wrapper indisponible".to_string(),
-                },
-                &mut controls,
-            );
+        } else if let Some(view) = &view {
+            let _ = view.enqueue(DaemonToWrapper::End {
+                subscription_id,
+                reason: "wrapper indisponible".to_string(),
+            });
+        }
+        if let Some(view) = view {
+            views.push(view);
         }
     }
     state.pending_attach_sends.retain(|_, pending| pending.conn_id != conn_id);
@@ -1765,12 +1791,13 @@ fn handle_wrapper_message(
                 let _ = execute_controls(vec![control]);
             }
             if let Some(view) = view {
+                let _ = view.enqueue(DaemonToWrapper::End {
+                    subscription_id,
+                    reason: "désabonnement demandé".to_string(),
+                });
                 view.close_and_join();
             }
-            Some(DaemonToWrapper::End {
-                subscription_id,
-                reason: "désabonnement demandé".to_string(),
-            })
+            None
         }
         WrapperToDaemon::Subscribed { subscription_id } => {
             let control = {
@@ -1848,26 +1875,17 @@ fn handle_wrapper_message(
             subscription_id,
             reason,
         } => {
-            let (control, view) = {
+            let view = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                 let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
                 if subscription.wrapper_conn != conn_id {
                     return None;
                 }
-                let control = st.connections.get(&subscription.attach_conn).map(|writer| DeferredControl {
-                    writer: writer.clone(),
-                    message: DaemonToWrapper::End {
-                        subscription_id: subscription_id.clone(),
-                        reason,
-                    },
-                });
                 st.attach_subscriptions.remove(&subscription_id);
-                (control, st.attach_views.remove(&subscription_id))
+                st.attach_views.remove(&subscription_id)
             };
-            if let Some(control) = control {
-                let _ = execute_controls(vec![control]);
-            }
             if let Some(view) = view {
+                let _ = view.enqueue(DaemonToWrapper::End { subscription_id, reason });
                 view.close_and_join();
             }
             None
@@ -1878,24 +1896,21 @@ fn handle_wrapper_message(
             offset,
             reason,
         } => {
-            let control = {
+            let view = {
                 let st = state.lock().unwrap_or_else(|e| e.into_inner());
                 let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
                 if subscription.wrapper_conn != conn_id {
                     return None;
                 }
-                st.connections.get(&subscription.attach_conn).map(|writer| DeferredControl {
-                    writer: writer.clone(),
-                    message: DaemonToWrapper::JournalReadError {
-                        subscription_id,
-                        line,
-                        offset,
-                        reason,
-                    },
-                })
+                st.attach_views.get(&subscription_id).cloned()
             };
-            if let Some(control) = control {
-                let _ = execute_controls(vec![control]);
+            if let Some(view) = view {
+                let _ = view.enqueue(DaemonToWrapper::JournalReadError {
+                    subscription_id,
+                    line,
+                    offset,
+                    reason,
+                });
             }
             None
         }
@@ -3082,9 +3097,9 @@ mod presence_tests {
             subscription_id: "sub-fragments".to_string(), seq: 41, offset: 0,
             final_fragment: false, bytes: bytes.clone(),
         }));
-        assert!(view.enqueue(DaemonToWrapper::JournalFragment {
-            subscription_id: "sub-fragments".to_string(), seq: 42, offset: 1,
-            final_fragment: true, bytes: bytes.clone(),
+        assert!(!view.enqueue(DaemonToWrapper::JournalFragment {
+            subscription_id: "sub-fragments".to_string(), seq: 41, offset: 1,
+            final_fragment: false, bytes: bytes.clone(),
         }));
         assert!(!view.enqueue(DaemonToWrapper::JournalFragment {
             subscription_id: "sub-fragments".to_string(), seq: 41, offset: 2,
@@ -3094,10 +3109,15 @@ mod presence_tests {
             subscription_id: "sub-fragments".to_string(), seq: 41, offset: 3,
             final_fragment: true, bytes: b"frontiere evincee".to_vec(),
         }));
+        assert!(view.enqueue(DaemonToWrapper::JournalFragment {
+            subscription_id: "sub-fragments".to_string(), seq: 42, offset: 4,
+            final_fragment: true, bytes: b"sequence suivante admise".to_vec(),
+        }));
         let queue = view.queue.0.lock().unwrap();
         assert_eq!(queue.dropping_seq, None);
         assert!(queue.messages.iter().all(|message| message.seq != Some(41)));
         assert_eq!(queue.gap.as_ref().map(|gap| (gap.0, gap.1)), Some((41, 41)));
+        assert_eq!(queue.messages.iter().filter(|message| message.seq == Some(42)).count(), 1);
     }
 
     #[test]
@@ -3131,6 +3151,26 @@ mod presence_tests {
         assert!(state.attach_subscriptions.is_empty());
         assert!(state.attach_views.is_empty());
         let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn end_abandonne_la_file_et_interdit_toute_frame_ulterieure() {
+        let view = AttachView::suspended("sub-terminal");
+        assert!(view.enqueue(DaemonToWrapper::JournalFragment {
+            subscription_id: "sub-terminal".to_string(), seq: 5, offset: 0,
+            final_fragment: true, bytes: b"avant-end".to_vec(),
+        }));
+        assert!(view.enqueue(DaemonToWrapper::End {
+            subscription_id: "sub-terminal".to_string(), reason: "fin".to_string(),
+        }));
+        assert!(!view.enqueue(DaemonToWrapper::JournalReadError {
+            subscription_id: "sub-terminal".to_string(), line: 7, offset: 42,
+            reason: "trop tard".to_string(),
+        }));
+        let queue = view.queue.0.lock().unwrap();
+        assert_eq!(queue.messages.len(), 1);
+        assert!(queue.messages.front().is_some_and(|message| message.terminal));
+        assert!(queue.messages.iter().all(|message| message.seq.is_none()));
     }
 
     #[test]
