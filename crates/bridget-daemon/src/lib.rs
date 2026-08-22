@@ -1,6 +1,7 @@
 pub mod attach;
 pub mod cli;
 pub mod daemon;
+pub mod desired_state;
 pub mod idempotency;
 pub mod managers;
 pub mod registry;
