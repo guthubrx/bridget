@@ -37,11 +37,23 @@ outil MCP futur en sont des projections : aucun ne dépend des crates internes
 ni de la base SQLite du daemon. La voie historique `Send` reste inchangée et ne
 traverse pas ce socle sans négociation explicite.
 
+La négociation suit l'ordre strict D-604 : `RoleHello(Client)`, puis
+`RoleAccepted`, puis seulement `ClientHello`. La matrice des rôles est fermée :
+les opérations idempotentes sont réservées au rôle client, les accusés de
+remise au wrapper, et aucune de ces variantes n'est admise sur une connexion
+attach.
+
 Pour les remises aux wrappers, le socle sera complété par une remise accusée
 distincte, identifiée par `delivery_id`. La portée promise est explicitement
 limitée : exactement une injection à travers les crashs client et daemon tant
 que le wrapper reste vivant ; un wrapper arrêté après une marque `Seen` donne
 une issue indéterminée, pas une seconde injection.
+
+Le store de reçus D-608 est détenu par l'`instance_id` stable du wrapper sous
+un répertoire d'état durable, non par son nom affiché. Toute corruption ou
+disparition après son initialisation met la génération en quarantaine
+fail-closed : la réponse devient indéterminée et le store n'est jamais recréé
+vide.
 
 ## Conséquences positives
 

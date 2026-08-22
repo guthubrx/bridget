@@ -26,13 +26,6 @@ impl OperationKind {
         }
     }
 
-    fn from_str(value: &str) -> Result<Self, IdempotencyError> {
-        match value {
-            "send" => Ok(Self::Send),
-            "spawn" => Ok(Self::Spawn),
-            _ => Err(IdempotencyError::CorruptRecord("operation inconnue")),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,6 +107,7 @@ pub enum IdempotencyError {
     InvalidIdempotencyKey,
     CanonicalTooLarge,
     InvalidIssuedAt,
+    InvalidHorizon,
     InvalidTransition { from: RecordState, to: RecordState },
     MissingRecord,
     CorruptRecord(&'static str),
@@ -127,6 +121,7 @@ impl std::fmt::Display for IdempotencyError {
             Self::InvalidIdempotencyKey => write!(formatter, "clé d'idempotence invalide"),
             Self::CanonicalTooLarge => write!(formatter, "enveloppe canonique trop grande"),
             Self::InvalidIssuedAt => write!(formatter, "issued_at invalide"),
+            Self::InvalidHorizon => write!(formatter, "horizon d'idempotence invalide"),
             Self::InvalidTransition { from, to } => {
                 write!(formatter, "transition interdite: {from:?} vers {to:?}")
             }
@@ -189,7 +184,7 @@ impl IdempotencyStore {
         key: &IdempotencyKey,
         canonical_bytes: &[u8],
         issued_at: i64,
-        expires_at: i64,
+        horizon_secs: i64,
         now: i64,
         issued_at_tolerance_secs: i64,
     ) -> Result<Reservation, IdempotencyError> {
@@ -197,7 +192,13 @@ impl IdempotencyStore {
         if issued_at > now.saturating_add(issued_at_tolerance_secs.max(0)) {
             return Err(IdempotencyError::InvalidIssuedAt);
         }
-        if expires_at <= issued_at || expires_at <= now {
+        if horizon_secs <= 0 {
+            return Err(IdempotencyError::InvalidHorizon);
+        }
+        let expires_at = issued_at
+            .checked_add(horizon_secs)
+            .ok_or(IdempotencyError::InvalidHorizon)?;
+        if expires_at <= now {
             return Ok(Reservation::IdempotencyExpired);
         }
 
@@ -221,14 +222,18 @@ impl IdempotencyStore {
         }
 
         let record = self.load_record(key)?.ok_or(IdempotencyError::MissingRecord)?;
+        if record.expires_at <= now {
+            return Ok(Reservation::IdempotencyExpired);
+        }
         if record.canonical_bytes != canonical_bytes {
             return Ok(Reservation::EnvelopeMismatch);
         }
         Ok(Reservation::Replayed(record.lookup_result()?))
     }
 
-    pub fn lookup(&self, key: &IdempotencyKey) -> Result<LookupResult, IdempotencyError> {
+    pub fn lookup(&self, key: &IdempotencyKey, now: i64) -> Result<LookupResult, IdempotencyError> {
         match self.load_record(key)? {
+            Some(record) if record.expires_at <= now => Ok(LookupResult::IdempotencyExpired),
             Some(record) => record.lookup_result(),
             None => Ok(LookupResult::IdempotencyExpired),
         }
@@ -422,7 +427,7 @@ mod tests {
 
     fn reserve(store: &IdempotencyStore, bytes: &[u8]) -> Reservation {
         store
-            .reserve(&key(), bytes, NOW, NOW + HORIZON, NOW, 30)
+            .reserve(&key(), bytes, NOW, HORIZON, NOW, 30)
             .unwrap()
     }
 
@@ -460,10 +465,10 @@ mod tests {
     fn first_send_outside_its_horizon_is_expired() {
         let store = IdempotencyStore::open_in_memory().unwrap();
         assert_eq!(
-            store.reserve(&key(), b"canon", NOW - HORIZON - 1, NOW - 1, NOW, 30).unwrap(),
+            store.reserve(&key(), b"canon", NOW - HORIZON - 1, HORIZON, NOW, 30).unwrap(),
             Reservation::IdempotencyExpired
         );
-        assert_eq!(store.lookup(&key()).unwrap(), LookupResult::IdempotencyExpired);
+        assert_eq!(store.lookup(&key(), NOW).unwrap(), LookupResult::IdempotencyExpired);
     }
 
     #[test]
@@ -488,9 +493,9 @@ mod tests {
         let store = IdempotencyStore::open_in_memory().unwrap();
         assert!(matches!(reserve(&store, b"canon"), Reservation::Prepared { .. }));
         assert_eq!(store.purge_expired(NOW + HORIZON - 1).unwrap(), 0);
-        assert!(matches!(store.lookup(&key()).unwrap(), LookupResult::OutcomeUnknown { .. }));
+        assert!(matches!(store.lookup(&key(), NOW + HORIZON - 1).unwrap(), LookupResult::OutcomeUnknown { .. }));
         assert_eq!(store.purge_expired(NOW + HORIZON).unwrap(), 1);
-        assert_eq!(store.lookup(&key()).unwrap(), LookupResult::IdempotencyExpired);
+        assert_eq!(store.lookup(&key(), NOW + HORIZON).unwrap(), LookupResult::IdempotencyExpired);
     }
 
     #[test]
@@ -498,7 +503,6 @@ mod tests {
         assert!(IdempotencyKey::new("scope-too-short", OperationKind::Send, "message").is_err());
         assert!(IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, "message").is_ok());
         assert!(IdempotencyKey::new("012_scope_aaaaaaaaaaaa!", OperationKind::Send, "message").is_err());
-        assert_eq!(OperationKind::from_str("spawn").unwrap(), OperationKind::Spawn);
     }
 
     #[test]

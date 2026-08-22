@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod daemon;
+pub mod idempotency;
 pub mod managers;
 pub mod registry;
 pub mod receipt_store;
