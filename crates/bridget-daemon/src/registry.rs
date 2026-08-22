@@ -92,7 +92,7 @@ impl AgentRegistry {
     pub fn interactive_alias(command: &str) -> Option<&'static str> {
         match command {
             "codex" => Some("codex"),
-            "claude" | "gclaude" => Some("claude"),
+            "claude" | "gclaude" | "claude-son" => Some("claude"),
             "gemini" => Some("gemini"),
             _ => None,
         }
@@ -108,12 +108,21 @@ impl AgentRegistry {
             self.get(agent_type)?;
             return Ok(agent_type.to_string());
         }
-        if let Some((agent_type, _)) = self
+        let matching_types = self
             .agents
             .iter()
-            .find(|(_, definition)| command_basename(&definition.command) == basename)
-        {
-            return Ok(agent_type.clone());
+            .filter(|(_, definition)| command_basename(&definition.command) == basename)
+            .map(|(agent_type, _)| agent_type.as_str())
+            .collect::<Vec<_>>();
+        if matching_types.len() == 1 {
+            return Ok(matching_types[0].to_string());
+        }
+        if matching_types.len() > 1 {
+            return Err(format!(
+                "commande ambiguë '{command}' dans {} : {}. Utilisez un type explicite.",
+                self.source.display(),
+                matching_types.join(", ")
+            ));
         }
 
         let available = self
@@ -354,6 +363,28 @@ mod tests {
     fn generic_codex_command_resolves_through_the_registry() {
         let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
         assert_eq!(registry.type_for_command("codex").unwrap(), "codex");
+    }
+
+    #[test]
+    fn historic_interactive_aliases_remain_available() {
+        for (command, agent_type) in [
+            ("codex", "codex"),
+            ("claude", "claude"),
+            ("gemini", "gemini"),
+            ("gclaude", "claude"),
+            ("claude-son", "claude"),
+        ] {
+            assert_eq!(AgentRegistry::interactive_alias(command), Some(agent_type));
+        }
+    }
+
+    #[test]
+    fn ambiguous_command_is_refused_without_map_order_fallback() {
+        let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
+        let error = registry.type_for_command("npx").unwrap_err();
+        assert!(error.contains("commande ambiguë 'npx'"));
+        assert!(error.contains("claude"));
+        assert!(error.contains("codex"));
     }
 
     #[test]
