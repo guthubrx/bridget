@@ -1,5 +1,12 @@
 # Bridget
 
+## MCP tools
+
+Run `bridget mcp` from a Bridget teammate to expose `bridget_send`,
+`bridget_who`, and `bridget_ledger` over JSON-RPC stdin/stdout. Structured
+results are also emitted as MCP text content; retries reuse the `id` and
+`issued_at` returned by the first send.
+
 [🇫🇷 Français](README.md) · **🇬🇧 English**
 
 > Getting command-line AI agents to work together — on one machine, or on

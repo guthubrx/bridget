@@ -49,7 +49,7 @@ commit en review immuable, auteur ≠ relecteur, zéro trace IA, jamais de push)
   binaire, chaîne npx ×3, pid recyclé (naissance divergente), hors-agent,
   marqueur legacy.
 
-- [ ] **T1005** Outils `bridget_send`/`bridget_who`/`bridget_ledger` :
+- [x] **T1005** Outils `bridget_send`/`bridget_who`/`bridget_ledger` :
   connexion daemon PAR APPEL (deux phases Register/commande, budget 10 s du
   registre), `bridget_send` **projection du contrat 012** (id métier avant
   connexion via `SendIdempotent` quand le client MCP négocie —
@@ -72,7 +72,7 @@ commit en review immuable, auteur ≠ relecteur, zéro trace IA, jamais de push)
   **Observable** : SC-004 selon l'issue de la gate T1001, smoke test réel par
   type disponible.
 
-- [ ] **T1007** Prompt allégé (FR-006/SC-005) : blocs avant/après versionnés
+- [x] **T1007** Prompt allégé (FR-006/SC-005) : blocs avant/après versionnés
   en fixtures, réduction ≥ 60 % (comptage Unicode documenté), matrice
   comportementale = quickstart 007 §1-§4 rejoués avec le prompt réduit.
   **Observable** : mesure consignée + matrice au vert.

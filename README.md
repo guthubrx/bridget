@@ -107,9 +107,14 @@ une enveloppe différente avec la même clé est refusée par
 `IdempotencyExpired` interdit toute réémission aveugle. Les trois options sont
 obligatoires ensemble ; un envoi historique sans elles reste inchangé.
 
-Cette garantie est disponible sur le protocole local et la CLI. La projection
-MCP est volontairement différée à la session 010 : elle ne doit pas être
-supposée équivalente avant sa propre preuve de conformité.
+Cette garantie est disponible sur le protocole local et la CLI.
+
+## Outils MCP
+
+Lancez `bridget mcp` depuis un équipier Bridget pour exposer `bridget_send`,
+`bridget_who` et `bridget_ledger` sur stdin/stdout JSON-RPC. Les résultats
+structurés sont également fournis en texte MCP ; le retry réutilise `id` et
+`issued_at` retournés par le premier envoi.
 
 ## Équipiers ACP
 

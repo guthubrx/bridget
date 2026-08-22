@@ -1,5 +1,26 @@
 # Journal d’implémentation — MCP natif
 
+## Checklist finale SC-001 à SC-006
+
+- [x] **SC-001** — le dispatcher MCP conserve un unique lecteur et un writer
+  sérialisé ; la matrice FR-009 de 15 cas est couverte par
+  `crates/bridget-daemon/tests/fixtures/mcp/fr009.jsonl` et ses tests.
+- [x] **SC-002** — l'identité est résolue à chaque `tools/call` : tests de
+  renommage, filiation et marqueur historique dans `mcp_identity.rs`.
+- [x] **SC-003** — `bridget_send` respecte l'idempotence 012 : corpus MCP et
+  tests de retry, refus et `outcome_unknown` dans `mcp.rs`.
+- [x] **SC-004** — les trois voies disponibles ont passé le spike T1001 sans
+  mutation de configuration ; Gemini reste documenté indisponible.
+- [x] **SC-005** — le prompt MCP allégé est versionné et mesuré par
+  `crates/bridget-daemon/tests/prompt_reduction_test.rs`.
+- [x] **SC-006** — la projection ledger partagée est utilisée par CLI et MCP,
+  avec golden du renderer CLI et DTO MCP testés dans `cli.rs` et `mcp.rs`.
+
+### Non-régression finale
+
+La suite cumulée a exécuté 241 tests unitaires daemon, 29 tests core, 8 tests
+d'intégration et 2 tests idempotence ; 6 tests sont explicitement ignorés.
+
 ## T1001 — Spike-gate des quatre voies de branchement
 
 - **Date** : 2026-08-22
