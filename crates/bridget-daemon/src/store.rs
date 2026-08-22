@@ -263,19 +263,30 @@ impl Store {
             .as_secs() as i64
             - (days as i64 * 86400);
 
-        let deleted = self
-            .conn
+        let transaction = self.conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        let deleted = transaction
             .execute(
                 "DELETE FROM ledger WHERE ts < ?1",
                 rusqlite::params![cutoff],
             )
             .map_err(StoreError::Sqlite)?;
-        self.conn
+        transaction
+            .execute(
+                "DELETE FROM request_events
+                 WHERE request_id IN (
+                    SELECT id FROM tracked_requests
+                    WHERE state != 'open' AND completed_at < ?1
+                 )",
+                rusqlite::params![cutoff],
+            )
+            .map_err(StoreError::Sqlite)?;
+        transaction
             .execute(
                 "DELETE FROM tracked_requests WHERE state != 'open' AND completed_at < ?1",
                 rusqlite::params![cutoff],
             )
             .map_err(StoreError::Sqlite)?;
+        transaction.commit().map_err(StoreError::Sqlite)?;
         Ok(deleted)
     }
 
@@ -386,6 +397,27 @@ mod tests {
         let reopened = Store::open(&path).unwrap();
         assert_eq!(reopened.latest_deferred_reminder("request-1").unwrap().map(|event| event.0), Some(2));
         drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn purge_supprime_avec_la_demande_les_evenements_associes() {
+        let path = std::env::temp_dir().join(format!("bridget-store-purge-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let store = Store::open(&path).unwrap();
+        store.create_request("request-1", "alice", "bob", 60).unwrap();
+        assert!(store.mark_timed_out("request-1").unwrap());
+        store.record_deferred_reminder("request-1", 2).unwrap();
+        store.conn.execute(
+            "UPDATE tracked_requests SET completed_at = ?1 WHERE id = ?2",
+            rusqlite::params![now_secs() - 86_401, "request-1"],
+        ).unwrap();
+
+        store.purge_older_than_days(1).unwrap();
+
+        assert!(store.get_request("request-1").unwrap().is_none());
+        assert!(store.latest_deferred_reminder("request-1").unwrap().is_none());
+        drop(store);
         let _ = std::fs::remove_file(path);
     }
 }
