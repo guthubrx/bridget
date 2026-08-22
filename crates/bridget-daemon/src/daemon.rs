@@ -181,10 +181,19 @@ struct DaemonState {
     /// Les clients attach négocient ce rôle explicite ; l'absence d'entrée
     /// reste un wrapper pour préserver les agents 007 déjà connectés.
     connection_roles: HashMap<String, ConnectionRole>,
+    /// Souscriptions attach actives, distinctes de l'annuaire des équipiers.
+    attach_subscriptions: HashMap<String, AttachSubscription>,
     presences: HashMap<String, Presence>,
     conn_counter: u64,
     /// Messages --reply en attente de réponse : (msg_id, from, to, expire_at, target_conn)
     pending_replies: Vec<PendingReply>,
+}
+
+#[derive(Clone)]
+struct AttachSubscription {
+    agent: String,
+    attach_conn: String,
+    wrapper_conn: String,
 }
 
 struct PendingReply {
@@ -272,6 +281,78 @@ fn deliver_to_agent(writer: &Arc<Mutex<BufWriter<UnixStream>>>, target_name: &st
     Ok(())
 }
 
+fn push_control_message(
+    writer: &Arc<Mutex<BufWriter<UnixStream>>>,
+    message: &DaemonToWrapper,
+) -> bool {
+    let Ok(json) = encode(message) else {
+        return false;
+    };
+    let Ok(mut writer) = writer.lock() else {
+        return false;
+    };
+    writeln!(writer, "{json}")
+        .and_then(|_| writer.flush())
+        .is_ok()
+}
+
+fn agent_uses_acp(agent: &bridget_core::router::RegisteredAgent) -> bool {
+    let agent_type = agent.agent_type.to_string();
+    crate::registry::AgentRegistry::load()
+        .ok()
+        .and_then(|registry| registry.get(&agent_type).ok().map(|definition| definition.protocol == "acp"))
+        // Un type ouvert par le registre de test de T708 reste ACP tant qu'il
+        // n'a pas déclaré explicitement un protocole tmux.
+        .unwrap_or(!matches!(agent.agent_type, bridget_core::AgentType::Shell))
+}
+
+fn attach_refusal_for_subscription(
+    state: &DaemonState,
+    agent: &str,
+) -> Result<String, AttachRefusal> {
+    let registered = state
+        .router
+        .get_agent(agent)
+        .ok_or(AttachRefusal::AgentUnknown)?;
+    if !agent_uses_acp(registered) {
+        return Err(AttachRefusal::AgentNotAcp);
+    }
+    if !state.connections.contains_key(&registered.connection_id) {
+        return Err(AttachRefusal::WrapperUnavailable);
+    }
+    Ok(registered.connection_id.clone())
+}
+
+fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) {
+    let affected = state
+        .attach_subscriptions
+        .iter()
+        .filter(|(_, subscription)| {
+            subscription.attach_conn == conn_id || subscription.wrapper_conn == conn_id
+        })
+        .map(|(id, subscription)| (id.clone(), subscription.clone()))
+        .collect::<Vec<_>>();
+    for (subscription_id, subscription) in affected {
+        state.attach_subscriptions.remove(&subscription_id);
+        if subscription.attach_conn == conn_id {
+            if let Some(writer) = state.connections.get(&subscription.wrapper_conn) {
+                let _ = push_control_message(
+                    writer,
+                    &DaemonToWrapper::Unsubscribe { subscription_id },
+                );
+            }
+        } else if let Some(writer) = state.connections.get(&subscription.attach_conn) {
+            let _ = push_control_message(
+                writer,
+                &DaemonToWrapper::End {
+                    subscription_id,
+                    reason: "wrapper indisponible".to_string(),
+                },
+            );
+        }
+    }
+}
+
 // Fonction pour exposer les métriques publiquement (M-005)
 pub fn get_metrics() -> &'static Metrics {
     // Note: ceci est un stub pour l'observabilité
@@ -300,6 +381,7 @@ impl DaemonState {
             conn_operating_systems: HashMap::new(),
             conn_instances: HashMap::new(),
             connection_roles: HashMap::new(),
+            attach_subscriptions: HashMap::new(),
             presences: HashMap::new(),
             conn_counter: 0,
             pending_replies: Vec::new(),
@@ -766,6 +848,7 @@ fn handle_connection(
     // Connexion fermée : désenregistrer avec nettoyage explicite pour éviter fuites
     let (writer_opt, removed) = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        close_attach_subscriptions(&mut st, &conn_id);
 
         // Récupérer le writer AVANT suppression pour nettoyage explicite
         let writer_opt = st.connections.remove(&conn_id);
@@ -1257,24 +1340,173 @@ fn handle_wrapper_message(
 
     match msg {
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
-        // Le cycle de souscription est installé en T804. T802 réserve les
-        // variantes et ferme immédiatement la frontière de rôle.
-        WrapperToDaemon::Subscribe { .. } | WrapperToDaemon::Unsubscribe { .. } => {
-            Some(DaemonToWrapper::AttachRejected {
-                subscription_id: None,
-                reason: AttachRefusal::WrapperUnavailable,
+        WrapperToDaemon::Subscribe { agent, window } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            if st.connection_roles.get(conn_id) != Some(&ConnectionRole::Attach) {
+                return Some(DaemonToWrapper::AttachRejected {
+                    subscription_id: None,
+                    reason: AttachRefusal::MessageOutsideAttachRole,
+                });
+            }
+            let wrapper_conn = match attach_refusal_for_subscription(&st, &agent) {
+                Ok(connection_id) => connection_id,
+                Err(reason) => {
+                    return Some(DaemonToWrapper::AttachRejected {
+                        subscription_id: None,
+                        reason,
+                    });
+                }
+            };
+            let subscription_id = format!("attach-{}", uuid::Uuid::new_v4());
+            st.attach_subscriptions.insert(
+                subscription_id.clone(),
+                AttachSubscription {
+                    agent: agent.clone(),
+                    attach_conn: conn_id.to_string(),
+                    wrapper_conn: wrapper_conn.clone(),
+                },
+            );
+            let accepted = st
+                .connections
+                .get(&wrapper_conn)
+                .is_some_and(|writer| {
+                    push_control_message(
+                        writer,
+                        &DaemonToWrapper::Subscribe {
+                            subscription_id: subscription_id.clone(),
+                            agent,
+                            window,
+                        },
+                    )
+                });
+            if accepted {
+                None
+            } else {
+                st.attach_subscriptions.remove(&subscription_id);
+                Some(DaemonToWrapper::AttachRejected {
+                    subscription_id: Some(subscription_id),
+                    reason: AttachRefusal::WrapperUnavailable,
+                })
+            }
+        }
+        WrapperToDaemon::Unsubscribe { subscription_id } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(subscription) = st.attach_subscriptions.get(&subscription_id).cloned() else {
+                // Une fin d'ancienne génération n'a pas le droit de toucher
+                // une souscription plus récente sur la même connexion.
+                return None;
+            };
+            if subscription.attach_conn != conn_id {
+                return Some(DaemonToWrapper::AttachRejected {
+                    subscription_id: Some(subscription_id),
+                    reason: AttachRefusal::MessageOutsideAttachRole,
+                });
+            }
+            st.attach_subscriptions.remove(&subscription_id);
+            if let Some(writer) = st.connections.get(&subscription.wrapper_conn) {
+                let _ = push_control_message(
+                    writer,
+                    &DaemonToWrapper::Unsubscribe {
+                        subscription_id: subscription_id.clone(),
+                    },
+                );
+            }
+            Some(DaemonToWrapper::End {
+                subscription_id,
+                reason: "désabonnement demandé".to_string(),
             })
         }
-        // Les relais wrapper→daemon sont introduits avec le worker de journal
-        // (T803b/T804). Les accepter ici conserve la compatibilité de décodage
-        // sans les faire entrer dans le routage de messages.
-        WrapperToDaemon::Subscribed { .. }
-        | WrapperToDaemon::JournalFragment { .. }
+        WrapperToDaemon::Subscribed { subscription_id } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
+            if subscription.wrapper_conn != conn_id {
+                return None;
+            }
+            log::debug!(
+                "abonnement attach {} accepté par {}",
+                subscription_id,
+                subscription.agent
+            );
+            let delivered = st.connections.get(&subscription.attach_conn).is_some_and(|writer| {
+                push_control_message(writer, &DaemonToWrapper::Subscribed { subscription_id: subscription_id.clone() })
+            });
+            if !delivered {
+                st.attach_subscriptions.remove(&subscription_id);
+            }
+            None
+        }
+        WrapperToDaemon::AttachRejected {
+            subscription_id,
+            reason,
+        } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let subscription_id = subscription_id?;
+            let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
+            if subscription.wrapper_conn != conn_id {
+                return None;
+            }
+            if let Some(writer) = st.connections.get(&subscription.attach_conn) {
+                let _ = push_control_message(
+                    writer,
+                    &DaemonToWrapper::AttachRejected {
+                        subscription_id: Some(subscription_id.clone()),
+                        reason,
+                    },
+                );
+            }
+            st.attach_subscriptions.remove(&subscription_id);
+            None
+        }
+        WrapperToDaemon::End {
+            subscription_id,
+            reason,
+        } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
+            if subscription.wrapper_conn != conn_id {
+                return None;
+            }
+            if let Some(writer) = st.connections.get(&subscription.attach_conn) {
+                let _ = push_control_message(
+                    writer,
+                    &DaemonToWrapper::End {
+                        subscription_id: subscription_id.clone(),
+                        reason,
+                    },
+                );
+            }
+            st.attach_subscriptions.remove(&subscription_id);
+            None
+        }
+        WrapperToDaemon::JournalReadError {
+            subscription_id,
+            line,
+            offset,
+            reason,
+        } => {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
+            if subscription.wrapper_conn != conn_id {
+                return None;
+            }
+            if let Some(writer) = st.connections.get(&subscription.attach_conn) {
+                let _ = push_control_message(
+                    writer,
+                    &DaemonToWrapper::JournalReadError {
+                        subscription_id,
+                        line,
+                        offset,
+                        reason,
+                    },
+                );
+            }
+            None
+        }
+        // Le fan-out des fragments et des gaps est ajouté en T804b. Ces
+        // variantes restent décodables ici sans entrer dans le routage.
+        WrapperToDaemon::JournalFragment { .. }
         | WrapperToDaemon::SnapshotCaughtUp { .. }
-        | WrapperToDaemon::Gap { .. }
-        | WrapperToDaemon::End { .. }
-        | WrapperToDaemon::JournalReadError { .. }
-        | WrapperToDaemon::AttachRejected { .. } => None,
+        | WrapperToDaemon::Gap { .. } => None,
         WrapperToDaemon::Register {
             agent_type,
             name,
@@ -1303,6 +1535,7 @@ fn handle_wrapper_message(
 
         WrapperToDaemon::Unregister => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            close_attach_subscriptions(&mut st, conn_id);
             st.router.unregister_by_conn(conn_id);
             st.mark_stopped(conn_id);
             st.conn_names.remove(conn_id);
@@ -1881,6 +2114,24 @@ pub struct DaemonStatus {
 mod presence_tests {
     use super::*;
 
+    fn control_socket(label: &str) -> (Arc<Mutex<BufWriter<UnixStream>>>, BufReader<UnixStream>) {
+        let path = std::env::temp_dir().join(format!(
+            "bc-{label}-{}.sock",
+            &uuid::Uuid::new_v4().simple().to_string()[..12]
+        ));
+        let listener = UnixListener::bind(&path).unwrap();
+        let client = UnixStream::connect(&path).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        std::fs::remove_file(path).unwrap();
+        (Arc::new(Mutex::new(BufWriter::new(server))), BufReader::new(client))
+    }
+
+    fn read_control(reader: &mut BufReader<UnixStream>) -> DaemonToWrapper {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        decode(line.trim()).unwrap()
+    }
+
     #[test]
     fn unreachable_presence_remains_visible() {
         let base = std::env::temp_dir().join(format!("bridget-presence-{}", std::process::id()));
@@ -2097,6 +2348,124 @@ mod presence_tests {
         );
         let _ = std::fs::remove_file(config.db_path);
         let _ = std::fs::remove_file(config.socket_path.with_extension("target.sock"));
+    }
+
+    #[test]
+    fn abonnement_attach_attend_le_wrapper_et_ignore_la_fin_d_une_ancienne_generation() {
+        let (mut state, config) = state_with_registered_agent("attach-cycle");
+        let (wrapper_writer, mut wrapper_reader) = control_socket("wrapper");
+        let (attach_writer, mut attach_reader) = control_socket("attach");
+        state.connections.insert("conn-1".to_string(), wrapper_writer);
+        state.connections.insert("attach-1".to_string(), attach_writer);
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_wrapper_message(
+                "attach-1",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+
+        assert!(handle_wrapper_message(
+            "attach-1",
+            WrapperToDaemon::Subscribe {
+                agent: "agent-2".to_string(),
+                window: bridget_transport::AttachWindow::Today,
+            },
+            &shared,
+        )
+        .is_none());
+        let first_id = match read_control(&mut wrapper_reader) {
+            DaemonToWrapper::Subscribe { subscription_id, .. } => subscription_id,
+            other => panic!("commande wrapper inattendue: {}", encode(&other).unwrap()),
+        };
+        assert_eq!(shared.lock().unwrap().agent_infos().len(), 1, "attach reste hors de who");
+        assert!(shared.lock().unwrap().attach_subscriptions.contains_key(&first_id));
+        assert!(handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::Subscribed {
+                subscription_id: first_id.clone(),
+            },
+            &shared,
+        )
+        .is_none());
+        assert!(matches!(
+            read_control(&mut attach_reader),
+            DaemonToWrapper::Subscribed { subscription_id } if subscription_id == first_id
+        ));
+        handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::JournalReadError {
+                subscription_id: first_id.clone(),
+                line: 12,
+                offset: 384,
+                reason: "ligne corrompue".to_string(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            read_control(&mut attach_reader),
+            DaemonToWrapper::JournalReadError {
+                subscription_id,
+                line: 12,
+                offset: 384,
+                reason,
+            } if subscription_id == first_id && reason == "ligne corrompue"
+        ));
+
+        handle_wrapper_message(
+            "attach-1",
+            WrapperToDaemon::Subscribe {
+                agent: "agent-2".to_string(),
+                window: bridget_transport::AttachWindow::Seq(8),
+            },
+            &shared,
+        );
+        let second_id = match read_control(&mut wrapper_reader) {
+            DaemonToWrapper::Subscribe { subscription_id, .. } => subscription_id,
+            other => panic!("commande wrapper inattendue: {}", encode(&other).unwrap()),
+        };
+        handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::Subscribed {
+                subscription_id: second_id.clone(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            read_control(&mut attach_reader),
+            DaemonToWrapper::Subscribed { subscription_id } if subscription_id == second_id
+        ));
+
+        handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::End {
+                subscription_id: first_id.clone(),
+                reason: "ancienne génération".to_string(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            read_control(&mut attach_reader),
+            DaemonToWrapper::End { subscription_id, .. } if subscription_id == first_id
+        ));
+        assert!(shared.lock().unwrap().attach_subscriptions.contains_key(&second_id));
+
+        {
+            let mut state = shared.lock().unwrap();
+            close_attach_subscriptions(&mut state, "attach-1");
+            assert!(state.attach_subscriptions.is_empty());
+        }
+        assert!(matches!(
+            read_control(&mut wrapper_reader),
+            DaemonToWrapper::Unsubscribe { subscription_id } if subscription_id == second_id
+        ));
+        let _ = std::fs::remove_file(config.db_path);
     }
 
     #[test]
