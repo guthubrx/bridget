@@ -220,21 +220,21 @@ struct AttachViewBuffer {
 }
 
 struct AttachView {
-    subscription_id: String,
     queue: Arc<(Mutex<AttachViewBuffer>, Condvar)>,
+    worker: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl AttachView {
     #[cfg(test)]
-    fn suspended(subscription_id: impl Into<String>) -> Arc<Self> {
+    fn suspended(_subscription_id: impl Into<String>) -> Arc<Self> {
         Arc::new(Self {
-            subscription_id: subscription_id.into(),
             queue: Arc::new((
                 Mutex::new(AttachViewBuffer {
                     messages: VecDeque::new(), bytes: 0, gap: None, closed: false,
                 }),
                 Condvar::new(),
             )),
+            worker: Mutex::new(None),
         })
     }
 
@@ -247,20 +247,21 @@ impl AttachView {
             }),
             Condvar::new(),
         ));
-        let view = Arc::new(Self { subscription_id, queue });
-        let worker = view.clone();
-        thread::spawn(move || {
+        let view = Arc::new(Self { queue: queue.clone(), worker: Mutex::new(None) });
+        let worker_queue = queue.clone();
+        let worker_subscription = subscription_id;
+        let handle = thread::spawn(move || {
             let mut writer = BufWriter::new(stream);
             loop {
                 let next = {
-                    let (lock, wake) = &*worker.queue;
+                    let (lock, wake) = &*worker_queue;
                     let mut buffer = lock.lock().unwrap_or_else(|e| e.into_inner());
                     while buffer.messages.is_empty() && buffer.gap.is_none() && !buffer.closed {
                         buffer = wake.wait(buffer).unwrap_or_else(|e| e.into_inner());
                     }
                     if let Some((from_seq, to_seq, reason)) = buffer.gap.take() {
                         encode(&DaemonToWrapper::Gap {
-                            subscription_id: worker.subscription_id.clone(), from_seq, to_seq, reason,
+                            subscription_id: worker_subscription.clone(), from_seq, to_seq, reason,
                         }).ok()
                     } else if let Some(message) = buffer.messages.pop_front() {
                         buffer.bytes = buffer.bytes.saturating_sub(message.encoded.len());
@@ -268,15 +269,18 @@ impl AttachView {
                     } else { None }
                 };
                 let Some(next) = next else {
-                    if worker.queue.0.lock().unwrap_or_else(|e| e.into_inner()).closed { break; }
+                    if worker_queue.0.lock().unwrap_or_else(|e| e.into_inner()).closed { break; }
                     continue;
                 };
                 if writeln!(writer, "{next}").and_then(|_| writer.flush()).is_err() {
-                    worker.close();
+                    let (lock, wake) = &*worker_queue;
+                    lock.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
+                    wake.notify_all();
                     break;
                 }
             }
         });
+        *view.worker.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
         Some(view)
     }
 
@@ -319,6 +323,13 @@ impl AttachView {
         let (lock, wake) = &*self.queue;
         lock.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
         wake.notify_all();
+    }
+
+    fn close_and_join(&self) {
+        self.close();
+        if let Some(worker) = self.worker.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -490,7 +501,7 @@ fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) -> Vec<Def
         .collect::<Vec<_>>();
     for (subscription_id, subscription) in affected {
         state.attach_subscriptions.remove(&subscription_id);
-        if let Some(view) = state.attach_views.remove(&subscription_id) { view.close(); }
+        if let Some(view) = state.attach_views.remove(&subscription_id) { view.close_and_join(); }
         if subscription.attach_conn == conn_id {
             defer_control(
                 state,
@@ -1559,7 +1570,7 @@ fn handle_wrapper_message(
             } else {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                 st.attach_subscriptions.remove(&subscription_id);
-                if let Some(view) = st.attach_views.remove(&subscription_id) { view.close(); }
+                if let Some(view) = st.attach_views.remove(&subscription_id) { view.close_and_join(); }
                 Some(DaemonToWrapper::AttachRejected {
                     subscription_id: Some(subscription_id),
                     reason: AttachRefusal::WrapperUnavailable,
@@ -1620,7 +1631,7 @@ fn handle_wrapper_message(
                 let control = {
                     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                     let subscription = st.attach_subscriptions.remove(&subscription_id);
-                    if let Some(view) = st.attach_views.remove(&subscription_id) { view.close(); }
+                    if let Some(view) = st.attach_views.remove(&subscription_id) { view.close_and_join(); }
                     subscription.and_then(|subscription| {
                         st.connections.get(&subscription.wrapper_conn).map(|writer| DeferredControl {
                             writer: writer.clone(),
