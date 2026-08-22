@@ -15,6 +15,7 @@ tranché et appliqué au plan (TOML → JSON).
 | Garde clé API au lancement | aucune garde d'environnement existante | recherche `rg -n "API_KEY" crates/` : 0 résultat | **CRÉER** (FR-011) |
 | `AcpTransport` | `TmuxTransport` implémente le trait `Transport` | `tmux.rs:11`, `transport.rs:30` | **CRÉER** — c'est l'objet même de la feature ; le trait est réutilisé tel quel, extension minimale d'une méthode d'état (D-204) |
 | Client JSON-RPC minimal | encode/decode `serde_json` ligne à ligne du protocole wrapper↔daemon | `protocol.rs:138-147` | **CRÉER** dans `acp.rs` en reprenant les mêmes primitives (style et helpers identiques) ; la crate officielle async est écartée (research R-004) |
+| Fixtures ACP versionnées | fixtures runtime temporaires créées en test | `crates/bridget-daemon/src/runtime.rs:217-229` | **CRÉER** `tests/fixtures/acp/` : les cas R-004 et le spike Codex doivent rester reproductibles et relus octet pour octet, contrairement aux fichiers temporaires de runtime |
 | Sélection de type d'agent au lancement | liste blanche en dur + dispatch `cli.rs` | `wrapper.rs:522`, `cli.rs:62-77` | **REMPLACER** par le registre (FR-013) — la liste en dur est inscrite au registre des dépréciations puis supprimée |
 | `docs/DEPRECATIONS.md`, ADR 003 | `docs/decisions/` contient 001 et 002 | `ls docs/decisions/` | **CRÉER** (aucun équivalent) |
 

@@ -44,7 +44,7 @@ valide chaque tâche avant coche. Ne jamais committer automatiquement.
   inconnue → avertissement) ; les agents tmux actuels se lancent à l'identique
   via le registre.
 
-- [ ] **T704** [US1] **Client JSON-RPC minimal + `AcpTransport`** :
+- [X] **T704** [US1] **Client JSON-RPC minimal + `AcpTransport`** :
   `crates/bridget-transport/src/acp.rs` — spawn du sous-processus adaptateur
   (stdio pipés), `initialize` (négociation de version → erreur explicite si
   incompatible), `session/new`, un seul thread lecteur avec dispatch

@@ -2,10 +2,12 @@
 //!
 //! Définit les messages JSON qui circulent sur la socket locale.
 
+pub mod acp;
 pub mod protocol;
-pub mod transport;
 pub mod tmux;
+pub mod transport;
 
-pub use protocol::{WrapperToDaemon, DaemonToWrapper};
-pub use transport::{Transport, TransportError};
+pub use acp::{AcpEvent, AcpOptions, AcpTransport, TurnState};
+pub use protocol::{DaemonToWrapper, WrapperToDaemon};
 pub use tmux::TmuxTransport;
+pub use transport::{Transport, TransportError};

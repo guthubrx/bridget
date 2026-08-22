@@ -112,3 +112,16 @@ API pendant cette tentative.
 - **Simplicité** : le registre réutilise `serde_json`; il ne crée ni dépendance
   ni couche de lancement supplémentaire.
 - **Non vérifié** : l'exécution ACP réelle relève de T704 et T705.
+
+## T704 — Client JSON-RPC minimal et transport ACP
+
+- **Statut** : terminé
+- **Fichiers** : `crates/bridget-transport/src/acp.rs`, `lib.rs`, fixtures
+  `tests/fixtures/acp/generic.jsonl` et `tests/fixtures/acp/codex-spike.jsonl`.
+- **Vérifications** : un lecteur stdout unique, writer sérialisé, corrélation
+  `id → waiter`, worker FIFO et file bornée. Les fixtures générique et Codex
+  couvrent la matrice R-004 ; le mapping de prompt applique le contrat de
+  livraison sans transformer le corps.
+- **Limite assumée** : le branchement du wrapper, le relais des événements et
+  le `CancelDelivery` typé sont traités par T705 ; le transport expose déjà la
+  purge par id et l'arrêt ACP propre.
