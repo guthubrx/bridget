@@ -115,7 +115,7 @@ auteur ≠ relecteur.
   **Observable** : un test par ligne de la table 012, chacun après crash
   daemon simulé.
 
-- [ ] **T1211** Finition : README (section envois idempotents), DEPRECATIONS
+- [x] **T1211** Finition : README (section envois idempotents), DEPRECATIONS
   relu, `implementation.md` avec SC-001..SC-006 pointés (SC-004 gate MCP
   explicitement déférée à la 010).
   **Observable** : checklist pointée avec preuves.

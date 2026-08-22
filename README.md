@@ -85,6 +85,32 @@ bridget send --to codex-1 "Analyse ce fichier" --reply
 bridget who
 ```
 
+## Envois idempotents
+
+Pour une délégation que votre programme pourra rejouer après une coupure,
+fournissez les trois valeurs durables ensemble : une portée opaque stable, une
+clé métier et son instant Unix d'émission. Bridget ne génère jamais ces valeurs
+à la place du client.
+
+```bash
+bridget send --to codex-1 \
+  --id delegation-42 \
+  --issued-at 1787400000 \
+  --issuer-scope "012_scope_aaaaaaaaaaaa" \
+  "Analyse ce fichier"
+```
+
+Un retry réutilise exactement ces trois valeurs et la même enveloppe. Il
+rejoue alors l'issue durable (`Accepted`, refus motivé ou `OutcomeUnknown`) ;
+une enveloppe différente avec la même clé est refusée par
+`EnvelopeMismatch`. Après l'échéance annoncée par le daemon,
+`IdempotencyExpired` interdit toute réémission aveugle. Les trois options sont
+obligatoires ensemble ; un envoi historique sans elles reste inchangé.
+
+Cette garantie est disponible sur le protocole local et la CLI. La projection
+MCP est volontairement différée à la session 010 : elle ne doit pas être
+supposée équivalente avant sa propre preuve de conformité.
+
 ## Équipiers ACP
 
 Un équipier ACP reçoit les livraisons directement via l’Agent Client Protocol
