@@ -72,3 +72,30 @@ corrélé. Un second test lance réellement un enfant supervisé qui termine ave
 le code 7, puis exerce `try_wait` → événement → rejets/état/vue. Les tests de
 permissions vérifient aussi les modes créés directement par `DirBuilder` et
 `OpenOptions`, sans fenêtre `create` puis `chmod`.
+
+## T909 — Matrice de parité FR-008
+
+La matrice versionnée `fr-008-v1` exécute trois fois le même corpus dans chaque
+mode, avec le même faux adaptateur ACP déterministe et le même daemon réel. Le
+premier passage lance le wrapper depuis un terminal ; le second passe par
+`SpawnOrder`, le bootstrap, le wrapper supervisé et un `Register` réel. Chaque
+passage couvre quatre tours : demande suivie nominale, corps multiligne avec
+apostrophe/guillemets/`$VAR`/backticks, puis deux demandes envoyées pendant un
+tour ralenti pour exercer la file FIFO.
+
+Observables comparés sans tolérance : quatre accusés, quatre réponses dans
+l'ordre, quatre demandes finales `answered`, présence `acp/connected`, et les
+douze événements du journal v1 rendus par une vraie connexion attach. Les
+champs volatils (identifiants, horodatages, nom de génération) sont normalisés ;
+les types d'événement, corps, texte des updates, `stop_reason` et routage de la
+réponse restent comparés octet pour octet. Total : 6 passages, 24 échanges
+suivis et 72 frames attach, zéro divergence. Une campagne séparée vérifie le
+refus réel `OPENAI_API_KEY` avant spawn dans les deux modes, avec le même motif
+`BillingGuard`.
+
+Le banc est borné à dix secondes par opération et a terminé en 20,51 s sur la
+machine de validation. La commande reproductible est :
+
+```bash
+cargo test -p bridget-daemon --test managed_parity_test -- --nocapture
+```
