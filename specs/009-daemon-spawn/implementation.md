@@ -65,6 +65,10 @@ de générations actives reste inchangé par le refus.
   démarrage puis chaque heure la même rétention en jours que le journal du
   daemon.
 
-Les tests exécutent le hook après un vrai `exec`, distinguent son
-`StartupFailed` du `BootstrapReady`, vérifient le polling non bloquant, les
-permissions/rétention et les trois sorties visibles d'une mort spontanée.
+Le test d'intégration exécute le vrai binaire `bridget managed-wrapper` après
+le bootstrap : avant `Registered`, aucun succès n'est observable ; après la
+réponse du faux daemon, l'échec réel de spawn ACP remonte un `StartupFailed`
+corrélé. Un second test lance réellement un enfant supervisé qui termine avec
+le code 7, puis exerce `try_wait` → événement → rejets/état/vue. Les tests de
+permissions vérifient aussi les modes créés directement par `DirBuilder` et
+`OpenOptions`, sans fenêtre `create` puis `chmod`.

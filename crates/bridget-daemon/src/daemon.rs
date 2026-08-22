@@ -6030,15 +6030,73 @@ mod presence_tests {
                 wrapper_conn: Some("conn-1".to_string()),
             },
         );
+        let executable = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .and_then(std::path::Path::parent)
+            .unwrap()
+            .join("bridget");
+        assert!(executable.exists(), "binaire bridget de test absent");
+        let process_root = std::env::temp_dir().join(format!(
+            "bridget-t906-death-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&process_root).unwrap();
+        let launch = ManagedLaunch {
+            bootstrap_executable: executable,
+            identity: ManagedIdentity {
+                instance_id: lease.instance_id.clone(),
+                command_id: lease.command_id.clone(),
+                generation: lease.generation,
+            },
+            wrapper_executable: PathBuf::from("/bin/sh"),
+            wrapper_args: vec!["-c".to_string(), "exit 7".to_string()],
+            cwd: process_root.clone(),
+            env: std::collections::BTreeMap::new(),
+        };
+        let marker_store = ManagedMarkerStore::at_directory(process_root.join("managed"));
+        let child = crate::managed_process::spawn_managed_bootstrap(&launch)
+            .unwrap()
+            .wait_ready()
+            .unwrap()
+            .persist_marker(&marker_store, "agent-2")
+            .unwrap()
+            .release()
+            .unwrap();
+        let prepared = PreparedSpawn {
+            lease: lease.clone(),
+            agent_type: "fixture".to_string(),
+            command: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), "exit 7".to_string()],
+            cwd: process_root.clone(),
+            env: std::collections::BTreeMap::new(),
+        };
+        let mut active = HashMap::from([(
+            lease.instance_id.clone(),
+            SupervisedProcess {
+                prepared,
+                child,
+                registered: Some(("conn-1".to_string(), "agent-2".to_string())),
+                connected: true,
+                failure_sent: false,
+            },
+        )]);
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let observed = loop {
+            poll_managed_processes(&state.fleet, &observed_tx, &mut active);
+            if let Ok(event) = observed_rx.try_recv() {
+                break event;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(matches!(
+            &observed,
+            ManagedSupervisorEvent::Exited { reason, .. }
+                if reason.contains("exit status: 7")
+        ));
         let shared = Arc::new(Mutex::new(state));
         let (event_tx, event_rx) = mpsc::channel();
-        event_tx
-            .send(ManagedSupervisorEvent::Exited {
-                lease,
-                conn_id: Some("conn-1".to_string()),
-                reason: "équipier terminé avec exit status: 7".to_string(),
-            })
-            .unwrap();
+        event_tx.send(observed).unwrap();
         drain_managed_events(&shared, &event_rx);
         assert!(matches!(
             read_control(&mut sender_reader),
@@ -6056,6 +6114,7 @@ mod presence_tests {
         assert!(state.attach_subscriptions.is_empty());
         assert!(state.router.get_agent("agent-2").is_none());
         drop(state);
+        let _ = std::fs::remove_dir_all(process_root);
         let _ = std::fs::remove_file(config.db_path);
     }
 }

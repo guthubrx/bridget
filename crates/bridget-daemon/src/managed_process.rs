@@ -8,7 +8,7 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::fd::{AsRawFd, RawFd};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -773,12 +773,14 @@ impl ManagedStderrStore {
         let generation = agent.join(format!("{}-g{}", identity.instance_id, identity.generation));
         private_directory(&generation)?;
         let path = generation.join("stderr.log");
+        if path.exists() {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        }
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .mode(0o600)
             .open(&path)?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
         Ok((file, path))
     }
 
@@ -812,7 +814,9 @@ impl ManagedStderrStore {
 }
 
 fn private_directory(path: &Path) -> io::Result<()> {
-    fs::create_dir_all(path)?;
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder.create(path)?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
 
@@ -910,7 +914,6 @@ mod tests {
     const BOOTSTRAP_CHILD_ENV: &str = "BRIDGET_T903_BOOTSTRAP_CHILD";
     const BOOTSTRAP_REQUEST_ENV: &str = "BRIDGET_T903_BOOTSTRAP_REQUEST";
     const FD_PROBE_ENV: &str = "BRIDGET_T903_FD_PROBE";
-    const STATUS_HOOK_ENV: &str = "BRIDGET_T906_STATUS_HOOK";
     const CONTROLLER_ENV: &str = "BRIDGET_T903_CRASH_CONTROLLER";
     const CONTROLLER_STAGE_ENV: &str = "BRIDGET_T903_CRASH_STAGE";
     const CONTROLLER_ROOT_ENV: &str = "BRIDGET_T903_CRASH_ROOT";
@@ -981,36 +984,6 @@ mod tests {
         spawn_bootstrap_command(command, Stdio::null()).unwrap()
     }
 
-    fn spawn_status_hook_bootstrap() -> ManagedChild {
-        let request = BootstrapRequest {
-            identity: identity(),
-            wrapper_executable: current_test_executable(),
-            wrapper_args: vec![
-                "--exact".to_string(),
-                "managed_process::tests::managed_status_hook_child".to_string(),
-                "--ignored".to_string(),
-                "--nocapture".to_string(),
-                "--test-threads=1".to_string(),
-            ],
-        };
-        let mut command = helper_command("managed_process::tests::bootstrap_child");
-        command
-            .env(BOOTSTRAP_CHILD_ENV, "1")
-            .env(
-                BOOTSTRAP_REQUEST_ENV,
-                serde_json::to_string(&json!({
-                    "instance_id": request.identity.instance_id,
-                    "command_id": request.identity.command_id,
-                    "generation": request.identity.generation,
-                    "wrapper_executable": request.wrapper_executable,
-                    "wrapper_args": request.wrapper_args,
-                }))
-                .unwrap(),
-            )
-            .env(STATUS_HOOK_ENV, "1");
-        spawn_bootstrap_command(command, Stdio::null()).unwrap()
-    }
-
     #[test]
     #[ignore]
     fn bootstrap_child() {
@@ -1061,20 +1034,6 @@ mod tests {
         while read_one(STATUS_FD, &mut byte).unwrap_or(0) != 0 {}
     }
 
-    #[test]
-    #[ignore]
-    fn managed_status_hook_child() {
-        if std::env::var(STATUS_HOOK_ENV).ok().as_deref() != Some("1") {
-            return;
-        }
-        let mut reporter = ManagedStatusReporter::from_environment()
-            .unwrap()
-            .expect("FD hérité après exec");
-        reporter
-            .startup_failed("command_missing", "/adaptateur/absent")
-            .unwrap();
-    }
-
     fn read_probe(child: &mut RunningManagedChild) -> serde_json::Value {
         let mut line = String::new();
         child.status_reader().read_line(&mut line).unwrap();
@@ -1109,35 +1068,6 @@ mod tests {
         assert_eq!(probe["release_open"], false);
         released.close_status();
         assert!(released.child_mut().wait().unwrap().success());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn hook_managed_status_reporte_un_echec_correle_apres_bootstrap_ready() {
-        let root = test_root("status-hook");
-        let store = ManagedMarkerStore::at_directory(root.join("managed"));
-        let ready = spawn_status_hook_bootstrap().wait_ready().unwrap();
-        assert_eq!(ready.ready().instance_id, identity().instance_id);
-        let mut running = ready
-            .persist_marker(&store, "codex-1")
-            .unwrap()
-            .release()
-            .unwrap();
-        let mut line = String::new();
-        running.status_reader().read_line(&mut line).unwrap();
-        let status: ManagedStatus = serde_json::from_str(line.trim_end()).unwrap();
-        assert_eq!(
-            status,
-            ManagedStatus::StartupFailed {
-                kind: "command_missing".to_string(),
-                reason: "/adaptateur/absent".to_string(),
-                instance_id: identity().instance_id,
-                command_id: identity().command_id,
-                generation: identity().generation,
-            }
-        );
-        running.close_status();
-        assert!(running.child_mut().wait().unwrap().success());
         let _ = fs::remove_dir_all(root);
     }
 
