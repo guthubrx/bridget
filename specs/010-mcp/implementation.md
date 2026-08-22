@@ -2,13 +2,12 @@
 
 ## Checklist finale SC-001 à SC-006
 
-- [x] **SC-001** — le dispatcher MCP conserve un unique lecteur et un writer
-  sérialisé ; la matrice FR-009 de 15 cas est couverte par
-  `crates/bridget-daemon/tests/fixtures/mcp/fr009.jsonl` et ses tests.
-- [x] **SC-002** — l'identité est résolue à chaque `tools/call` : tests de
-  renommage, filiation et marqueur historique dans `mcp_identity.rs`.
-- [x] **SC-003** — `bridget_send` respecte l'idempotence 012 : corpus MCP et
-  tests de retry, refus et `outcome_unknown` dans `mcp.rs`.
+- [x] **SC-001** — les corps riches sont transmis octet pour octet ; preuve
+  `send_transmet_un_corps_riche_octet_pour_octet_et_negocie_le_client`.
+- [x] **SC-002** — les quatre familles de refus conservent catégorie et motif ;
+  preuve `resultats_metier_conservent_les_categories_de_refus_fermees`.
+- [x] **SC-003** — l'identité expéditeur du ledger est résolue à chaque appel ;
+  preuves `mcp_identity.rs` et `dto_ledger_respectent_le_contrat_outil`.
 - [x] **SC-004** — les trois voies disponibles ont passé le spike T1001 sans
   mutation de configuration ; Gemini reste documenté indisponible.
 - [x] **SC-005** — le prompt MCP allégé est versionné et mesuré par
