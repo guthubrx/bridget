@@ -253,3 +253,32 @@ FR-014 reste hors checklist : T712 exige une validation fédérée SSH distincte
 wrapper a été terminé extérieurement, produisant un EOF sans `Unregister` et
 l'état `unreachable`. Ce contrôle ne teste **pas** l'arrêt propre vers
 `stopped`.
+
+## T712 — Gate fédération SSH
+
+- **Date** : 2026-08-22.
+- **Isolement** : daemon de test local lancé avec `HOME=/tmp/bg-gate` et socket
+  `/tmp/bg-gate/.cache/bridget/bridget.sock`; aucun daemon ou agent de
+  production n'a été arrêté. Le client distant a été déployé depuis le commit
+  `c0964e7` (client-only) sur `cartae.app:2222`.
+- **Tunnel** : commande manuelle, équivalente à `federate-ssh.sh` mais avec le
+  socket de gate isolé :
+
+```text
+ssh -N -p 2222 -o BatchMode=yes -o ControlMaster=no -o ControlPath=none -o ExitOnForwardFailure=yes -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -R /home/moi/.cache/bridget/bridget.sock:/tmp/bg-gate/.cache/bridget/bridget.sock moi@cartae.app
+```
+
+- **Échange observé** : `bridget who` exécuté à distance a affiché
+  `t712-acp ... transport acp ... connected`. Le `bridget send --reply` distant
+  (id `ffdb7b5fcb844`) a produit dans le journal local la réponse Codex sur
+  `router.rs` puis `turn_end` avec `stop_reason=end_turn` (seq 90). Les
+  variables `OPENAI_API_KEY` et `CODEX_API_KEY` étaient absentes avant le
+  lancement du wrapper de test.
+- **Résultat strict** : le client éphémère `bridget send --reply` distant n'a
+  créé aucune entrée visible par `bridget ledger` ni `bridget requests` (sortie
+  `Ledger vide.` / `Aucune demande suivie.`). La clôture au ledger exigée par
+  FR-014 n'est donc pas prouvée : T712 reste décochée et la session 007 reste
+  `In Progress` sur ce gate.
+- **Nettoyage** : wrapper, tunnel SSH, daemon de test et socket distant de gate
+  ont été arrêtés/supprimés; la configuration persistante `federate-ssh` n'a
+  pas été retirée faute d'autorisation explicite.
