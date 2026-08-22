@@ -61,7 +61,7 @@ pub fn run() {
 
     // Les lanceurs historiques restent interactifs ; leur type et leur
     // autorisation viennent désormais du registre, pas d'une liste CLI.
-    if let Some(agent_type) = crate::registry::AgentRegistry::launcher_type(cmd) {
+    if let Some(agent_type) = crate::registry::AgentRegistry::interactive_alias(cmd) {
         launch_agent_wrapper(cmd, agent_type, &args[2..]);
     }
 
@@ -73,7 +73,15 @@ pub fn run() {
         }
         let cmd = &args[2];
         let rest = &args[3..];
-        launch_agent_wrapper(cmd, "custom", rest);
+        let registry = crate::registry::AgentRegistry::load().unwrap_or_else(|error| {
+            eprintln!("bridget: {error}");
+            std::process::exit(1);
+        });
+        let agent_type = registry.type_for_command(cmd).unwrap_or_else(|error| {
+            eprintln!("bridget: {error}");
+            std::process::exit(1);
+        });
+        launch_agent_wrapper(cmd, &agent_type, rest);
     }
 
     // --- Sous-commandes daemon / client ---
@@ -102,7 +110,15 @@ pub fn run() {
             // Si c'est une commande inconnue mais qu'elle existe dans le PATH,
             // la traiter comme un agent personnalisé
             if which(cmd) {
-                launch_agent_wrapper(cmd, "custom", &args[2..]);
+                let registry = crate::registry::AgentRegistry::load().unwrap_or_else(|error| {
+                    eprintln!("bridget: {error}");
+                    std::process::exit(1);
+                });
+                let agent_type = registry.type_for_command(cmd).unwrap_or_else(|error| {
+                    eprintln!("bridget: {error}");
+                    std::process::exit(1);
+                });
+                launch_agent_wrapper(cmd, &agent_type, &args[2..]);
             } else {
                 eprintln!("sous-commande inconnue: {}", cmd);
                 print_usage();

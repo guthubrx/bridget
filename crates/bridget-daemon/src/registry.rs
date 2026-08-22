@@ -36,10 +36,18 @@ pub struct AgentRegistry {
     source: PathBuf,
 }
 
-fn default_protocol() -> String { "acp".to_string() }
-fn default_permissions() -> String { "allow".to_string() }
-fn default_queue_capacity() -> usize { DEFAULT_QUEUE_CAPACITY }
-fn default_notify_timeout_secs() -> u64 { DEFAULT_NOTIFY_TIMEOUT_SECS }
+fn default_protocol() -> String {
+    "acp".to_string()
+}
+fn default_permissions() -> String {
+    "allow".to_string()
+}
+fn default_queue_capacity() -> usize {
+    DEFAULT_QUEUE_CAPACITY
+}
+fn default_notify_timeout_secs() -> u64 {
+    DEFAULT_NOTIFY_TIMEOUT_SECS
+}
 
 impl AgentRegistry {
     pub fn load() -> Result<Self, String> {
@@ -48,7 +56,9 @@ impl AgentRegistry {
         if source.exists() {
             let content = std::fs::read_to_string(&source)
                 .map_err(|err| format!("impossible de lire {}: {err}", source.display()))?;
-            warn_unknown_keys(&content, &source);
+            for warning in unknown_key_warnings(&content, &source) {
+                eprintln!("avertissement: {warning}");
+            }
             let user: AgentRegistryFile = serde_json::from_str(&content)
                 .map_err(|err| format!("registre invalide {}: {err}", source.display()))?;
             validate_registry(&user.agents, &source)?;
@@ -70,11 +80,16 @@ impl AgentRegistry {
     pub fn get(&self, agent_type: &str) -> Result<&AgentDefinition, String> {
         self.agents.get(agent_type).ok_or_else(|| {
             let available = self.agents.keys().cloned().collect::<Vec<_>>().join(", ");
-            format!("type d'agent inconnu '{agent_type}' dans {}. Types disponibles : {available}", self.source.display())
+            format!(
+                "type d'agent inconnu '{agent_type}' dans {}. Types disponibles : {available}",
+                self.source.display()
+            )
         })
     }
 
-    pub fn launcher_type(command: &str) -> Option<&'static str> {
+    /// Alias des lanceurs interactifs historiques. Cette table ne vaut pas
+    /// autorisation : `type_for_command` consulte toujours le registre.
+    pub fn interactive_alias(command: &str) -> Option<&'static str> {
         match command {
             "codex" => Some("codex"),
             "claude" | "gclaude" => Some("claude"),
@@ -82,9 +97,46 @@ impl AgentRegistry {
             _ => None,
         }
     }
+
+    /// Résout une commande du flux `bridget --` vers son type déclaré.
+    ///
+    /// Les alias interactifs historiques restent acceptés, puis les commandes
+    /// du registre sont comparées par leur basename pour tolérer un chemin.
+    pub fn type_for_command(&self, command: &str) -> Result<String, String> {
+        let basename = command_basename(command);
+        if let Some(agent_type) = Self::interactive_alias(basename) {
+            self.get(agent_type)?;
+            return Ok(agent_type.to_string());
+        }
+        if let Some((agent_type, _)) = self
+            .agents
+            .iter()
+            .find(|(_, definition)| command_basename(&definition.command) == basename)
+        {
+            return Ok(agent_type.clone());
+        }
+
+        let available = self
+            .agents
+            .iter()
+            .map(|(agent_type, definition)| format!("{agent_type} ({})", definition.command))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(format!(
+            "commande '{command}' non déclarée dans {}. Types/commandes disponibles : {available}",
+            self.source.display()
+        ))
+    }
 }
 
-fn warn_unknown_keys(content: &str, source: &Path) {
+fn command_basename(command: &str) -> &str {
+    Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(command)
+}
+
+fn unknown_key_warnings(content: &str, source: &Path) -> Vec<String> {
     const KEYS: &[&str] = &[
         "command",
         "args",
@@ -95,38 +147,64 @@ fn warn_unknown_keys(content: &str, source: &Path) {
         "notify_timeout_secs",
     ];
     let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
-        return;
+        return Vec::new();
     };
     let Some(agents) = value.get("agents").and_then(serde_json::Value::as_object) else {
-        return;
+        return Vec::new();
     };
+    let mut warnings = Vec::new();
     for (agent_type, definition) in agents {
         let Some(definition) = definition.as_object() else {
             continue;
         };
-        for key in definition.keys().filter(|key| !KEYS.contains(&key.as_str())) {
-            eprintln!("avertissement: clé inconnue '{key}' pour '{agent_type}' dans {}", source.display());
+        for key in definition
+            .keys()
+            .filter(|key| !KEYS.contains(&key.as_str()))
+        {
+            warnings.push(format!(
+                "clé inconnue '{key}' pour '{agent_type}' dans {}",
+                source.display()
+            ));
         }
     }
+    warnings
 }
 
 fn config_path() -> PathBuf {
-    std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/tmp")).join(".config/bridget/agents.json")
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+        .join(".config/bridget/agents.json")
 }
 
-fn validate_registry(agents: &BTreeMap<String, AgentDefinition>, source: &Path) -> Result<(), String> {
+fn validate_registry(
+    agents: &BTreeMap<String, AgentDefinition>,
+    source: &Path,
+) -> Result<(), String> {
     for (name, definition) in agents {
         if definition.command.trim().is_empty() {
-            return Err(format!("registre invalide {}: command vide pour '{name}'", source.display()));
+            return Err(format!(
+                "registre invalide {}: command vide pour '{name}'",
+                source.display()
+            ));
         }
         if !matches!(definition.protocol.as_str(), "acp" | "tmux") {
-            return Err(format!("registre invalide {}: protocol invalide pour '{name}'", source.display()));
+            return Err(format!(
+                "registre invalide {}: protocol invalide pour '{name}'",
+                source.display()
+            ));
         }
         if !matches!(definition.permissions.as_str(), "allow" | "deny") {
-            return Err(format!("registre invalide {}: permissions invalides pour '{name}'", source.display()));
+            return Err(format!(
+                "registre invalide {}: permissions invalides pour '{name}'",
+                source.display()
+            ));
         }
         if definition.queue_capacity == 0 {
-            return Err(format!("registre invalide {}: queue_capacity nul pour '{name}'", source.display()));
+            return Err(format!(
+                "registre invalide {}: queue_capacity nul pour '{name}'",
+                source.display()
+            ));
         }
     }
     Ok(())
@@ -146,9 +224,30 @@ fn definition(command: &str, args: &[&str], forbidden_env: &[&str]) -> AgentDefi
 
 fn default_agents() -> BTreeMap<String, AgentDefinition> {
     BTreeMap::from([
-        ("codex".to_string(), definition("npx", &["@zed-industries/codex-acp@0.16.0", "-c", "model=\"gpt-5.5\""], &["OPENAI_API_KEY", "CODEX_API_KEY"])),
-        ("claude".to_string(), definition("npx", &["@zed-industries/claude-code-acp@0.16.2"], &["ANTHROPIC_API_KEY"])),
-        ("gemini".to_string(), definition("gemini", &["--acp"], &["GEMINI_API_KEY", "GOOGLE_API_KEY"])),
+        (
+            "codex".to_string(),
+            definition(
+                "npx",
+                &[
+                    "@zed-industries/codex-acp@0.16.0",
+                    "-c",
+                    "model=\"gpt-5.5\"",
+                ],
+                &["OPENAI_API_KEY", "CODEX_API_KEY"],
+            ),
+        ),
+        (
+            "claude".to_string(),
+            definition(
+                "npx",
+                &["@zed-industries/claude-code-acp@0.16.2"],
+                &["ANTHROPIC_API_KEY"],
+            ),
+        ),
+        (
+            "gemini".to_string(),
+            definition("gemini", &["--acp"], &["GEMINI_API_KEY", "GOOGLE_API_KEY"]),
+        ),
     ])
 }
 
@@ -159,22 +258,67 @@ mod tests {
     #[test]
     fn defaults_cover_the_three_priorities() {
         let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
-        assert_eq!(registry.get("codex").unwrap().command, "npx");
-        assert_eq!(registry.get("codex").unwrap().queue_capacity, 32);
+        let codex = registry.get("codex").unwrap();
+        assert_eq!(codex.command, "npx");
+        assert_eq!(
+            codex.args,
+            vec![
+                "@zed-industries/codex-acp@0.16.0",
+                "-c",
+                "model=\"gpt-5.5\""
+            ]
+        );
+        assert_eq!(codex.forbidden_env, vec!["OPENAI_API_KEY", "CODEX_API_KEY"]);
+        assert_eq!(codex.protocol, "acp");
+        assert_eq!(codex.permissions, "allow");
+        assert_eq!(codex.queue_capacity, 32);
+        assert_eq!(codex.notify_timeout_secs, 600);
         assert_eq!(registry.get("gemini").unwrap().args, vec!["--acp"]);
     }
 
     #[test]
     fn user_entry_replaces_its_default() {
-        let registry = AgentRegistry::from_json(r#"{"agents":{"codex":{"command":"custom","protocol":"tmux"}}}"#, "/tmp/agents.json").unwrap();
+        let registry = AgentRegistry::from_json(
+            r#"{"agents":{"codex":{"command":"custom","protocol":"tmux"}}}"#,
+            "/tmp/agents.json",
+        )
+        .unwrap();
         assert_eq!(registry.get("codex").unwrap().command, "custom");
         assert!(registry.get("codex").unwrap().forbidden_env.is_empty());
     }
 
     #[test]
-    fn invalid_entry_is_rejected() {
-        let result = AgentRegistry::from_json(r#"{"agents":{"codex":{"command":"","protocol":"bad"}}}"#, "/tmp/agents.json");
+    fn empty_command_is_rejected() {
+        let result =
+            AgentRegistry::from_json(r#"{"agents":{"codex":{"command":""}}}"#, "/tmp/agents.json");
         assert!(result.unwrap_err().contains("command vide"));
+    }
+
+    #[test]
+    fn invalid_protocol_is_rejected() {
+        let result = AgentRegistry::from_json(
+            r#"{"agents":{"codex":{"command":"codex","protocol":"bad"}}}"#,
+            "/tmp/agents.json",
+        );
+        assert!(result.unwrap_err().contains("protocol invalide"));
+    }
+
+    #[test]
+    fn invalid_permissions_are_rejected() {
+        let result = AgentRegistry::from_json(
+            r#"{"agents":{"codex":{"command":"codex","permissions":"ask"}}}"#,
+            "/tmp/agents.json",
+        );
+        assert!(result.unwrap_err().contains("permissions invalides"));
+    }
+
+    #[test]
+    fn zero_queue_capacity_is_rejected() {
+        let result = AgentRegistry::from_json(
+            r#"{"agents":{"codex":{"command":"codex","queue_capacity":0}}}"#,
+            "/tmp/agents.json",
+        );
+        assert!(result.unwrap_err().contains("queue_capacity nul"));
     }
 
     #[test]
@@ -183,5 +327,40 @@ mod tests {
         let error = registry.get("inconnu").unwrap_err();
         assert!(error.contains("/tmp/agents.json"));
         assert!(error.contains("codex"));
+    }
+
+    #[test]
+    fn unknown_entry_key_is_reported() {
+        let warnings = unknown_key_warnings(
+            r#"{"agents":{"codex":{"command":"codex","surprise":true}}}"#,
+            Path::new("/tmp/agents.json"),
+        );
+        assert_eq!(
+            warnings,
+            vec!["clé inconnue 'surprise' pour 'codex' dans /tmp/agents.json"]
+        );
+    }
+
+    #[test]
+    fn valid_entry_keys_produce_no_warning() {
+        let warnings = unknown_key_warnings(
+            r#"{"agents":{"codex":{"command":"codex","args":[],"protocol":"acp","forbidden_env":[],"permissions":"allow","queue_capacity":32,"notify_timeout_secs":600}}}"#,
+            Path::new("/tmp/agents.json"),
+        );
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn generic_codex_command_resolves_through_the_registry() {
+        let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
+        assert_eq!(registry.type_for_command("codex").unwrap(), "codex");
+    }
+
+    #[test]
+    fn undeclared_generic_command_names_source_and_choices() {
+        let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
+        let error = registry.type_for_command("not-declared").unwrap_err();
+        assert!(error.contains("/tmp/agents.json"));
+        assert!(error.contains("codex (npx)"));
     }
 }
