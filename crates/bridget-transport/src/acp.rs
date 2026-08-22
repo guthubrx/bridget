@@ -1557,9 +1557,8 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
 read initialize
 echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
 read session
-echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
 exec 0<&-
-sleep 1
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
 "#;
         let (observer, observed_events) = mpsc::channel();
         let mut transport = AcpTransport::spawn_with_clock_and_cancel_grace(
@@ -1576,7 +1575,6 @@ sleep 1
             Some(observer),
         )
         .unwrap();
-        thread::sleep(Duration::from_millis(30));
         transport.deliver(&message("flush-failed")).unwrap();
         let mut dispatched = false;
         for _ in 0..20 {
