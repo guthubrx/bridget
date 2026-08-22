@@ -52,7 +52,10 @@ Attendu : le contenu revient intact dans la réponse (SC-002).
 
 Envoyer une tâche longue puis, immédiatement, un second message. Attendu : le
 second est livré après la fin du premier tour, dans l'ordre, sans perte ; le
-ledger ne montre aucune relance pendant le tour en cours (SC-004).
+ledger consigne une relance différée pendant le tour en cours (SC-004), puis
+reprend les relances normales dès le retour à l'état `connected`. Une coupure
+et reconnexion du wrapper pendant ce tour conserve l'état `busy` dans
+l'annuaire.
 
 ## 5. Garde de facturation
 

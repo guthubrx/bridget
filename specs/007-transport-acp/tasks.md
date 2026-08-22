@@ -148,7 +148,7 @@ bout en bout (SC-001, SC-002).
 
 ## Phase 3 : US3 — Relances informées et facturation protégée
 
-- [ ] **T709** [US3] **État de tour et échecs motivés** : variante légère
+- [X] **T709** [US3] **État de tour et échecs motivés** : variante légère
   `WrapperToDaemon` d'état de tour (arbitrage reuse-audit), transitions
   remontées à chaque début/fin de tour ; dans `daemon.rs` : relance différée si
   tour en cours avec événement consigné (FR-008), échec motivé vers l'émetteur

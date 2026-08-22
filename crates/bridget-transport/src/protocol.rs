@@ -27,6 +27,9 @@ pub enum WrapperToDaemon {
         /// lancé, ou domaine choisi explicitement s'il en existe un.
         #[serde(default)]
         domain: Option<String>,
+        /// État ACP re-déclaré après chaque reconnexion du wrapper.
+        #[serde(default)]
+        turn_in_progress: bool,
     },
     /// Se désenregistrer.
     Unregister,
@@ -36,6 +39,8 @@ pub enum WrapperToDaemon {
     Send(BridgetMessage),
     /// Refus terminal asynchrone d'une livraison déjà acquittée par le daemon.
     DeliveryRejected { id: String, reason: String },
+    /// Transition dédiée du tour ACP, distincte de l'observation `Runtime`.
+    TurnState { in_progress: bool },
     /// Annuler une demande suivie appartenant à l'agent courant.
     CancelRequest {
         id: String,
@@ -201,6 +206,7 @@ mod tests {
             os: Some("Linux".to_string()),
             instance_id: Some("instance-test".to_string()),
             domain: Some("bridget".to_string()),
+            turn_in_progress: false,
         };
         let json = encode(&msg).unwrap();
         assert!(json.contains("\"type\":\"Register\""));
@@ -214,6 +220,7 @@ mod tests {
                 os,
                 instance_id,
                 domain,
+                turn_in_progress,
             } => {
                 assert_eq!(agent_type, "codex");
                 assert!(name.is_none());
@@ -222,6 +229,7 @@ mod tests {
                 assert_eq!(os.as_deref(), Some("Linux"));
                 assert_eq!(instance_id.as_deref(), Some("instance-test"));
                 assert_eq!(domain.as_deref(), Some("bridget"));
+                assert!(!turn_in_progress);
             }
             _ => panic!("mauvais type"),
         }
@@ -272,6 +280,10 @@ mod tests {
         assert!(matches!(
             decode(&encode(&rejected).unwrap()).unwrap(),
             WrapperToDaemon::DeliveryRejected { id, reason } if id == "message-1" && reason == "file ACP pleine"
+        ));
+        assert!(matches!(
+            decode(&encode(&WrapperToDaemon::TurnState { in_progress: true }).unwrap()).unwrap(),
+            WrapperToDaemon::TurnState { in_progress: true }
         ));
     }
 

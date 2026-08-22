@@ -339,6 +339,9 @@ impl RuntimeProbe {
 ///
 /// `name = None` laisse le daemon attribuer le nom initial. Après une
 /// reconnexion, le wrapper passe son nom établi afin de reprendre son identité.
+/// Les paramètres reflètent directement l'enveloppe Register ; les regrouper
+/// serait un refactor hors périmètre de T709.
+#[allow(clippy::too_many_arguments)]
 fn connect_and_register(
     agent_type: &str,
     name: Option<&str>,
@@ -347,6 +350,7 @@ fn connect_and_register(
     os: &str,
     instance_id: &str,
     domain: Option<&str>,
+    turn_in_progress: bool,
 ) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
     let stream = UnixStream::connect(socket_path()).map_err(|e| e.to_string())?;
     set_cloexec(&stream);
@@ -368,6 +372,7 @@ fn connect_and_register(
         os: Some(os.to_string()),
         instance_id: Some(instance_id.to_string()),
         domain: domain.map(str::to_owned),
+        turn_in_progress,
     };
     writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
@@ -425,6 +430,7 @@ pub fn launch(
         &os,
         &instance_id,
         initial_domain.as_deref(),
+        false,
     )?;
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
 
@@ -701,6 +707,7 @@ pub fn launch(
                         &os_for_thread,
                         &instance_id_for_thread,
                         effective_domain(&wanted_name).as_deref(),
+                        false,
                     ) {
                         Ok((new_reader, new_writer, registered_name)) => {
                             if registered_name != wanted_name {
@@ -812,6 +819,7 @@ pub fn launch(
                             &os_for_thread,
                             &instance_id_for_thread,
                             effective_domain(&wanted_name).as_deref(),
+                            false,
                         ) {
                             Ok((new_reader, new_writer, registered_name))
                                 if registered_name == wanted_name =>
@@ -900,7 +908,7 @@ fn launch_acp(
     let os = operating_system();
     let instance_id = uuid::Uuid::new_v4().to_string();
     let initial_domain = effective_name.as_deref().and_then(effective_domain).or_else(derive_domain);
-    let (mut reader, initial_writer, my_name) = connect_and_register(
+    let (mut reader, initial_writer, mut my_name) = connect_and_register(
         agent_type,
         effective_name.as_deref(),
         &host,
@@ -908,6 +916,7 @@ fn launch_acp(
         &os,
         &instance_id,
         initial_domain.as_deref(),
+        false,
     )?;
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
     let name_state_path = socket_path().parent().unwrap().join("agent-names").join(format!("active-{my_name}"));
@@ -929,31 +938,19 @@ fn launch_acp(
 
     loop {
         let events = transport.drain_events();
-        let journal_failed = journal_failure_requires_shutdown(&events);
-        for event in events {
-            match event {
-                AcpEvent::TurnFinished { message, response, .. } if message.reply && !response.is_empty() => {
-                    let mut reply = bridget_core::BridgetMessage::new(&my_name, &message.from, response);
-                    reply.in_reply_to = Some(message.id);
-                    send_wrapper_message(&writer, WrapperToDaemon::Send(reply));
-                }
-                AcpEvent::TurnFinished { message, response, .. } if message.reply && response.is_empty() => {
-                    send_wrapper_message(&writer, WrapperToDaemon::DeliveryRejected { id: message.id, reason: "réponse vide".to_string() });
-                }
-                AcpEvent::DeliveryRejected { message_id, reason } => {
-                    send_wrapper_message(&writer, WrapperToDaemon::DeliveryRejected { id: message_id, reason });
-                }
-                AcpEvent::JournalFailed { detail } => warn!("arrêt du transport ACP : {detail}"),
-                _ => {}
-            }
-        }
+        let journal_failed = forward_acp_events(&writer, &my_name, events);
         if journal_failed {
             transport.shutdown();
             break;
         }
         let mut line = String::new();
         match reader.read_line(&mut line) {
-            Ok(0) => break,
+            Ok(0) => {
+                let Some((new_reader, registered_name)) = reconnect_acp(&writer, &transport, agent_type, &name_state_path, &host, &os, &instance_id, &my_name) else { break; };
+                reader = new_reader;
+                my_name = registered_name;
+                continue;
+            }
             Ok(_) => match decode(line.trim()) {
                 Ok(DaemonToWrapper::Deliver(message)) => {
                     if let Err(error) = transport.deliver(&message) {
@@ -968,7 +965,13 @@ fn launch_acp(
                 Err(error) => warn!("message ACP illisible: {}", error),
             },
             Err(error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                warn!("connexion daemon ACP perdue : {error}");
+                let Some((new_reader, registered_name)) = reconnect_acp(&writer, &transport, agent_type, &name_state_path, &host, &os, &instance_id, &my_name) else { break; };
+                reader = new_reader;
+                my_name = registered_name;
+                continue;
+            }
         }
         if !transport.is_alive() {
             break;
@@ -978,23 +981,8 @@ fn launch_acp(
     // L'EOF peut fermer le transport entre deux itérations : vider une dernière
     // fois les événements terminaux avant Unregister afin que le daemon voie
     // chaque DeliveryRejected (tour actif comme file restante).
-    for event in transport.drain_events() {
-        match event {
-            AcpEvent::TurnFinished { message, response, .. } if message.reply && !response.is_empty() => {
-                let mut reply = bridget_core::BridgetMessage::new(&my_name, &message.from, response);
-                reply.in_reply_to = Some(message.id);
-                send_wrapper_message(&writer, WrapperToDaemon::Send(reply));
-            }
-            AcpEvent::TurnFinished { message, response, .. } if message.reply && response.is_empty() => {
-                send_wrapper_message(&writer, WrapperToDaemon::DeliveryRejected { id: message.id, reason: "réponse vide".to_string() });
-            }
-            AcpEvent::DeliveryRejected { message_id, reason } => {
-                send_wrapper_message(&writer, WrapperToDaemon::DeliveryRejected { id: message_id, reason });
-            }
-            AcpEvent::JournalFailed { detail } => warn!("échec terminal du journal ACP : {detail}"),
-            _ => {}
-        }
-    }
+    let _ = forward_acp_events(&writer, &my_name, transport.drain_events());
+    send_wrapper_message(&writer, WrapperToDaemon::TurnState { in_progress: false });
     send_wrapper_message(&writer, WrapperToDaemon::Unregister);
     Ok(())
 }
@@ -1011,6 +999,59 @@ fn send_wrapper_message(writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>, mess
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn reconnect_acp(writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>, transport: &AcpTransport, agent_type: &str, name_state_path: &std::path::Path, host: &str, os: &str, instance_id: &str, fallback_name: &str) -> Option<(BufReader<UnixStream>, String)> {
+    let mut attempts = 0_u32;
+    while transport.is_alive() {
+        thread::sleep(reconnect_delay(attempts));
+        attempts = attempts.saturating_add(1);
+        let wanted_name = resolve_current_name(name_state_path, fallback_name);
+        let busy = matches!(transport.state(), bridget_transport::TurnState::InProgress { .. });
+        match connect_and_register(agent_type, Some(&wanted_name), host, "acp", os, instance_id, effective_domain(&wanted_name).as_deref(), busy) {
+            Ok((reader, new_writer, registered_name)) if registered_name == wanted_name => {
+                *writer.lock().unwrap_or_else(|error| error.into_inner()) = Some(new_writer);
+                return Some((reader, registered_name));
+            }
+            Ok((_, _, registered_name)) => warn!("reconnexion ACP refusée : nom inattendu « {} »", registered_name),
+            Err(error) => warn!("reconnexion ACP de « {} » impossible (tentative {}) : {}", wanted_name, attempts, error),
+        }
+    }
+    None
+}
+
+fn forward_acp_events(writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>, my_name: &str, events: Vec<AcpEvent>) -> bool {
+    let mut journal_failed = false;
+    for event in events {
+        match event {
+            AcpEvent::TurnStarted { .. } => send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: true }),
+            AcpEvent::TurnFinished { message, response, stop_reason } => {
+                send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
+                if stop_reason_is_error(&stop_reason) {
+                    send_wrapper_message(writer, WrapperToDaemon::DeliveryRejected { id: message.id, reason: format!("stopReason ACP d'erreur : {stop_reason}") });
+                } else if message.reply && !response.is_empty() {
+                    let mut reply = bridget_core::BridgetMessage::new(my_name, &message.from, response);
+                    reply.in_reply_to = Some(message.id);
+                    send_wrapper_message(writer, WrapperToDaemon::Send(reply));
+                } else if message.reply {
+                    send_wrapper_message(writer, WrapperToDaemon::DeliveryRejected { id: message.id, reason: "réponse vide".to_string() });
+                }
+            }
+            AcpEvent::DeliveryRejected { message_id, reason } => {
+                send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
+                send_wrapper_message(writer, WrapperToDaemon::DeliveryRejected { id: message_id, reason });
+            }
+            AcpEvent::JournalFailed { detail } => { journal_failed = true; warn!("arrêt du transport ACP : {detail}"); }
+            AcpEvent::Update { .. } | AcpEvent::Error { .. } => {}
+        }
+    }
+    journal_failed
+}
+
+fn stop_reason_is_error(stop_reason: &str) -> bool {
+    matches!(stop_reason, "error" | "failed" | "failure")
+}
+
+#[cfg(test)]
 fn journal_failure_requires_shutdown(events: &[AcpEvent]) -> bool {
     events.iter().any(|event| matches!(event, AcpEvent::JournalFailed { .. }))
 }

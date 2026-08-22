@@ -404,6 +404,7 @@ fn send_control_to_daemon(command: WrapperToDaemon) -> Result<DaemonToWrapper, S
         os: None,
         instance_id: None,
         domain: None,
+        turn_in_progress: false,
     };
     let reg_json = encode(&reg).map_err(|e| e.to_string())?;
     writeln!(writer, "{}", reg_json).map_err(|e| e.to_string())?;
@@ -532,6 +533,7 @@ fn send_rename_to_daemon(current_name: &str, name: &str) -> Result<DaemonToWrapp
         os: None,
         instance_id: None,
         domain: None,
+        turn_in_progress: false,
     };
     writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
@@ -579,6 +581,7 @@ fn send_runtime_to_daemon(
         os: None,
         instance_id: None,
         domain: None,
+        turn_in_progress: false,
     };
     writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;

@@ -196,6 +196,7 @@ struct PendingReply {
     /// Palier d'escalade atteint : 0 = rien, 1 = rappel discret,
     /// 2 = rappel ferme, 3 = notification échec à l'émetteur
     escalation_level: u8,
+    deferred_level: Option<u8>,
 }
 
 enum ReminderAction {
@@ -218,6 +219,7 @@ enum ReminderAction {
         from_conn: String,
         timeout_secs: u64,
     },
+    Deferred { to: String, msg_id: String, level: u8 },
 }
 
 // Type d'erreur pour la livraison de messages (H-002)
@@ -313,10 +315,22 @@ impl DaemonState {
             }
     }
 
-    fn remove_presence(&mut self, conn_id: &str) {
-        if let Some(instance_id) = self.conn_instances.remove(conn_id) {
-            self.presences.remove(&instance_id);
-        }
+    fn mark_stopped(&mut self, conn_id: &str) {
+        if let Some(instance_id) = self.conn_instances.remove(conn_id)
+            && let Some(presence) = self.presences.get_mut(&instance_id) {
+                presence.state = "stopped".to_string();
+                presence.last_seen = Instant::now();
+            }
+    }
+
+    fn set_turn_state(&mut self, conn_id: &str, in_progress: bool) -> Result<(), String> {
+        let instance_id = self.conn_instances.get(conn_id)
+            .ok_or_else(|| "état de tour reçu d'une connexion non enregistrée".to_string())?;
+        let presence = self.presences.get_mut(instance_id)
+            .ok_or_else(|| "présence de l'équipier introuvable".to_string())?;
+        presence.state = if in_progress { "busy" } else { "connected" }.to_string();
+        presence.last_seen = Instant::now();
+        Ok(())
     }
 
     fn agent_infos(&mut self) -> Vec<bridget_transport::protocol::AgentInfo> {
@@ -357,7 +371,8 @@ impl DaemonState {
                     // injoignable, d'où un état unique plutôt qu'une colonne.
                     state: match presence {
                         Some(presence) if presence.is_dnd() => "dnd".to_string(),
-                        _ => "connected".to_string(),
+                        Some(presence) => presence.state.clone(),
+                        None => "connected".to_string(),
                     },
                     last_seen_secs: presence
                         .map(|p| p.last_seen.elapsed().as_secs())
@@ -439,6 +454,7 @@ impl DaemonState {
                 timeout_secs,
                 created_at,
                 escalation_level: request.escalation_level,
+                deferred_level: None,
             });
         }
         let _ = conn_id;
@@ -528,12 +544,24 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                 .filter(|presence| presence.is_dnd())
                 .map(|presence| presence.name.clone())
                 .collect();
+            let busy_connections: std::collections::HashSet<String> = st.conn_instances.iter()
+                .filter(|(_, instance_id)| st.presences.get(*instance_id).is_some_and(|presence| presence.state == "busy"))
+                .map(|(connection_id, _)| connection_id.clone())
+                .collect();
 
             for p in st.pending_replies.iter_mut() {
                 let elapsed = now.duration_since(p.created_at).as_secs();
                 let t = p.timeout_secs;
 
                 if !should_remind(undisturbed.contains(&p.to), p.escalation_level) {
+                    continue;
+                }
+
+                if let Some(level) = deferred_reminder_level(busy_connections.contains(&p.target_conn), p.escalation_level, elapsed, t) {
+                    if p.deferred_level != Some(level) {
+                        p.deferred_level = Some(level);
+                        actions.push(ReminderAction::Deferred { to: p.to.clone(), msg_id: p.msg_id.clone(), level });
+                    }
                     continue;
                 }
 
@@ -650,6 +678,9 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                             from, to
                         );
                     }
+                }
+                ReminderAction::Deferred { to, msg_id, level } => {
+                    info!("relance différée (tour en cours) : palier {} pour {} sur demande {}", level, to, msg_id);
                 }
             }
         }
@@ -851,6 +882,7 @@ fn handle_register(
     os: Option<String>,
     instance_id: Option<String>,
     domain: Option<String>,
+    turn_in_progress: bool,
     state: &mut DaemonState,
 ) -> DaemonToWrapper {
     log::debug!(
@@ -906,7 +938,7 @@ fn handle_register(
                         host: host.unwrap_or_else(|| "inconnu".to_string()),
                         transport: transport.unwrap_or_else(|| "unix".to_string()),
                         os: os.unwrap_or_else(|| "inconnu".to_string()),
-                        state: "connected".to_string(),
+                        state: if turn_in_progress { "busy" } else { "connected" }.to_string(),
                         last_seen: Instant::now(),
                         reconnect_count,
                         model,
@@ -1026,6 +1058,17 @@ fn should_remind(target_is_undisturbed: bool, escalation_level: u8) -> bool {
     !target_is_undisturbed || escalation_level >= 2
 }
 
+fn deferred_reminder_level(target_is_busy: bool, escalation_level: u8, elapsed_secs: u64, timeout_secs: u64) -> Option<u8> {
+    if !target_is_busy {
+        return None;
+    }
+    match escalation_level {
+        0 if elapsed_secs >= timeout_secs / 3 => Some(1),
+        1 if elapsed_secs >= (timeout_secs * 2) / 3 => Some(2),
+        _ => None,
+    }
+}
+
 /// Retrouve la présence d'un agent désigné par son nom.
 ///
 /// Même résolution que `handle_runtime` : les commandes de contrôle arrivent par
@@ -1124,6 +1167,7 @@ fn handle_wrapper_message(
             os,
             instance_id,
             domain,
+            turn_in_progress,
         } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let response = handle_register(
@@ -1135,6 +1179,7 @@ fn handle_wrapper_message(
                 os,
                 instance_id,
                 domain,
+                turn_in_progress,
                 &mut st,
             );
             Some(response)
@@ -1143,7 +1188,7 @@ fn handle_wrapper_message(
         WrapperToDaemon::Unregister => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             st.router.unregister_by_conn(conn_id);
-            st.remove_presence(conn_id);
+            st.mark_stopped(conn_id);
             st.conn_names.remove(conn_id);
             st.conn_hosts.remove(conn_id);
             st.conn_operating_systems.remove(conn_id);
@@ -1413,6 +1458,7 @@ fn handle_wrapper_message(
                             timeout_secs: timeout,
                             created_at: std::time::Instant::now(),
                             escalation_level: 0,
+                            deferred_level: None,
                         });
                         info!(
                             "reply attendu: {} → {} (timeout={}s, escalade à {}/{}s)",
@@ -1447,6 +1493,14 @@ fn handle_wrapper_message(
             None
         }
 
+        WrapperToDaemon::TurnState { in_progress } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            match st.set_turn_state(conn_id, in_progress) {
+                Ok(()) => None,
+                Err(reason) => Some(DaemonToWrapper::Nack { id: "turn-state".to_string(), reason }),
+            }
+        }
+
         WrapperToDaemon::ListAgents => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let agents = st.agent_infos();
@@ -1478,6 +1532,9 @@ fn handle_wrapper_message(
             let request = st.store.get_request(&id).ok().flatten();
             if let Some(request) = request {
                 st.pending_replies.retain(|pending| pending.msg_id != id);
+                if reason.contains("échéance") || reason.contains("timeout ACP") {
+                    let _ = st.store.mark_timed_out(&id);
+                }
                 if let Some(agent) = st.router.get_agent(&request.sender)
                     && let Some(writer) = st.connections.get(&agent.connection_id)
                     && let Err(error) = deliver_to_agent(
@@ -1620,6 +1677,7 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
         os: None,
         instance_id: None,
         domain: None,
+        turn_in_progress: false,
     };
     let reg_json = match encode(&reg) {
         Ok(j) => j,
@@ -1960,6 +2018,7 @@ mod presence_tests {
             Some("macOS".to_string()),
             Some("instance-1".to_string()),
             Some("bridget".to_string()),
+            false,
             &mut state,
         );
         assert!(matches!(response, DaemonToWrapper::Registered { .. }));
@@ -1970,6 +2029,43 @@ mod presence_tests {
         assert_eq!(agents[0].model.as_deref(), Some("gpt-5.3-codex"));
         assert_eq!(agents[0].effort.as_deref(), Some("xhigh"));
 
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    #[test]
+    fn tour_busy_differe_les_rappels_sans_differe_l_echeance() {
+        assert_eq!(deferred_reminder_level(true, 0, 20, 60), Some(1));
+        assert_eq!(deferred_reminder_level(true, 1, 40, 60), Some(2));
+        assert_eq!(deferred_reminder_level(true, 2, 60, 60), None);
+        assert_eq!(deferred_reminder_level(false, 0, 20, 60), None);
+    }
+
+    #[test]
+    fn reconnexion_redeclare_busy_et_arret_propre_reste_stopped() {
+        let (mut state, config) = state_with_registered_agent("tour-reconnexion");
+        state.set_turn_state("conn-1", true).unwrap();
+        assert_eq!(state.agent_infos()[0].state, "busy");
+        state.router.unregister_by_conn("conn-1");
+        state.mark_unreachable("conn-1");
+        let response = handle_register("conn-2", "claude".to_string(), Some("agent-2".to_string()), Some("macbook".to_string()), Some("acp".to_string()), Some("macOS".to_string()), Some("instance-1".to_string()), None, true, &mut state);
+        assert!(matches!(response, DaemonToWrapper::Registered { .. }));
+        assert_eq!(state.agent_infos()[0].state, "busy");
+        state.router.unregister_by_conn("conn-2");
+        state.mark_stopped("conn-2");
+        assert_eq!(state.agent_infos()[0].state, "stopped");
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    #[test]
+    fn expiration_transport_est_idempotente_cote_daemon() {
+        let (mut state, config) = state_with_registered_agent("expiration-unique");
+        state.store.create_request("request-timeout", "sender", "agent-2", 60).unwrap();
+        state.pending_replies.push(PendingReply { msg_id: "request-timeout".to_string(), from: "sender".to_string(), from_conn: "conn-sender".to_string(), to: "agent-2".to_string(), target_conn: "conn-1".to_string(), timeout_secs: 60, created_at: Instant::now(), escalation_level: 0, deferred_level: None });
+        let shared = Arc::new(Mutex::new(state));
+        handle_wrapper_message("conn-1", WrapperToDaemon::DeliveryRejected { id: "request-timeout".to_string(), reason: "échéance de livraison dépassée".to_string() }, &shared);
+        let state = shared.lock().unwrap();
+        assert!(state.pending_replies.is_empty());
+        assert_eq!(state.store.get_request("request-timeout").unwrap().unwrap().state, "timed_out");
         let _ = std::fs::remove_file(&config.db_path);
     }
 
