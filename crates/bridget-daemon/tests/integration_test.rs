@@ -236,11 +236,14 @@ sleep 2
             let mut line = String::new();
             match reader.read_line(&mut line) {
                 Ok(0) => panic!("wrapper fermé avant son accusé idempotent"),
-                Ok(_) => match decode(line.trim()).unwrap() {
-                    report @ (WrapperToDaemon::DeliverAcked { .. }
-                    | WrapperToDaemon::DeliveryIndeterminate { .. }) => return report,
-                    _ => {}
-                },
+                Ok(_) => {
+                    let decoded = decode(line.trim()).unwrap();
+                    if let report @ (WrapperToDaemon::DeliverAcked { .. }
+                    | WrapperToDaemon::DeliveryIndeterminate { .. }) = decoded
+                    {
+                        return report;
+                    }
+                }
                 Err(error)
                     if matches!(
                         error.kind(),
