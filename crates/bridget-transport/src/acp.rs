@@ -1,14 +1,14 @@
 //! Transport ACP synchrone : un lecteur stdout, un writer sérialisé et un
 //! worker FIFO. Le lecteur est l'unique propriétaire du flux de l'adaptateur.
 
+use crate::journal::{JournalLiveFeed, JournalWriter};
 use crate::transport::{Transport, TransportError};
-use crate::journal::JournalWriter;
 use bridget_core::BridgetMessage;
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::path::Path;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
@@ -291,8 +291,23 @@ impl AcpTransport {
     }
 
     pub fn enable_journal(&self, root: impl AsRef<Path>, agent: &str) -> std::io::Result<()> {
+        self.enable_journal_with_live_feed(root, agent, None)
+    }
+
+    pub fn enable_journal_with_live_feed(
+        &self,
+        root: impl AsRef<Path>,
+        agent: &str,
+        live_feed: Option<JournalLiveFeed>,
+    ) -> std::io::Result<()> {
         *self.journal.lock().unwrap_or_else(|err| err.into_inner()) =
-            Some(JournalWriter::start(root, agent, &self.session_id, self.events.clone())?);
+            Some(JournalWriter::start_with_live_feed(
+                root,
+                agent,
+                &self.session_id,
+                self.events.clone(),
+                live_feed,
+            )?);
         Ok(())
     }
 

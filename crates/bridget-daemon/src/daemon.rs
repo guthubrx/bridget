@@ -205,6 +205,7 @@ struct AttachSubscription {
     agent: String,
     attach_conn: String,
     wrapper_conn: String,
+    caught_up: bool,
 }
 
 struct PendingAttachSend {
@@ -1733,6 +1734,7 @@ fn handle_wrapper_message(
                         agent: agent.clone(),
                         attach_conn: conn_id.to_string(),
                         wrapper_conn,
+                        caught_up: false,
                     },
                 );
                 st.attach_views.insert(subscription_id.clone(), view);
@@ -1914,41 +1916,116 @@ fn handle_wrapper_message(
             }
             None
         }
-        WrapperToDaemon::JournalFragment { subscription_id, seq, offset, final_fragment, bytes } => {
+        WrapperToDaemon::JournalFragment {
+            subscription_id,
+            seq,
+            offset,
+            final_fragment,
+            bytes,
+        } => {
             let view = {
                 let st = state.lock().unwrap_or_else(|e| e.into_inner());
-                st.attach_subscriptions.get(&subscription_id)
+                st.attach_subscriptions
+                    .get(&subscription_id)
                     .filter(|subscription| subscription.wrapper_conn == conn_id)
                     .and_then(|_| st.attach_views.get(&subscription_id).cloned())
             };
             if let Some(view) = view {
                 let _ = view.enqueue(DaemonToWrapper::JournalFragment {
-                    subscription_id, seq, offset, final_fragment, bytes,
+                    subscription_id,
+                    seq,
+                    offset,
+                    final_fragment,
+                    bytes,
                 });
             }
             None
         }
-        WrapperToDaemon::SnapshotCaughtUp { subscription_id, through_seq } => {
-            let view = {
+        WrapperToDaemon::LiveJournalFragment {
+            seq,
+            offset,
+            final_fragment,
+            bytes,
+        } => {
+            let views = {
                 let st = state.lock().unwrap_or_else(|e| e.into_inner());
-                st.attach_subscriptions.get(&subscription_id)
-                    .filter(|subscription| subscription.wrapper_conn == conn_id)
-                    .and_then(|_| st.attach_views.get(&subscription_id).cloned())
+                st.attach_subscriptions
+                    .iter()
+                    .filter(|(_, subscription)| {
+                        subscription.wrapper_conn == conn_id && subscription.caught_up
+                    })
+                    .filter_map(|(subscription_id, _)| {
+                        st.attach_views
+                            .get(subscription_id)
+                            .cloned()
+                            .map(|view| (subscription_id.clone(), view))
+                    })
+                    .collect::<Vec<_>>()
             };
-            if let Some(view) = view {
-                let _ = view.enqueue(DaemonToWrapper::SnapshotCaughtUp { subscription_id, through_seq });
+            for (subscription_id, view) in views {
+                let _ = view.enqueue(DaemonToWrapper::JournalFragment {
+                    subscription_id,
+                    seq,
+                    offset,
+                    final_fragment,
+                    bytes: bytes.clone(),
+                });
             }
             None
         }
-        WrapperToDaemon::Gap { subscription_id, from_seq, to_seq, reason } => {
+        WrapperToDaemon::SnapshotCaughtUp {
+            subscription_id,
+            through_seq,
+        } => {
             let view = {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
-                st.attach_subscriptions.get(&subscription_id)
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let accepted = st
+                    .attach_subscriptions
+                    .get_mut(&subscription_id)
                     .filter(|subscription| subscription.wrapper_conn == conn_id)
-                    .and_then(|_| st.attach_views.get(&subscription_id).cloned())
+                    .map(|subscription| subscription.caught_up = true)
+                    .is_some();
+                accepted
+                    .then(|| st.attach_views.get(&subscription_id).cloned())
+                    .flatten()
             };
             if let Some(view) = view {
-                let _ = view.enqueue(DaemonToWrapper::Gap { subscription_id, from_seq, to_seq, reason });
+                let _ = view.enqueue(DaemonToWrapper::SnapshotCaughtUp {
+                    subscription_id,
+                    through_seq,
+                });
+            }
+            None
+        }
+        WrapperToDaemon::Gap {
+            subscription_id,
+            from_seq,
+            to_seq,
+            reason,
+        } => {
+            let view = {
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let accepted = st
+                    .attach_subscriptions
+                    .get_mut(&subscription_id)
+                    .filter(|subscription| subscription.wrapper_conn == conn_id)
+                    .map(|subscription| {
+                        if reason.as_deref() == Some("live_feed_overrun") {
+                            subscription.caught_up = false;
+                        }
+                    })
+                    .is_some();
+                accepted
+                    .then(|| st.attach_views.get(&subscription_id).cloned())
+                    .flatten()
+            };
+            if let Some(view) = view {
+                let _ = view.enqueue(DaemonToWrapper::Gap {
+                    subscription_id,
+                    from_seq,
+                    to_seq,
+                    reason,
+                });
             }
             None
         }
@@ -2644,6 +2721,7 @@ mod presence_tests {
                 agent: "agent-2".to_string(),
                 attach_conn: attach_conn.to_string(),
                 wrapper_conn: "conn-1".to_string(),
+                caught_up: false,
             },
         );
         state.attach_views.insert(subscription_id.to_string(), view);
@@ -3126,22 +3204,37 @@ mod presence_tests {
         let (wrapper_writer, _wrapper_reader) = control_socket("attach-non-seq-wrapper");
         let (attach_writer, _attach_reader) = control_socket("attach-non-seq-view");
         let view = AttachView::suspended_with_sender("sub-non-seq", state.view_closed_tx.clone());
-        state.connections.insert("conn-1".to_string(), wrapper_writer);
-        state.connections.insert("attach-1".to_string(), attach_writer);
-        state.attach_subscriptions.insert("sub-non-seq".to_string(), AttachSubscription {
-            agent: "agent-2".to_string(), attach_conn: "attach-1".to_string(),
-            wrapper_conn: "conn-1".to_string(),
-        });
-        state.attach_views.insert("sub-non-seq".to_string(), view.clone());
+        state
+            .connections
+            .insert("conn-1".to_string(), wrapper_writer);
+        state
+            .connections
+            .insert("attach-1".to_string(), attach_writer);
+        state.attach_subscriptions.insert(
+            "sub-non-seq".to_string(),
+            AttachSubscription {
+                agent: "agent-2".to_string(),
+                attach_conn: "attach-1".to_string(),
+                wrapper_conn: "conn-1".to_string(),
+                caught_up: false,
+            },
+        );
+        state
+            .attach_views
+            .insert("sub-non-seq".to_string(), view.clone());
         {
             let mut queue = view.queue.0.lock().unwrap();
             queue.bytes = ATTACH_VIEW_BUFFER_BYTES;
         }
         assert!(!view.enqueue(DaemonToWrapper::SnapshotCaughtUp {
-            subscription_id: "sub-non-seq".to_string(), through_seq: Some(7),
+            subscription_id: "sub-non-seq".to_string(),
+            through_seq: Some(7),
         }));
         assert!(!view.enqueue(DaemonToWrapper::Gap {
-            subscription_id: "sub-non-seq".to_string(), from_seq: 8, to_seq: 9, reason: None,
+            subscription_id: "sub-non-seq".to_string(),
+            from_seq: 8,
+            to_seq: 9,
+            reason: None,
         }));
         let (controls, views) = collect_closed_attach_views(&mut state);
         let _ = execute_controls(controls);

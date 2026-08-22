@@ -138,6 +138,16 @@ pub enum WrapperToDaemon {
         #[serde(with = "base64_bytes")]
         bytes: Vec<u8>,
     },
+    /// Fragment live indépendant des vues ; le daemon le multiplexe vers les
+    /// abonnements dont le rejeu est terminé.
+    LiveJournalFragment {
+        seq: u64,
+        offset: u64,
+        #[serde(rename = "final")]
+        final_fragment: bool,
+        #[serde(with = "base64_bytes")]
+        bytes: Vec<u8>,
+    },
     /// Marque la frontière entre le rejeu et le suivi continu.
     SnapshotCaughtUp {
         subscription_id: String,
@@ -681,6 +691,12 @@ mod tests {
                 offset: 0,
                 final_fragment: true,
                 bytes: b"{\"v\":1}\n".to_vec(),
+            },
+            WrapperToDaemon::LiveJournalFragment {
+                seq: 8,
+                offset: 0,
+                final_fragment: true,
+                bytes: b"{\"v\":1,\"seq\":8}".to_vec(),
             },
             WrapperToDaemon::SnapshotCaughtUp {
                 subscription_id: "sub-1".to_string(),
