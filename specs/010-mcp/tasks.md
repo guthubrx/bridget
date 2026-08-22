@@ -64,7 +64,7 @@ commit en review immuable, auteur ≠ relecteur, zéro trace IA, jamais de push)
 
 ## Phase 2 — Branchement et prompt
 
-- [ ] **T1006** Branchement déclaratif (FR-005/FR-012) : champ `mcp` au
+- [x] **T1006** Branchement déclaratif (FR-005/FR-012) : champ `mcp` au
   registre (schéma étendu), injection **éphémère par session** selon la voie
   validée au spike pour chaque type (mcpServers ACP pour les équipiers ;
   formes CLI constatées pour les interactifs) — **jamais d'écriture de config

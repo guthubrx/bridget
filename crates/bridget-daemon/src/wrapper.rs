@@ -509,7 +509,22 @@ pub fn launch(
     // (= --yolo) sinon le sandbox bloque la connexion socket vers le daemon.
     // Pour Claude Code : ajouter --dangerously-skip-permissions --permission-mode bypassPermissions
     // + injecter un prompt initial qui dit à l'agent de répondre via bridget.
+    let definition = crate::registry::AgentRegistry::load()?.get(agent_type)?.clone();
     let mut final_args: Vec<String> = Vec::new();
+    let mut ephemeral_mcp_config = None;
+    match definition.mcp.interactive.as_str() {
+        "codex" => {
+            final_args.push("-c".to_string());
+            final_args.push(codex_mcp_override(&mcp_server_entry()?)?);
+        }
+        "claude" => {
+            let config = claude_mcp_config(&mcp_server_entry()?, &instance_id)?;
+            final_args.extend(["--strict-mcp-config".to_string(), "--mcp-config".to_string(), config.display().to_string()]);
+            ephemeral_mcp_config = Some(config);
+        }
+        "none" | "unsupported" => {}
+        _ => return Err("configuration MCP interactive inconnue dans le registre".into()),
+    }
     if agent_type == "codex" {
         // Vérifier si l'utilisateur n'a pas déjà passé --yolo ou le bypass
         let already_bypassed = agent_args
@@ -550,7 +565,7 @@ pub fn launch(
 
     // L'autorisation est déclarative : un type absent du registre est refusé
     // avant le spawn, avec les types disponibles et le fichier concerné.
-    crate::registry::AgentRegistry::load()?.get(agent_type)?;
+    let _ = definition;
 
     // Validation des arguments pour prévenir injection
     for arg in &final_args {
@@ -912,6 +927,9 @@ pub fn launch(
 
     // 6. Attendre la fin de l'agent
     let status = child.wait()?;
+    if let Some(config) = ephemeral_mcp_config {
+        let _ = std::fs::remove_file(config);
+    }
 
     // 7. Désenregistrement
     stopping.store(true, Ordering::SeqCst);
@@ -1679,6 +1697,13 @@ fn launch_acp_with_status(
     }
     std::fs::write(&name_state_path, &my_name)?;
     let mcp_environment = vec![(("BRIDGET_AGENT_INSTANCE_ID").into(), instance_id.clone().into())];
+    let mcp_servers = definition
+        .mcp
+        .acp_session
+        .then(mcp_server_entry)
+        .transpose()?
+        .into_iter()
+        .collect();
     let options = AcpOptions {
         command: definition.command.clone(),
         args: definition.args.clone(),
@@ -1687,9 +1712,13 @@ fn launch_acp_with_status(
         notify_timeout_secs: definition.notify_timeout_secs,
     };
     let mut transport = if managed_reporter.is_some() {
-        AcpTransport::spawn_inheriting_stderr_with_environment(options, &mcp_environment)
+        AcpTransport::spawn_inheriting_stderr_with_environment_and_mcp(
+            options,
+            &mcp_environment,
+            mcp_servers,
+        )
     } else {
-        AcpTransport::spawn_with_environment(options, &mcp_environment)
+        AcpTransport::spawn_with_environment_and_mcp(options, &mcp_environment, mcp_servers)
     }?;
     let marker_directory = socket.parent().unwrap().join("agent-pids");
     let adapter_pid = transport.process_id();
@@ -1822,6 +1851,32 @@ fn billing_guard_error(variable: &str) -> String {
         "variable d'environnement refusée pour l'équipier ACP : {variable} \
          (utilisez BRIDGET_ALLOW_API_KEY=1 uniquement si vous acceptez la facturation API)"
     )
+}
+
+fn mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let command = std::env::current_exe()?.to_string_lossy().into_owned();
+    Ok(serde_json::json!({
+        "name": "bridget",
+        "command": command,
+        "args": ["mcp"],
+        "env": []
+    }))
+}
+
+fn claude_mcp_config(server: &serde_json::Value, instance_id: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let path = socket_path()
+        .parent()
+        .ok_or("répertoire socket Bridget absent")?
+        .join(format!("mcp-{instance_id}.json"));
+    std::fs::write(&path, serde_json::to_vec(&serde_json::json!({
+        "mcpServers": { "bridget": server }
+    }))?)?;
+    Ok(path)
+}
+
+fn codex_mcp_override(server: &serde_json::Value) -> Result<String, Box<dyn std::error::Error>> {
+    let command = server["command"].as_str().ok_or("commande MCP absente")?;
+    Ok(format!("mcp_servers.bridget={{command={command:?},args=[\"mcp\"]}}"))
 }
 
 fn send_wrapper_message(
@@ -2003,6 +2058,7 @@ mod reconnect_tests {
             permissions: "allow".to_string(),
             queue_capacity: 32,
             notify_timeout_secs: 600,
+            mcp: crate::registry::McpDefinition::default(),
         }
     }
 

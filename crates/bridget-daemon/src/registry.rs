@@ -10,6 +10,20 @@ const MAX_PASS_ENV_ENTRIES: usize = 64;
 const MAX_ENV_NAME_BYTES: usize = 128;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct McpDefinition {
+    #[serde(default = "default_interactive_mcp")]
+    pub interactive: String,
+    #[serde(default)]
+    pub acp_session: bool,
+}
+
+impl Default for McpDefinition {
+    fn default() -> Self {
+        Self { interactive: default_interactive_mcp(), acp_session: false }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct AgentDefinition {
     pub command: String,
     #[serde(default)]
@@ -28,6 +42,10 @@ pub struct AgentDefinition {
     pub queue_capacity: usize,
     #[serde(default = "default_notify_timeout_secs")]
     pub notify_timeout_secs: u64,
+    /// Branchement MCP éphémère, déclaré par type et jamais par une
+    /// configuration utilisateur persistante.
+    #[serde(default)]
+    pub mcp: McpDefinition,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -53,6 +71,9 @@ fn default_queue_capacity() -> usize {
 }
 fn default_notify_timeout_secs() -> u64 {
     DEFAULT_NOTIFY_TIMEOUT_SECS
+}
+fn default_interactive_mcp() -> String {
+    "none".to_string()
 }
 
 impl AgentRegistry {
@@ -165,6 +186,7 @@ fn unknown_key_warnings(content: &str, source: &Path) -> Vec<String> {
         "permissions",
         "queue_capacity",
         "notify_timeout_secs",
+        "mcp",
     ];
     let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
         return Vec::new();
@@ -223,6 +245,12 @@ fn validate_registry(
         if definition.queue_capacity == 0 {
             return Err(format!(
                 "registre invalide {}: queue_capacity nul pour '{name}'",
+                source.display()
+            ));
+        }
+        if !matches!(definition.mcp.interactive.as_str(), "none" | "claude" | "codex" | "unsupported") {
+            return Err(format!(
+                "registre invalide {}: mcp.interactive invalide pour '{name}'",
                 source.display()
             ));
         }
@@ -292,6 +320,7 @@ fn definition(
     args: &[&str],
     forbidden_env: &[&str],
     pass_env: &[&str],
+    mcp_interactive: &str,
 ) -> AgentDefinition {
     AgentDefinition {
         command: command.to_string(),
@@ -302,6 +331,7 @@ fn definition(
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
+        mcp: McpDefinition { interactive: mcp_interactive.to_string(), acp_session: true },
     }
 }
 
@@ -331,6 +361,7 @@ fn default_agents() -> BTreeMap<String, AgentDefinition> {
                     "SSL_CERT_FILE",
                     "SSL_CERT_DIR",
                 ],
+                "codex",
             ),
         ),
         (
@@ -351,6 +382,7 @@ fn default_agents() -> BTreeMap<String, AgentDefinition> {
                     "SSL_CERT_FILE",
                     "SSL_CERT_DIR",
                 ],
+                "claude",
             ),
         ),
         (
@@ -360,6 +392,7 @@ fn default_agents() -> BTreeMap<String, AgentDefinition> {
                 &["--acp"],
                 &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
                 &["XDG_CONFIG_HOME", "XDG_CACHE_HOME", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"],
+                "unsupported",
             ),
         ),
     ])
@@ -390,6 +423,9 @@ mod tests {
         assert!(codex.pass_env.contains(&"CODEX_HOME".to_string()));
         assert!(!codex.pass_env.contains(&"OPENAI_API_KEY".to_string()));
         assert_eq!(registry.get("gemini").unwrap().args, vec!["--acp"]);
+        assert_eq!(codex.mcp.interactive, "codex");
+        assert!(codex.mcp.acp_session);
+        assert_eq!(registry.get("gemini").unwrap().mcp.interactive, "unsupported");
     }
 
     #[test]
@@ -417,6 +453,15 @@ mod tests {
             "/tmp/agents.json",
         );
         assert!(result.unwrap_err().contains("protocol invalide"));
+    }
+
+    #[test]
+    fn invalid_mcp_interactive_is_rejected() {
+        let result = AgentRegistry::from_json(
+            r#"{"agents":{"codex":{"command":"codex","mcp":{"interactive":"global-file"}}}}"#,
+            "/tmp/agents.json",
+        );
+        assert!(result.unwrap_err().contains("mcp.interactive invalide"));
     }
 
     #[test]

@@ -75,6 +75,12 @@ type Completions = Arc<Mutex<HashMap<String, mpsc::Sender<()>>>>;
 type Journal = Arc<Mutex<Option<JournalWriter>>>;
 type Clock = Arc<dyn Fn() -> SystemTime + Send + Sync>;
 
+struct SpawnContext<'a> {
+    inherit_stderr: bool,
+    environment: &'a [(OsString, OsString)],
+    mcp_servers: Vec<Value>,
+}
+
 struct ActiveTurn {
     message_id: String,
     cancellation: mpsc::Sender<String>,
@@ -142,14 +148,22 @@ impl AcpTransport {
         options: AcpOptions,
         environment: &[(OsString, OsString)],
     ) -> Result<Self, TransportError> {
+        Self::spawn_with_environment_and_mcp(options, environment, Vec::new())
+    }
+
+    /// Variante avec environnement et serveurs MCP propres à cette session.
+    pub fn spawn_with_environment_and_mcp(
+        options: AcpOptions,
+        environment: &[(OsString, OsString)],
+        mcp_servers: Vec<Value>,
+    ) -> Result<Self, TransportError> {
         Self::spawn_with_clock_and_cancel_grace_inner(
             options,
             Arc::new(SystemTime::now),
             CANCEL_GRACE,
             CANCEL_POLL,
             None,
-            false,
-            environment,
+            SpawnContext { inherit_stderr: false, environment, mcp_servers },
         )
     }
 
@@ -163,14 +177,22 @@ impl AcpTransport {
         options: AcpOptions,
         environment: &[(OsString, OsString)],
     ) -> Result<Self, TransportError> {
+        Self::spawn_inheriting_stderr_with_environment_and_mcp(options, environment, Vec::new())
+    }
+
+    /// Variante supervisée avec environnement et serveurs MCP éphémères.
+    pub fn spawn_inheriting_stderr_with_environment_and_mcp(
+        options: AcpOptions,
+        environment: &[(OsString, OsString)],
+        mcp_servers: Vec<Value>,
+    ) -> Result<Self, TransportError> {
         Self::spawn_with_clock_and_cancel_grace_inner(
             options,
             Arc::new(SystemTime::now),
             CANCEL_GRACE,
             CANCEL_POLL,
             None,
-            true,
-            environment,
+            SpawnContext { inherit_stderr: true, environment, mcp_servers },
         )
     }
 
@@ -197,8 +219,7 @@ impl AcpTransport {
             cancel_grace,
             poll_interval,
             test_observer,
-            false,
-            &[],
+            SpawnContext { inherit_stderr: false, environment: &[], mcp_servers: Vec::new() },
         )
     }
 
@@ -208,22 +229,21 @@ impl AcpTransport {
         cancel_grace: Duration,
         poll_interval: Duration,
         test_observer: Option<mpsc::Sender<AcpEvent>>,
-        inherit_stderr: bool,
-        environment: &[(OsString, OsString)],
+        context: SpawnContext<'_>,
     ) -> Result<Self, TransportError> {
         if options.queue_capacity == 0 {
             return Err(TransportError::DeliveryFailed(
                 "queue ACP de capacité nulle".to_string(),
             ));
         }
-        let stderr = if inherit_stderr {
+        let stderr = if context.inherit_stderr {
             Stdio::inherit()
         } else {
             Stdio::null()
         };
         let mut child = Command::new(&options.command)
             .args(&options.args)
-            .envs(environment.iter().cloned())
+            .envs(context.environment.iter().cloned())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(stderr)
@@ -294,7 +314,7 @@ impl AcpTransport {
                 "session/new",
                 json!({
                     "cwd": std::env::current_dir().map_err(|err| TransportError::Io(err.to_string()))?,
-                    "mcpServers": []
+                    "mcpServers": context.mcp_servers
                 }),
             )?;
             let session_id = session
@@ -1449,6 +1469,33 @@ mod tests {
                 .to_string(),
             "livraison échouée: version ACP incompatible"
         );
+    }
+
+    #[test]
+    fn session_acp_recoit_le_serveur_mcp_ephemere() {
+        let script = r#"
+read initialize
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read session
+case "$session" in
+  *'"name":"bridget"'*) ;;
+  *) exit 31 ;;
+esac
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+while read line; do :; done
+"#;
+        let transport = AcpTransport::spawn_with_environment_and_mcp(
+            AcpOptions {
+                command: "sh".to_string(),
+                args: vec!["-c".to_string(), script.to_string()],
+                queue_capacity: 1,
+                permissions: "allow".to_string(),
+                notify_timeout_secs: 1,
+            },
+            &[],
+            vec![json!({ "name": "bridget", "command": "bridget", "args": ["mcp"], "env": [] })],
+        ).unwrap();
+        transport.shutdown();
     }
 
     #[test]
