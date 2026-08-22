@@ -9,6 +9,9 @@ pub mod tmux;
 pub mod transport;
 
 pub use acp::{AcpEvent, AcpOptions, AcpTransport, TurnState};
-pub use protocol::{DaemonToWrapper, WrapperToDaemon};
+pub use protocol::{
+    AttachRefusal, AttachWindow, ConnectionRole, DaemonToWrapper, WrapperToDaemon,
+    MAX_ATTACH_FRAGMENT_BYTES,
+};
 pub use tmux::TmuxTransport;
 pub use transport::{Transport, TransportError};

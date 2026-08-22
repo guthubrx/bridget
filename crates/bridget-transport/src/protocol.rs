@@ -7,10 +7,85 @@
 use bridget_core::BridgetMessage;
 use serde::{Deserialize, Serialize};
 
+/// Rôle négocié au début d'une connexion persistante avec le daemon.
+///
+/// L'absence de négociation reste implicitement un wrapper pour préserver les
+/// agents 007 déjà déployés. Un client attach doit en revanche s'annoncer
+/// explicitement avant toute souscription.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionRole {
+    Wrapper,
+    Attach,
+}
+
+/// Fenêtre d'historique demandée par une vue attach.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value")]
+pub enum AttachWindow {
+    Today,
+    Seq(u64),
+    Date(String),
+}
+
+/// Refus explicitement typés du plan de contrôle attach.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachRefusal {
+    AgentUnknown,
+    AgentNotAcp,
+    WrapperUnavailable,
+    CommandQueueSaturated,
+    InvalidDate,
+    FutureDate,
+    DateOutsideRetention,
+    ReplyNotAllowed,
+    MessageOutsideAttachRole,
+}
+
+/// Taille maximale d'un fragment d'événement sur le fil attach.
+pub const MAX_ATTACH_FRAGMENT_BYTES: usize = 256 * 1024;
+
 /// Messages envoyés par le wrapper vers le daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum WrapperToDaemon {
+    /// Négocie un rôle avant l'usage d'une connexion persistante.
+    RoleHandshake { role: ConnectionRole },
+    /// Ouvrir un abonnement à la vue d'un équipier.
+    Subscribe { agent: String, window: AttachWindow },
+    /// Fermer un abonnement sans fermer la connexion attach.
+    Unsubscribe { subscription_id: String },
+    /// Confirmation du wrapper : le daemon peut alors l'annoncer à la vue.
+    Subscribed { subscription_id: String },
+    /// Fragment binaire d'une ligne JSONL versionnée.
+    JournalFragment {
+        subscription_id: String,
+        seq: u64,
+        offset: u64,
+        #[serde(rename = "final")]
+        final_fragment: bool,
+        bytes: Vec<u8>,
+    },
+    /// Marque la frontière entre le rejeu et le suivi continu.
+    SnapshotCaughtUp {
+        subscription_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        through_seq: Option<u64>,
+    },
+    /// Signale une plage volontairement non rendue par une vue lente.
+    Gap {
+        subscription_id: String,
+        from_seq: u64,
+        to_seq: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// Termine un abonnement, sans impliquer la fermeture de connexion.
+    End {
+        subscription_id: String,
+        reason: String,
+    },
     /// S'enregistrer auprès du daemon.
     Register {
         agent_type: String,
@@ -121,6 +196,52 @@ impl std::fmt::Display for RuntimeSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    /// Le rôle demandé est accepté pour cette connexion.
+    RoleAccepted { role: ConnectionRole },
+    /// Souscription du daemon vers le wrapper lecteur du journal.
+    Subscribe {
+        subscription_id: String,
+        agent: String,
+        window: AttachWindow,
+    },
+    /// Désabonnement relayé au wrapper.
+    Unsubscribe { subscription_id: String },
+    /// Confirmation d'abonnement envoyée à la vue après acceptation wrapper.
+    Subscribed { subscription_id: String },
+    /// Fragment d'événement relayé à la vue attachée.
+    JournalFragment {
+        subscription_id: String,
+        seq: u64,
+        offset: u64,
+        #[serde(rename = "final")]
+        final_fragment: bool,
+        bytes: Vec<u8>,
+    },
+    /// Le rejeu est terminé ; `through_seq` est absent si la fenêtre est vide.
+    SnapshotCaughtUp {
+        subscription_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        through_seq: Option<u64>,
+    },
+    /// Lacune de rendu coalescée, émise avant l'événement suivant conservé.
+    Gap {
+        subscription_id: String,
+        from_seq: u64,
+        to_seq: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// Fin motivée d'un abonnement attach.
+    End {
+        subscription_id: String,
+        reason: String,
+    },
+    /// Refus typé du plan de contrôle attach.
+    AttachRejected {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subscription_id: Option<String>,
+        reason: AttachRefusal,
+    },
     /// Confirmation d'enregistrement avec le nom final.
     Registered { name: String },
     /// Confirmation d'un renommage.
@@ -141,6 +262,39 @@ pub enum DaemonToWrapper {
     RequestCancelled { id: String, state: String },
     /// Liste des demandes suivies accessibles à l'agent courant.
     RequestList { requests: Vec<RequestInfo> },
+}
+
+impl WrapperToDaemon {
+    /// Vérifie la matrice fermée d'une connexion déjà négociée comme attach.
+    /// Le handshake est volontairement exclu : il n'est admis qu'avant que le
+    /// daemon n'enregistre le rôle de la connexion.
+    pub fn attach_refusal(&self) -> Option<AttachRefusal> {
+        match self {
+            Self::Subscribe { .. } | Self::Unsubscribe { .. } | Self::Heartbeat => None,
+            Self::Send(message) if !message.reply => None,
+            Self::Send(_) => Some(AttachRefusal::ReplyNotAllowed),
+            _ => Some(AttachRefusal::MessageOutsideAttachRole),
+        }
+    }
+}
+
+impl DaemonToWrapper {
+    /// Vérifie la matrice de réception du client attach. Le daemon l'emploiera
+    /// lors du fan-out : les livraisons réservées au wrapper ne traversent pas
+    /// la frontière de rôle.
+    pub fn allowed_for_attach(&self) -> bool {
+        matches!(
+            self,
+            Self::Subscribed { .. }
+                | Self::JournalFragment { .. }
+                | Self::SnapshotCaughtUp { .. }
+                | Self::Gap { .. }
+                | Self::End { .. }
+                | Self::AttachRejected { .. }
+                | Self::Ack { .. }
+                | Self::Nack { .. }
+        )
+    }
 }
 
 /// Sérialise un message en ligne JSON (newline-delimited JSON).
@@ -382,5 +536,164 @@ mod tests {
             }
             _ => panic!("mauvais type"),
         }
+    }
+
+    #[test]
+    fn attach_client_messages_roundtrip() {
+        let handshake = WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Attach,
+        };
+        assert!(matches!(
+            decode(&encode(&handshake).unwrap()).unwrap(),
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Attach
+            }
+        ));
+
+        let subscribe = WrapperToDaemon::Subscribe {
+            agent: "codex-1".to_string(),
+            window: AttachWindow::Seq(42),
+        };
+        assert!(matches!(
+            decode(&encode(&subscribe).unwrap()).unwrap(),
+            WrapperToDaemon::Subscribe {
+                agent,
+                window: AttachWindow::Seq(42)
+            } if agent == "codex-1"
+        ));
+
+        let unsubscribe = WrapperToDaemon::Unsubscribe {
+            subscription_id: "sub-1".to_string(),
+        };
+        assert!(matches!(
+            decode(&encode(&unsubscribe).unwrap()).unwrap(),
+            WrapperToDaemon::Unsubscribe { subscription_id } if subscription_id == "sub-1"
+        ));
+    }
+
+    #[test]
+    fn attach_relay_messages_roundtrip() {
+        let messages = vec![
+            WrapperToDaemon::Subscribed {
+                subscription_id: "sub-1".to_string(),
+            },
+            WrapperToDaemon::JournalFragment {
+                subscription_id: "sub-1".to_string(),
+                seq: 7,
+                offset: 0,
+                final_fragment: true,
+                bytes: b"{\"v\":1}\n".to_vec(),
+            },
+            WrapperToDaemon::SnapshotCaughtUp {
+                subscription_id: "sub-1".to_string(),
+                through_seq: Some(7),
+            },
+            WrapperToDaemon::Gap {
+                subscription_id: "sub-1".to_string(),
+                from_seq: 3,
+                to_seq: 4,
+                reason: Some("vue lente".to_string()),
+            },
+            WrapperToDaemon::End {
+                subscription_id: "sub-1".to_string(),
+                reason: "wrapper arrêté".to_string(),
+            },
+        ];
+        for message in messages {
+            assert_eq!(encode(&message).unwrap(), encode(&decode::<WrapperToDaemon>(&encode(&message).unwrap()).unwrap()).unwrap());
+        }
+        assert_eq!(MAX_ATTACH_FRAGMENT_BYTES, 256 * 1024);
+    }
+
+    #[test]
+    fn attach_daemon_messages_roundtrip() {
+        let messages = vec![
+            DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach,
+            },
+            DaemonToWrapper::Subscribe {
+                subscription_id: "sub-1".to_string(),
+                agent: "codex-1".to_string(),
+                window: AttachWindow::Today,
+            },
+            DaemonToWrapper::Unsubscribe {
+                subscription_id: "sub-1".to_string(),
+            },
+            DaemonToWrapper::Subscribed {
+                subscription_id: "sub-1".to_string(),
+            },
+            DaemonToWrapper::JournalFragment {
+                subscription_id: "sub-1".to_string(),
+                seq: 8,
+                offset: 0,
+                final_fragment: true,
+                bytes: vec![0, 1, 2],
+            },
+            DaemonToWrapper::SnapshotCaughtUp {
+                subscription_id: "sub-1".to_string(),
+                through_seq: None,
+            },
+            DaemonToWrapper::Gap {
+                subscription_id: "sub-1".to_string(),
+                from_seq: 6,
+                to_seq: 7,
+                reason: None,
+            },
+            DaemonToWrapper::End {
+                subscription_id: "sub-1".to_string(),
+                reason: "désabonné".to_string(),
+            },
+            DaemonToWrapper::AttachRejected {
+                subscription_id: None,
+                reason: AttachRefusal::AgentNotAcp,
+            },
+        ];
+        for message in messages {
+            let reaches_attach = !matches!(
+                message,
+                DaemonToWrapper::RoleAccepted { .. }
+                    | DaemonToWrapper::Subscribe { .. }
+                    | DaemonToWrapper::Unsubscribe { .. }
+            );
+            let json = encode(&message).unwrap();
+            let decoded: DaemonToWrapper = decode(&json).unwrap();
+            assert_eq!(json, encode(&decoded).unwrap());
+            assert_eq!(decoded.allowed_for_attach(), reaches_attach);
+        }
+    }
+
+    #[test]
+    fn role_attach_refuse_les_messages_wrapper_et_reply_suivi() {
+        let wrapper_only = WrapperToDaemon::Runtime {
+            agent: "codex-1".to_string(),
+            model: "gpt-5.5".to_string(),
+            effort: None,
+            source: RuntimeSource::Declared,
+        };
+        assert_eq!(
+            wrapper_only.attach_refusal(),
+            Some(AttachRefusal::MessageOutsideAttachRole)
+        );
+
+        let mut tracked_send = BridgetMessage::new("forge", "codex-1", "réponds");
+        tracked_send.reply = true;
+        assert_eq!(
+            WrapperToDaemon::Send(tracked_send).attach_refusal(),
+            Some(AttachRefusal::ReplyNotAllowed)
+        );
+        assert!(WrapperToDaemon::Send(BridgetMessage::new("humain", "codex-1", "bonjour"))
+            .attach_refusal()
+            .is_none());
+        assert!(!DaemonToWrapper::Deliver(BridgetMessage::new("a", "b", "x"))
+            .allowed_for_attach());
+    }
+
+    #[test]
+    fn protocol_007_reste_compatible_sans_handshake() {
+        let json = r#"{"type":"Register","agent_type":"codex","name":null,"turn_in_progress":false}"#;
+        assert!(matches!(
+            decode::<WrapperToDaemon>(json).unwrap(),
+            WrapperToDaemon::Register { agent_type, .. } if agent_type == "codex"
+        ));
     }
 }

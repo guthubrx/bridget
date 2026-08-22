@@ -2,7 +2,7 @@
 //! entre les wrappers connectés, persiste l'état en SQLite.
 
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
-use bridget_transport::protocol::{decode, encode};
+use bridget_transport::protocol::{decode, encode, AttachRefusal, ConnectionRole};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use log::{error, info, warn};
 use std::collections::HashMap;
@@ -178,6 +178,9 @@ struct DaemonState {
     conn_hosts: HashMap<String, String>,
     conn_operating_systems: HashMap<String, String>,
     conn_instances: HashMap<String, String>,
+    /// Les clients attach négocient ce rôle explicite ; l'absence d'entrée
+    /// reste un wrapper pour préserver les agents 007 déjà connectés.
+    connection_roles: HashMap<String, ConnectionRole>,
     presences: HashMap<String, Presence>,
     conn_counter: u64,
     /// Messages --reply en attente de réponse : (msg_id, from, to, expire_at, target_conn)
@@ -296,6 +299,7 @@ impl DaemonState {
             conn_hosts: HashMap::new(),
             conn_operating_systems: HashMap::new(),
             conn_instances: HashMap::new(),
+            connection_roles: HashMap::new(),
             presences: HashMap::new(),
             conn_counter: 0,
             pending_replies: Vec::new(),
@@ -771,6 +775,7 @@ fn handle_connection(
         st.conn_names.remove(&conn_id);
         st.conn_hosts.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
+        st.connection_roles.remove(&conn_id);
         (writer_opt, removed)
     };
 
@@ -1215,7 +1220,49 @@ fn handle_wrapper_message(
     msg: WrapperToDaemon,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Option<DaemonToWrapper> {
+    if let WrapperToDaemon::RoleHandshake { role } = &msg {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        if st.connection_roles.contains_key(conn_id) {
+            return Some(DaemonToWrapper::AttachRejected {
+                subscription_id: None,
+                reason: AttachRefusal::MessageOutsideAttachRole,
+            });
+        }
+        st.connection_roles.insert(conn_id.to_string(), *role);
+        return Some(DaemonToWrapper::RoleAccepted { role: *role });
+    }
+
+    let attach_refusal = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        (st.connection_roles.get(conn_id) == Some(&ConnectionRole::Attach))
+            .then(|| msg.attach_refusal())
+            .flatten()
+    };
+    if let Some(reason) = attach_refusal {
+        return Some(DaemonToWrapper::AttachRejected {
+            subscription_id: None,
+            reason,
+        });
+    }
+
     match msg {
+        WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
+        // Le cycle de souscription est installé en T804. T802 réserve les
+        // variantes et ferme immédiatement la frontière de rôle.
+        WrapperToDaemon::Subscribe { .. } | WrapperToDaemon::Unsubscribe { .. } => {
+            Some(DaemonToWrapper::AttachRejected {
+                subscription_id: None,
+                reason: AttachRefusal::WrapperUnavailable,
+            })
+        }
+        // Les relais wrapper→daemon sont introduits avec le worker de journal
+        // (T803b/T804). Les accepter ici conserve la compatibilité de décodage
+        // sans les faire entrer dans le routage de messages.
+        WrapperToDaemon::Subscribed { .. }
+        | WrapperToDaemon::JournalFragment { .. }
+        | WrapperToDaemon::SnapshotCaughtUp { .. }
+        | WrapperToDaemon::Gap { .. }
+        | WrapperToDaemon::End { .. } => None,
         WrapperToDaemon::Register {
             agent_type,
             name,
@@ -1911,6 +1958,46 @@ mod presence_tests {
             },
         );
         (state, config)
+    }
+
+    #[test]
+    fn connexion_attach_refuse_un_message_reserve_au_wrapper() {
+        let (state, config) = state_with_registered_agent("attach-role");
+        let shared = Arc::new(Mutex::new(state));
+
+        let accepted = handle_wrapper_message(
+            "attach-1",
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Attach,
+            },
+            &shared,
+        );
+        assert!(matches!(
+            accepted,
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+
+        let refusal = handle_wrapper_message(
+            "attach-1",
+            WrapperToDaemon::Runtime {
+                agent: "agent-2".to_string(),
+                model: "gpt-5.5".to_string(),
+                effort: None,
+                source: bridget_transport::protocol::RuntimeSource::Declared,
+            },
+            &shared,
+        );
+        assert!(matches!(
+            refusal,
+            Some(DaemonToWrapper::AttachRejected {
+                reason: AttachRefusal::MessageOutsideAttachRole,
+                ..
+            })
+        ));
+        assert_eq!(shared.lock().unwrap().router.list_agents().len(), 1);
+        let _ = std::fs::remove_file(config.db_path);
     }
 
     #[test]

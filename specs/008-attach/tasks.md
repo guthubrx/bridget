@@ -29,7 +29,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
 
 ## Phase 1 : US1 — Regarder un équipier travailler
 
-- [ ] **T802** [US1] **Variantes de protocole d'abonnement + rôle typé**
+- [X] **T802** [US1] **Variantes de protocole d'abonnement + rôle typé**
   (`protocol.rs`, style D-209) : handshake de rôle attach (T801-a) ;
   souscription `{ agent, window: Today|Seq(n)|Date }` ; acceptation
   `subscription_id` (après acceptation wrapper) ; fragment `{ subscription_id,
