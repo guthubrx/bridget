@@ -388,6 +388,17 @@ fn message_expired(message: &BridgetMessage) -> bool {
         .unwrap_or(false)
 }
 
+/// Convertit l'échéance absolue portée par le daemon en durée restante pour le
+/// prompt déjà actif. L'absence d'échéance conserve le comportement historique.
+fn remaining_deadline(message: &BridgetMessage) -> Option<Duration> {
+    let deadline_at = message.deadline_at?;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    Some(Duration::from_secs(deadline_at.saturating_sub(now)))
+}
+
 fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         loop {
@@ -461,7 +472,7 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                     "prompt": [{ "type": "text", "text": prompt_for(&message) }]
                 }),
                 if message.reply {
-                    None
+                    remaining_deadline(&message)
                 } else {
                     Some(worker.notify_timeout)
                 },
@@ -932,18 +943,22 @@ fn permission_response(value: &Value, permissions: &str, cancelled: bool) -> Opt
             json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": { "outcome": "cancelled" } } }),
         );
     }
-    let desired = if permissions == "allow" {
-        "allow_"
+    let accepted_kinds = if permissions == "allow" {
+        ["allow_once", "allow_always"]
     } else {
-        "reject_"
+        ["reject_once", "reject_always"]
     };
     let option = options.iter().find(|option| {
         option
             .get("kind")
             .and_then(Value::as_str)
-            .is_some_and(|kind| kind.starts_with(desired))
+            .is_some_and(|kind| accepted_kinds.contains(&kind))
+            && option.get("optionId").and_then(Value::as_str).is_some()
     });
-    match option.and_then(|option| option.get("optionId")).cloned() {
+    match option
+        .and_then(|option| option.get("optionId"))
+        .and_then(Value::as_str)
+    {
         Some(option_id) => Some(
             json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": { "outcome": "selected", "optionId": option_id } } }),
         ),
@@ -1023,6 +1038,17 @@ mod tests {
         assert_eq!(
             permission_response(&permission, "deny", false).unwrap()["result"]["outcome"]["optionId"],
             "reject-1"
+        );
+        let invalid_permission = json!({
+            "id": "permission-invalid",
+            "params": { "options": [
+                {"optionId": "bogus", "kind": "allow_bogus"},
+                {"optionId": 7, "kind": "allow_once"}
+            ]}
+        });
+        assert_eq!(
+            permission_response(&invalid_permission, "allow", false).unwrap()["result"],
+            json!({"outcome":{"outcome":"cancelled"}})
         );
 
         let numeric: Value = serde_json::from_str(lines[3]).unwrap();
@@ -1391,6 +1417,48 @@ echo '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
             }
         }
         panic!("le tour annulé a empêché ou contaminé le prompt suivant");
+    }
+
+    #[test]
+    fn active_reply_deadline_uses_cancel_grace_then_drains_queue() {
+        let script = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read prompt
+read cancel
+sleep 3
+"#;
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            queue_capacity: 2,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+        })
+        .unwrap();
+        let mut active = message("deadline-active");
+        active.reply = true;
+        active.deadline_at = Some(
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                + 1,
+        );
+        transport.deliver(&active).unwrap();
+        transport.deliver(&message("deadline-queued")).unwrap();
+        for _ in 0..250 {
+            thread::sleep(Duration::from_millis(10));
+            if !transport.is_alive() {
+                let events = transport.drain_events();
+                assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, reason } if message_id == "deadline-active" && reason.contains("timeout ACP"))));
+                assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, .. } if message_id == "deadline-queued")));
+                return;
+            }
+        }
+        panic!("l'échéance du tour actif n'a pas interrompu le prompt ACP");
     }
 
     #[test]
