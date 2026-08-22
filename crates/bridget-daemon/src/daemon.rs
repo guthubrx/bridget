@@ -1954,9 +1954,20 @@ fn handle_delivery_ack(conn_id: &str, delivery_id: String, delivery_generation: 
     let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
         return Some(DaemonToWrapper::Nack { id: delivery_id, reason: "accusé idempotent émis par une instance inconnue".to_string() });
     };
-    st.idempotency.acknowledge_send_delivery(&delivery_id, &instance_id, delivery_generation)
-        .err()
-        .map(|error| DaemonToWrapper::Nack { id: delivery_id, reason: error.to_string() })
+    match st
+        .idempotency
+        .acknowledge_send_delivery(&delivery_id, &instance_id, delivery_generation)
+    {
+        Ok(()) => {
+            #[cfg(feature = "test-support")]
+            crate::test_sync::checkpoint("after_delivery_acked");
+            None
+        }
+        Err(error) => Some(DaemonToWrapper::Nack {
+            id: delivery_id,
+            reason: error.to_string(),
+        }),
+    }
 }
 
 fn reject_idempotent_send(
@@ -2554,13 +2565,21 @@ fn handle_wrapper_message(
                 });
             };
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            st.idempotency
-                .mark_delivery_indeterminate(&delivery_id, &instance_id, delivery_generation)
-                .err()
-                .map(|error| DaemonToWrapper::Nack {
+            match st.idempotency.mark_delivery_indeterminate(
+                &delivery_id,
+                &instance_id,
+                delivery_generation,
+            ) {
+                Ok(()) => {
+                    #[cfg(feature = "test-support")]
+                    crate::test_sync::checkpoint("after_delivery_indeterminate");
+                    None
+                }
+                Err(error) => Some(DaemonToWrapper::Nack {
                     id: delivery_id,
                     reason: error.to_string(),
-                })
+                }),
+            }
         }
         WrapperToDaemon::Subscribe { agent, window } => {
             let (subscription_id, control) = {

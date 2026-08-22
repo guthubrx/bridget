@@ -108,6 +108,14 @@ fn make_fifo(path: &Path) {
     );
 }
 
+fn checkpoint_root(root: &Path, point: &str) -> (PathBuf, PathBuf) {
+    let sync = root.join("sync");
+    fs::create_dir_all(&sync).expect("répertoire de synchronisation");
+    make_fifo(&sync.join(format!("{point}.fifo")));
+    let marker = sync.join(format!("{point}.ready"));
+    (sync, marker)
+}
+
 fn spawn_daemon(root: &Path, sync: Option<&Path>) -> DaemonProcess {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
     command
@@ -285,6 +293,13 @@ fn retry_issue(socket: &Path, message_id: String, issued_at: i64) -> Idempotency
     }
 }
 
+fn issued_at() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("horloge")
+        .as_secs() as i64
+}
+
 fn run_amont_cycle(point: &str, serial: usize) {
     let root = test_root(point);
     let sync = root.join("sync");
@@ -435,4 +450,217 @@ fn destination_remplacee_reste_indeterminee_sans_reroutage() {
     assert!(matches!(issue, IdempotencyIssue::OutcomeUnknown { .. }));
     restarted.stop();
     fs::remove_dir_all(root).expect("nettoyage destination remplacée");
+}
+
+#[test]
+fn recovery_terminal_acked_rejoue_accepted_apres_crash_daemon() {
+    let root = test_root("recovery-terminal");
+    let (sync, marker) = checkpoint_root(&root, "after_delivery_acked");
+    let daemon = spawn_daemon(&root, Some(&sync));
+    let socket_path = socket(&root);
+    let mut recipient = register_recipient_as(&socket_path, "recovery-terminal-instance");
+    let issued_at = issued_at();
+    let message_id = "recovery-terminal".to_string();
+    let mut client = negotiate_client(&socket_path);
+    client.send(idempotent_send(message_id.clone(), issued_at));
+    let _ = client.receive();
+    let (delivery_id, delivery_generation) = match receive_delivery(&mut recipient) {
+        DaemonToWrapper::DeliverIdempotent {
+            delivery_id,
+            delivery_generation,
+            ..
+        } => (delivery_id, delivery_generation),
+        _ => unreachable!(),
+    };
+    recipient.send(WrapperToDaemon::DeliverAcked {
+        delivery_id,
+        delivery_generation,
+    });
+    watch_marker(&sync, &marker);
+    daemon.stop();
+    drop(client);
+    drop(recipient);
+
+    let restarted = spawn_daemon(&root, None);
+    let socket_path = socket(&root);
+    let mut recipient = register_recipient_as(&socket_path, "recovery-terminal-instance");
+    assert_no_delivery(&mut recipient);
+    assert!(matches!(
+        retry_issue(&socket_path, message_id, issued_at),
+        IdempotencyIssue::Accepted { .. }
+    ));
+    restarted.stop();
+    fs::remove_dir_all(root).expect("nettoyage terminal");
+}
+
+#[test]
+fn recovery_acked_wrapper_finalise_accepted_apres_crash_daemon() {
+    let root = test_root("recovery-acked-wrapper");
+    let daemon = spawn_daemon(&root, None);
+    let socket_path = socket(&root);
+    let mut recipient = register_recipient_as(&socket_path, "recovery-acked-wrapper-instance");
+    let issued_at = issued_at();
+    let message_id = "recovery-acked-wrapper".to_string();
+    let mut client = negotiate_client(&socket_path);
+    client.send(idempotent_send(message_id.clone(), issued_at));
+    let _ = client.receive();
+    let first = receive_delivery(&mut recipient);
+    daemon.stop();
+    drop(client);
+    drop(recipient);
+
+    let restarted = spawn_daemon(&root, None);
+    let socket_path = socket(&root);
+    let mut recipient = register_recipient_as(&socket_path, "recovery-acked-wrapper-instance");
+    let redelivery = receive_delivery(&mut recipient);
+    assert_eq!(
+        encode(&first).expect("première remise encodable"),
+        encode(&redelivery).expect("remise reprise encodable")
+    );
+    let (delivery_id, delivery_generation) = match redelivery {
+        DaemonToWrapper::DeliverIdempotent {
+            delivery_id,
+            delivery_generation,
+            ..
+        } => (delivery_id, delivery_generation),
+        _ => unreachable!(),
+    };
+    recipient.send(WrapperToDaemon::DeliverAcked {
+        delivery_id,
+        delivery_generation,
+    });
+    assert!(matches!(
+        retry_issue(&socket_path, message_id, issued_at),
+        IdempotencyIssue::Accepted { .. }
+    ));
+    restarted.stop();
+    fs::remove_dir_all(root).expect("nettoyage acked wrapper");
+}
+
+#[test]
+fn recovery_seen_indeterminate_maintient_outcome_unknown_apres_crash_daemon() {
+    let root = test_root("recovery-indeterminate");
+    let (sync, marker) = checkpoint_root(&root, "after_delivery_indeterminate");
+    let daemon = spawn_daemon(&root, Some(&sync));
+    let socket_path = socket(&root);
+    let mut recipient = register_recipient_as(&socket_path, "recovery-indeterminate-instance");
+    let issued_at = issued_at();
+    let message_id = "recovery-indeterminate".to_string();
+    let mut client = negotiate_client(&socket_path);
+    client.send(idempotent_send(message_id.clone(), issued_at));
+    let _ = client.receive();
+    let (delivery_id, delivery_generation) = match receive_delivery(&mut recipient) {
+        DaemonToWrapper::DeliverIdempotent {
+            delivery_id,
+            delivery_generation,
+            ..
+        } => (delivery_id, delivery_generation),
+        _ => unreachable!(),
+    };
+    recipient.send(WrapperToDaemon::DeliveryIndeterminate {
+        delivery_id,
+        delivery_generation,
+    });
+    watch_marker(&sync, &marker);
+    daemon.stop();
+    drop(client);
+    drop(recipient);
+
+    let restarted = spawn_daemon(&root, None);
+    let socket_path = socket(&root);
+    let mut recipient = register_recipient_as(&socket_path, "recovery-indeterminate-instance");
+    assert_no_delivery(&mut recipient);
+    assert!(matches!(
+        retry_issue(&socket_path, message_id, issued_at),
+        IdempotencyIssue::OutcomeUnknown { .. }
+    ));
+    restarted.stop();
+    fs::remove_dir_all(root).expect("nettoyage indéterminé");
+}
+
+#[test]
+fn recovery_absent_redelivre_sans_doublon_apres_crash_daemon() {
+    let root = test_root("recovery-absent");
+    let (sync, marker) = checkpoint_root(&root, "after_delivery_before_issue");
+    let daemon = spawn_daemon(&root, Some(&sync));
+    let socket_path = socket(&root);
+    let recipient = register_recipient_as(&socket_path, "recovery-absent-instance");
+    let issued_at = issued_at();
+    let message_id = "recovery-absent".to_string();
+    let mut client = negotiate_client(&socket_path);
+    client.send(idempotent_send(message_id.clone(), issued_at));
+    watch_marker(&sync, &marker);
+    daemon.stop();
+    drop(client);
+    drop(recipient);
+
+    let restarted = spawn_daemon(&root, None);
+    let socket_path = socket(&root);
+    let mut recipient = register_recipient_as(&socket_path, "recovery-absent-instance");
+    let (delivery_id, delivery_generation) = match receive_delivery(&mut recipient) {
+        DaemonToWrapper::DeliverIdempotent {
+            delivery_id,
+            delivery_generation,
+            ..
+        } => (delivery_id, delivery_generation),
+        _ => unreachable!(),
+    };
+    recipient.send(WrapperToDaemon::DeliverAcked {
+        delivery_id,
+        delivery_generation,
+    });
+    assert!(matches!(
+        retry_issue(&socket_path, message_id, issued_at),
+        IdempotencyIssue::Accepted { .. }
+    ));
+    restarted.stop();
+    fs::remove_dir_all(root).expect("nettoyage absent");
+}
+
+#[test]
+fn recovery_prepared_reprend_le_dispatch_apres_crash_daemon() {
+    let root = test_root("recovery-prepared");
+    let (sync, marker) = checkpoint_root(&root, "after_prepared");
+    let daemon = spawn_daemon(&root, Some(&sync));
+    let socket_path = socket(&root);
+    let recipient = register_recipient_as(&socket_path, "recovery-prepared-instance");
+    let issued_at = issued_at();
+    let message_id = "recovery-prepared".to_string();
+    let mut client = negotiate_client(&socket_path);
+    client.send(idempotent_send(message_id.clone(), issued_at));
+    watch_marker(&sync, &marker);
+    daemon.stop();
+    drop(client);
+    drop(recipient);
+
+    let restarted = spawn_daemon(&root, None);
+    let socket_path = socket(&root);
+    let mut recipient = register_recipient_as(&socket_path, "recovery-prepared-instance");
+    let mut client = negotiate_client(&socket_path);
+    client.send(idempotent_send(message_id.clone(), issued_at));
+    assert!(matches!(
+        client.receive(),
+        DaemonToWrapper::IdempotencyResult {
+            issue: IdempotencyIssue::OutcomeUnknown { .. },
+            ..
+        }
+    ));
+    let (delivery_id, delivery_generation) = match receive_delivery(&mut recipient) {
+        DaemonToWrapper::DeliverIdempotent {
+            delivery_id,
+            delivery_generation,
+            ..
+        } => (delivery_id, delivery_generation),
+        _ => unreachable!(),
+    };
+    recipient.send(WrapperToDaemon::DeliverAcked {
+        delivery_id,
+        delivery_generation,
+    });
+    assert!(matches!(
+        retry_issue(&socket_path, message_id, issued_at),
+        IdempotencyIssue::Accepted { .. }
+    ));
+    restarted.stop();
+    fs::remove_dir_all(root).expect("nettoyage prepared");
 }
