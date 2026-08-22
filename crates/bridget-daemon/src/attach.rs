@@ -185,6 +185,8 @@ struct AttachClientState {
     pending_send: HashMap<String, String>,
     pending_send_expirations: HashMap<String, Instant>,
     reassembly: Option<Reassembly>,
+    #[cfg(test)]
+    event_observer: Option<mpsc::Sender<()>>,
 }
 
 impl AttachClientState {
@@ -199,6 +201,8 @@ impl AttachClientState {
             pending_send: HashMap::new(),
             pending_send_expirations: HashMap::new(),
             reassembly: None,
+            #[cfg(test)]
+            event_observer: None,
         }
     }
 
@@ -846,6 +850,8 @@ fn spawn_attach_reader(
                     return;
                 }
             };
+            #[cfg(test)]
+            let journal_rendered = matches!(&message, DaemonToWrapper::JournalFragment { .. });
             let outcome = match state
                 .lock()
                 .map_err(|_| "état attach empoisonné".to_string())
@@ -859,6 +865,15 @@ fn spawn_attach_reader(
             };
             for event in outcome.events {
                 print_interactive_event(&event, &input, &screen, &agent, raw_terminal);
+            }
+            #[cfg(test)]
+            if journal_rendered
+                && let Some(observer) = state
+                    .lock()
+                    .ok()
+                    .and_then(|state| state.event_observer.clone())
+            {
+                let _ = observer.send(());
             }
             if let Some(reason) = outcome.rejected {
                 let attachable_agents = if reason == AttachRefusal::AgentUnknown {
@@ -1998,14 +2013,15 @@ mod tests {
 
         let (mut input_writer, input_reader) = UnixStream::pair().unwrap();
         let (input_start_tx, input_start_rx) = mpsc::channel();
-        let (written_tx, written_rx) = mpsc::channel();
+        let (event_rendered_tx, event_rendered_rx) = mpsc::channel();
         let input_writer = thread::spawn(move || {
             input_start_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            event_rendered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
             assert_eq!(input_writer.write(b"dernier envoi\n").unwrap(), 14);
             input_writer.shutdown(Shutdown::Write).unwrap();
-            written_tx.send(()).unwrap();
         });
         let mut state = AttachClientState::new(AttachWindow::Today);
+        state.event_observer = Some(event_rendered_tx);
         state.subscription_requested();
         state
             .dispatch(DaemonToWrapper::Subscribed {
@@ -2015,15 +2031,6 @@ mod tests {
 
         let result = with_raw_terminal(pseudo_tty.slave, |raw_terminal| {
             input_start_tx.send(()).unwrap();
-            written_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-            let mut ready = libc::pollfd {
-                fd: input_reader.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            assert_eq!(unsafe { libc::poll(&mut ready, 1, 0) }, 1);
-            assert_ne!(ready.revents & libc::POLLIN, 0);
-            assert_ne!(ready.revents & libc::POLLHUP, 0);
             drive_interactive(
                 connection,
                 &mut state,

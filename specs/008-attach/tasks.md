@@ -50,7 +50,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
   corrupt-line) + fenêtre vide ; l'usage T706 (`valid_events`, récupération de
   `seq`) reste intact.
 
-- [ ] **T803b** [US1] **Worker de relais wrapper** : worker dédié à canal
+- [x] **T803b** [US1] **Worker de relais wrapper** : worker dédié à canal
   borné + **canal de contrôle séparé jamais refusé** ; curseur par abonnement ;
   équité rejeu/suivi par tranches ; suivi par offset (motif sonde runtime) ;
   zéro lecture sans abonné ; jamais bloquant pour l'écrivain du journal.
@@ -87,7 +87,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
   dépassement de tampon → `Gap` exact ; rejet tardif routé via la table puis
   purgé.
 
-- [ ] **T805a** [US1] **Client attach : socket, réassemblage, reconnexion**
+- [x] **T805a** [US1] **Client attach : socket, réassemblage, reconnexion**
   (`attach.rs` + sous-commande `cli.rs`) : connexion persistante (lecteur
   unique + dispatch `subscription_id`/`message_id`, writer sérialisé), état
   mémoire (`last_seq`, `initial_window`, `caught_up`, `pending_send`),
@@ -99,7 +99,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
   événement reçu exactement une fois** (FR-008/contrat) ; générations
   obsolètes ignorées côté client.
 
-- [ ] **T805b** [US1] **Client attach : rendu et sanitisation** : préfixes
+- [x] **T805b** [US1] **Client attach : rendu et sanitisation** : préfixes
   horodatés par type de payload v1, liste blanche Unicode (hors `Cc`/`Cf`,
   `␛` visible), continuations indentées, longueur bornée signalée, refus
   motivés (non-ACP → pointer le pane, inconnu → liste des attachables).
@@ -156,7 +156,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
 
 ## Phase 4 : Finition
 
-- [ ] **T810** Non-régression, synchronisation 007 et documentation : **gate
+- [x] **T810** Non-régression, synchronisation 007 et documentation : **gate
   d'intégration — tous les commits 007 finalement validés (T707-T712 compris)
   sont intégrés à la branche 008 avant clôture** (pas de base MVP figée) ;
   suite complète + agents 007 inchangés ; section « Observer un équipier »

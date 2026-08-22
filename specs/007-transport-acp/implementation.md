@@ -253,3 +253,58 @@ FR-014 reste hors checklist : T712 exige une validation fédérée SSH distincte
 wrapper a été terminé extérieurement, produisant un EOF sans `Unregister` et
 l'état `unreachable`. Ce contrôle ne teste **pas** l'arrêt propre vers
 `stopped`.
+
+## T712 — Gate fédération SSH
+
+- **Date** : 2026-08-22.
+- **Isolement** : daemon de test local lancé avec `HOME=/tmp/bg-gate` et socket
+  `/tmp/bg-gate/.cache/bridget/bridget.sock`; aucun daemon ou agent de
+  production n'a été arrêté. Le client distant a été déployé depuis le commit
+  `c0964e7` (client-only) sur `cartae.app:2222`.
+- **Tunnel** : commande manuelle, équivalente à `federate-ssh.sh` mais avec le
+  socket de gate isolé :
+
+```text
+ssh -N -p 2222 -o BatchMode=yes -o ControlMaster=no -o ControlPath=none -o ExitOnForwardFailure=yes -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -R /home/moi/.cache/bridget/bridget.sock:/tmp/bg-gate/.cache/bridget/bridget.sock moi@cartae.app
+```
+
+- **Échange observé** : `bridget who` exécuté à distance a affiché
+  `t712-acp ... transport acp ... connected`. Le `bridget send --reply` distant
+  (id `ffdb7b5fcb844`) a produit dans le journal local la réponse Codex sur
+  `router.rs` puis `turn_end` avec `stop_reason=end_turn` (seq 90). Les
+  variables `OPENAI_API_KEY` et `CODEX_API_KEY` étaient absentes avant le
+  lancement du wrapper de test.
+- **Résultat strict** : le client éphémère `bridget send --reply` distant n'a
+  créé aucune entrée visible par `bridget ledger` ni `bridget requests` (sortie
+  `Ledger vide.` / `Aucune demande suivie.`). La clôture au ledger exigée par
+  FR-014 n'est donc pas prouvée : T712 reste décochée et la session 007 reste
+  `In Progress` sur ce gate.
+- **Nettoyage** : wrapper, tunnel SSH, daemon de test et socket distant de gate
+  ont été arrêtés/supprimés; la configuration persistante `federate-ssh` n'a
+  pas été retirée faute d'autorisation explicite.
+
+### Diagnostic du ledger distant
+
+Le diagnostic a été rejoué sur le même socket de gate. `bridget who` local et
+distant ont tous deux répondu `Aucun agent connecté.`, ce qui confirme que le
+client distant emploie bien le socket SSH tunnelé. En revanche, pour le même
+daemon, le client local a affiché le message `cli-send-2780730 → t712-acp`
+dans son ledger alors que le client distant a affiché `Ledger vide.`. Le
+ledger est donc lu depuis une base locale distante et non projeté par le
+daemon fédéré : c'est un défaut de câblage du client fédéré, non une absence de
+réponse ACP.
+
+### Correction validée
+
+Le protocole fournit désormais une projection bornée du ledger depuis le store
+du daemon. Après déploiement client-only sur `cartae.app:2222`, les deux
+commandes `bridget ledger` (maître isolé et client distant à travers le tunnel)
+ont affiché octet pour octet la même entrée :
+
+```text
+Derniers 1 messages :
+  [1787414994] cli-send-2780730 → t712-acp: Explique en une phrase le rôle du fichier crates/bridget-cor
+```
+
+La clôture de l'échange fédéré est donc consultable par le client distant ;
+T712 est validée.

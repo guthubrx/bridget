@@ -229,8 +229,14 @@ répondre — sauf si un prompt est déjà fourni.
 | `bridget discover` | alias de `who` |
 | `bridget status` | santé du daemon, chemins, nombre d'agents et de messages |
 | `bridget ledger` | vingt derniers messages enregistrés |
+| `bridget attach <équipier> [--today \| --date AAAA-MM-JJ \| --from-seq N]` | ouvre une vue interactive d’un équipier ACP : historique, suivi en direct et saisie de messages ordinaires |
 | `bridget version` | version du binaire |
 | `bridget help` | aide en ligne, résumé de toutes les commandes |
+
+Une vue `attach` ne s’ajoute pas à l’annuaire et ne peut pas usurper un
+équipier. Elle rejoue d’abord la fenêtre demandée, puis suit le journal en
+direct. Les séquences de contrôle présentes dans les réponses sont rendues
+visibles et la saisie est conservée pendant l’arrivée d’un événement.
 
 ### Se décrire
 

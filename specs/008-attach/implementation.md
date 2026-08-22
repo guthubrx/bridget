@@ -68,11 +68,10 @@ faire échouer proprement un banc bloqué.
   `t809-acp`, `bridget attach t809-acp` distant a retourné le message motivé
   `équipier « t809-acp » inconnu ; aucun équipier ACP n'est actuellement
   attachable`, sans erreur brute.
-- **Résultat strict** : la resynchronisation d'une vue attach persistante après
-  coupure du tunnel n'a pas été démontrée : le wrapper ACP de remplacement est
-  sorti avant sa reconnexion et l'ancien wrapper est resté enregistré comme
-  présence obsolète. Le banc SC-001 distant de 60 s à 10 événements/s n'a donc
-  pas été lancé; son p95 < 3 s n'est pas établi. T809 reste décochée.
+- **Première tentative** : la resynchronisation n'était pas démontrée, car le
+  wrapper ACP de remplacement était sorti avant sa reconnexion. La reprise et
+  le banc relancés ensuite sont consignés ci-dessous : ils ont fermé cette
+  lacune et T809 est validée.
 - **Nettoyage** : tunnel, daemon de test, wrappers de test et socket distant de
   gate ont été arrêtés/supprimés. Aucune configuration persistante de
   fédération n'a été supprimée.
@@ -128,3 +127,32 @@ La reprise de la connexion attach après coupure est ainsi démontrée.
   observée est `[5, 6, 7]` : aucune perte ni doublon à la bascule
   catch-up→live introduite par le relais mémoire, y compris à la rotation de
   fichier simulée.
+
+## T810 — Intégration finale et checklist des critères
+
+- **Intégration 007** : la branche `session-07-transport-acp` à la révision
+  `7948287` est intégrée par le commit de fusion T810. Elle apporte notamment
+  la projection distante du ledger (`aa85bdf`) et la validation fédérée T712.
+- **WIP archivé avant intégration** : le diff orphelin de douze fichiers a été
+  conservé de façon réversible dans
+  `/Users/moi/Nextcloud/10.Scripts/bridget/specs/008-attach/wip-orphelin-2026-08-22.patch`
+  (1 729 insertions, 697 suppressions), puis le worktree a été restauré avant
+  la fusion.
+
+| Critère | Preuve |
+| --- | --- |
+| SC-001 | T807 : 600 tours locaux à 10/s, p95 11,888459 ms et max 13,178 ms ; T809 distant : 600/600 événements, p95 60,302080 ms (< 3 s). |
+| SC-002 | T807 : le banc de rotation simule `seq=5` au rejeu, attend `SnapshotCaughtUp`, puis obtient en live `[6, 7]` ; séquence finale exacte `[5, 6, 7]`. |
+| SC-003 | T806b : `saisie_attach_envoie_reply_false_et_conserve_la_correlation_jusqu_au_rejet_tardif` couvre l'envoi, l'accusé et le rejet différé ; T809 confirme l'échange distant complet. |
+| SC-004 | T804b : `deux_vues_attach_recoivent_le_meme_flux_et_sont_recoltees` et `vue_lente_est_recoltee_sans_bloquer_le_daemon_ni_les_autres_vues` ; T806a restaure le terminal sur sortie et panic. |
+| SC-005 | T808 : six campagnes déterministes à deux vues réelles, dégradation p95 comprise entre -2,8 % et +4,9 % (< 5 %). |
+| SC-006 | T809 : homes, caches et sockets distincts sur cartae ; indisponibilité, coupure/reprise du tunnel et resynchronisation observées. |
+| SC-007 | T805b : `neutralise_la_fixture_hostile_et_indente_les_fausses_lignes` ; T806b : `evenement_hostile_ne_modifie_jamais_la_saisie_partielle`. |
+
+La suite workspace et Clippy sans avertissement ont été relancés après la
+fusion 007 ; les agents historiques et ACP restent couverts par les suites
+007/008 existantes.
+
+Le test pseudo-TTY de non-régression `POLLIN|POLLHUP` synchronise désormais le
+rendu de l'événement socket avant la fermeture du flux d'entrée : il démontre
+sans course que la dernière ligne est envoyée et que termios est restauré.
