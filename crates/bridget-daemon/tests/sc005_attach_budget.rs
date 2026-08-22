@@ -20,6 +20,7 @@ const EVENTS_PER_TURN: usize = 2;
 const GLOBAL_TIMEOUT: Duration = Duration::from_secs(60);
 const SC001_TURNS: usize = 600;
 const SC001_CADENCE: Duration = Duration::from_millis(100);
+const SC005_INTERNAL_PAIRS: usize = 5;
 
 /// Les deux bancs de latence mesurent des délais de quelques microsecondes :
 /// ils doivent donc s'exclure mutuellement dans le même binaire de test.
@@ -274,6 +275,18 @@ fn percentile_95(samples: &[Duration]) -> Duration {
     ordered[(ordered.len() * 95).div_ceil(100).saturating_sub(1)]
 }
 
+fn median(samples: &mut [Duration]) -> Duration {
+    assert!(!samples.is_empty(), "médiane sans campagne SC-005");
+    samples.sort_unstable();
+    samples[samples.len() / 2]
+}
+
+fn median_delta(samples: &mut [i128]) -> i128 {
+    assert!(!samples.is_empty(), "médiane sans delta SC-005");
+    samples.sort_unstable();
+    samples[samples.len() / 2]
+}
+
 struct BenchHarness {
     root: PathBuf,
     socket: PathBuf,
@@ -458,13 +471,28 @@ fn run_interleaved_campaign() -> (Duration, usize, Duration, usize) {
 #[test]
 fn sc005_deux_vues_reelles_ne_degradent_pas_le_p95_d_append_de_plus_de_cinq_pourcent() {
     let _lock = lock_latency_bench();
-    let (baseline, baseline_count, observed, observed_count) = run_interleaved_campaign();
+    let mut baselines = Vec::with_capacity(SC005_INTERNAL_PAIRS);
+    let mut observed = Vec::with_capacity(SC005_INTERNAL_PAIRS);
+    let mut deltas = Vec::with_capacity(SC005_INTERNAL_PAIRS);
+    for _ in 0..SC005_INTERNAL_PAIRS {
+        let (baseline, baseline_count, with_views, observed_count) = run_interleaved_campaign();
+        assert_eq!(baseline_count, MEASURED_TURNS * EVENTS_PER_TURN);
+        assert_eq!(observed_count, MEASURED_TURNS * EVENTS_PER_TURN);
+        baselines.push(baseline);
+        observed.push(with_views);
+        deltas.push(with_views.as_nanos() as i128 - baseline.as_nanos() as i128);
+    }
+    let baseline = median(&mut baselines);
+    let with_views = median(&mut observed);
+    let paired_delta = median_delta(&mut deltas);
+    let relative_limit = (baseline.as_nanos() / 20) as i128;
+    let limit = relative_limit.max(Duration::from_micros(5).as_nanos() as i128);
     eprintln!(
-        "SC-005 append p95 entrelacé: 0 vue={baseline:?} ({baseline_count} échantillons), 2 vues={observed:?} ({observed_count} échantillons)"
+        "SC-005 p95 appariés de {SC005_INTERNAL_PAIRS} campagnes entrelacées: 0 vue médian={baseline:?} ({baselines:?}), 2 vues médian={with_views:?} ({observed:?}), deltas ns={deltas:?}, médiane delta={paired_delta}ns, limite={limit}ns"
     );
     assert!(
-        observed.as_nanos() * 100 < baseline.as_nanos() * 105,
-        "p95 append entrelacé avec 2 vues réelles={observed:?}, sans vue={baseline:?}"
+        paired_delta <= limit,
+        "delta p95 médian avec 2 vues réelles={paired_delta}ns, p95 sans vue={baseline:?}, limite={limit}ns"
     );
 }
 

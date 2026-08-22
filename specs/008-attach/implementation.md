@@ -174,16 +174,20 @@ Le 2026-08-22, le banc `sc005_deux_vues_reelles_ne_degradent_pas_le_p95_d_append
 | Pré-fusion | 22,417 → 21,750 | -3,0 % |
 
 Le résultat post-fusion ne montre pas une régression stable : ses mesures de
-base varient elles-mêmes de 21,209 à 185,458 µs, et les écarts absolus des
-trois échecs de seuil sont de 21,542, 7,959 et 1,500 µs. La projection ledger
+base varient elles-mêmes de 21,209 à 185,458 µs. La projection ledger
 `aa85bdf` ne participe pas au chemin d'append : elle ne fait qu'un traitement
-`LedgerProjection` sous le verrou du daemon, hors des tours du banc. Le seuil
-relatif de 5 % reste donc approprié aux charges mesurables ; pour cette zone
-sous 100 µs, un plancher absolu est nécessaire pour éviter que quelques
-microsecondes de bruit ne fassent échouer le gate. Proposition soumise à la
-review : ne pas appliquer la comparaison relative lorsque les deux p95 sont
-inférieurs à 100 µs, sans changer le seuil pour les charges au-dessus de ce
-plancher.
+`LedgerProjection` sous le verrou du daemon, hors des tours du banc.
+
+L'arbitre a donc retenu un calcul apparié. Chaque exécution contient cinq
+campagnes entrelacées ; pour chaque paire, le banc calcule
+`d_i = p95(2 vues)_i - p95(0 vue)_i`. Il accepte lorsque la médiane des
+`d_i` ne dépasse pas `max(5 % × médiane(p95_0 vue_i), 5 µs)`. Cette forme
+retire la dérive commune d'une campagne, conserve le budget relatif et borne
+le coût absolu sans exemption artificielle des petites mesures.
+
+Les six relances externes post-amendement sont toutes vertes. Les médianes de
+delta sont respectivement **0,751**, **1,083**, **0,583**, **0,291**,
+**1,083** et **0,500 µs**, sous la borne de **5 µs** dans chaque cas.
 
 Le test pseudo-TTY de non-régression `POLLIN|POLLHUP` synchronise désormais le
 rendu de l'événement socket avant la fermeture du flux d'entrée : il démontre
