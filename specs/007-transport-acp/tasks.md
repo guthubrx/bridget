@@ -178,7 +178,7 @@ bout en bout (SC-001, SC-002).
 
 ## Phase 4 : Finition
 
-- [ ] **T711** Non-régression locale et documentation : suite `cargo test`
+- [X] **T711** Non-régression locale et documentation : suite `cargo test`
   complète + agents tmux réels inchangés (SC-006) ; section « Équipiers ACP »
   dans `README.md` et `README.en.md` ; `DEPRECATIONS.md` relu — aucun chemin
   hérité non étiqueté (SC-007) ; `implementation.md` complet ; `bridget who`

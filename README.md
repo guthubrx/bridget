@@ -85,6 +85,29 @@ bridget send --to codex-1 "Analyse ce fichier" --reply
 bridget who
 ```
 
+## Équipiers ACP
+
+Un équipier ACP reçoit les livraisons directement via l’Agent Client Protocol
+(ACP), sans injection de texte dans son terminal. Lancez-le avec
+`--equipier` :
+
+```bash
+bridget codex --equipier
+bridget claude --equipier
+```
+
+Les types, commandes et politiques sont déclarés dans
+`~/.config/bridget/agents.json`. L’entrée Codex utilise
+`@zed-industries/codex-acp@0.16.0` avec le pin `-c model="gpt-5.5"`, requis
+par la version embarquée de l’adaptateur. Bridget refuse par défaut les clés
+API déclarées dans `forbidden_env`, pour préserver l’authentification par
+abonnement ; `BRIDGET_ALLOW_API_KEY=1` est un contournement explicite à
+employer seulement si la facturation API est voulue.
+
+Gemini reste déclaratif, mais les comptes individuels ne sont pas supportés au
+2026-08-22 : Google demande la migration vers Antigravity. Les agents tmux
+existants, lancés sans `--equipier`, conservent leur comportement `💬`.
+
 ## Positionnement et modèle de confiance
 
 Bridget cherche deux choses : un **canal de communication fiable** entre agents

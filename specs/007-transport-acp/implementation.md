@@ -220,3 +220,32 @@ https://antigravity.google
 - Les tests couvrent la priorité de `forbidden_env` (première clé si deux sont
   présentes, seconde seule), et le parsing strict : seul exactement `"1"`
   active le contournement.
+
+## T711 — Checklist de finition
+
+- [x] **SC-001** — échange Codex suivi sans prompt Bridget : transport ACP et
+  clôture couverts par `acp::tests::false_adapter_exercises_stdio_reader_writer_and_prompt`.
+- [x] **SC-002** — corps spéciaux conservé :
+  `acp::tests::prompt_preserves_the_body_byte_for_byte`.
+- [x] **SC-003** — type inconnu configuré et cycle complet via wrapper réel :
+  `integration_test::test_unknown_registry_type_completes_a_tracked_exchange`
+  (commit `fdf5835`).
+- [x] **SC-004** — relance différée, sans différer l'échéance :
+  `daemon::presence_tests::tour_busy_differe_les_rappels_sans_differe_l_echeance`.
+- [x] **SC-005** — clés API refusées et contournement strict :
+  `wrapper::reconnect_tests::api_key_forbidden_*` et
+  `seul_le_contournement_egal_a_un_est_accepte`.
+- [x] **SC-006** — validation tmux réelle : `t711-tmux` lancé sans
+  `--equipier` apparaît avec le transport `tmux`; le pane a capturé le bloc
+  historique « Règles ABSOLUES » puis le message
+  `💬 cli-send-51888 → t711-tmux (reply=no, id=1e464491)`.
+- [x] **SC-007** — `docs/DEPRECATIONS.md` relu : tous les chemins hérités
+  retirés par la migration ACP sont étiquetés.
+
+FR-014 reste hors checklist : T712 exige une validation fédérée SSH distincte.
+
+**Annuaire ACP** : `t711-acp` lancé avec `bridget codex --name t711-acp
+--equipier` est apparu dans `bridget who` avec `TRANSPORT=acp`. Les variables
+`OPENAI_API_KEY` et `CODEX_API_KEY` étaient absentes avant le lancement ; le
+processus de validation a ensuite été arrêté et son état transitoire est devenu
+`unreachable`, conformément à la table de présence.
