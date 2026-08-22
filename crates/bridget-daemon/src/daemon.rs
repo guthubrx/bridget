@@ -538,112 +538,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         // Collecter les actions à faire
         let actions: Vec<ReminderAction> = {
             let mut st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
-            let mut actions = Vec::new();
-            let mut state_updates = Vec::new();
-            let mut timeout_candidates = Vec::new();
-            let mut deferred_events = Vec::new();
-
-            // Les destinataires qui refusent d'être dérangés ne reçoivent aucun
-            // rappel : respecter le statut à l'aller et le violer au rappel
-            // n'aurait aucun sens. La demande reste ouverte et son échéance
-            // court toujours ; seule la relance est retenue.
-            let undisturbed: std::collections::HashSet<String> = st
-                .presences
-                .values()
-                .filter(|presence| presence.is_dnd())
-                .map(|presence| presence.name.clone())
-                .collect();
-            let busy_connections: std::collections::HashSet<String> = st.conn_instances.iter()
-                .filter(|(_, instance_id)| st.presences.get(*instance_id).is_some_and(|presence| presence.state == "busy"))
-                .map(|(connection_id, _)| connection_id.clone())
-                .collect();
-
-            for p in st.pending_replies.iter_mut() {
-                let elapsed = now.duration_since(p.created_at).as_secs();
-                let t = p.timeout_secs;
-
-                // L'échéance absolue prime sur toute politique de relance : le
-                // booléen SQLite arbitre aussi la course avec DeliveryRejected.
-                if elapsed >= t {
-                    p.escalation_level = 3;
-                    timeout_candidates.push((p.to.clone(), p.from.clone(), p.msg_id.clone(), p.from_conn.clone(), t));
-                    continue;
-                }
-
-                if !should_remind(undisturbed.contains(&p.to), p.escalation_level) {
-                    continue;
-                }
-
-                if let Some(level) = deferred_reminder_level(busy_connections.contains(&p.target_conn), elapsed, t) {
-                    if p.deferred_level != Some(level) {
-                        p.deferred_level = Some(level);
-                        deferred_events.push((p.msg_id.clone(), level));
-                        actions.push(ReminderAction::Deferred { to: p.to.clone(), msg_id: p.msg_id.clone(), level });
-                    }
-                    continue;
-                }
-
-                // Après un tour long, reprendre directement au plus haut
-                // palier différé évite une rafale douce puis ferme.
-                if let Some(level) = p.deferred_level.take() {
-                    p.escalation_level = level;
-                    state_updates.push((p.msg_id.clone(), level));
-                    if level == 1 {
-                        actions.push(ReminderAction::Gentle {
-                            to: p.to.clone(), from: p.from.clone(), msg_id: p.msg_id.clone(), target_conn: p.target_conn.clone(),
-                        });
-                    } else {
-                        actions.push(ReminderAction::Firm {
-                            to: p.to.clone(), from: p.from.clone(), msg_id: p.msg_id.clone(), target_conn: p.target_conn.clone(),
-                        });
-                    }
-                    continue;
-                }
-
-                if p.escalation_level == 0 && elapsed >= t / 3 {
-                    p.escalation_level = 1;
-                    state_updates.push((p.msg_id.clone(), 1));
-                    actions.push(ReminderAction::Gentle {
-                        to: p.to.clone(),
-                        from: p.from.clone(),
-                        msg_id: p.msg_id.clone(),
-                        target_conn: p.target_conn.clone(),
-                    });
-                } else if p.escalation_level == 1 && elapsed >= (t * 2) / 3 {
-                    p.escalation_level = 2;
-                    state_updates.push((p.msg_id.clone(), 2));
-                    actions.push(ReminderAction::Firm {
-                        to: p.to.clone(),
-                        from: p.from.clone(),
-                        msg_id: p.msg_id.clone(),
-                        target_conn: p.target_conn.clone(),
-                    });
-                }
-            }
-
-            // Retirer les entries au palier 3 depuis plus de 30s (abandon)
-            st.pending_replies.retain(|p| {
-                if p.escalation_level >= 3 {
-                    let elapsed = now.duration_since(p.created_at).as_secs();
-                    elapsed < p.timeout_secs + TIMEOUT_GRACE_PERIOD
-                } else {
-                    true
-                }
-            });
-
-            for (id, level) in state_updates {
-                let _ = st.store.set_escalation_level(&id, level);
-            }
-            for (id, level) in deferred_events {
-                let _ = st.store.record_deferred_reminder(&id, level);
-            }
-            for (to, from, msg_id, from_conn, timeout_secs) in timeout_candidates {
-                if claim_timeout(&st.store, &msg_id) {
-                    actions.push(ReminderAction::Timeout { to, from, msg_id, from_conn, timeout_secs });
-                }
-            }
-
-            actions
+            collect_reminder_actions(&mut st, now)
         };
 
         // Exécuter les actions hors lock
@@ -1098,6 +993,131 @@ fn deferred_reminder_level(target_is_busy: bool, elapsed_secs: u64, timeout_secs
     } else {
         None
     }
+}
+
+/// Applique une itération complète de la surveillance des demandes suivies.
+/// Les écritures de socket restent dans la boucle du daemon, hors verrou ; ce
+/// facteur ne produit que les actions et persiste les transitions associées.
+fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<ReminderAction> {
+    let mut actions = Vec::new();
+    let mut state_updates = Vec::new();
+    let mut timeout_candidates = Vec::new();
+    let mut deferred_events = Vec::new();
+    let undisturbed: std::collections::HashSet<String> = state
+        .presences
+        .values()
+        .filter(|presence| presence.is_dnd())
+        .map(|presence| presence.name.clone())
+        .collect();
+    let busy_connections: std::collections::HashSet<String> = state
+        .conn_instances
+        .iter()
+        .filter(|(_, instance_id)| {
+            state
+                .presences
+                .get(*instance_id)
+                .is_some_and(|presence| presence.state == "busy")
+        })
+        .map(|(connection_id, _)| connection_id.clone())
+        .collect();
+
+    for pending in state.pending_replies.iter_mut() {
+        let elapsed = now.duration_since(pending.created_at).as_secs();
+        let timeout = pending.timeout_secs;
+        if elapsed >= timeout {
+            pending.escalation_level = 3;
+            timeout_candidates.push((
+                pending.to.clone(),
+                pending.from.clone(),
+                pending.msg_id.clone(),
+                pending.from_conn.clone(),
+                timeout,
+            ));
+            continue;
+        }
+        if !should_remind(undisturbed.contains(&pending.to), pending.escalation_level) {
+            continue;
+        }
+        if let Some(level) = deferred_reminder_level(
+            busy_connections.contains(&pending.target_conn),
+            elapsed,
+            timeout,
+        ) {
+            if pending.deferred_level != Some(level) {
+                pending.deferred_level = Some(level);
+                deferred_events.push((pending.msg_id.clone(), level));
+                actions.push(ReminderAction::Deferred {
+                    to: pending.to.clone(),
+                    msg_id: pending.msg_id.clone(),
+                    level,
+                });
+            }
+            continue;
+        }
+        if let Some(level) = pending.deferred_level.take() {
+            pending.escalation_level = level;
+            state_updates.push((pending.msg_id.clone(), level));
+            actions.push(if level == 1 {
+                ReminderAction::Gentle {
+                    to: pending.to.clone(),
+                    from: pending.from.clone(),
+                    msg_id: pending.msg_id.clone(),
+                    target_conn: pending.target_conn.clone(),
+                }
+            } else {
+                ReminderAction::Firm {
+                    to: pending.to.clone(),
+                    from: pending.from.clone(),
+                    msg_id: pending.msg_id.clone(),
+                    target_conn: pending.target_conn.clone(),
+                }
+            });
+            continue;
+        }
+        if pending.escalation_level == 0 && elapsed >= timeout / 3 {
+            pending.escalation_level = 1;
+            state_updates.push((pending.msg_id.clone(), 1));
+            actions.push(ReminderAction::Gentle {
+                to: pending.to.clone(),
+                from: pending.from.clone(),
+                msg_id: pending.msg_id.clone(),
+                target_conn: pending.target_conn.clone(),
+            });
+        } else if pending.escalation_level == 1 && elapsed >= (timeout * 2) / 3 {
+            pending.escalation_level = 2;
+            state_updates.push((pending.msg_id.clone(), 2));
+            actions.push(ReminderAction::Firm {
+                to: pending.to.clone(),
+                from: pending.from.clone(),
+                msg_id: pending.msg_id.clone(),
+                target_conn: pending.target_conn.clone(),
+            });
+        }
+    }
+
+    state.pending_replies.retain(|pending| {
+        pending.escalation_level < 3
+            || now.duration_since(pending.created_at).as_secs()
+                < pending.timeout_secs + TIMEOUT_GRACE_PERIOD
+    });
+    for (id, level) in state_updates {
+        let _ = state.store.set_escalation_level(&id, level);
+    }
+    for (id, level) in deferred_events {
+        let _ = state.store.record_deferred_reminder(&id, level);
+    }
+    for (to, from, msg_id, from_conn, timeout_secs) in timeout_candidates {
+        if claim_timeout(&state.store, &msg_id) {
+            actions.push(ReminderAction::Timeout {
+                to,
+                from,
+                msg_id,
+                from_conn,
+                timeout_secs,
+            });
+        }
+    }
+    actions
 }
 
 /// Retourne vrai pour le seul chemin autorisé à notifier l'émetteur d'une
@@ -2090,6 +2110,45 @@ mod presence_tests {
         // donc jamais différer le timeout du daemon.
         assert_eq!(deferred_reminder_level(true, 60, 60), Some(2));
         assert_eq!(deferred_reminder_level(false, 20, 60), None);
+    }
+
+    #[test]
+    fn boucle_busy_persiste_les_reports_et_expire_une_seule_fois() {
+        let (mut state, config) = state_with_registered_agent("busy-boucle");
+        state.set_turn_state("conn-1", true).unwrap();
+        state
+            .store
+            .create_request("request-busy", "sender", "agent-2", 60)
+            .unwrap();
+        let started = Instant::now();
+        state.pending_replies.push(PendingReply {
+            msg_id: "request-busy".to_string(),
+            from: "sender".to_string(),
+            from_conn: "conn-sender".to_string(),
+            to: "agent-2".to_string(),
+            target_conn: "conn-1".to_string(),
+            timeout_secs: 60,
+            created_at: started,
+            escalation_level: 0,
+            deferred_level: None,
+        });
+
+        let first = collect_reminder_actions(&mut state, started + Duration::from_secs(20));
+        assert!(first.iter().any(|action| matches!(action, ReminderAction::Deferred { level: 1, .. })));
+        assert!(!first.iter().any(|action| matches!(action, ReminderAction::Gentle { .. } | ReminderAction::Firm { .. } | ReminderAction::Timeout { .. })));
+        assert_eq!(state.store.latest_deferred_reminder("request-busy").unwrap().map(|event| event.0), Some(1));
+
+        let second = collect_reminder_actions(&mut state, started + Duration::from_secs(40));
+        assert!(second.iter().any(|action| matches!(action, ReminderAction::Deferred { level: 2, .. })));
+        assert!(!second.iter().any(|action| matches!(action, ReminderAction::Gentle { .. } | ReminderAction::Firm { .. } | ReminderAction::Timeout { .. })));
+        assert_eq!(state.store.latest_deferred_reminder("request-busy").unwrap().map(|event| event.0), Some(2));
+
+        let timeout = collect_reminder_actions(&mut state, started + Duration::from_secs(60));
+        assert_eq!(timeout.iter().filter(|action| matches!(action, ReminderAction::Timeout { .. })).count(), 1);
+        assert_eq!(state.store.get_request("request-busy").unwrap().unwrap().state, "timed_out");
+        let repeated = collect_reminder_actions(&mut state, started + Duration::from_secs(61));
+        assert!(!repeated.iter().any(|action| matches!(action, ReminderAction::Timeout { .. })));
+        let _ = std::fs::remove_file(&config.db_path);
     }
 
     #[test]

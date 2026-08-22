@@ -230,8 +230,11 @@ https://antigravity.google
 - [x] **SC-003** — type inconnu configuré et cycle complet via wrapper réel :
   `integration_test::test_unknown_registry_type_completes_a_tracked_exchange`
   (commit `fdf5835`).
-- [x] **SC-004** — relance différée, sans différer l'échéance :
-  `daemon::presence_tests::tour_busy_differe_les_rappels_sans_differe_l_echeance`.
+- [x] **SC-004** — boucle de relance sous tour `busy` :
+  `daemon::presence_tests::boucle_busy_persiste_les_reports_et_expire_une_seule_fois`
+  vérifie zéro action de livraison douce/ferme à T/3 et 2T/3, les événements
+  `reminder_deferred` persistés aux paliers 1 puis 2, puis un unique timeout à
+  T malgré l'état `busy`.
 - [x] **SC-005** — clés API refusées et contournement strict :
   `wrapper::reconnect_tests::api_key_forbidden_*` et
   `seul_le_contournement_egal_a_un_est_accepte`.
@@ -247,5 +250,6 @@ FR-014 reste hors checklist : T712 exige une validation fédérée SSH distincte
 **Annuaire ACP** : `t711-acp` lancé avec `bridget codex --name t711-acp
 --equipier` est apparu dans `bridget who` avec `TRANSPORT=acp`. Les variables
 `OPENAI_API_KEY` et `CODEX_API_KEY` étaient absentes avant le lancement ; le
-processus de validation a ensuite été arrêté et son état transitoire est devenu
-`unreachable`, conformément à la table de présence.
+wrapper a été terminé extérieurement, produisant un EOF sans `Unregister` et
+l'état `unreachable`. Ce contrôle ne teste **pas** l'arrêt propre vers
+`stopped`.
