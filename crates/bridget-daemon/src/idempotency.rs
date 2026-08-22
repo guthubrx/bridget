@@ -108,6 +108,10 @@ pub struct SendDelivery {
     pub recipient_instance_id: String,
     pub delivery_generation: u64,
     pub expires_at: i64,
+    /// Enveloppe de remise exacte, possédée par la saga `send_deliveries`.
+    /// Elle permet la reprise sans relire les structures éphémères du daemon
+    /// ni résoudre à nouveau le nom du destinataire.
+    pub message_bytes: Vec<u8>,
 }
 
 /// Demande suivie créée avec la remise d'un `reply=yes` dans l'unique
@@ -210,12 +214,16 @@ impl IdempotencyStore {
                 delivery_generation INTEGER NOT NULL CHECK (delivery_generation > 0),
                 phase TEXT NOT NULL CHECK (phase IN ('dispatching', 'acked', 'indeterminate')),
                 expires_at INTEGER NOT NULL,
+                message_bytes BLOB,
                 FOREIGN KEY (issuer_scope, operation_kind, idempotency_key)
                     REFERENCES idempotency_records(issuer_scope, operation_kind, idempotency_key)
                     ON DELETE CASCADE
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_send_deliveries_operation
                 ON send_deliveries(issuer_scope, operation_kind, idempotency_key);
+            CREATE TABLE IF NOT EXISTS idempotency_schema_migrations (
+                version INTEGER PRIMARY KEY
+            );
             CREATE TABLE IF NOT EXISTS tracked_requests (
                 id TEXT PRIMARY KEY,
                 sender TEXT NOT NULL,
@@ -228,6 +236,26 @@ impl IdempotencyStore {
                 completed_at INTEGER
             );",
         )?;
+        let migration_applied = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 2)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !migration_applied {
+            let has_message_bytes = conn
+                .prepare("PRAGMA table_info(send_deliveries)")?
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?
+                .iter()
+                .any(|column| column == "message_bytes");
+            if !has_message_bytes {
+                conn.execute("ALTER TABLE send_deliveries ADD COLUMN message_bytes BLOB", [])?;
+            }
+            conn.execute(
+                "INSERT INTO idempotency_schema_migrations(version) VALUES (2)",
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -368,6 +396,9 @@ impl IdempotencyStore {
         if key.operation_kind != OperationKind::Send || delivery.delivery_id.is_empty() {
             return Err(IdempotencyError::InvalidDelivery);
         }
+        if delivery.message_bytes.is_empty() || delivery.message_bytes.len() > MAX_CANONICAL_BYTES {
+            return Err(IdempotencyError::InvalidDelivery);
+        }
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -383,8 +414,8 @@ impl IdempotencyStore {
         tx.execute(
             "INSERT INTO send_deliveries (
                 delivery_id, issuer_scope, operation_kind, idempotency_key,
-                recipient_instance_id, delivery_generation, phase, expires_at
-             ) VALUES (?1, ?2, 'send', ?3, ?4, ?5, 'dispatching', ?6)",
+                recipient_instance_id, delivery_generation, phase, expires_at, message_bytes
+             ) VALUES (?1, ?2, 'send', ?3, ?4, ?5, 'dispatching', ?6, ?7)",
             params![
                 delivery.delivery_id,
                 key.issuer_scope,
@@ -392,6 +423,7 @@ impl IdempotencyStore {
                 delivery.recipient_instance_id,
                 delivery.delivery_generation,
                 delivery.expires_at,
+                delivery.message_bytes,
             ],
         )?;
         if let Some(reply) = reply {
@@ -463,7 +495,7 @@ impl IdempotencyStore {
     ) -> Result<Option<SendDelivery>, IdempotencyError> {
         self.conn
             .query_row(
-                "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at
+                "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at, message_bytes
                  FROM send_deliveries
                  WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2",
                 params![key.issuer_scope, key.idempotency_key],
@@ -473,11 +505,60 @@ impl IdempotencyStore {
                         recipient_instance_id: row.get(1)?,
                         delivery_generation: row.get(2)?,
                         expires_at: row.get(3)?,
+                        message_bytes: row.get(4)?,
                     })
                 },
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    /// Reprise bornée : seules les remises encore en cours pour l'instance
+    /// exacte sont relivrées. Une remise Acked ou Indeterminate ne l'est pas.
+    pub fn dispatching_deliveries_for_instance(
+        &self,
+        recipient_instance_id: &str,
+        now: i64,
+    ) -> Result<Vec<SendDelivery>, IdempotencyError> {
+        let mut statement = self.conn.prepare(
+            "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at, message_bytes
+             FROM send_deliveries
+             WHERE recipient_instance_id = ?1 AND phase = 'dispatching' AND expires_at > ?2
+             ORDER BY delivery_id",
+        )?;
+        statement
+            .query_map(params![recipient_instance_id, now], |row| {
+                Ok(SendDelivery {
+                    delivery_id: row.get(0)?,
+                    recipient_instance_id: row.get(1)?,
+                    delivery_generation: row.get(2)?,
+                    expires_at: row.get(3)?,
+                    message_bytes: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Une marque `Seen` sans observable d'injection reste indéterminée : le
+    /// daemon conserve OutcomeUnknown jusqu'à l'expiration et ne réinjecte pas.
+    pub fn mark_delivery_indeterminate(
+        &mut self,
+        delivery_id: &str,
+        recipient_instance_id: &str,
+        delivery_generation: u64,
+    ) -> Result<(), IdempotencyError> {
+        let updated = self.conn.execute(
+            "UPDATE send_deliveries SET phase = 'indeterminate'
+             WHERE delivery_id = ?1 AND recipient_instance_id = ?2
+               AND delivery_generation = ?3 AND phase = 'dispatching'",
+            params![delivery_id, recipient_instance_id, delivery_generation],
+        )?;
+        if updated == 1 {
+            Ok(())
+        } else {
+            Err(IdempotencyError::InvalidDelivery)
+        }
     }
 
     /// Accusé aval : la remise et le résultat public deviennent terminaux dans
@@ -845,6 +926,7 @@ mod tests {
             recipient_instance_id: "instance-1".to_string(),
             delivery_generation: 1,
             expires_at: NOW + HORIZON,
+            message_bytes: b"message-1".to_vec(),
         };
         store.begin_send_delivery(&key, &delivery).unwrap();
         assert_eq!(store.send_delivery(&key).unwrap(), Some(delivery));
@@ -866,6 +948,7 @@ mod tests {
             recipient_instance_id: "instance-1".to_string(),
             delivery_generation: 9,
             expires_at: NOW + HORIZON,
+            message_bytes: b"message-retry".to_vec(),
         };
         store.begin_send_delivery(&key, &delivery).unwrap();
         assert_eq!(
@@ -892,6 +975,7 @@ mod tests {
                     recipient_instance_id: "instance-1".to_string(),
                     delivery_generation: 2,
                     expires_at: NOW + HORIZON,
+                    message_bytes: b"message-expired".to_vec(),
                 },
             )
             .unwrap();
@@ -913,6 +997,7 @@ mod tests {
                     recipient_instance_id: "instance-1".to_string(),
                     delivery_generation: 3,
                     expires_at: NOW + HORIZON,
+                    message_bytes: b"message-first".to_vec(),
                 },
             )
             .unwrap();
@@ -928,6 +1013,7 @@ mod tests {
                     recipient_instance_id: "instance-1".to_string(),
                     delivery_generation: 4,
                     expires_at: NOW + HORIZON,
+                    message_bytes: b"message-second".to_vec(),
                 },
             )
             .is_err());
@@ -951,6 +1037,7 @@ mod tests {
             recipient_instance_id: "instance-1".to_string(),
             delivery_generation: 5,
             expires_at: NOW + HORIZON,
+            message_bytes: b"message-reply".to_vec(),
         };
         let reply = ReplyTracking {
             request_id: "request-reply".to_string(),

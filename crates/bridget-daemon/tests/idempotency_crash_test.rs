@@ -193,6 +193,10 @@ fn watch_marker(directory: &Path, marker: &Path) {
 }
 
 fn register_recipient(socket: &Path) -> Client {
+    register_recipient_as(socket, "t1209-recipient")
+}
+
+fn register_recipient_as(socket: &Path, instance_id: &str) -> Client {
     let mut recipient = Client::connect(socket);
     recipient.send(WrapperToDaemon::Register {
         agent_type: "fixture".to_string(),
@@ -200,7 +204,7 @@ fn register_recipient(socket: &Path) -> Client {
         host: Some("t1209".to_string()),
         transport: Some("acp".to_string()),
         os: Some("test".to_string()),
-        instance_id: Some("t1209-recipient".to_string()),
+        instance_id: Some(instance_id.to_string()),
         domain: None,
         turn_in_progress: false,
     });
@@ -209,6 +213,34 @@ fn register_recipient(socket: &Path) -> Client {
         DaemonToWrapper::Registered { .. }
     ));
     recipient
+}
+
+fn receive_delivery(recipient: &mut Client) -> DaemonToWrapper {
+    match recipient.receive() {
+        delivery @ DaemonToWrapper::DeliverIdempotent { .. } => delivery,
+        other => panic!("remise idempotente attendue: {other:?}"),
+    }
+}
+
+fn assert_no_delivery(recipient: &mut Client) {
+    recipient
+        .reader
+        .get_ref()
+        .set_read_timeout(Some(Duration::from_millis(250)))
+        .expect("borne de lecture");
+    let mut line = String::new();
+    let result = recipient.reader.read_line(&mut line);
+    assert!(
+        matches!(
+            result,
+            Err(ref error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                )
+        ),
+        "une instance remplacée ne doit jamais recevoir une remise figée: {result:?}"
+    );
 }
 
 fn negotiate_client(socket: &Path) -> Client {
@@ -305,4 +337,102 @@ fn matrice_crash_amont_rejoue_les_issues_sans_reservation_dupliquee() {
         Ok(Err(payload)) => std::panic::resume_unwind(payload),
         Err(_) => panic!("matrice T1209 dépassée après {GLOBAL_TIMEOUT:?}"),
     }
+}
+
+#[test]
+fn reprise_daemon_redelivre_les_octets_immuables_a_la_meme_instance() {
+    let root = test_root("redelivery");
+    let daemon = spawn_daemon(&root, None);
+    let socket_path = socket(&root);
+    let mut recipient = register_recipient_as(&socket_path, "recipient-stable");
+    let issued_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("horloge")
+        .as_secs() as i64;
+    let message_id = "t1205bis-redelivery".to_string();
+    let mut client = negotiate_client(&socket_path);
+    client.send(idempotent_send(message_id.clone(), issued_at));
+    assert!(matches!(
+        client.receive(),
+        DaemonToWrapper::IdempotencyResult {
+            issue: IdempotencyIssue::OutcomeUnknown { .. },
+            ..
+        }
+    ));
+    let first = receive_delivery(&mut recipient);
+    daemon.stop();
+    drop(client);
+    drop(recipient);
+
+    let restarted = spawn_daemon(&root, None);
+    let socket_path = socket(&root);
+    let mut recipient = register_recipient_as(&socket_path, "recipient-stable");
+    let replayed = receive_delivery(&mut recipient);
+    assert_eq!(
+        encode(&first).expect("première remise encodable"),
+        encode(&replayed).expect("remise reprise encodable"),
+        "la reprise doit relire et rejouer les bytes persistés"
+    );
+    let (delivery_id, delivery_generation) = match replayed {
+        DaemonToWrapper::DeliverIdempotent {
+            delivery_id,
+            delivery_generation,
+            ..
+        } => (delivery_id, delivery_generation),
+        _ => unreachable!(),
+    };
+    recipient.send(WrapperToDaemon::DeliverAcked {
+        delivery_id,
+        delivery_generation,
+    });
+    let terminal = retry_issue(&socket_path, message_id, issued_at);
+    assert!(matches!(terminal, IdempotencyIssue::Accepted { .. }));
+    restarted.stop();
+    fs::remove_dir_all(root).expect("nettoyage reprise");
+}
+
+#[test]
+fn destination_remplacee_reste_indeterminee_sans_reroutage() {
+    let root = test_root("destination-remplacee");
+    let daemon = spawn_daemon(&root, None);
+    let socket_path = socket(&root);
+    let mut recipient = register_recipient_as(&socket_path, "recipient-original");
+    let issued_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("horloge")
+        .as_secs() as i64;
+    let message_id = "t1205bis-destination-remplacee".to_string();
+    let mut client = negotiate_client(&socket_path);
+    client.send(idempotent_send(message_id.clone(), issued_at));
+    assert!(matches!(
+        client.receive(),
+        DaemonToWrapper::IdempotencyResult {
+            issue: IdempotencyIssue::OutcomeUnknown { .. },
+            ..
+        }
+    ));
+    let (delivery_id, delivery_generation) = match receive_delivery(&mut recipient) {
+        DaemonToWrapper::DeliverIdempotent {
+            delivery_id,
+            delivery_generation,
+            ..
+        } => (delivery_id, delivery_generation),
+        _ => unreachable!(),
+    };
+    recipient.send(WrapperToDaemon::DeliveryIndeterminate {
+        delivery_id,
+        delivery_generation,
+    });
+    daemon.stop();
+    drop(client);
+    drop(recipient);
+
+    let restarted = spawn_daemon(&root, None);
+    let socket_path = socket(&root);
+    let mut replacement = register_recipient_as(&socket_path, "recipient-replacement");
+    assert_no_delivery(&mut replacement);
+    let issue = retry_issue(&socket_path, message_id, issued_at);
+    assert!(matches!(issue, IdempotencyIssue::OutcomeUnknown { .. }));
+    restarted.stop();
+    fs::remove_dir_all(root).expect("nettoyage destination remplacée");
 }
