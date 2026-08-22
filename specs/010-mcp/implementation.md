@@ -210,21 +210,30 @@ les chaînes produites aux fixtures versionnées : une reformulation non mesuré
 ne peut donc pas entrer par un second chemin.
 
 Le banc lance ensuite le vrai chemin `bridget codex` avec le MCP interactif du
-registre par défaut. Un exécutable Codex de fixture reste vivant pendant le
-dépôt du marqueur et capture les arguments effectivement reçus après
-`wrapper::launch`; le test exige que l'un d'eux soit exactement la fixture
-réduite, avec le nom de session substitué. Ce passage réel a détecté puis fait
-retirer un point-virgule que la garde d'arguments refusait avant le spawn.
+registre par défaut. Un exécutable Codex de fixture capture les arguments
+effectivement reçus après `wrapper::launch`; le test exige que l'un d'eux soit
+exactement la fixture réduite, avec le nom de session substitué. Ce passage
+réel a détecté puis fait retirer un point-virgule que la garde d'arguments
+refusait avant le spawn.
+
+Cet exécutable reste vivant après la capture : dans la **même racine, la même
+instance et la même session**, il lance le serveur `bridget mcp` réellement
+injecté, appelle `bridget_who`, reçoit les quatre enveloppes du corpus par le
+transport tmux de production puis les clôt avec `bridget reply`. Les oracles
+vérifient la demande suivie, le corps riche octet pour octet, l'ordre du tour
+lent et de sa file, ainsi qu'une coupure et reconnexion réelles du socket du
+même wrapper. Le ledger final contient exactement quatre demandes `answered`.
 
 La matrice `managed_parity_test::matrice_fr008_compare_le_meme_corpus_et_les_frames_attach`
-rejoue le quickstart 007 §1 à §4 trois fois dans chacun des deux modes de
-lancement. Les oracles restent indépendants de la simple parité : présence ACP
-et état `connected`, demande suivie répondue et close, corps riche exact au
-`turn_start`, FIFO pendant le tour lent, relance différée persistée, coupure
-réelle du socket wrapper puis reconnexion conservant `busy`. La fixture réduite
-est liée à ce banc et ne contient plus la syntaxe `bridget send`.
+rejoue en complément le quickstart 007 §1 à §4 trois fois dans chacun des deux
+modes ACP de lancement. Les oracles restent indépendants de la simple parité :
+présence ACP et état `connected`, demande suivie répondue et close, corps riche
+exact au `turn_start`, FIFO pendant le tour lent, relance différée persistée,
+coupure réelle du socket wrapper puis reconnexion conservant `busy`. La fixture
+réduite est donc reliée causalement au premier corpus, tandis que le second
+verrouille les garanties ACP impossibles à observer sur le transport tmux.
 
 Validation ciblée : **2/2** tests d'identité de prompt, **2/2** tests statiques
-de réduction, capture du lancement MCP réel puis matrice comportementale
-**1/1** au vert en **33,06 s** (trois campagnes par mode, quatre tours par
-campagne).
+de réduction, corpus dans la session MCP capturée puis matrice comportementale
+**1/1** au vert en **36,17 s** (une session interactive capturée, puis trois
+campagnes par mode ACP, quatre tours par campagne).

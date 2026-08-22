@@ -101,17 +101,46 @@ for line in sys.stdin:
     adapter
 }
 
-fn capture_interactive_mcp_prompt(root: &Path, run: usize) {
+struct InteractivePromptSession {
+    child: Child,
+    release: PathBuf,
+    done: PathBuf,
+    slow_started: PathBuf,
+}
+
+impl InteractivePromptSession {
+    fn finish(self) -> Vec<String> {
+        fs::write(&self.release, b"release").unwrap();
+        let output = self.child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "le wrapper interactif a échoué : {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&fs::read(&self.done).unwrap()).unwrap()
+    }
+}
+
+fn start_interactive_prompt_session(root: &Path, name: &str) -> InteractivePromptSession {
     let bin = root.join("prompt-bin");
     let capture = root.join("captured-prompt.json");
     let release = root.join("release-prompt-cli");
+    let done = root.join("prompt-corpus-done.json");
+    let who = root.join("prompt-who.json");
+    let inbox = root.join("prompt-inbox.jsonl");
+    let slow_started = root.join("prompt-slow-started");
+    let fake_tmux_root = root.join("fake-tmux");
     let codex = bin.join("codex");
+    let tmux = bin.join("tmux");
     fs::create_dir_all(&bin).unwrap();
+    fs::create_dir_all(&fake_tmux_root).unwrap();
     fs::write(
         &codex,
         r#"#!/usr/bin/python3
 import json
 import os
+import re
+import subprocess
 import sys
 import time
 
@@ -120,16 +149,140 @@ temporary = capture + ".tmp"
 with open(temporary, "w", encoding="utf-8") as output:
     json.dump(sys.argv[1:], output, ensure_ascii=False)
 os.replace(temporary, capture)
+
+marker = os.path.join(os.environ["HOME"], ".cache", "bridget", "agent-pids", str(os.getpid()))
+deadline = time.monotonic() + 10
+while not os.path.exists(marker):
+    if time.monotonic() >= deadline:
+        raise RuntimeError("marqueur d'identité MCP absent")
+    time.sleep(0.01)
+
+override = next(value for value in sys.argv[1:] if value.startswith("mcp_servers.bridget="))
+match = re.search(r'command="([^"]+)"', override)
+if match is None:
+    raise RuntimeError("commande MCP absente de l'argument injecté")
+bridget = match.group(1)
+mcp = subprocess.Popen(
+    [bridget, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE, text=True,
+)
+
+def rpc(message, response=True):
+    mcp.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
+    mcp.stdin.flush()
+    if response:
+        return json.loads(mcp.stdout.readline())
+
+rpc({"jsonrpc":"2.0", "id":1, "method":"initialize", "params":{}})
+rpc({"jsonrpc":"2.0", "method":"notifications/initialized"}, False)
+listed = rpc({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}})
+assert any(tool["name"] == "bridget_who" for tool in listed["result"]["tools"])
+observed = rpc({
+    "jsonrpc":"2.0", "id":3, "method":"tools/call",
+    "params":{"name":"bridget_who", "arguments":{}},
+})
+with open(os.environ["BRIDGET_PROMPT_WHO"] + ".tmp", "w", encoding="utf-8") as output:
+    json.dump(observed, output, ensure_ascii=False)
+os.replace(os.environ["BRIDGET_PROMPT_WHO"] + ".tmp", os.environ["BRIDGET_PROMPT_WHO"])
+
+processed = []
+offset = 0
+deadline = time.monotonic() + 30
+while len(processed) < 4:
+    if time.monotonic() >= deadline:
+        raise RuntimeError(f"corpus incomplet: {processed}")
+    if not os.path.exists(os.environ["BRIDGET_PROMPT_INBOX"]):
+        time.sleep(0.01)
+        continue
+    with open(os.environ["BRIDGET_PROMPT_INBOX"], encoding="utf-8") as source:
+        source.seek(offset)
+        lines = source.readlines()
+        offset = source.tell()
+    for line in lines:
+        item = json.loads(line)
+        envelope = item["envelope"]
+        if "(reply=yes" not in envelope:
+            continue
+        body = envelope.split("\n", 1)[1].split("\n\n⚠", 1)[0]
+        if body == "QUEUE-SLOW":
+            with open(os.environ["BRIDGET_PROMPT_SLOW"], "w") as signal:
+                signal.write("started")
+            time.sleep(2.2)
+        with open(os.environ["BRIDGET_FAKE_LAST_SENDER"], "w") as reply_ref:
+            reply_ref.write(item["reply_ref"])
+        response = {
+            "TRACKED": "fixture-response-1",
+            "QUEUE-SLOW": "fixture-response-slow",
+            "QUEUE-NEXT": "fixture-response-next",
+        }.get(body, body)
+        subprocess.run(
+            [bridget, "reply", response], check=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        )
+        processed.append(body)
+with open(os.environ["BRIDGET_PROMPT_DONE"] + ".tmp", "w", encoding="utf-8") as output:
+    json.dump(processed, output, ensure_ascii=False)
+os.replace(os.environ["BRIDGET_PROMPT_DONE"] + ".tmp", os.environ["BRIDGET_PROMPT_DONE"])
+
 while not os.path.exists(os.environ["BRIDGET_PROMPT_RELEASE"]):
     time.sleep(0.01)
+mcp.stdin.close()
+mcp.wait(timeout=3)
+"#,
+    )
+    .unwrap();
+    fs::write(
+        &tmux,
+        r#"#!/usr/bin/python3
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+root = os.environ["BRIDGET_FAKE_TMUX_ROOT"]
+os.makedirs(root, exist_ok=True)
+command = args[0]
+def option(name):
+    return args[args.index(name) + 1]
+def buffer_path():
+    return os.path.join(root, option("-b").replace("/", "_"))
+
+if command == "display-message":
+    print("%prompt-mcp")
+elif command == "load-buffer":
+    with open(buffer_path(), "w", encoding="utf-8") as output:
+        output.write(sys.stdin.read())
+elif command == "paste-buffer":
+    path = buffer_path()
+    with open(path, encoding="utf-8") as source:
+        envelope = source.read()
+    try:
+        with open(os.environ["BRIDGET_FAKE_LAST_SENDER"], encoding="utf-8") as source:
+            reply_ref = source.read()
+    except FileNotFoundError:
+        reply_ref = ""
+    record = json.dumps({"envelope":envelope, "reply_ref":reply_ref}, ensure_ascii=False) + "\n"
+    fd = os.open(os.environ["BRIDGET_PROMPT_INBOX"], os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    os.write(fd, record.encode("utf-8"))
+    os.close(fd)
+    os.unlink(path)
+elif command == "show-buffer":
+    sys.exit(1)
+elif command == "capture-pane":
+    print("›")
+elif command == "delete-buffer":
+    try:
+        os.unlink(buffer_path())
+    except FileNotFoundError:
+        pass
 "#,
     )
     .unwrap();
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&tmux, fs::Permissions::from_mode(0o700)).unwrap();
 
-    let name = format!("prompt-mcp-{run}");
     let mut child = Command::new(env!("CARGO_BIN_EXE_bridget"))
-        .args(["codex", "--name", &name])
+        .args(["codex", "--name", name])
         .env_clear()
         .env("HOME", root)
         .env("PATH", format!("{}:{FROZEN_PATH}", bin.display()))
@@ -138,6 +291,15 @@ while not os.path.exists(os.environ["BRIDGET_PROMPT_RELEASE"]):
         .env("TMPDIR", "/tmp")
         .env("BRIDGET_PROMPT_CAPTURE", &capture)
         .env("BRIDGET_PROMPT_RELEASE", &release)
+        .env("BRIDGET_PROMPT_DONE", &done)
+        .env("BRIDGET_PROMPT_WHO", &who)
+        .env("BRIDGET_PROMPT_INBOX", &inbox)
+        .env("BRIDGET_PROMPT_SLOW", &slow_started)
+        .env("BRIDGET_FAKE_TMUX_ROOT", &fake_tmux_root)
+        .env(
+            "BRIDGET_FAKE_LAST_SENDER",
+            root.join(".cache/bridget").join(format!("last-sender-{name}")),
+        )
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -163,19 +325,33 @@ while not os.path.exists(os.environ["BRIDGET_PROMPT_RELEASE"]):
         .expect("prompt Bridget absent des arguments du CLI MCP");
     let expected = REDUCED_PROMPT
         .trim_end_matches('\n')
-        .replace("agent-fixture", &name);
+        .replace("agent-fixture", name);
     assert_eq!(
         actual, &expected,
         "le lancement MCP n'utilise pas la fixture réduite"
     );
 
-    fs::write(&release, b"release").unwrap();
-    let output = child.wait_with_output().unwrap();
+    let deadline = Instant::now() + MATRIX_TIMEOUT;
+    while !who.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    if !who.exists() {
+        let _ = child.kill();
+        let output = child.wait_with_output().unwrap();
+        panic!(
+            "bridget_who n'a pas été appelé par le faux Codex : {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let observed: serde_json::Value = serde_json::from_slice(&fs::read(who).unwrap()).unwrap();
     assert!(
-        output.status.success(),
-        "le wrapper de capture a échoué : {}",
-        String::from_utf8_lossy(&output.stderr)
+        observed["result"]["structuredContent"]["agents"]
+            .as_array()
+            .is_some_and(|agents| agents.iter().any(|agent| agent["name"] == name)),
+        "la session MCP capturée n'apparaît pas dans bridget_who: {observed}"
     );
+
+    InteractivePromptSession { child, release, done, slow_started }
 }
 
 fn write_cached_npx_fixture(root: &Path) {
@@ -313,7 +489,8 @@ impl CutProxy {
                     target_writer.flush().unwrap();
                     let is_wrapper = matches!(
                         decode::<WrapperToDaemon>(first_line.trim_end()),
-                        Ok(WrapperToDaemon::Register { ref agent_type, .. }) if agent_type == "parity"
+                        Ok(WrapperToDaemon::Register { ref agent_type, .. })
+                            if agent_type == "parity" || agent_type == "codex"
                     );
                     if is_wrapper {
                         *current_wrapper
@@ -534,9 +711,13 @@ fn wait_agent_state(control: &mut Peer, name: &str, expected: &str) -> AgentInfo
 }
 
 fn send_tracked(peer: &mut Peer, to: &str, body: &str) -> String {
+    send_tracked_with_timeout(peer, to, body, 5)
+}
+
+fn send_tracked_with_timeout(peer: &mut Peer, to: &str, body: &str, timeout: u64) -> String {
     let mut message = BridgetMessage::new(&peer.name, to, body);
     message.reply = true;
-    message.reply_timeout = Some(5);
+    message.reply_timeout = Some(timeout);
     let id = message.id.clone();
     peer.send(&WrapperToDaemon::Send(message));
     match peer.recv() {
@@ -544,6 +725,29 @@ fn send_tracked(peer: &mut Peer, to: &str, body: &str) -> String {
         other => panic!("accusé inattendu: {other:?}"),
     }
     id
+}
+
+fn wait_path(path: &Path, description: &str) {
+    let deadline = Instant::now() + MATRIX_TIMEOUT;
+    while !path.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(path.exists(), "{description}");
+}
+
+fn wait_reconnected(control: &mut Peer, name: &str) -> AgentInfo {
+    let deadline = Instant::now() + MATRIX_TIMEOUT;
+    loop {
+        let agent = wait_agent(control, name);
+        if agent.reconnect_count >= 1 {
+            return agent;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{name} ne s'est pas reconnecté dans la même session"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn receive_replies(peer: &mut Peer, expected_ids: &[String]) -> Vec<String> {
@@ -558,6 +762,65 @@ fn receive_replies(peer: &mut Peer, expected_ids: &[String]) -> Vec<String> {
         }
     }
     replies
+}
+
+fn run_interactive_prompt_corpus(
+    socket: &Path,
+    agent: &str,
+    proxy: &CutProxy,
+    session: InteractivePromptSession,
+) {
+    let mut peer = Peer::register(socket, "prompt-sender");
+
+    // Quickstart 007 §1 : c'est exactement la session qui a reçu le prompt
+    // réduit qui est visible et interrogée par l'outil MCP bridget_who.
+    let initial = wait_agent(&mut peer, agent);
+    assert_eq!(initial.agent_type, "codex");
+    assert_eq!(initial.transport, "unix");
+    assert_eq!(initial.state, "connected");
+
+    // Quickstart 007 §2 et §3 : la même session répond à une demande
+    // suivie, puis restitue un corps riche octet pour octet.
+    let first = send_tracked_with_timeout(&mut peer, agent, "TRACKED", 9);
+    assert_eq!(
+        receive_replies(&mut peer, &[first]),
+        vec!["fixture-response-1"]
+    );
+    let exact = "l'apostrophe d'usage, \"guillemets\", $VAR, `backticks`,\net ce saut de ligne.";
+    let second = send_tracked_with_timeout(&mut peer, agent, exact, 9);
+    assert_eq!(receive_replies(&mut peer, &[second]), vec![exact]);
+
+    // Quickstart 007 §4 : le faux CLI reste vivant pendant le tour lent,
+    // une seconde demande est livrée à la même session, puis la connexion du
+    // wrapper est réellement coupée et reprise sans perdre l'ordre FIFO.
+    let slow = send_tracked_with_timeout(&mut peer, agent, "QUEUE-SLOW", 9);
+    wait_path(
+        &session.slow_started,
+        "le même faux Codex n'a pas commencé le tour lent",
+    );
+    let next = send_tracked_with_timeout(&mut peer, agent, "QUEUE-NEXT", 9);
+    proxy.cut_wrapper_and_wait_for_reconnect();
+    let reconnected = wait_reconnected(&mut peer, agent);
+    assert_eq!(reconnected.transport, "unix");
+    assert_eq!(
+        receive_replies(&mut peer, &[slow, next]),
+        vec!["fixture-response-slow", "fixture-response-next"]
+    );
+
+    peer.send(&WrapperToDaemon::ListRequests {
+        sender: peer.name.clone(),
+        limit: 200,
+    });
+    match peer.recv() {
+        DaemonToWrapper::RequestList { requests } => {
+            assert_eq!(requests.len(), MATRIX_EXPECTED_TURNS);
+            assert!(requests.iter().all(|request| request.state == "answered"));
+        }
+        other => panic!("liste des demandes du prompt inattendue: {other:?}"),
+    }
+
+    let processed = session.finish();
+    assert_eq!(processed, vec!["TRACKED", exact, "QUEUE-SLOW", "QUEUE-NEXT"]);
 }
 
 fn normalized_entry(bytes: &[u8]) -> String {
@@ -855,21 +1118,21 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
     assert!(REDUCED_PROMPT.contains("reply=no"));
     assert!(!REDUCED_PROMPT.contains("bridget send"));
 
-    let prompt_root = PathBuf::from(format!(
-        "/tmp/bg10p-{}-{}",
-        std::process::id(),
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
-    ));
-    write_fixture(&prompt_root);
-    let prompt_daemon = DaemonProcess::start(&prompt_root, false, false);
-    capture_interactive_mcp_prompt(&prompt_root, 0);
-    prompt_daemon.stop();
-    fs::remove_dir_all(prompt_root).unwrap();
-
     for run in 0..MATRIX_RUNS_PER_MODE {
         let root = test_root(&format!("matrix-{run}"));
         let adapter = write_fixture(&root);
         let (daemon, proxy) = start_daemon_behind_proxy(&root);
+
+        if run == 0 {
+            let prompt_name = "prompt-mcp-0";
+            let prompt_session = start_interactive_prompt_session(&root, prompt_name);
+            run_interactive_prompt_corpus(
+                &daemon.socket,
+                prompt_name,
+                &proxy,
+                prompt_session,
+            );
+        }
 
         let terminal_name = format!("parity-terminal-{run}");
         let mut terminal = Command::new(env!("CARGO_BIN_EXE_bridget"))
