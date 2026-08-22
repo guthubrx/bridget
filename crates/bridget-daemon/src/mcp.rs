@@ -1,9 +1,24 @@
 //! Façade MCP stdio. Le protocole daemon reste le seul transport métier.
 
+use bridget_core::BridgetMessage;
+use bridget_transport::protocol::{
+    CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue, LedgerScope,
+    decode, encode,
+};
+use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::os::unix::net::UnixStream;
+use std::path::Path;
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
+const DAEMON_BUDGET: Duration = Duration::from_secs(10);
+const MAX_IN_FLIGHT_TOOL_CALLS: usize = 8;
+static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Default)]
 struct Session {
@@ -15,38 +30,138 @@ struct Session {
 ///
 /// L'ownership exclusif du `BufWriter` sérialise les sorties JSON-RPC : aucun
 /// diagnostic ne peut rejoindre stdout, qui est réservé aux réponses MCP.
-pub fn serve<R: BufRead, W: Write>(mut input: R, output: W) -> io::Result<()> {
-    let mut output = BufWriter::new(output);
+pub fn serve<R: BufRead, W: Write + Send>(mut input: R, output: W) -> io::Result<()> {
+    let output = Arc::new(Mutex::new(BufWriter::new(output)));
     let mut session = Session::default();
     let mut line = String::new();
+    let in_flight = Arc::new(Mutex::new(HashSet::new()));
+    let cancelled = Arc::new(Mutex::new(HashSet::new()));
+    let active = Arc::new(AtomicUsize::new(0));
 
-    loop {
-        line.clear();
-        if input.read_line(&mut line)? == 0 {
-            return output.flush();
+    std::thread::scope(|scope| -> io::Result<()> {
+        loop {
+            line.clear();
+            if input.read_line(&mut line)? == 0 {
+                break;
+            }
+            if line.trim().is_empty() {
+                continue;
+            }
+            let request = match serde_json::from_str::<Value>(line.trim_end()) {
+                Ok(request) => request,
+                Err(_) => {
+                    write_shared_response(&output, &error(Value::Null, -32700, "JSON malformé"))?;
+                    continue;
+                }
+            };
+            if let Some(cancelled_id) = cancellation_id(&request) {
+                let is_active = in_flight
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .contains(&cancelled_id);
+                if is_active {
+                    cancelled
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .insert(cancelled_id);
+                }
+                continue;
+            }
+            let call_id = asynchronous_tool_call_id(&request, &session);
+            if let Some(call_id) = call_id {
+                if !try_reserve_tool_call(&active) {
+                    write_shared_response(
+                        &output,
+                        &result(
+                            request.get("id").cloned().unwrap_or(Value::Null),
+                            technical_result("busy", "serveur MCP saturé : réessaie plus tard"),
+                        ),
+                    )?;
+                    continue;
+                }
+                in_flight
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .insert(call_id.clone());
+                let output = Arc::clone(&output);
+                let in_flight = Arc::clone(&in_flight);
+                let cancelled = Arc::clone(&cancelled);
+                let active = Arc::clone(&active);
+                scope.spawn(move || {
+                    let mut tool_session = Session {
+                        initialize_seen: true,
+                        initialized: true,
+                    };
+                    let response = dispatch(&request, &mut tool_session);
+                    let cancelled_call = cancelled
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .remove(&call_id);
+                    in_flight
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .remove(&call_id);
+                    active.fetch_sub(1, Ordering::AcqRel);
+                    if !cancelled_call
+                        && let Some(response) = response
+                    {
+                        let _ = write_shared_response(&output, &response);
+                    }
+                });
+                continue;
+            }
+            if let Some(response) = dispatch(&request, &mut session) {
+                write_shared_response(&output, &response)?;
+            }
         }
-        if line.trim().is_empty() {
-            continue;
-        }
-        let response = match serde_json::from_str::<Value>(line.trim_end()) {
-            Ok(request) => dispatch(&request, &mut session),
-            Err(_) => Some(error(Value::Null, -32700, "JSON malformé")),
-        };
-        if let Some(response) = response {
-            write_response(&mut output, &response)?;
-        }
-    }
+        Ok(())
+    })?;
+    output
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .flush()
 }
 
 /// Lance la façade MCP depuis la sous-commande `bridget mcp`.
 pub fn run_stdio() -> io::Result<()> {
-    serve(BufReader::new(io::stdin().lock()), io::stdout().lock())
+    serve(BufReader::new(io::stdin().lock()), io::stdout())
 }
 
 fn write_response(output: &mut impl Write, response: &Value) -> io::Result<()> {
     serde_json::to_writer(&mut *output, response).map_err(io::Error::other)?;
     output.write_all(b"\n")?;
     output.flush()
+}
+
+fn write_shared_response(output: &Arc<Mutex<BufWriter<impl Write>>>, response: &Value) -> io::Result<()> {
+    let mut writer = output.lock().unwrap_or_else(|error| error.into_inner());
+    write_response(&mut *writer, response)
+}
+
+fn cancellation_id(request: &Value) -> Option<String> {
+    (request.get("method").and_then(Value::as_str) == Some("notifications/cancelled"))
+        .then(|| request.get("params")?.get("requestId").map(Value::to_string))
+        .flatten()
+}
+
+fn asynchronous_tool_call_id(request: &Value, session: &Session) -> Option<String> {
+    (session.initialized
+        && request.get("method").and_then(Value::as_str) == Some("tools/call"))
+        .then(|| request.get("id").map(Value::to_string))
+        .flatten()
+}
+
+fn try_reserve_tool_call(active: &AtomicUsize) -> bool {
+    let mut observed = active.load(Ordering::Acquire);
+    loop {
+        if observed >= MAX_IN_FLIGHT_TOOL_CALLS {
+            return false;
+        }
+        match active.compare_exchange_weak(observed, observed + 1, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(current) => observed = current,
+        }
+    }
 }
 
 fn dispatch(request: &Value, session: &mut Session) -> Option<Value> {
@@ -126,17 +241,13 @@ fn dispatch_with_identity(
                 Ok(identity) => identity,
                 Err(identity_error) => return id.map(|id| identity_error_result(id, &identity_error)),
             };
-            id.map(|id| {
-                result(
-                    id,
-                    json!({
-                        "content": [{
-                            "type": "text",
-                            "text": format!("Outil Bridget indisponible avant la connexion au daemon pour {identity}.")
-                        }],
-                        "isError": true
-                    }),
-                )
+            let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+            id.map(|id| match execute_tool(&identity, name, &arguments) {
+                Ok(payload) => result(id, tool_result(payload)),
+                Err(ToolError::InvalidParams(message)) => error(id, -32602, &message),
+                Err(ToolError::Technical { code, message }) => {
+                    result(id, technical_result(code, &message))
+                }
             })
         }
         _ => id.map(|id| error(id, -32601, &format!("méthode inconnue: {method}"))),
@@ -171,6 +282,420 @@ fn identity_error_result(id: Value, identity_error: &crate::mcp_identity::Identi
     )
 }
 
+#[derive(Debug)]
+enum ToolError {
+    InvalidParams(String),
+    Technical { code: &'static str, message: String },
+}
+
+struct DaemonConnection {
+    writer: BufWriter<UnixStream>,
+    reader: BufReader<UnixStream>,
+    deadline: Instant,
+}
+
+impl DaemonConnection {
+    fn connect(socket: &Path) -> Result<Self, ToolError> {
+        let stream = UnixStream::connect(socket).map_err(|error| ToolError::Technical {
+            code: "daemon_unreachable",
+            message: format!("daemon Bridget injoignable : {error}"),
+        })?;
+        let reader_stream = stream.try_clone().map_err(|error| ToolError::Technical {
+            code: "daemon_unreachable",
+            message: format!("impossible de dupliquer le socket daemon : {error}"),
+        })?;
+        Ok(Self {
+            writer: BufWriter::new(stream),
+            reader: BufReader::new(reader_stream),
+            deadline: Instant::now() + DAEMON_BUDGET,
+        })
+    }
+
+    fn exchange(&mut self, command: &WrapperToDaemon) -> Result<DaemonToWrapper, ToolError> {
+        self.apply_remaining_timeout("daemon_unreachable")?;
+        let json = encode(command).map_err(|error| ToolError::Technical {
+            code: "daemon_protocol",
+            message: format!("encodage daemon impossible : {error}"),
+        })?;
+        writeln!(self.writer, "{json}").map_err(|error| ToolError::Technical {
+            code: "daemon_unreachable",
+            message: format!("écriture daemon impossible : {error}"),
+        })?;
+        self.writer.flush().map_err(|error| ToolError::Technical {
+            code: "daemon_unreachable",
+            message: format!("flush daemon impossible : {error}"),
+        })?;
+        self.read_response("daemon_unreachable")
+    }
+
+    fn send_then_wait(
+        &mut self,
+        command: &WrapperToDaemon,
+    ) -> Result<DaemonToWrapper, ToolError> {
+        self.apply_remaining_timeout("daemon_unreachable")?;
+        let json = encode(command).map_err(|error| ToolError::Technical {
+            code: "daemon_protocol",
+            message: format!("encodage daemon impossible : {error}"),
+        })?;
+        writeln!(self.writer, "{json}").map_err(|error| ToolError::Technical {
+            code: "daemon_unreachable",
+            message: format!("écriture daemon impossible : {error}"),
+        })?;
+        self.writer.flush().map_err(|error| ToolError::Technical {
+            code: "daemon_unreachable",
+            message: format!("flush daemon impossible : {error}"),
+        })?;
+        self.read_response("outcome_unknown")
+    }
+
+    fn read_response(&mut self, failure_code: &'static str) -> Result<DaemonToWrapper, ToolError> {
+        self.apply_remaining_timeout(failure_code)?;
+        let mut line = String::new();
+        self.reader
+            .read_line(&mut line)
+            .map_err(|error| ToolError::Technical {
+                code: failure_code,
+                message: format!("réponse daemon indisponible : {error}"),
+            })?;
+        if line.is_empty() {
+            return Err(ToolError::Technical {
+                code: failure_code,
+                message: "daemon Bridget a fermé la connexion sans réponse".to_string(),
+            });
+        }
+        decode(line.trim_end()).map_err(|error| ToolError::Technical {
+            code: "daemon_protocol",
+            message: format!("réponse daemon invalide : {error}"),
+        })
+    }
+
+    fn apply_remaining_timeout(&self, code: &'static str) -> Result<(), ToolError> {
+        let remaining = self.deadline.checked_duration_since(Instant::now()).ok_or_else(|| {
+            ToolError::Technical {
+                code,
+                message: "budget total de 10 s dépassé".to_string(),
+            }
+        })?;
+        self.writer
+            .get_ref()
+            .set_write_timeout(Some(remaining))
+            .map_err(|error| ToolError::Technical {
+                code,
+                message: format!("impossible de borner l'écriture daemon : {error}"),
+            })?;
+        self.reader
+            .get_ref()
+            .set_read_timeout(Some(remaining))
+            .map_err(|error| ToolError::Technical {
+                code,
+                message: format!("impossible de borner la lecture daemon : {error}"),
+            })
+    }
+}
+
+fn execute_tool(identity: &str, name: &str, arguments: &Value) -> Result<Value, ToolError> {
+    let arguments = arguments.as_object().ok_or_else(|| {
+        ToolError::InvalidParams("arguments d'outil invalides".to_string())
+    })?;
+    let socket = crate::daemon::DaemonConfig::default().socket_path;
+    execute_tool_at(identity, name, arguments, &socket)
+}
+
+fn execute_tool_at(
+    identity: &str,
+    name: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    match name {
+        "bridget_send" => execute_send(identity, arguments, socket),
+        "bridget_who" => execute_who(arguments, socket),
+        "bridget_ledger" => execute_ledger(identity, arguments, socket),
+        _ => Err(ToolError::InvalidParams("outil inconnu".to_string())),
+    }
+}
+
+fn execute_send(
+    identity: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    reject_unknown_arguments(arguments, &["to", "body", "reply", "reply_timeout", "id"])?;
+    let to = required_non_empty_string(arguments, "to")?;
+    let body = required_non_empty_string(arguments, "body")?;
+    let reply = optional_bool(arguments, "reply")?.unwrap_or(false);
+    let reply_timeout = optional_positive_u64(arguments, "reply_timeout")?;
+    if !reply && reply_timeout.is_some() {
+        return Err(ToolError::InvalidParams(
+            "reply_timeout est réservé à reply=true".to_string(),
+        ));
+    }
+    let id = match arguments.get("id") {
+        Some(value) => value
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| ToolError::InvalidParams("id doit être une chaîne non vide".to_string()))?,
+        None => new_message_id(),
+    };
+    let mut message = BridgetMessage::new(identity, to, body);
+    message.id = id.clone();
+    message.reply = reply;
+    message.reply_timeout = reply_timeout;
+    let issued_at = now_secs();
+    let mut connection = DaemonConnection::connect(socket)?;
+    match connection.exchange(&WrapperToDaemon::RoleHandshake {
+        role: ConnectionRole::Client,
+    })? {
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client,
+        } => {}
+        other => return unexpected_response(other),
+    }
+    let issuer_scope = issuer_scope(identity);
+    match connection.exchange(&WrapperToDaemon::ClientHello {
+        contract_version: CLIENT_CONTRACT_VERSION,
+        issuer_scope,
+        capabilities: vec![ClientCapability::SendIdempotent],
+    })? {
+        DaemonToWrapper::ClientWelcome { capabilities, .. }
+            if capabilities.contains(&ClientCapability::SendIdempotent) => {}
+        DaemonToWrapper::ClientRejected { reason } => {
+            return Err(ToolError::Technical {
+                code: "daemon_protocol",
+                message: format!("négociation client refusée : {reason:?}"),
+            });
+        }
+        other => return unexpected_response(other),
+    }
+    match connection.send_then_wait(&WrapperToDaemon::SendIdempotent {
+        message,
+        message_id: id.clone(),
+        issued_at,
+    }) {
+        Ok(DaemonToWrapper::IdempotencyResult { issue, .. }) => Ok(send_issue_result(&id, issue)),
+        Ok(other) => unexpected_response(other),
+        Err(ToolError::Technical { code: "outcome_unknown", message }) => Ok(json!({
+            "status": "outcome_unknown",
+            "id": id,
+            "reason": format!("accusé perdu après transmission — retry possible avec le même id ({message})")
+        })),
+        Err(error) => Err(error),
+    }
+}
+
+fn execute_who(
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    reject_unknown_arguments(arguments, &["domain"])?;
+    let domain = match arguments.get("domain") {
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or_else(|| ToolError::InvalidParams("domain doit être une chaîne".to_string()))?
+                .to_string(),
+        ),
+        None => None,
+    };
+    let mut connection = registered_connection(socket)?;
+    match connection.exchange(&WrapperToDaemon::ListAgents)? {
+        DaemonToWrapper::AgentList { agents } => Ok(json!({
+            "agents": agents.into_iter().filter(|agent| {
+                domain.as_deref().is_none_or(|wanted| agent.domain.as_deref() == Some(wanted))
+            }).collect::<Vec<_>>()
+        })),
+        other => unexpected_response(other),
+    }
+}
+
+fn execute_ledger(
+    identity: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    reject_unknown_arguments(arguments, &["view", "limit"])?;
+    let view = arguments
+        .get("view")
+        .and_then(Value::as_str)
+        .unwrap_or("both");
+    let scope = match view {
+        "messages" => LedgerScope::Messages,
+        "requests" => LedgerScope::Requests,
+        "both" => LedgerScope::Both,
+        _ => return Err(ToolError::InvalidParams("view doit valoir messages, requests ou both".to_string())),
+    };
+    let limit = match arguments.get("limit") {
+        Some(value) => value
+            .as_u64()
+            .filter(|value| (1..=200).contains(value))
+            .ok_or_else(|| {
+                ToolError::InvalidParams("limit doit être compris entre 1 et 200".to_string())
+            })? as u16,
+        None => 20,
+    };
+    let mut connection = registered_connection(socket)?;
+    let mut messages = Vec::new();
+    let mut requests = Vec::new();
+    if matches!(scope, LedgerScope::Messages | LedgerScope::Both) {
+        match connection.exchange(&WrapperToDaemon::LedgerProjection {
+            scope: LedgerScope::Messages,
+            limit,
+        })? {
+            DaemonToWrapper::LedgerProjection { messages: result, .. } => messages = result,
+            other => return unexpected_response(other),
+        }
+    }
+    if matches!(scope, LedgerScope::Requests | LedgerScope::Both) {
+        match connection.exchange(&WrapperToDaemon::ListRequests {
+            sender: identity.to_string(),
+        })? {
+            DaemonToWrapper::RequestList { requests: result } => requests = result,
+            other => return unexpected_response(other),
+        }
+    }
+    Ok(json!({ "messages": messages, "requests": requests }))
+}
+
+fn registered_connection(socket: &Path) -> Result<DaemonConnection, ToolError> {
+    let mut connection = DaemonConnection::connect(socket)?;
+    let registration = WrapperToDaemon::Register {
+        agent_type: "mcp".to_string(),
+        name: Some(format!("mcp-{}", std::process::id())),
+        host: None,
+        transport: None,
+        os: None,
+        instance_id: None,
+        domain: None,
+        turn_in_progress: false,
+    };
+    match connection.exchange(&registration)? {
+        DaemonToWrapper::Registered { .. } => Ok(connection),
+        other => unexpected_response(other),
+    }
+}
+
+fn send_issue_result(id: &str, issue: IdempotencyIssue) -> Value {
+    match issue {
+        IdempotencyIssue::Accepted { .. } => json!({ "status": "accepted", "id": id, "hops": 4 }),
+        IdempotencyIssue::Rejected { category, reason } => {
+            json!({ "status": public_refusal_category(&category), "id": id, "reason": reason })
+        }
+        IdempotencyIssue::OutcomeUnknown { .. } => json!({
+            "status": "outcome_unknown",
+            "id": id,
+            "reason": "accusé perdu après transmission — retry possible avec le même id"
+        }),
+        IdempotencyIssue::EnvelopeMismatch => json!({
+            "status": "outcome_unknown",
+            "id": id,
+            "reason": "enveloppe différente pour le même id"
+        }),
+        IdempotencyIssue::IdempotencyExpired | IdempotencyIssue::InvalidIssuedAt => json!({
+            "status": "outcome_unknown",
+            "id": id,
+            "reason": "clé d'idempotence expirée ou horodatage invalide"
+        }),
+    }
+}
+
+fn public_refusal_category(category: &str) -> &str {
+    match category {
+        "dnd" | "circuit_breaker" | "hops_exhausted" | "queue_full" => category,
+        "duplicate_content" | "quarantined" => "duplicate",
+        "routing" | "recipient_unavailable" => "unknown_recipient",
+        "reply_sender_unavailable" => "reply_requires_agent",
+        _ => "outcome_unknown",
+    }
+}
+
+fn tool_result(payload: Value) -> Value {
+    json!({
+        "content": [{ "type": "text", "text": "Résultat Bridget structuré." }],
+        "structuredContent": payload
+    })
+}
+
+fn technical_result(code: &str, message: &str) -> Value {
+    json!({
+        "content": [{ "type": "text", "text": message }],
+        "isError": true,
+        "code": code
+    })
+}
+
+fn unexpected_response<T>(response: DaemonToWrapper) -> Result<T, ToolError> {
+    Err(ToolError::Technical {
+        code: "daemon_protocol",
+        message: format!("réponse daemon inattendue : {response:?}"),
+    })
+}
+
+fn reject_unknown_arguments(
+    arguments: &serde_json::Map<String, Value>,
+    allowed: &[&str],
+) -> Result<(), ToolError> {
+    if let Some(unknown) = arguments.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(ToolError::InvalidParams(format!("argument inconnu : {unknown}")));
+    }
+    Ok(())
+}
+
+fn required_non_empty_string(
+    arguments: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<String, ToolError> {
+    arguments
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| ToolError::InvalidParams(format!("{key} doit être une chaîne non vide")))
+}
+
+fn optional_bool(
+    arguments: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<bool>, ToolError> {
+    arguments
+        .get(key)
+        .map(|value| value.as_bool().ok_or_else(|| ToolError::InvalidParams(format!("{key} doit être booléen"))))
+        .transpose()
+}
+
+fn optional_positive_u64(
+    arguments: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<u64>, ToolError> {
+    arguments
+        .get(key)
+        .map(|value| value.as_u64().filter(|value| *value > 0).ok_or_else(|| ToolError::InvalidParams(format!("{key} doit être un entier positif"))))
+        .transpose()
+}
+
+fn new_message_id() -> String {
+    let sequence = NEXT_MESSAGE_ID.fetch_add(1, Ordering::Relaxed);
+    format!("mcp-{}-{:x}-{:x}", std::process::id(), now_secs(), sequence)
+}
+
+fn issuer_scope(identity: &str) -> String {
+    let mut first = 0xcbf29ce484222325_u64;
+    let mut second = 0x9e3779b97f4a7c15_u64;
+    for byte in identity.bytes() {
+        first = (first ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+        second = second.rotate_left(5) ^ u64::from(byte);
+        second = second.wrapping_mul(0x9e3779b185ebca87);
+    }
+    format!("012_scope_{first:016x}{second:016x}")
+}
+
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
 fn initialize_result() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
@@ -190,7 +715,8 @@ fn tools() -> Vec<Value> {
                     "to": { "type": "string", "minLength": 1 },
                     "body": { "type": "string", "minLength": 1 },
                     "reply": { "type": "boolean", "default": false },
-                    "reply_timeout": { "type": "integer", "minimum": 1 }
+                    "reply_timeout": { "type": "integer", "minimum": 1 },
+                    "id": { "type": "string", "minLength": 1, "description": "Clé métier à réutiliser pour un retry explicite." }
                 },
                 "required": ["to", "body"],
                 "additionalProperties": false
@@ -225,6 +751,9 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use std::cell::Cell;
+    use std::os::unix::net::UnixListener;
+    use std::path::PathBuf;
+    use std::thread;
 
     const FIXTURES: &str = include_str!("../tests/fixtures/mcp/fr009.jsonl");
 
@@ -325,8 +854,157 @@ mod tests {
                 "params": { "name": "bridget_who", "arguments": {} }
             });
             let response = dispatch_with_identity(&request, &mut session, &resolver).unwrap();
-            assert_eq!(response["result"]["isError"], true);
+            assert_eq!(response["id"], id);
         }
         assert_eq!(calls.get(), 2);
+    }
+
+    fn test_socket(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "bridget-mcp-{label}-{}-{}.sock",
+            std::process::id(),
+            NEXT_MESSAGE_ID.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    fn read_command(reader: &mut BufReader<UnixStream>) -> WrapperToDaemon {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        decode(line.trim_end()).unwrap()
+    }
+
+    fn write_command(writer: &mut BufWriter<UnixStream>, response: DaemonToWrapper) {
+        writeln!(writer, "{}", encode(&response).unwrap()).unwrap();
+        writer.flush().unwrap();
+    }
+
+    #[test]
+    fn send_transmet_un_corps_riche_octet_pour_octet_et_negocie_le_client() {
+        let socket = test_socket("send-rich");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let expected_body = "l'apostrophe, \"guillemets\", $VAR, `backticks`,\net l'emoji é".to_string();
+        let server = thread::spawn({
+            let expected_body = expected_body.clone();
+            move || {
+                let (stream, _) = listener.accept().unwrap();
+                let read_stream = stream.try_clone().unwrap();
+                let mut reader = BufReader::new(read_stream);
+                let mut writer = BufWriter::new(stream);
+                assert!(matches!(
+                    read_command(&mut reader),
+                    WrapperToDaemon::RoleHandshake { role: ConnectionRole::Client }
+                ));
+                write_command(&mut writer, DaemonToWrapper::RoleAccepted { role: ConnectionRole::Client });
+                assert!(matches!(read_command(&mut reader), WrapperToDaemon::ClientHello { .. }));
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::ClientWelcome {
+                        version: CLIENT_CONTRACT_VERSION,
+                        horizon_secs: 60,
+                        issued_at_tolerance_secs: 5,
+                        capabilities: vec![ClientCapability::SendIdempotent],
+                    },
+                );
+                match read_command(&mut reader) {
+                    WrapperToDaemon::SendIdempotent { message, message_id, .. } => {
+                        assert_eq!(message.body, expected_body);
+                        assert_eq!(message_id, "retry-me");
+                    }
+                    other => panic!("commande inattendue: {other:?}"),
+                }
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::IdempotencyResult {
+                        operation_kind: "send".to_string(),
+                        idempotency_key: "retry-me".to_string(),
+                        issue: IdempotencyIssue::Accepted { expires_at: 60 },
+                    },
+                );
+            }
+        });
+        let result = execute_tool_at(
+            "codex-1",
+            "bridget_send",
+            json!({
+                "to": "claude-1", "body": expected_body, "id": "retry-me"
+            })
+            .as_object()
+            .unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(result["status"], "accepted");
+        assert_eq!(result["id"], "retry-me");
+        server.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
+    fn resultats_metier_conservent_les_categories_de_refus_fermees() {
+        for (category, expected) in [
+            ("dnd", "dnd"),
+            ("circuit_breaker", "circuit_breaker"),
+            ("duplicate_content", "duplicate"),
+            ("routing", "unknown_recipient"),
+        ] {
+            let result = send_issue_result(
+                "id-1",
+                IdempotencyIssue::Rejected {
+                    category: category.to_string(),
+                    reason: "motif exact".to_string(),
+                },
+            );
+            assert_eq!(result["status"], expected);
+            assert_eq!(result["reason"], "motif exact");
+        }
+    }
+
+    #[test]
+    fn daemon_coupe_est_un_is_error_technique_immediat() {
+        let missing = test_socket("missing");
+        let error = execute_tool_at(
+            "codex-1",
+            "bridget_who",
+            &serde_json::Map::new(),
+            &missing,
+        )
+        .unwrap_err();
+        assert!(matches!(error, ToolError::Technical { code: "daemon_unreachable", .. }));
+    }
+
+    #[test]
+    fn limite_d_appels_simultanes_refuse_avant_toute_connexion() {
+        let active = AtomicUsize::new(0);
+        for _ in 0..MAX_IN_FLIGHT_TOOL_CALLS {
+            assert!(try_reserve_tool_call(&active));
+        }
+        assert!(!try_reserve_tool_call(&active));
+        assert_eq!(active.load(Ordering::Acquire), MAX_IN_FLIGHT_TOOL_CALLS);
+    }
+
+    #[test]
+    fn who_ouvre_une_connexion_ephemere_register_puis_commande() {
+        let socket = test_socket("who");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let read_stream = stream.try_clone().unwrap();
+            let mut reader = BufReader::new(read_stream);
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(read_command(&mut reader), WrapperToDaemon::Register { agent_type, .. } if agent_type == "mcp"));
+            write_command(&mut writer, DaemonToWrapper::Registered { name: "mcp-test".to_string() });
+            assert!(matches!(read_command(&mut reader), WrapperToDaemon::ListAgents));
+            write_command(&mut writer, DaemonToWrapper::AgentList { agents: Vec::new() });
+        });
+        let result = execute_tool_at(
+            "codex-1",
+            "bridget_who",
+            &serde_json::Map::new(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(result, json!({ "agents": [] }));
+        server.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
     }
 }

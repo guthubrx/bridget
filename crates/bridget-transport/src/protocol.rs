@@ -327,6 +327,11 @@ pub enum WrapperToDaemon {
     },
     /// Lister les demandes suivies de l'agent courant.
     ListRequests { sender: String },
+    /// Projection bornée du ledger détenu par le daemon.
+    LedgerProjection {
+        scope: LedgerScope,
+        limit: u16,
+    },
     /// Signal de vie (périodique).
     Heartbeat,
     /// Demander la liste des agents connectés.
@@ -510,6 +515,11 @@ pub enum DaemonToWrapper {
     RequestCancelled { id: String, state: String },
     /// Liste des demandes suivies accessibles à l'agent courant.
     RequestList { requests: Vec<RequestInfo> },
+    /// Projection de lecture sans rendu, commune au binaire et à MCP.
+    LedgerProjection {
+        messages: Vec<LedgerMessage>,
+        requests: Vec<RequestInfo>,
+    },
 }
 
 impl WrapperToDaemon {
@@ -600,6 +610,24 @@ pub struct RequestInfo {
     pub deferred_reminder_level: Option<u8>,
     #[serde(default)]
     pub deferred_reminder_at: Option<i64>,
+}
+
+/// Sous-ensembles fermés de la projection de lecture du ledger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LedgerScope {
+    Messages,
+    Requests,
+    Both,
+}
+
+/// Échange stocké par le daemon et exposé aux clients de lecture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LedgerMessage {
+    pub id: String,
+    pub ts: i64,
+    pub sender: String,
+    pub target: String,
+    pub body: String,
 }
 
 #[cfg(test)]
@@ -878,6 +906,33 @@ mod tests {
             } if operation_kind == "send" && idempotency_key == "message-1" && delivery_id == "delivery-1"
         ));
         assert!(!welcome.allowed_for_attach());
+    }
+
+    #[test]
+    fn ledger_projection_roundtrip_est_bornee_par_le_serveur() {
+        let request = WrapperToDaemon::LedgerProjection {
+            scope: LedgerScope::Both,
+            limit: 20,
+        };
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encode(&request).unwrap()).unwrap(),
+            WrapperToDaemon::LedgerProjection { scope: LedgerScope::Both, limit: 20 }
+        ));
+        let response = DaemonToWrapper::LedgerProjection {
+            messages: vec![LedgerMessage {
+                id: "message-1".to_string(),
+                ts: 42,
+                sender: "alice".to_string(),
+                target: "bob".to_string(),
+                body: "intact\n$VAR".to_string(),
+            }],
+            requests: Vec::new(),
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(&encode(&response).unwrap()).unwrap(),
+            DaemonToWrapper::LedgerProjection { messages, requests }
+                if messages[0].body == "intact\n$VAR" && requests.is_empty()
+        ));
     }
 
     #[test]

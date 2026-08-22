@@ -4296,6 +4296,20 @@ fn handle_wrapper_message(
                 }),
             }
         }
+
+        WrapperToDaemon::LedgerProjection { scope, limit } => {
+            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            match crate::ledger::read_projection(&st.store, scope, usize::from(limit)) {
+                Ok(projection) => Some(DaemonToWrapper::LedgerProjection {
+                    messages: projection.messages,
+                    requests: projection.requests,
+                }),
+                Err(error) => Some(DaemonToWrapper::Nack {
+                    id: "ledger".to_string(),
+                    reason: error.to_string(),
+                }),
+            }
+        }
     }
 }
 

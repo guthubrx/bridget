@@ -2,7 +2,9 @@
 
 use crate::daemon::{self, DaemonConfig};
 use bridget_core::BridgetMessage;
-use bridget_transport::protocol::{AgentInfo, AttachWindow, RuntimeSource, decode, encode};
+use bridget_transport::protocol::{
+    AgentInfo, AttachWindow, LedgerMessage, LedgerScope, RuntimeSource, decode, encode,
+};
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
@@ -1704,35 +1706,52 @@ fn cmd_status() {
 }
 
 fn cmd_ledger() {
-    let config = DaemonConfig::default();
-    match crate::store::Store::open(&config.db_path) {
-        Ok(store) => match store.recent_messages(20) {
-            Ok(entries) => {
-                if entries.is_empty() {
-                    println!("Ledger vide.");
-                } else {
-                    println!("Derniers {} messages :", entries.len());
-                    for entry in entries.iter().rev() {
-                        println!(
-                            "  [{}] {} → {}: {}",
-                            entry.ts,
-                            entry.sender,
-                            entry.target,
-                            entry.body.chars().take(60).collect::<String>()
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("erreur lecture ledger: {}", e);
-                std::process::exit(1);
-            }
-        },
-        Err(e) => {
-            eprintln!("base inaccessible: {}", e);
+    let messages = match send_control_to_daemon(WrapperToDaemon::LedgerProjection {
+        scope: LedgerScope::Messages,
+        limit: 20,
+    }) {
+        Ok(DaemonToWrapper::LedgerProjection { messages, .. }) => Ok(messages),
+        Ok(DaemonToWrapper::Nack { reason, .. }) => Err(format!("erreur lecture ledger: {reason}")),
+        Ok(_) => Err("réponse inattendue du daemon".to_string()),
+        Err(_) => {
+            let config = DaemonConfig::default();
+            crate::store::Store::open(&config.db_path)
+                .map_err(|error| format!("base inaccessible: {error}"))
+                .and_then(|store| {
+                    crate::ledger::read_projection(&store, LedgerScope::Messages, 20)
+                        .map(|projection| projection.messages)
+                        .map_err(|error| format!("erreur lecture ledger: {error}"))
+                })
+        }
+    };
+    match messages {
+        Ok(messages) => print_ledger(&messages),
+        Err(error) => {
+            eprintln!("{error}");
             std::process::exit(1);
         }
     }
+}
+
+fn print_ledger(entries: &[LedgerMessage]) {
+    print!("{}", render_ledger(entries));
+}
+
+fn render_ledger(entries: &[LedgerMessage]) -> String {
+    if entries.is_empty() {
+        return "Ledger vide.\n".to_string();
+    }
+    let mut rendered = format!("Derniers {} messages :\n", entries.len());
+    for entry in entries.iter().rev() {
+        rendered.push_str(&format!(
+            "  [{}] {} → {}: {}\n",
+            entry.ts,
+            entry.sender,
+            entry.target,
+            entry.body.chars().take(60).collect::<String>()
+        ));
+    }
+    rendered
 }
 
 #[cfg(test)]
