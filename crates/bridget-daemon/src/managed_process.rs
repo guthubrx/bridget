@@ -920,6 +920,11 @@ impl ManagedStatusReporter {
         if unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
             return Err(io::Error::last_os_error().into());
         }
+        // Le bootstrap a volontairement retiré CLOEXEC pour transmettre ce FD
+        // au wrapper. Celui-ci le remet immédiatement : l'adaptateur ACP lancé
+        // ensuite ne doit pas garder le canal ouvert et retarder indéfiniment
+        // le passage BootstrapReady -> Connected côté superviseur.
+        set_fd_cloexec(fd, true)?;
         let generation = std::env::var(MANAGED_GENERATION_ENV)
             .ok()
             .and_then(|value| value.parse().ok())
