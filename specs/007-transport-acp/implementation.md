@@ -4,11 +4,16 @@
 
 - **Statut** : terminé
 - **Date** : 2026-08-22
-- **Précondition** : `OPENAI_API_KEY` absent de l'environnement.
+- **Précondition** : `OPENAI_API_KEY` et `CODEX_API_KEY` absents de
+  l'environnement.
 - **Script jetable** : `/tmp/bridget-spike-codex-acp.mjs`
 - **Transcriptions brutes** :
-  - `/tmp/bridget-spike-codex-acp-attempt1.transcript`
-  - `/tmp/bridget-spike-codex-acp-attempt2.transcript`
+  - `/tmp/bridget-spike-codex-acp-attempt1.transcript` (supprimée après
+    extraction)
+  - `/tmp/bridget-spike-codex-acp-attempt2.transcript` (supprimée après
+    extraction)
+  - `/tmp/bridget-spike-codex-acp-attempt3.transcript` (créée en mode `0600`,
+    supprimée après extraction)
 
 Les réponses `initialize` complètes contiennent des métadonnées de modèles et
 des instructions volumineuses, générées par le service (plus de 200 ko chacune).
@@ -33,13 +38,11 @@ npx @zed-industries/codex-acp@0.16.0 -c 'model="gpt-5.6-sol"' -c 'model_reasonin
 < {"jsonrpc":"2.0","error":{"code":-32603,"message":"Internal error","data":{"message":"...The 'gpt-5.6-sol' model requires a newer version of Codex..."}},"id":3}
 ```
 
-### Tentative 2 — home Codex isolé (succès)
+### Tentative 2 — configuration temporaire (succès de diagnostic)
 
-Commande :
-
-```text
-CODEX_HOME=/tmp/spike-codex-home npx @zed-industries/codex-acp@0.16.0
-```
+Exécution de diagnostic avec une configuration temporaire, non retenue pour le
+transport ; elle a uniquement permis d'identifier le modèle compatible du coeur
+embarqué.
 
 ```text
 > {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"bridget-spike","version":"0.1.0"}}}
@@ -51,8 +54,28 @@ CODEX_HOME=/tmp/spike-codex-home npx @zed-industries/codex-acp@0.16.0
 < {"jsonrpc":"2.0","result":{"stopReason":"end_turn"},"id":3}
 ```
 
-Le répertoire `/tmp/spike-codex-home` a été supprimé après le test. Aucun
-adaptateur ne demande de clé API pendant les deux tentatives.
+Aucun adaptateur ne demande de clé API pendant ces deux tentatives.
+
+### Tentative 3 — pin gpt-5.5 avec le home Codex courant (succès)
+
+Commande :
+
+```text
+npx @zed-industries/codex-acp@0.16.0 -c 'model="gpt-5.5"'
+```
+
+```text
+> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"bridget-spike","version":"0.1.0"}}}
+< {"jsonrpc":"2.0","result":{"protocolVersion":1,...},"id":1}
+> {"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/007-transport-acp","mcpServers":[]}}
+< {"jsonrpc":"2.0","result":{"sessionId":"01a027bc-..."},"id":2}
+> {"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"01a027bc-...","prompt":[{"type":"text","text":"Réponds exactement : SPIKE_ACP_OK"}]}}
+< {"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"SPIKE_ACP_OK"}}}}
+< {"jsonrpc":"2.0","result":{"stopReason":"end_turn"},"id":3}
+```
+
+La transcription est créée en mode `0600`. Aucun adaptateur ne demande de clé
+API pendant cette tentative.
 
 ### Self-review Article XIX/XX
 

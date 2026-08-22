@@ -47,19 +47,21 @@ Note : les adaptateurs Zed sont explicitement publiés pour usage hors Zed
 
 Le protocole ACP 1 est négocié avec `codex-acp` 0.16.0, sans demande de clé
 API : la méthode `initialize` annonce explicitement l'authentification ChatGPT
-par abonnement. Deux conditions de lancement ont été testées :
+par abonnement. Trois conditions de lancement ont été testées :
 
-1. `-c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"high\"` : `initialize`
-   et `session/new` réussissent, mais `session/prompt` échoue avec « The
-   'gpt-5.6-sol' model requires a newer version of Codex ».
-2. `CODEX_HOME` isolé, contenant uniquement `auth.json`, sans options `-c` :
-   `initialize`, `session/new`, `session/prompt` réussissent ; la réponse de
-   tour porte `stopReason: "end_turn"` et le texte `SPIKE_ACP_OK`.
+1. Sans surcharge : `initialize` et `session/new` réussissent, mais
+   `session/prompt` échoue car le modèle configuré est trop récent pour le
+   coeur Codex embarqué par l'adaptateur.
+2. `-c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"high\"` : même échec
+   au `session/prompt` avec « The 'gpt-5.6-sol' model requires a newer version
+   of Codex ».
+3. `-c model=\"gpt-5.5\"` avec le home Codex courant : `initialize`,
+   `session/new`, `session/prompt` réussissent ; la réponse de tour porte
+   `stopReason: "end_turn"` et le texte `SPIKE_ACP_OK`.
 
-Conclusion : l'adaptateur 0.16.0 ne peut pas utiliser les modèles récents
-configurés dans le home Codex courant. Le registre conserve donc ses arguments
-par défaut ; l'isolation du home devra être modélisée explicitement avant le
-lancement d'équipiers, plutôt que de déduire un modèle non vérifié.
+Conclusion : le pin `gpt-5.5` est ajouté à l'entrée Codex par défaut du
+registre. Les protections de facturation couvrent `OPENAI_API_KEY` et
+`CODEX_API_KEY`, deux méthodes d'authentification annoncées par l'adaptateur.
 
 ## R-003 — Facturation : abonnements, jamais de clé API
 

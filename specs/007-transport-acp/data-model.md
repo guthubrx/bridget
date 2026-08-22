@@ -12,9 +12,13 @@ surcharge. Les valeurs par défaut suivent research R-002.
   "agents": {
     "codex": {
       "command": "npx",
-      "args": ["@zed-industries/codex-acp@0.16.0"],
+      "args": [
+        "@zed-industries/codex-acp@0.16.0",
+        "-c",
+        "model=\"gpt-5.5\""
+      ],
       "protocol": "acp",
-      "forbidden_env": ["OPENAI_API_KEY"],
+      "forbidden_env": ["OPENAI_API_KEY", "CODEX_API_KEY"],
       "permissions": "allow"
     },
     "claude": {
@@ -35,13 +39,11 @@ surcharge. Les valeurs par défaut suivent research R-002.
 }
 ```
 
-**Constat du spike T701 (2026-08-22).** La commande par défaut ci-dessus est
-validée avec un `CODEX_HOME` isolé qui ne contient que l'authentification
-abonnement. Les surcharges `-c model=\"gpt-5.6-sol\"` et
-`-c model_reasoning_effort=\"high\"` ne sont pas retenues : le coeur Codex
-embarqué par l'adaptateur 0.16.0 les refuse comme trop récentes. L'isolation du
-home est une condition de validation du spike, pas encore un champ du registre
-à implémenter ; l'ajouter exige une décision et une tâche dédiées.
+**Constat du spike T701 (2026-08-22).** Le pin
+`-c model=\"gpt-5.5\"` ci-dessus est validé avec le home Codex courant :
+`session/prompt` retourne `stopReason: "end_turn"`. Les surcharges vers
+`gpt-5.6-sol` et l'effort `high` ne sont pas retenues, car le coeur Codex
+embarqué par l'adaptateur 0.16.0 les refuse comme trop récentes.
 
 `protocol` vaut `acp` ou `tmux` ; `forbidden_env` porte la garde de facturation
 (FR-011) ; `permissions` la réponse automatique aux `session/request_permission`
