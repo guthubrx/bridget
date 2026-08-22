@@ -64,6 +64,12 @@ impl MatrixDaemonGuard {
             daemon.stop();
         }
     }
+
+    fn crash(&mut self) {
+        if let Some(daemon) = self.0.take() {
+            daemon.crash();
+        }
+    }
 }
 
 impl Drop for MatrixDaemonGuard {
@@ -79,6 +85,16 @@ impl DaemonProcess {
         }
         thread::sleep(Duration::from_millis(20));
         let _ = unsafe { libc::kill(-self.process_group_id, libc::SIGKILL) };
+        let _ = self.child.wait();
+        if let Some(logs) = self.logs.take() {
+            let _ = logs.join();
+        }
+    }
+
+    fn crash(mut self) {
+        unsafe {
+            libc::kill(-self.process_group_id, libc::SIGKILL);
+        }
         let _ = self.child.wait();
         if let Some(logs) = self.logs.take() {
             let _ = logs.join();
@@ -535,16 +551,20 @@ fn matrice_crash_sc001_redelivre_cinquante_prompts_uniques() {
         let mut client = negotiate_client(&socket_path);
         client.send(command.clone());
         watch_marker(&sync, &marker);
-        daemon.stop();
+        daemon.crash();
 
         daemon.restart(&root);
         wait_for_registered_agent(&socket_path, "acp-matrix");
-        assert!(matches!(
-            retry_command_issue(&socket_path, command.clone()),
-            IdempotencyIssue::OutcomeUnknown { .. }
-        ));
+        let first_replay = retry_command_issue(&socket_path, command.clone());
+        let second_replay = retry_command_issue(&socket_path, command.clone());
+        assert_eq!(first_replay, second_replay, "le rejeu en vol est stable");
+        assert!(matches!(first_replay, IdempotencyIssue::OutcomeUnknown { .. }));
         wait_for_counter(&counter, serial + 1);
         wait_for_accepted(&socket_path, &command);
+        let first_terminal = retry_command_issue(&socket_path, command.clone());
+        let second_terminal = retry_command_issue(&socket_path, command.clone());
+        assert_eq!(first_terminal, second_terminal, "le rejeu terminal est stable");
+        assert!(matches!(first_terminal, IdempotencyIssue::Accepted { .. }));
         if serial + 1 < MATRIX_CYCLES {
             arm_checkpoint(&sync, &points, points[(serial + 1) % points.len()]);
             daemon.restart_with_sync(&root, &sync);

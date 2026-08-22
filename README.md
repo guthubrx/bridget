@@ -95,7 +95,7 @@ clé métier et son instant Unix d'émission. Bridget ne génère jamais ces val
 ```bash
 bridget send --to codex-1 \
   --id delegation-42 \
-  --issued-at 1787400000 \
+  --issued-at 1787422993 \
   --issuer-scope "012_scope_aaaaaaaaaaaa" \
   "Analyse ce fichier"
 ```

@@ -16,10 +16,11 @@ cargo test -p bridget-daemon --features test-support \
   --test idempotency_crash_test -- --ignored --test-threads=1
 ```
 
-Mesure de validation : **50/50 prompts uniques en 167,57 s**. Le banc couvre
+Mesure de validation : **50/50 prompts uniques en 172,62 s**. Le banc couvre
 les quatre frontières (avant réservation, après `Prepared`, après remise avant
-issue, après issue avant accusé client), redémarre le daemon à chaque crash et
-le possède dans un groupe de processus nettoyé par garde RAII.
+issue, après issue avant accusé client), tue directement le groupe du daemon
+par `SIGKILL` à chaque jalon puis le redémarre ; la garde RAII réserve `SIGTERM`
+au nettoyage final.
 
 ## Critères de succès
 
