@@ -118,48 +118,150 @@ pub struct ManagedLaunch {
 }
 
 /// Extrémités détenues par le daemon pendant la phase de bootstrap.
-pub struct ManagedChild {
-    pub child: Child,
+struct ProcessChannels {
+    child: Child,
     release: Option<UnixStream>,
-    status: BufReader<UnixStream>,
+    status: Option<BufReader<UnixStream>>,
+}
+
+/// Bootstrap lancé mais pas encore reconnu comme prêt.
+pub struct ManagedChild {
+    inner: ProcessChannels,
+}
+
+/// Groupe créé, mais marqueur durable pas encore écrit.
+pub struct ReadyManagedChild {
+    inner: ProcessChannels,
+    ready: BootstrapReady,
+}
+
+/// Marqueur durable écrit ; seul cet état autorise l'octet RELEASE.
+pub struct MarkedManagedChild {
+    inner: ProcessChannels,
+    marker: ManagedMarkerHandle,
+}
+
+/// Wrapper exécuté et supervisable par T904/T906.
+pub struct RunningManagedChild {
+    inner: ProcessChannels,
+    marker: ManagedMarkerHandle,
 }
 
 impl ManagedChild {
     /// Attend la preuve de création du groupe. Ce statut n'est jamais un succès.
-    pub fn wait_ready(&mut self) -> Result<BootstrapReady, ManagedProcessError> {
+    pub fn wait_ready(mut self) -> Result<ReadyManagedChild, ManagedProcessError> {
         let mut line = String::new();
-        if self.status.read_line(&mut line)? == 0 {
-            return Err(ManagedProcessError::InvalidStatus(
+        let read = self
+            .inner
+            .status
+            .as_mut()
+            .expect("canal de statut présent avant le transfert")
+            .read_line(&mut line);
+        let ready = match read {
+            Ok(0) => Err(ManagedProcessError::InvalidStatus(
                 "EOF avant BootstrapReady".to_string(),
-            ));
-        }
-        match serde_json::from_str::<ManagedStatus>(line.trim_end()) {
-            Ok(ManagedStatus::BootstrapReady(ready)) => Ok(ready),
-            Ok(ManagedStatus::StartupFailed { .. }) => Err(ManagedProcessError::InvalidStatus(
-                "StartupFailed reçu avant BootstrapReady".to_string(),
             )),
-            Err(error) => Err(ManagedProcessError::InvalidStatus(error.to_string())),
+            Ok(_) => match serde_json::from_str::<ManagedStatus>(line.trim_end()) {
+                Ok(ManagedStatus::BootstrapReady(ready)) => Ok(ready),
+                Ok(ManagedStatus::StartupFailed { .. }) => Err(ManagedProcessError::InvalidStatus(
+                    "StartupFailed reçu avant BootstrapReady".to_string(),
+                )),
+                Err(error) => Err(ManagedProcessError::InvalidStatus(error.to_string())),
+            },
+            Err(error) => Err(error.into()),
+        };
+        match ready {
+            Ok(ready) => Ok(ReadyManagedChild {
+                inner: self.inner,
+                ready,
+            }),
+            Err(error) => {
+                self.inner.release.take();
+                let _ = self.inner.child.wait();
+                Err(error)
+            }
+        }
+    }
+}
+
+impl ReadyManagedChild {
+    pub fn ready(&self) -> &BootstrapReady {
+        &self.ready
+    }
+
+    /// Écrit durablement le marqueur avant de rendre RELEASE accessible.
+    pub fn persist_marker(
+        mut self,
+        store: &ManagedMarkerStore,
+        name: &str,
+    ) -> Result<MarkedManagedChild, ManagedProcessError> {
+        match store.persist(name, &self.ready) {
+            Ok(marker) => Ok(MarkedManagedChild {
+                inner: self.inner,
+                marker,
+            }),
+            Err(error) => {
+                self.inner.release.take();
+                let _ = self.inner.child.wait();
+                Err(error)
+            }
         }
     }
 
-    /// Libère exactement une fois le bootstrap après durabilité du marqueur.
-    pub fn release(&mut self) -> Result<(), ManagedProcessError> {
-        let mut release = self.release.take().ok_or_else(|| {
+    /// Crash/abandon avant marqueur : EOF ferme le bootstrap sans exécuter.
+    pub fn abandon(mut self) -> Child {
+        self.inner.release.take();
+        self.inner.status.take();
+        self.inner.child
+    }
+}
+
+impl MarkedManagedChild {
+    /// Libère exactement une fois le bootstrap, après la preuve durable portée
+    /// par le type. Aucun appelant ne peut obtenir ce type sans écriture.
+    pub fn release(mut self) -> Result<RunningManagedChild, ManagedProcessError> {
+        let mut release = self.inner.release.take().ok_or_else(|| {
             ManagedProcessError::InvalidArgument("RELEASE déjà envoyé".to_string())
         })?;
         release.write_all(&[RELEASE_BYTE])?;
         release.flush()?;
         drop(release);
-        Ok(())
+        Ok(RunningManagedChild {
+            inner: self.inner,
+            marker: self.marker,
+        })
     }
 
-    /// Fermer sans octet est l'abandon explicite ; le bootstrap doit `_exit`.
-    pub fn abandon(&mut self) {
-        self.release.take();
+    pub fn marker(&self) -> &ManagedMarkerHandle {
+        &self.marker
+    }
+
+    /// Crash/abandon après marqueur et avant RELEASE : le marqueur persiste.
+    pub fn abandon(mut self) -> (Child, ManagedMarkerHandle) {
+        self.inner.release.take();
+        self.inner.status.take();
+        (self.inner.child, self.marker)
+    }
+}
+
+impl RunningManagedChild {
+    pub fn marker(&self) -> &ManagedMarkerHandle {
+        &self.marker
+    }
+
+    pub fn child_mut(&mut self) -> &mut Child {
+        &mut self.inner.child
     }
 
     pub fn status_reader(&mut self) -> &mut BufReader<UnixStream> {
-        &mut self.status
+        self.inner
+            .status
+            .as_mut()
+            .expect("canal de statut déjà fermé")
+    }
+
+    pub fn close_status(&mut self) {
+        self.inner.status.take();
     }
 }
 
@@ -453,15 +555,33 @@ fn spawn_bootstrap_command(mut command: Command) -> Result<ManagedChild, Managed
     drop(bootstrap_release);
     drop(bootstrap_status);
     Ok(ManagedChild {
-        child,
-        release: Some(daemon_release),
-        status: BufReader::new(daemon_status),
+        inner: ProcessChannels {
+            child,
+            release: Some(daemon_release),
+            status: Some(BufReader::new(daemon_status)),
+        },
     })
 }
 
 /// Store minimal des marqueurs `~/.cache/bridget/managed/<nom>.json`.
 pub struct ManagedMarkerStore {
     directory: PathBuf,
+}
+
+/// Preuve typée qu'un marqueur corrélé a été écrit durablement.
+pub struct ManagedMarkerHandle {
+    path: PathBuf,
+    marker: ManagedMarker,
+}
+
+impl ManagedMarkerHandle {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn marker(&self) -> &ManagedMarker {
+        &self.marker
+    }
 }
 
 impl ManagedMarkerStore {
@@ -479,13 +599,14 @@ impl ManagedMarkerStore {
         &self,
         name: &str,
         ready: &BootstrapReady,
-    ) -> Result<PathBuf, ManagedProcessError> {
+    ) -> Result<ManagedMarkerHandle, ManagedProcessError> {
         let path = self.marker_path(name)?;
-        let mut bytes = serde_json::to_vec_pretty(&ManagedMarker::from(ready))
+        let marker = ManagedMarker::from(ready);
+        let mut bytes = serde_json::to_vec_pretty(&marker)
             .map_err(|error| ManagedProcessError::InvalidStatus(error.to_string()))?;
         bytes.push(b'\n');
         write_private_file_atomic(&path, &bytes)?;
-        Ok(path)
+        Ok(ManagedMarkerHandle { path, marker })
     }
 
     pub fn load(&self, name: &str) -> Result<ManagedMarker, ManagedProcessError> {
@@ -651,7 +772,7 @@ mod tests {
         while read_one(STATUS_FD, &mut byte).unwrap_or(0) != 0 {}
     }
 
-    fn read_probe(child: &mut ManagedChild) -> serde_json::Value {
+    fn read_probe(child: &mut RunningManagedChild) -> serde_json::Value {
         let mut line = String::new();
         child.status_reader().read_line(&mut line).unwrap();
         serde_json::from_str(line.trim_end()).unwrap()
@@ -659,24 +780,32 @@ mod tests {
 
     #[test]
     fn eof_abandonne_tandis_que_release_exec_la_sonde() {
-        let mut abandoned = spawn_test_bootstrap();
-        let ready = abandoned.wait_ready().unwrap();
-        assert_eq!(ready.pid, ready.pgid);
-        assert_eq!(ready.birth, process_birth(ready.pid).unwrap());
-        abandoned.abandon();
-        let status = abandoned.child.wait().unwrap();
+        let abandoned = spawn_test_bootstrap().wait_ready().unwrap();
+        assert_eq!(abandoned.ready().pid, abandoned.ready().pgid);
+        assert_eq!(
+            abandoned.ready().birth,
+            process_birth(abandoned.ready().pid).unwrap()
+        );
+        let mut child = abandoned.abandon();
+        let status = child.wait().unwrap();
         assert_eq!(status.code(), Some(ABANDONED_EXIT_CODE));
 
-        let mut released = spawn_test_bootstrap();
-        released.wait_ready().unwrap();
-        released.release().unwrap();
+        let root = test_root("release");
+        let store = ManagedMarkerStore::at_directory(root.join("managed"));
+        let mut released = spawn_test_bootstrap()
+            .wait_ready()
+            .unwrap()
+            .persist_marker(&store, "codex-1")
+            .unwrap()
+            .release()
+            .unwrap();
         let probe = read_probe(&mut released);
         assert_eq!(probe["event"], "fd_probe");
         assert_eq!(probe["status_open"], true);
         assert_eq!(probe["release_open"], false);
-        let status_stream = released.status.into_inner();
-        drop(status_stream);
-        assert!(released.child.wait().unwrap().success());
+        released.close_status();
+        assert!(released.child_mut().wait().unwrap().success());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -711,7 +840,8 @@ mod tests {
             command_id: identity().command_id,
             generation: identity().generation,
         };
-        let path = store.persist("codex-1", &ready).unwrap();
+        let marker = store.persist("codex-1", &ready).unwrap();
+        let path = marker.path().to_path_buf();
         assert_eq!(store.load("codex-1").unwrap(), ManagedMarker::from(&ready));
         assert_eq!(
             fs::metadata(path.parent().unwrap())
@@ -739,26 +869,50 @@ mod tests {
         }
         let stage = std::env::var(CONTROLLER_STAGE_ENV).unwrap();
         let root = PathBuf::from(std::env::var_os(CONTROLLER_ROOT_ENV).unwrap());
-        let mut managed = spawn_test_bootstrap();
-        let ready = managed.wait_ready().unwrap();
+        let ready = spawn_test_bootstrap().wait_ready().unwrap();
+        let ready_info = ready.ready().clone();
         let marker_store = ManagedMarkerStore::at_directory(root.join("managed"));
-        if stage != "before_marker" {
-            marker_store.persist("codex-1", &ready).unwrap();
+        match stage.as_str() {
+            "before_marker" => {
+                write_crash_boundary(&root, &ready_info);
+                let _held_ready = ready;
+                loop {
+                    thread::park();
+                }
+            }
+            "after_marker" => {
+                let marked = ready.persist_marker(&marker_store, "codex-1").unwrap();
+                write_crash_boundary(&root, &ready_info);
+                let _held_marked = marked;
+                loop {
+                    thread::park();
+                }
+            }
+            "after_release" => {
+                let mut running = ready
+                    .persist_marker(&marker_store, "codex-1")
+                    .unwrap()
+                    .release()
+                    .unwrap();
+                let probe = read_probe(&mut running);
+                assert_eq!(probe["status_open"], true);
+                assert_eq!(probe["release_open"], false);
+                write_crash_boundary(&root, &ready_info);
+                let _held_running = running;
+                loop {
+                    thread::park();
+                }
+            }
+            unknown => panic!("frontière inconnue: {unknown}"),
         }
-        if stage == "after_release" {
-            managed.release().unwrap();
-            let probe = read_probe(&mut managed);
-            assert_eq!(probe["status_open"], true);
-            assert_eq!(probe["release_open"], false);
-        }
+    }
+
+    fn write_crash_boundary(root: &Path, ready: &BootstrapReady) {
         write_private_file_atomic(
             &root.join("boundary.json"),
-            serde_json::to_string(&ready).unwrap().as_bytes(),
+            serde_json::to_string(ready).unwrap().as_bytes(),
         )
         .unwrap();
-        loop {
-            thread::park();
-        }
     }
 
     fn wait_for_path(path: &Path) {
