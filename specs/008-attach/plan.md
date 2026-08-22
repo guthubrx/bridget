@@ -64,6 +64,9 @@ crates/bridget-daemon/src/
 crates/bridget-transport/src/
 └── protocol.rs          # variantes d'abonnement (noms au reuse-audit)
 
+crates/bridget-transport/src/
+└── journal.rs           # extension par tranches du lecteur v1 existant
+
 docs/decisions/004-abonnement-attach.md   # NOUVEAU : ADR
 ```
 
@@ -101,6 +104,13 @@ fenêtres différentes seraient indiscernables et une fin d'ancienne génératio
 pourrait fermer la nouvelle. Chaque événement = la ligne JSONL v1 telle quelle.
 Noms de variantes fixés au reuse-audit, en cohérence avec les variantes 007
 livrées.
+
+Le client utilise une connexion à rôle `attach`, dédiée et hors annuaire : le
+daemon n'autorise sur elle que `Subscribe`, `Unsubscribe`, `Send` et
+`Heartbeat`. Toutes les variantes propres à un wrapper (`Register`, `Rename`,
+`Runtime`, `Domain`, `Availability`, `TurnState`, `DeliveryRejected`,
+`CancelRequest`, `ListRequests`) sont refusées par une erreur typée. Cette
+matrice fermée empêche l'escalade d'un client de vue vers un rôle équipier.
 
 **D-302 — Le wrapper pousse, il n'est jamais interrogé — via un worker de
 relais dédié.** Le wrapper suit son propre journal par offset (il en est
@@ -168,6 +178,17 @@ retire que sur issue terminale, expiration bornée, ou fermeture réelle de la
 connexion — **jamais à `End`** (un rejet tardif peut arriver pendant un
 réabonnement et doit rester corrélé). Chemin unique, cas « accusé puis rejet
 tardif » testé avec événements de flux intercalés, y compris après `End`.
+
+Ces envois sont obligatoirement `reply=false` : ils empruntent le chemin de
+livraison ordinaire avec une identité humaine imposée par le daemon, mais ne
+créent aucune demande suivie ni relance. La réponse est exclusivement rendue
+par le flux d'abonnement.
+
+**D-309 — Extension unique du lecteur JSONL.** Le relais ajoute la lecture
+incrémentale par tranches, positions et diagnostics de lignes dans `journal.rs`.
+Il réutilise le parseur v1 et les fixtures de T706 ; `valid_events()` conserve
+son contrat de compatibilité. Un deuxième parseur est exclu afin qu'un seul
+module connaisse la récupération des queues partielles ou corrompues.
 
 **D-306 — SC-005 outillé par un faux adaptateur déterministe.** La mesure de
 non-perturbation (p95 latence d'append, N ≥ 200) s'appuie sur l'adaptateur de

@@ -14,7 +14,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
 
 ## Phase 0 : Fondations
 
-- [ ] **T801** [Fondation] **ADR 004 + arbitrages** :
+- [X] **T801** [Fondation] **ADR 004 + arbitrages** :
   `docs/decisions/004-abonnement-attach.md`. Décisions consignées : (a) client
   attach = **connexion à rôle dédié**, hors annuaire et hors routage, avec
   **matrice fermée des messages autorisés** à ce rôle (Subscribe/Unsubscribe/

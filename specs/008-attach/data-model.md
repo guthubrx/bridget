@@ -30,6 +30,22 @@ Cycle : créé à la souscription, détruit à la déconnexion du client, à la
 demande, à la fermeture pour lenteur, ou à la disparition du wrapper (fin typée
 avec motif et `subscription_id`).
 
+## Rôle de connexion attach
+
+Une connexion attach est un client persistant **hors annuaire et hors routage**
+d'équipier. Elle ne crée donc ni présence ni nom d'agent dans `who`. Sa matrice
+est fermée :
+
+| Sens | Autorisé | Refusé (exemples) |
+|---|---|---|
+| attach → daemon | `Subscribe`, `Unsubscribe`, `Send` avec `reply=false`, `Heartbeat` | `Register`, `Unregister`, `Rename`, `Runtime`, `Domain`, `Availability`, `TurnState`, `DeliveryRejected`, `CancelRequest`, `ListRequests` |
+| daemon → attach | `Subscribed`, fragments, `SnapshotCaughtUp`, `Gap`, `End`, `Ack`/`Nack`/`DeliveryRejected` corrélés | `Deliver`, `CancelDelivery`, `Disconnect`, `Registered`, `Renamed`, `AgentList`, `RequestList` |
+
+Toute variante hors matrice reçoit un refus typé `message hors rôle attach`.
+Le daemon force l'identité humaine de chaque `Send` et rejette une tentative de
+forger l'émetteur. Les envois sont `reply=false` : ils restent corrélés pour
+leurs issues terminales, sans demande suivie ni relance.
+
 ## Côté wrapper : relais de journal
 
 | Élément | Rôle |
@@ -37,6 +53,11 @@ avec motif et `subscription_id`).
 | worker de relais dédié | seul à lire le journal pour le relais ; commandé par un **canal borné** depuis le thread d'écoute (qui ne fait qu'enfiler et retourne — jamais de rejeu dans le thread d'écoute : il bloquerait Deliver, heartbeat et annulations). **Politique de saturation** : `try_send` plein → refus **typé** de la souscription (remonté au client, jamais de perte silencieuse) ; les commandes d'arrêt/désabonnement passent par un canal de contrôle séparé (jamais refusées) — pas d'abonnement fantôme, pas de fuite. Tests : canal plein, arrêt pendant saturation |
 | curseur par abonnement | position de rejeu propre à chaque `subscription_id` (deux fenêtres différentes coexistent) |
 | lecture par tranches bornées | équité entre rejeu d'un gros historique et suivi live ; le rejeu ne monopolise pas le worker |
+
+La lecture par tranches étend `journal.rs`, où vivent déjà le parseur v1, la
+récupération de séquence et les fixtures T706. `valid_events()` reste le point
+de compatibilité existant ; le relais ajoute les positions et diagnostics sans
+créer un second parseur.
 
 ## État du client (mémoire seulement, D-303)
 

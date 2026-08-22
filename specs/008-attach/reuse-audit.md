@@ -6,7 +6,8 @@ corrigé après revue — l'audit initial référençait `60b0577` ; certaines l
 de `journal.rs` citées ont pu glisser avec les correctifs, les preuves restent
 valables par nom de symbole).
 **Statut** : OK — aucun doublon bloquant, réutilisations massives confirmées
-avec preuves, quatre créations justifiées.
+avec preuves, quatre créations justifiées. Les trois arbitrages de T801 sont
+actés ci-dessous.
 
 ## Items du plan confrontés à l'existant
 
@@ -21,6 +22,14 @@ avec preuves, quatre créations justifiées.
 | Connexion attach persistante du client | connexions CLI existantes (`cli-send-*` éphémères, `send_control_to_daemon`) | `cli.rs:454` | **ÉTENDRE** : le client attach garde la connexion ouverte (le daemon gère déjà des connexions longues : les wrappers) ; l'envoi humain D-308 passe par cette connexion avec `Send` existant (`protocol.rs` WrapperToDaemon::Send) — pas de nouveau type de message d'envoi |
 | Fan-out daemon vers vues | aucun mécanisme de diffusion existant (le daemon route point à point) | lecture `daemon.rs` | **CRÉER** la table d'abonnements + écrivain par vue (D-305) — c'est le cœur nouveau de la session |
 | Sous-commande `attach` | dispatch CLI par registre (T703) | `cli.rs`, `registry.rs` | **RÉUTILISER** le dispatch ; `attach` est une sous-commande client, pas un type d'agent |
+
+## Arbitrages T801
+
+| Sujet | Décision | Preuve et portée |
+|---|---|---|
+| Connexion client attach | **Créer un rôle dédié hors annuaire et hors routage**, à matrice fermée : `Subscribe`/`Unsubscribe`/`Send`/`Heartbeat` seulement ; les messages wrapper-only sont refusés typés | Aucun équivalent de rôle client long dans `daemon.rs`; `Register` alimente `Router` (`daemon.rs:1219-1244`), donc il ne peut pas être détourné sans rendre la vue visible dans `who`. |
+| Envoi depuis la vue | **Réutiliser `Send` avec `reply=false`** sur la connexion attach persistante | `WrapperToDaemon::Send` existe (`protocol.rs:67-70`) ; `reply=false` conserve la livraison et évite la demande suivie. Les issues tardives restent corrélées par la connexion persistante. |
+| Lecture de journal | **Étendre `journal.rs` par tranches**, sans nouveau parseur | `SessionJournal::valid_events` est déjà le lecteur tolérant v1 (`journal.rs:113-126`) ; le relais lui ajoute offsets et diagnostics tout en préservant T706. |
 
 ## Arbitrages
 
@@ -37,13 +46,11 @@ avec preuves, quatre créations justifiées.
    extension pour le relais doit lire **par tranches** (exigence D-302) sans
    casser son usage T706.
 2. Le daemon n'a aujourd'hui aucune connexion « client longue durée » autre que
-   les wrappers : la connexion attach persistante emprunte le chemin `Register`
-   — vérifier qu'un client attach n'apparaît pas comme un agent dans l'annuaire
-   (type dédié ou enregistrement séparé, à trancher en tasks).
-3. L'envoi via la connexion attach réutilise `Send`, mais le refus
-   `reply_requires_agent` (`daemon.rs:1214`) vise les clients éphémères — la
-   connexion attach persistante doit être reconnue comme apte au `reply` différé
-   ou l'envoi limité à `reply=false` (à trancher en tasks, avec cxbridget).
+   les wrappers : T801 tranche un rôle attach séparé, hors annuaire, avec une
+   matrice de messages fermée. T802 porte son handshake typé.
+3. L'envoi via la connexion attach réutilise `Send` mais est borné à
+   `reply=false` : aucune demande suivie n'est créée ; les échecs tardifs sont
+   corrélés par `message_id` sur la connexion persistante.
 
 ## Gate avant tasks
 
