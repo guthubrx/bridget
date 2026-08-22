@@ -3,16 +3,18 @@
 
 use crate::transport::{Transport, TransportError};
 use bridget_core::BridgetMessage;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const CANCEL_GRACE: Duration = Duration::from_millis(250);
+const CANCEL_POLL: Duration = Duration::from_millis(20);
 
 #[derive(Debug, Clone)]
 pub struct AcpOptions {
@@ -56,10 +58,17 @@ pub enum AcpEvent {
 
 type Waiters = Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>;
 type Writer = Arc<Mutex<Option<ChildStdin>>>;
+type Completions = Arc<Mutex<HashMap<String, mpsc::Sender<()>>>>;
+
+struct ActiveTurn {
+    message_id: String,
+    cancellation: mpsc::Sender<String>,
+    cancelled: Arc<AtomicBool>,
+}
 
 struct QueueState {
     messages: VecDeque<BridgetMessage>,
-    active: Option<String>,
+    active: Option<ActiveTurn>,
     closed: bool,
 }
 
@@ -67,6 +76,7 @@ struct TurnWorker {
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     writer: Writer,
     waiters: Waiters,
+    completions: Completions,
     next_id: Arc<AtomicU64>,
     alive: Arc<AtomicBool>,
     state: Arc<Mutex<TurnState>>,
@@ -74,11 +84,13 @@ struct TurnWorker {
     response: Arc<Mutex<String>>,
     session_id: String,
     notify_timeout: Duration,
+    child: Arc<Mutex<Child>>,
 }
 
 pub struct AcpTransport {
     connection_id: String,
     alive: Arc<AtomicBool>,
+    shutdown_started: Arc<AtomicBool>,
     state: Arc<Mutex<TurnState>>,
     events: Arc<Mutex<VecDeque<AcpEvent>>>,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
@@ -116,10 +128,12 @@ impl AcpTransport {
             .take()
             .ok_or_else(|| TransportError::Io("stdout ACP absent".to_string()))?;
         let alive = Arc::new(AtomicBool::new(true));
+        let shutdown_started = Arc::new(AtomicBool::new(false));
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let response = Arc::new(Mutex::new(String::new()));
         let writer = Arc::new(Mutex::new(Some(stdin)));
         let waiters: Waiters = Arc::new(Mutex::new(HashMap::new()));
+        let completions: Completions = Arc::new(Mutex::new(HashMap::new()));
         let next_id = Arc::new(AtomicU64::new(1));
         let queue = Arc::new((
             Mutex::new(QueueState {
@@ -129,15 +143,19 @@ impl AcpTransport {
             }),
             Condvar::new(),
         ));
+        let active_session = Arc::new(Mutex::new(None));
+        let child = Arc::new(Mutex::new(child));
         let reader_handle = spawn_reader(
             stdout,
             writer.clone(),
             waiters.clone(),
+            completions.clone(),
             events.clone(),
             response.clone(),
             alive.clone(),
             options.permissions.clone(),
             queue.clone(),
+            active_session.clone(),
         );
 
         let setup = (|| -> Result<String, TransportError> {
@@ -177,18 +195,23 @@ impl AcpTransport {
         let session_id = match setup {
             Ok(session_id) => session_id,
             Err(error) => {
+                writer.lock().unwrap_or_else(|err| err.into_inner()).take();
+                let mut child = child.lock().unwrap_or_else(|err| err.into_inner());
                 let _ = child.kill();
                 let _ = child.wait();
+                drop(child);
                 let _ = reader_handle.join();
                 return Err(error);
             }
         };
+        *active_session.lock().unwrap_or_else(|err| err.into_inner()) = Some(session_id.clone());
 
         let state = Arc::new(Mutex::new(TurnState::Idle));
         let worker_handle = spawn_worker(TurnWorker {
             queue: queue.clone(),
             writer: writer.clone(),
             waiters,
+            completions,
             next_id: next_id.clone(),
             alive: alive.clone(),
             state: state.clone(),
@@ -196,17 +219,19 @@ impl AcpTransport {
             response,
             session_id: session_id.clone(),
             notify_timeout: Duration::from_secs(options.notify_timeout_secs),
+            child: child.clone(),
         });
         Ok(Self {
             connection_id: format!("acp-{pid}"),
             alive,
+            shutdown_started,
             state,
             events,
             queue,
             queue_capacity: options.queue_capacity,
             writer,
             session_id,
-            child: Arc::new(Mutex::new(child)),
+            child,
             reader_handle: Mutex::new(Some(reader_handle)),
             worker_handle: Mutex::new(Some(worker_handle)),
         })
@@ -227,16 +252,19 @@ impl AcpTransport {
             .collect()
     }
 
-    /// Retire atomiquement un message en attente, ou annule le tour actif.
+    /// Retire atomiquement un message en attente, ou signale au worker que le
+    /// tour actif doit appliquer le protocole cancel+grâce.
     pub fn cancel_delivery(&self, message_id: &str, reason: &str) -> bool {
         let message = {
             let (queue, wakeup) = &*self.queue;
             let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
-            if queue.active.as_deref() == Some(message_id) {
-                let _ = write_json(
-                    &self.writer,
-                    json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": self.session_id } }),
-                );
+            if let Some(active) = queue
+                .active
+                .as_ref()
+                .filter(|active| active.message_id == message_id)
+            {
+                active.cancelled.store(true, Ordering::SeqCst);
+                let _ = active.cancellation.send(reason.to_string());
                 return true;
             }
             let Some(index) = queue
@@ -263,9 +291,10 @@ impl AcpTransport {
     /// Arrêt propre : le client demande l'annulation du tour courant et ferme
     /// sa file, sans bloquer le thread qui détruit le transport.
     pub fn shutdown(&self) {
-        if !self.alive.swap(false, Ordering::SeqCst) {
+        if self.shutdown_started.swap(true, Ordering::SeqCst) {
             return;
         }
+        self.alive.store(false, Ordering::SeqCst);
         let (queue, wakeup) = &*self.queue;
         let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
         queue.closed = true;
@@ -318,6 +347,16 @@ impl Transport for AcpTransport {
         if !self.is_alive() {
             return Err(TransportError::AgentDead);
         }
+        if message_expired(msg) {
+            self.events
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push_back(AcpEvent::DeliveryRejected {
+                    message_id: msg.id.clone(),
+                    reason: "échéance de livraison dépassée".to_string(),
+                });
+            return Ok(());
+        }
         if !enqueue(&self.queue, self.queue_capacity, msg.clone()) {
             self.events
                 .lock()
@@ -339,82 +378,120 @@ impl Transport for AcpTransport {
     }
 }
 
+fn message_expired(message: &BridgetMessage) -> bool {
+    let Some(deadline_at) = message.deadline_at else {
+        return false;
+    };
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|now| now.as_secs() >= deadline_at)
+        .unwrap_or(false)
+}
+
 fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
-    thread::spawn(move || loop {
-        let message = {
-            let (queue, wakeup) = &*worker.queue;
-            let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
-            while queue.messages.is_empty() && !queue.closed {
-                queue = wakeup.wait(queue).unwrap_or_else(|err| err.into_inner());
+    thread::spawn(move || {
+        loop {
+            let (message, cancellation, cancelled) = {
+                let (queue, wakeup) = &*worker.queue;
+                let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
+                while queue.messages.is_empty() && !queue.closed {
+                    queue = wakeup.wait(queue).unwrap_or_else(|err| err.into_inner());
+                }
+                if queue.closed {
+                    break;
+                }
+                let message = queue.messages.pop_front().expect("file ACP non vide");
+                let (cancellation, cancellation_receiver) = mpsc::channel();
+                let cancelled = Arc::new(AtomicBool::new(false));
+                queue.active = Some(ActiveTurn {
+                    message_id: message.id.clone(),
+                    cancellation,
+                    cancelled: cancelled.clone(),
+                });
+                (message, cancellation_receiver, cancelled)
+            };
+            if !worker.alive.load(Ordering::SeqCst) {
+                worker
+                    .events
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .push_back(AcpEvent::DeliveryRejected {
+                        message_id: message.id,
+                        reason: "équipier arrêté".to_string(),
+                    });
+                clear_active_turn(&worker.queue);
+                continue;
             }
-            if queue.closed {
-                break;
+            if message_expired(&message) {
+                worker
+                    .events
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .push_back(AcpEvent::DeliveryRejected {
+                        message_id: message.id.clone(),
+                        reason: "échéance de livraison dépassée".to_string(),
+                    });
+                clear_active_turn(&worker.queue);
+                continue;
             }
-            let message = queue.messages.pop_front().expect("file ACP non vide");
-            queue.active = Some(message.id.clone());
-            message
-        };
-        if !worker.alive.load(Ordering::SeqCst) {
+            *worker.state.lock().unwrap_or_else(|err| err.into_inner()) = TurnState::InProgress {
+                message_id: message.id.clone(),
+                since: SystemTime::now(),
+            };
             worker
                 .events
                 .lock()
                 .unwrap_or_else(|err| err.into_inner())
-                .push_back(AcpEvent::DeliveryRejected {
-                    message_id: message.id,
-                    reason: "équipier arrêté".to_string(),
+                .push_back(AcpEvent::TurnStarted {
+                    message_id: message.id.clone(),
                 });
-            continue;
+            worker
+                .response
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .clear();
+            let result = prompt_request(
+                &worker.writer,
+                &worker.waiters,
+                &worker.completions,
+                &worker.next_id,
+                "session/prompt",
+                json!({
+                    "sessionId": &worker.session_id,
+                    "prompt": [{ "type": "text", "text": prompt_for(&message) }]
+                }),
+                if message.reply {
+                    None
+                } else {
+                    Some(worker.notify_timeout)
+                },
+                &cancellation,
+                &cancelled,
+                &worker.session_id,
+                &worker.child,
+                &worker.queue,
+                &worker.events,
+                &worker.alive,
+            );
+            let collected = worker
+                .response
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .clone();
+            *worker.state.lock().unwrap_or_else(|err| err.into_inner()) = TurnState::Idle;
+            clear_active_turn(&worker.queue);
+            let event = finish_turn(message, collected, result);
+            worker
+                .events
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push_back(event);
         }
-        *worker.state.lock().unwrap_or_else(|err| err.into_inner()) = TurnState::InProgress {
-            message_id: message.id.clone(),
-            since: SystemTime::now(),
-        };
-        worker
-            .events
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .push_back(AcpEvent::TurnStarted {
-                message_id: message.id.clone(),
-            });
-        worker
-            .response
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .clear();
-        let result = prompt_request(
-            &worker.writer,
-            &worker.waiters,
-            &worker.next_id,
-            "session/prompt",
-            json!({
-                "sessionId": &worker.session_id,
-                "prompt": [{ "type": "text", "text": prompt_for(&message) }]
-            }),
-            if message.reply {
-                None
-            } else {
-                Some(worker.notify_timeout)
-            },
-        );
-        let collected = worker
-            .response
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .clone();
-        *worker.state.lock().unwrap_or_else(|err| err.into_inner()) = TurnState::Idle;
-        worker
-            .queue
-            .0
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .active = None;
-        let event = finish_turn(message, collected, result);
-        worker
-            .events
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .push_back(event);
     })
+}
+
+fn clear_active_turn(queue: &Arc<(Mutex<QueueState>, Condvar)>) {
+    queue.0.lock().unwrap_or_else(|err| err.into_inner()).active = None;
 }
 
 fn enqueue(
@@ -461,11 +538,13 @@ fn spawn_reader(
     stdout: ChildStdout,
     writer: Writer,
     waiters: Waiters,
+    completions: Completions,
     events: Arc<Mutex<VecDeque<AcpEvent>>>,
     response: Arc<Mutex<String>>,
     alive: Arc<AtomicBool>,
     permissions: String,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
+    active_session: Arc<Mutex<Option<String>>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
@@ -488,13 +567,36 @@ fn spawn_reader(
                     .unwrap_or_else(|err| err.into_inner())
                     .remove(id)
             });
-            if let (Some((_, result)), Some(waiter)) = (rpc_result, waiter) {
-                let _ = waiter.send(result);
+            if let (Some((id, result)), Some(waiter)) = (rpc_result.as_ref(), waiter) {
+                complete_request(&completions, id);
+                let _ = waiter.send(result.clone());
+                continue;
+            }
+            if let Some((id, _)) = rpc_result.as_ref()
+                && complete_request(&completions, id) {
                 continue;
             }
             match value.get("method").and_then(Value::as_str) {
                 Some("session/update") => {
-                    if let Some(text) = update_text(&value) {
+                    let session_id = active_session
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .clone();
+                    if update_has_foreign_session(&value, session_id.as_deref()) {
+                        events
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .push_back(AcpEvent::Error {
+                                detail: "update ACP ignorée pour une session étrangère".to_string(),
+                            });
+                    } else if active_turn_is_cancelled(&queue) {
+                        events
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .push_back(AcpEvent::Error {
+                                detail: "update ACP ignorée après annulation du tour".to_string(),
+                            });
+                    } else if let Some(text) = update_text(&value, session_id.as_deref()) {
                         response
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
@@ -508,7 +610,9 @@ fn spawn_reader(
                     }
                 }
                 Some("session/request_permission") => {
-                    if let Some(reply) = permission_response(&value, &permissions) {
+                    if let Some(reply) =
+                        permission_response(&value, &permissions, active_turn_is_cancelled(&queue))
+                    {
                         let _ = write_json(&writer, reply);
                     }
                 }
@@ -565,21 +669,37 @@ fn drain_queue(queue: &mut QueueState, events: &Arc<Mutex<VecDeque<AcpEvent>>>, 
     }
 }
 
+// Les ressources du tour sont distinctes par conception (lecteur unique,
+// writer sérialisé, worker et arrêt forcé) ; les regrouper brouillerait D-204.
+#[allow(clippy::too_many_arguments)]
 fn prompt_request(
     writer: &Writer,
     waiters: &Waiters,
+    completions: &Completions,
     next_id: &AtomicU64,
     method: &str,
     params: Value,
     timeout: Option<Duration>,
+    cancellation: &mpsc::Receiver<String>,
+    cancelled: &AtomicBool,
+    session_id: &str,
+    child: &Arc<Mutex<Child>>,
+    queue: &Arc<(Mutex<QueueState>, Condvar)>,
+    events: &Arc<Mutex<VecDeque<AcpEvent>>>,
+    alive: &AtomicBool,
 ) -> Result<Value, TransportError> {
     let id = next_id.fetch_add(1, Ordering::SeqCst);
     let (sender, receiver) = mpsc::channel();
+    let (completion_sender, completion_receiver) = mpsc::channel();
     let key = id.to_string();
     waiters
         .lock()
         .unwrap_or_else(|err| err.into_inner())
         .insert(key.clone(), sender);
+    completions
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .insert(key.clone(), completion_sender);
     if let Err(error) = write_json(
         writer,
         json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
@@ -588,15 +708,108 @@ fn prompt_request(
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .remove(&key);
+        completions
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&key);
         return Err(error);
     }
-    let result = match timeout {
-        Some(timeout) => receiver
-            .recv_timeout(timeout)
-            .map_err(|_| TransportError::DeliveryFailed(format!("timeout ACP pour {method}")))?,
-        None => receiver.recv().map_err(|_| TransportError::AgentDead)?,
-    };
-    result.map_err(TransportError::DeliveryFailed)
+    let started = std::time::Instant::now();
+    loop {
+        let timed_out = timeout.is_some_and(|timeout| started.elapsed() >= timeout);
+        let cancellation_reason = cancellation
+            .try_recv()
+            .ok()
+            .or_else(|| timed_out.then(|| format!("timeout ACP pour {method}")));
+        if let Some(reason) = cancellation_reason {
+            cancelled.store(true, Ordering::SeqCst);
+            waiters
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .remove(&key);
+            let _ = write_json(
+                writer,
+                json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": session_id } }),
+            );
+            if completion_receiver.recv_timeout(CANCEL_GRACE).is_err() {
+                force_stop_transport(
+                    writer,
+                    child,
+                    queue,
+                    events,
+                    waiters,
+                    completions,
+                    alive,
+                    &reason,
+                );
+            }
+            return Err(TransportError::DeliveryFailed(reason));
+        }
+        let remaining = timeout
+            .map(|timeout| timeout.saturating_sub(started.elapsed()))
+            .unwrap_or(CANCEL_POLL);
+        let poll = remaining.min(CANCEL_POLL);
+        match receiver.recv_timeout(poll) {
+            Ok(result) => {
+                completions
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .remove(&key);
+                return result.map_err(TransportError::DeliveryFailed);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(TransportError::AgentDead),
+        }
+    }
+}
+
+fn complete_request(completions: &Completions, id: &str) -> bool {
+    completions
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .remove(id)
+        .is_some_and(|completion| completion.send(()).is_ok())
+}
+
+fn active_turn_is_cancelled(queue: &Arc<(Mutex<QueueState>, Condvar)>) -> bool {
+    queue
+        .0
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .active
+        .as_ref()
+        .is_some_and(|active| active.cancelled.load(Ordering::SeqCst))
+}
+
+// L'arrêt forcé touche explicitement chaque propriétaire de ressource afin de
+// fermer stdin, récolter l'enfant et drainer la file sans fuite.
+#[allow(clippy::too_many_arguments)]
+fn force_stop_transport(
+    writer: &Writer,
+    child: &Arc<Mutex<Child>>,
+    queue: &Arc<(Mutex<QueueState>, Condvar)>,
+    events: &Arc<Mutex<VecDeque<AcpEvent>>>,
+    waiters: &Waiters,
+    completions: &Completions,
+    alive: &AtomicBool,
+    reason: &str,
+) {
+    alive.store(false, Ordering::SeqCst);
+    let (queue_state, wakeup) = &**queue;
+    let mut queue_state = queue_state.lock().unwrap_or_else(|err| err.into_inner());
+    queue_state.closed = true;
+    drain_queue(&mut queue_state, events, reason);
+    wakeup.notify_all();
+    drop(queue_state);
+    writer.lock().unwrap_or_else(|err| err.into_inner()).take();
+    let mut child = child.lock().unwrap_or_else(|err| err.into_inner());
+    let _ = child.kill();
+    let _ = child.wait();
+    fail_waiters(waiters, reason);
+    completions
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clear();
 }
 
 fn request(
@@ -665,7 +878,18 @@ fn rpc_response(value: &Value) -> Option<(String, Result<Value, String>)> {
     Some((id, result))
 }
 
-fn update_text(value: &Value) -> Option<&str> {
+fn update_has_foreign_session(value: &Value, session_id: Option<&str>) -> bool {
+    value
+        .pointer("/params/sessionId")
+        .and_then(Value::as_str)
+        .zip(session_id)
+        .is_some_and(|(received, expected)| received != expected)
+}
+
+fn update_text<'a>(value: &'a Value, session_id: Option<&str>) -> Option<&'a str> {
+    if update_has_foreign_session(value, session_id) {
+        return None;
+    }
     if value
         .pointer("/params/update/sessionUpdate")
         .and_then(Value::as_str)
@@ -700,32 +924,32 @@ fn write_json(writer: &Writer, value: Value) -> Result<(), TransportError> {
         .map_err(|err| TransportError::Io(err.to_string()))
 }
 
-fn permission_response(value: &Value, permissions: &str) -> Option<Value> {
+fn permission_response(value: &Value, permissions: &str, cancelled: bool) -> Option<Value> {
     let id = value.get("id")?;
     let options = value.pointer("/params/options")?.as_array()?;
+    if cancelled {
+        return Some(
+            json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": { "outcome": "cancelled" } } }),
+        );
+    }
     let desired = if permissions == "allow" {
-        "allow"
+        "allow_"
     } else {
-        "deny"
+        "reject_"
     };
     let option = options.iter().find(|option| {
         option
             .get("kind")
             .and_then(Value::as_str)
-            .is_some_and(|kind| kind.contains(desired))
-            || option
-                .get("name")
-                .and_then(Value::as_str)
-                .is_some_and(|name| name.to_lowercase().contains(desired))
+            .is_some_and(|kind| kind.starts_with(desired))
     });
     match option.and_then(|option| option.get("optionId")).cloned() {
         Some(option_id) => Some(
-            json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": "Selected", "optionId": option_id } }),
+            json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": { "outcome": "selected", "optionId": option_id } } }),
         ),
-        None if permissions == "deny" => {
-            Some(json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": "Cancelled" } }))
-        }
-        None => None,
+        None => Some(
+            json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": { "outcome": "cancelled" } } }),
+        ),
     }
 }
 
@@ -783,19 +1007,22 @@ mod tests {
             .lines()
             .collect::<Vec<_>>();
         let notification: Value = serde_json::from_str(lines[0]).unwrap();
-        assert_eq!(update_text(&notification), Some("premier"));
+        assert_eq!(
+            update_text(&notification, Some("fixture-session")),
+            Some("premier")
+        );
 
         let tool_update: Value = serde_json::from_str(lines[1]).unwrap();
-        assert_eq!(update_text(&tool_update), None);
+        assert_eq!(update_text(&tool_update, Some("fixture-session")), None);
 
         let permission: Value = serde_json::from_str(lines[2]).unwrap();
         assert_eq!(
-            permission_response(&permission, "allow").unwrap()["result"],
-            json!({"outcome":"Selected","optionId":"allow-1"})
+            permission_response(&permission, "allow", false).unwrap()["result"],
+            json!({"outcome":{"outcome":"selected","optionId":"allow-1"}})
         );
         assert_eq!(
-            permission_response(&permission, "deny").unwrap()["result"]["optionId"],
-            "deny-1"
+            permission_response(&permission, "deny", false).unwrap()["result"]["outcome"]["optionId"],
+            "reject-1"
         );
 
         let numeric: Value = serde_json::from_str(lines[3]).unwrap();
@@ -804,11 +1031,13 @@ mod tests {
         assert_eq!(rpc_response(&string).unwrap().0, "\"string-9\"");
 
         let error: Value = serde_json::from_str(lines[5]).unwrap();
-        assert!(rpc_response(&error)
-            .unwrap()
-            .1
-            .unwrap_err()
-            .contains("refus"));
+        assert!(
+            rpc_response(&error)
+                .unwrap()
+                .1
+                .unwrap_err()
+                .contains("refus")
+        );
 
         let unknown: Value = serde_json::from_str(lines[6]).unwrap();
         assert_eq!(
@@ -824,7 +1053,7 @@ mod tests {
         let mut stop_reason = None;
         for line in include_str!("../tests/fixtures/acp/codex-spike.jsonl").lines() {
             let value: Value = serde_json::from_str(line).unwrap();
-            if let Some(chunk) = update_text(&value) {
+            if let Some(chunk) = update_text(&value, Some("spike-session")) {
                 text.push_str(chunk);
             }
             if let Some((_, Ok(result))) = rpc_response(&value) {
@@ -905,6 +1134,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["first", "second"]
         );
+    }
+
+    #[test]
+    fn expired_delivery_is_rejected_before_it_reaches_the_prompt_queue() {
+        let mut message = message("expired");
+        message.deadline_at = Some(0);
+        assert!(message_expired(&message));
     }
 
     #[test]
@@ -1042,6 +1278,186 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
     }
 
     #[test]
+    fn false_adapter_asserts_the_raw_official_permission_envelope() {
+        let script = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read request
+echo '{"jsonrpc":"2.0","id":"permission-1","method":"session/request_permission","params":{"sessionId":"fixture-session","options":[{"optionId":"allow-1","kind":"allow_once"}]}}'
+read permission
+case "$permission" in
+  *'"result":{"outcome":{"optionId":"allow-1","outcome":"selected"}}'*)
+    echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}' ;;
+  *) exit 12 ;;
+esac
+"#;
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            queue_capacity: 2,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+        })
+        .unwrap();
+        transport.deliver(&message("permission-raw")).unwrap();
+        for _ in 0..30 {
+            thread::sleep(Duration::from_millis(10));
+            if transport
+                .drain_events()
+                .iter()
+                .any(|event| matches!(event, AcpEvent::TurnFinished { .. }))
+            {
+                return;
+            }
+        }
+        panic!("l'enveloppe brute de permission officielle n'a pas été acceptée");
+    }
+
+    #[test]
+    fn foreign_session_update_is_ignored_and_diagnosed() {
+        let script = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read request
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"foreign-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"interdit"}}}}'
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+"#;
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            queue_capacity: 2,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+        })
+        .unwrap();
+        transport.deliver(&message("foreign-update")).unwrap();
+        for _ in 0..30 {
+            thread::sleep(Duration::from_millis(10));
+            let events = transport.drain_events();
+            if events.iter().any(|event| matches!(event, AcpEvent::TurnFinished { response, .. } if response.is_empty())) {
+                assert!(events.iter().any(|event| matches!(event, AcpEvent::Error { detail } if detail.contains("session étrangère"))));
+                return;
+            }
+        }
+        panic!("l'update de session étrangère n'a pas été diagnostiquée");
+    }
+
+    #[test]
+    fn cancelled_turn_waits_for_adapter_before_the_next_prompt() {
+        let script = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read first_prompt
+read cancel
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"cancelled"}}'
+read second_prompt
+echo '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
+"#;
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            queue_capacity: 2,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+        })
+        .unwrap();
+        transport.deliver(&message("cancelled")).unwrap();
+        transport.deliver(&message("next")).unwrap();
+        for _ in 0..30 {
+            thread::sleep(Duration::from_millis(10));
+            if matches!(transport.state(), TurnState::InProgress { ref message_id, .. } if message_id == "cancelled")
+            {
+                break;
+            }
+        }
+        assert!(transport.cancel_delivery("cancelled", "annulation daemon"));
+        let mut rejected = false;
+        let mut next_finished = false;
+        for _ in 0..60 {
+            thread::sleep(Duration::from_millis(10));
+            for event in transport.drain_events() {
+                rejected |= matches!(event, AcpEvent::DeliveryRejected { ref message_id, .. } if message_id == "cancelled");
+                next_finished |=
+                    matches!(event, AcpEvent::TurnFinished { message, .. } if message.id == "next");
+            }
+            if rejected && next_finished {
+                return;
+            }
+        }
+        panic!("le tour annulé a empêché ou contaminé le prompt suivant");
+    }
+
+    #[test]
+    fn ignored_cancel_kills_transport_and_drains_the_queue() {
+        let script = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read prompt
+read cancel
+sleep 2
+"#;
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            queue_capacity: 2,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+        })
+        .unwrap();
+        transport.deliver(&message("active")).unwrap();
+        transport.deliver(&message("queued")).unwrap();
+        for _ in 0..30 {
+            thread::sleep(Duration::from_millis(10));
+            if matches!(transport.state(), TurnState::InProgress { ref message_id, .. } if message_id == "active")
+            {
+                break;
+            }
+        }
+        assert!(transport.cancel_delivery("active", "annulation daemon"));
+        thread::sleep(CANCEL_GRACE + Duration::from_millis(100));
+        assert!(!transport.is_alive());
+        let events = transport.drain_events();
+        assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, .. } if message_id == "active")));
+        assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, .. } if message_id == "queued")));
+    }
+
+    #[test]
+    fn notification_timeout_uses_cancel_grace_then_forced_drain() {
+        let script = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read prompt
+read cancel
+sleep 2
+"#;
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            queue_capacity: 2,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 0,
+        })
+        .unwrap();
+        transport.deliver(&message("timeout-active")).unwrap();
+        transport.deliver(&message("timeout-queued")).unwrap();
+        thread::sleep(CANCEL_GRACE + Duration::from_millis(100));
+        assert!(!transport.is_alive());
+        let events = transport.drain_events();
+        assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, reason } if message_id == "timeout-active" && reason.contains("timeout ACP"))));
+        assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, .. } if message_id == "timeout-queued")));
+    }
+
+    #[test]
     fn false_adapter_eof_rejects_an_active_turn() {
         let script = r#"
 read request
@@ -1060,9 +1476,12 @@ exit 0
         })
         .unwrap();
         transport.deliver(&message("eof-message")).unwrap();
+        transport.deliver(&message("eof-queued")).unwrap();
         for _ in 0..20 {
             thread::sleep(Duration::from_millis(10));
-            if transport.drain_events().iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, reason } if message_id == "eof-message" && reason.contains("EOF ACP"))) {
+            let events = transport.drain_events();
+            if events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, reason } if message_id == "eof-message" && reason.contains("EOF ACP")))
+                && events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, reason } if message_id == "eof-queued" && reason.contains("EOF ACP"))) {
                 return;
             }
         }

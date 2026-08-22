@@ -1334,8 +1334,21 @@ fn handle_wrapper_message(
                     st.envelope_guard
                         .mark_relayed(&bridge_msg.id, &bridge_msg.to);
 
+                    // Le daemon est l'autorité de l'échéance : le wrapper ACP
+                    // reçoit sa valeur absolue pour purger un tour devenu trop
+                    // tardif juste avant `session/prompt`.
+                    let mut delivered_message = bridge_msg.clone();
+                    if delivered_message.reply {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        delivered_message.deadline_at = Some(
+                            now.saturating_add(delivered_message.reply_timeout.unwrap_or(60)),
+                        );
+                    }
                     // Push vers le destinataire
-                    let dtw = DaemonToWrapper::Deliver(bridge_msg.clone());
+                    let dtw = DaemonToWrapper::Deliver(delivered_message);
                     let json = encode(&dtw).unwrap_or_default();
                     eprintln!("[BRIDGET] Push vers {}: {} octets", target_conn, json.len());
 

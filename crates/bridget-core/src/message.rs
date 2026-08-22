@@ -59,6 +59,11 @@ pub struct BridgetMessage {
     /// Le daemon relance le destinataire à T/3, 2T/3, puis notifie l'émetteur à T.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_timeout: Option<u64>,
+    /// Échéance Unix absolue transmise au transport destinataire. Le daemon
+    /// reste l'autorité de cycle de vie ; le transport refuse aussi un tour
+    /// qui arriverait après cette échéance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_at: Option<u64>,
     /// Identifiant de la demande suivie à laquelle ce message répond.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_reply_to: Option<String>,
@@ -85,6 +90,7 @@ impl BridgetMessage {
             reply: false,
             hops: default_hops(),
             reply_timeout: None,
+            deadline_at: None,
             in_reply_to: None,
         }
     }

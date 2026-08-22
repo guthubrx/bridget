@@ -964,6 +964,25 @@ fn launch_acp(
         }
     }
     transport.shutdown();
+    // L'EOF peut fermer le transport entre deux itérations : vider une dernière
+    // fois les événements terminaux avant Unregister afin que le daemon voie
+    // chaque DeliveryRejected (tour actif comme file restante).
+    for event in transport.drain_events() {
+        match event {
+            AcpEvent::TurnFinished { message, response, .. } if message.reply && !response.is_empty() => {
+                let mut reply = bridget_core::BridgetMessage::new(&my_name, &message.from, response);
+                reply.in_reply_to = Some(message.id);
+                send_wrapper_message(&writer, WrapperToDaemon::Send(reply));
+            }
+            AcpEvent::TurnFinished { message, response, .. } if message.reply && response.is_empty() => {
+                send_wrapper_message(&writer, WrapperToDaemon::DeliveryRejected { id: message.id, reason: "réponse vide".to_string() });
+            }
+            AcpEvent::DeliveryRejected { message_id, reason } => {
+                send_wrapper_message(&writer, WrapperToDaemon::DeliveryRejected { id: message_id, reason });
+            }
+            _ => {}
+        }
+    }
     send_wrapper_message(&writer, WrapperToDaemon::Unregister);
     Ok(())
 }

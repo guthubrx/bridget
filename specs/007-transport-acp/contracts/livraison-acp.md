@@ -36,9 +36,11 @@ Règles :
 Règles :
 
 1. Le « texte final » est la concaténation des blocs dont
-   `sessionUpdate == "agent_message_chunk"` et `content.type == "text"`
+   `sessionUpdate == "agent_message_chunk"` **et** `content.type == "text"`
    (et dont le `sessionId`, quand présent, correspond à la session), dans
-   l'ordre — jamais le texte porté par un appel d'outil ni la progression.
+   l'ordre — **jamais** le texte porté par `tool_call`/`tool_call_update` ni la
+   progression (précision imposée par la pair review T704 : sans le
+   discriminateur, du texte d'outil polluerait la réponse).
 2. La réponse est routée par le canal wrapper→daemon avec l'id du message
    d'origine — c'est cet id qui clôt la demande suivie (cycle de vie 003).
 3. Un seul tour actif par équipier ; les messages reçus pendant un tour sont
@@ -46,12 +48,40 @@ Règles :
 
 ## Demandes de permission pendant un tour
 
-Une requête `session/request_permission` porte `params.options[]`. La réponse
-ACP v1 sélectionne un `optionId` réellement proposé : `outcome: Selected` pour
-une option autorisante/rejetante suivant la politique ; `outcome: Cancelled`
-si aucun rejet n'est proposé ou si le tour est annulé pendant la permission.
+Contrat ACP v1 exact (corrigé après pair review T704 — la forme
+`result.outcome = "allow"|"deny"` est **hors contrat**) :
 
-`session/cancel` est une notification JSON-RPC sans `id`. Le timeout court ne
-s'applique qu'à `initialize` et `session/new` : un prompt attend son résultat
-ou l'annulation de l'autorité daemon. Les notifications inconnues sont
-journalisées ; une requête inconnue reçoit aussi `-32601`.
+- la requête `session/request_permission` porte `params.options[]`, chaque
+  option ayant un `optionId` et un `kind` officiel : `allow_once` /
+  `allow_always` / `reject_once` / `reject_always` (pas de `deny_*` — valeur
+  inexistante au schéma) ;
+- la réponse DOIT suivre l'enveloppe **imbriquée et en minuscules** du schéma
+  officiel : `result.outcome = { "outcome": "selected", "optionId": … }`, avec
+  un `optionId` **choisi parmi les options reçues** — politique `allow` → kind
+  `allow_*`, politique `deny` → kind `reject_*` ;
+- si aucune option ne convient, la réponse est
+  `result.outcome = { "outcome": "cancelled" }` — une requête serveur ne reste
+  **jamais** sans réponse ;
+- si le tour est annulé pendant qu'une permission est pendante, elle est close
+  par `cancelled` ;
+- les fixtures de test proviennent du schéma officiel et l'assertion porte sur
+  le **JSON brut** émis.
+
+Chaque demande et sa réponse automatique sont journalisées
+(`event: permission`).
+
+## Conformité protocolaire complémentaire
+
+- `session/cancel` est une **notification** JSON-RPC : émise **sans `id`**,
+  aucune réponse attendue (une forme requête créerait un waiter orphelin).
+- Le timeout de requête court (poignée de main `initialize`/`session/new`) ne
+  s'applique **jamais** à `session/prompt` : un tour attend jusqu'à son
+  résultat ou jusqu'à l'annulation décidée par l'autorité daemon (D-206) ; les
+  tours de notification (`reply=no`) relèvent du `notify_timeout_secs` du
+  registre. **Tout timeout ou annulation d'un tour actif suit le même
+  protocole** : retrait atomique du waiter, `session/cancel`, attente d'une
+  grâce bornée de fin de tour ; si l'adaptateur l'ignore, arrêt forcé
+  (kill+récolte), transport marqué mort, file drainée en échecs terminaux —
+  jamais un simple abandon d'attente pendant que le tour continue.
+- Toute méthode ou notification inconnue reçue est journalisée (événement
+  diagnostic) ; une requête inconnue reçoit en plus l'erreur `-32601`.
