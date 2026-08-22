@@ -4,6 +4,7 @@ use bridget_transport::fsutil::{create_private_dir, write_private_file_atomic};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 const MAX_DELIVERY_ID_LEN: usize = 128;
 
@@ -62,6 +63,7 @@ impl From<io::Error> for ReceiptError {
 pub struct ReceiptStore {
     directory: PathBuf,
     quota: ReceiptQuota,
+    transition_lock: Mutex<()>,
 }
 
 impl ReceiptStore {
@@ -75,7 +77,11 @@ impl ReceiptStore {
         let directory = state_home.join("bridget").join("receipts").join(instance_id);
         let existed_before_open = directory.exists();
         create_private_dir(&directory)?;
-        let store = Self { directory, quota };
+        let store = Self {
+            directory,
+            quota,
+            transition_lock: Mutex::new(()),
+        };
         if existed_before_open {
             if store.read_max_expires_at().is_err() {
                 write_private_file_atomic(&store.quarantine_path(), i64::MAX.to_string().as_bytes())?;
@@ -93,6 +99,7 @@ impl ReceiptStore {
         expires_at: i64,
         now: i64,
     ) -> Result<ReceiptDecision, ReceiptError> {
+        let _transition = self.transition_lock.lock().unwrap_or_else(|poison| poison.into_inner());
         validate_token(delivery_id).map_err(|_| ReceiptError::InvalidDeliveryId)?;
         if expires_at <= now {
             return Err(ReceiptError::InvalidExpiry);
@@ -114,7 +121,7 @@ impl ReceiptStore {
                 }
             },
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                if self.would_exceed_quota(ReceiptEntry::Seen { expires_at }.serialize().len() as u64)? {
+                if self.would_exceed_quota(ReceiptEntry::Acked { expires_at }.serialize().len() as u64)? {
                     return Ok(ReceiptDecision::RejectedQuota);
                 }
                 self.persist_entry(&path, ReceiptEntry::Seen { expires_at })?;
@@ -131,6 +138,7 @@ impl ReceiptStore {
         delivery_id: &str,
         now: i64,
     ) -> Result<ReceiptDecision, ReceiptError> {
+        let _transition = self.transition_lock.lock().unwrap_or_else(|poison| poison.into_inner());
         validate_token(delivery_id).map_err(|_| ReceiptError::InvalidDeliveryId)?;
         if self.is_quarantined(now)? || !self.directory_is_healthy() {
             return Ok(ReceiptDecision::Indeterminate);
@@ -157,6 +165,10 @@ impl ReceiptStore {
     }
 
     pub fn purge_expired(&self, now: i64) -> Result<usize, ReceiptError> {
+        let _transition = self.transition_lock.lock().unwrap_or_else(|poison| poison.into_inner());
+        // La purge est atomique par entrée : le sentinel conserve un horizon
+        // conservateur entre deux suppressions, donc un crash ne peut pas
+        // transformer un reçu disparu en nouvelle injection.
         if !self.directory_is_healthy() {
             return Ok(0);
         }
@@ -242,7 +254,9 @@ impl ReceiptStore {
     fn read_max_expires_at(&self) -> Result<i64, ReceiptError> {
         match fs::read(self.max_expires_path()) {
             Ok(bytes) => parse_timestamp(&bytes).map_err(|_| ReceiptError::Io(io::Error::other("horizon corrompu"))),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(0),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Err(ReceiptError::Io(io::Error::new(io::ErrorKind::NotFound, "sentinel max_expires_at absent")))
+            }
             Err(error) => Err(error.into()),
         }
     }
@@ -312,7 +326,8 @@ fn validate_token(value: &str) -> Result<(), ()> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{atomic::{AtomicU64, Ordering}, Arc, Barrier};
+    use std::thread;
 
     const NOW: i64 = 1_000_000;
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -370,6 +385,82 @@ mod tests {
         fs::remove_dir_all(&store.directory).unwrap();
         assert_eq!(store.receive("delivery_1", NOW + 60, NOW).unwrap(), ReceiptDecision::Indeterminate);
         assert!(!store.directory.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_sentinel_or_recreated_directory_is_fail_closed_after_initialization() {
+        let (store, root) = test_store(ReceiptQuota::default());
+        assert_eq!(store.receive("delivery_old", NOW + 60, NOW).unwrap(), ReceiptDecision::Inject);
+        fs::remove_file(store.max_expires_path()).unwrap();
+        assert_eq!(store.receive("delivery_old", NOW + 60, NOW).unwrap(), ReceiptDecision::Indeterminate);
+        assert_eq!(store.receive("delivery_new", NOW + 60, NOW).unwrap(), ReceiptDecision::Indeterminate);
+        let reopened = ReceiptStore::open(&root, "instance_012_aaaaaaaaaaaa", ReceiptQuota::default()).unwrap();
+        assert_eq!(reopened.receive("delivery_old", NOW + 60, NOW).unwrap(), ReceiptDecision::Indeterminate);
+        assert_eq!(reopened.receive("delivery_new", NOW + 60, NOW).unwrap(), ReceiptDecision::Indeterminate);
+
+        fs::remove_dir_all(&reopened.directory).unwrap();
+        create_private_dir(&reopened.directory).unwrap();
+        let recreated = ReceiptStore::open(&root, "instance_012_aaaaaaaaaaaa", ReceiptQuota::default()).unwrap();
+        assert_eq!(recreated.receive("delivery_old", NOW + 60, NOW).unwrap(), ReceiptDecision::Indeterminate);
+        assert_eq!(recreated.receive("delivery_new", NOW + 60, NOW).unwrap(), ReceiptDecision::Indeterminate);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn concurrent_delivery_reserves_once_and_serializes_quota() {
+        let (store, root) = test_store(ReceiptQuota { max_entries: 1, max_bytes: 1024, horizon_max_secs: 60 });
+        let store = Arc::new(store);
+        let barrier = Arc::new(Barrier::new(3));
+        let mut same_delivery = Vec::new();
+        for _ in 0..2 {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            same_delivery.push(thread::spawn(move || {
+                barrier.wait();
+                store.receive("delivery_same", NOW + 60, NOW).unwrap()
+            }));
+        }
+        barrier.wait();
+        let decisions: Vec<_> = same_delivery.into_iter().map(|handle| handle.join().unwrap()).collect();
+        assert_eq!(decisions.iter().filter(|decision| **decision == ReceiptDecision::Inject).count(), 1);
+        assert_eq!(decisions.iter().filter(|decision| **decision == ReceiptDecision::Indeterminate).count(), 1);
+
+        let quota_store = Arc::new(
+            ReceiptStore::open(
+                &root,
+                "instance_012_bbbbbbbbbbbb",
+                ReceiptQuota { max_entries: 1, max_bytes: 1024, horizon_max_secs: 60 },
+            )
+            .unwrap(),
+        );
+        let quota_barrier = Arc::new(Barrier::new(3));
+        let mut distinct_delivery = Vec::new();
+        for delivery_id in ["delivery_other_1", "delivery_other_2"] {
+            let store = quota_store.clone();
+            let barrier = quota_barrier.clone();
+            distinct_delivery.push(thread::spawn(move || {
+                barrier.wait();
+                store.receive(delivery_id, NOW + 60, NOW).unwrap()
+            }));
+        }
+        quota_barrier.wait();
+        let decisions: Vec<_> = distinct_delivery.into_iter().map(|handle| handle.join().unwrap()).collect();
+        assert_eq!(decisions.iter().filter(|decision| **decision == ReceiptDecision::Inject).count(), 1);
+        assert_eq!(decisions.iter().filter(|decision| **decision == ReceiptDecision::RejectedQuota).count(), 1);
+        drop(store);
+        drop(quota_store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn quota_reserves_the_final_acked_size_at_its_exact_boundary() {
+        let expires_at = NOW + 60;
+        let final_size = ReceiptEntry::Acked { expires_at }.serialize().len() as u64;
+        let (store, root) = test_store(ReceiptQuota { max_entries: 2, max_bytes: final_size, horizon_max_secs: 60 });
+        assert_eq!(store.receive("delivery_1", expires_at, NOW).unwrap(), ReceiptDecision::Inject);
+        assert_eq!(store.acknowledge("delivery_1", NOW).unwrap(), ReceiptDecision::Acked);
+        assert_eq!(store.receive("delivery_2", expires_at, NOW).unwrap(), ReceiptDecision::RejectedQuota);
         let _ = fs::remove_dir_all(root);
     }
 

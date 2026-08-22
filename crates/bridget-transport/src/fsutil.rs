@@ -15,6 +15,10 @@ pub fn create_private_dir(path: &Path) -> io::Result<()> {
 }
 
 /// Remplace atomiquement un fichier privé (0600) après synchronisation disque.
+///
+/// Un échec avant le renommage nettoie le temporaire. Un échec après le
+/// renommage est propagé : l'appelant doit alors traiter l'issue comme
+/// indéterminée plutôt que supposer une écriture réussie.
 pub fn write_private_file_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| io::Error::other("fichier sans parent"))?;
     create_private_dir(parent)?;
@@ -25,11 +29,17 @@ pub fn write_private_file_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .create_new(true)
         .mode(0o600)
         .open(&temporary)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
-    fs::rename(&temporary, path)?;
-    File::open(parent)?.sync_all()
+    let result = (|| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+        fs::rename(&temporary, path)?;
+        File::open(parent)?.sync_all()
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 #[cfg(test)]
