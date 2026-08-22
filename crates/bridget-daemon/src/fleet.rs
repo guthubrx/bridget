@@ -65,6 +65,15 @@ pub struct SpawnWaiter {
     pub deadline_at: i64,
 }
 
+/// Génération persistante restée en vol lors du crash précédent. T908 la
+/// prépare à nouveau sans réserver une seconde clé ni une seconde génération.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryCandidate {
+    pub lease: SpawnLease,
+    pub agent_type: String,
+    pub cwd: PathBuf,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpawnSubmission {
     Start(SpawnLease),
@@ -213,8 +222,7 @@ impl FleetSupervisor {
             .inner
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        inner.active_by_command.contains_key(command_id)
-            || inner.completed.contains_key(command_id)
+        inner.active_by_command.contains_key(command_id) || inner.completed.contains_key(command_id)
     }
 
     pub fn quota(&self) -> usize {
@@ -227,6 +235,37 @@ impl FleetSupervisor {
             .unwrap_or_else(|poison| poison.into_inner())
             .active_by_command
             .len()
+    }
+
+    /// Instantané ordonné des générations en vol rattachées à `fleet.json`.
+    /// Les entrées déjà terminales ne figurent pas ici : T908 leur réserve une
+    /// nouvelle génération de reprise.
+    pub fn recovery_candidates(&self) -> Vec<RecoveryCandidate> {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut candidates = inner
+            .active_by_command
+            .values()
+            .filter(|active| active.persistent)
+            .map(|active| RecoveryCandidate {
+                lease: lease_from(active),
+                agent_type: active.agent_type.clone(),
+                cwd: active.cwd.clone(),
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| left.lease.name.cmp(&right.lease.name));
+        candidates
+    }
+
+    pub fn desired_fleet(&self) -> Result<DesiredFleet, FleetError> {
+        self.desired.load().map_err(Into::into)
+    }
+
+    pub fn remove_desired(&self, name: &str) -> Result<(), FleetError> {
+        self.desired.remove(name)?;
+        Ok(())
     }
 
     /// Réserve une clé puis applique, sous le même verrou métier, les gardes
@@ -885,6 +924,47 @@ mod tests {
         assert_eq!(
             reopened.request_spawn(&spawn, NOW + 2).unwrap(),
             SpawnSubmission::Terminal(issue)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reprise_expose_les_generations_en_vol_dans_l_ordre_des_noms() {
+        let root = test_root("recovery-candidates");
+        let supervisor = open(&root);
+        for (command_id, name) in [("command-z", "zeta"), ("command-a", "alpha")] {
+            let spawn = order(command_id, Some(name), true);
+            let lease = start(&supervisor, &spawn);
+            supervisor.mark_starting(&lease, NOW).unwrap();
+            supervisor
+                .desired
+                .upsert(
+                    name.to_string(),
+                    DesiredEquipier {
+                        agent_type: "codex".to_string(),
+                        cwd: PathBuf::from("/tmp"),
+                        command_id: command_id.to_string(),
+                        generation: lease.generation,
+                        created: NOW.to_string(),
+                    },
+                )
+                .unwrap();
+        }
+        drop(supervisor);
+
+        let reopened = open(&root);
+        let candidates = reopened.recovery_candidates();
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.lease.name.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "zeta"]
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.lease.persistent)
         );
         fs::remove_dir_all(root).unwrap();
     }

@@ -5,7 +5,8 @@
 //! chaque refus terminal passe par la même saga idempotente que le succès.
 
 use crate::fleet::{
-    FleetError, FleetSupervisor, SpawnLease, SpawnOrder, SpawnSubmission, SpawnWaiter,
+    FleetError, FleetSupervisor, RecoveryCandidate, SpawnLease, SpawnOrder, SpawnSubmission,
+    SpawnWaiter,
 };
 use crate::idempotency::SpawnCommandIssue;
 use crate::registry::{
@@ -89,8 +90,35 @@ fn prepare_spawn(
     order: &SpawnOrder,
     lease: SpawnLease,
 ) -> Result<PreparedSpawn, SpawnRefusal> {
+    prepare_spawn_parts(registry, source, &order.agent_type, &order.cwd, lease)
+}
+
+/// Reprépare une génération persistante restée en vol sans repasser par la
+/// réservation idempotente. Les mêmes gardes registre, facturation,
+/// environnement et cwd que pour un spawn neuf restent autoritaires.
+pub fn prepare_recovery(
+    registry: &AgentRegistry,
+    source: &SourceEnvironment,
+    candidate: RecoveryCandidate,
+) -> Result<PreparedSpawn, SpawnRefusal> {
+    prepare_spawn_parts(
+        registry,
+        source,
+        &candidate.agent_type,
+        &candidate.cwd,
+        candidate.lease,
+    )
+}
+
+fn prepare_spawn_parts(
+    registry: &AgentRegistry,
+    source: &SourceEnvironment,
+    agent_type: &str,
+    cwd: &Path,
+    lease: SpawnLease,
+) -> Result<PreparedSpawn, SpawnRefusal> {
     let definition = registry
-        .get(&order.agent_type)
+        .get(agent_type)
         .map_err(|_| SpawnRefusal::UnknownType)?;
     if let Some(variable) = forbidden_environment_variable(
         definition,
@@ -108,7 +136,7 @@ fn prepare_spawn(
             detail: format!("le protocole '{}' n'est pas ACP", definition.protocol),
         });
     }
-    if !order.cwd.is_dir() {
+    if !cwd.is_dir() {
         return Err(SpawnRefusal::CwdGone);
     }
     let env = build_environment(definition, source)?;
@@ -120,10 +148,10 @@ fn prepare_spawn(
     }
     Ok(PreparedSpawn {
         lease,
-        agent_type: order.agent_type.clone(),
+        agent_type: agent_type.to_string(),
         command: definition.command.clone(),
         args: definition.args.clone(),
-        cwd: order.cwd.clone(),
+        cwd: cwd.to_path_buf(),
         env,
     })
 }
@@ -480,6 +508,16 @@ mod tests {
         );
         assert_eq!(supervisor.active_count(), 0);
         assert!(!supervisor.knows_command("command-recovering"));
+
+        let known = order(&root, "command-known-before-recovery", "agent-known");
+        assert!(matches!(
+            submit_spawn(&supervisor, &registry, &source(&root), &known, NOW, false,).unwrap(),
+            SpawnDecision::Ready(_)
+        ));
+        assert!(matches!(
+            submit_spawn(&supervisor, &registry, &source(&root), &known, NOW, true,).unwrap(),
+            SpawnDecision::Await(_)
+        ));
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -415,9 +415,7 @@ impl RunningManagedChild {
         signal_group(pgid, libc::SIGTERM)?;
         if self.wait_group_gone_reaping(pgid, forced_grace, poll_interval)? {
             self.remove_marker()?;
-            return Ok(ManagedStopResult::StoppedForced {
-                survivors_killed,
-            });
+            return Ok(ManagedStopResult::StoppedForced { survivors_killed });
         }
         Ok(ManagedStopResult::Timeout)
     }
@@ -502,11 +500,7 @@ pub fn signal_group(pgid: u32, signal: libc::c_int) -> io::Result<()> {
     }
 }
 
-pub fn wait_group_gone(
-    pgid: u32,
-    timeout: Duration,
-    poll_interval: Duration,
-) -> io::Result<bool> {
+pub fn wait_group_gone(pgid: u32, timeout: Duration, poll_interval: Duration) -> io::Result<bool> {
     let deadline = Instant::now() + timeout;
     loop {
         if !group_exists(pgid)? {
@@ -1154,6 +1148,98 @@ impl ManagedMarkerStore {
             .map_err(|error| ManagedProcessError::InvalidStatus(error.to_string()))
     }
 
+    /// Termine, avant toute reprise, les groupes laissés par une génération
+    /// précédente du daemon. Ces processus ne sont plus ses enfants : leur
+    /// disparition est donc constatée exclusivement par `kill(-pgid, 0)` ; un
+    /// `waitpid` produirait `ECHILD` et n'est volontairement jamais utilisé.
+    ///
+    /// Les marqueurs sont parcourus par nom pour rendre la réconciliation
+    /// déterministe. Un marqueur n'est supprimé qu'après disparition confirmée
+    /// du groupe, ou lorsque la naissance prouve que le PID a été recyclé.
+    pub fn reconcile_stale_groups(
+        &self,
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> Result<Vec<String>, ManagedProcessError> {
+        let entries = match fs::read_dir(&self.directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut names = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let name = path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .ok_or_else(|| {
+                    ManagedProcessError::InvalidStatus(format!(
+                        "nom de marqueur non UTF-8: {}",
+                        path.display()
+                    ))
+                })?
+                .to_string();
+            validate_marker_name(&name)?;
+            names.push(name);
+        }
+        names.sort();
+
+        let mut reconciled = Vec::with_capacity(names.len());
+        for name in names {
+            let marker = self.load(&name)?;
+            validate_identity(&ManagedIdentity {
+                instance_id: marker.instance_id.clone(),
+                command_id: marker.command_id.clone(),
+                generation: marker.generation,
+            })?;
+            if marker.pgid == 0 {
+                return Err(ManagedProcessError::InvalidStatus(format!(
+                    "marqueur géré incomplet pour {name}"
+                )));
+            }
+            let birth = match process_birth(marker.pgid) {
+                Ok(birth) => birth,
+                Err(error)
+                    if error.kind() == io::ErrorKind::NotFound
+                        || error.raw_os_error() == Some(libc::ESRCH) =>
+                {
+                    self.remove(&name)?;
+                    reconciled.push(name);
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
+            if birth != marker.birth || !group_exists(marker.pgid)? {
+                self.remove(&name)?;
+                reconciled.push(name);
+                continue;
+            }
+            signal_group(marker.pgid, libc::SIGTERM)?;
+            let cooperative_grace = timeout / 2;
+            let forced_grace = timeout.saturating_sub(cooperative_grace);
+            if !wait_group_gone(marker.pgid, cooperative_grace, poll_interval)? {
+                match signal_group(marker.pgid, libc::SIGKILL) {
+                    Ok(()) => {}
+                    Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            if !wait_group_gone(marker.pgid, forced_grace, poll_interval)? {
+                return Err(ManagedProcessError::InvalidStatus(format!(
+                    "groupe périmé encore vivant pour {name} (pgid {})",
+                    marker.pgid
+                )));
+            }
+            self.remove(&name)?;
+            reconciled.push(name);
+        }
+        Ok(reconciled)
+    }
+
     /// Arrête un groupe retrouvé uniquement par son marqueur après perte de
     /// la table superviseur. Un marqueur dont le leader a disparu ou dont la
     /// naissance ne correspond plus est retiré sans signaler le PID recyclé.
@@ -1189,9 +1275,7 @@ impl ManagedMarkerStore {
         signal_group(marker.pgid, libc::SIGTERM)?;
         if wait_group_gone(marker.pgid, timeout, poll_interval)? {
             self.remove(name)?;
-            return Ok(Some(ManagedStopResult::StoppedForced {
-                survivors_killed,
-            }));
+            return Ok(Some(ManagedStopResult::StoppedForced { survivors_killed }));
         }
         Ok(Some(ManagedStopResult::Timeout))
     }
@@ -1290,9 +1374,7 @@ mod tests {
             .iter()
             .any(|argument| argument == "managed_process::tests::fd_probe_child");
         let mut command = helper_command("managed_process::tests::bootstrap_child");
-        command
-            .env(BOOTSTRAP_CHILD_ENV, "1")
-            .env(
+        command.env(BOOTSTRAP_CHILD_ENV, "1").env(
                 BOOTSTRAP_REQUEST_ENV,
                 serde_json::to_string(&json!({
                     "instance_id": request.identity.instance_id,
@@ -1414,11 +1496,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let descendant_path = root.join("descendant.pid");
         let fake_npx = root.join("npx");
-        fs::write(
-            &fake_npx,
-            "#!/bin/sh\nsleep 30 &\necho $! > \"$1\"\nwait\n",
-        )
-        .unwrap();
+        fs::write(&fake_npx, "#!/bin/sh\nsleep 30 &\necho $! > \"$1\"\nwait\n").unwrap();
         fs::set_permissions(&fake_npx, fs::Permissions::from_mode(0o700)).unwrap();
         let store = ManagedMarkerStore::at_directory(root.join("managed"));
         let mut child = spawn_test_bootstrap_with_wrapper(
@@ -1485,6 +1563,43 @@ mod tests {
         );
         assert!(matches!(
             store.load("codex-1"),
+            Err(ManagedProcessError::Io(ref error))
+                if error.kind() == io::ErrorKind::NotFound
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reconciliation_termine_un_groupe_reel_avant_de_supprimer_son_marqueur() {
+        let root = test_root("reconcile-real-group");
+        fs::create_dir_all(&root).unwrap();
+        let store = ManagedMarkerStore::at_directory(root.join("managed"));
+        let mut running = spawn_test_bootstrap_with_wrapper(
+            PathBuf::from("/bin/sh"),
+            vec![
+                "-c".to_string(),
+                "trap '' TERM; while :; do sleep 1; done".to_string(),
+            ],
+        )
+        .wait_ready()
+        .unwrap()
+        .persist_marker(&store, "codex-reconcile")
+        .unwrap()
+        .release()
+        .unwrap();
+        let pgid = running.marker().marker().pgid;
+        let reaper = thread::spawn(move || running.child_mut().wait().unwrap());
+
+        assert_eq!(
+            store
+                .reconcile_stale_groups(Duration::from_secs(2), Duration::from_millis(10))
+                .unwrap(),
+            ["codex-reconcile"]
+        );
+        assert!(!group_exists(pgid).unwrap());
+        let _ = reaper.join().unwrap();
+        assert!(matches!(
+            store.load("codex-reconcile"),
             Err(ManagedProcessError::Io(ref error))
                 if error.kind() == io::ErrorKind::NotFound
         ));
@@ -1560,7 +1675,10 @@ mod tests {
             ManagedProcessError::Io(ref source)
                 if source.kind() == io::ErrorKind::PermissionDenied
         ));
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o644);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
         fs::remove_file(&path).unwrap();
         fs::create_dir(&path).unwrap();
         assert!(matches!(

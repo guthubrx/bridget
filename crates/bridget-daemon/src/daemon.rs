@@ -27,7 +27,8 @@ use crate::{
     desired_state::DesiredStateStore,
     fleet::{FleetConfig, FleetSupervisor, SpawnLease, SpawnOrder as FleetSpawnOrder},
     lifecycle::{
-        PreparedSpawn, SourceEnvironment, SpawnDecision, source_environment, submit_spawn,
+        PreparedSpawn, SourceEnvironment, SpawnDecision, prepare_recovery, source_environment,
+        submit_spawn,
     },
     managed_process::{
         ManagedIdentity, ManagedLaunch, ManagedMarkerStore, ManagedStatus, ManagedStderrStore,
@@ -95,6 +96,7 @@ const MANAGED_STOP_COOPERATIVE_GRACE: Duration = Duration::from_millis(500);
 const MANAGED_STOP_FORCED_GRACE: Duration = Duration::from_secs(1);
 const MANAGED_STOP_POLL: Duration = Duration::from_millis(20);
 const MANAGED_STOP_REPLY_TIMEOUT: Duration = Duration::from_secs(3);
+const MANAGED_RECOVERY_DEADLINE_SECS: i64 = 30;
 const CLIENT_IDEMPOTENCY_HORIZON_SECS: i64 = 7 * 24 * 60 * 60;
 const CLIENT_ISSUED_AT_TOLERANCE_SECS: i64 = 60;
 const MAX_ACTIVE_ISSUER_SCOPES: usize = 4096;
@@ -236,6 +238,7 @@ struct DaemonState {
     registry: AgentRegistry,
     source_env: SourceEnvironment,
     recovering: bool,
+    recovery_commands: HashSet<String>,
     managed_tx: Sender<ManagedSupervisorCommand>,
     marker_store: ManagedMarkerStore,
     managed_spawns: HashMap<String, ManagedSpawnRecord>,
@@ -266,10 +269,13 @@ struct DaemonState {
 
 struct ManagedSpawnRecord {
     lease: SpawnLease,
+    agent_type: String,
     requester_conns: Vec<String>,
     wrapper_conn: Option<String>,
     stop: Arc<ManagedStopControl>,
 }
+
+type ManagedRecovery = (PreparedSpawn, Arc<ManagedStopControl>);
 
 struct ManagedStopControl {
     requested: AtomicBool,
@@ -958,7 +964,12 @@ fn start_managed_supervisor(
     commands: Receiver<ManagedSupervisorCommand>,
     events: Sender<ManagedSupervisorEvent>,
 ) {
-    start_managed_supervisor_with_executable(fleet, config, commands, events, None);
+    #[cfg(test)]
+    let executable_override =
+        std::env::var_os("BRIDGET_T908_MANAGED_EXECUTABLE").map(PathBuf::from);
+    #[cfg(not(test))]
+    let executable_override = None;
+    start_managed_supervisor_with_executable(fleet, config, commands, events, executable_override);
 }
 
 fn start_managed_supervisor_with_executable(
@@ -1063,7 +1074,8 @@ fn handle_managed_command(
                 let Some(ready) = child.wait_ready_or_cancel(
                     || stop.is_actionable() || unix_timestamp() >= prepared.lease.deadline_at,
                     MANAGED_STOP_POLL,
-                )? else {
+                )?
+                else {
                     return Ok(None);
                 };
                 if ready.ready().instance_id != prepared.lease.instance_id
@@ -1331,6 +1343,7 @@ fn drain_managed_events(
                             );
                         }
                     }
+                    finish_recovery_command(&mut st, &lease.command_id);
                 }
                 ManagedSupervisorEvent::Failed {
                     lease,
@@ -1349,7 +1362,8 @@ fn drain_managed_events(
                     };
                     if let Some(record) = st.managed_spawns.remove(&lease.command_id) {
                         if record.stop.is_requested() {
-                            stop_completion = Some((Arc::clone(&record.stop), StopOutcome::Stopped));
+                            stop_completion =
+                                Some((Arc::clone(&record.stop), StopOutcome::Stopped));
                         }
                         st.managed_by_instance.remove(&lease.instance_id);
                         st.managed_terminal_instances
@@ -1378,6 +1392,7 @@ fn drain_managed_events(
                             presence.last_seen = Instant::now();
                         }
                     }
+                    finish_recovery_command(&mut st, &lease.command_id);
                 }
                 ManagedSupervisorEvent::Exited {
                     lease,
@@ -1393,11 +1408,8 @@ fn drain_managed_events(
                     {
                         stop_completion = Some((Arc::clone(&record.stop), StopOutcome::Stopped));
                     }
-                    let wrapper_conn = conn_id.or_else(|| {
-                        record
-                            .as_ref()
-                            .and_then(|value| value.wrapper_conn.clone())
-                    });
+                    let wrapper_conn = conn_id
+                        .or_else(|| record.as_ref().and_then(|value| value.wrapper_conn.clone()));
                     if let Some(wrapper_conn) = wrapper_conn {
                         let (attach_controls, attach_views) =
                             close_attach_subscriptions(&mut st, &wrapper_conn);
@@ -1426,6 +1438,7 @@ fn drain_managed_events(
                         presence.state = "stopped".to_string();
                         presence.last_seen = Instant::now();
                     }
+                    finish_recovery_command(&mut st, &lease.command_id);
                 }
                 ManagedSupervisorEvent::Stopped {
                     lease,
@@ -1437,11 +1450,8 @@ fn drain_managed_events(
                     st.managed_by_instance.remove(&lease.instance_id);
                     st.managed_terminal_instances
                         .insert(lease.instance_id.clone());
-                    let wrapper_conn = conn_id.or_else(|| {
-                        record
-                            .as_ref()
-                            .and_then(|value| value.wrapper_conn.clone())
-                    });
+                    let wrapper_conn = conn_id
+                        .or_else(|| record.as_ref().and_then(|value| value.wrapper_conn.clone()));
                     if let Some(record) = record {
                         for requester in record.requester_conns {
                             defer_control(
@@ -1485,6 +1495,7 @@ fn drain_managed_events(
                         presence.state = "stopped".to_string();
                         presence.last_seen = Instant::now();
                     }
+                    finish_recovery_command(&mut st, &lease.command_id);
                     stop_completion = Some((completion, outcome));
                 }
                 ManagedSupervisorEvent::StopTimedOut {
@@ -1507,6 +1518,13 @@ fn drain_managed_events(
         if let Some((completion, outcome)) = stop_completion {
             completion.complete(outcome);
         }
+    }
+}
+
+fn finish_recovery_command(state: &mut DaemonState, command_id: &str) {
+    state.recovery_commands.remove(command_id);
+    if state.recovery_commands.is_empty() {
+        state.recovering = false;
     }
 }
 
@@ -1540,6 +1558,7 @@ impl DaemonState {
             registry,
             source_env: source_environment(),
             recovering: false,
+            recovery_commands: HashSet::new(),
             managed_tx,
             marker_store: ManagedMarkerStore::at_directory(
                 config
@@ -1662,9 +1681,30 @@ impl DaemonState {
             .collect();
         let live_names: std::collections::HashSet<String> =
             agents.iter().map(|agent| agent.name.clone()).collect();
+        for record in self.managed_spawns.values().filter(|record| {
+            self.recovery_commands.contains(&record.lease.command_id)
+                && !live_names.contains(&record.lease.name)
+        }) {
+            agents.push(bridget_transport::protocol::AgentInfo {
+                name: record.lease.name.clone(),
+                agent_type: record.agent_type.clone(),
+                connection_id: String::new(),
+                host: "local".to_string(),
+                transport: "acp".to_string(),
+                os: std::env::consts::OS.to_string(),
+                state: "recovering".to_string(),
+                last_seen_secs: 0,
+                reconnect_count: 0,
+                domain: None,
+                model: None,
+                effort: None,
+            });
+        }
+        let listed_names: std::collections::HashSet<String> =
+            agents.iter().map(|agent| agent.name.clone()).collect();
         for presence in self.presences.values().filter(|presence| {
                 matches!(presence.state.as_str(), "stopped" | "unreachable")
-                    && !live_names.contains(&presence.name)
+                && !listed_names.contains(&presence.name)
         }) {
             agents.push(bridget_transport::protocol::AgentInfo {
                 name: presence.name.clone(),
@@ -1738,6 +1778,118 @@ impl DaemonState {
     }
 }
 
+/// Réserve toutes les reprises en ordre lexical avant de libérer la boucle
+/// normale. Les `PreparedSpawn` ne sont envoyés au superviseur qu'après la fin
+/// de cette fonction, ce qui rend tous les noms visibles à `stop` même si le
+/// premier bootstrap bloque.
+fn reserve_managed_recoveries(
+    state: &mut DaemonState,
+    now: i64,
+) -> Result<Vec<ManagedRecovery>, Box<dyn std::error::Error>> {
+    state.recovering = true;
+    let candidates = state.fleet.recovery_candidates();
+    let in_flight_names = candidates
+        .iter()
+        .map(|candidate| candidate.lease.name.clone())
+        .collect::<HashSet<_>>();
+    let desired = state.fleet.desired_fleet()?;
+    let mut prepared = Vec::new();
+
+    for candidate in candidates {
+        if candidate.lease.deadline_at <= now {
+            let _ =
+                state
+                    .fleet
+                    .expire(&candidate.lease.command_id, candidate.lease.generation, now);
+            continue;
+        }
+        let lease = candidate.lease.clone();
+        match prepare_recovery(&state.registry, &state.source_env, candidate) {
+            Ok(recovery) => prepared.push(recovery),
+            Err(reason) => {
+                let detail = serde_json::to_string(&reason)
+                    .unwrap_or_else(|_| "échec de préparation de reprise".to_string());
+                let _ = state.fleet.fail(&lease, "recovery_failed", detail);
+            }
+        }
+    }
+
+    for (name, equipier) in desired.equipiers {
+        if in_flight_names.contains(&name) {
+            continue;
+        }
+        let order = FleetSpawnOrder {
+            agent_type: equipier.agent_type,
+            requested_name: Some(name.clone()),
+            cwd: equipier.cwd,
+            persistent: true,
+            command_id: format!("recovery-{}", Uuid::new_v4()),
+            issued_at: now,
+            deadline_at: now.saturating_add(MANAGED_RECOVERY_DEADLINE_SECS),
+        };
+        match submit_spawn(
+            &state.fleet,
+            &state.registry,
+            &state.source_env,
+            &order,
+            now,
+            false,
+        )? {
+            SpawnDecision::Ready(recovery) => prepared.push(recovery),
+            SpawnDecision::Rejected(reason) => {
+                warn!("reprise de {name} refusée: {reason:?}");
+                state.fleet.remove_desired(&name)?;
+            }
+            SpawnDecision::EnvelopeMismatch => {
+                warn!("reprise de {name} refusée: enveloppe divergente");
+                state.fleet.remove_desired(&name)?;
+            }
+            SpawnDecision::Await(_) | SpawnDecision::Accepted { .. } => {
+                warn!("reprise de {name} rattachée à un état inattendu");
+                state.fleet.remove_desired(&name)?;
+            }
+        }
+    }
+
+    prepared.sort_by(|left, right| left.lease.name.cmp(&right.lease.name));
+    for (recovery, stop) in prepared
+        .iter()
+        .map(|recovery| (recovery, Arc::new(ManagedStopControl::new())))
+    {
+        state.managed_by_instance.insert(
+            recovery.lease.instance_id.clone(),
+            recovery.lease.command_id.clone(),
+        );
+        state
+            .recovery_commands
+            .insert(recovery.lease.command_id.clone());
+        state.managed_spawns.insert(
+            recovery.lease.command_id.clone(),
+            ManagedSpawnRecord {
+                lease: recovery.lease.clone(),
+                agent_type: recovery.agent_type.clone(),
+                requester_conns: Vec::new(),
+                wrapper_conn: None,
+                stop,
+            },
+        );
+    }
+    state.recovering = !state.recovery_commands.is_empty();
+
+    Ok(prepared
+        .into_iter()
+        .map(|recovery| {
+            let stop = state
+                .managed_spawns
+                .get(&recovery.lease.command_id)
+                .expect("reprise insérée sous le même verrou")
+                .stop
+                .clone();
+            (recovery, stop)
+        })
+        .collect())
+}
+
 /// Lance le daemon.
 pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Verrouillage exclusif avec flock — empêche deux daemons de démarrer en même temps
@@ -1776,6 +1928,23 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         std::process::id()
     );
 
+    let marker_store = ManagedMarkerStore::at_directory(
+        config
+            .db_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("/tmp"))
+            .join("managed"),
+    );
+    let reconciled =
+        marker_store.reconcile_stale_groups(MANAGED_STOP_FORCED_GRACE, MANAGED_STOP_POLL)?;
+    if !reconciled.is_empty() {
+        info!(
+            "réconciliation: {} ancien(s) groupe(s) terminé(s): {}",
+            reconciled.len(),
+            reconciled.join(", ")
+        );
+    }
+
     if config.socket_path.exists() {
         std::fs::remove_file(&config.socket_path)?;
     }
@@ -1787,12 +1956,37 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     let (managed_tx, managed_rx) = mpsc::channel();
     let (managed_event_tx, managed_event_rx) = mpsc::channel();
     let state = Arc::new(Mutex::new(DaemonState::new(&config, managed_tx)?));
+    let recoveries = {
+        let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
+        reserve_managed_recoveries(&mut st, unix_timestamp())?
+    };
     let fleet = state
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .fleet
         .clone();
     start_managed_supervisor(fleet, &config, managed_rx, managed_event_tx);
+    for (prepared, stop) in recoveries {
+        let command_id = prepared.lease.command_id.clone();
+        let instance_id = prepared.lease.instance_id.clone();
+        let sent = {
+            let st = state.lock().unwrap_or_else(|poison| poison.into_inner());
+            st.managed_tx
+                .send(ManagedSupervisorCommand::Start { prepared, stop })
+        };
+        if sent.is_err() {
+            let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
+            if let Some(record) = st.managed_spawns.remove(&command_id) {
+                let _ = st.fleet.fail(
+                    &record.lease,
+                    "negotiation_failed",
+                    "superviseur indisponible pendant la reprise",
+                );
+            }
+            st.managed_by_instance.remove(&instance_id);
+            finish_recovery_command(&mut st, &command_id);
+        }
+    }
 
     // Purge au démarrage
     {
@@ -2881,12 +3075,12 @@ fn handle_idempotent_send(
             ) {
                 Ok(prepared) => prepared,
                 Err((category, reason)) => {
-                    return reject_idempotent_send(st, &key, category, reason).unwrap_or_else(
-                        |error| DaemonToWrapper::Nack {
+            return reject_idempotent_send(st, &key, category, reason).unwrap_or_else(|error| {
+                DaemonToWrapper::Nack {
                             id: key.idempotency_key.clone(),
                             reason: error,
-                        },
-                    );
+                }
+            });
                 }
             };
             let Some(recipient_instance_id) = st.conn_instances.get(&prepared.target_conn).cloned() else {
@@ -3190,6 +3384,7 @@ fn handle_wrapper_message(
                         prepared.lease.command_id.clone(),
                         ManagedSpawnRecord {
                             lease: prepared.lease.clone(),
+                            agent_type: prepared.agent_type.clone(),
                             requester_conns: vec![conn_id.to_string()],
                             wrapper_conn: None,
                             stop: Arc::clone(&stop),
@@ -3235,13 +3430,11 @@ fn handle_wrapper_message(
                 Ok(SpawnDecision::Rejected(reason)) => {
                     Some(DaemonToWrapper::SpawnRejected { command_id, reason })
                 }
-                Ok(SpawnDecision::EnvelopeMismatch) => {
-                    Some(DaemonToWrapper::IdempotencyResult {
+                Ok(SpawnDecision::EnvelopeMismatch) => Some(DaemonToWrapper::IdempotencyResult {
                         operation_kind: "spawn".to_string(),
                         idempotency_key: command_id,
                         issue: IdempotencyIssue::EnvelopeMismatch,
-                    })
-                }
+                }),
                 Err(error) => Some(DaemonToWrapper::SpawnRejected {
                     command_id,
                     reason: SpawnRefusal::NegotiationFailed {
@@ -3305,11 +3498,11 @@ fn handle_wrapper_message(
                         let _ = push_control_message(&writer, &DaemonToWrapper::Disconnect);
                     }
                     completion.mark_handshake_complete();
-                    receiver
-                        .recv_timeout(MANAGED_STOP_REPLY_TIMEOUT)
-                        .unwrap_or(StopOutcome::Timeout {
+                    receiver.recv_timeout(MANAGED_STOP_REPLY_TIMEOUT).unwrap_or(
+                        StopOutcome::Timeout {
                             state: "superviseur sans issue dans le délai".to_string(),
-                        })
+                        },
+                    )
                 }
                 ManagedStopTarget::Marker { store, fallback } => match store.stop_current_group(
                     &name,
@@ -4196,9 +4389,14 @@ mod presence_tests {
     use super::*;
     use bridget_core::BridgetMessage;
     use std::collections::BTreeMap;
-    use std::ffi::OsString;
+    use std::ffi::{CString, OsString};
     use std::io::Read;
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::PermissionsExt;
+    use std::process::{Child, Command};
+
+    const T908_DAEMON_CHILD_ENV: &str = "BRIDGET_T908_DAEMON_CHILD";
+    const T908_ROOT_ENV: &str = "BRIDGET_T908_ROOT";
 
     fn control_socket(label: &str) -> (Arc<Mutex<BufWriter<UnixStream>>>, BufReader<UnixStream>) {
         let path = std::env::temp_dir().join(format!(
@@ -4386,6 +4584,574 @@ mod presence_tests {
             },
         );
         (state, config)
+    }
+
+    fn recovery_fixture_state(root: &std::path::Path) -> (DaemonState, DaemonConfig) {
+        std::fs::create_dir_all(root).unwrap();
+        let config = DaemonConfig {
+            socket_path: root.join("bridget.sock"),
+            db_path: root.join("bridget.db"),
+            log_path: root.join("daemon.log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+        };
+        let (managed_tx, _managed_rx) = mpsc::channel();
+        let mut state = DaemonState::new(&config, managed_tx).unwrap();
+        state.registry = AgentRegistry::from_json(
+            &serde_json::json!({
+                "agents": {
+                    "fixture": {
+                        "command": "/bin/sh",
+                        "protocol": "acp",
+                        "forbidden_env": [],
+                        "pass_env": []
+                    }
+                }
+            })
+            .to_string(),
+            root.join("agents.json"),
+        )
+        .unwrap();
+        state.source_env = BTreeMap::from([
+            ("HOME".to_string(), root.as_os_str().to_owned()),
+            ("PATH".to_string(), OsString::from("/bin:/usr/bin")),
+            ("USER".to_string(), OsString::from("tester")),
+            ("LANG".to_string(), OsString::from("C")),
+            ("TMPDIR".to_string(), OsString::from("/tmp")),
+        ]);
+        (state, config)
+    }
+
+    fn recovery_daemon_config(root: &std::path::Path) -> DaemonConfig {
+        let cache = root.join(".cache/bridget");
+        DaemonConfig {
+            socket_path: cache.join("bridget.sock"),
+            db_path: cache.join("bridget.db"),
+            log_path: cache.join("daemon.log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+        }
+    }
+
+    fn spawn_recovery_daemon(root: &std::path::Path) -> Child {
+        Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("daemon::presence_tests::recovery_daemon_child")
+            .arg("--ignored")
+            .arg("--nocapture")
+            .env(T908_DAEMON_CHILD_ENV, "1")
+            .env(T908_ROOT_ENV, root)
+            .env("HOME", root)
+            .env("BRIDGET_T908_MANAGED_EXECUTABLE", managed_test_binary())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    fn wait_daemon_socket(socket: &std::path::Path) {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            if socket.exists() && UnixStream::connect(socket).is_ok() {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "socket daemon absente après reprise"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn daemon_request(socket: &std::path::Path, request: WrapperToDaemon) -> DaemonToWrapper {
+        let stream = UnixStream::connect(socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(8)))
+            .unwrap();
+        let mut writer = BufWriter::new(stream.try_clone().unwrap());
+        writeln!(writer, "{}", encode(&request).unwrap()).unwrap();
+        writer.flush().unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        decode(line.trim()).unwrap()
+    }
+
+    #[test]
+    #[ignore]
+    fn recovery_daemon_child() {
+        if std::env::var(T908_DAEMON_CHILD_ENV).ok().as_deref() != Some("1") {
+            return;
+        }
+        let root = PathBuf::from(std::env::var_os(T908_ROOT_ENV).unwrap());
+        run(recovery_daemon_config(&root)).unwrap();
+    }
+
+    fn persist_connected_fixture(
+        state: &DaemonState,
+        name: &str,
+        command_id: &str,
+        now: i64,
+    ) -> SpawnLease {
+        let order = FleetSpawnOrder {
+            agent_type: "fixture".to_string(),
+            requested_name: Some(name.to_string()),
+            cwd: PathBuf::from("/tmp"),
+            persistent: true,
+            command_id: command_id.to_string(),
+            issued_at: now,
+            deadline_at: now + 60,
+        };
+        let lease = match state.fleet.request_spawn(&order, now).unwrap() {
+            crate::fleet::SpawnSubmission::Start(lease) => lease,
+            other => panic!("réservation persistante attendue: {other:?}"),
+        };
+        state.fleet.mark_starting(&lease, now).unwrap();
+        state
+            .fleet
+            .register_connected(&lease, &lease.instance_id, now + 1)
+            .unwrap();
+        lease
+    }
+
+    #[test]
+    fn reprise_reserve_tous_les_noms_avant_ouverture_et_devient_visible() {
+        let root = PathBuf::from(format!(
+            "/tmp/bg908-reserve-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let (state, config) = recovery_fixture_state(&root);
+        let now = unix_timestamp();
+        let previous = persist_connected_fixture(&state, "alpha", "initial-alpha", now);
+        drop(state);
+
+        let (mut reopened, _) = recovery_fixture_state(&root);
+        let recoveries = reserve_managed_recoveries(&mut reopened, now + 2).unwrap();
+        assert_eq!(recoveries.len(), 1);
+        assert_eq!(recoveries[0].0.lease.name, "alpha");
+        assert!(recoveries[0].0.lease.generation > previous.generation);
+        assert!(reopened.recovering);
+        assert_eq!(reopened.recovery_commands.len(), 1);
+        assert_eq!(reopened.agent_infos()[0].state, "recovering");
+        drop(reopened);
+        let _ = std::fs::remove_file(config.socket_path);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn matrice_reprise_isole_echec_et_quota_sans_retry_infini() {
+        let root = PathBuf::from(format!(
+            "/tmp/bg908-matrix-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let (_, config) = recovery_fixture_state(&root);
+        let desired = DesiredStateStore::at_path(desired_state_path(&config));
+        let mut fleet = crate::desired_state::DesiredFleet::default();
+        for index in 0..10_u64 {
+            fleet.equipiers.insert(
+                format!("agent-{index:02}"),
+                crate::desired_state::DesiredEquipier {
+                    agent_type: if index == 0 { "inconnu" } else { "fixture" }.to_string(),
+                    cwd: PathBuf::from("/tmp"),
+                    command_id: format!("ancien-{index}"),
+                    generation: index + 1,
+                    created: index.to_string(),
+                },
+            );
+        }
+        desired.persist(&fleet).unwrap();
+
+        let (mut reopened, _) = recovery_fixture_state(&root);
+        let recoveries = reserve_managed_recoveries(&mut reopened, unix_timestamp()).unwrap();
+        assert_eq!(recoveries.len(), reopened.fleet.quota());
+        let remaining = reopened.fleet.desired_fleet().unwrap();
+        assert_eq!(remaining.equipiers.len(), reopened.fleet.quota());
+        assert!(!remaining.equipiers.contains_key("agent-00"));
+        assert!(!remaining.equipiers.contains_key("agent-09"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reprise_en_conflit_avec_un_wrapper_terminal_echoue_sans_retry() {
+        let root = PathBuf::from(format!(
+            "/tmp/bg908-conflict-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let (_, config) = recovery_fixture_state(&root);
+        let desired = DesiredStateStore::at_path(desired_state_path(&config));
+        let mut fleet = crate::desired_state::DesiredFleet::default();
+        fleet.equipiers.insert(
+            "alpha".to_string(),
+            crate::desired_state::DesiredEquipier {
+                agent_type: "fixture".to_string(),
+                cwd: PathBuf::from("/tmp"),
+                command_id: "ancien-alpha".to_string(),
+                generation: 1,
+                created: "initial".to_string(),
+            },
+        );
+        desired.persist(&fleet).unwrap();
+
+        let (mut state, _) = recovery_fixture_state(&root);
+        let recoveries = reserve_managed_recoveries(&mut state, unix_timestamp()).unwrap();
+        assert_eq!(recoveries.len(), 1);
+        let lease = recoveries[0].0.lease.clone();
+        let shared = Arc::new(Mutex::new(state));
+
+        assert!(matches!(
+            handle_wrapper_message(
+                "terminal-alpha",
+                WrapperToDaemon::Register {
+                    agent_type: "fixture".to_string(),
+                    name: Some("alpha".to_string()),
+                    host: Some("local".to_string()),
+                    transport: Some("tmux".to_string()),
+                    os: Some("test".to_string()),
+                    instance_id: None,
+                    domain: None,
+                    turn_in_progress: false,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::Registered { ref name }) if name == "alpha"
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "managed-alpha",
+                WrapperToDaemon::Register {
+                    agent_type: "fixture".to_string(),
+                    name: Some("alpha".to_string()),
+                    host: Some("local".to_string()),
+                    transport: Some("acp".to_string()),
+                    os: Some("test".to_string()),
+                    instance_id: Some(lease.instance_id.clone()),
+                    domain: None,
+                    turn_in_progress: false,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::Nack { ref reason, .. }) if reason.contains("déjà")
+        ));
+
+        {
+            let state = shared.lock().unwrap();
+            state
+                .fleet
+                .fail(&lease, "name_active", "nom déjà actif")
+                .unwrap();
+        }
+        let (event_tx, event_rx) = mpsc::channel();
+        event_tx
+            .send(ManagedSupervisorEvent::Failed {
+                lease: lease.clone(),
+                kind: "name_active".to_string(),
+                reason: "nom déjà actif".to_string(),
+            })
+            .unwrap();
+        drain_managed_events(&shared, &event_rx);
+
+        let state = shared.lock().unwrap();
+        assert!(
+            !state
+                .fleet
+                .desired_fleet()
+                .unwrap()
+                .equipiers
+                .contains_key("alpha")
+        );
+        assert!(!state.recovering);
+        assert_eq!(
+            state.router.get_agent("alpha").unwrap().connection_id,
+            "terminal-alpha"
+        );
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stop_du_second_retablissement_gagne_avant_son_bootstrap() {
+        let root = PathBuf::from(format!(
+            "/tmp/bg908-stop-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let (_, config) = recovery_fixture_state(&root);
+        let desired = DesiredStateStore::at_path(desired_state_path(&config));
+        let mut fleet = crate::desired_state::DesiredFleet::default();
+        for name in ["alpha", "beta"] {
+            fleet.equipiers.insert(
+                name.to_string(),
+                crate::desired_state::DesiredEquipier {
+                    agent_type: "fixture".to_string(),
+                    cwd: PathBuf::from("/tmp"),
+                    command_id: format!("ancien-{name}"),
+                    generation: 1,
+                    created: "initial".to_string(),
+                },
+            );
+        }
+        desired.persist(&fleet).unwrap();
+        let (mut state, _) = recovery_fixture_state(&root);
+        let (managed_tx, managed_rx) = mpsc::channel();
+        state.managed_tx = managed_tx.clone();
+        let recoveries = reserve_managed_recoveries(&mut state, unix_timestamp()).unwrap();
+        assert_eq!(recoveries.len(), 2);
+        let beta = state
+            .managed_spawns
+            .values()
+            .find(|record| record.lease.name == "beta")
+            .unwrap();
+        let completion = Arc::clone(&beta.stop);
+        let beta_command = beta.lease.command_id.clone();
+        let alpha_command = state
+            .managed_spawns
+            .values()
+            .find(|record| record.lease.name == "alpha")
+            .unwrap()
+            .lease
+            .command_id
+            .clone();
+
+        let gate = root.join("bootstrap-gate");
+        let gate_ready = root.join("bootstrap-gate.ready");
+        let gate_once = root.join("bootstrap-gate.once");
+        let gate_c = CString::new(gate.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(gate_c.as_ptr(), 0o600) }, 0);
+        let shim = root.join("managed-shim.sh");
+        std::fs::write(
+            &shim,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = managed-bootstrap ]; then\n  if mkdir '{}' 2>/dev/null; then\n    : > '{}'\n    IFS= read -r release < '{}' || exit 1\n  fi\n  exec '{}' \"$@\"\nfi\ntrap 'exit 0' TERM\nwhile :; do sleep 1; done\n",
+                gate_once.display(),
+                gate_ready.display(),
+                gate.display(),
+                managed_test_binary().display(),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let shared = Arc::new(Mutex::new(state));
+        let (event_tx, event_rx) = mpsc::channel();
+        start_managed_supervisor_with_executable(
+            Arc::clone(&shared.lock().unwrap().fleet),
+            &config,
+            managed_rx,
+            event_tx,
+            Some(shim),
+        );
+        for (prepared, stop) in recoveries {
+            managed_tx
+                .send(ManagedSupervisorCommand::Start { prepared, stop })
+                .unwrap();
+        }
+        let gate_deadline = Instant::now() + Duration::from_secs(5);
+        while !gate_ready.exists() {
+            assert!(
+                Instant::now() < gate_deadline,
+                "le premier bootstrap n'a pas atteint la barrière"
+            );
+            thread::yield_now();
+        }
+
+        let caller_state = Arc::clone(&shared);
+        let caller = thread::spawn(move || {
+            handle_wrapper_message(
+                "control",
+                WrapperToDaemon::StopOrder {
+                    name: "beta".to_string(),
+                    command_id: "stop-beta-recovery".to_string(),
+                },
+                &caller_state,
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !completion.is_actionable() {
+            assert!(
+                Instant::now() < deadline,
+                "stop non visible avant bootstrap"
+            );
+            thread::yield_now();
+        }
+
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&gate)
+            .unwrap()
+            .write_all(b"release\n")
+            .unwrap();
+        let stop_deadline = Instant::now() + Duration::from_secs(8);
+        let result = loop {
+            drain_managed_events(&shared, &event_rx);
+            if caller.is_finished() {
+                break caller.join().unwrap();
+            }
+            assert!(
+                Instant::now() < stop_deadline,
+                "le stop du second rétablissement n'a pas abouti"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(matches!(
+            result,
+            Some(DaemonToWrapper::StopResult {
+                outcome: StopOutcome::Stopped | StopOutcome::StoppedForced { .. },
+                ..
+            })
+        ));
+        let state = shared.lock().unwrap();
+        assert!(
+            !state
+                .fleet
+                .desired_fleet()
+                .unwrap()
+                .equipiers
+                .contains_key("beta")
+        );
+        assert!(!state.recovery_commands.contains(&beta_command));
+        assert!(state.recovering, "alpha reste encore en reprise");
+        drop(state);
+
+        let alpha = Arc::clone(&shared.lock().unwrap().managed_spawns[&alpha_command].stop);
+        alpha.mark_handshake_complete();
+        let alpha_done = alpha.request();
+        let cleanup_deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            drain_managed_events(&shared, &event_rx);
+            if alpha_done.try_recv().is_ok() {
+                break;
+            }
+            assert!(
+                Instant::now() < cleanup_deadline,
+                "nettoyage du premier rétablissement incomplet"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        drop(managed_tx);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sigkill_daemon_reconcilie_l_ancien_groupe_avant_une_reprise_unique() {
+        let root = PathBuf::from(format!(
+            "/tmp/bg908-e2e-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let config = recovery_daemon_config(&root);
+        std::fs::create_dir_all(config.db_path.parent().unwrap()).unwrap();
+        let registry_path = root.join(".config/bridget/agents.json");
+        std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+        let adapter = root.join("adapter.sh");
+        std::fs::write(
+            &adapter,
+            "#!/bin/sh\nread initialize || exit 1\necho '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1}}'\nread session || exit 1\necho '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"recovery-session\"}}'\nwhile read line; do :; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&adapter, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(
+            &registry_path,
+            serde_json::to_vec(&serde_json::json!({
+                "agents": {
+                    "fixture": {
+                        "command": adapter,
+                        "protocol": "acp",
+                        "permissions": "allow",
+                        "forbidden_env": [],
+                        "pass_env": [],
+                        "queue_capacity": 2,
+                        "notify_timeout_secs": 1
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut first_daemon = spawn_recovery_daemon(&root);
+        wait_daemon_socket(&config.socket_path);
+        let now = unix_timestamp();
+        assert!(matches!(
+            daemon_request(
+                &config.socket_path,
+                WrapperToDaemon::SpawnOrder {
+                    agent_type: "fixture".to_string(),
+                    name: Some("persistent-one".to_string()),
+                    cwd: "/tmp".to_string(),
+                    persistent: true,
+                    command_id: "initial-persistent".to_string(),
+                    issued_at: now,
+                    deadline_at: now + 20,
+                }
+            ),
+            DaemonToWrapper::SpawnAccepted { ref name, .. } if name == "persistent-one"
+        ));
+        let marker_store =
+            ManagedMarkerStore::at_directory(config.db_path.parent().unwrap().join("managed"));
+        let first_marker = marker_store.load("persistent-one").unwrap();
+        assert!(crate::managed_process::group_exists(first_marker.pgid).unwrap());
+
+        assert_ne!(first_daemon.id(), 0);
+        assert_eq!(
+            unsafe { libc::kill(first_daemon.id() as libc::pid_t, libc::SIGKILL) },
+            0
+        );
+        let _ = first_daemon.wait().unwrap();
+
+        let mut restarted = spawn_recovery_daemon(&root);
+        wait_daemon_socket(&config.socket_path);
+        let deadline = Instant::now() + Duration::from_secs(12);
+        let agents = loop {
+            if let DaemonToWrapper::AgentList { agents } =
+                daemon_request(&config.socket_path, WrapperToDaemon::ListAgents)
+                && agents.len() == 1
+                && agents[0].name == "persistent-one"
+                && agents[0].state == "connected"
+            {
+                break agents;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "reprise persistante non connectée"
+            );
+            thread::sleep(Duration::from_millis(25));
+        };
+        assert_eq!(agents.len(), 1, "une seule génération doit être visible");
+        assert!(!crate::managed_process::group_exists(first_marker.pgid).unwrap());
+        let second_marker = marker_store.load("persistent-one").unwrap();
+        assert_ne!(second_marker.instance_id, first_marker.instance_id);
+        assert_ne!(second_marker.pgid, first_marker.pgid);
+
+        assert!(matches!(
+            daemon_request(
+                &config.socket_path,
+                WrapperToDaemon::StopOrder {
+                    name: "persistent-one".to_string(),
+                    command_id: "stop-after-recovery".to_string(),
+                }
+            ),
+            DaemonToWrapper::StopResult {
+                outcome: StopOutcome::Stopped | StopOutcome::StoppedForced { .. },
+                ..
+            }
+        ));
+        assert_eq!(
+            unsafe { libc::kill(restarted.id() as libc::pid_t, libc::SIGTERM) },
+            0
+        );
+        let status = restarted.wait().unwrap();
+        assert!(status.success());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -5042,10 +5808,12 @@ mod presence_tests {
                 .state,
             "open"
         );
-        assert!(state
+        assert!(
+            state
             .pending_replies
             .iter()
-            .any(|pending| pending.msg_id == "reply-idempotent"));
+                .any(|pending| pending.msg_id == "reply-idempotent")
+        );
         let _ = std::fs::remove_file(config.db_path);
     }
 
@@ -6313,6 +7081,7 @@ mod presence_tests {
             lease.command_id.clone(),
             ManagedSpawnRecord {
                 lease: lease.clone(),
+                agent_type: "fixture".to_string(),
                 requester_conns: Vec::new(),
                 wrapper_conn: connected.then(|| "conn-1".to_string()),
                 stop: Arc::clone(&stop),
@@ -6426,7 +7195,10 @@ mod presence_tests {
         });
         let deadline = Instant::now() + Duration::from_secs(2);
         while !stop.is_requested() {
-            assert!(Instant::now() < deadline, "stop non transmis au superviseur");
+            assert!(
+                Instant::now() < deadline,
+                "stop non transmis au superviseur"
+            );
             thread::yield_now();
         }
         assert!(
@@ -6608,7 +7380,10 @@ mod presence_tests {
         }
         let (event_tx, event_rx) = mpsc::channel();
         poll_managed_processes(&fleet, &event_tx, &mut active);
-        assert!(active.is_empty(), "le groupe réel reste supervisé après sa disparition");
+        assert!(
+            active.is_empty(),
+            "le groupe réel reste supervisé après sa disparition"
+        );
         drain_managed_events(&shared, &event_rx);
 
         assert!(matches!(
@@ -6681,7 +7456,10 @@ mod presence_tests {
         ));
         let deadline = Instant::now() + Duration::from_secs(2);
         while !stop.is_actionable() {
-            assert!(Instant::now() < deadline, "stop non transmis au superviseur");
+            assert!(
+                Instant::now() < deadline,
+                "stop non transmis au superviseur"
+            );
             thread::yield_now();
         }
         let (event_tx, event_rx) = mpsc::channel();
@@ -6698,7 +7476,10 @@ mod presence_tests {
         {
             let state = shared.lock().unwrap();
             assert!(state.managed_spawns.contains_key(&lease.command_id));
-            assert_eq!(state.managed_by_instance.get(&lease.instance_id), Some(&lease.command_id));
+            assert_eq!(
+                state.managed_by_instance.get(&lease.instance_id),
+                Some(&lease.command_id)
+            );
             assert!(state.router.get_agent("agent-2").is_some());
             assert_eq!(state.presences["instance-1"].state, "connected");
         }
@@ -6920,6 +7701,7 @@ mod presence_tests {
             lease.command_id.clone(),
             ManagedSpawnRecord {
                 lease: lease.clone(),
+                agent_type: "fixture".to_string(),
                 requester_conns: vec!["requester".to_string()],
                 wrapper_conn: None,
                 stop: Arc::new(ManagedStopControl::new()),
@@ -6983,6 +7765,7 @@ mod presence_tests {
             lease.command_id.clone(),
             ManagedSpawnRecord {
                 lease: lease.clone(),
+                agent_type: "fixture".to_string(),
                 requester_conns: Vec::new(),
                 wrapper_conn: Some("conn-1".to_string()),
                 stop: Arc::new(ManagedStopControl::new()),
@@ -6995,10 +7778,8 @@ mod presence_tests {
             .unwrap()
             .join("bridget");
         assert!(executable.exists(), "binaire bridget de test absent");
-        let process_root = std::env::temp_dir().join(format!(
-            "bridget-t906-death-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let process_root =
+            std::env::temp_dir().join(format!("bridget-t906-death-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&process_root).unwrap();
         let launch = ManagedLaunch {
             bootstrap_executable: executable,
