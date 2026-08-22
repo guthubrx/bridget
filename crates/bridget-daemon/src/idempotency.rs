@@ -670,15 +670,15 @@ mod tests {
         let store = IdempotencyStore::open_in_memory().unwrap();
         assert_eq!(
             reserve(&store, b"canon"),
-            Reservation::Replayed(LookupResult::OutcomeUnknown {
-                expires_at: NOW + HORIZON
-            })
-        );
-        assert_eq!(
-            reserve(&store, b"canon"),
             Reservation::Prepared {
                 expires_at: NOW + HORIZON
             }
+        );
+        assert_eq!(
+            reserve(&store, b"canon"),
+            Reservation::Replayed(LookupResult::OutcomeUnknown {
+                expires_at: NOW + HORIZON
+            })
         );
     }
 
