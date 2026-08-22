@@ -1,5 +1,6 @@
 //! Client de vue attach : connexion persistante, reprise et rendu sûr du journal.
 
+use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     AttachRefusal, AttachWindow, ConnectionRole, DaemonToWrapper,
     MAX_ATTACH_SERIALIZED_FRAME_BYTES, WrapperToDaemon, decode, encode,
@@ -7,12 +8,13 @@ use bridget_transport::protocol::{
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::mem::MaybeUninit;
+use std::net::Shutdown;
 use std::os::fd::RawFd;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MAX_REASSEMBLY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RENDERED_EVENT_CHARS: usize = 16 * 1024;
@@ -20,6 +22,8 @@ const MAX_RENDERED_LABEL_CHARS: usize = 160;
 const MAX_CONSECUTIVE_COMBINING_MARKS: usize = 8;
 const RECONNECT_DELAY: Duration = Duration::from_millis(250);
 const RETIRED_SUBSCRIPTIONS_LIMIT: usize = 64;
+const SEND_ISSUE_TIMEOUT: Duration = Duration::from_secs(60);
+const INPUT_POLL_TIMEOUT_MILLIS: i32 = 100;
 
 /// Garde minimale du terminal d'entrée. Le mode désactive le traitement des
 /// signaux afin que Ctrl-C arrive comme l'octet `0x03` à la boucle de saisie.
@@ -138,6 +142,7 @@ pub enum AttachEvent {
     SendRejected {
         message_id: String,
         delayed: bool,
+        reason: String,
     },
 }
 
@@ -178,6 +183,7 @@ struct AttachClientState {
     last_seq: Option<u64>,
     caught_up: bool,
     pending_send: HashMap<String, String>,
+    pending_send_expirations: HashMap<String, Instant>,
     reassembly: Option<Reassembly>,
 }
 
@@ -191,6 +197,7 @@ impl AttachClientState {
             last_seq: None,
             caught_up: false,
             pending_send: HashMap::new(),
+            pending_send_expirations: HashMap::new(),
             reassembly: None,
         }
     }
@@ -217,6 +224,7 @@ impl AttachClientState {
         self.caught_up = false;
         self.reassembly = None;
         self.pending_send.clear();
+        self.pending_send_expirations.clear();
     }
 
     fn is_current(&self, subscription_id: &str) -> bool {
@@ -323,18 +331,18 @@ impl AttachClientState {
                     .events
                     .push(AttachEvent::SendAcknowledged { message_id: id });
             }
-            DaemonToWrapper::Nack { id, .. } if self.pending_send.remove(&id).is_some() => {
+            DaemonToWrapper::Nack { id, reason } if self.remove_pending_send(&id) => {
                 outcome.events.push(AttachEvent::SendRejected {
                     message_id: id,
                     delayed: false,
+                    reason,
                 });
             }
-            DaemonToWrapper::DeliveryRejected { id, .. }
-                if self.pending_send.remove(&id).is_some() =>
-            {
+            DaemonToWrapper::DeliveryRejected { id, reason } if self.remove_pending_send(&id) => {
                 outcome.events.push(AttachEvent::SendRejected {
                     message_id: id,
                     delayed: true,
+                    reason,
                 });
             }
             DaemonToWrapper::Disconnect => outcome.reconnect = true,
@@ -342,6 +350,37 @@ impl AttachClientState {
             _ => return Err("message interdit sur une connexion attach".to_string()),
         }
         Ok(outcome)
+    }
+
+    fn track_send(&mut self, message_id: String, body: String, now: Instant) {
+        self.pending_send.insert(message_id.clone(), body);
+        self.pending_send_expirations
+            .insert(message_id, now + SEND_ISSUE_TIMEOUT);
+    }
+
+    fn remove_pending_send(&mut self, message_id: &str) -> bool {
+        self.pending_send_expirations.remove(message_id);
+        self.pending_send.remove(message_id).is_some()
+    }
+
+    fn expire_pending_sends(&mut self, now: Instant) -> Vec<AttachEvent> {
+        let expired = self
+            .pending_send_expirations
+            .iter()
+            .filter(|(_, expires_at)| **expires_at <= now)
+            .map(|(message_id, _)| message_id.clone())
+            .collect::<Vec<_>>();
+        expired
+            .into_iter()
+            .filter_map(|message_id| {
+                self.remove_pending_send(&message_id)
+                    .then_some(AttachEvent::SendRejected {
+                        message_id,
+                        delayed: true,
+                        reason: "délai d'issue dépassé".to_string(),
+                    })
+            })
+            .collect()
     }
 
     /// Assemble une charge en O(nombre d'octets), avec une rétention bornée à
@@ -454,19 +493,7 @@ impl AttachConnection {
     }
 
     fn read(&mut self) -> Result<Option<DaemonToWrapper>, String> {
-        loop {
-            let Some(frame) = read_bounded_frame(&mut self.reader)? else {
-                return Ok(None);
-            };
-            let line =
-                std::str::from_utf8(&frame).map_err(|_| "réponse attach non UTF-8".to_string())?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            return decode(line)
-                .map(Some)
-                .map_err(|error| format!("réponse attach invalide: {error}"));
-        }
+        read_daemon_message(&mut self.reader)
     }
 
     fn accept_role(&mut self) -> Result<(), String> {
@@ -572,6 +599,17 @@ fn discard_until_newline(reader: &mut BufReader<UnixStream>) -> Result<(), Strin
 /// Lance une vue attach persistante. La mémoire croît au plus comme un
 /// événement réassemblé (4 Mio) plus la petite table des envois de l'invocation.
 pub fn run(agent: &str, initial_window: AttachWindow, socket_path: &Path) -> Result<(), String> {
+    with_raw_terminal(libc::STDIN_FILENO, |raw_terminal| {
+        run_with_input(agent, initial_window, socket_path, raw_terminal)
+    })
+}
+
+fn run_with_input(
+    agent: &str,
+    initial_window: AttachWindow,
+    socket_path: &Path,
+    raw_terminal: bool,
+) -> Result<(), String> {
     let mut state = AttachClientState::new(initial_window);
     let mut connected_once = false;
 
@@ -582,7 +620,7 @@ pub fn run(agent: &str, initial_window: AttachWindow, socket_path: &Path) -> Res
             connection.subscribe(agent, window)?;
             Ok(connection)
         });
-        let mut connection = match attempt {
+        let connection = match attempt {
             Ok(connection) => connection,
             Err(error) if !connected_once => return Err(error),
             Err(_) => {
@@ -591,20 +629,399 @@ pub fn run(agent: &str, initial_window: AttachWindow, socket_path: &Path) -> Res
             }
         };
         connected_once = true;
-        let mut renderer = |event: &AttachEvent| print_transport_event(event, agent);
-        drive_connection(
-            &mut connection,
-            &mut state,
-            agent,
-            socket_path,
-            &mut renderer,
-        )?;
+        if !drive_interactive(connection, &mut state, agent, socket_path, raw_terminal)? {
+            return Ok(());
+        }
 
         state.connection_closed();
         thread::sleep(RECONNECT_DELAY);
     }
 }
 
+#[derive(Debug)]
+enum ReaderStatus {
+    Closed,
+    Failed(String),
+}
+
+#[derive(Debug, Default)]
+struct InputBuffer {
+    bytes: Vec<u8>,
+}
+
+impl InputBuffer {
+    fn push(&mut self, byte: u8) {
+        self.bytes.push(byte);
+    }
+
+    fn erase_last(&mut self) -> bool {
+        let Some(last_start) = std::str::from_utf8(&self.bytes)
+            .ok()
+            .and_then(|text| text.char_indices().next_back().map(|(index, _)| index))
+        else {
+            return self.bytes.pop().is_some();
+        };
+        self.bytes.truncate(last_start);
+        true
+    }
+
+    fn take(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.bytes)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    fn display(&self) -> String {
+        String::from_utf8_lossy(&self.bytes).into_owned()
+    }
+}
+
+/// Maintient la saisie locale pendant qu'un seul lecteur socket traite le flux
+/// attach. Le writer reste partagé et sérialisé avec les resouscriptions du
+/// lecteur ; ainsi `Send` et les issues différées passent par la même connexion.
+fn drive_interactive(
+    connection: AttachConnection,
+    client_state: &mut AttachClientState,
+    agent: &str,
+    socket_path: &Path,
+    raw_terminal: bool,
+) -> Result<bool, String> {
+    let AttachConnection { reader, writer } = connection;
+    let shared_state = Arc::new(Mutex::new(std::mem::replace(
+        client_state,
+        AttachClientState::new(AttachWindow::Today),
+    )));
+    let input = Arc::new(Mutex::new(InputBuffer::default()));
+    let screen = Arc::new(Mutex::new(()));
+    let (status_tx, status_rx) = mpsc::channel();
+    let reader_handle = spawn_attach_reader(
+        reader,
+        writer.clone(),
+        shared_state.clone(),
+        input.clone(),
+        screen.clone(),
+        agent.to_string(),
+        socket_path.to_path_buf(),
+        status_tx,
+        raw_terminal,
+    );
+
+    let mut reconnect = true;
+    let mut reader_failure = None;
+    loop {
+        match status_rx.try_recv() {
+            Ok(ReaderStatus::Closed) => break,
+            Ok(ReaderStatus::Failed(error)) => {
+                reconnect = false;
+                reader_failure = Some(error);
+                break;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => break,
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+
+        let mut pollfd = libc::pollfd {
+            fd: libc::STDIN_FILENO,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let poll_result = unsafe { libc::poll(&mut pollfd, 1, INPUT_POLL_TIMEOUT_MILLIS) };
+        if poll_result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                reconnect = false;
+                break;
+            }
+            continue;
+        }
+        if poll_result == 0 {
+            render_expired_sends(&shared_state, &input, &screen, agent, raw_terminal);
+            continue;
+        }
+        if pollfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+            // Hors TTY, stdin peut être fermé par le lanceur sans que la vue
+            // elle-même soit terminée : le flux socket reste alors observable.
+            // En raw mode, Ctrl-D est traité comme un octet avant ce palier.
+            if raw_terminal {
+                reconnect = false;
+                break;
+            }
+            render_expired_sends(&shared_state, &input, &screen, agent, raw_terminal);
+            continue;
+        }
+        if pollfd.revents & libc::POLLIN == 0 {
+            continue;
+        }
+
+        let mut byte = 0_u8;
+        let read = unsafe {
+            libc::read(
+                libc::STDIN_FILENO,
+                (&mut byte as *mut u8).cast::<libc::c_void>(),
+                1,
+            )
+        };
+        if read == 0 {
+            reconnect = false;
+            break;
+        }
+        if read < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            reconnect = false;
+            break;
+        }
+        if !handle_input_byte(
+            byte,
+            &shared_state,
+            &input,
+            &screen,
+            &writer,
+            agent,
+            raw_terminal,
+        )? {
+            reconnect = false;
+            break;
+        }
+        render_expired_sends(&shared_state, &input, &screen, agent, raw_terminal);
+    }
+
+    close_attach_socket(&writer);
+    let _ = reader_handle.join();
+    let mut recovered = Arc::try_unwrap(shared_state)
+        .map_err(|_| "état attach encore partagé à la fermeture".to_string())?
+        .into_inner()
+        .map_err(|_| "état attach empoisonné".to_string())?;
+    recovered.connection_closed();
+    *client_state = recovered;
+    match reader_failure {
+        Some(error) => Err(error),
+        None => Ok(reconnect),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_attach_reader(
+    mut reader: BufReader<UnixStream>,
+    writer: Arc<Mutex<BufWriter<UnixStream>>>,
+    state: Arc<Mutex<AttachClientState>>,
+    input: Arc<Mutex<InputBuffer>>,
+    screen: Arc<Mutex<()>>,
+    agent: String,
+    socket_path: std::path::PathBuf,
+    status_tx: mpsc::Sender<ReaderStatus>,
+    raw_terminal: bool,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        loop {
+            let message = match read_daemon_message(&mut reader) {
+                Ok(Some(message)) => message,
+                Ok(None) => {
+                    let _ = status_tx.send(ReaderStatus::Closed);
+                    return;
+                }
+                Err(error) => {
+                    let _ = status_tx.send(ReaderStatus::Failed(error));
+                    return;
+                }
+            };
+            let outcome = match state
+                .lock()
+                .map_err(|_| "état attach empoisonné".to_string())
+                .and_then(|mut state| state.dispatch(message))
+            {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    let _ = status_tx.send(ReaderStatus::Failed(error));
+                    return;
+                }
+            };
+            for event in outcome.events {
+                print_interactive_event(&event, &input, &screen, &agent, raw_terminal);
+            }
+            if let Some(reason) = outcome.rejected {
+                let attachable_agents = if reason == AttachRefusal::AgentUnknown {
+                    list_attachable_agents(&socket_path)
+                } else {
+                    Vec::new()
+                };
+                let _ = status_tx.send(ReaderStatus::Failed(attach_refusal_message(
+                    &reason,
+                    &agent,
+                    &attachable_agents,
+                )));
+                return;
+            }
+            if let Some(window) = outcome.resubscribe
+                && let Err(error) = write_socket_message(
+                    &writer,
+                    &WrapperToDaemon::Subscribe {
+                        agent: agent.clone(),
+                        window,
+                    },
+                )
+            {
+                let _ = status_tx.send(ReaderStatus::Failed(error));
+                return;
+            }
+            if outcome.reconnect {
+                let _ = status_tx.send(ReaderStatus::Closed);
+                return;
+            }
+        }
+    })
+}
+
+fn read_daemon_message(
+    reader: &mut BufReader<UnixStream>,
+) -> Result<Option<DaemonToWrapper>, String> {
+    loop {
+        let Some(frame) = read_bounded_frame(reader)? else {
+            return Ok(None);
+        };
+        let line =
+            std::str::from_utf8(&frame).map_err(|_| "réponse attach non UTF-8".to_string())?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        return decode(line)
+            .map(Some)
+            .map_err(|error| format!("réponse attach invalide: {error}"));
+    }
+}
+
+fn handle_input_byte(
+    byte: u8,
+    state: &Arc<Mutex<AttachClientState>>,
+    input: &Arc<Mutex<InputBuffer>>,
+    screen: &Arc<Mutex<()>>,
+    writer: &Arc<Mutex<BufWriter<UnixStream>>>,
+    agent: &str,
+    raw_terminal: bool,
+) -> Result<bool, String> {
+    match byte {
+        0x03 => return Ok(false),
+        0x04 => {
+            if input
+                .lock()
+                .map_err(|_| "saisie attach empoisonnée".to_string())?
+                .is_empty()
+            {
+                return Ok(false);
+            }
+        }
+        b'\r' | b'\n' => {
+            let bytes = input
+                .lock()
+                .map_err(|_| "saisie attach empoisonnée".to_string())?
+                .take();
+            if raw_terminal {
+                write_input_bytes(screen, b"\r\n");
+            }
+            if bytes.is_empty() {
+                return Ok(true);
+            }
+            let body = String::from_utf8(bytes)
+                .map_err(|_| "saisie invalide : UTF-8 attendu".to_string())?;
+            let message = BridgetMessage::new("humain", agent, body.clone());
+            let message_id = message.id.clone();
+            {
+                let mut state = state
+                    .lock()
+                    .map_err(|_| "état attach empoisonné".to_string())?;
+                state.track_send(message_id.clone(), body, Instant::now());
+            }
+            if let Err(error) = write_socket_message(writer, &WrapperToDaemon::Send(message)) {
+                let _ = state
+                    .lock()
+                    .map(|mut state| state.remove_pending_send(&message_id));
+                return Err(error);
+            }
+            return Ok(true);
+        }
+        0x08 | 0x7f => {
+            let erased = input
+                .lock()
+                .map_err(|_| "saisie attach empoisonnée".to_string())?
+                .erase_last();
+            if erased && raw_terminal {
+                write_input_bytes(screen, b"\x08 \x08");
+            }
+        }
+        byte if byte >= 0x20 => {
+            input
+                .lock()
+                .map_err(|_| "saisie attach empoisonnée".to_string())?
+                .push(byte);
+            if raw_terminal {
+                write_input_bytes(screen, &[byte]);
+            }
+        }
+        _ => {}
+    }
+    Ok(true)
+}
+
+fn render_expired_sends(
+    state: &Arc<Mutex<AttachClientState>>,
+    input: &Arc<Mutex<InputBuffer>>,
+    screen: &Arc<Mutex<()>>,
+    agent: &str,
+    raw_terminal: bool,
+) {
+    let events = state
+        .lock()
+        .map(|mut state| state.expire_pending_sends(Instant::now()))
+        .unwrap_or_default();
+    for event in events {
+        print_interactive_event(&event, input, screen, agent, raw_terminal);
+    }
+}
+
+fn print_interactive_event(
+    event: &AttachEvent,
+    input: &Arc<Mutex<InputBuffer>>,
+    screen: &Arc<Mutex<()>>,
+    agent: &str,
+    raw_terminal: bool,
+) {
+    let rendered = render_attach_event(event, agent);
+    let input = input
+        .lock()
+        .map(|input| input.display())
+        .unwrap_or_default();
+    if let Ok(_screen) = screen.lock() {
+        let mut output = std::io::stdout().lock();
+        if raw_terminal {
+            let _ = output.write_all(b"\r\n");
+        }
+        let _ = writeln!(output, "{rendered}");
+        if raw_terminal {
+            let _ = write!(output, "> {input}");
+        }
+        let _ = output.flush();
+    }
+}
+
+fn write_input_bytes(screen: &Arc<Mutex<()>>, bytes: &[u8]) {
+    if let Ok(_screen) = screen.lock() {
+        let mut output = std::io::stdout().lock();
+        let _ = output.write_all(bytes);
+        let _ = output.flush();
+    }
+}
+
+fn close_attach_socket(writer: &Arc<Mutex<BufWriter<UnixStream>>>) {
+    if let Ok(writer) = writer.lock() {
+        let _ = writer.get_ref().shutdown(Shutdown::Both);
+    }
+}
+
+#[cfg(test)]
 fn drive_connection(
     connection: &mut AttachConnection,
     state: &mut AttachClientState,
@@ -635,14 +1052,6 @@ fn drive_connection(
         }
     }
     Ok(())
-}
-
-fn print_transport_event(event: &AttachEvent, agent: &str) {
-    let rendered = render_attach_event(event, agent);
-    match event {
-        AttachEvent::Journal { .. } => println!("{rendered}"),
-        _ => eprintln!("{rendered}"),
-    }
 }
 
 /// Rend un événement sans jamais laisser les données du journal produire des
@@ -687,11 +1096,13 @@ fn render_attach_event(event: &AttachEvent, agent: &str) -> String {
         AttachEvent::SendRejected {
             message_id,
             delayed,
+            reason,
         } => {
             let phase = if *delayed { "différé" } else { "immédiat" };
             format!(
-                "attach: envoi {} rejeté ({phase})",
-                sanitize_inline(message_id)
+                "attach: envoi {} rejeté ({phase}) : {}",
+                sanitize_inline(message_id),
+                sanitize_inline(reason)
             )
         }
     }
@@ -1403,9 +1814,143 @@ mod tests {
             vec![AttachEvent::SendRejected {
                 message_id: "message-1".to_string(),
                 delayed: true,
+                reason: "transport arrêté".to_string(),
             }]
         );
         assert!(state.pending_send.is_empty());
+    }
+
+    #[test]
+    fn saisie_attach_envoie_reply_false_et_conserve_la_correlation_jusqu_au_rejet_tardif() {
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let screen = Arc::new(Mutex::new(()));
+
+        for byte in b"bonjour\n" {
+            assert!(
+                handle_input_byte(*byte, &state, &input, &screen, &writer, "codex-1", false,)
+                    .unwrap()
+            );
+        }
+
+        let mut reader = BufReader::new(read_stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let WrapperToDaemon::Send(message) = decode(line.trim_end()).unwrap() else {
+            panic!("Send attendu sur la connexion attach");
+        };
+        assert_eq!(message.from, "humain");
+        assert_eq!(message.to, "codex-1");
+        assert_eq!(message.body, "bonjour");
+        assert!(!message.reply);
+        let message_id = message.id;
+
+        let acknowledged = state
+            .lock()
+            .unwrap()
+            .dispatch(DaemonToWrapper::Ack {
+                id: message_id.clone(),
+            })
+            .unwrap();
+        assert_eq!(
+            acknowledged.events,
+            vec![AttachEvent::SendAcknowledged {
+                message_id: message_id.clone()
+            }]
+        );
+        assert!(state.lock().unwrap().pending_send.contains_key(&message_id));
+
+        state
+            .lock()
+            .unwrap()
+            .dispatch(DaemonToWrapper::End {
+                subscription_id: "ancienne-generation".to_string(),
+                reason: "wrapper parti".to_string(),
+            })
+            .unwrap();
+        let rejected = state
+            .lock()
+            .unwrap()
+            .dispatch(DaemonToWrapper::DeliveryRejected {
+                id: message_id.clone(),
+                reason: "file ACP pleine".to_string(),
+            })
+            .unwrap();
+        assert_eq!(
+            rejected.events,
+            vec![AttachEvent::SendRejected {
+                message_id: message_id.clone(),
+                delayed: true,
+                reason: "file ACP pleine".to_string(),
+            }]
+        );
+        assert!(!state.lock().unwrap().pending_send.contains_key(&message_id));
+    }
+
+    #[test]
+    fn evenement_hostile_ne_modifie_jamais_la_saisie_partielle() {
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"r\xc3\xa9ponse en cours".to_vec(),
+        }));
+        let screen = Arc::new(Mutex::new(()));
+        let hostile = include_bytes!("../tests/fixtures/attach-hostile.jsonl");
+        let event = AttachEvent::Journal {
+            seq: 9,
+            bytes: hostile.strip_suffix(b"\n").unwrap().to_vec(),
+            live: true,
+        };
+        let expected = input.lock().unwrap().bytes.clone();
+        let event_input = input.clone();
+        let event_screen = screen.clone();
+        let worker = thread::spawn(move || {
+            print_interactive_event(&event, &event_input, &event_screen, "codex-1", true);
+        });
+        worker.join().unwrap();
+        assert_eq!(input.lock().unwrap().bytes, expected);
+    }
+
+    #[test]
+    fn expiration_d_un_envoi_est_terminale_et_affiche_son_motif() {
+        let mut state = AttachClientState::new(AttachWindow::Today);
+        let now = Instant::now();
+        state.track_send("message-expire".to_string(), "texte".to_string(), now);
+        let events =
+            state.expire_pending_sends(now + SEND_ISSUE_TIMEOUT + Duration::from_millis(1));
+        assert_eq!(
+            events,
+            vec![AttachEvent::SendRejected {
+                message_id: "message-expire".to_string(),
+                delayed: true,
+                reason: "délai d'issue dépassé".to_string(),
+            }]
+        );
+        assert!(state.pending_send.is_empty());
+    }
+
+    #[test]
+    fn ctrl_c_et_eof_sur_tampon_vide_quittent_proprement_la_boucle_de_saisie() {
+        let (write_stream, _) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let screen = Arc::new(Mutex::new(()));
+        assert!(
+            !handle_input_byte(0x03, &state, &input, &screen, &writer, "codex-1", false,).unwrap()
+        );
+        assert!(
+            !handle_input_byte(0x04, &state, &input, &screen, &writer, "codex-1", false,).unwrap()
+        );
+    }
+
+    #[test]
+    fn retour_arriere_retire_un_scalaire_utf8_entier() {
+        let mut input = InputBuffer {
+            bytes: "réponse".as_bytes().to_vec(),
+        };
+        assert!(input.erase_last());
+        assert_eq!(input.display(), "répons");
     }
 
     #[test]

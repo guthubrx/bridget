@@ -112,13 +112,13 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
 
 ## Phase 2 : US2 — Parler à l'équipier depuis la vue
 
-- [ ] **T806a** [US2] **Raw mode et restauration** : termios via `libc`
+- [x] **T806a** [US2] **Raw mode et restauration** : termios via `libc`
   (`ISIG` désactivé, `0x03` en boucle : restauration puis sortie ; garde RAII
   en filet ; stdin non-TTY → mode dégradé sans raw).
   **Observable** : tests pseudo-TTY (Ctrl-C, EOF, erreur, non-TTY) — terminal
   restauré sur chaque chemin de sortie.
 
-- [ ] **T806b** [US2] **Saisie, envoi et issues corrélées** : tampon de saisie
+- [x] **T806b** [US2] **Saisie, envoi et issues corrélées** : tampon de saisie
   applicatif réaffiché sous chaque événement ; envoi `Send` `reply=false` sur
   la connexion attach, `message_id` conservé, `pending_send` nettoyée sur
   issue terminale/expiration/fermeture réelle — jamais à `End` ; issues
