@@ -42,22 +42,37 @@ pub struct AgentPidMarker {
     pub name_file: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedIdentity {
+    pub name: String,
+    pub instance_id: String,
+}
+
 pub trait ProcessTree {
     fn birth(&self, pid: u32) -> Option<u64>;
     fn parent(&self, pid: u32) -> Option<u32>;
 }
 
 pub fn resolve_current() -> Result<String, IdentityError> {
+    resolve_current_identity().map(|identity| identity.name)
+}
+
+/// Résout atomiquement le nom affiché et la portée stable d'instance.
+pub fn resolve_current_identity() -> Result<ResolvedIdentity, IdentityError> {
     let name_file = std::env::var_os("BRIDGET_AGENT_NAME_FILE").map(PathBuf::from);
-    let instance_id = std::env::var("BRIDGET_AGENT_INSTANCE_ID").ok();
+    let instance_id = std::env::var("BRIDGET_AGENT_INSTANCE_ID")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or(IdentityError::IdentityNotFound)?;
     let home = std::env::var_os("HOME").ok_or(IdentityError::IdentityNotFound)?;
-    resolve_with(
+    let name = resolve_with(
         name_file.as_deref(),
         &PathBuf::from(home).join(".cache/bridget/agent-pids"),
-        instance_id.as_deref(),
+        Some(&instance_id),
         std::process::id(),
         &SystemProcessTree,
-    )
+    )?;
+    Ok(ResolvedIdentity { name, instance_id })
 }
 
 /// Identifiant d'instance stable du wrapper qui héberge la façade MCP.
@@ -66,10 +81,7 @@ pub fn resolve_current() -> Result<String, IdentityError> {
 /// entre deux appels, alors que l'instance reste la portée du contrat
 /// d'idempotence 012 pendant toute la vie du wrapper.
 pub fn resolve_current_instance_id() -> Result<String, IdentityError> {
-    std::env::var("BRIDGET_AGENT_INSTANCE_ID")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .ok_or(IdentityError::IdentityNotFound)
+    resolve_current_identity().map(|identity| identity.instance_id)
 }
 
 struct SystemProcessTree;

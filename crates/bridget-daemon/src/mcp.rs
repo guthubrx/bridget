@@ -35,7 +35,7 @@ pub fn serve<R: BufRead, W: Write + Send>(mut input: R, output: W) -> io::Result
     serve_with(
         &mut input,
         output,
-        &crate::mcp_identity::resolve_current,
+        &crate::mcp_identity::resolve_current_identity,
         &execute_tool,
     )
 }
@@ -49,8 +49,8 @@ fn serve_with<R, W, I, E>(
 where
     R: BufRead,
     W: Write + Send,
-    I: Fn() -> Result<String, crate::mcp_identity::IdentityError> + Sync,
-    E: Fn(&str, &str, &Value) -> Result<Value, ToolError> + Sync,
+    I: Fn() -> Result<crate::mcp_identity::ResolvedIdentity, crate::mcp_identity::IdentityError> + Sync,
+    E: Fn(&crate::mcp_identity::ResolvedIdentity, &str, &Value) -> Result<Value, ToolError> + Sync,
 {
     let output = Arc::new(Mutex::new(BufWriter::new(output)));
     let mut session = Session::default();
@@ -199,7 +199,7 @@ fn try_reserve_tool_call(active: &AtomicUsize) -> bool {
 fn dispatch_with_identity(
     request: &Value,
     session: &mut Session,
-    resolve_identity: &impl Fn() -> Result<String, crate::mcp_identity::IdentityError>,
+    resolve_identity: &impl Fn() -> Result<crate::mcp_identity::ResolvedIdentity, crate::mcp_identity::IdentityError>,
 ) -> Option<Value> {
     dispatch_with_executor(request, session, resolve_identity, &execute_tool)
 }
@@ -207,8 +207,8 @@ fn dispatch_with_identity(
 fn dispatch_with_executor(
     request: &Value,
     session: &mut Session,
-    resolve_identity: &impl Fn() -> Result<String, crate::mcp_identity::IdentityError>,
-    execute: &impl Fn(&str, &str, &Value) -> Result<Value, ToolError>,
+    resolve_identity: &impl Fn() -> Result<crate::mcp_identity::ResolvedIdentity, crate::mcp_identity::IdentityError>,
+    execute: &impl Fn(&crate::mcp_identity::ResolvedIdentity, &str, &Value) -> Result<Value, ToolError>,
 ) -> Option<Value> {
     let Some(object) = request.as_object() else {
         return Some(error(Value::Null, -32600, "requête JSON-RPC invalide"));
@@ -402,7 +402,7 @@ impl DaemonConnection {
             });
         }
         decode(line.trim_end()).map_err(|error| ToolError::Technical {
-            code: "daemon_protocol",
+            code: failure_code,
             message: format!("réponse daemon invalide : {error}"),
         })
     }
@@ -431,18 +431,16 @@ impl DaemonConnection {
     }
 }
 
-fn execute_tool(identity: &str, name: &str, arguments: &Value) -> Result<Value, ToolError> {
+fn execute_tool(
+    identity: &crate::mcp_identity::ResolvedIdentity,
+    name: &str,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
     let arguments = arguments.as_object().ok_or_else(|| {
         ToolError::InvalidParams("arguments d'outil invalides".to_string())
     })?;
     let socket = crate::daemon::DaemonConfig::default().socket_path;
-    let instance_id = crate::mcp_identity::resolve_current_instance_id().map_err(|error| {
-        ToolError::Technical {
-            code: error.code(),
-            message: error.remediation().to_string(),
-        }
-    })?;
-    execute_tool_at_with_scope(identity, &instance_id, name, arguments, &socket)
+    execute_tool_at_with_scope(&identity.name, &identity.instance_id, name, arguments, &socket)
 }
 
 #[cfg(test)]
@@ -620,6 +618,7 @@ fn execute_ledger(
     if matches!(scope, LedgerScope::Requests | LedgerScope::Both) {
         match connection.exchange(&WrapperToDaemon::ListRequests {
             sender: identity.to_string(),
+            limit,
         })? {
             DaemonToWrapper::RequestList { requests: result } => requests = result,
             other => return unexpected_response(other),
@@ -960,7 +959,10 @@ mod tests {
         let calls = Cell::new(0);
         let resolver = || {
             calls.set(calls.get() + 1);
-            Ok("agent".to_string())
+            Ok(crate::mcp_identity::ResolvedIdentity {
+                name: "agent".to_string(),
+                instance_id: "instance".to_string(),
+            })
         };
         for id in [3, 4] {
             let request = json!({
@@ -1241,8 +1243,11 @@ mod tests {
         .join("\n");
         let barrier = Arc::clone(&started);
         let server = thread::spawn(move || {
-            let resolver = || Ok("agent".to_string());
-            let execute = move |_: &str, _: &str, _: &Value| {
+            let resolver = || Ok(crate::mcp_identity::ResolvedIdentity {
+                name: "agent".to_string(),
+                instance_id: "instance".to_string(),
+            });
+            let execute = move |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| {
                 started_tx.send(()).unwrap();
                 barrier.wait();
                 Ok(json!({ "agents": [] }))

@@ -326,7 +326,7 @@ pub enum WrapperToDaemon {
         reason: Option<String>,
     },
     /// Lister les demandes suivies de l'agent courant.
-    ListRequests { sender: String },
+    ListRequests { sender: String, limit: u16 },
     /// Projection bornée du ledger détenu par le daemon.
     LedgerProjection {
         scope: LedgerScope,

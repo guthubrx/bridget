@@ -4265,9 +4265,9 @@ fn handle_wrapper_message(
             }
         }
 
-        WrapperToDaemon::ListRequests { sender } => {
+        WrapperToDaemon::ListRequests { sender, limit } => {
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
-            match st.store.requests_for_sender(&sender) {
+            match st.store.requests_for_participant(&sender, usize::from(limit)) {
                 Ok(requests) => match requests
                         .into_iter()
                         .map(|request| -> Result<_, crate::store::StoreError> {
@@ -7010,6 +7010,7 @@ mod presence_tests {
             "conn-1",
             WrapperToDaemon::ListRequests {
                 sender: "agent-2".to_string(),
+                limit: 200,
             },
             &shared,
         );

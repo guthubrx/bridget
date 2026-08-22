@@ -570,6 +570,7 @@ fn run_corpus(socket: &Path, agent: &str, run: usize, proxy: &CutProxy) -> ModeO
 
     peer.send(&WrapperToDaemon::ListRequests {
         sender: peer.name.clone(),
+        limit: 200,
     });
     let request_states: Vec<String> = match peer.recv() {
         DaemonToWrapper::RequestList { requests } => {
@@ -791,6 +792,7 @@ fn sc001_vingt_spawns_survivent_a_la_fermeture_du_client_et_repondent() {
 
     sender.send(&WrapperToDaemon::ListRequests {
         sender: sender.name.clone(),
+        limit: 200,
     });
     match sender.recv() {
         DaemonToWrapper::RequestList { requests } => {

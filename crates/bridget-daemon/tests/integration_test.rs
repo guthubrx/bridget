@@ -275,6 +275,7 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
 
         let list = WrapperToDaemon::ListRequests {
             sender: sender.name.clone(),
+            limit: 200,
         };
         writeln!(sender.writer, "{}", encode(&list).unwrap()).unwrap();
         sender.writer.flush().unwrap();

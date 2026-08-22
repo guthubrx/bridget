@@ -847,6 +847,7 @@ fn cmd_requests(args: &[String]) {
     let json_output = args.iter().any(|arg| arg == "--json");
     match send_control_to_daemon(WrapperToDaemon::ListRequests {
         sender: current_agent_name(),
+        limit: 200,
     }) {
         Ok(DaemonToWrapper::RequestList { requests }) if json_output => println!(
             "{}",
