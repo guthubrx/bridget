@@ -371,9 +371,28 @@ fn is_date(value: &str) -> bool {
     bytes.len() == 10
         && bytes[4] == b'-'
         && bytes[7] == b'-'
-        && bytes.iter().enumerate().all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
-        && value[5..7].parse::<u8>().is_ok_and(|month| (1..=12).contains(&month))
-        && value[8..10].parse::<u8>().is_ok_and(|day| (1..=31).contains(&day))
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+        && matches!(
+            (
+                value[0..4].parse::<i32>(),
+                value[5..7].parse::<u8>(),
+                value[8..10].parse::<u8>(),
+            ),
+            (Ok(year), Ok(month), Ok(day)) if day >= 1 && day <= days_in_month(year, month)
+        )
+}
+
+fn days_in_month(year: i32, month: u8) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 0,
+    }
 }
 
 fn create_private_dir(path: &Path) -> std::io::Result<()> {
@@ -572,8 +591,52 @@ mod tests {
         let rotation = resolve_window(&fixtures.join("rotation"), &AttachWindow::Seq(5), "2026-08-24").unwrap();
         assert_eq!(rotation.files.len(), 2);
         assert_eq!(rotation.from_seq, Some(5));
-        let events = rotation.files.iter().flat_map(|path| valid_events(path)).collect::<Vec<_>>();
-        assert_eq!(events.iter().filter_map(|event| event["seq"].as_u64()).collect::<Vec<_>>(), vec![5, 6]);
+
+        let mut first = IncrementalJournalReader::new(&rotation.files[0]);
+        let mut first_items = Vec::new();
+        while first.next_offset() < fs::metadata(&rotation.files[0]).unwrap().len() {
+            first_items.extend(first.read_chunk(9).unwrap());
+        }
+        assert_eq!(first.next_offset(), fs::metadata(&rotation.files[0]).unwrap().len());
+        assert!(matches!(first_items.as_slice(), [JournalReadItem::Event(event)] if event.seq == 5 && event.offset == 0 && event.line == 1));
+        assert!(first.read_chunk(9).unwrap().is_empty(), "le premier fichier est consommé avant la rotation");
+
+        let mut second = IncrementalJournalReader::new(&rotation.files[1]);
+        let mut second_items = Vec::new();
+        while second.next_offset() < fs::metadata(&rotation.files[1]).unwrap().len() {
+            second_items.extend(second.read_chunk(9).unwrap());
+        }
+        assert_eq!(second.next_offset(), fs::metadata(&rotation.files[1]).unwrap().len());
+        assert!(matches!(second_items.as_slice(), [JournalReadItem::Event(event)] if event.seq == 6 && event.offset == 0 && event.line == 1));
+        assert_eq!(
+            first_items
+                .iter()
+                .chain(second_items.iter())
+                .filter_map(|item| match item {
+                    JournalReadItem::Event(event) => Some(event.seq),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![5, 6]
+        );
+
+        let partial_tail = fixtures.join("partial-tail.jsonl");
+        let mut old = IncrementalJournalReader::new(&partial_tail);
+        let mut old_items = Vec::new();
+        while old.next_offset() < fs::metadata(&partial_tail).unwrap().len() {
+            old_items.extend(old.read_chunk(7).unwrap());
+        }
+        assert!(matches!(old_items.first(), Some(JournalReadItem::Event(event)) if event.seq == 7 && event.offset == 0));
+        assert!(matches!(old_items.get(1), Some(JournalReadItem::Unreadable(_))));
+        assert!(old.read_chunk(7).unwrap().is_empty(), "la queue partielle ancienne ne bloque pas la rotation");
+        let partial_root = root("partial-tail-before-next");
+        create_private_dir(&partial_root).unwrap();
+        let path_after_partial = partial_root.join("2026-08-25.jsonl");
+        fs::write(&path_after_partial, b"{\"v\":1,\"seq\":8}\n").unwrap();
+        let mut next = IncrementalJournalReader::new(path_after_partial);
+        let next_items = next.read_chunk(32).unwrap();
+        assert!(matches!(next_items.as_slice(), [JournalReadItem::Event(event)] if event.seq == 8 && event.offset == 0));
+        fs::remove_dir_all(partial_root).unwrap();
 
         let root = root("empty-window");
         create_private_dir(&root).unwrap();
@@ -581,6 +644,10 @@ mod tests {
         assert_eq!(resolve_window(&root, &AttachWindow::Date("2026-08-23".to_string()), "2026-08-22"), Err(JournalWindowError::FutureDate));
         assert_eq!(resolve_window(&root, &AttachWindow::Date("bad".to_string()), "2026-08-22"), Err(JournalWindowError::InvalidDate));
         assert_eq!(resolve_window(&root, &AttachWindow::Date("2026-08-21".to_string()), "2026-08-22"), Err(JournalWindowError::DateOutsideRetention));
+        assert!(!is_date("2026-02-31"));
+        assert!(is_date("2024-02-29"));
+        assert!(!is_date("2026-02-29"));
+        assert!(!is_date("2026-04-31"));
         fs::remove_dir_all(root).unwrap();
     }
 }
