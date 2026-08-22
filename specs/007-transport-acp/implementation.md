@@ -187,3 +187,10 @@ https://antigravity.google
 - **Issue** : aucun équipier enregistré, aucun prompt, aucune réponse ni
   `stopReason` ; les fixtures temporaires de tentative sont supprimées. La
   tâche reste décochée en attente de la révision de la voie de support Gemini.
+
+## T709 — Relances informées
+
+- **Choix de persistance** : une relance différée est enregistrée comme
+  événement typé `reminder_deferred` dans le store des demandes. Elle relève
+  du cycle de vie d'une demande et reste ainsi lisible par la vue ledger, sans
+  détourner le journal JSONL de session ACP.

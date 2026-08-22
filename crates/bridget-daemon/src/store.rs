@@ -54,6 +54,13 @@ impl Store {
             );
             CREATE INDEX IF NOT EXISTS idx_tracked_requests_sender ON tracked_requests(sender, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_tracked_requests_open ON tracked_requests(state, deadline_at);
+            CREATE TABLE IF NOT EXISTS request_events (
+                request_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                level INTEGER NOT NULL,
+                ts INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_request_events_request ON request_events(request_id, ts);
             ",
         )
         .map_err(StoreError::Sqlite)?;
@@ -145,6 +152,27 @@ impl Store {
     pub fn set_escalation_level(&self, id: &str, level: u8) -> Result<(), StoreError> {
         self.conn.execute("UPDATE tracked_requests SET escalation_level = ?1 WHERE id = ?2 AND state = 'open'", rusqlite::params![level, id]).map_err(StoreError::Sqlite)?;
         Ok(())
+    }
+
+    /// Événement de cycle de vie consultable par la vue ledger : une relance a
+    /// été retenue parce que l'équipier avait un tour ACP en cours.
+    pub fn record_deferred_reminder(&self, id: &str, level: u8) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO request_events (request_id, event_type, level, ts) VALUES (?1, 'reminder_deferred', ?2, ?3)",
+            rusqlite::params![id, level, now_secs()],
+        ).map_err(StoreError::Sqlite)?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn deferred_reminder_levels(&self, id: &str) -> Result<Vec<u8>, StoreError> {
+        let mut statement = self.conn.prepare(
+            "SELECT level FROM request_events WHERE request_id = ?1 AND event_type = 'reminder_deferred' ORDER BY ts, rowid",
+        ).map_err(StoreError::Sqlite)?;
+        statement.query_map(rusqlite::params![id], |row| row.get(0))
+            .map_err(StoreError::Sqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Sqlite)
     }
 
     fn query_requests<P: rusqlite::Params>(
@@ -342,6 +370,21 @@ mod tests {
             reopened.get_request("request-1").unwrap().unwrap().state,
             "cancelled"
         );
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn deferred_reminder_is_persisted_for_ledger_readers() {
+        let path = std::env::temp_dir().join(format!("bridget-store-events-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let store = Store::open(&path).unwrap();
+        store.create_request("request-1", "alice", "bob", 60).unwrap();
+        store.record_deferred_reminder("request-1", 2).unwrap();
+        assert_eq!(store.deferred_reminder_levels("request-1").unwrap(), vec![2]);
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.deferred_reminder_levels("request-1").unwrap(), vec![2]);
         drop(reopened);
         let _ = std::fs::remove_file(path);
     }

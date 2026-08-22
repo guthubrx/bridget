@@ -384,10 +384,17 @@ impl DaemonState {
                 }
             })
             .collect();
+        let live_names: std::collections::HashSet<String> = agents
+            .iter()
+            .map(|agent| agent.name.clone())
+            .collect();
         for presence in self
             .presences
             .values()
-            .filter(|presence| presence.state != "connected")
+            .filter(|presence| {
+                matches!(presence.state.as_str(), "stopped" | "unreachable")
+                    && !live_names.contains(&presence.name)
+            })
         {
             agents.push(bridget_transport::protocol::AgentInfo {
                 name: presence.name.clone(),
@@ -533,6 +540,8 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             let mut st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
             let mut actions = Vec::new();
             let mut state_updates = Vec::new();
+            let mut timeout_candidates = Vec::new();
+            let mut deferred_events = Vec::new();
 
             // Les destinataires qui refusent d'être dérangés ne reçoivent aucun
             // rappel : respecter le statut à l'aller et le violer au rappel
@@ -553,14 +562,40 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                 let elapsed = now.duration_since(p.created_at).as_secs();
                 let t = p.timeout_secs;
 
+                // L'échéance absolue prime sur toute politique de relance : le
+                // booléen SQLite arbitre aussi la course avec DeliveryRejected.
+                if elapsed >= t {
+                    p.escalation_level = 3;
+                    timeout_candidates.push((p.to.clone(), p.from.clone(), p.msg_id.clone(), p.from_conn.clone(), t));
+                    continue;
+                }
+
                 if !should_remind(undisturbed.contains(&p.to), p.escalation_level) {
                     continue;
                 }
 
-                if let Some(level) = deferred_reminder_level(busy_connections.contains(&p.target_conn), p.escalation_level, elapsed, t) {
+                if let Some(level) = deferred_reminder_level(busy_connections.contains(&p.target_conn), elapsed, t) {
                     if p.deferred_level != Some(level) {
                         p.deferred_level = Some(level);
+                        deferred_events.push((p.msg_id.clone(), level));
                         actions.push(ReminderAction::Deferred { to: p.to.clone(), msg_id: p.msg_id.clone(), level });
+                    }
+                    continue;
+                }
+
+                // Après un tour long, reprendre directement au plus haut
+                // palier différé évite une rafale douce puis ferme.
+                if let Some(level) = p.deferred_level.take() {
+                    p.escalation_level = level;
+                    state_updates.push((p.msg_id.clone(), level));
+                    if level == 1 {
+                        actions.push(ReminderAction::Gentle {
+                            to: p.to.clone(), from: p.from.clone(), msg_id: p.msg_id.clone(), target_conn: p.target_conn.clone(),
+                        });
+                    } else {
+                        actions.push(ReminderAction::Firm {
+                            to: p.to.clone(), from: p.from.clone(), msg_id: p.msg_id.clone(), target_conn: p.target_conn.clone(),
+                        });
                     }
                     continue;
                 }
@@ -583,16 +618,6 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                         msg_id: p.msg_id.clone(),
                         target_conn: p.target_conn.clone(),
                     });
-                } else if p.escalation_level == 2 && elapsed >= t {
-                    p.escalation_level = 3;
-                    state_updates.push((p.msg_id.clone(), 3));
-                    actions.push(ReminderAction::Timeout {
-                        to: p.to.clone(),
-                        from: p.from.clone(),
-                        msg_id: p.msg_id.clone(),
-                        from_conn: p.from_conn.clone(),
-                        timeout_secs: t,
-                    });
                 }
             }
 
@@ -607,10 +632,14 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             });
 
             for (id, level) in state_updates {
-                if level == 3 {
-                    let _ = st.store.mark_timed_out(&id);
-                } else {
-                    let _ = st.store.set_escalation_level(&id, level);
+                let _ = st.store.set_escalation_level(&id, level);
+            }
+            for (id, level) in deferred_events {
+                let _ = st.store.record_deferred_reminder(&id, level);
+            }
+            for (to, from, msg_id, from_conn, timeout_secs) in timeout_candidates {
+                if claim_timeout(&st.store, &msg_id) {
+                    actions.push(ReminderAction::Timeout { to, from, msg_id, from_conn, timeout_secs });
                 }
             }
 
@@ -1058,15 +1087,23 @@ fn should_remind(target_is_undisturbed: bool, escalation_level: u8) -> bool {
     !target_is_undisturbed || escalation_level >= 2
 }
 
-fn deferred_reminder_level(target_is_busy: bool, escalation_level: u8, elapsed_secs: u64, timeout_secs: u64) -> Option<u8> {
+fn deferred_reminder_level(target_is_busy: bool, elapsed_secs: u64, timeout_secs: u64) -> Option<u8> {
     if !target_is_busy {
         return None;
     }
-    match escalation_level {
-        0 if elapsed_secs >= timeout_secs / 3 => Some(1),
-        1 if elapsed_secs >= (timeout_secs * 2) / 3 => Some(2),
-        _ => None,
+    if elapsed_secs >= (timeout_secs * 2) / 3 {
+        Some(2)
+    } else if elapsed_secs >= timeout_secs / 3 {
+        Some(1)
+    } else {
+        None
     }
+}
+
+/// Retourne vrai pour le seul chemin autorisé à notifier l'émetteur d'une
+/// échéance. SQLite arbitre l'intercalage transport ↔ thread de relance.
+fn claim_timeout(store: &Store, id: &str) -> bool {
+    store.mark_timed_out(id).unwrap_or(false)
 }
 
 /// Retrouve la présence d'un agent désigné par son nom.
@@ -1532,8 +1569,9 @@ fn handle_wrapper_message(
             let request = st.store.get_request(&id).ok().flatten();
             if let Some(request) = request {
                 st.pending_replies.retain(|pending| pending.msg_id != id);
-                if reason.contains("échéance") || reason.contains("timeout ACP") {
-                    let _ = st.store.mark_timed_out(&id);
+                if (reason.contains("échéance") || reason.contains("timeout ACP"))
+                    && !claim_timeout(&st.store, &id) {
+                        return None;
                 }
                 if let Some(agent) = st.router.get_agent(&request.sender)
                     && let Some(writer) = st.connections.get(&agent.connection_id)
@@ -1791,6 +1829,7 @@ mod presence_tests {
 
         let agents = state.agent_infos();
         assert_eq!(agents.len(), 1);
+        assert_eq!(agents.iter().map(|agent| agent.name.as_str()).collect::<Vec<_>>(), vec!["agent-distant-1"]);
         assert_eq!(agents[0].host, "projet-a");
         assert_eq!(agents[0].os, "Linux");
         assert_eq!(agents[0].state, "unreachable");
@@ -2025,6 +2064,7 @@ mod presence_tests {
 
         let agents = state.agent_infos();
         assert_eq!(agents.len(), 1);
+        assert_eq!(agents.iter().map(|agent| agent.name.as_str()).collect::<Vec<_>>(), vec!["agent-2"]);
         assert_eq!(agents[0].state, "connected");
         assert_eq!(agents[0].model.as_deref(), Some("gpt-5.3-codex"));
         assert_eq!(agents[0].effort.as_deref(), Some("xhigh"));
@@ -2034,17 +2074,22 @@ mod presence_tests {
 
     #[test]
     fn tour_busy_differe_les_rappels_sans_differe_l_echeance() {
-        assert_eq!(deferred_reminder_level(true, 0, 20, 60), Some(1));
-        assert_eq!(deferred_reminder_level(true, 1, 40, 60), Some(2));
-        assert_eq!(deferred_reminder_level(true, 2, 60, 60), None);
-        assert_eq!(deferred_reminder_level(false, 0, 20, 60), None);
+        assert_eq!(deferred_reminder_level(true, 20, 60), Some(1));
+        assert_eq!(deferred_reminder_level(true, 40, 60), Some(2));
+        // La boucle traite elapsed >= T avant cet auxiliaire : busy ne peut
+        // donc jamais différer le timeout du daemon.
+        assert_eq!(deferred_reminder_level(true, 60, 60), Some(2));
+        assert_eq!(deferred_reminder_level(false, 20, 60), None);
     }
 
     #[test]
     fn reconnexion_redeclare_busy_et_arret_propre_reste_stopped() {
         let (mut state, config) = state_with_registered_agent("tour-reconnexion");
         state.set_turn_state("conn-1", true).unwrap();
-        assert_eq!(state.agent_infos()[0].state, "busy");
+        let agents = state.agent_infos();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].name, "agent-2");
+        assert_eq!(agents[0].state, "busy");
         state.router.unregister_by_conn("conn-1");
         state.mark_unreachable("conn-1");
         let response = handle_register("conn-2", "claude".to_string(), Some("agent-2".to_string()), Some("macbook".to_string()), Some("acp".to_string()), Some("macOS".to_string()), Some("instance-1".to_string()), None, true, &mut state);
@@ -2066,6 +2111,15 @@ mod presence_tests {
         let state = shared.lock().unwrap();
         assert!(state.pending_replies.is_empty());
         assert_eq!(state.store.get_request("request-timeout").unwrap().unwrap().state, "timed_out");
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    #[test]
+    fn intercalage_timeout_et_transport_n_autorise_qu_une_notification() {
+        let (state, config) = state_with_registered_agent("timeout-concurrent");
+        state.store.create_request("request-timeout", "sender", "agent-2", 60).unwrap();
+        assert!(claim_timeout(&state.store, "request-timeout"));
+        assert!(!claim_timeout(&state.store, "request-timeout"));
         let _ = std::fs::remove_file(&config.db_path);
     }
 

@@ -67,6 +67,7 @@ type Waiters = Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>;
 type Writer = Arc<Mutex<Option<ChildStdin>>>;
 type Completions = Arc<Mutex<HashMap<String, mpsc::Sender<()>>>>;
 type Journal = Arc<Mutex<Option<JournalWriter>>>;
+type Clock = Arc<dyn Fn() -> SystemTime + Send + Sync>;
 
 struct ActiveTurn {
     message_id: String,
@@ -92,8 +93,11 @@ struct TurnWorker {
     response: Arc<Mutex<String>>,
     session_id: String,
     notify_timeout: Duration,
+    cancel_grace: Duration,
+    poll_interval: Duration,
     child: Arc<Mutex<Child>>,
     journal: Journal,
+    clock: Clock,
 }
 
 pub struct AcpTransport {
@@ -110,10 +114,19 @@ pub struct AcpTransport {
     reader_handle: Mutex<Option<thread::JoinHandle<()>>>,
     worker_handle: Mutex<Option<thread::JoinHandle<()>>>,
     journal: Journal,
+    clock: Clock,
 }
 
 impl AcpTransport {
     pub fn spawn(options: AcpOptions) -> Result<Self, TransportError> {
+        Self::spawn_with_clock(options, Arc::new(SystemTime::now))
+    }
+
+    fn spawn_with_clock(options: AcpOptions, clock: Clock) -> Result<Self, TransportError> {
+        Self::spawn_with_clock_and_cancel_grace(options, clock, CANCEL_GRACE, CANCEL_POLL)
+    }
+
+    fn spawn_with_clock_and_cancel_grace(options: AcpOptions, clock: Clock, cancel_grace: Duration, poll_interval: Duration) -> Result<Self, TransportError> {
         if options.queue_capacity == 0 {
             return Err(TransportError::DeliveryFailed(
                 "queue ACP de capacité nulle".to_string(),
@@ -231,8 +244,11 @@ impl AcpTransport {
             response,
             session_id: session_id.clone(),
             notify_timeout: Duration::from_secs(options.notify_timeout_secs),
+            cancel_grace,
+            poll_interval,
             child: child.clone(),
             journal: journal.clone(),
+            clock: clock.clone(),
         });
         Ok(Self {
             connection_id: format!("acp-{pid}"),
@@ -248,6 +264,7 @@ impl AcpTransport {
             reader_handle: Mutex::new(Some(reader_handle)),
             worker_handle: Mutex::new(Some(worker_handle)),
             journal,
+            clock,
         })
     }
 
@@ -375,7 +392,7 @@ impl Transport for AcpTransport {
         if !self.is_alive() {
             return Err(TransportError::AgentDead);
         }
-        if message_expired(msg) {
+        if message_expired_at(msg, (self.clock)()) {
             self.events
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner())
@@ -406,11 +423,16 @@ impl Transport for AcpTransport {
     }
 }
 
+#[cfg(test)]
 fn message_expired(message: &BridgetMessage) -> bool {
+    message_expired_at(message, SystemTime::now())
+}
+
+fn message_expired_at(message: &BridgetMessage, now: SystemTime) -> bool {
     let Some(deadline_at) = message.deadline_at else {
         return false;
     };
-    SystemTime::now()
+    now
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|now| now.as_secs() >= deadline_at)
         .unwrap_or(false)
@@ -418,15 +440,6 @@ fn message_expired(message: &BridgetMessage) -> bool {
 
 /// Convertit l'échéance absolue portée par le daemon en durée restante pour le
 /// prompt déjà actif. L'absence d'échéance conserve le comportement historique.
-fn remaining_deadline(message: &BridgetMessage) -> Option<Duration> {
-    let deadline_at = message.deadline_at?;
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    Some(Duration::from_secs(deadline_at.saturating_sub(now)))
-}
-
 fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         loop {
@@ -461,7 +474,7 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 clear_active_turn(&worker.queue);
                 continue;
             }
-            if message_expired(&message) {
+            if message_expired_at(&message, (worker.clock)()) {
                 worker
                     .events
                     .lock()
@@ -504,11 +517,9 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                     "sessionId": &worker.session_id,
                     "prompt": [{ "type": "text", "text": prompt_for(&message) }]
                 }),
-                if message.reply {
-                    remaining_deadline(&message)
-                } else {
-                    Some(worker.notify_timeout)
-                },
+                (!message.reply).then_some(worker.notify_timeout),
+                message.reply.then_some(message.deadline_at).flatten(),
+                &worker.clock,
                 &cancellation,
                 &cancelled,
                 &worker.session_id,
@@ -516,6 +527,8 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 &worker.queue,
                 &worker.events,
                 &worker.alive,
+                worker.cancel_grace,
+                worker.poll_interval,
             );
             let collected = worker
                 .response
@@ -799,6 +812,8 @@ fn prompt_request(
     method: &str,
     params: Value,
     timeout: Option<Duration>,
+    deadline_at: Option<u64>,
+    clock: &Clock,
     cancellation: &mpsc::Receiver<String>,
     cancelled: &AtomicBool,
     session_id: &str,
@@ -806,6 +821,8 @@ fn prompt_request(
     queue: &Arc<(Mutex<QueueState>, Condvar)>,
     events: &Arc<Mutex<VecDeque<AcpEvent>>>,
     alive: &AtomicBool,
+    cancel_grace: Duration,
+    poll_interval: Duration,
 ) -> Result<Value, TransportError> {
     let id = next_id.fetch_add(1, Ordering::SeqCst);
     let (sender, receiver) = mpsc::channel();
@@ -835,7 +852,11 @@ fn prompt_request(
     }
     let started = std::time::Instant::now();
     loop {
-        let timed_out = timeout.is_some_and(|timeout| started.elapsed() >= timeout);
+        let timed_out = deadline_at.is_some_and(|deadline| {
+            (clock)().duration_since(SystemTime::UNIX_EPOCH)
+                .map(|now| now.as_secs() >= deadline)
+                .unwrap_or(false)
+        }) || timeout.is_some_and(|timeout| started.elapsed() >= timeout);
         let cancellation_reason = cancellation
             .try_recv()
             .ok()
@@ -850,7 +871,7 @@ fn prompt_request(
                 writer,
                 json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": session_id } }),
             );
-            if completion_receiver.recv_timeout(CANCEL_GRACE).is_err() {
+            if completion_receiver.recv_timeout(cancel_grace).is_err() {
                 force_stop_transport(
                     writer,
                     child,
@@ -864,10 +885,13 @@ fn prompt_request(
             }
             return Err(TransportError::DeliveryFailed(reason));
         }
-        let remaining = timeout
+        let remaining = deadline_at.map(|deadline| {
+            let now = (clock)().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+            Duration::from_secs(deadline.saturating_sub(now))
+        }).or(timeout)
             .map(|timeout| timeout.saturating_sub(started.elapsed()))
             .unwrap_or(CANCEL_POLL);
-        let poll = remaining.min(CANCEL_POLL);
+        let poll = remaining.min(poll_interval);
         match receiver.recv_timeout(poll) {
             Ok(result) => {
                 completions
@@ -1665,38 +1689,45 @@ echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
 read request
 echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
 read prompt
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"prompt-observe"}}}}'
 read cancel
-sleep 3
+while :; do :; done
 "#;
-        let mut transport = AcpTransport::spawn(AcpOptions {
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+        let observed_now = Arc::new(AtomicU64::new(now));
+        let clock_now = observed_now.clone();
+        let clock: Clock = Arc::new(move || SystemTime::UNIX_EPOCH + Duration::from_secs(clock_now.load(Ordering::SeqCst)));
+        let mut transport = AcpTransport::spawn_with_clock_and_cancel_grace(AcpOptions {
             command: "sh".to_string(),
             args: vec!["-c".to_string(), script.to_string()],
             queue_capacity: 2,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
-        })
+        }, clock, Duration::ZERO, Duration::ZERO)
         .unwrap();
         let mut active = message("deadline-active");
         active.reply = true;
-        active.deadline_at = Some(
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-                + 1,
-        );
+        active.deadline_at = Some(now + 1);
         transport.deliver(&active).unwrap();
         transport.deliver(&message("deadline-queued")).unwrap();
-        for _ in 0..250 {
-            thread::sleep(Duration::from_millis(10));
-            if !transport.is_alive() {
-                let events = transport.drain_events();
-                assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, reason } if message_id == "deadline-active" && reason.contains("timeout ACP"))));
-                assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, .. } if message_id == "deadline-queued")));
+        let mut observed_prompt = false;
+        for _ in 0..100_000 {
+            observed_prompt |= transport.drain_events().iter().any(|event| matches!(event, AcpEvent::Update { detail } if detail == "prompt-observe"));
+            if observed_prompt { break; }
+            thread::yield_now();
+        }
+        assert!(observed_prompt, "le faux adaptateur n'a pas observé le prompt");
+        observed_now.store(now + 1, Ordering::SeqCst);
+        let mut terminal_events = Vec::new();
+        for _ in 0..100_000 {
+            terminal_events.extend(transport.drain_events());
+            if terminal_events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, reason } if message_id == "deadline-active" && reason.contains("timeout ACP")))
+                && terminal_events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, .. } if message_id == "deadline-queued")) {
                 return;
             }
+            thread::yield_now();
         }
-        panic!("l'échéance du tour actif n'a pas interrompu le prompt ACP");
+        panic!("l'échéance injectée n'a pas interrompu le prompt ACP");
     }
 
     #[test]
