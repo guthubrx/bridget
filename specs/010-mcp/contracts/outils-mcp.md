@@ -16,7 +16,8 @@ MCP servi : `initialize` (version pinnée, capacité `tools` seule),
 Catégories métier fermées (extensibles — un client ignore une catégorie
 inconnue sans casser) : `accepted`, `dnd`, `circuit_breaker`, `duplicate`,
 `hops_exhausted`, `unknown_recipient`, `queue_full`, `reply_requires_agent`,
-`outcome_unknown`.
+`outcome_unknown`, `envelope_mismatch`, `idempotency_expired`,
+`invalid_issued_at`.
 
 ## `bridget_send`
 
@@ -27,21 +28,24 @@ Entrée :
   "to":            { "type": "string", "minLength": 1 },
   "body":          { "type": "string", "minLength": 1 },
   "reply":         { "type": "boolean", "default": false },
-  "reply_timeout": { "type": "integer", "minimum": 1, "description": "secondes ; uniquement avec reply=true, sinon invalid_params" }
+  "reply_timeout": { "type": "integer", "minimum": 1, "description": "secondes ; uniquement avec reply=true, sinon invalid_params" },
+  "id":            { "type": "string", "minLength": 1, "description": "clé métier de retry" },
+  "issued_at":     { "type": "integer", "minimum": 1, "description": "valeur renvoyée par le premier appel ; requise avec id au retry" }
 }
 ```
 
 Résultat métier :
 
 ```json
-{ "status": "accepted", "id": "…", "hops": 4 }
+{ "status": "accepted", "id": "…", "issued_at": 1700000000, "hops": 4 }
 { "status": "dnd", "reason": "« sol » ne souhaite pas être dérangé (encore 12 min)", "minutes_left": 12 }
 { "status": "outcome_unknown", "id": "…", "reason": "accusé perdu après transmission — retry possible avec le même id" }
 ```
 
 Règles : corps transmis octet pour octet ; id métier généré avant la connexion
 daemon ; retour dès accusé/refus (jamais d'attente de la réponse du
-destinataire) ; `retry` explicite avec le même id → déduplication daemon.
+destinataire) ; le premier résultat renvoie `id` et `issued_at`, qui doivent
+être rejoués ensemble pour un retry → déduplication daemon.
 
 ## `bridget_who`
 

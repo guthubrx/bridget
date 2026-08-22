@@ -602,8 +602,10 @@ fn unknown_os() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestInfo {
     pub id: String,
+    pub sender: String,
     pub target: String,
     pub state: String,
+    pub created_at: i64,
     pub deadline_at: i64,
     pub cancel_reason: Option<String>,
     #[serde(default)]

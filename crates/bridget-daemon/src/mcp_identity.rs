@@ -60,6 +60,18 @@ pub fn resolve_current() -> Result<String, IdentityError> {
     )
 }
 
+/// Identifiant d'instance stable du wrapper qui héberge la façade MCP.
+///
+/// Il ne dépend jamais du nom dynamique de l'agent : ce dernier peut changer
+/// entre deux appels, alors que l'instance reste la portée du contrat
+/// d'idempotence 012 pendant toute la vie du wrapper.
+pub fn resolve_current_instance_id() -> Result<String, IdentityError> {
+    std::env::var("BRIDGET_AGENT_INSTANCE_ID")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or(IdentityError::IdentityNotFound)
+}
+
 struct SystemProcessTree;
 impl ProcessTree for SystemProcessTree {
     fn birth(&self, pid: u32) -> Option<u64> {

@@ -46,8 +46,10 @@ pub fn read_projection(
                 let deferred = store.latest_deferred_reminder(&request.id)?;
                 Ok(RequestInfo {
                     id: request.id,
+                    sender: request.sender,
                     target: request.target,
                     state: request.state,
+                    created_at: request.created_at,
                     deadline_at: request.deadline_at,
                     cancel_reason: request.cancel_reason,
                     deferred_reminder_level: deferred.map(|event| event.0),

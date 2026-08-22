@@ -1737,7 +1737,7 @@ fn print_ledger(entries: &[LedgerMessage]) {
     print!("{}", render_ledger(entries));
 }
 
-fn render_ledger(entries: &[LedgerMessage]) -> String {
+pub(crate) fn render_ledger(entries: &[LedgerMessage]) -> String {
     if entries.is_empty() {
         return "Ledger vide.\n".to_string();
     }
@@ -1761,6 +1761,22 @@ mod hook_tests {
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
     use std::thread;
+
+    #[test]
+    fn rendu_ledger_cli_reste_octet_pour_octet_stable() {
+        let entries = vec![
+            LedgerMessage {
+                id: "ancien".to_string(), ts: 1, sender: "alice".to_string(), target: "bob".to_string(), body: "premier".to_string(),
+            },
+            LedgerMessage {
+                id: "recent".to_string(), ts: 2, sender: "bob".to_string(), target: "alice".to_string(), body: "corps riche $VAR\nintact".to_string(),
+            },
+        ];
+        assert_eq!(
+            render_ledger(&entries),
+            "Derniers 2 messages :\n  [2] bob → alice: corps riche $VAR\nintact\n  [1] alice → bob: premier\n"
+        );
+    }
 
     /// Configuration réaliste : quatre hooks utilisateur déjà en place, dont
     /// un sur `Stop`. L'insertion doit être additive, jamais destructive.
