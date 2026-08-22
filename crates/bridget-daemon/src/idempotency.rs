@@ -857,6 +857,29 @@ mod tests {
     }
 
     #[test]
+    fn retry_en_vol_rejoue_unknown_puis_accepted_apres_accuse() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let key = key();
+        assert!(matches!(reserve(&store, b"canon"), Reservation::Prepared { .. }));
+        let delivery = SendDelivery {
+            delivery_id: "delivery-retry".to_string(),
+            recipient_instance_id: "instance-1".to_string(),
+            delivery_generation: 9,
+            expires_at: NOW + HORIZON,
+        };
+        store.begin_send_delivery(&key, &delivery).unwrap();
+        assert_eq!(
+            reserve(&store, b"canon"),
+            Reservation::Replayed(LookupResult::OutcomeUnknown { expires_at: NOW + HORIZON })
+        );
+        store.acknowledge_send_delivery("delivery-retry", "instance-1", 9).unwrap();
+        assert_eq!(
+            reserve(&store, b"canon"),
+            Reservation::Replayed(LookupResult::Accepted { expires_at: NOW + HORIZON })
+        );
+    }
+
+    #[test]
     fn purge_expired_removes_its_delivery_through_the_foreign_key() {
         let mut store = IdempotencyStore::open_in_memory().unwrap();
         let key = key();
