@@ -34,6 +34,8 @@ pub enum WrapperToDaemon {
     Rename { current_name: String, name: String },
     /// Envoyer un message à un autre agent.
     Send(BridgetMessage),
+    /// Refus terminal asynchrone d'une livraison déjà acquittée par le daemon.
+    DeliveryRejected { id: String, reason: String },
     /// Annuler une demande suivie appartenant à l'agent courant.
     CancelRequest {
         id: String,
@@ -120,6 +122,8 @@ pub enum DaemonToWrapper {
     Renamed { old_name: String, name: String },
     /// Livrer un message à l'agent.
     Deliver(BridgetMessage),
+    /// Retirer un message de la file du transport, sans l'injecter.
+    CancelDelivery { id: String, reason: String },
     /// Acquittement d'un envoi.
     Ack { id: String },
     /// Refus d'un envoi avec raison.
@@ -249,6 +253,26 @@ mod tests {
             WrapperToDaemon::Send(m) => assert_eq!(m.body, "réponse"),
             _ => panic!("mauvais type"),
         }
+    }
+
+    #[test]
+    fn test_encode_decode_acp_delivery_lifecycle() {
+        let cancel = DaemonToWrapper::CancelDelivery {
+            id: "message-1".to_string(),
+            reason: "échéance".to_string(),
+        };
+        assert!(matches!(
+            decode(&encode(&cancel).unwrap()).unwrap(),
+            DaemonToWrapper::CancelDelivery { id, reason } if id == "message-1" && reason == "échéance"
+        ));
+        let rejected = WrapperToDaemon::DeliveryRejected {
+            id: "message-1".to_string(),
+            reason: "file ACP pleine".to_string(),
+        };
+        assert!(matches!(
+            decode(&encode(&rejected).unwrap()).unwrap(),
+            WrapperToDaemon::DeliveryRejected { id, reason } if id == "message-1" && reason == "file ACP pleine"
+        ));
     }
 
     #[test]

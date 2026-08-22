@@ -69,7 +69,7 @@ valide chaque tâche avant coche. Ne jamais committer automatiquement.
   terminal, purge par id ; corps spéciaux intacts octet pour octet. (Les
   fixtures Claude et Gemini sont ajoutées par T707 et T708.)
 
-- [ ] **T705** [US1] **Branchement wrapper équipier et protocole** : flag de
+- [X] **T705** [US1] **Branchement wrapper équipier et protocole** : flag de
   lancement (`cli.rs`, nom du flag à fixer et documenter), mode ACP dans
   `wrapper.rs` — pas de prompt « Règles ABSOLUES » (FR-004), `AcpTransport` au
   lieu de `TmuxTransport` ; **le wrapper ne tient aucune file propre** : il

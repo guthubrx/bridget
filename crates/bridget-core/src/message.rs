@@ -96,13 +96,16 @@ impl BridgetMessage {
     }
 
     /// Génère une clé de contenu pour la déduplication par contenu.
-    /// Combine le destinataire + le hash du body.
+    /// Combine le destinataire, le corps et la demande référencée.
+    /// Deux réponses textuellement identiques à des demandes distinctes ne sont
+    /// pas des doublons : leur `in_reply_to` porte une sémantique métier.
     pub fn content_key(&self) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
         self.to.hash(&mut hasher);
         self.body.hash(&mut hasher);
+        self.in_reply_to.hash(&mut hasher);
         format!("{:016x}", hasher.finish())
     }
 }
@@ -121,6 +124,15 @@ mod tests {
         assert_eq!(msg.body, "hello");
         assert!(!msg.reply);
         assert_eq!(msg.hops, 4);
+    }
+
+    #[test]
+    fn content_key_keeps_distinct_tracked_replies_distinct() {
+        let mut first = BridgetMessage::new("codex", "alice", "même réponse");
+        first.in_reply_to = Some("request-1".to_string());
+        let mut second = first.clone();
+        second.in_reply_to = Some("request-2".to_string());
+        assert_ne!(first.content_key(), second.content_key());
     }
 
     #[test]

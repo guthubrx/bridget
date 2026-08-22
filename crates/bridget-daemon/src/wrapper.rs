@@ -3,7 +3,7 @@
 //! Appelé par le CLI quand l'utilisateur tape : bridget codex, bridget claude, etc.
 
 use bridget_transport::protocol::{decode, encode};
-use bridget_transport::{DaemonToWrapper, TmuxTransport, Transport, WrapperToDaemon};
+use bridget_transport::{AcpEvent, AcpOptions, AcpTransport, DaemonToWrapper, TmuxTransport, Transport, WrapperToDaemon};
 use log::{debug, error, info, warn};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
@@ -393,13 +393,17 @@ pub fn launch(
     agent_args: &[String],
     explicit_name: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let (equipier, agent_args) = split_equipier_flag(agent_args);
+    if equipier {
+        return launch_acp(agent_type, &agent_args, explicit_name);
+    }
     // 1. Enregistrement initial — avec persistance du nom.
     // Si l'utilisateur a passé --name, on l'utilise.
     // Sinon, si on fait un resume, on essaie de retrouver le nom précédent.
     let effective_name = if let Some(n) = explicit_name {
         Some(n.to_string())
     } else {
-        load_persistent_name(agent_type, agent_args)
+        load_persistent_name(agent_type, &agent_args)
     };
 
     let host = host_name();
@@ -428,9 +432,9 @@ pub fn launch(
     info!("enregistré: {}", my_name);
 
     // Sauvegarder le nom pour les futurs resume
-    save_persistent_name(agent_type, agent_args, &my_name);
+    save_persistent_name(agent_type, &agent_args, &my_name);
     let name_state_path = {
-        let hash = session_hash(agent_args);
+        let hash = session_hash(&agent_args);
         if hash.is_empty() {
             socket_path()
                 .parent()
@@ -783,7 +787,7 @@ pub fn launch(
                             error!("injection tmux: {}", e);
                         }
                     } else {
-                        eprintln!("\n[bridget] ← « {} »: {}\n", bm.from, bm.body);
+                        warn!("livraison ignorée : aucun pane tmux pour {}", bm.id);
                     }
                 }
                 DaemonToWrapper::Disconnect => {
@@ -858,9 +862,137 @@ pub fn launch(
     std::process::exit(0);
 }
 
+fn split_equipier_flag(agent_args: &[String]) -> (bool, Vec<String>) {
+    let mut equipier = false;
+    let mut remaining = Vec::with_capacity(agent_args.len());
+    for argument in agent_args {
+        if argument == "--equipier" {
+            equipier = true;
+        } else {
+            remaining.push(argument.clone());
+        }
+    }
+    (equipier, remaining)
+}
+
+fn launch_acp(
+    agent_type: &str,
+    agent_args: &[String],
+    explicit_name: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !agent_args.is_empty() {
+        return Err("le mode --equipier n'accepte pas d'arguments d'agent".into());
+    }
+    let registry = crate::registry::AgentRegistry::load()?;
+    let definition = registry.get(agent_type)?;
+    if definition.protocol != "acp" {
+        return Err(format!("le type '{agent_type}' n'utilise pas le protocole ACP").into());
+    }
+    let forbidden_variable = (std::env::var("BRIDGET_ALLOW_API_KEY").ok().as_deref() != Some("1"))
+        .then(|| definition.forbidden_env.iter().find(|variable| std::env::var_os(variable).is_some()))
+        .flatten();
+    if let Some(variable) = forbidden_variable {
+        return Err(format!("variable d'environnement refusée pour l'équipier ACP : {variable} (utilisez BRIDGET_ALLOW_API_KEY=1 uniquement si vous acceptez la facturation API)").into());
+    }
+
+    let effective_name = explicit_name.map(str::to_owned);
+    let host = host_name();
+    let os = operating_system();
+    let instance_id = uuid::Uuid::new_v4().to_string();
+    let initial_domain = effective_name.as_deref().and_then(effective_domain).or_else(derive_domain);
+    let (mut reader, initial_writer, my_name) = connect_and_register(
+        agent_type,
+        effective_name.as_deref(),
+        &host,
+        "acp",
+        &os,
+        &instance_id,
+        initial_domain.as_deref(),
+    )?;
+    let writer = Arc::new(Mutex::new(Some(initial_writer)));
+    let name_state_path = socket_path().parent().unwrap().join("agent-names").join(format!("active-{my_name}"));
+    if let Some(parent) = name_state_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&name_state_path, &my_name)?;
+    let mut transport = AcpTransport::spawn(AcpOptions {
+        command: definition.command.clone(),
+        args: definition.args.clone(),
+        queue_capacity: definition.queue_capacity,
+        permissions: definition.permissions.clone(),
+    })?;
+
+    loop {
+        for event in transport.drain_events() {
+            match event {
+                AcpEvent::TurnFinished { message, response, .. } if message.reply && !response.is_empty() => {
+                    let mut reply = bridget_core::BridgetMessage::new(&my_name, &message.from, response);
+                    reply.in_reply_to = Some(message.id);
+                    send_wrapper_message(&writer, WrapperToDaemon::Send(reply));
+                }
+                AcpEvent::TurnFinished { message, response, .. } if message.reply && response.is_empty() => {
+                    send_wrapper_message(&writer, WrapperToDaemon::DeliveryRejected { id: message.id, reason: "réponse vide".to_string() });
+                }
+                AcpEvent::DeliveryRejected { message_id, reason } => {
+                    send_wrapper_message(&writer, WrapperToDaemon::DeliveryRejected { id: message_id, reason });
+                }
+                _ => {}
+            }
+        }
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => match decode(line.trim()) {
+                Ok(DaemonToWrapper::Deliver(message)) => {
+                    if let Err(error) = transport.deliver(&message) {
+                        send_wrapper_message(&writer, WrapperToDaemon::DeliveryRejected { id: message.id, reason: error.to_string() });
+                    }
+                }
+                Ok(DaemonToWrapper::CancelDelivery { id, reason }) => {
+                    transport.cancel_delivery(&id, &reason);
+                }
+                Ok(DaemonToWrapper::Disconnect) => break,
+                Ok(_) => {}
+                Err(error) => warn!("message ACP illisible: {}", error),
+            },
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+            Err(error) => return Err(error.into()),
+        }
+        if !transport.is_alive() {
+            break;
+        }
+    }
+    transport.shutdown();
+    send_wrapper_message(&writer, WrapperToDaemon::Unregister);
+    Ok(())
+}
+
+fn send_wrapper_message(writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>, message: WrapperToDaemon) {
+    let Ok(json) = encode(&message) else { return; };
+    let write_result = writer
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .as_mut()
+        .map(|writer| writeln!(writer, "{}", json).and_then(|_| writer.flush()));
+    if let Some(Err(error)) = write_result {
+        warn!("envoi wrapper ACP impossible: {}", error);
+    }
+}
+
 #[cfg(test)]
 mod reconnect_tests {
     use super::*;
+
+    #[test]
+    fn equipier_flag_is_removed_before_the_agent_is_started() {
+        let (equipier, remaining) = split_equipier_flag(&[
+            "--equipier".to_string(),
+            "resume".to_string(),
+            "session".to_string(),
+        ]);
+        assert!(equipier);
+        assert_eq!(remaining, vec!["resume", "session"]);
+    }
 
     #[test]
     fn le_domaine_derive_nomme_le_depot_courant() {

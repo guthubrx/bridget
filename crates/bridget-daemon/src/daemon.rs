@@ -1226,16 +1226,17 @@ fn handle_wrapper_message(
                 });
             }
 
-            if let Some(request_id) = bridge_msg.in_reply_to.as_deref()
-                && st
-                    .store
-                    .mark_answered(request_id, &bridge_msg.from, &bridge_msg.to)
-                    .unwrap_or(false)
-                {
-                    st.pending_replies
-                        .retain(|pending| pending.msg_id != request_id);
-                    info!("demande {} répondue", request_id);
-                }
+            // Une réponse suivie ne contourne DND et ne clôt le ledger que si
+            // sa demande est ouverte et lie exactement les deux participants.
+            // Cette vérification ne modifie aucun état : une référence forgée
+            // reste un message ordinaire.
+            let valid_tracked_reply = bridge_msg.in_reply_to.as_deref().is_some_and(|request_id| {
+                st.store.get_request(request_id).ok().flatten().is_some_and(|request| {
+                    request.state == "open"
+                        && request.sender == bridge_msg.to
+                        && request.target == bridge_msg.from
+                })
+            });
 
             // 1. Disjoncteur
             if !st.circuit_breaker.check(&bridge_msg.from, &bridge_msg.to) {
@@ -1298,7 +1299,8 @@ fn handle_wrapper_message(
             // interroger l'annuaire avant chaque envoi. L'émetteur reçoit la
             // raison et le temps restant afin de décider lui-même s'il attend,
             // insiste plus tard, ou s'adresse à quelqu'un d'autre.
-            if let Some(presence) = presence_of_agent(&mut st, &bridge_msg.to)
+            if !valid_tracked_reply
+                && let Some(presence) = presence_of_agent(&mut st, &bridge_msg.to)
                 && presence.is_dnd() {
                     let minutes = presence.dnd_minutes_left();
                     let target = presence.name.clone();
@@ -1337,13 +1339,14 @@ fn handle_wrapper_message(
                     let json = encode(&dtw).unwrap_or_default();
                     eprintln!("[BRIDGET] Push vers {}: {} octets", target_conn, json.len());
 
+                    let mut delivery_succeeded = false;
                     if let Some(target_writer) = st.connections.get(&target_conn) {
                         log::debug!("push vers {}: écriture sur writer", target_conn);
                         if let Ok(mut w) = target_writer.lock() {
                             eprintln!("[BRIDGET] Writer locked for {}, écriture...", target_conn);
                             match writeln!(w, "{}", json) {
-                                Ok(_) => {
-                                    let _ = w.flush();
+                                Ok(_) if w.flush().is_ok() => {
+                                    delivery_succeeded = true;
                                     info!(
                                         "livré: {} → « {} » (hops={}, reply={})",
                                         bridge_msg.id,
@@ -1352,11 +1355,21 @@ fn handle_wrapper_message(
                                         bridge_msg.reply
                                     );
                                 }
+                                Ok(_) => error!("push {}: flush échoué", target_conn),
                                 Err(e) => error!("push {}: {}", target_conn, e),
                             }
                         }
                     } else {
                         warn!("cible {} disparue", target_conn);
+                    }
+
+                    if delivery_succeeded
+                        && valid_tracked_reply
+                        && let Some(request_id) = bridge_msg.in_reply_to.as_deref()
+                        && st.store.mark_answered(request_id, &bridge_msg.from, &bridge_msg.to).unwrap_or(false)
+                    {
+                        st.pending_replies.retain(|pending| pending.msg_id != request_id);
+                        info!("demande {} répondue après livraison", request_id);
                     }
 
                     // Si reply=yes, enregistrer dans pending_replies pour escalade
@@ -1447,6 +1460,25 @@ fn handle_wrapper_message(
             Some(handle_availability(&agent, until_secs, &mut st))
         }
 
+        WrapperToDaemon::DeliveryRejected { id, reason } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let request = st.store.get_request(&id).ok().flatten();
+            if let Some(request) = request {
+                st.pending_replies.retain(|pending| pending.msg_id != id);
+                if let Some(agent) = st.router.get_agent(&request.sender)
+                    && let Some(writer) = st.connections.get(&agent.connection_id)
+                    && let Err(error) = deliver_to_agent(
+                        writer,
+                        &request.sender,
+                        &format!("Échec de livraison de la demande #{id} : {reason}"),
+                    )
+                {
+                    error!("impossible de notifier l'échec ACP à {}: {}", request.sender, error);
+                }
+            }
+            None
+        }
+
         WrapperToDaemon::CancelRequest { id, sender, reason } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             if st.router.get_agent(&sender).is_none() {
@@ -1465,22 +1497,41 @@ fn handle_wrapper_message(
                         .retain(|pending| pending.msg_id != request.id);
                     if let Some(agent) = st.router.get_agent(&request.target)
                         && let Some(writer) = st.connections.get(&agent.connection_id)
-                            && let Err(e) = deliver_to_agent(
-                                writer,
-                                &request.target,
-                                &format!(
-                                    "Demande #{} annulée par {}. Aucune réponse n'est requise.{}",
-                                    request.id,
-                                    sender,
-                                    request
-                                        .cancel_reason
-                                        .as_deref()
-                                        .map(|r| format!(" Motif : {}", r))
-                                        .unwrap_or_default()
-                                ),
-                            ) {
-                                error!("Impossible de délivrer l'annulation à {}: {}", request.target, e);
+                    {
+                        let is_acp = st
+                            .conn_instances
+                            .get(&agent.connection_id)
+                            .and_then(|instance| st.presences.get(instance))
+                            .is_some_and(|presence| presence.transport == "acp");
+                        if is_acp {
+                            let cancel = DaemonToWrapper::CancelDelivery {
+                                id: request.id.clone(),
+                                reason: request.cancel_reason.clone().unwrap_or_else(|| "demande annulée".to_string()),
+                            };
+                            match encode(&cancel)
+                                .map_err(|error| error.to_string())
+                                .and_then(|json| {
+                                    let mut writer = writer.lock().map_err(|error| error.to_string())?;
+                                    writeln!(writer, "{json}").map_err(|error| error.to_string())?;
+                                    writer.flush().map_err(|error| error.to_string())
+                                })
+                            {
+                                Ok(()) => {}
+                                Err(error) => error!("Impossible de signaler l'annulation à {}: {}", request.target, error),
                             }
+                        } else if let Err(error) = deliver_to_agent(
+                            writer,
+                            &request.target,
+                            &format!(
+                                "Demande #{} annulée par {}. Aucune réponse n'est requise.{}",
+                                request.id,
+                                sender,
+                                request.cancel_reason.as_deref().map(|reason| format!(" Motif : {reason}")).unwrap_or_default()
+                            ),
+                        ) {
+                            error!("Impossible de délivrer l'annulation à {}: {}", request.target, error);
+                        }
+                    }
                     Some(DaemonToWrapper::RequestCancelled {
                         id: request.id,
                         state: request.state,

@@ -125,3 +125,13 @@ API pendant cette tentative.
 - **Limite assumée** : le branchement du wrapper, le relais des événements et
   le `CancelDelivery` typé sont traités par T705 ; le transport expose déjà la
   purge par id et l'arrêt ACP propre.
+
+## T705 — Branchement équipier et cycle de livraison
+
+- **Statut** : terminé
+- **Fichiers** : `crates/bridget-daemon/src/wrapper.rs`, `daemon.rs`,
+  `crates/bridget-transport/src/protocol.rs`, `crates/bridget-core/src/message.rs`.
+- **Vérifications** : `--equipier` sélectionne ACP et ne transmet aucun prompt
+  historique ; les refus asynchrones et annulations sont typés ; le daemon ne
+  clôt une demande suivie qu'après livraison réussie et ne contourne DND qu'une
+  fois les participants de la demande validés sans mutation.
