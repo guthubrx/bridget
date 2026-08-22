@@ -1876,6 +1876,15 @@ fn handle_idempotency_lookup(
     }
 }
 
+fn handle_delivery_ack(conn_id: &str, delivery_id: String, delivery_generation: u64, st: &mut DaemonState) -> Option<DaemonToWrapper> {
+    let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
+        return Some(DaemonToWrapper::Nack { id: delivery_id, reason: "accusé idempotent émis par une instance inconnue".to_string() });
+    };
+    st.idempotency.acknowledge_send_delivery(&delivery_id, &instance_id, delivery_generation)
+        .err()
+        .map(|error| DaemonToWrapper::Nack { id: delivery_id, reason: error.to_string() })
+}
+
 fn reject_idempotent_send(
     st: &mut DaemonState,
     key: &IdempotencyKey,
@@ -2421,9 +2430,11 @@ fn handle_wrapper_message(
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
             Some(handle_idempotency_lookup(conn_id, operation_kind, idempotency_key, &st))
         }
-        WrapperToDaemon::DeliverAcked { .. } | WrapperToDaemon::DeliveryIndeterminate { .. } => {
-            None
+        WrapperToDaemon::DeliverAcked { delivery_id, delivery_generation } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            handle_delivery_ack(conn_id, delivery_id, delivery_generation, &mut st)
         }
+        WrapperToDaemon::DeliveryIndeterminate { .. } => None,
         WrapperToDaemon::Subscribe { agent, window } => {
             let (subscription_id, control) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());

@@ -480,6 +480,35 @@ impl IdempotencyStore {
             .map_err(Into::into)
     }
 
+    /// Accusé aval : la remise et le résultat public deviennent terminaux dans
+    /// une même transaction, après validation de l'instance et génération.
+    pub fn acknowledge_send_delivery(
+        &mut self,
+        delivery_id: &str,
+        recipient_instance_id: &str,
+        delivery_generation: u64,
+    ) -> Result<(), IdempotencyError> {
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row = tx.query_row(
+            "SELECT issuer_scope, idempotency_key, recipient_instance_id, delivery_generation, phase
+             FROM send_deliveries WHERE delivery_id = ?1",
+            params![delivery_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, u64>(3)?, row.get::<_, String>(4)?)),
+        ).optional()?.ok_or(IdempotencyError::InvalidDelivery)?;
+        if row.2 != recipient_instance_id || row.3 != delivery_generation { return Err(IdempotencyError::InvalidDelivery); }
+        if row.4 == "acked" { tx.commit()?; return Ok(()); }
+        if row.4 != "dispatching" { return Err(IdempotencyError::InvalidDelivery); }
+        let delivery = tx.execute("UPDATE send_deliveries SET phase = 'acked' WHERE delivery_id = ?1 AND phase = 'dispatching'", params![delivery_id])?;
+        let record = tx.execute(
+            "UPDATE idempotency_records SET state = 'terminal', public_result_kind = 'accepted', public_result_category = NULL, public_result_reason = NULL
+             WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2 AND state = 'dispatching'",
+            params![row.0, row.1],
+        )?;
+        if delivery != 1 || record != 1 { return Err(IdempotencyError::DispatchUnavailable); }
+        tx.commit()?;
+        Ok(())
+    }
+
     #[cfg(test)]
     pub fn record_count(&self) -> Result<usize, IdempotencyError> {
         self.conn
