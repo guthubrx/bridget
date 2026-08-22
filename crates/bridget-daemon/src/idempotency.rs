@@ -200,6 +200,7 @@ impl IdempotencyStore {
                 expires_at INTEGER NOT NULL,
                 FOREIGN KEY (issuer_scope, operation_kind, idempotency_key)
                     REFERENCES idempotency_records(issuer_scope, operation_kind, idempotency_key)
+                    ON DELETE CASCADE
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_send_deliveries_operation
                 ON send_deliveries(issuer_scope, operation_kind, idempotency_key);",
@@ -333,6 +334,51 @@ impl IdempotencyStore {
                 delivery.expires_at,
             ],
         )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Finalise un refus de clé neuve sans rendre l'état intermédiaire
+    /// `Dispatching` observable à travers un crash ou une autre connexion.
+    pub fn reject_prepared(
+        &mut self,
+        key: &IdempotencyKey,
+        category: &str,
+        reason: &str,
+    ) -> Result<(), IdempotencyError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let dispatched = tx.execute(
+            "UPDATE idempotency_records SET state = 'dispatching'
+             WHERE issuer_scope = ?1 AND operation_kind = ?2 AND idempotency_key = ?3
+               AND state = 'prepared'",
+            params![
+                key.issuer_scope,
+                key.operation_kind.as_str(),
+                key.idempotency_key,
+            ],
+        )?;
+        if dispatched != 1 {
+            return Err(IdempotencyError::DispatchUnavailable);
+        }
+        let terminal = tx.execute(
+            "UPDATE idempotency_records
+             SET state = 'terminal', public_result_kind = 'rejected',
+                 public_result_category = ?1, public_result_reason = ?2
+             WHERE issuer_scope = ?3 AND operation_kind = ?4 AND idempotency_key = ?5
+               AND state = 'dispatching'",
+            params![
+                category,
+                reason,
+                key.issuer_scope,
+                key.operation_kind.as_str(),
+                key.idempotency_key,
+            ],
+        )?;
+        if terminal != 1 {
+            return Err(IdempotencyError::DispatchUnavailable);
+        }
         tx.commit()?;
         Ok(())
     }
@@ -703,6 +749,80 @@ mod tests {
             store.lookup(&key, NOW).unwrap(),
             LookupResult::OutcomeUnknown {
                 expires_at: NOW + HORIZON
+            }
+        );
+    }
+
+    #[test]
+    fn purge_expired_removes_its_delivery_through_the_foreign_key() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let key = key();
+        assert!(matches!(reserve(&store, b"canon"), Reservation::Prepared { .. }));
+        store
+            .begin_send_delivery(
+                &key,
+                &SendDelivery {
+                    delivery_id: "delivery-expired".to_string(),
+                    recipient_instance_id: "instance-1".to_string(),
+                    delivery_generation: 2,
+                    expires_at: NOW + HORIZON,
+                },
+            )
+            .unwrap();
+        assert_eq!(store.purge_expired(NOW + HORIZON).unwrap(), 1);
+        assert_eq!(store.send_delivery(&key).unwrap(), None);
+    }
+
+    #[test]
+    fn failed_delivery_insert_rolls_back_the_dispatch_transition() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let first = key();
+        let second = IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, "message-2").unwrap();
+        assert!(matches!(reserve(&store, b"first"), Reservation::Prepared { .. }));
+        store
+            .begin_send_delivery(
+                &first,
+                &SendDelivery {
+                    delivery_id: "same-delivery".to_string(),
+                    recipient_instance_id: "instance-1".to_string(),
+                    delivery_generation: 3,
+                    expires_at: NOW + HORIZON,
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            store.reserve(&second, b"second", NOW, HORIZON, NOW, 30).unwrap(),
+            Reservation::Prepared { .. }
+        ));
+        assert!(store
+            .begin_send_delivery(
+                &second,
+                &SendDelivery {
+                    delivery_id: "same-delivery".to_string(),
+                    recipient_instance_id: "instance-1".to_string(),
+                    delivery_generation: 4,
+                    expires_at: NOW + HORIZON,
+                },
+            )
+            .is_err());
+        assert_eq!(
+            store.lookup(&second, NOW).unwrap(),
+            LookupResult::OutcomeUnknown { expires_at: NOW + HORIZON }
+        );
+        assert_eq!(store.send_delivery(&second).unwrap(), None);
+    }
+
+    #[test]
+    fn reject_prepared_publishes_only_the_terminal_refusal() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let key = key();
+        assert!(matches!(reserve(&store, b"canon"), Reservation::Prepared { .. }));
+        store.reject_prepared(&key, "routing", "cible absente").unwrap();
+        assert_eq!(
+            store.lookup(&key, NOW).unwrap(),
+            LookupResult::Rejected {
+                category: "routing".to_string(),
+                reason: "cible absente".to_string(),
             }
         );
     }

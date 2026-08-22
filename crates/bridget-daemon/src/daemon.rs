@@ -18,7 +18,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::idempotency::{
-    IdempotencyKey, IdempotencyStore, LookupResult, OperationKind, PublicResult, Reservation,
+    IdempotencyKey, IdempotencyStore, LookupResult, OperationKind, Reservation,
     SendDelivery,
 };
 use crate::store::Store;
@@ -1776,6 +1776,15 @@ fn unix_now_secs() -> i64 {
         .min(i64::MAX as u64) as i64
 }
 
+fn next_delivery_generation() -> u64 {
+    loop {
+        let generation = (Uuid::new_v4().as_u128() as u64) & i64::MAX as u64;
+        if generation != 0 {
+            return generation;
+        }
+    }
+}
+
 fn canonical_field(bytes: &mut Vec<u8>, value: &[u8]) {
     bytes.extend_from_slice(&(value.len() as u64).to_be_bytes());
     bytes.extend_from_slice(value);
@@ -1802,12 +1811,10 @@ fn canonical_send(
     let mut bytes = b"bridget/client-send/v1\0".to_vec();
     canonical_field(&mut bytes, issuer_scope.as_bytes());
     canonical_field(&mut bytes, message_id.as_bytes());
-    canonical_field(&mut bytes, message.from.as_bytes());
     canonical_field(&mut bytes, message.to.as_bytes());
     canonical_field(&mut bytes, message.body.as_bytes());
     bytes.push(u8::from(message.reply));
     canonical_field(&mut bytes, &message.hops.to_be_bytes());
-    canonical_option(&mut bytes, message.reply_timeout);
     canonical_option(&mut bytes, message.deadline_at);
     canonical_option(&mut bytes, message.in_reply_to.as_deref());
     canonical_field(&mut bytes, &issued_at.to_be_bytes());
@@ -1853,25 +1860,108 @@ fn reject_idempotent_send(
     let category = category.into();
     let reason = reason.into();
     st.idempotency
-        .transition(
-            key,
-            crate::idempotency::RecordState::Prepared,
-            crate::idempotency::RecordState::Dispatching,
-        )
-        .map_err(|error| error.to_string())?;
-    st.idempotency
-        .finalize(
-            key,
-            PublicResult::Rejected {
-                category: category.clone(),
-                reason: reason.clone(),
-            },
-        )
+        .reject_prepared(key, &category, &reason)
         .map_err(|error| error.to_string())?;
     Ok(issue_response(
         key,
         IdempotencyIssue::Rejected { category, reason },
     ))
+}
+
+/// Gardes communes précédant toute remise. Les deux appels publics conservent
+/// leurs identités de déduplication propres, mais partagent les invariants de
+/// réponse, DND, sauts et routage.
+struct PreparedDispatch {
+    content_key: String,
+    message_guard_id: String,
+    target_conn: String,
+    logical_sender: String,
+    reply_sender_conn: Option<String>,
+    valid_tracked_reply: bool,
+}
+
+fn prepare_dispatch(
+    st: &mut DaemonState,
+    message: &mut bridget_core::BridgetMessage,
+    conn_id: &str,
+    logical_sender: String,
+    content_key: String,
+    message_guard_id: String,
+) -> Result<PreparedDispatch, (&'static str, String)> {
+    let reply_sender_conn = st
+        .router
+        .get_agent(&message.from)
+        .map(|agent| agent.connection_id.clone());
+    if message.reply && reply_sender_conn.is_none() {
+        return Err((
+            "reply_sender_unavailable",
+            "--reply requiert un agent Bridget connecté ; lance la commande depuis un wrapper actif ou envoie sans --reply".to_string(),
+        ));
+    }
+
+    let valid_tracked_reply = message.in_reply_to.as_deref().is_some_and(|request_id| {
+        st.store
+            .get_request(request_id)
+            .ok()
+            .flatten()
+            .is_some_and(|request| {
+                request.state == "open"
+                    && request.sender == message.to
+                    && request.target == message.from
+            })
+    });
+
+    if !st.circuit_breaker.check(&logical_sender, &message.to) {
+        return Err((
+            "circuit_breaker",
+            format!(
+                "disjoncteur: limite {} échanges / {}s",
+                st.circuit_breaker.limit(),
+                st.circuit_breaker.window_secs()
+            ),
+        ));
+    }
+    if st.deduplicator.is_duplicate(&content_key, &message.to) {
+        return Err(("duplicate_content", "doublon de contenu".to_string()));
+    }
+    if st
+        .envelope_guard
+        .is_quarantined(&message_guard_id, &message.to)
+    {
+        return Err((
+            "quarantined",
+            "message déjà relayé (quarantaine)".to_string(),
+        ));
+    }
+    if !message.decrement_hops() {
+        return Err(("hops_exhausted", "budget de sauts épuisé".to_string()));
+    }
+    if !valid_tracked_reply
+        && let Some(presence) = presence_of_agent(st, &message.to)
+        && presence.is_dnd()
+    {
+        let minutes = presence.dnd_minutes_left();
+        let target = presence.name.clone();
+        return Err((
+            "dnd",
+            format!("« {target} » ne souhaite pas être dérangé (encore {minutes} min)"),
+        ));
+    }
+    let target_conn = match st
+        .router
+        .resolve(&message.from, &message.to, message.hops, conn_id)
+    {
+        RouterAction::Deliver { target_conn } => target_conn,
+        RouterAction::Reject(error) => return Err(("routing", error.to_string())),
+    };
+    Ok(PreparedDispatch {
+        content_key,
+        message_guard_id,
+        target_conn,
+        logical_sender,
+        reply_sender_conn,
+        valid_tracked_reply,
+    })
 }
 
 fn handle_idempotent_send(
@@ -1889,6 +1979,14 @@ fn handle_idempotent_send(
     // L'identifiant métier est l'autorité publique ; l'ancien champ `id` de
     // Bridget est donc normalisé avant toute comparaison ou garde mutable.
     message.id = message_id.clone();
+    if message.reply && message.deadline_at.is_none() {
+        let timeout = message.reply_timeout.unwrap_or(60);
+        message.deadline_at = Some(
+            issued_at
+                .saturating_add(timeout as i64)
+                .max(0) as u64,
+        );
+    }
     let key = match IdempotencyKey::new(negotiated.issuer_scope, OperationKind::Send, message_id) {
         Ok(key) => key,
         Err(_error) => {
@@ -1937,88 +2035,31 @@ fn handle_idempotent_send(
         Reservation::Prepared { expires_at } => {
             // Les gardes ci-dessous peuvent consulter ou modifier les limites
             // historiques, mais seulement après la réservation d'une clé neuve.
-            if message.reply && message.deadline_at.is_none() {
-                return reject_idempotent_send(
-                    st,
-                    &key,
-                    "deadline_required",
-                    "un envoi idempotent avec reply requiert deadline_at absolu",
-                )
-                .unwrap_or_else(|error| DaemonToWrapper::Nack {
-                    id: key.idempotency_key.clone(),
-                    reason: error,
-                });
-            }
-            if !st.circuit_breaker.check(&message.from, &message.to) {
-                return reject_idempotent_send(
-                    st,
-                    &key,
-                    "circuit_breaker",
-                    "limite d'échanges atteinte",
-                )
-                .unwrap_or_else(|error| DaemonToWrapper::Nack {
-                    id: key.idempotency_key.clone(),
-                    reason: error,
-                });
-            }
             // Les gardes historiques restent applicables à une clé neuve,
             // mais leur espace est celui de l'émetteur idempotent : deux
             // scopes sont deux émetteurs logiques et ne se contaminent pas.
             let content_key = format!("{}:{}", key.issuer_scope, message.content_key());
-            if st.deduplicator.is_duplicate(&content_key, &message.to) {
-                return reject_idempotent_send(st, &key, "duplicate_content", "doublon de contenu")
-                    .unwrap_or_else(|error| DaemonToWrapper::Nack {
-                        id: key.idempotency_key.clone(),
-                        reason: error,
-                    });
-            }
             let scoped_message_id = format!("{}:{}", key.issuer_scope, message.id);
-            if st
-                .envelope_guard
-                .is_quarantined(&scoped_message_id, &message.to)
-            {
-                return reject_idempotent_send(st, &key, "quarantined", "message déjà relayé")
-                    .unwrap_or_else(|error| DaemonToWrapper::Nack {
-                        id: key.idempotency_key.clone(),
-                        reason: error,
-                    });
-            }
-            if !message.decrement_hops() {
-                return reject_idempotent_send(
-                    st,
-                    &key,
-                    "hops_exhausted",
-                    "budget de sauts épuisé",
-                )
-                .unwrap_or_else(|error| DaemonToWrapper::Nack {
-                    id: key.idempotency_key.clone(),
-                    reason: error,
-                });
-            }
-            if let Some(presence) = presence_of_agent(st, &message.to)
-                && presence.is_dnd()
-            {
-                return reject_idempotent_send(st, &key, "dnd", "destinataire indisponible")
-                    .unwrap_or_else(|error| DaemonToWrapper::Nack {
-                        id: key.idempotency_key.clone(),
-                        reason: error,
-                    });
-            }
-            let target_conn =
-                match st
-                    .router
-                    .resolve(&message.from, &message.to, message.hops, conn_id)
-                {
-                    RouterAction::Deliver { target_conn } => target_conn,
-                    RouterAction::Reject(error) => {
-                        return reject_idempotent_send(st, &key, "routing", error.to_string())
-                            .unwrap_or_else(|error| DaemonToWrapper::Nack {
-                                id: key.idempotency_key.clone(),
-                                reason: error,
-                            });
-                    }
-                };
-            let Some(recipient_instance_id) = st.conn_instances.get(&target_conn).cloned() else {
+            let logical_sender = format!("client:{}", key.issuer_scope);
+            let prepared = match prepare_dispatch(
+                st,
+                &mut message,
+                conn_id,
+                logical_sender,
+                content_key,
+                scoped_message_id,
+            ) {
+                Ok(prepared) => prepared,
+                Err((category, reason)) => {
+                    return reject_idempotent_send(st, &key, category, reason).unwrap_or_else(
+                        |error| DaemonToWrapper::Nack {
+                            id: key.idempotency_key.clone(),
+                            reason: error,
+                        },
+                    );
+                }
+            };
+            let Some(recipient_instance_id) = st.conn_instances.get(&prepared.target_conn).cloned() else {
                 return reject_idempotent_send(
                     st,
                     &key,
@@ -2033,7 +2074,7 @@ fn handle_idempotent_send(
             let delivery = SendDelivery {
                 delivery_id: Uuid::new_v4().to_string(),
                 recipient_instance_id,
-                delivery_generation: 1,
+                delivery_generation: next_delivery_generation(),
                 expires_at,
             };
             if let Err(error) = st.idempotency.begin_send_delivery(&key, &delivery) {
@@ -2043,10 +2084,12 @@ fn handle_idempotent_send(
                     reason: "impossible de préparer la remise".to_string(),
                 };
             }
-            st.circuit_breaker.record(&message.from, &message.to);
-            st.deduplicator.mark_sent(&content_key, &message.to);
+            st.circuit_breaker
+                .record(&prepared.logical_sender, &message.to);
+            st.deduplicator
+                .mark_sent(&prepared.content_key, &message.to);
             st.envelope_guard
-                .mark_relayed(&scoped_message_id, &message.to);
+                .mark_relayed(&prepared.message_guard_id, &message.to);
             issue_response(
                 &key,
                 IdempotencyIssue::OutcomeUnknown {
@@ -2673,136 +2716,45 @@ fn handle_wrapper_message(
                 }
             }
 
-            // Un client CLI temporaire se déconnecte dès qu'il a reçu l'Ack.
-            // Il ne peut donc pas recevoir une réponse différée. Une demande
-            // `--reply` n'est valide que si l'identité de l'émetteur désigne un
-            // wrapper encore connecté ; sinon on refuse l'envoi plutôt que de
-            // livrer une tâche dont la réponse sera inévitablement rejetée.
-            let reply_sender_conn = st
-                .router
-                .get_agent(&bridge_msg.from)
-                .map(|agent| agent.connection_id.clone());
+            let logical_sender = bridge_msg.from.clone();
+            let content_key = bridge_msg.content_key();
+            let message_guard_id = bridge_msg.id.clone();
+            let prepared = match prepare_dispatch(
+                &mut st,
+                &mut bridge_msg,
+                conn_id,
+                logical_sender,
+                content_key,
+                message_guard_id,
+            ) {
+                Ok(prepared) => prepared,
+                Err((_category, reason)) => {
+                    return Some(DaemonToWrapper::Nack {
+                        id: bridge_msg.id.clone(),
+                        reason,
+                    });
+                }
+            };
             let is_ephemeral_cli_sender = sender_name.starts_with("cli-send-")
-                && reply_sender_conn.as_deref() == Some(conn_id);
-            if bridge_msg.reply && (reply_sender_conn.is_none() || is_ephemeral_cli_sender) {
+                && prepared.reply_sender_conn.as_deref() == Some(conn_id);
+            if bridge_msg.reply && is_ephemeral_cli_sender {
                 return Some(DaemonToWrapper::Nack {
                     id: bridge_msg.id.clone(),
                     reason: "--reply requiert un agent Bridget connecté ; lance la commande depuis un wrapper actif ou envoie sans --reply".to_string(),
                 });
             }
-
-            // Une réponse suivie ne contourne DND et ne clôt le ledger que si
-            // sa demande est ouverte et lie exactement les deux participants.
-            // Cette vérification ne modifie aucun état : une référence forgée
-            // reste un message ordinaire.
-            let valid_tracked_reply = bridge_msg.in_reply_to.as_deref().is_some_and(|request_id| {
-                st.store
-                    .get_request(request_id)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|request| {
-                    request.state == "open"
-                        && request.sender == bridge_msg.to
-                        && request.target == bridge_msg.from
-                })
-            });
-
-            // 1. Disjoncteur
-            if !st.circuit_breaker.check(&bridge_msg.from, &bridge_msg.to) {
-                warn!(
-                    "DISJONCTEUR: {} ↔ {} — {} échanges dans la fenêtre",
-                    bridge_msg.from,
-                    bridge_msg.to,
-                    st.circuit_breaker.count(&bridge_msg.from, &bridge_msg.to)
-                );
-                return Some(DaemonToWrapper::Nack {
-                    id: bridge_msg.id.clone(),
-                    reason: format!(
-                        "disjoncteur: limite {} échanges / {}s",
-                        st.circuit_breaker.limit(),
-                        st.circuit_breaker.window_secs()
-                    ),
-                });
-            }
-
-            // 2. Déduplication par contenu
-            let content_key = bridge_msg.content_key();
-            if st.deduplicator.is_duplicate(&content_key, &bridge_msg.to) {
-                warn!(
-                    "DEDUP: doublon vers « {} » (clé {})",
-                    bridge_msg.to, content_key
-                );
-                return Some(DaemonToWrapper::Nack {
-                    id: bridge_msg.id.clone(),
-                    reason: "doublon de contenu".to_string(),
-                });
-            }
-
-            // 3. Quarantaine par ID
-            if st
-                .envelope_guard
-                .is_quarantined(&bridge_msg.id, &bridge_msg.to)
-            {
-                warn!(
-                    "QUARANTAINE: id {} déjà relayé vers « {} »",
-                    bridge_msg.id, bridge_msg.to
-                );
-                return Some(DaemonToWrapper::Nack {
-                    id: bridge_msg.id.clone(),
-                    reason: "message déjà relayé (quarantaine)".to_string(),
-                });
-            }
-
-            // 4. Décrémenter les hops
-            if !bridge_msg.decrement_hops() {
-                return Some(DaemonToWrapper::Nack {
-                    id: bridge_msg.id.clone(),
-                    reason: "budget de sauts épuisé".to_string(),
-                });
-            }
-
-            // 4 bis. Respecter le refus d'être dérangé du destinataire.
-            //
-            // Le contrôle est ici, dans le daemon, et non côté client : un
-            // client d'une version antérieure le contournerait, et il devrait
-            // interroger l'annuaire avant chaque envoi. L'émetteur reçoit la
-            // raison et le temps restant afin de décider lui-même s'il attend,
-            // insiste plus tard, ou s'adresse à quelqu'un d'autre.
-            if !valid_tracked_reply
-                && let Some(presence) = presence_of_agent(&mut st, &bridge_msg.to)
-                && presence.is_dnd()
-            {
-                    let minutes = presence.dnd_minutes_left();
-                    let target = presence.name.clone();
-                    info!(
-                        "refus DND: « {} » ne veut pas être dérangé ({} min)",
-                        target, minutes
-                    );
-                    return Some(DaemonToWrapper::Nack {
-                        id: bridge_msg.id.clone(),
-                        reason: format!(
-                            "« {} » ne souhaite pas être dérangé (encore {} min)",
-                            target, minutes
-                        ),
-                    });
-                }
-
-            // 5. Router
-            let action =
-                st.router
-                    .resolve(&bridge_msg.from, &bridge_msg.to, bridge_msg.hops, conn_id);
-
-            match action {
-                RouterAction::Deliver { target_conn } => {
+            let target_conn = prepared.target_conn;
                     let conv_key = format!("{}|{}", bridge_msg.from, bridge_msg.to);
 
                     if let Err(e) = st.store.record_message(&bridge_msg, &conv_key) {
                         error!("store: {}", e);
                     }
-                    st.circuit_breaker.record(&bridge_msg.from, &bridge_msg.to);
-                    st.deduplicator.mark_sent(&content_key, &bridge_msg.to);
+                    st.circuit_breaker
+                        .record(&prepared.logical_sender, &bridge_msg.to);
+                    st.deduplicator
+                        .mark_sent(&prepared.content_key, &bridge_msg.to);
                     st.envelope_guard
-                        .mark_relayed(&bridge_msg.id, &bridge_msg.to);
+                        .mark_relayed(&prepared.message_guard_id, &bridge_msg.to);
 
                     // Le daemon est l'autorité de l'échéance : le wrapper ACP
                     // reçoit sa valeur absolue pour purger un tour devenu trop
@@ -2846,7 +2798,7 @@ fn handle_wrapper_message(
                     }
 
                     if delivery_succeeded
-                        && valid_tracked_reply
+                        && prepared.valid_tracked_reply
                         && let Some(request_id) = bridge_msg.in_reply_to.as_deref()
                         && st
                             .store
@@ -2879,7 +2831,7 @@ fn handle_wrapper_message(
                             // un agent, conn_id est un client CLI éphémère. Les
                             // relances et le timeout doivent viser le wrapper
                             // durable identifié ci-dessus.
-                            from_conn: reply_sender_conn
+                            from_conn: prepared.reply_sender_conn
                                 .expect("un --reply a toujours un expéditeur connecté"),
                             to: bridge_msg.to.clone(),
                             target_conn: target_conn.clone(),
@@ -2910,15 +2862,6 @@ fn handle_wrapper_message(
                     Some(DaemonToWrapper::Ack {
                         id: bridge_msg.id.clone(),
                     })
-                }
-                RouterAction::Reject(err) => {
-                    warn!("rejet: {}", err);
-                    Some(DaemonToWrapper::Nack {
-                        id: bridge_msg.id.clone(),
-                        reason: err.to_string(),
-                    })
-                }
-            }
         }
 
         WrapperToDaemon::Heartbeat => {
@@ -3842,6 +3785,21 @@ mod presence_tests {
     }
 
     #[test]
+    fn canonical_send_ignore_le_nom_affiche_et_le_timeout_relatif() {
+        let mut original = idempotent_message("enveloppe stable");
+        original.reply = true;
+        original.reply_timeout = Some(20);
+        original.deadline_at = Some(123_456);
+        let mut renamed = original.clone();
+        renamed.from = "maicie-renommee".to_string();
+        renamed.reply_timeout = Some(90);
+        assert_eq!(
+            canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &original, 123_000),
+            canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &renamed, 123_000)
+        );
+    }
+
+    #[test]
     fn send_idempotent_rejoue_sans_rerouter_et_isole_les_scopes() {
         let (state, config) = state_with_registered_agent("idempotent-send");
         let shared = Arc::new(Mutex::new(state));
@@ -3869,6 +3827,39 @@ mod presence_tests {
             }) => delivery_id,
             other => panic!("réponse inattendue: {other:?}"),
         };
+        negotiate_idempotent_client(&shared, "client-b", scope_b);
+        let other_scope = handle_wrapper_message(
+            "client-b",
+            WrapperToDaemon::SendIdempotent {
+                message: idempotent_message("tâche durable"),
+                message_id: "message-identique".to_string(),
+                issued_at,
+            },
+            &shared,
+        );
+        assert!(matches!(
+            other_scope,
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown {
+                    delivery_id: Some(delivery_id),
+                    ..
+                },
+                ..
+            }) if delivery_id != first_delivery
+        ));
+        let state = shared.lock().unwrap();
+        let first_key = IdempotencyKey::new(scope_a, OperationKind::Send, "message-identique").unwrap();
+        let second_key = IdempotencyKey::new(scope_b, OperationKind::Send, "message-identique").unwrap();
+        assert_ne!(
+            state.idempotency.send_delivery(&first_key).unwrap().unwrap().delivery_generation,
+            state.idempotency.send_delivery(&second_key).unwrap().unwrap().delivery_generation
+        );
+        // Un rejeu est jugé avant tout routage : retirer ou renommer la cible
+        // n'autorise jamais une nouvelle résolution pour cette clé connue.
+        {
+            let mut state = shared.lock().unwrap();
+            state.router.rename("conn-1", "agent-renommé").unwrap();
+        }
         let replay = handle_wrapper_message(
             "client-a",
             WrapperToDaemon::SendIdempotent {
@@ -3904,29 +3895,8 @@ mod presence_tests {
                 ..
             })
         ));
-
-        negotiate_idempotent_client(&shared, "client-b", scope_b);
-        let other_scope = handle_wrapper_message(
-            "client-b",
-            WrapperToDaemon::SendIdempotent {
-                message: idempotent_message("tâche durable"),
-                message_id: "message-identique".to_string(),
-                issued_at,
-            },
-            &shared,
-        );
-        assert!(matches!(
-            other_scope,
-            Some(DaemonToWrapper::IdempotencyResult {
-                issue: IdempotencyIssue::OutcomeUnknown {
-                    delivery_id: Some(delivery_id),
-                    ..
-                },
-                ..
-            }) if delivery_id != first_delivery
-        ));
         assert_eq!(
-            shared.lock().unwrap().idempotency.record_count().unwrap(),
+            state.idempotency.record_count().unwrap(),
             2
         );
         let _ = std::fs::remove_file(config.db_path);
@@ -3976,6 +3946,47 @@ mod presence_tests {
             shared.lock().unwrap().idempotency.record_count().unwrap(),
             1
         );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn send_idempotent_conserve_les_invariants_de_reponse_et_dnd() {
+        let (mut state, config) = state_with_registered_agent("idempotent-reply");
+        state
+            .router
+            .register(
+                Some("maicie"),
+                &bridget_core::AgentType::Codex,
+                "sender-wrapper",
+            )
+            .unwrap();
+        state
+            .store
+            .create_request("request-open", "agent-2", "maicie", 60)
+            .unwrap();
+        state.presences.get_mut("instance-1").unwrap().dnd_until =
+            Some(Instant::now() + Duration::from_secs(60));
+        let shared = Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(&shared, "client-reply", "012_scope_replyyyyyyyyy");
+        let mut reply = idempotent_message("réponse suivie");
+        reply.from = "maicie".to_string();
+        reply.in_reply_to = Some("request-open".to_string());
+        let result = handle_wrapper_message(
+            "client-reply",
+            WrapperToDaemon::SendIdempotent {
+                message: reply,
+                message_id: "reply-idempotent".to_string(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            result,
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { .. },
+                ..
+            })
+        ));
         let _ = std::fs::remove_file(config.db_path);
     }
 
