@@ -266,22 +266,28 @@ impl IncrementalJournalReader {
         } else { self.pending.extend_from_slice(&chunk); }
 
         let mut items = Vec::new();
-        if self.pending.len() > MAX_INCREMENTAL_LINE_BYTES {
-            let offset = self.pending_offset;
-            let line = self.next_line;
-            let seq = sequence_prefix(&self.pending);
-            items.push(JournalReadItem::Oversized { seq, offset, line });
-            if let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
+        loop {
+            let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') else {
+                if self.pending.len() > MAX_INCREMENTAL_LINE_BYTES {
+                    let offset = self.pending_offset;
+                    let line = self.next_line;
+                    let seq = sequence_prefix(&self.pending);
+                    items.push(JournalReadItem::Oversized { seq, offset, line });
+                    self.pending.clear();
+                    self.discarding = Some((offset, line, seq));
+                }
+                break;
+            };
+            if end > MAX_INCREMENTAL_LINE_BYTES {
+                let offset = self.pending_offset;
+                let line = self.next_line;
+                let seq = sequence_prefix(&self.pending);
+                items.push(JournalReadItem::Oversized { seq, offset, line });
                 self.pending.drain(..=end);
                 self.pending_offset = self.pending_offset.saturating_add((end + 1) as u64);
                 self.next_line = self.next_line.saturating_add(1);
-            } else {
-                self.pending.clear();
-                self.discarding = Some((offset, line, seq));
-                return Ok(items);
+                continue;
             }
-        }
-        while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
             let mut line = self.pending.drain(..=end).collect::<Vec<_>>();
             line.pop();
             let offset = self.pending_offset;
@@ -582,6 +588,50 @@ mod tests {
         for _ in 0..80 { seen.extend(reader.read_chunk(65_536).unwrap()); assert!(reader.buffered_len() <= MAX_INCREMENTAL_LINE_BYTES); }
         assert!(matches!(seen.iter().find(|item| matches!(item, JournalReadItem::Oversized { .. })), Some(JournalReadItem::Oversized { seq: Some(42), .. })));
         assert!(matches!(seen.last(), Some(JournalReadItem::Event(JournalReadEvent { seq: 43, .. }))));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lecteur_mesure_la_borne_sur_la_premiere_ligne_et_non_le_tampon_entier() {
+        fn valid_line(seq: u64, length: usize) -> Vec<u8> {
+            let prefix = format!("{{\"v\":1,\"seq\":{seq},\"body\":\"").into_bytes();
+            let suffix = b"\"}";
+            assert!(length >= prefix.len() + suffix.len());
+            [prefix.as_slice(), &vec![b'x'; length - prefix.len() - suffix.len()], suffix].concat()
+        }
+
+        let root = root("incremental-boundaries");
+        create_private_dir(&root).unwrap();
+
+        let near = root.join("near.jsonl");
+        let mut near_contents = valid_line(40, MAX_INCREMENTAL_LINE_BYTES - 8);
+        near_contents.extend_from_slice(b"\n{\"v\":1,\"seq\":41}\n");
+        fs::write(&near, near_contents).unwrap();
+        let mut near_reader = IncrementalJournalReader::new(&near);
+        let near_items = near_reader.read_chunk(MAX_INCREMENTAL_LINE_BYTES + 64).unwrap();
+        assert!(near_items.iter().all(|item| !matches!(item, JournalReadItem::Oversized { .. })));
+        assert_eq!(
+            near_items
+                .iter()
+                .filter_map(|item| match item { JournalReadItem::Event(event) => Some(event.seq), _ => None })
+                .collect::<Vec<_>>(),
+            vec![40, 41]
+        );
+
+        let exact = root.join("exact.jsonl");
+        let mut exact_contents = valid_line(42, MAX_INCREMENTAL_LINE_BYTES);
+        exact_contents.push(b'\n');
+        fs::write(&exact, exact_contents).unwrap();
+        let exact_items = IncrementalJournalReader::new(&exact).read_chunk(MAX_INCREMENTAL_LINE_BYTES + 1).unwrap();
+        assert!(matches!(exact_items.as_slice(), [JournalReadItem::Event(JournalReadEvent { seq: 42, .. })]));
+
+        let too_large = root.join("too-large.jsonl");
+        let mut too_large_contents = valid_line(43, MAX_INCREMENTAL_LINE_BYTES + 1);
+        too_large_contents.push(b'\n');
+        fs::write(&too_large, too_large_contents).unwrap();
+        let too_large_items = IncrementalJournalReader::new(&too_large).read_chunk(MAX_INCREMENTAL_LINE_BYTES + 2).unwrap();
+        assert!(matches!(too_large_items.as_slice(), [JournalReadItem::Oversized { seq: Some(43), .. }]));
+
         fs::remove_dir_all(root).unwrap();
     }
 
