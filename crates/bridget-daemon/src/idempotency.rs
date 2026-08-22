@@ -179,19 +179,19 @@ pub struct IdempotencyStore {
 
 impl IdempotencyStore {
     pub fn open(path: &Path) -> Result<Self, IdempotencyError> {
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(2))?;
-        Self::init_schema(&conn)?;
+        Self::init_schema(&mut conn)?;
         Ok(Self { conn })
     }
 
     pub fn open_in_memory() -> Result<Self, IdempotencyError> {
-        let conn = Connection::open_in_memory()?;
-        Self::init_schema(&conn)?;
+        let mut conn = Connection::open_in_memory()?;
+        Self::init_schema(&mut conn)?;
         Ok(Self { conn })
     }
 
-    fn init_schema(conn: &Connection) -> Result<(), IdempotencyError> {
+    fn init_schema(conn: &mut Connection) -> Result<(), IdempotencyError> {
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS idempotency_records (
@@ -240,26 +240,36 @@ impl IdempotencyStore {
                 completed_at INTEGER
             );",
         )?;
-        let migration_applied = conn.query_row(
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let migration_applied = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 2)",
             [],
             |row| row.get::<_, bool>(0),
         )?;
         if !migration_applied {
-            let has_message_bytes = conn
+            let has_message_bytes = tx
                 .prepare("PRAGMA table_info(send_deliveries)")?
                 .query_map([], |row| row.get::<_, String>(1))?
                 .collect::<Result<Vec<_>, _>>()?
                 .iter()
                 .any(|column| column == "message_bytes");
             if !has_message_bytes {
-                conn.execute("ALTER TABLE send_deliveries ADD COLUMN message_bytes BLOB", [])?;
+                tx.execute("ALTER TABLE send_deliveries ADD COLUMN message_bytes BLOB", [])?;
             }
-            conn.execute(
+            // Une remise v1 sans enveloppe est irréparable sans reroutage :
+            // elle devient indéterminée dans la même migration avant v2.
+            tx.execute(
+                "UPDATE send_deliveries
+                 SET phase = 'indeterminate'
+                 WHERE phase = 'dispatching' AND message_bytes IS NULL",
+                [],
+            )?;
+            tx.execute(
                 "INSERT INTO idempotency_schema_migrations(version) VALUES (2)",
                 [],
             )?;
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1131,6 +1141,92 @@ mod tests {
             store.reserve(&key(), b"negative", NOW, -1, NOW, 30),
             Err(IdempotencyError::InvalidHorizon)
         ));
+    }
+
+    #[test]
+    fn migration_v1_classe_les_remises_sans_payload_sans_bloquer_les_valides() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-idempotency-v1-{}-{}.db",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE idempotency_records (
+                issuer_scope TEXT NOT NULL,
+                operation_kind TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                canonical_bytes BLOB NOT NULL,
+                state TEXT NOT NULL,
+                public_result_kind TEXT,
+                public_result_category TEXT,
+                public_result_reason TEXT,
+                issued_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                PRIMARY KEY (issuer_scope, operation_kind, idempotency_key)
+            );
+            CREATE TABLE send_deliveries (
+                delivery_id TEXT PRIMARY KEY,
+                issuer_scope TEXT NOT NULL,
+                operation_kind TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                recipient_instance_id TEXT NOT NULL,
+                delivery_generation INTEGER NOT NULL,
+                phase TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                message_bytes BLOB
+            );",
+        )
+        .unwrap();
+        for (key, delivery) in [("legacy", "delivery-legacy"), ("valid", "delivery-valid")] {
+            conn.execute(
+                "INSERT INTO idempotency_records VALUES (?1, 'send', ?2, X'00', 'dispatching', NULL, NULL, NULL, ?3, ?4)",
+                params!["012_scope_aaaaaaaaaaaa", key, NOW, NOW + HORIZON],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO send_deliveries VALUES (?1, ?2, 'send', ?3, 'instance-1', 1, 'dispatching', ?4, ?5)",
+                params![
+                    delivery,
+                    "012_scope_aaaaaaaaaaaa",
+                    key,
+                    NOW + HORIZON,
+                    (key == "valid").then(|| b"payload".to_vec()),
+                ],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let store = IdempotencyStore::open(&path).unwrap();
+        let deliveries = store
+            .dispatching_deliveries_for_instance("instance-1", NOW)
+            .unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].delivery_id, "delivery-valid");
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT phase FROM send_deliveries WHERE delivery_id = 'delivery-legacy'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "indeterminate"
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM idempotency_schema_migrations WHERE version = 2",
+                    [],
+                    |row| row.get::<_, u32>(0),
+                )
+                .unwrap(),
+            1
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

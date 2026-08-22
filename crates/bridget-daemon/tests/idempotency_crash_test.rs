@@ -8,6 +8,8 @@
 
 use bridget_core::BridgetMessage;
 use bridget_daemon::test_sync::DIRECTORY_ENV;
+use bridget_daemon::registry::AgentRegistry;
+use bridget_daemon::wrapper::launch_acp_with;
 use bridget_transport::protocol::{
     decode, encode, ClientCapability, ConnectionRole, IdempotencyIssue, CLIENT_CONTRACT_VERSION,
 };
@@ -285,11 +287,89 @@ fn idempotent_send(message_id: String, issued_at: i64) -> WrapperToDaemon {
 }
 
 fn retry_issue(socket: &Path, message_id: String, issued_at: i64) -> IdempotencyIssue {
+    retry_command_issue(socket, idempotent_send(message_id, issued_at))
+}
+
+fn retry_command_issue(socket: &Path, command: WrapperToDaemon) -> IdempotencyIssue {
     let mut client = negotiate_client(socket);
-    client.send(idempotent_send(message_id, issued_at));
+    client.send(command);
     match client.receive() {
         DaemonToWrapper::IdempotencyResult { issue, .. } => issue,
         other => panic!("issue idempotente attendue: {other:?}"),
+    }
+}
+
+fn registry_with_counting_acp_agent() -> (AgentRegistry, PathBuf, PathBuf) {
+    let directory = test_root("acp-registry");
+    fs::create_dir_all(&directory).expect("répertoire du registre ACP");
+    let counter = directory.join("session-prompt-count");
+    let definition = serde_json::json!({
+        "agents": {
+            "fixture-acp": {
+                "command": "sh",
+                "args": ["-c", format!(r#"
+read initialize
+echo '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1}}}}'
+read new_session
+echo '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"fixture-acp"}}}}'
+read prompt
+printf x >> '{}'
+echo '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
+sleep 5
+"#, counter.display())],
+                "protocol": "acp",
+                "permissions": "allow",
+                "queue_capacity": 2,
+                "notify_timeout_secs": 1
+            }
+        }
+    });
+    let path = directory.join("agents.json");
+    fs::write(&path, serde_json::to_string_pretty(&definition).expect("registre sérialisable"))
+        .expect("registre ACP écrit");
+    let registry = AgentRegistry::from_json(
+        &fs::read_to_string(&path).expect("registre ACP lisible"),
+        &path,
+    )
+    .expect("registre ACP valide");
+    (registry, directory, counter)
+}
+
+fn wait_for_counter(counter: &Path, expected: usize) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fs::read(counter).map_or(0, |bytes| bytes.len()) < expected {
+        assert!(Instant::now() < deadline, "frame session/prompt absente dans la borne");
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_for_registered_agent(socket: &Path, name: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut probe = Client::connect(socket);
+        probe.send(WrapperToDaemon::ListAgents);
+        if matches!(
+            probe.receive(),
+            DaemonToWrapper::AgentList { agents } if agents.iter().any(|agent| agent.name == name)
+        ) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "wrapper ACP non enregistré dans la borne");
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_for_accepted(socket: &Path, command: &WrapperToDaemon) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let issue = retry_command_issue(socket, command.clone());
+        if matches!(issue, IdempotencyIssue::Accepted { .. }) {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("Accepted absent dans la borne, dernière issue: {issue:?}");
+        }
+        thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -485,10 +565,7 @@ fn recovery_terminal_acked_rejoue_accepted_apres_crash_daemon() {
     let socket_path = socket(&root);
     let mut recipient = register_recipient_as(&socket_path, "recovery-terminal-instance");
     assert_no_delivery(&mut recipient);
-    assert!(matches!(
-        retry_issue(&socket_path, message_id, issued_at),
-        IdempotencyIssue::Accepted { .. }
-    ));
+    wait_for_accepted(&socket_path, &idempotent_send(message_id, issued_at));
     restarted.stop();
     fs::remove_dir_all(root).expect("nettoyage terminal");
 }
@@ -663,4 +740,59 @@ fn recovery_prepared_reprend_le_dispatch_apres_crash_daemon() {
     ));
     restarted.stop();
     fs::remove_dir_all(root).expect("nettoyage prepared");
+}
+
+#[test]
+fn vrai_wrapper_acp_compte_un_prompt_a_travers_le_redemarrage_daemon() {
+    let root = test_root("acp-daemon-restart");
+    let daemon = spawn_daemon(&root, None);
+    let socket_path = socket(&root);
+    let (registry, registry_root, counter) = registry_with_counting_acp_agent();
+    let wrapper_home = registry_root.join("wrapper-home");
+    fs::create_dir_all(&wrapper_home).expect("home wrapper ACP");
+    let wrapper_registry = registry.clone();
+    let wrapper_socket = socket_path.clone();
+    let wrapper = thread::spawn(move || {
+        launch_acp_with(
+            "fixture-acp",
+            &[],
+            Some("acp-recipient"),
+            &wrapper_registry,
+            &wrapper_socket,
+            &wrapper_home,
+        )
+        .map_err(|error| error.to_string())
+    });
+    wait_for_registered_agent(&socket_path, "acp-recipient");
+    let issued_at = issued_at();
+    let message_id = "vrai-wrapper-acp".to_string();
+    let mut client = negotiate_client(&socket_path);
+    let mut message = BridgetMessage::new("human", "acp-recipient", "frame réelle");
+    message.id = message_id.clone();
+    let command = WrapperToDaemon::SendIdempotent {
+        message,
+        message_id: message_id.clone(),
+        issued_at,
+    };
+    client.send(command.clone());
+    assert!(matches!(
+        client.receive(),
+        DaemonToWrapper::IdempotencyResult {
+            issue: IdempotencyIssue::OutcomeUnknown { .. },
+            ..
+        }
+    ));
+    wait_for_counter(&counter, 1);
+    wait_for_accepted(&socket_path, &command);
+
+    daemon.stop();
+    let restarted = spawn_daemon(&root, None);
+    let socket_path = socket(&root);
+    wait_for_registered_agent(&socket_path, "acp-recipient");
+    thread::sleep(Duration::from_millis(250));
+    assert_eq!(fs::read(&counter).expect("compteur ACP"), b"x");
+    restarted.stop();
+    assert_eq!(wrapper.join().expect("thread wrapper"), Ok(()));
+    fs::remove_dir_all(root).expect("nettoyage daemon ACP");
+    fs::remove_dir_all(registry_root).expect("nettoyage registre ACP");
 }
