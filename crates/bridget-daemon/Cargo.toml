@@ -8,6 +8,11 @@ license.workspace = true
 name = "bridget_daemon"
 path = "src/lib.rs"
 
+[features]
+# Surface exclusivement destinée aux bancs d'intégration : elle n'est jamais
+# activée dans un binaire de distribution.
+test-support = []
+
 [[bin]]
 name = "bridget"
 path = "src/main.rs"

@@ -1851,6 +1851,11 @@ fn billing_guard_error(variable: &str) -> String {
 }
 
 fn mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    #[cfg(feature = "test-support")]
+    if let Some(server) = smoke_mcp_server_entry()? {
+        return Ok(server);
+    }
+
     let command = std::env::current_exe()?.to_string_lossy().into_owned();
     Ok(serde_json::json!({
         "name": "bridget",
@@ -1858,6 +1863,27 @@ fn mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
         "args": ["mcp"],
         "env": []
     }))
+}
+
+/// Injection réservée au banc d'intégration T1006. Cette surface est absente
+/// des builds distribués ; elle force le wrapper de production à construire
+/// réellement les options Codex/Claude/ACP autour du serveur MCP épinglé.
+#[cfg(feature = "test-support")]
+fn smoke_mcp_server_entry() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
+    let Ok(command) = std::env::var("BRIDGET_TEST_MCP_SERVER_COMMAND") else {
+        return Ok(None);
+    };
+    let args = match std::env::var("BRIDGET_TEST_MCP_SERVER_ARGS") {
+        Ok(value) => serde_json::from_str::<Vec<String>>(&value)?,
+        Err(std::env::VarError::NotPresent) => Vec::new(),
+        Err(error) => return Err(error.into()),
+    };
+    Ok(Some(serde_json::json!({
+        "name": "bridget",
+        "command": command,
+        "args": args,
+        "env": []
+    })))
 }
 
 /// Configuration MCP Claude temporaire. Le fichier n'appartient jamais à la

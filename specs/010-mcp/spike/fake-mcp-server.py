@@ -9,6 +9,7 @@ Protocole : JSON-RPC 2.0, un message par ligne (transport stdio MCP).
 Outil unique : probe. Logs sur stderr exclusivement (pureté stdout).
 """
 import json
+import os
 import sys
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -16,6 +17,12 @@ PROTOCOL_VERSION = "2025-06-18"
 
 def log(msg):
     print(f"[fake-mcp] {msg}", file=sys.stderr, flush=True)
+    # Le smoke T1006 peut demander une copie du journal sans mélanger ce
+    # diagnostic au transport JSON-RPC stdout.
+    path = os.environ.get("BRIDGET_MCP_SMOKE_LOG")
+    if path:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(f"[fake-mcp] {msg}\n")
 
 
 def send(obj):
