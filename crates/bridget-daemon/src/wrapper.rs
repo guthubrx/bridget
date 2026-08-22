@@ -920,6 +920,7 @@ fn launch_acp(
         args: definition.args.clone(),
         queue_capacity: definition.queue_capacity,
         permissions: definition.permissions.clone(),
+        notify_timeout_secs: definition.notify_timeout_secs,
     })?;
 
     loop {

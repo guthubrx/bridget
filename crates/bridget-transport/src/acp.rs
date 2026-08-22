@@ -20,6 +20,7 @@ pub struct AcpOptions {
     pub args: Vec<String>,
     pub queue_capacity: usize,
     pub permissions: String,
+    pub notify_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +58,7 @@ type Waiters = Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>;
 
 struct QueueState {
     messages: VecDeque<BridgetMessage>,
+    active: Option<String>,
     closed: bool,
 }
 
@@ -70,6 +72,7 @@ struct TurnWorker {
     events: Arc<Mutex<VecDeque<AcpEvent>>>,
     response: Arc<Mutex<String>>,
     session_id: String,
+    notify_timeout: Duration,
 }
 
 pub struct AcpTransport {
@@ -80,9 +83,10 @@ pub struct AcpTransport {
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     queue_capacity: usize,
     writer: Arc<Mutex<ChildStdin>>,
-    next_id: Arc<AtomicU64>,
     session_id: String,
-    _child: Arc<Mutex<Child>>,
+    child: Arc<Mutex<Child>>,
+    reader_handle: Mutex<Option<thread::JoinHandle<()>>>,
+    worker_handle: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl AcpTransport {
@@ -116,7 +120,15 @@ impl AcpTransport {
         let writer = Arc::new(Mutex::new(stdin));
         let waiters: Waiters = Arc::new(Mutex::new(HashMap::new()));
         let next_id = Arc::new(AtomicU64::new(1));
-        spawn_reader(
+        let queue = Arc::new((
+            Mutex::new(QueueState {
+                messages: VecDeque::new(),
+                active: None,
+                closed: false,
+            }),
+            Condvar::new(),
+        ));
+        let reader_handle = spawn_reader(
             stdout,
             writer.clone(),
             waiters.clone(),
@@ -124,47 +136,55 @@ impl AcpTransport {
             response.clone(),
             alive.clone(),
             options.permissions.clone(),
+            queue.clone(),
         );
 
-        let initialize = request(
-            &writer,
-            &waiters,
-            &next_id,
-            "initialize",
-            json!({
-                "protocolVersion": 1,
-                "clientCapabilities": {},
-                "clientInfo": { "name": "bridget", "version": env!("CARGO_PKG_VERSION") }
-            }),
-        )?;
-        ensure_protocol_version(&initialize)?;
-        let session = request(
-            &writer,
-            &waiters,
-            &next_id,
-            "session/new",
-            json!({
-                "cwd": std::env::current_dir().map_err(|err| TransportError::Io(err.to_string()))?,
-                "mcpServers": []
-            }),
-        )?;
-        let session_id = session
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                TransportError::DeliveryFailed("session/new ne retourne pas sessionId".to_string())
-            })?
-            .to_string();
+        let setup = (|| -> Result<String, TransportError> {
+            let initialize = request(
+                &writer,
+                &waiters,
+                &next_id,
+                "initialize",
+                json!({
+                    "protocolVersion": 1,
+                    "clientCapabilities": {},
+                    "clientInfo": { "name": "bridget", "version": env!("CARGO_PKG_VERSION") }
+                }),
+            )?;
+            ensure_protocol_version(&initialize)?;
+            let session = request(
+                &writer,
+                &waiters,
+                &next_id,
+                "session/new",
+                json!({
+                    "cwd": std::env::current_dir().map_err(|err| TransportError::Io(err.to_string()))?,
+                    "mcpServers": []
+                }),
+            )?;
+            let session_id = session
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    TransportError::DeliveryFailed(
+                        "session/new ne retourne pas sessionId".to_string(),
+                    )
+                })?
+                .to_string();
+            Ok(session_id)
+        })();
+        let session_id = match setup {
+            Ok(session_id) => session_id,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader_handle.join();
+                return Err(error);
+            }
+        };
 
-        let queue = Arc::new((
-            Mutex::new(QueueState {
-                messages: VecDeque::new(),
-                closed: false,
-            }),
-            Condvar::new(),
-        ));
         let state = Arc::new(Mutex::new(TurnState::Idle));
-        spawn_worker(TurnWorker {
+        let worker_handle = spawn_worker(TurnWorker {
             queue: queue.clone(),
             writer: writer.clone(),
             waiters,
@@ -174,6 +194,7 @@ impl AcpTransport {
             events: events.clone(),
             response,
             session_id: session_id.clone(),
+            notify_timeout: Duration::from_secs(options.notify_timeout_secs),
         });
         Ok(Self {
             connection_id: format!("acp-{pid}"),
@@ -183,9 +204,10 @@ impl AcpTransport {
             queue,
             queue_capacity: options.queue_capacity,
             writer,
-            next_id,
             session_id,
-            _child: Arc::new(Mutex::new(child)),
+            child: Arc::new(Mutex::new(child)),
+            reader_handle: Mutex::new(Some(reader_handle)),
+            worker_handle: Mutex::new(Some(worker_handle)),
         })
     }
 
@@ -204,11 +226,28 @@ impl AcpTransport {
             .collect()
     }
 
-    /// Retire un message en attente par son id. Le tour actif reste sous
-    /// l'autorité du daemon et sera traité par `session/cancel` en T705.
+    /// Retire atomiquement un message en attente, ou annule le tour actif.
     pub fn cancel_delivery(&self, message_id: &str, reason: &str) -> bool {
-        let Some(message) = purge_queued(&self.queue, message_id) else {
-            return false;
+        let message = {
+            let (queue, wakeup) = &*self.queue;
+            let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
+            if queue.active.as_deref() == Some(message_id) {
+                let _ = write_json(
+                    &self.writer,
+                    json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": self.session_id } }),
+                );
+                return true;
+            }
+            let Some(index) = queue
+                .messages
+                .iter()
+                .position(|message| message.id == message_id)
+            else {
+                return false;
+            };
+            let message = queue.messages.remove(index).expect("message ACP présent");
+            wakeup.notify_one();
+            message
         };
         self.events
             .lock()
@@ -227,18 +266,39 @@ impl AcpTransport {
             return;
         }
         let (queue, wakeup) = &*self.queue;
-        queue.lock().unwrap_or_else(|err| err.into_inner()).closed = true;
+        let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
+        queue.closed = true;
+        drain_queue(&mut queue, &self.events, "équipier arrêté");
         wakeup.notify_all();
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        drop(queue);
         let _ = write_json(
             &self.writer,
             json!({
                 "jsonrpc": "2.0",
-                "id": id,
                 "method": "session/cancel",
                 "params": { "sessionId": self.session_id }
             }),
         );
+        let mut child = self.child.lock().unwrap_or_else(|err| err.into_inner());
+        let _ = child.kill();
+        let _ = child.wait();
+        drop(child);
+        if let Some(handle) = self
+            .reader_handle
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()
+        {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self
+            .worker_handle
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()
+        {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -274,7 +334,7 @@ impl Transport for AcpTransport {
     }
 }
 
-fn spawn_worker(worker: TurnWorker) {
+fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
     thread::spawn(move || loop {
         let message = {
             let (queue, wakeup) = &*worker.queue;
@@ -285,7 +345,9 @@ fn spawn_worker(worker: TurnWorker) {
             if queue.closed {
                 break;
             }
-            queue.messages.pop_front().expect("file ACP non vide")
+            let message = queue.messages.pop_front().expect("file ACP non vide");
+            queue.active = Some(message.id.clone());
+            message
         };
         if !worker.alive.load(Ordering::SeqCst) {
             worker
@@ -314,7 +376,7 @@ fn spawn_worker(worker: TurnWorker) {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .clear();
-        let result = request(
+        let result = prompt_request(
             &worker.writer,
             &worker.waiters,
             &worker.next_id,
@@ -323,6 +385,11 @@ fn spawn_worker(worker: TurnWorker) {
                 "sessionId": &worker.session_id,
                 "prompt": [{ "type": "text", "text": prompt_for(&message) }]
             }),
+            if message.reply {
+                None
+            } else {
+                Some(worker.notify_timeout)
+            },
         );
         let collected = worker
             .response
@@ -330,13 +397,19 @@ fn spawn_worker(worker: TurnWorker) {
             .unwrap_or_else(|err| err.into_inner())
             .clone();
         *worker.state.lock().unwrap_or_else(|err| err.into_inner()) = TurnState::Idle;
+        worker
+            .queue
+            .0
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .active = None;
         let event = finish_turn(message, collected, result);
         worker
             .events
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .push_back(event);
-    });
+    })
 }
 
 fn enqueue(
@@ -376,21 +449,9 @@ fn finish_turn(
     }
 }
 
-fn purge_queued(
-    queue: &Arc<(Mutex<QueueState>, Condvar)>,
-    message_id: &str,
-) -> Option<BridgetMessage> {
-    let (queue, wakeup) = &**queue;
-    let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
-    let index = queue
-        .messages
-        .iter()
-        .position(|message| message.id == message_id)?;
-    let message = queue.messages.remove(index);
-    wakeup.notify_one();
-    message
-}
-
+// Les huit ressources sont les extrémités explicites du pipeline stdio ; les
+// regrouper masquerait l'unique propriétaire de stdout imposé par D-204.
+#[allow(clippy::too_many_arguments)]
 fn spawn_reader(
     stdout: ChildStdout,
     writer: Arc<Mutex<ChildStdin>>,
@@ -399,7 +460,8 @@ fn spawn_reader(
     response: Arc<Mutex<String>>,
     alive: Arc<AtomicBool>,
     permissions: String,
-) {
+    queue: Arc<(Mutex<QueueState>, Condvar)>,
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else {
@@ -449,11 +511,33 @@ fn spawn_reader(
                     if let Some(reply) = method_not_found_response(&value, method) {
                         let _ = write_json(&writer, reply);
                     }
+                    events
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .push_back(AcpEvent::Error {
+                            detail: format!("méthode ACP inconnue: {method}"),
+                        });
                 }
-                _ => {}
+                Some(method) => events
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .push_back(AcpEvent::Error {
+                        detail: format!("notification ACP inconnue: {method}"),
+                    }),
+                None => events
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .push_back(AcpEvent::Error {
+                        detail: "message ACP inattendu".to_string(),
+                    }),
             }
         }
         alive.store(false, Ordering::SeqCst);
+        let (queue_state, wakeup) = &*queue;
+        let mut queue_state = queue_state.lock().unwrap_or_else(|err| err.into_inner());
+        queue_state.closed = true;
+        drain_queue(&mut queue_state, &events, "EOF ACP");
+        wakeup.notify_all();
         fail_waiters(&waiters, "EOF ACP");
         events
             .lock()
@@ -461,7 +545,53 @@ fn spawn_reader(
             .push_back(AcpEvent::Error {
                 detail: "EOF ACP".to_string(),
             });
-    });
+    })
+}
+
+fn drain_queue(queue: &mut QueueState, events: &Arc<Mutex<VecDeque<AcpEvent>>>, reason: &str) {
+    for message in queue.messages.drain(..) {
+        events
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .push_back(AcpEvent::DeliveryRejected {
+                message_id: message.id,
+                reason: reason.to_string(),
+            });
+    }
+}
+
+fn prompt_request(
+    writer: &Arc<Mutex<ChildStdin>>,
+    waiters: &Waiters,
+    next_id: &AtomicU64,
+    method: &str,
+    params: Value,
+    timeout: Option<Duration>,
+) -> Result<Value, TransportError> {
+    let id = next_id.fetch_add(1, Ordering::SeqCst);
+    let (sender, receiver) = mpsc::channel();
+    let key = id.to_string();
+    waiters
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .insert(key.clone(), sender);
+    if let Err(error) = write_json(
+        writer,
+        json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
+    ) {
+        waiters
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&key);
+        return Err(error);
+    }
+    let result = match timeout {
+        Some(timeout) => receiver
+            .recv_timeout(timeout)
+            .map_err(|_| TransportError::DeliveryFailed(format!("timeout ACP pour {method}")))?,
+        None => receiver.recv().map_err(|_| TransportError::AgentDead)?,
+    };
+    result.map_err(TransportError::DeliveryFailed)
 }
 
 fn request(
@@ -531,6 +661,17 @@ fn rpc_response(value: &Value) -> Option<(String, Result<Value, String>)> {
 }
 
 fn update_text(value: &Value) -> Option<&str> {
+    if value
+        .pointer("/params/update/sessionUpdate")
+        .and_then(Value::as_str)
+        != Some("agent_message_chunk")
+        || value
+            .pointer("/params/update/content/type")
+            .and_then(Value::as_str)
+            != Some("text")
+    {
+        return None;
+    }
     value
         .pointer("/params/update/content/text")
         .and_then(Value::as_str)
@@ -555,12 +696,31 @@ fn write_json(writer: &Arc<Mutex<ChildStdin>>, value: Value) -> Result<(), Trans
 
 fn permission_response(value: &Value, permissions: &str) -> Option<Value> {
     let id = value.get("id")?;
-    let outcome = if permissions == "allow" {
+    let options = value.pointer("/params/options")?.as_array()?;
+    let desired = if permissions == "allow" {
         "allow"
     } else {
         "deny"
     };
-    Some(json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": outcome } }))
+    let option = options.iter().find(|option| {
+        option
+            .get("kind")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind.contains(desired))
+            || option
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.to_lowercase().contains(desired))
+    });
+    match option.and_then(|option| option.get("optionId")).cloned() {
+        Some(option_id) => Some(
+            json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": "Selected", "optionId": option_id } }),
+        ),
+        None if permissions == "deny" => {
+            Some(json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": "Cancelled" } }))
+        }
+        None => None,
+    }
 }
 
 fn method_not_found_response(value: &Value, method: &str) -> Option<Value> {
@@ -589,6 +749,7 @@ mod tests {
         Arc::new((
             Mutex::new(QueueState {
                 messages: VecDeque::new(),
+                active: None,
                 closed: false,
             }),
             Condvar::new(),
@@ -618,34 +779,37 @@ mod tests {
         let notification: Value = serde_json::from_str(lines[0]).unwrap();
         assert_eq!(update_text(&notification), Some("premier"));
 
-        let permission: Value = serde_json::from_str(lines[1]).unwrap();
+        let tool_update: Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(update_text(&tool_update), None);
+
+        let permission: Value = serde_json::from_str(lines[2]).unwrap();
         assert_eq!(
-            permission_response(&permission, "allow").unwrap()["result"]["outcome"],
-            "allow"
+            permission_response(&permission, "allow").unwrap()["result"],
+            json!({"outcome":"Selected","optionId":"allow-1"})
         );
         assert_eq!(
-            permission_response(&permission, "deny").unwrap()["result"]["outcome"],
-            "deny"
+            permission_response(&permission, "deny").unwrap()["result"]["optionId"],
+            "deny-1"
         );
 
-        let numeric: Value = serde_json::from_str(lines[2]).unwrap();
-        let string: Value = serde_json::from_str(lines[3]).unwrap();
+        let numeric: Value = serde_json::from_str(lines[3]).unwrap();
+        let string: Value = serde_json::from_str(lines[4]).unwrap();
         assert_eq!(rpc_response(&numeric).unwrap().0, "9");
         assert_eq!(rpc_response(&string).unwrap().0, "\"string-9\"");
 
-        let error: Value = serde_json::from_str(lines[4]).unwrap();
+        let error: Value = serde_json::from_str(lines[5]).unwrap();
         assert!(rpc_response(&error)
             .unwrap()
             .1
             .unwrap_err()
             .contains("refus"));
 
-        let unknown: Value = serde_json::from_str(lines[5]).unwrap();
+        let unknown: Value = serde_json::from_str(lines[6]).unwrap();
         assert_eq!(
             method_not_found_response(&unknown, "server/inconnu").unwrap()["error"]["code"],
             -32601
         );
-        assert!(serde_json::from_str::<Value>(lines[6]).is_err());
+        assert!(serde_json::from_str::<Value>(lines[7]).is_err());
     }
 
     #[test]
@@ -743,12 +907,16 @@ mod tests {
         enqueue(&queue, 3, message("first"));
         enqueue(&queue, 3, message("cancel"));
         enqueue(&queue, 3, message("last"));
-        assert_eq!(purge_queued(&queue, "cancel").unwrap().id, "cancel");
         let (state, _) = &*queue;
+        let mut state = state.lock().unwrap();
+        let index = state
+            .messages
+            .iter()
+            .position(|message| message.id == "cancel")
+            .unwrap();
+        assert_eq!(state.messages.remove(index).unwrap().id, "cancel");
         assert_eq!(
             state
-                .lock()
-                .unwrap()
                 .messages
                 .iter()
                 .map(|message| message.id.as_str())
@@ -800,5 +968,36 @@ mod tests {
         let alive = AtomicBool::new(true);
         assert!(alive.swap(false, Ordering::SeqCst));
         assert!(!alive.swap(false, Ordering::SeqCst));
+    }
+
+    #[test]
+    fn false_adapter_exercises_stdio_reader_writer_and_prompt() {
+        let script = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read request
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"réponse"}}}}'
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+"#;
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            queue_capacity: 2,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+        })
+        .unwrap();
+        let message = message("fixture-message");
+        transport.deliver(&message).unwrap();
+        for _ in 0..20 {
+            thread::sleep(Duration::from_millis(10));
+            let events = transport.drain_events();
+            if events.iter().any(|event| matches!(event, AcpEvent::TurnFinished { response, stop_reason, .. } if response == "réponse" && stop_reason == "end_turn")) {
+                return;
+            }
+        }
+        panic!("le faux adaptateur n'a pas terminé le tour");
     }
 }

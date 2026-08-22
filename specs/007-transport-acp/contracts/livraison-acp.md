@@ -35,9 +35,10 @@ Règles :
 
 Règles :
 
-1. Le « texte final » est la concaténation des blocs de texte de réponse du
-   tour (notifications `session/update` de type message), dans l'ordre, sans
-   les appels d'outils ni la progression.
+1. Le « texte final » est la concaténation des blocs dont
+   `sessionUpdate == "agent_message_chunk"` et `content.type == "text"`
+   (et dont le `sessionId`, quand présent, correspond à la session), dans
+   l'ordre — jamais le texte porté par un appel d'outil ni la progression.
 2. La réponse est routée par le canal wrapper→daemon avec l'id du message
    d'origine — c'est cet id qui clôt la demande suivie (cycle de vie 003).
 3. Un seul tour actif par équipier ; les messages reçus pendant un tour sont
@@ -45,6 +46,12 @@ Règles :
 
 ## Demandes de permission pendant un tour
 
-`session/request_permission` reçoit la réponse configurée au registre
-(`allow` par défaut, parité R-005). Chaque demande et sa réponse automatique
-sont journalisées (`event: permission`).
+Une requête `session/request_permission` porte `params.options[]`. La réponse
+ACP v1 sélectionne un `optionId` réellement proposé : `outcome: Selected` pour
+une option autorisante/rejetante suivant la politique ; `outcome: Cancelled`
+si aucun rejet n'est proposé ou si le tour est annulé pendant la permission.
+
+`session/cancel` est une notification JSON-RPC sans `id`. Le timeout court ne
+s'applique qu'à `initialize` et `session/new` : un prompt attend son résultat
+ou l'annulation de l'autorité daemon. Les notifications inconnues sont
+journalisées ; une requête inconnue reçoit aussi `-32601`.
