@@ -1550,7 +1550,17 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
                     "message_id": "journal-message",
                     "payload": {"stop_reason":"end_turn"}
                 })));
-                assert!(events.iter().any(|event| event["event"] == "error" && event.get("message_id").is_none()));
+                // L'EOF peut être lu juste avant ou juste après le résultat
+                // terminal du tour : le journal conserve alors, de façon
+                // légitime, le message courant ou aucun message corrélé.
+                assert!(events.iter().any(|event| {
+                    event["event"] == "error"
+                        && match event.get("message_id") {
+                            None => true,
+                            Some(serde_json::Value::String(id)) => id == "journal-message",
+                            _ => false,
+                        }
+                }));
                 std::fs::remove_dir_all(root).unwrap();
                 return;
             }
