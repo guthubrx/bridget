@@ -174,6 +174,23 @@ cargo test -p bridget-daemon --test managed_parity_test \
 | **SC-005** | `sc005_sc006_persistance_arrets_cooperatifs_et_reconciliation_sigkill` réalise trois redémarrages : persistants 3/3, éphémères 0/3, puis trois stops exclus 3/3. |
 | **SC-006** | Le même scénario compare les PGID de trois groupes avec descendants `npx`, exige leur disparition après arrêt coopératif et rejoue un SIGKILL réel ; `sigkill_daemon_reconcilie_l_ancien_groupe_avant_une_reprise_unique` isole aussi cette frontière. |
 
-La gate de clôture reste distincte de cette documentation : l'historique Git de
-la branche doit contenir les têtes finales des sessions 008 et 012 avant que
-T911 puisse être cochée.
+### Gate d'intégration finale
+
+La branche contient les deux séries revues par des commits de fusion dédiés :
+
+- `8598694` intègre la tête finale 008 `3efcd4c` ;
+- `c9b1bfb` intègre la tête finale 012 `748cf8c`.
+
+Les deux commandes `git merge-base --is-ancestor 3efcd4c HEAD` et
+`git merge-base --is-ancestor 748cf8c HEAD` terminent avec le statut 0. La
+batterie post-fusion `cargo test --workspace` termine avec **327 tests passés**,
+**0 échec** et **7 ignorés explicitement**. Le lint
+`cargo clippy --workspace --all-targets -- -D warnings` termine sans
+avertissement.
+
+Deux oracles concurrents ont été rendus déterministes pendant cette gate sans
+modifier le comportement produit : une barrière contrôle la saturation du flux
+live avant le rattrapage journal, et l'inspection des groupes de processus
+tolère la course bornée `Connected` → `exec npx`. Le parseur de l'instantané
+`ps` accepte aussi l'alignement à espaces multiples des PID courts après le
+bouclage des PID macOS.

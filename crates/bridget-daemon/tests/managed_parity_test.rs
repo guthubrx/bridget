@@ -636,13 +636,17 @@ fn stop_managed(control: &mut Peer, name: &str, run: usize) {
         name: name.to_string(),
         command_id: format!("stop-parity-{run}"),
     });
-    assert!(matches!(
-        control.recv(),
-        DaemonToWrapper::StopResult {
-            outcome: StopOutcome::Stopped | StopOutcome::StoppedForced { .. },
-            ..
-        }
-    ));
+    let response = control.recv();
+    assert!(
+        matches!(
+            response,
+            DaemonToWrapper::StopResult {
+                outcome: StopOutcome::Stopped | StopOutcome::StoppedForced { .. },
+                ..
+            }
+        ),
+        "arrêt géré inattendu pour {name}: {response:?}"
+    );
 }
 
 fn spawn_managed(control: &mut Peer, root: &Path, name: &str, command_id: &str, persistent: bool) {
@@ -699,31 +703,34 @@ fn process_group_members(pgid: u32) -> Vec<(u32, String)> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| {
-            let mut fields = line.trim().splitn(3, char::is_whitespace);
+            let mut fields = line.split_whitespace();
             let pid = fields.next()?.parse::<u32>().ok()?;
-            let group = fields.next()?.trim().parse::<u32>().ok()?;
-            let command = fields.next()?.trim().to_string();
+            let group = fields.next()?.parse::<u32>().ok()?;
+            let command = fields.collect::<Vec<_>>().join(" ");
             (group == pgid).then_some((pid, command))
         })
         .collect()
 }
 
 fn assert_npx_descendant(pgid: u32) -> Vec<(u32, String)> {
-    let members = process_group_members(pgid);
-    assert!(
-        members.len() >= 2,
-        "le groupe {pgid} doit contenir le wrapper et son descendant npx: {members:?}"
-    );
-    assert!(
-        members.iter().any(|(_, command)| {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let members = process_group_members(pgid);
+        let has_npx = members.iter().any(|(_, command)| {
             command.contains("npx")
                 || command == "npm"
                 || command.contains("npm exec")
                 || command.contains("npm-cli.js exec")
-        }),
-        "aucun descendant npx dans le groupe {pgid}: {members:?}"
-    );
-    members
+        });
+        if members.len() >= 2 && has_npx {
+            return members;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "le groupe {pgid} doit contenir le wrapper et son descendant npx: {members:?}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn wait_groups_gone(pgids: &[u32]) {

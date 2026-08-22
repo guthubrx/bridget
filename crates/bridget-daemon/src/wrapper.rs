@@ -1276,6 +1276,7 @@ impl LiveFanout {
 struct AttachRelayHooks {
     before_command: Arc<dyn Fn() + Send + Sync>,
     before_read: Arc<dyn Fn() + Send + Sync>,
+    before_live_read: Arc<dyn Fn() + Send + Sync>,
     control_observed: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -1284,6 +1285,7 @@ impl Default for AttachRelayHooks {
         Self {
             before_command: Arc::new(|| {}),
             before_read: Arc::new(|| {}),
+            before_live_read: Arc::new(|| {}),
             control_observed: Arc::new(|| {}),
         }
     }
@@ -1628,6 +1630,7 @@ impl AttachRelayWorker {
                         if live_fanout.pending_fragment.is_none()
                             && live_fanout.pending_events.is_empty()
                         {
+                            (hooks.before_live_read)();
                             let batch = feed.after(live_fanout.cursor);
                             if let Some((from_seq, to_seq)) = batch.gap {
                                 for subscription_id in live_ids {
@@ -2880,6 +2883,19 @@ mod reconnect_tests {
             Some(feed.clone()),
         )
         .unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let arm = Arc::new(AtomicBool::new(false));
+        let worker_barrier = Arc::clone(&barrier);
+        let worker_arm = Arc::clone(&arm);
+        let hooks = AttachRelayHooks {
+            before_live_read: Arc::new(move || {
+                if worker_arm.swap(false, Ordering::SeqCst) {
+                    worker_barrier.wait();
+                    worker_barrier.wait();
+                }
+            }),
+            ..AttachRelayHooks::default()
+        };
         let (events, emitter) = relay_emitter();
         let mut worker = AttachRelayWorker::start_with_live(
             root.clone(),
@@ -2887,7 +2903,7 @@ mod reconnect_tests {
             4,
             feed.clone(),
             emitter,
-            AttachRelayHooks::default(),
+            hooks,
         );
         worker
             .subscribe("sub-gap".to_string(), AttachWindow::Seq(0))
@@ -2898,6 +2914,8 @@ mod reconnect_tests {
             })
         });
 
+        arm.store(true, Ordering::SeqCst);
+        barrier.wait();
         writer
             .enqueue("update", None, serde_json::json!({"content":"deux"}))
             .unwrap();
@@ -2905,6 +2923,7 @@ mod reconnect_tests {
             .enqueue("update", None, serde_json::json!({"content":"trois"}))
             .unwrap();
         writer.stop();
+        barrier.wait();
 
         wait_for(|| {
             let messages = events.lock().unwrap();
@@ -2964,6 +2983,7 @@ mod reconnect_tests {
                     barrier_for_worker.wait();
                 }
             }),
+            before_live_read: Arc::new(|| {}),
             control_observed: Arc::new(move || {
                 let _ = control_sender.send(());
             }),
