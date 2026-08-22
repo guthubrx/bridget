@@ -162,3 +162,18 @@ cargo test -p bridget-daemon --test managed_parity_test \
   sc005_sc006_persistance_arrets_cooperatifs_et_reconciliation_sigkill \
   -- --exact --nocapture
 ```
+
+## T911 — Checklist des critères de succès
+
+| Critère | Preuve versionnée |
+|---|---|
+| **SC-001** | `sc001_vingt_spawns_survivent_a_la_fermeture_du_client_et_repondent` : N=20, 20/20 spawns et échanges suivis, p95 442,466 ms, maximum 530,891 ms, sous le seuil de 10 s. |
+| **SC-002** | `stop_apres_register_traverse_le_wrapper_et_le_superviseur_reels`, `stop_force_termine_l_intermediaire_npx_qui_ignore_l_annulation_et_son_descendant` et `timeout_d_arret_conserve_le_groupe_reel_et_sa_supervision_jusqu_a_disparition` couvrent l'arrêt synchrone, les descendants et la voie non terminale. |
+| **SC-003** | `matrice_sc003_couvre_les_onze_familles_sans_residu_operationnel` exerce les onze refus fermés avec motif typé et invariant sans état résiduel. |
+| **SC-004** | `matrice_fr008_compare_le_meme_corpus_et_les_frames_attach` exécute trois passages par mode, vérifie les corps attendus, la reconnexion busy et compare les frames attach normalisées sans tolérance. |
+| **SC-005** | `sc005_sc006_persistance_arrets_cooperatifs_et_reconciliation_sigkill` réalise trois redémarrages : persistants 3/3, éphémères 0/3, puis trois stops exclus 3/3. |
+| **SC-006** | Le même scénario compare les PGID de trois groupes avec descendants `npx`, exige leur disparition après arrêt coopératif et rejoue un SIGKILL réel ; `sigkill_daemon_reconcilie_l_ancien_groupe_avant_une_reprise_unique` isole aussi cette frontière. |
+
+La gate de clôture reste distincte de cette documentation : l'historique Git de
+la branche doit contenir les têtes finales des sessions 008 et 012 avant que
+T911 puisse être cochée.

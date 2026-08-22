@@ -12,3 +12,7 @@ atteinte.
 Relecture T711 : ces deux chemins hérités sont les seuls retirés par la
 migration ACP ; ils restent étiquetés ici jusqu'à la suppression de leur
 référence historique.
+
+Relecture T911 : la gestion du cycle de vie par le daemon est additive. Le
+lancement historique par wrapper-terminal reste supporté et aucun nouveau
+chemin n'est déprécié par la session 009.

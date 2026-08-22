@@ -105,6 +105,28 @@ Gemini remains declarative, but individual accounts are not supported as of
 2026-08-22: Google requires migration to Antigravity. Existing tmux agents,
 started without `--equipier`, keep their `💬` behaviour.
 
+## Persistent teammates
+
+The daemon can own the lifecycle of an ACP teammate. The terminal issuing the
+order may then close without stopping that teammate:
+
+```bash
+bridget spawn codex --name analysis --persistent
+bridget who
+bridget stop analysis
+```
+
+`--persistent` asks the daemon to relaunch the teammate after its own restart,
+under the same name and with the same configuration. A teammate started without
+that option remains active after the ordering terminal closes, but is not
+recreated the next time the daemon starts. `bridget stop` terminates the whole
+process group, including `npx` descendants, and removes a persistent teammate
+from desired state so it does not return.
+
+Every `spawn` prints a `command_id`. If the network reply is lost, replay the
+exact order with `--command-id <ID>`: Bridget returns the same outcome without
+creating a second generation.
+
 ## Scope and trust model
 
 Bridget aims at two things: a **reliable communication channel** between CLI
