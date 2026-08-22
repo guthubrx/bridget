@@ -47,6 +47,29 @@ pub enum ClientRefusal {
     MessageOutsideClientRole,
 }
 
+/// Issue calculée d'une opération client idempotente. `OutcomeUnknown` est
+/// informatif : il impose un `Lookup` ou le rejeu strict de la même enveloppe,
+/// jamais une nouvelle émission avec une nouvelle clé.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum IdempotencyIssue {
+    Accepted {
+        expires_at: i64,
+    },
+    Rejected {
+        category: String,
+        reason: String,
+    },
+    OutcomeUnknown {
+        expires_at: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delivery_id: Option<String>,
+    },
+    EnvelopeMismatch,
+    IdempotencyExpired,
+    InvalidIssuedAt,
+}
+
 /// Fenêtre d'historique demandée par une vue attach.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value")]
@@ -346,6 +369,12 @@ pub enum DaemonToWrapper {
     },
     /// Refus motivé de la négociation ou de la matrice client.
     ClientRejected { reason: ClientRefusal },
+    /// Issue durable ou calculée d'un `SendIdempotent`.
+    IdempotencyResult {
+        operation_kind: String,
+        idempotency_key: String,
+        issue: IdempotencyIssue,
+    },
     /// Remise aval réservée au wrapper destinataire.
     DeliverIdempotent {
         delivery_id: String,
@@ -775,6 +804,25 @@ mod tests {
                 capabilities,
                 ..
             } if capabilities == vec![ClientCapability::Lookup]
+        ));
+        let result = DaemonToWrapper::IdempotencyResult {
+            operation_kind: "send".to_string(),
+            idempotency_key: "message-1".to_string(),
+            issue: IdempotencyIssue::OutcomeUnknown {
+                expires_at: 123,
+                delivery_id: Some("delivery-1".to_string()),
+            },
+        };
+        assert!(matches!(
+            decode(&encode(&result).unwrap()).unwrap(),
+            DaemonToWrapper::IdempotencyResult {
+                operation_kind,
+                idempotency_key,
+                issue: IdempotencyIssue::OutcomeUnknown {
+                    expires_at: 123,
+                    delivery_id: Some(delivery_id),
+                },
+            } if operation_kind == "send" && idempotency_key == "message-1" && delivery_id == "delivery-1"
         ));
         assert!(!welcome.allowed_for_attach());
     }
