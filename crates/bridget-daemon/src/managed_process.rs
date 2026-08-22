@@ -814,10 +814,19 @@ impl ManagedStderrStore {
 }
 
 fn private_directory(path: &Path) -> io::Result<()> {
+    if path.exists() {
+        let metadata = fs::metadata(path)?;
+        if !metadata.is_dir() || metadata.permissions().mode() & 0o777 != 0o700 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("répertoire privé non conforme: {}", path.display()),
+            ));
+        }
+        return Ok(());
+    }
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true).mode(0o700);
-    builder.create(path)?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+    builder.create(path)
 }
 
 fn validate_marker_name(name: &str) -> Result<(), ManagedProcessError> {
@@ -1102,6 +1111,27 @@ mod tests {
         assert_eq!(store.purge_older_than_days(0).unwrap(), 2);
         assert!(!first.exists());
         assert!(!second.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stderr_refuse_un_repertoire_existant_aux_permissions_trop_larges() {
+        let root = test_root("stderr-permissions");
+        let directory = root.join("stderr");
+        fs::create_dir_all(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+        let store = ManagedStderrStore::at_directory(&directory);
+
+        let error = store.open("codex-1", &identity()).unwrap_err();
+        assert!(matches!(
+            error,
+            ManagedProcessError::Io(ref source)
+                if source.kind() == io::ErrorKind::PermissionDenied
+        ));
+        assert_eq!(
+            fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
         let _ = fs::remove_dir_all(root);
     }
 
