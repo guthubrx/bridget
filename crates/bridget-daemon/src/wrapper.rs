@@ -896,11 +896,12 @@ fn launch_acp(
     if definition.protocol != "acp" {
         return Err(format!("le type '{agent_type}' n'utilise pas le protocole ACP").into());
     }
-    let forbidden_variable = (std::env::var("BRIDGET_ALLOW_API_KEY").ok().as_deref() != Some("1"))
-        .then(|| definition.forbidden_env.iter().find(|variable| std::env::var_os(variable).is_some()))
-        .flatten();
-    if let Some(variable) = forbidden_variable {
-        return Err(format!("variable d'environnement refusée pour l'équipier ACP : {variable} (utilisez BRIDGET_ALLOW_API_KEY=1 uniquement si vous acceptez la facturation API)").into());
+    if let Some(error) = forbidden_env_error(
+        definition,
+        std::env::var("BRIDGET_ALLOW_API_KEY").ok().as_deref() == Some("1"),
+        |variable| std::env::var_os(variable).is_some(),
+    ) {
+        return Err(error.into());
     }
 
     let effective_name = explicit_name.map(str::to_owned);
@@ -987,6 +988,26 @@ fn launch_acp(
     Ok(())
 }
 
+fn forbidden_env_error(
+    definition: &crate::registry::AgentDefinition,
+    allow_api_key: bool,
+    is_present: impl Fn(&str) -> bool,
+) -> Option<String> {
+    if allow_api_key {
+        return None;
+    }
+    definition
+        .forbidden_env
+        .iter()
+        .find(|variable| is_present(variable))
+        .map(|variable| {
+            format!(
+                "variable d'environnement refusée pour l'équipier ACP : {variable} \
+                 (utilisez BRIDGET_ALLOW_API_KEY=1 uniquement si vous acceptez la facturation API)"
+            )
+        })
+}
+
 fn send_wrapper_message(writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>, message: WrapperToDaemon) {
     let Ok(json) = encode(&message) else { return; };
     let write_result = writer
@@ -1060,6 +1081,18 @@ fn journal_failure_requires_shutdown(events: &[AcpEvent]) -> bool {
 mod reconnect_tests {
     use super::*;
 
+    fn acp_definition(forbidden_env: &[&str]) -> crate::registry::AgentDefinition {
+        crate::registry::AgentDefinition {
+            command: "adapter".to_string(),
+            args: Vec::new(),
+            protocol: "acp".to_string(),
+            forbidden_env: forbidden_env.iter().map(ToString::to_string).collect(),
+            permissions: "allow".to_string(),
+            queue_capacity: 32,
+            notify_timeout_secs: 600,
+        }
+    }
+
     #[test]
     fn journal_failure_requires_an_immediate_transport_shutdown() {
         assert!(journal_failure_requires_shutdown(&[AcpEvent::JournalFailed {
@@ -1068,6 +1101,28 @@ mod reconnect_tests {
         assert!(!journal_failure_requires_shutdown(&[AcpEvent::Error {
             detail: "diagnostic non terminal".to_string(),
         }]));
+    }
+
+    #[test]
+    fn api_key_forbidden_refuse_le_lancement_en_nommant_la_variable() {
+        let error = forbidden_env_error(
+            &acp_definition(&["OPENAI_API_KEY", "CODEX_API_KEY"]),
+            false,
+            |variable| variable == "CODEX_API_KEY",
+        )
+        .expect("clé API refusée");
+        assert!(error.contains("CODEX_API_KEY"));
+        assert!(error.contains("BRIDGET_ALLOW_API_KEY=1"));
+    }
+
+    #[test]
+    fn api_key_forbidden_accepte_le_contournement_explicite() {
+        assert!(forbidden_env_error(
+            &acp_definition(&["ANTHROPIC_API_KEY"]),
+            true,
+            |variable| variable == "ANTHROPIC_API_KEY",
+        )
+        .is_none());
     }
 
     #[test]

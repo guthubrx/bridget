@@ -210,3 +210,11 @@ https://antigravity.google
   `git diff --name-only d68ed09 -- crates | rg -v '^crates/[^/]+/tests/'`
   ne produit aucune sortie. La modification Rust est donc limitée au test
   d'intégration ; aucun fichier de code de production n'est modifié.
+
+## T710 — Garde de facturation
+
+- Le lancement ACP refuse la première variable présente de `forbidden_env` et
+  nomme la variable dans le message français, avec le contournement explicite
+  `BRIDGET_ALLOW_API_KEY=1`.
+- Deux tests couvrent le refus (variable et contournement visibles dans le
+  message) et l'acceptation uniquement lorsque le contournement vaut `1`.

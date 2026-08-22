@@ -168,7 +168,7 @@ bout en bout (SC-001, SC-002).
   arrêt propre → `stopped` (pas `unreachable`), pas de double signalement
   d'expiration daemon/transport** ; quickstart §4.
 
-- [ ] **T710** [US3] **Garde de facturation** : au lancement d'un équipier,
+- [X] **T710** [US3] **Garde de facturation** : au lancement d'un équipier,
   refus si une variable de `forbidden_env` du registre est présente, message en
   français nommant la variable et le contournement `BRIDGET_ALLOW_API_KEY=1`
   (`wrapper.rs`, D-207).
