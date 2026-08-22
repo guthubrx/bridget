@@ -234,14 +234,13 @@ fn cmd_rename(args: &[String]) {
 }
 
 fn current_agent_name() -> String {
-    if let Ok(path) = std::env::var("BRIDGET_AGENT_NAME_FILE") {
-        if let Ok(name) = std::fs::read_to_string(path) {
+    if let Ok(path) = std::env::var("BRIDGET_AGENT_NAME_FILE")
+        && let Ok(name) = std::fs::read_to_string(path) {
             let name = name.trim();
             if !name.is_empty() {
                 return name.to_string();
             }
         }
-    }
     std::env::var("BRIDGET_AGENT_NAME").unwrap_or_else(|_| "human".to_string())
 }
 
@@ -917,12 +916,11 @@ fn cmd_domain(args: &[String]) {
         eprintln!("usage: bridget domain <nom> | bridget domain --reset");
         std::process::exit(2);
     }
-    if let Some(name) = &requested {
-        if let Err(reason) = validate_agent_name(name) {
+    if let Some(name) = &requested
+        && let Err(reason) = validate_agent_name(name) {
             eprintln!("erreur: {}", reason);
             std::process::exit(2);
         }
-    }
 
     let agent = current_agent_name();
     if agent == "human" {
@@ -1184,25 +1182,23 @@ fn cmd_agents(args: &[String]) {
             "{}",
             serde_json::to_string(&status.agents).unwrap_or_else(|_| "[]".to_string())
         );
+    } else if status.agents.is_empty() {
+        println!("Aucun agent connecte.");
     } else {
-        if status.agents.is_empty() {
-            println!("Aucun agent connecte.");
-        } else {
-            println!("Agents connectes :");
-            for agent in &status.agents {
-                println!(
-                    "  {} ({}) [{}] — {} / {} via {} — {} / {} [{}]",
-                    agent.name,
-                    agent.agent_type,
-                    cell(agent.domain.as_deref()),
-                    agent.host,
-                    agent.os,
-                    agent.transport,
-                    cell(agent.model.as_deref()),
-                    cell(agent.effort.as_deref()),
-                    agent.state
-                );
-            }
+        println!("Agents connectes :");
+        for agent in &status.agents {
+            println!(
+                "  {} ({}) [{}] — {} / {} via {} — {} / {} [{}]",
+                agent.name,
+                agent.agent_type,
+                cell(agent.domain.as_deref()),
+                agent.host,
+                agent.os,
+                agent.transport,
+                cell(agent.model.as_deref()),
+                cell(agent.effort.as_deref()),
+                agent.state
+            );
         }
     }
 }

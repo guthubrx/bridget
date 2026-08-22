@@ -16,6 +16,12 @@ pub struct ConnectionManager {
     conn_counter: u64,
 }
 
+impl Default for ConnectionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConnectionManager {
     pub fn new() -> Self {
         Self {
@@ -91,6 +97,12 @@ pub struct Presence {
     pub reconnect_count: u32,
 }
 
+impl Default for PresenceManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PresenceManager {
     pub fn new() -> Self {
         Self {
@@ -114,11 +126,10 @@ impl PresenceManager {
     }
 
     pub fn mark_unreachable(&mut self, conn_id: &str, conn_instances: &HashMap<String, String>) {
-        if let Some(instance_id) = conn_instances.get(conn_id) {
-            if let Some(presence) = self.presences.get_mut(instance_id) {
+        if let Some(instance_id) = conn_instances.get(conn_id)
+            && let Some(presence) = self.presences.get_mut(instance_id) {
                 presence.state = "unreachable".to_string();
             }
-        }
     }
 
     pub fn get_presence(&self, instance_id: &str) -> Option<&Presence> {
@@ -150,6 +161,12 @@ pub struct PendingReply {
     pub created_at: Instant,
     pub timeout_secs: u64,
     pub escalation_level: u32,
+}
+
+impl Default for RequestManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RequestManager {

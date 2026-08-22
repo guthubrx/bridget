@@ -24,6 +24,12 @@ pub struct Metrics {
     pub active_connections: AtomicUsize,
 }
 
+impl Default for Metrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Metrics {
     pub fn new() -> Self {
         Metrics {
@@ -267,7 +273,7 @@ pub fn get_metrics() -> &'static Metrics {
     // Dans une implémentation complète, les métriques seraient partagées globalement
     use std::sync::OnceLock;
     static METRICS: OnceLock<Metrics> = OnceLock::new();
-    METRICS.get_or_init(|| Metrics::new())
+    METRICS.get_or_init(Metrics::new)
 }
 
 impl DaemonState {
@@ -300,12 +306,11 @@ impl DaemonState {
     }
 
     fn mark_unreachable(&mut self, conn_id: &str) {
-        if let Some(instance_id) = self.conn_instances.remove(conn_id) {
-            if let Some(presence) = self.presences.get_mut(&instance_id) {
+        if let Some(instance_id) = self.conn_instances.remove(conn_id)
+            && let Some(presence) = self.presences.get_mut(&instance_id) {
                 presence.state = "unreachable".to_string();
                 presence.last_seen = Instant::now();
             }
-        }
     }
 
     fn remove_presence(&mut self, conn_id: &str) {
@@ -452,6 +457,9 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
+        // Ce descripteur ne sert qu'au verrou flock ; l'écriture du PID suit
+        // avec std::fs::write et effectue explicitement le remplacement.
+        .truncate(false)
         .open(&pid_file)
         .map_err(|e| format!("Impossible de créer PID file {}: {}", pid_file.display(), e))?;
 
@@ -485,14 +493,13 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Purge au démarrage
     {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
-        if let Ok(n) = st.store.purge_older_than_days(config.retention_days) {
-            if n > 0 {
+        if let Ok(n) = st.store.purge_older_than_days(config.retention_days)
+            && n > 0 {
                 info!(
                     "purge: {} messages supprimés (> {} jours)",
                     n, config.retention_days
                 );
             }
-        }
     }
 
     // Thread de surveillance des --reply sans réponse (escalade progressive)
@@ -654,11 +661,10 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(3600));
         let st = st_purge.lock().unwrap_or_else(|e| e.into_inner());
-        if let Ok(n) = st.store.purge_older_than_days(retention) {
-            if n > 0 {
+        if let Ok(n) = st.store.purge_older_than_days(retention)
+            && n > 0 {
                 info!("purge périodique: {} messages supprimés", n);
             }
-        }
     });
 
     // Setup signal handler — flag atomique global (pas de Mutex dans le handler)
@@ -702,20 +708,19 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
             info!("shutdown demandé — notification des wrappers...");
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
-            for (_, writer) in &st.connections {
+            for writer in st.connections.values() {
                 let msg = DaemonToWrapper::Disconnect;
-                if let Ok(json) = encode(&msg) {
-                    if let Ok(mut w) = writer.lock() {
+                if let Ok(json) = encode(&msg)
+                    && let Ok(mut w) = writer.lock() {
                         let _ = writeln!(w, "{}", json);
                         let _ = w.flush();
                     }
-                }
             }
             drop(st);
             if let Err(e) = std::fs::remove_file(&config.socket_path) {
                 log::warn!("Impossible de supprimer socket {}: {}", config.socket_path.display(), e);
             }
-            if let Err(e) = std::fs::remove_file(&config.socket_path.with_extension("pid")) {
+            if let Err(e) = std::fs::remove_file(config.socket_path.with_extension("pid")) {
                 log::warn!("Impossible de supprimer PID file {}: {}", config.socket_path.with_extension("pid").display(), e);
             }
             info!("daemon arrêté proprement");
@@ -815,13 +820,12 @@ fn handle_connection(
     };
 
     // Nettoyage explicite du writer pour éviter fuites de ressources
-    if let Some(writer_mutex) = writer_opt {
-        if let Ok(mut writer) = writer_mutex.lock() {
+    if let Some(writer_mutex) = writer_opt
+        && let Ok(mut writer) = writer_mutex.lock() {
             use std::io::Write;
             let _ = writer.flush();
             // Le drop explicite fermera le stream proprement
         }
-    }
 
     if let Some(agent) = removed {
         info!("agent '{}' déconnecté ({})", agent.name, conn_id);
@@ -834,6 +838,10 @@ fn handle_connection(
 }
 
 /// Traite l'enregistrement d'un wrapper
+///
+/// Les champs du message `Register` restent dépliés ici pour refléter le
+/// protocole de transport ; les regrouper imposerait un refactor hors scope.
+#[allow(clippy::too_many_arguments)]
 fn handle_register(
     conn_id: &str,
     agent_type: String,
@@ -1218,8 +1226,8 @@ fn handle_wrapper_message(
                 });
             }
 
-            if let Some(request_id) = bridge_msg.in_reply_to.as_deref() {
-                if st
+            if let Some(request_id) = bridge_msg.in_reply_to.as_deref()
+                && st
                     .store
                     .mark_answered(request_id, &bridge_msg.from, &bridge_msg.to)
                     .unwrap_or(false)
@@ -1228,7 +1236,6 @@ fn handle_wrapper_message(
                         .retain(|pending| pending.msg_id != request_id);
                     info!("demande {} répondue", request_id);
                 }
-            }
 
             // 1. Disjoncteur
             if !st.circuit_breaker.check(&bridge_msg.from, &bridge_msg.to) {
@@ -1291,8 +1298,8 @@ fn handle_wrapper_message(
             // interroger l'annuaire avant chaque envoi. L'émetteur reçoit la
             // raison et le temps restant afin de décider lui-même s'il attend,
             // insiste plus tard, ou s'adresse à quelqu'un d'autre.
-            if let Some(presence) = presence_of_agent(&mut st, &bridge_msg.to) {
-                if presence.is_dnd() {
+            if let Some(presence) = presence_of_agent(&mut st, &bridge_msg.to)
+                && presence.is_dnd() {
                     let minutes = presence.dnd_minutes_left();
                     let target = presence.name.clone();
                     info!(
@@ -1307,7 +1314,6 @@ fn handle_wrapper_message(
                         ),
                     });
                 }
-            }
 
             // 5. Router
             let action =
@@ -1408,11 +1414,10 @@ fn handle_wrapper_message(
 
         WrapperToDaemon::Heartbeat => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(instance_id) = st.conn_instances.get(conn_id).cloned() {
-                if let Some(presence) = st.presences.get_mut(&instance_id) {
+            if let Some(instance_id) = st.conn_instances.get(conn_id).cloned()
+                && let Some(presence) = st.presences.get_mut(&instance_id) {
                     presence.last_seen = Instant::now();
                 }
-            }
             None
         }
 
@@ -1458,9 +1463,9 @@ fn handle_wrapper_message(
                 Ok(Some(request)) if request.state == "cancelled" => {
                     st.pending_replies
                         .retain(|pending| pending.msg_id != request.id);
-                    if let Some(agent) = st.router.get_agent(&request.target) {
-                        if let Some(writer) = st.connections.get(&agent.connection_id) {
-                            if let Err(e) = deliver_to_agent(
+                    if let Some(agent) = st.router.get_agent(&request.target)
+                        && let Some(writer) = st.connections.get(&agent.connection_id)
+                            && let Err(e) = deliver_to_agent(
                                 writer,
                                 &request.target,
                                 &format!(
@@ -1476,8 +1481,6 @@ fn handle_wrapper_message(
                             ) {
                                 error!("Impossible de délivrer l'annulation à {}: {}", request.target, e);
                             }
-                        }
-                    }
                     Some(DaemonToWrapper::RequestCancelled {
                         id: request.id,
                         state: request.state,
@@ -1610,16 +1613,8 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
     }
 }
 
-impl Default for DaemonStatus {
-    fn default() -> Self {
-        DaemonStatus {
-            running: false,
-            agents: vec![],
-            message_count: 0,
-        }
-    }
-}
 
+#[derive(Default)]
 pub struct DaemonStatus {
     pub running: bool,
     pub agents: Vec<bridget_transport::protocol::AgentInfo>,

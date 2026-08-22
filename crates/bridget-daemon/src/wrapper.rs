@@ -47,11 +47,10 @@ fn socket_path() -> PathBuf {
 }
 
 fn host_name() -> String {
-    if let Ok(host) = std::env::var("HOSTNAME") {
-        if !host.trim().is_empty() {
+    if let Ok(host) = std::env::var("HOSTNAME")
+        && !host.trim().is_empty() {
             return host;
         }
-    }
     Command::new("hostname")
         .output()
         .ok()
@@ -62,11 +61,10 @@ fn host_name() -> String {
 }
 
 fn transport_name() -> String {
-    if let Ok(transport) = std::env::var("BRIDGET_TRANSPORT") {
-        if !transport.trim().is_empty() {
+    if let Ok(transport) = std::env::var("BRIDGET_TRANSPORT")
+        && !transport.trim().is_empty() {
             return transport;
         }
-    }
     let config_path = std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
@@ -500,7 +498,7 @@ pub fn launch(
 
     // VALIDATION DE SÉCURITÉ : whitelist stricte des binaires autorisés
     let allowed_binaries = ["codex", "claude", "gemini", "gclaude", "claude-son"];
-    let binary_name = agent_binary.split('/').last().unwrap_or(agent_binary);
+    let binary_name = agent_binary.split('/').next_back().unwrap_or(agent_binary);
     if !allowed_binaries.contains(&binary_name) {
         return Err(format!(
             "Binaire non autorisé '{}'. Binaires permis: {}",
@@ -642,7 +640,7 @@ pub fn launch(
 
                     // Vérification proactive du socket (auto-reconnect)
                     // Vérifier toutes les X secondes si le socket existe toujours
-                    if Instant::now().duration_since(last_heartbeat).as_secs() % SOCKET_CHECK_INTERVAL.as_secs() == 0 {
+                    if Instant::now().duration_since(last_heartbeat).as_secs().is_multiple_of(SOCKET_CHECK_INTERVAL.as_secs()) {
                         if socket_path().exists() {
                             debug!("Socket Bridget détecté - daemon probablement disponible");
                         } else {
@@ -731,7 +729,7 @@ pub fn launch(
 
                             // Notification visuelle à l'utilisateur (si tmux)
                             if let Some(ref mut t) = transport {
-                                let notif = format!("🔄 Bridget: reconnecté au daemon");
+                                let notif = "🔄 Bridget: reconnecté au daemon".to_string();
                                 if let Err(e) = t.deliver(&bridget_core::BridgetMessage::new(
                                     "bridget", &my_name_for_thread, &notif
                                 )) {
@@ -850,14 +848,12 @@ pub fn launch(
     // 7. Désenregistrement
     stopping.store(true, Ordering::SeqCst);
     {
-        if let Ok(json) = encode(&WrapperToDaemon::Unregister) {
-            if let Ok(mut writer) = writer_clone.lock() {
-                if let Some(w) = writer.as_mut() {
+        if let Ok(json) = encode(&WrapperToDaemon::Unregister)
+            && let Ok(mut writer) = writer_clone.lock()
+                && let Some(w) = writer.as_mut() {
                     let _ = writeln!(w, "{}", json);
                     let _ = w.flush();
                 }
-            }
-        }
     }
 
     *writer.lock().unwrap() = None;

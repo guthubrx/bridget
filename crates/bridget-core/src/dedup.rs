@@ -24,10 +24,10 @@ impl Deduplicator {
     /// Retourne true si le message DOIT être bloqué (doublon).
     pub fn is_duplicate(&mut self, content_key: &str, target: &str) -> bool {
         self.prune();
-        match self.entries.get(content_key) {
-            Some((_, stored_target)) if stored_target == target => true,
-            _ => false,
-        }
+        matches!(
+            self.entries.get(content_key),
+            Some((_, stored_target)) if stored_target == target
+        )
     }
 
     /// Enregistre un contenu comme envoyé.

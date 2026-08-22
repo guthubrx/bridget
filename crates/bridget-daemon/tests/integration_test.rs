@@ -129,12 +129,11 @@ impl FakeAgent {
                     Err(_) => break,
                 }
             }
-            if let Ok(msg) = decode::<DaemonToWrapper>(line.trim()) {
-                if let DaemonToWrapper::Deliver(bm) = msg {
+            if let Ok(msg) = decode::<DaemonToWrapper>(line.trim())
+                && let DaemonToWrapper::Deliver(bm) = msg {
                     let agent = agent_arc.lock().unwrap();
                     agent.received.lock().unwrap().push(bm);
                 }
-            }
         });
     }
 }
