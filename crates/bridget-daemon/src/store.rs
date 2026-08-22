@@ -110,6 +110,17 @@ impl Store {
         self.query_requests("SELECT id, sender, target, state, created_at, deadline_at, escalation_level, cancel_reason, completed_at FROM tracked_requests WHERE sender = ?1 ORDER BY created_at DESC", rusqlite::params![sender])
     }
 
+    pub fn requests_for_participant(
+        &self,
+        participant: &str,
+        limit: usize,
+    ) -> Result<Vec<TrackedRequest>, StoreError> {
+        self.query_requests(
+            "SELECT id, sender, target, state, created_at, deadline_at, escalation_level, cancel_reason, completed_at FROM tracked_requests WHERE sender = ?1 OR target = ?1 ORDER BY created_at DESC LIMIT ?2",
+            rusqlite::params![participant, limit.clamp(1, 200)],
+        )
+    }
+
     /// Projection bornée des demandes, destinée aux lecteurs neutres du
     /// daemon (CLI fédérée aujourd'hui, vue ledger demain).
     pub fn recent_requests(&self, limit: usize) -> Result<Vec<TrackedRequest>, StoreError> {

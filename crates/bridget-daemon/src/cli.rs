@@ -99,6 +99,7 @@ pub fn run() {
         "daemon" => cmd_daemon(),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
+        "mcp" => cmd_mcp(),
         "attach" => cmd_attach(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
@@ -140,6 +141,13 @@ pub fn run() {
                 std::process::exit(2);
             }
         }
+    }
+}
+
+fn cmd_mcp() {
+    if let Err(error) = crate::mcp::run_stdio() {
+        eprintln!("bridget mcp: {error}");
+        std::process::exit(1);
     }
 }
 
@@ -206,6 +214,7 @@ fn print_usage() {
            -- <CMD> [ARGS...]     Agent personnalisé\n\n\
          Daemon & client :\n  \
            daemon                 Lance le daemon\n  \
+           mcp                    Lance le serveur MCP sur stdio\n  \
            attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            spawn <TYPE>           Lance un équipier géré [--name N] [--persistent]\n  \
            stop <N>               Arrête un équipier géré\n  \
@@ -1035,6 +1044,7 @@ fn cmd_requests(args: &[String]) {
     let json_output = args.iter().any(|arg| arg == "--json");
     match send_control_to_daemon(WrapperToDaemon::ListRequests {
         sender: current_agent_name(),
+        limit: 200,
     }) {
         Ok(DaemonToWrapper::RequestList { requests }) if json_output => println!(
             "{}",
@@ -1894,69 +1904,52 @@ fn cmd_status() {
 }
 
 fn cmd_ledger() {
-    match send_control_to_daemon(WrapperToDaemon::LedgerProjection {
+    let messages = match send_control_to_daemon(WrapperToDaemon::LedgerProjection {
         scope: LedgerScope::Messages,
         limit: 20,
     }) {
-        Ok(DaemonToWrapper::LedgerProjection { messages, .. }) => {
-            print_ledger(&messages);
-        }
-        Ok(DaemonToWrapper::Nack { reason, .. }) => {
-            eprintln!("erreur lecture ledger: {reason}");
-            std::process::exit(1);
-        }
-        Ok(_) => {
-            eprintln!("réponse inattendue du daemon");
-            std::process::exit(1);
-        }
+        Ok(DaemonToWrapper::LedgerProjection { messages, .. }) => Ok(messages),
+        Ok(DaemonToWrapper::Nack { reason, .. }) => Err(format!("erreur lecture ledger: {reason}")),
+        Ok(_) => Err("réponse inattendue du daemon".to_string()),
         Err(_) => {
-            // Hors daemon, conserver la lecture locale historique pour les
-            // installations monoprocessus et les diagnostics hors ligne.
             let config = DaemonConfig::default();
-            match crate::store::Store::open(&config.db_path) {
-                Ok(store) => match store.recent_messages(20) {
-                    Ok(entries) => {
-                        let messages = entries
-                            .into_iter()
-                            .map(|entry| LedgerMessage {
-                                id: entry.id,
-                                ts: entry.ts,
-                                sender: entry.sender,
-                                target: entry.target,
-                                body: entry.body,
-                            })
-                            .collect::<Vec<_>>();
-                        print_ledger(&messages);
-                    }
-                    Err(error) => {
-                        eprintln!("erreur lecture ledger: {error}");
-                        std::process::exit(1);
-                    }
-                },
-                Err(error) => {
-                    eprintln!("base inaccessible: {error}");
-                    std::process::exit(1);
-                }
-            }
+            crate::store::Store::open(&config.db_path)
+                .map_err(|error| format!("base inaccessible: {error}"))
+                .and_then(|store| {
+                    crate::ledger::read_projection(&store, LedgerScope::Messages, 20)
+                        .map(|projection| projection.messages)
+                        .map_err(|error| format!("erreur lecture ledger: {error}"))
+                })
+        }
+    };
+    match messages {
+        Ok(messages) => print_ledger(&messages),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
         }
     }
 }
 
 fn print_ledger(entries: &[LedgerMessage]) {
+    print!("{}", render_ledger(entries));
+}
+
+pub(crate) fn render_ledger(entries: &[LedgerMessage]) -> String {
     if entries.is_empty() {
-        println!("Ledger vide.");
-        return;
+        return "Ledger vide.\n".to_string();
     }
-    println!("Derniers {} messages :", entries.len());
+    let mut rendered = format!("Derniers {} messages :\n", entries.len());
     for entry in entries.iter().rev() {
-        println!(
-            "  [{}] {} → {}: {}",
+        rendered.push_str(&format!(
+            "  [{}] {} → {}: {}\n",
             entry.ts,
             entry.sender,
             entry.target,
             entry.body.chars().take(60).collect::<String>()
-        );
+        ));
     }
+    rendered
 }
 
 #[cfg(test)]
@@ -1966,6 +1959,30 @@ mod hook_tests {
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
     use std::thread;
+
+    #[test]
+    fn rendu_ledger_cli_reste_octet_pour_octet_stable() {
+        let entries = vec![
+            LedgerMessage {
+                id: "ancien".to_string(),
+                ts: 1,
+                sender: "alice".to_string(),
+                target: "bob".to_string(),
+                body: "premier".to_string(),
+            },
+            LedgerMessage {
+                id: "recent".to_string(),
+                ts: 2,
+                sender: "bob".to_string(),
+                target: "alice".to_string(),
+                body: "corps riche $VAR\nintact".to_string(),
+            },
+        ];
+        assert_eq!(
+            render_ledger(&entries),
+            "Derniers 2 messages :\n  [2] bob → alice: corps riche $VAR\nintact\n  [1] alice → bob: premier\n"
+        );
+    }
 
     /// Configuration réaliste : quatre hooks utilisateur déjà en place, dont
     /// un sur `Stop`. L'insertion doit être additive, jamais destructive.

@@ -678,6 +678,7 @@ fn execute_ledger(
     if matches!(scope, LedgerScope::Requests | LedgerScope::Both) {
         match connection.exchange(&WrapperToDaemon::ListRequests {
             sender: identity.to_string(),
+            limit,
         })? {
             DaemonToWrapper::RequestList { requests: result } => requests = result,
             other => return unexpected_response(other),
@@ -685,7 +686,7 @@ fn execute_ledger(
     }
     Ok(json!({
         "messages": messages.into_iter().map(ledger_message_dto).collect::<Vec<_>>(),
-        "requests": requests.into_iter().map(|request| request_dto(identity, request)).collect::<Vec<_>>(),
+        "requests": requests.into_iter().map(request_dto).collect::<Vec<_>>(),
     }))
 }
 
@@ -835,13 +836,14 @@ fn ledger_message_dto(message: bridget_transport::protocol::LedgerMessage) -> Va
     })
 }
 
-fn request_dto(from: &str, request: bridget_transport::protocol::RequestInfo) -> Value {
+fn request_dto(request: bridget_transport::protocol::RequestInfo) -> Value {
     json!({
         "id": request.id,
-        "from": from,
+        "from": request.sender,
         "to": request.target,
         "state": request.state,
         "deadline": request.deadline_at,
+        "created": request.created_at,
     })
 }
 
@@ -1128,6 +1130,7 @@ mod tests {
                 IdempotencyIssue::Rejected {
                     category: category.to_string(),
                     reason: "motif exact".to_string(),
+                    expires_at: 1_700_000_100,
                 },
             );
             assert_eq!(result["status"], expected);
@@ -1267,6 +1270,7 @@ mod tests {
             IdempotencyIssue::Rejected {
                 category: "future_refusal".to_string(),
                 reason: "raison".to_string(),
+                expires_at: 8,
             },
         );
         assert_eq!(unknown["status"], "future_refusal");

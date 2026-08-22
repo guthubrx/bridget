@@ -18,7 +18,7 @@ use log::{debug, error, info, warn};
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
@@ -50,6 +50,18 @@ const RUNTIME_PATH_REFRESH: Duration = Duration::from_secs(60);
 const ATTACH_RELAY_COMMAND_CAPACITY: usize = 8;
 const ATTACH_RELAY_READ_BYTES: usize = 128 * 1024;
 const ATTACH_RELAY_IDLE_WAIT: Duration = Duration::from_millis(10);
+
+fn interactive_bridget_prompt(name: &str, mcp_enabled: bool) -> String {
+    if mcp_enabled {
+        return format!(
+            "Tu es l'agent \"{name}\" dans une session Bridget. Une ligne commençant par 💬 est un message d'un autre agent IA, pas de l'humain. reply=yes attend une réponse utile. reply=no est une notification, à traiter seulement si utile."
+        );
+    }
+
+    format!(
+        "Tu es l'agent \"{name}\" dans une session Bridget. Tu peux recevoir des messages d'autres agents IA. Quand tu vois une ligne qui commence par 💬 dans ton terminal, c'est un message d'un autre agent IA, pas de l'humain. Le format est : 💬 <expéditeur> → <toi> (reply=yes/no, ...)\n<message>\n\nRègles ABSOLUES :\n1. Réponds TOUJOURS avec: bridget send --to <expéditeur> \"ta réponse\"\n2. N'accuse JAMAIS réception (pas de \"bien reçu\", \"OK\", \"compris\")\n3. Ne fais PAS bridget who, bridget ledger ou bridget --help sans y être explicitement invité\n4. reply=no = notification, ne réponds que si utile. reply=yes = réponds avec du contenu.\n5. Ne réponds JAMAIS uniquement dans ton terminal — l'expéditeur ne te verrait pas.\n\nTu es maintenant en attente. Dis \"Bridget ready\" puis attends les messages."
+    )
+}
 
 #[derive(Debug, Clone)]
 struct PendingIdempotentDelivery {
@@ -698,7 +710,30 @@ pub fn launch(
     // (= --yolo) sinon le sandbox bloque la connexion socket vers le daemon.
     // Pour Claude Code : ajouter --dangerously-skip-permissions --permission-mode bypassPermissions
     // + injecter un prompt initial qui dit à l'agent de répondre via bridget.
+    let definition = crate::registry::AgentRegistry::load()?.get(agent_type)?.clone();
     let mut final_args: Vec<String> = Vec::new();
+    // Le garde possède le fichier Claude jusqu'à la sortie de `launch`. Son
+    // `Drop` couvre aussi tous les refus entre cette préparation et `wait()`.
+    let mut ephemeral_mcp_config = None;
+    let mcp_enabled = match definition.mcp.interactive.as_str() {
+        "codex" => {
+            final_args.push("-c".to_string());
+            final_args.push(codex_mcp_override(&mcp_server_entry()?)?);
+            true
+        }
+        "claude" => {
+            let config = claude_mcp_config(&mcp_server_entry()?, &instance_id)?;
+            final_args.extend([
+                "--strict-mcp-config".to_string(),
+                "--mcp-config".to_string(),
+                config.path().display().to_string(),
+            ]);
+            ephemeral_mcp_config = Some(config);
+            true
+        }
+        "none" | "unsupported" => false,
+        _ => return Err("configuration MCP interactive inconnue dans le registre".into()),
+    };
     if agent_type == "codex" {
         // Vérifier si l'utilisateur n'a pas déjà passé --yolo ou le bypass
         let already_bypassed = agent_args
@@ -728,30 +763,17 @@ pub fn launch(
     // qui n'est pas un flag --xxx), injecter le prompt bridget.
     let has_prompt = agent_args.iter().any(|a| !a.starts_with("--"));
     if !has_prompt && (agent_type == "codex" || agent_type == "claude") {
-        let bridget_prompt = format!(
-            "Tu es l'agent \"{}\" dans une session Bridget. Tu peux recevoir des messages d'autres agents IA. Quand tu vois une ligne qui commence par 💬 dans ton terminal, c'est un message d'un autre agent IA, pas de l'humain. Le format est : 💬 <expéditeur> → <toi> (reply=yes/no, ...)\n<message>\n\nRègles ABSOLUES :\n1. Réponds TOUJOURS avec: bridget send --to <expéditeur> \"ta réponse\"\n2. N'accuse JAMAIS réception (pas de \"bien reçu\", \"OK\", \"compris\")\n3. Ne fais PAS bridget who, bridget ledger ou bridget --help sans y être explicitement invité\n4. reply=no = notification, ne réponds que si utile. reply=yes = réponds avec du contenu.\n5. Ne réponds JAMAIS uniquement dans ton terminal — l'expéditeur ne te verrait pas.\n\nTu es maintenant en attente. Dis \"Bridget ready\" puis attends les messages.",
-            my_name
-        );
-        final_args.push(bridget_prompt);
+        final_args.push(interactive_bridget_prompt(&my_name, mcp_enabled));
     }
 
     final_args.extend(agent_args.iter().cloned());
 
     // L'autorisation est déclarative : un type absent du registre est refusé
     // avant le spawn, avec les types disponibles et le fichier concerné.
-    crate::registry::AgentRegistry::load()?.get(agent_type)?;
+    let _ = definition;
 
     // Validation des arguments pour prévenir injection
-    for arg in &final_args {
-        // Rejeter les tentatives d'injection de commandes
-        if arg.contains(';') || arg.contains('&') || arg.contains('|') || arg.contains('$') {
-            return Err(format!(
-                "Argument non autorisé contient des caractères shell dangereux: '{}'",
-                arg
-            )
-            .into());
-        }
-    }
+    validate_wrapper_args(&final_args)?;
 
     eprintln!(
         "[bridget] Lancement: {} {}",
@@ -763,6 +785,7 @@ pub fn launch(
         .args(&final_args)
         .env("BRIDGET_AGENT_NAME", &my_name)
         .env("BRIDGET_AGENT_NAME_FILE", &name_state_path)
+        .env("BRIDGET_AGENT_INSTANCE_ID", &instance_id)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -770,6 +793,14 @@ pub fn launch(
         .map_err(|e| format!("impossible de lancer '{}': {}", agent_binary, e))?;
 
     let agent_pid = child.id();
+    let marker_directory = socket_path().parent().unwrap().join("agent-pids");
+    crate::mcp_identity::write_marker(
+        &marker_directory,
+        agent_pid,
+        crate::managed_process::process_birth(agent_pid)?,
+        &instance_id,
+        &name_state_path,
+    )?;
 
     // 5. Thread d'écoute
     let writer_clone = writer.clone();
@@ -1092,6 +1123,9 @@ pub fn launch(
 
     // 6. Attendre la fin de l'agent
     let status = child.wait()?;
+    // `ephemeral_mcp_config` est libéré ici. Le garde RAII couvre également
+    // toutes les sorties anticipées précédentes.
+    drop(ephemeral_mcp_config);
 
     // 7. Désenregistrement
     stopping.store(true, Ordering::SeqCst);
@@ -2036,18 +2070,42 @@ fn launch_acp_with_status(
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&name_state_path, &my_name)?;
-    let spawn_transport = if managed_reporter.is_some() {
-        AcpTransport::spawn_inheriting_stderr
-    } else {
-        AcpTransport::spawn
-    };
-    let mut transport = spawn_transport(AcpOptions {
+    let mcp_environment = vec![(
+        "BRIDGET_AGENT_INSTANCE_ID".into(),
+        instance_id.clone().into(),
+    )];
+    let mcp_servers = definition
+        .mcp
+        .acp_session
+        .then(mcp_server_entry)
+        .transpose()?
+        .into_iter()
+        .collect();
+    let options = AcpOptions {
         command: definition.command.clone(),
         args: definition.args.clone(),
         queue_capacity: definition.queue_capacity,
         permissions: definition.permissions.clone(),
         notify_timeout_secs: definition.notify_timeout_secs,
-    })?;
+    };
+    let mut transport = if managed_reporter.is_some() {
+        AcpTransport::spawn_inheriting_stderr_with_environment_and_mcp(
+            options,
+            &mcp_environment,
+            mcp_servers,
+        )
+    } else {
+        AcpTransport::spawn_with_environment_and_mcp(options, &mcp_environment, mcp_servers)
+    }?;
+    let marker_directory = socket.parent().unwrap().join("agent-pids");
+    let adapter_pid = transport.process_id();
+    crate::mcp_identity::write_marker(
+        &marker_directory,
+        adapter_pid,
+        crate::managed_process::process_birth(adapter_pid)?,
+        &instance_id,
+        &name_state_path,
+    )?;
     let live_feed = JournalLiveFeed::default();
     transport.enable_journal_with_live_feed(
         home.join(".cache/bridget/sessions"),
@@ -2224,6 +2282,126 @@ fn billing_guard_error(variable: &str) -> String {
     )
 }
 
+fn mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    #[cfg(feature = "test-support")]
+    if let Some(server) = smoke_mcp_server_entry()? {
+        return Ok(server);
+    }
+
+    let command = std::env::current_exe()?.to_string_lossy().into_owned();
+    Ok(serde_json::json!({
+        "name": "bridget",
+        "type": "stdio",
+        "command": command,
+        "args": ["mcp"],
+        "env": []
+    }))
+}
+
+/// Injection réservée au banc d'intégration T1006. Cette surface est absente
+/// des builds distribués ; elle force le wrapper de production à construire
+/// réellement les options Codex/Claude/ACP autour du serveur MCP épinglé.
+#[cfg(feature = "test-support")]
+fn smoke_mcp_server_entry() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
+    let Ok(command) = std::env::var("BRIDGET_TEST_MCP_SERVER_COMMAND") else {
+        return Ok(None);
+    };
+    let args = match std::env::var("BRIDGET_TEST_MCP_SERVER_ARGS") {
+        Ok(value) => serde_json::from_str::<Vec<String>>(&value)?,
+        Err(std::env::VarError::NotPresent) => Vec::new(),
+        Err(error) => return Err(error.into()),
+    };
+    Ok(Some(serde_json::json!({
+        "name": "bridget",
+        "type": "stdio",
+        "command": command,
+        "args": args,
+        "env": []
+    })))
+}
+
+/// Configuration MCP Claude temporaire. Le fichier n'appartient jamais à la
+/// configuration utilisateur : il vit sous le répertoire d'état Bridget et
+/// le garde le retire quelle que soit l'issue du lancement.
+struct EphemeralMcpConfig {
+    path: PathBuf,
+}
+
+impl EphemeralMcpConfig {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for EphemeralMcpConfig {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(
+                "nettoyage de la configuration MCP éphémère impossible {}: {}",
+                self.path.display(),
+                error
+            );
+        }
+    }
+}
+
+fn claude_mcp_config(
+    server: &serde_json::Value,
+    instance_id: &str,
+) -> Result<EphemeralMcpConfig, Box<dyn std::error::Error>> {
+    let socket = socket_path();
+    let directory = socket
+        .parent()
+        .ok_or("répertoire socket Bridget absent")?;
+    claude_mcp_config_in(directory, server, instance_id)
+}
+
+fn claude_mcp_config_in(
+    directory: &Path,
+    server: &serde_json::Value,
+    instance_id: &str,
+) -> Result<EphemeralMcpConfig, Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(directory)?;
+    let path = directory.join(format!("mcp-{instance_id}.json"));
+    // `mcpServers` de Claude Code n'est pas l'enveloppe ACP : il attend une
+    // définition stdio indexée par son nom, sans les champs ACP `name`/`env`.
+    let command = server["command"].as_str().ok_or("commande MCP absente")?;
+    let args = server["args"].clone();
+    std::fs::write(&path, serde_json::to_vec(&serde_json::json!({
+        "mcpServers": {
+            "bridget": { "type": "stdio", "command": command, "args": args }
+        }
+    }))?)?;
+    Ok(EphemeralMcpConfig { path })
+}
+
+fn codex_mcp_override(server: &serde_json::Value) -> Result<String, Box<dyn std::error::Error>> {
+    let command = server["command"].as_str().ok_or("commande MCP absente")?;
+    Ok(format!(
+        "mcp_servers.bridget={{command={command:?},args=[\"mcp\"]}}"
+    ))
+}
+
+fn validate_wrapper_args(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    for argument in arguments {
+        // Rejeter les tentatives d'injection de commandes.
+        if argument.contains(';')
+            || argument.contains('&')
+            || argument.contains('|')
+            || argument.contains('$')
+        {
+            return Err(format!(
+                "Argument non autorisé contient des caractères shell dangereux: '{}'",
+                argument
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 fn send_wrapper_message(
     writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
     message: WrapperToDaemon,
@@ -2366,6 +2544,30 @@ fn stop_reason_is_error(stop_reason: &str) -> bool {
 }
 
 #[cfg(test)]
+mod prompt_tests {
+    use super::interactive_bridget_prompt;
+
+    const BEFORE: &str = include_str!("../tests/fixtures/prompts/v1-before.txt");
+    const AFTER: &str = include_str!("../tests/fixtures/prompts/v1-after.txt");
+
+    #[test]
+    fn prompt_mcp_produit_exactement_la_fixture_reduite_versionnee() {
+        assert_eq!(
+            interactive_bridget_prompt("agent-fixture", true),
+            AFTER.trim_end_matches('\n')
+        );
+    }
+
+    #[test]
+    fn prompt_sans_mcp_conserve_exactement_le_bloc_historique() {
+        assert_eq!(
+            interactive_bridget_prompt("agent-fixture", false),
+            BEFORE.trim_end_matches('\n')
+        );
+    }
+}
+
+#[cfg(test)]
 fn journal_failure_requires_shutdown(events: &[AcpEvent]) -> bool {
     events
         .iter()
@@ -2375,6 +2577,51 @@ fn journal_failure_requires_shutdown(events: &[AcpEvent]) -> bool {
 #[cfg(test)]
 mod reconnect_tests {
     use super::*;
+
+    fn mcp_test_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "bridget-mcp-wrapper-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    fn user_config_snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        fn visit(root: &Path, directory: &Path, snapshot: &mut BTreeMap<PathBuf, Vec<u8>>) {
+            let Ok(entries) = std::fs::read_dir(directory) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(root, &path, snapshot);
+                } else if path.is_file() {
+                    snapshot.insert(
+                        path.strip_prefix(root).unwrap().to_path_buf(),
+                        std::fs::read(&path).unwrap(),
+                    );
+                }
+            }
+        }
+
+        let mut snapshot = BTreeMap::new();
+        for relative in [".claude", ".codex", ".gemini"] {
+            visit(root, &root.join(relative), &mut snapshot);
+        }
+        snapshot
+    }
+
+    fn write_user_config_sentinels(root: &Path) {
+        for (relative, contents) in [
+            (".claude/settings.json", b"claude-user-config".as_slice()),
+            (".codex/config.toml", b"codex-user-config".as_slice()),
+            (".gemini/settings.json", b"gemini-user-config".as_slice()),
+        ] {
+            let path = root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+    }
 
     fn relay_root(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("bridget-relay-{name}-{}", std::process::id()))
@@ -2392,6 +2639,50 @@ mod reconnect_tests {
         let mut message = bridget_core::BridgetMessage::new("maicie", "equipier", "tâche");
         message.id = id.to_string();
         message
+    }
+
+    #[test]
+    fn branchement_mcp_n_ecrit_aucune_configuration_utilisateur() {
+        let root = mcp_test_root("config-vide");
+        write_user_config_sentinels(&root);
+        let before = user_config_snapshot(&root);
+        let server = mcp_server_entry().unwrap();
+
+        let override_ = codex_mcp_override(&server).unwrap();
+        assert!(override_.contains("mcp_servers.bridget"));
+        let config =
+            claude_mcp_config_in(&root.join(".cache/bridget"), &server, "fixture").unwrap();
+        assert!(config.path().exists());
+        let claude = serde_json::from_slice::<serde_json::Value>(
+            &std::fs::read(config.path()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claude["mcpServers"]["bridget"]["type"], "stdio");
+        assert!(claude["mcpServers"]["bridget"].get("name").is_none());
+        assert!(claude["mcpServers"]["bridget"].get("env").is_none());
+        assert_eq!(server["name"], "bridget");
+        drop(config);
+
+        assert_eq!(user_config_snapshot(&root), before);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fichier_mcp_ephemere_est_nettoye_avant_un_refus_de_spawn() {
+        let root = mcp_test_root("refus-avant-spawn");
+        write_user_config_sentinels(&root);
+        let before = user_config_snapshot(&root);
+        let server = mcp_server_entry().unwrap();
+        let config =
+            claude_mcp_config_in(&root.join(".cache/bridget"), &server, "refused").unwrap();
+        let path = config.path().to_path_buf();
+
+        assert!(validate_wrapper_args(&["interdit;".to_string()]).is_err());
+        drop(config);
+
+        assert!(!path.exists(), "le garde nettoie le fichier avant le spawn");
+        assert_eq!(user_config_snapshot(&root), before);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2618,6 +2909,7 @@ mod reconnect_tests {
             permissions: "allow".to_string(),
             queue_capacity: 32,
             notify_timeout_secs: 600,
+            mcp: crate::registry::McpDefinition::default(),
         }
     }
 

@@ -337,7 +337,7 @@ pub enum WrapperToDaemon {
         reason: Option<String>,
     },
     /// Lister les demandes suivies de l'agent courant.
-    ListRequests { sender: String },
+    ListRequests { sender: String, limit: u16 },
     /// Projeter le ledger détenu par le daemon, pour un client fédéré qui ne
     /// possède pas sa base SQLite locale.
     LedgerProjection {
@@ -632,8 +632,10 @@ fn unknown_os() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestInfo {
     pub id: String,
+    pub sender: String,
     pub target: String,
     pub state: String,
+    pub created_at: i64,
     pub deadline_at: i64,
     pub cancel_reason: Option<String>,
     #[serde(default)]

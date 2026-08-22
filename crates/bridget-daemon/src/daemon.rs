@@ -4519,17 +4519,19 @@ fn handle_wrapper_message(
             }
         }
 
-        WrapperToDaemon::ListRequests { sender } => {
+        WrapperToDaemon::ListRequests { sender, limit } => {
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
-            match st.store.requests_for_sender(&sender) {
+            match st.store.requests_for_participant(&sender, usize::from(limit)) {
                 Ok(requests) => match requests
                         .into_iter()
                         .map(|request| -> Result<_, crate::store::StoreError> {
                             let deferred = st.store.latest_deferred_reminder(&request.id)?;
                             Ok(bridget_transport::protocol::RequestInfo {
                                 id: request.id,
+                                sender: request.sender,
                                 target: request.target,
                                 state: request.state,
+                                created_at: request.created_at,
                                 deadline_at: request.deadline_at,
                                 cancel_reason: request.cancel_reason,
                                 deferred_reminder_level: deferred.map(|event| event.0),
@@ -4552,67 +4554,17 @@ fn handle_wrapper_message(
         }
 
         WrapperToDaemon::LedgerProjection { scope, limit } => {
-            const MAX_LEDGER_PROJECTION: usize = 100;
-            let limit = usize::from(limit).clamp(1, MAX_LEDGER_PROJECTION);
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
-            let wants_messages = matches!(scope, bridget_transport::protocol::LedgerScope::Messages | bridget_transport::protocol::LedgerScope::Both);
-            let wants_requests = matches!(scope, bridget_transport::protocol::LedgerScope::Requests | bridget_transport::protocol::LedgerScope::Both);
-
-            let messages = if wants_messages {
-                match st.store.recent_messages(limit) {
-                    Ok(entries) => entries
-                        .into_iter()
-                        .map(|entry| bridget_transport::protocol::LedgerMessage {
-                            id: entry.id,
-                            ts: entry.ts,
-                            sender: entry.sender,
-                            target: entry.target,
-                            body: entry.body,
-                        })
-                        .collect(),
-                    Err(error) => return Some(DaemonToWrapper::Nack {
-                        id: "ledger".to_string(),
-                        reason: error.to_string(),
-                    }),
-                }
-            } else {
-                Vec::new()
-            };
-
-            let requests = if wants_requests {
-                match st.store.recent_requests(limit) {
-                    Ok(entries) => match entries
-                        .into_iter()
-                        .map(|request| -> Result<_, crate::store::StoreError> {
-                            let deferred = st.store.latest_deferred_reminder(&request.id)?;
-                            Ok(bridget_transport::protocol::RequestInfo {
-                                id: request.id,
-                                target: request.target,
-                                state: request.state,
-                                deadline_at: request.deadline_at,
-                                cancel_reason: request.cancel_reason,
-                                deferred_reminder_level: deferred.map(|event| event.0),
-                                deferred_reminder_at: deferred.map(|event| event.1),
-                            })
-                        })
-                        .collect::<Result<Vec<_>, _>>()
-                    {
-                        Ok(requests) => requests,
-                        Err(error) => return Some(DaemonToWrapper::Nack {
-                            id: "ledger".to_string(),
-                            reason: error.to_string(),
-                        }),
-                    },
-                    Err(error) => return Some(DaemonToWrapper::Nack {
-                        id: "ledger".to_string(),
-                        reason: error.to_string(),
-                    }),
-                }
-            } else {
-                Vec::new()
-            };
-
-            Some(DaemonToWrapper::LedgerProjection { messages, requests })
+            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            match crate::ledger::read_projection(&st.store, scope, usize::from(limit)) {
+                Ok(projection) => Some(DaemonToWrapper::LedgerProjection {
+                    messages: projection.messages,
+                    requests: projection.requests,
+                }),
+                Err(error) => Some(DaemonToWrapper::Nack {
+                    id: "ledger".to_string(),
+                    reason: error.to_string(),
+                }),
+            }
         }
     }
 }
@@ -7391,6 +7343,7 @@ mod presence_tests {
             "conn-1",
             WrapperToDaemon::ListRequests {
                 sender: "agent-2".to_string(),
+                limit: 200,
             },
             &shared,
         );
