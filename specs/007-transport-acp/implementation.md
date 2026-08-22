@@ -79,7 +79,8 @@ API pendant cette tentative.
 - **Vérifications** : absence de `OPENAI_API_KEY` et `CODEX_API_KEY`, trois
   cycles `initialize`/`session/new`/`session/prompt`, retour `stopReason` sur
   la tentative gagnante.
-- **Non vérifié** : les adaptateurs Claude et Gemini, prévus par T707 et T708.
+- **Non vérifié** : Claude vérifié en T707 (voir section T707) ; Gemini reste
+  T708.
 
 ## T702 — Décision et dépréciations
 

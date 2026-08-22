@@ -109,10 +109,16 @@ version à l'`initialize` et le pinnage des adaptateurs. Ce compromis est
 documenté et réversible (le schéma officiel de la crate sert de référence de
 conformité).
 
-**Borne de conformité obligatoire** (ajoutée après contre-revue cxbridget,
-objection 2 : « 7 méthodes » sous-estime le contrat JSON-RPC). Le client maison
-n'est acceptable qu'avec cette matrice couverte par des fixtures de test, pour
-chacun des trois adaptateurs pinnés :
+**Borne de conformité obligatoire** (ajoutée après contre-revue, objection 2 ;
+précisée en review T707 : **matrice à deux couches**). Couche 1 — *invariants
+du client JSON-RPC*, prouvés une fois par les fixtures génériques et les tests
+du dispatcher (ils n'appartiennent à aucun adaptateur) : hors-ordre, ids
+mixtes, `error`, EOF, JSON invalide, méthode inconnue, requête serveur→client,
+écritures concurrentes. Couche 2 — *formes filaires réellement observées par
+adaptateur* (fixture par adaptateur, capturée au réel) : tour nominal,
+notifications propres au harness (ex. `available_commands_update` de Claude),
+chunks vides/concaténés, `sessionId`, `stopReason`. On ne fabrique pas de
+captures artificielles pour la couche 1 :
 
 | Cas JSON-RPC | Comportement exigé |
 |---|---|
@@ -125,11 +131,6 @@ chacun des trois adaptateurs pinnés :
 | ligne non-JSON ou JSON invalide | journalisée et ignorée, sans panique ni corruption d'état |
 | message inattendu (méthode inconnue) | journalisé, ignoré ; répondre `method not found` si c'est une requête |
 | écritures concurrentes | sérialisées par le writer — aucun entrelacement possible |
-
-Les fixtures `generic.jsonl` portent les cas de la matrice communs aux
-adaptateurs ; les captures `codex-spike.jsonl` et `claude-spike.jsonl` valident
-pour chacun le flux réel `session/update` (dont notification intercalée) puis
-`stopReason: "end_turn"`.
 
 ## R-005 — Permissions en mode équipier headless
 

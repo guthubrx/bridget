@@ -122,8 +122,11 @@ bout en bout (SC-001, SC-002).
 
 - [X] **T707** [US2] **Équipier Claude** : valider l'entrée `claude` du registre
   par défaut (`@zed-industries/claude-code-acp@0.16.2`) en déroulant quickstart
-  §1-§3 avec un équipier Claude. **Capturer les fixtures Claude et les ajouter
-  à la matrice R-004** (même couverture que Codex), sans régression Codex.
+  §1-§3 avec un équipier Claude. **Capturer la fixture Claude de couche 2**
+  (formes filaires réellement observées : tour nominal, notifications propres
+  au harness, chunks — la couche 1 des invariants JSON-RPC est prouvée par les
+  fixtures génériques, matrice à deux couches de research R-004), sans
+  régression Codex.
   **Observable** : échange complet Claude (demande suivie → réponse → clôture) ;
   matrice de conformité au vert pour les deux adaptateurs.
 
