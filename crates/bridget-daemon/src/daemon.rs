@@ -1272,7 +1272,8 @@ fn handle_wrapper_message(
         | WrapperToDaemon::JournalFragment { .. }
         | WrapperToDaemon::SnapshotCaughtUp { .. }
         | WrapperToDaemon::Gap { .. }
-        | WrapperToDaemon::End { .. } => None,
+        | WrapperToDaemon::End { .. }
+        | WrapperToDaemon::AttachRejected { .. } => None,
         WrapperToDaemon::Register {
             agent_type,
             name,

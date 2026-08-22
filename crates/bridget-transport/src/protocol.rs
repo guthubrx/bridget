@@ -86,6 +86,12 @@ pub enum WrapperToDaemon {
         subscription_id: String,
         reason: String,
     },
+    /// Refus typé produit par le wrapper lors de la préparation d'un relais.
+    AttachRejected {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subscription_id: Option<String>,
+        reason: AttachRefusal,
+    },
     /// S'enregistrer auprès du daemon.
     Register {
         agent_type: String,
@@ -603,6 +609,10 @@ mod tests {
             WrapperToDaemon::End {
                 subscription_id: "sub-1".to_string(),
                 reason: "wrapper arrêté".to_string(),
+            },
+            WrapperToDaemon::AttachRejected {
+                subscription_id: Some("sub-1".to_string()),
+                reason: AttachRefusal::CommandQueueSaturated,
             },
         ];
         for message in messages {

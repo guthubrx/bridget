@@ -435,6 +435,11 @@ fn isolate_partial_tail(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Date courante du processus qui possède le journal.
+pub fn current_host_date() -> String {
+    now_date_and_timestamp().0
+}
+
 fn now_date_and_timestamp() -> (String, String) {
     let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
     let (year, month, day, hour, minute, second) = civil_time(seconds);
