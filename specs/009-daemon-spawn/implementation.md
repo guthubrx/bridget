@@ -99,3 +99,27 @@ machine de validation. La commande reproductible est :
 ```bash
 cargo test -p bridget-daemon --test managed_parity_test -- --nocapture
 ```
+
+## T909b — Banc de spawn SC-001
+
+Le banc lance vingt générations daemon-gérées réelles, séquentiellement afin
+de rester sous le quota de flotte de production. Chaque génération traverse
+`SpawnOrder` → bootstrap → `managed-wrapper` → `npx` → négociation ACP →
+`Register`. Le paquet `parity-acp@1.0.0` est présent dans le `node_modules`
+temporaire et `npx 11.19.0` est invoqué avec `--offline --no-install` : aucune
+installation, aucun réseau et aucune API de modèle ne participent à la mesure.
+
+L'environnement est recréé à l'identique pour les vingt essais :
+`HOME=<racine temporaire>`,
+`PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`, `USER=parity-test`,
+`LANG=C`, `TMPDIR=/tmp`, `PARITY_SINGLE_TURN=1`, et aucune clé API. Le client
+qui émet chaque ordre est une connexion Unix distincte ; sa socket est
+réellement fermée immédiatement après `SpawnAccepted`. Une autre connexion
+persistante envoie alors une demande suivie, reçoit la réponse ACP et vérifie
+sa clôture `answered` avant l'essai suivant.
+
+Résultat de la campagne finale N=20 : **20/20 spawns**, **20/20 échanges suivis**,
+p95 **442,466 ms**, maximum **530,891 ms**, total **28,23 s**. Le seuil p95
+reste fixé à 10 s et le timeout global à 120 s. Le test échoue sur le premier
+spawn/refus, la première réponse manquante, une demande non close, le p95 ou
+le timeout global ; il ne relance aucun essai.
