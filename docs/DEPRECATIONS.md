@@ -6,5 +6,4 @@ atteinte.
 
 | Chemin | Remplacé par | Supprimable quand |
 |---|---|---|
-| Aucun chemin déprécié à ce stade | — | — |
-
+| Liste blanche de binaires dans `crates/bridget-daemon/src/wrapper.rs` | Registre `~/.config/bridget/agents.json` | Supprimée en T703 |

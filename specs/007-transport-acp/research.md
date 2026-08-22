@@ -31,7 +31,7 @@ Vérifié le 2026-08-22 (npm + binaire local) :
 
 | Agent | Voie ACP | Version constatée | Lancement |
 |---|---|---|---|
-| Codex (priorité 1) | `@zed-industries/codex-acp` (npm, bin `codex-acp`) | 0.16.0 | `npx @zed-industries/codex-acp@0.16.0` |
+| Codex (priorité 1) | `@zed-industries/codex-acp` (npm, bin `codex-acp`) | 0.16.0 | `npx @zed-industries/codex-acp@0.16.0 -c model="gpt-5.5"` |
 | Claude (priorité 2) | `@zed-industries/claude-code-acp` (npm) | 0.16.2 | `npx @zed-industries/claude-code-acp@0.16.2` |
 | Gemini (priorité 3) | natif dans Gemini CLI | flag `--acp` présent sur le binaire local (`--experimental-acp` est **déprécié**) | `gemini --acp` |
 
@@ -80,7 +80,7 @@ lancement si l'une de ces variables est présente pour le fournisseur concerné 
 
 | Fournisseur | Variables refusées |
 |---|---|
-| Codex/OpenAI | `OPENAI_API_KEY` |
+| Codex/OpenAI | `OPENAI_API_KEY`, `CODEX_API_KEY` |
 | Claude/Anthropic | `ANTHROPIC_API_KEY` |
 | Gemini/Google | `GEMINI_API_KEY`, `GOOGLE_API_KEY` |
 

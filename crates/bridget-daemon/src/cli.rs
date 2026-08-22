@@ -59,24 +59,21 @@ pub fn run() {
 
     let cmd = &args[1];
 
-    // --- Sous-commandes wrapper (lancement d'agents CLI) ---
-    match cmd.as_str() {
-        // Fonction générique pour lancer un agent (M-001)
-        "codex" => launch_agent_wrapper("codex", "codex", &args[2..]),
-        "claude" => launch_agent_wrapper("claude", "claude", &args[2..]),
-        "gemini" => launch_agent_wrapper("gemini", "gemini", &args[2..]),
-        "gclaude" => launch_agent_wrapper("gclaude", "claude", &args[2..]),
-        "--" => {
-            // Wrapper générique : bridget -- /path/to/command args
-            if args.len() < 3 {
-                eprintln!("bridget: commande manquante après --");
-                std::process::exit(2);
-            }
-            let cmd = &args[2];
-            let rest = &args[3..];
-            launch_agent_wrapper(cmd, "custom", rest);
+    // Les lanceurs historiques restent interactifs ; leur type et leur
+    // autorisation viennent désormais du registre, pas d'une liste CLI.
+    if let Some(agent_type) = crate::registry::AgentRegistry::launcher_type(cmd) {
+        launch_agent_wrapper(cmd, agent_type, &args[2..]);
+    }
+
+    // --- Sous-commande wrapper générique ---
+    if cmd == "--" {
+        if args.len() < 3 {
+            eprintln!("bridget: commande manquante après --");
+            std::process::exit(2);
         }
-        _ => {}
+        let cmd = &args[2];
+        let rest = &args[3..];
+        launch_agent_wrapper(cmd, "custom", rest);
     }
 
     // --- Sous-commandes daemon / client ---

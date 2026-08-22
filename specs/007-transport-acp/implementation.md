@@ -6,20 +6,13 @@
 - **Date** : 2026-08-22
 - **Précondition** : `OPENAI_API_KEY` et `CODEX_API_KEY` absents de
   l'environnement.
-- **Script jetable** : `/tmp/bridget-spike-codex-acp.mjs`
-- **Transcriptions brutes** :
-  - `/tmp/bridget-spike-codex-acp-attempt1.transcript` (supprimée après
-    extraction)
-  - `/tmp/bridget-spike-codex-acp-attempt2.transcript` (supprimée après
-    extraction)
-  - `/tmp/bridget-spike-codex-acp-attempt3.transcript` (créée en mode `0600`,
-    supprimée après extraction)
+- **Hygiène** : le script jetable et les trois transcriptions, créées en mode
+  `0600`, ont été supprimés après extraction.
 
 Les réponses `initialize` complètes contiennent des métadonnées de modèles et
 des instructions volumineuses, générées par le service (plus de 200 ko chacune).
-Elles restent dans les transcriptions locales indiquées ci-dessus ; les lignes
-JSON-RPC déterminantes sont consignées ici afin d'éviter de versionner ces
-données externes non nécessaires à Bridget.
+Les lignes JSON-RPC déterminantes sont consignées ici afin d'éviter de
+versionner ces données externes non nécessaires à Bridget.
 
 ### Tentative 1 — modèle surchargé (échec)
 
@@ -83,9 +76,9 @@ API pendant cette tentative.
   construire sur un adaptateur inutilisable.
 - **Simplicité** : le spike utilise uniquement `node`, `npx` et JSON-RPC ; aucune
   dépendance ni source Bridget n'a été ajoutée.
-- **Vérifications** : absence de `OPENAI_API_KEY`, deux cycles
-  `initialize`/`session/new`/`session/prompt`, retour `stopReason` sur la
-  tentative gagnante.
+- **Vérifications** : absence de `OPENAI_API_KEY` et `CODEX_API_KEY`, trois
+  cycles `initialize`/`session/new`/`session/prompt`, retour `stopReason` sur
+  la tentative gagnante.
 - **Non vérifié** : les adaptateurs Claude et Gemini, prévus par T707 et T708.
 
 ## T702 — Décision et dépréciations
@@ -103,3 +96,19 @@ API pendant cette tentative.
   registre a les trois colonnes requises.
 - **Non vérifié** : aucun chemin de livraison hérité n'est encore remplacé ;
   T703 et T705 alimenteront le registre au moment de leur suppression.
+
+## T703 — Registre d'agents
+
+- **Statut** : terminé
+- **Fichiers** : `crates/bridget-daemon/src/registry.rs`, `cli.rs`,
+  `wrapper.rs`, `docs/DEPRECATIONS.md`
+- **Vérifications** : registre par défaut, surcharge utilisateur, validation,
+  type inconnu et tests historiques du workspace.
+
+### Self-review Article XIX/XX
+
+- **Nécessité** : les types et paramètres d'agents doivent être configurables
+  sans modifier le binaire.
+- **Simplicité** : le registre réutilise `serde_json`; il ne crée ni dépendance
+  ni couche de lancement supplémentaire.
+- **Non vérifié** : l'exécution ACP réelle relève de T704 et T705.

@@ -33,7 +33,7 @@ valide chaque tâche avant coche. Ne jamais committer automatiquement.
 
 ## Phase 1 : US1 — Équipier Codex (MVP)
 
-- [ ] **T703** [US1] **Registre d'agents** : `crates/bridget-daemon/src/registry.rs`
+- [X] **T703** [US1] **Registre d'agents** : `crates/bridget-daemon/src/registry.rs`
   — structures sérialisées `serde_json` conformes à `data-model.md`, registre
   par défaut embarqué (codex/claude/gemini, versions R-002), fusion avec
   `~/.config/bridget/agents.json`, validation avec messages en français (type

@@ -496,16 +496,9 @@ pub fn launch(
 
     final_args.extend(agent_args.iter().cloned());
 
-    // VALIDATION DE SÉCURITÉ : whitelist stricte des binaires autorisés
-    let allowed_binaries = ["codex", "claude", "gemini", "gclaude", "claude-son"];
-    let binary_name = agent_binary.split('/').next_back().unwrap_or(agent_binary);
-    if !allowed_binaries.contains(&binary_name) {
-        return Err(format!(
-            "Binaire non autorisé '{}'. Binaires permis: {}",
-            agent_binary,
-            allowed_binaries.join(", ")
-        ).into());
-    }
+    // L'autorisation est déclarative : un type absent du registre est refusé
+    // avant le spawn, avec les types disponibles et le fichier concerné.
+    crate::registry::AgentRegistry::load()?.get(agent_type)?;
 
     // Validation des arguments pour prévenir injection
     for arg in &final_args {
