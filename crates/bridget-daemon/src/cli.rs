@@ -1758,6 +1758,7 @@ mod hook_tests {
 #[cfg(test)]
 mod idempotency_projection_tests {
     use super::*;
+    use rusqlite::params;
     use std::os::unix::net::UnixListener;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1769,6 +1770,63 @@ mod idempotency_projection_tests {
             "bridget-t1208-{}-{counter}.sock",
             std::process::id()
         ))
+    }
+
+    fn temporary_database_path() -> std::path::PathBuf {
+        let counter = SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "bridget-t1208-{}-{counter}.db",
+            std::process::id()
+        ))
+    }
+
+    fn start_real_daemon() -> (std::path::PathBuf, std::path::PathBuf) {
+        let socket_path = temporary_socket_path();
+        let db_path = temporary_database_path();
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&db_path);
+        let config = DaemonConfig {
+            socket_path: socket_path.clone(),
+            db_path: db_path.clone(),
+            log_path: db_path.with_extension("log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+        };
+        std::thread::spawn(move || {
+            let _ = daemon::run(config);
+        });
+        for _ in 0..100 {
+            if socket_path.exists() {
+                return (socket_path, db_path);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("daemon réel T1208 non démarré");
+    }
+
+    fn stored_canonical_bytes(
+        db_path: &std::path::Path,
+        options: &IdempotentSendOptions,
+    ) -> Vec<u8> {
+        let connection = rusqlite::Connection::open(db_path).unwrap();
+        connection
+            .query_row(
+                "SELECT canonical_bytes FROM idempotency_records
+                 WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2",
+                params![options.issuer_scope, options.id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn idempotency_issue(response: DaemonToWrapper) -> IdempotencyIssue {
+        match response {
+            DaemonToWrapper::IdempotencyResult { issue, .. } => issue,
+            unexpected => panic!("issue idempotente attendue : {unexpected:?}"),
+        }
     }
 
     fn write_response(writer: &mut BufWriter<UnixStream>, response: DaemonToWrapper) {
@@ -1921,6 +1979,8 @@ mod idempotency_projection_tests {
             (None, Some("123".to_string()), None),
             (None, None, Some("scope".to_string())),
             (Some("id".to_string()), Some("123".to_string()), None),
+            (Some("id".to_string()), None, Some("scope".to_string())),
+            (None, Some("123".to_string()), Some("scope".to_string())),
         ] {
             assert!(idempotent_options(id, issued_at, issuer_scope).is_err());
         }
@@ -1973,5 +2033,58 @@ mod idempotency_projection_tests {
         assert_ne!(sends[0], sends[2]);
         assert!(sends[0].contains("bonjour"));
         assert!(sends[2].contains("message différent"));
+    }
+
+    #[test]
+    fn projection_cli_et_reference_partagent_le_canon_du_daemon_reel() {
+        let (socket_path, db_path) = start_real_daemon();
+        let issued_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let options = IdempotentSendOptions {
+            id: "message-t1208-reel".to_string(),
+            issued_at,
+            issuer_scope: "012_scope_aaaaaaaaaaaa".to_string(),
+        };
+        let mut message = BridgetMessage::new("human", "destinataire-absent", "bonjour");
+        message.id = options.id.clone();
+        message.reply = true;
+        message.reply_timeout = Some(12);
+
+        let reference = idempotency_issue(reference_client_send(&socket_path, &message, &options));
+        let cli = idempotency_issue(
+            send_idempotent_to_daemon_at(&socket_path, &message, &options).unwrap(),
+        );
+        assert_eq!(reference, cli, "référence et CLI rejouent la même issue");
+        let canonical = stored_canonical_bytes(&db_path, &options);
+
+        let mut divergences = Vec::new();
+        let mut body = message.clone();
+        body.body = "bonjour divergent".to_string();
+        divergences.push(body);
+        let mut target = message.clone();
+        target.to = "autre-destinataire".to_string();
+        divergences.push(target);
+        let mut reply = message.clone();
+        reply.reply = false;
+        divergences.push(reply);
+        let mut deadline = message.clone();
+        deadline.deadline_at = Some((issued_at + 13) as u64);
+        divergences.push(deadline);
+
+        for divergent in divergences {
+            assert_eq!(
+                idempotency_issue(
+                    send_idempotent_to_daemon_at(&socket_path, &divergent, &options).unwrap(),
+                ),
+                IdempotencyIssue::EnvelopeMismatch,
+            );
+            assert_eq!(
+                stored_canonical_bytes(&db_path, &options),
+                canonical,
+                "EnvelopeMismatch ne doit jamais modifier le record initial",
+            );
+        }
     }
 }
