@@ -3917,6 +3917,7 @@ mod presence_tests {
             state.idempotency.send_delivery(&first_key).unwrap().unwrap().delivery_generation,
             state.idempotency.send_delivery(&second_key).unwrap().unwrap().delivery_generation
         );
+        drop(state);
         // Un rejeu est jugé avant tout routage : retirer ou renommer la cible
         // n'autorise jamais une nouvelle résolution pour cette clé connue.
         {
@@ -3958,6 +3959,7 @@ mod presence_tests {
                 ..
             })
         ));
+        let state = shared.lock().unwrap();
         assert_eq!(
             state.idempotency.record_count().unwrap(),
             2
