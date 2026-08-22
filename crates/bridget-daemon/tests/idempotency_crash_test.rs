@@ -19,6 +19,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
@@ -26,19 +27,58 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MATRIX_CYCLES: usize = 50;
-const GLOBAL_TIMEOUT: Duration = Duration::from_secs(90);
+// Le wrapper ACP reconnecte volontairement avec un premier délai d'une seconde :
+// cinquante redémarrages réels restent donc bornés, sans rendre le banc fragile.
+const GLOBAL_TIMEOUT: Duration = Duration::from_secs(360);
 const READY_TIMEOUT: Duration = Duration::from_secs(5);
 const CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(5);
 const SCOPE: &str = "abcdefghijklmnopqrstuv";
 
 struct DaemonProcess {
     child: Child,
+    process_group_id: i32,
     logs: Option<thread::JoinHandle<()>>,
+}
+
+/// Possède le daemon de la matrice : une panique de timeout ne laisse jamais
+/// l'enfant actif après la fin du banc.
+struct MatrixDaemonGuard(Option<DaemonProcess>);
+
+impl MatrixDaemonGuard {
+    fn start(root: &Path, sync: &Path) -> Self {
+        Self(Some(spawn_daemon(root, Some(sync))))
+    }
+
+    fn restart(&mut self, root: &Path) {
+        self.stop();
+        self.0 = Some(spawn_daemon(root, None));
+    }
+
+    fn restart_with_sync(&mut self, root: &Path, sync: &Path) {
+        self.stop();
+        self.0 = Some(spawn_daemon(root, Some(sync)));
+    }
+
+    fn stop(&mut self) {
+        if let Some(daemon) = self.0.take() {
+            daemon.stop();
+        }
+    }
+}
+
+impl Drop for MatrixDaemonGuard {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 impl DaemonProcess {
     fn stop(mut self) {
-        let _ = self.child.kill();
+        unsafe {
+            libc::kill(-self.process_group_id, libc::SIGTERM);
+        }
+        thread::sleep(Duration::from_millis(20));
+        let _ = unsafe { libc::kill(-self.process_group_id, libc::SIGKILL) };
         let _ = self.child.wait();
         if let Some(logs) = self.logs.take() {
             let _ = logs.join();
@@ -48,7 +88,9 @@ impl DaemonProcess {
 
 impl Drop for DaemonProcess {
     fn drop(&mut self) {
-        let _ = self.child.kill();
+        unsafe {
+            libc::kill(-self.process_group_id, libc::SIGKILL);
+        }
         let _ = self.child.wait();
     }
 }
@@ -61,6 +103,9 @@ struct Client {
 impl Client {
     fn connect(socket: &Path) -> Self {
         let stream = UnixStream::connect(socket).expect("connexion au daemon");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .expect("borne lecture client");
         let reader = BufReader::new(stream.try_clone().expect("clone lecture"));
         Self {
             reader,
@@ -118,6 +163,14 @@ fn checkpoint_root(root: &Path, point: &str) -> (PathBuf, PathBuf) {
     (sync, marker)
 }
 
+fn arm_checkpoint(sync: &Path, points: &[&str], point: &str) {
+    for candidate in points {
+        let _ = fs::remove_file(sync.join(format!("{candidate}.fifo")));
+        let _ = fs::remove_file(sync.join(format!("{candidate}.ready")));
+    }
+    make_fifo(&sync.join(format!("{point}.fifo")));
+}
+
 fn spawn_daemon(root: &Path, sync: Option<&Path>) -> DaemonProcess {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
     command
@@ -131,7 +184,16 @@ fn spawn_daemon(root: &Path, sync: Option<&Path>) -> DaemonProcess {
     } else {
         command.env_remove(DIRECTORY_ENV);
     }
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     let mut child = command.spawn().expect("spawn daemon réel");
+    let process_group_id = child.id() as i32;
     let stderr = child.stderr.take().expect("stderr daemon");
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     let logs = thread::spawn(move || {
@@ -157,6 +219,7 @@ fn spawn_daemon(root: &Path, sync: Option<&Path>) -> DaemonProcess {
     }
     DaemonProcess {
         child,
+        process_group_id,
         logs: Some(logs),
     }
 }
@@ -202,6 +265,7 @@ fn watch_marker(directory: &Path, marker: &Path) {
     }
 }
 
+#[allow(dead_code)]
 fn register_recipient(socket: &Path) -> Client {
     register_recipient_as(socket, "t1209-recipient")
 }
@@ -299,7 +363,7 @@ fn retry_command_issue(socket: &Path, command: WrapperToDaemon) -> IdempotencyIs
     }
 }
 
-fn registry_with_counting_acp_agent() -> (AgentRegistry, PathBuf, PathBuf) {
+fn registry_with_counting_acp_agent(prompt_limit: usize) -> (AgentRegistry, PathBuf, PathBuf) {
     let directory = test_root("acp-registry");
     fs::create_dir_all(&directory).expect("répertoire du registre ACP");
     let counter = directory.join("session-prompt-count");
@@ -312,11 +376,15 @@ read initialize
 echo '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1}}}}'
 read new_session
 echo '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"fixture-acp"}}}}'
-read prompt
-printf x >> '{}'
-echo '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
-sleep 5
-"#, counter.display())],
+count=0
+while IFS= read -r prompt; do
+  printf x >> '{}'
+  request_id=$(printf '%s' "$prompt" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  echo "{{\"jsonrpc\":\"2.0\",\"id\":${{request_id}},\"result\":{{\"stopReason\":\"end_turn\"}}}}"
+  count=$((count + 1))
+  [ "$count" -ge {} ] && break
+done
+"#, counter.display(), prompt_limit)],
                 "protocol": "acp",
                 "permissions": "allow",
                 "queue_capacity": 2,
@@ -380,6 +448,7 @@ fn issued_at() -> i64 {
         .as_secs() as i64
 }
 
+#[allow(dead_code)]
 fn run_amont_cycle(point: &str, serial: usize) {
     let root = test_root(point);
     let sync = root.join("sync");
@@ -412,26 +481,86 @@ fn run_amont_cycle(point: &str, serial: usize) {
 }
 
 #[test]
-fn matrice_crash_amont_rejoue_les_issues_sans_reservation_dupliquee() {
-    let (done_tx, done_rx) = mpsc::sync_channel(1);
-    thread::spawn(move || {
-        let result = std::panic::catch_unwind(|| {
-            for serial in 0..MATRIX_CYCLES {
-                let point = if serial % 2 == 0 {
-                    "before_reservation"
-                } else {
-                    "after_prepared"
-                };
-                run_amont_cycle(point, serial);
-            }
-        });
-        let _ = done_tx.send(result);
+#[ignore = "banc de gate SC-001 : cargo test --features test-support --test idempotency_crash_test -- --ignored --test-threads=1"]
+fn matrice_crash_sc001_redelivre_cinquante_prompts_uniques() {
+    let root = test_root("sc001-matrix");
+    let sync = root.join("sync");
+    fs::create_dir_all(&sync).expect("répertoire de synchronisation");
+    let points = [
+        "before_reservation",
+        "after_prepared",
+        "after_delivery_before_issue",
+        "after_issue_before_client_ack",
+    ];
+    arm_checkpoint(&sync, &points, points[0]);
+
+    let mut daemon = MatrixDaemonGuard::start(&root, &sync);
+    let socket_path = socket(&root);
+    let (registry, registry_root, counter) = registry_with_counting_acp_agent(MATRIX_CYCLES);
+    let wrapper_home = registry_root.join("wrapper-home");
+    fs::create_dir_all(&wrapper_home).expect("home wrapper ACP");
+    let wrapper_registry = registry.clone();
+    let wrapper_socket = socket_path.clone();
+    let wrapper = thread::spawn(move || {
+        launch_acp_with(
+            "fixture-acp",
+            &[],
+            Some("acp-matrix"),
+            &wrapper_registry,
+            &wrapper_socket,
+            &wrapper_home,
+        )
+        .map_err(|error| error.to_string())
     });
-    match done_rx.recv_timeout(GLOBAL_TIMEOUT) {
-        Ok(Ok(())) => {}
-        Ok(Err(payload)) => std::panic::resume_unwind(payload),
-        Err(_) => panic!("matrice T1209 dépassée après {GLOBAL_TIMEOUT:?}"),
+    wait_for_registered_agent(&socket_path, "acp-matrix");
+    let deadline = Instant::now() + GLOBAL_TIMEOUT;
+
+    for serial in 0..MATRIX_CYCLES {
+        assert!(
+            Instant::now() < deadline,
+            "matrice T1209 dépassée après {GLOBAL_TIMEOUT:?}"
+        );
+        let point = points[serial % points.len()];
+        let marker = sync.join(format!("{point}.ready"));
+        let _ = fs::remove_file(&marker);
+        let issued_at = issued_at();
+        let message_id = format!("sc001-{serial}");
+        let mut message = BridgetMessage::new("human", "acp-matrix", "matrice SC-001");
+        message.id = message_id.clone();
+        let command = WrapperToDaemon::SendIdempotent {
+            message,
+            message_id,
+            issued_at,
+        };
+        let mut client = negotiate_client(&socket_path);
+        client.send(command.clone());
+        watch_marker(&sync, &marker);
+        daemon.stop();
+
+        daemon.restart(&root);
+        wait_for_registered_agent(&socket_path, "acp-matrix");
+        assert!(matches!(
+            retry_command_issue(&socket_path, command.clone()),
+            IdempotencyIssue::OutcomeUnknown { .. }
+        ));
+        wait_for_counter(&counter, serial + 1);
+        wait_for_accepted(&socket_path, &command);
+        if serial + 1 < MATRIX_CYCLES {
+            arm_checkpoint(&sync, &points, points[(serial + 1) % points.len()]);
+            daemon.restart_with_sync(&root, &sync);
+            wait_for_registered_agent(&socket_path, "acp-matrix");
+        }
     }
+
+    assert_eq!(
+        fs::read(&counter).expect("compteur ACP"),
+        vec![b'x'; MATRIX_CYCLES],
+        "chaque crash remet exactement un prompt, sans doublon"
+    );
+    daemon.stop();
+    assert_eq!(wrapper.join().expect("thread wrapper"), Ok(()));
+    fs::remove_dir_all(root).expect("nettoyage matrice");
+    fs::remove_dir_all(registry_root).expect("nettoyage registre ACP");
 }
 
 #[test]
@@ -748,7 +877,7 @@ fn recovery_terminal_acked_vrai_wrapper_rejoue_sans_second_prompt() {
     let (sync, marker) = checkpoint_root(&root, "after_delivery_acked");
     let daemon = spawn_daemon(&root, Some(&sync));
     let socket_path = socket(&root);
-    let (registry, registry_root, counter) = registry_with_counting_acp_agent();
+    let (registry, registry_root, counter) = registry_with_counting_acp_agent(1);
     let wrapper_home = registry_root.join("wrapper-home");
     fs::create_dir_all(&wrapper_home).expect("home wrapper ACP");
     let wrapper_registry = registry.clone();
@@ -791,7 +920,6 @@ fn recovery_terminal_acked_vrai_wrapper_rejoue_sans_second_prompt() {
     daemon.stop();
     let restarted = spawn_daemon(&root, None);
     let socket_path = socket(&root);
-    wait_for_registered_agent(&socket_path, "acp-recipient");
     wait_for_accepted(&socket_path, &command);
     thread::sleep(Duration::from_millis(250));
     assert_eq!(fs::read(&counter).expect("compteur ACP"), b"x");

@@ -85,13 +85,13 @@ auteur ≠ relecteur.
 
 ## Phase 3 — Projections et bancs
 
-- [ ] **T1208** Projection CLI (`--id`/`--issued-at`/`--issuer-scope`
+- [x] **T1208** Projection CLI (`--id`/`--issued-at`/`--issuer-scope`
   obligatoires ensemble) + client socket de référence (code de test) ;
   non-régression : suite 007/008 intacte.
   **Observable** : gate 012 de SC-004 (référence ↔ CLI, même issue), corpus
   SC-003 divergences (`EnvelopeMismatch` sans altération).
 
-- [ ] **T1209** Matrice de crash SC-001 : bancs aux 4 points (avant
+- [x] **T1209** Matrice de crash SC-001 : bancs aux 4 points (avant
   réservation / après `Prepared` / après remise avant issue / après issue
   avant accusé client) × redémarrages, N=50 réparti, comptage des prompts.
   **Observable** : 50/50 livraisons uniques, issues rejouées identiques.
