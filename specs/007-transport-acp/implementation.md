@@ -169,3 +169,21 @@ API pendant cette tentative.
 - **Hygiène** : le script et la transcription bruts, créés en `0600`, sont
   supprimés après extraction ; la fixture versionnée est minimisée et ne porte
   pas la liste locale des commandes annoncées par l'adaptateur.
+
+## T708 — Ouverture Gemini (bloquée)
+
+- **Précondition** : `GEMINI_API_KEY` et `GOOGLE_API_KEY` absents.
+- **Tentatives** : `gemini 0.46.0 --acp`, puis
+  `npx @google/gemini-cli@0.56.0 --acp` via une fixture de registre temporaire
+  Codex+Claude enrichie dynamiquement de l'entrée Gemini.
+- **Refus exact au `session/new`** :
+
+```text
+This client is no longer supported for Gemini Code Assist for individuals.
+To continue using Gemini, please migrate to the Antigravity suite of products:
+https://antigravity.google
+```
+
+- **Issue** : aucun équipier enregistré, aucun prompt, aucune réponse ni
+  `stopReason` ; les fixtures temporaires de tentative sont supprimées. La
+  tâche reste décochée en attente de la révision de la voie de support Gemini.

@@ -43,6 +43,16 @@ paquet quand `npx` le permet).
 Note : les adaptateurs Zed sont explicitement publiés pour usage hors Zed
 (source : zed.dev/blog/codex-is-live-in-zed, consulté 2026-08-22).
 
+**Constat T708 (2026-08-22)** : la voie individuelle Gemini est indisponible.
+Le binaire Homebrew 0.46.0 puis le pin npm
+`@google/gemini-cli@0.56.0 --acp`, tous deux lancés avec login Google et sans
+`GEMINI_API_KEY` ni `GOOGLE_API_KEY`, échouent au `session/new` avec le même
+refus : « This client is no longer supported for Gemini Code Assist for
+individuals. To continue using Gemini, please migrate to the Antigravity suite
+of products: https://antigravity.google ». Aucun tour ACP ni `stopReason` ne
+peut donc être capturé ; la compatibilité Gemini est suspendue à une voie de
+support Google rétablie ou à la révision de la spec.
+
 ### Constat spike T701 — 2026-08-22
 
 Le protocole ACP 1 est négocié avec `codex-acp` 0.16.0, sans demande de clé
