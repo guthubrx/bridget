@@ -1859,6 +1859,7 @@ fn mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let command = std::env::current_exe()?.to_string_lossy().into_owned();
     Ok(serde_json::json!({
         "name": "bridget",
+        "type": "stdio",
         "command": command,
         "args": ["mcp"],
         "env": []
@@ -1880,6 +1881,7 @@ fn smoke_mcp_server_entry() -> Result<Option<serde_json::Value>, Box<dyn std::er
     };
     Ok(Some(serde_json::json!({
         "name": "bridget",
+        "type": "stdio",
         "command": command,
         "args": args,
         "env": []
@@ -1931,8 +1933,14 @@ fn claude_mcp_config_in(
 ) -> Result<EphemeralMcpConfig, Box<dyn std::error::Error>> {
     std::fs::create_dir_all(directory)?;
     let path = directory.join(format!("mcp-{instance_id}.json"));
+    // `mcpServers` de Claude Code n'est pas l'enveloppe ACP : il attend une
+    // définition stdio indexée par son nom, sans les champs ACP `name`/`env`.
+    let command = server["command"].as_str().ok_or("commande MCP absente")?;
+    let args = server["args"].clone();
     std::fs::write(&path, serde_json::to_vec(&serde_json::json!({
-        "mcpServers": { "bridget": server }
+        "mcpServers": {
+            "bridget": { "type": "stdio", "command": command, "args": args }
+        }
     }))?)?;
     Ok(EphemeralMcpConfig { path })
 }
@@ -2270,6 +2278,13 @@ mod reconnect_tests {
         let config = claude_mcp_config_in(&root.join(".cache/bridget"), &server, "fixture")
             .unwrap();
         assert!(config.path().exists());
+        let claude = serde_json::from_slice::<serde_json::Value>(
+            &std::fs::read(config.path()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claude["mcpServers"]["bridget"]["type"], "stdio");
+        assert!(claude["mcpServers"]["bridget"].get("name").is_none());
+        assert!(claude["mcpServers"]["bridget"].get("env").is_none());
         assert_eq!(server["name"], "bridget");
         drop(config);
 

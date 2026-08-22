@@ -51,7 +51,10 @@ def main():
             continue
         method = msg.get("method")
         id_ = msg.get("id")
-        log(f"reçu method={method} id={id_}")
+        if method == "tools/call":
+            log(f"reçu method={method} id={id_} name={(msg.get('params') or {}).get('name')}")
+        else:
+            log(f"reçu method={method} id={id_}")
         if method == "initialize":
             result(id_, {
                 "protocolVersion": PROTOCOL_VERSION,

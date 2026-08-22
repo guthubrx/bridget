@@ -151,6 +151,37 @@ le diff des quatre hashes est vide.
   erreurs de protocole. Le golden de pureté décode chaque octet de stdout
   comme réponse JSON-RPC.
 
+## T1006 — Branchement MCP éphémère par session
+
+- **Commande de preuve** :
+
+```text
+BRIDGET_MCP_REAL_SMOKE=1 cargo test -p bridget-daemon --features test-support \
+  --test mcp_injection_smoke_test -- --include-ignored --test-threads=1
+```
+
+- **Résultat** : **3/3 vert**, durée 93,18 s. Le banc lance le wrapper de
+  production (`CARGO_BIN_EXE_bridget`) pour Codex et Claude ; le scénario ACP
+  lance le vrai wrapper équipier et `AcpTransport` avec une session
+  `session/new`. Dans les trois cas, le serveur épinglé
+  `specs/010-mcp/spike/fake-mcp-server.py` observe `tools/call name=probe` et
+  le harness reçoit `PROBE_OK`.
+- **Versions observées** : Codex CLI `0.149.0`, Claude Code `2.1.234`.
+  Gemini demeure `unsupported`, conformément au constat T708/T1001.
+- **Trace Codex** : `initialize → notifications/initialized → tools/call
+  name=probe → PROBE_OK`. Cette version appelle directement l’outil sans
+  `tools/list` (différent du spike T1001) ; l’exécution réussie de `probe`
+  établit néanmoins que l’injection éphémère est effective.
+- **Traces Claude et ACP** : `initialize → notifications/initialized →
+  tools/list → tools/call name=probe → PROBE_OK`.
+- **Non-mutation** : avant/après chaque voie interactive, le banc compare les
+  octets des fichiers réels `~/.claude/settings.json`,
+  `~/.claude/settings.local.json`, `~/.codex/config.toml` et
+  `~/.gemini/settings.json` ; le diff est vide. Le scénario ACP utilise un
+  HOME isolé avec les mêmes sentinelles et vérifie le même invariant. La
+  configuration Claude temporaire est protégée par un garde RAII, y compris
+  en cas de refus avant `spawn`.
+
 ## T1007 — Prompt allégé
 
 ### Phase A — Fixtures et mesure statique
