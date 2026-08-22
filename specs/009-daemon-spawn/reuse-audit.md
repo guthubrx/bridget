@@ -1,8 +1,12 @@
 # Reuse Audit : équipiers gérés par le daemon (009)
 
 **Date** : 2026-08-22 · **Base auditée** : `session-08-attach@e028311`
-(007 complète, 008 T801-T805a/T804b closes — les tâches 008 restantes ne
-touchent que `attach.rs`/`cli.rs`, hors des ancrages 009). **Statut** : OK.
+(007 complète, 008 T801-T805a/T804b closes). **Correction factuelle
+(review)** : les restes 008 touchent `attach.rs`/`cli.rs` **et** — pour les
+bancs T808 et la finition T810 — `acp.rs`/`journal.rs` (instrumentation
+test-only) et les docs ; chevauchements réels énumérés, tous disjoints des
+modules nouveaux 009 (`fleet.rs`, `managed_process.rs`, `desired_state.rs`).
+**Statut** : OK.
 **Amendement D-503 appliqué au plan avant cet audit** (socle 012).
 
 ## Items du plan confrontés à l'existant
