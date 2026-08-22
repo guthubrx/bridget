@@ -1519,7 +1519,7 @@ mod tests {
     use super::*;
     use bridget_transport::protocol::MAX_ATTACH_FRAGMENT_BYTES;
     use std::io::{BufRead, BufReader, Write};
-    use std::os::fd::RawFd;
+    use std::os::fd::{AsRawFd, RawFd};
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;
 
@@ -1963,7 +1963,7 @@ mod tests {
 
     #[test]
     fn pseudo_tty_polin_hup_livre_le_dernier_send_et_restaure_le_terminal() {
-        let mut pseudo_tty = PseudoTerminal::open();
+        let pseudo_tty = PseudoTerminal::open();
         let before = pseudo_tty.attrs();
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
         let connection = AttachConnection {
@@ -1996,15 +1996,14 @@ mod tests {
             message
         });
 
-        let master = pseudo_tty.master;
-        pseudo_tty.master = -1;
+        let (mut input_writer, input_reader) = UnixStream::pair().unwrap();
+        let (input_start_tx, input_start_rx) = mpsc::channel();
+        let (written_tx, written_rx) = mpsc::channel();
         let input_writer = thread::spawn(move || {
-            assert_eq!(
-                unsafe { libc::write(master, b"dernier envoi\n".as_ptr().cast(), 14) },
-                14
-            );
-            sent_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-            assert_eq!(unsafe { libc::close(master) }, 0);
+            input_start_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(input_writer.write(b"dernier envoi\n").unwrap(), 14);
+            input_writer.shutdown(Shutdown::Write).unwrap();
+            written_tx.send(()).unwrap();
         });
         let mut state = AttachClientState::new(AttachWindow::Today);
         state.subscription_requested();
@@ -2015,17 +2014,28 @@ mod tests {
             .unwrap();
 
         let result = with_raw_terminal(pseudo_tty.slave, |raw_terminal| {
+            input_start_tx.send(()).unwrap();
+            written_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let mut ready = libc::pollfd {
+                fd: input_reader.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            assert_eq!(unsafe { libc::poll(&mut ready, 1, 0) }, 1);
+            assert_ne!(ready.revents & libc::POLLIN, 0);
+            assert_ne!(ready.revents & libc::POLLHUP, 0);
             drive_interactive(
                 connection,
                 &mut state,
                 "codex-1",
                 Path::new("/tmp/bridget-attach-pty-unused.sock"),
-                pseudo_tty.slave,
+                input_reader.as_raw_fd(),
                 raw_terminal,
             )
         });
         assert!(result.is_ok());
         input_writer.join().unwrap();
+        sent_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_terminal_restored(&before, &pseudo_tty.attrs());
         assert_eq!(state.last_seq, Some(7), "l'événement est traité avant EOF");
         assert!(matches!(
