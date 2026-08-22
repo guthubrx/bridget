@@ -59,6 +59,7 @@ pub enum IdempotencyIssue {
     Rejected {
         category: String,
         reason: String,
+        expires_at: i64,
     },
     OutcomeUnknown {
         expires_at: i64,

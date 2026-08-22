@@ -87,7 +87,11 @@ pub enum PublicResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LookupResult {
     Accepted { expires_at: i64 },
-    Rejected { category: String, reason: String },
+    Rejected {
+        category: String,
+        reason: String,
+        expires_at: i64,
+    },
     OutcomeUnknown { expires_at: i64 },
     IdempotencyExpired,
 }
@@ -722,6 +726,7 @@ impl Record {
                     .public_result_reason
                     .clone()
                     .ok_or(IdempotencyError::CorruptRecord("motif absent"))?,
+                expires_at: self.expires_at,
             }),
             _ => Err(IdempotencyError::CorruptRecord("issue terminale absente")),
         }
@@ -829,6 +834,7 @@ mod tests {
             Reservation::Replayed(LookupResult::Rejected {
             category: "dnd".to_string(),
             reason: "occupé".to_string(),
+            expires_at: NOW + HORIZON,
             })
         );
     }
@@ -1109,6 +1115,7 @@ mod tests {
             LookupResult::Rejected {
                 category: "routing".to_string(),
                 reason: "cible absente".to_string(),
+                expires_at: NOW + HORIZON,
             }
         );
     }

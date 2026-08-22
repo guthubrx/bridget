@@ -1910,8 +1910,16 @@ fn replay_issue(
 ) -> Result<IdempotencyIssue, String> {
     match result {
         LookupResult::Accepted { expires_at } => Ok(IdempotencyIssue::Accepted { expires_at }),
-        LookupResult::Rejected { category, reason } => {
-            Ok(IdempotencyIssue::Rejected { category, reason })
+        LookupResult::Rejected {
+            category,
+            reason,
+            expires_at,
+        } => {
+            Ok(IdempotencyIssue::Rejected {
+                category,
+                reason,
+                expires_at,
+            })
         }
         LookupResult::OutcomeUnknown { expires_at } => Ok(IdempotencyIssue::OutcomeUnknown {
             expires_at,
@@ -1981,9 +1989,18 @@ fn reject_idempotent_send(
     st.idempotency
         .reject_prepared(key, &category, &reason)
         .map_err(|error| error.to_string())?;
+    let expires_at = match st.idempotency.lookup(key, unix_now_secs()) {
+        Ok(LookupResult::Rejected { expires_at, .. }) => expires_at,
+        Ok(_) => return Err("refus idempotent non terminal".to_string()),
+        Err(error) => return Err(error.to_string()),
+    };
     Ok(issue_response(
         key,
-        IdempotencyIssue::Rejected { category, reason },
+        IdempotencyIssue::Rejected {
+            category,
+            reason,
+            expires_at,
+        },
     ))
 }
 
@@ -4206,20 +4223,35 @@ mod presence_tests {
         };
         let rejected = handle_wrapper_message("client-reject", send(), &shared);
         assert!(matches!(
-            rejected,
+            rejected.as_ref(),
             Some(DaemonToWrapper::IdempotencyResult {
-                issue: IdempotencyIssue::Rejected { ref category, .. },
+                issue: IdempotencyIssue::Rejected { category, .. },
                 ..
             }) if category == "routing"
         ));
         let replay = handle_wrapper_message("client-reject", send(), &shared);
         assert!(matches!(
-            replay,
+            replay.as_ref(),
             Some(DaemonToWrapper::IdempotencyResult {
-                issue: IdempotencyIssue::Rejected { ref category, .. },
+                issue: IdempotencyIssue::Rejected { category, .. },
                 ..
             }) if category == "routing"
         ));
+        let rejection_expiry = match rejected {
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::Rejected { expires_at, .. },
+                ..
+            }) => expires_at,
+            _ => unreachable!("refus idempotent attendu"),
+        };
+        let replay_expiry = match replay {
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::Rejected { expires_at, .. },
+                ..
+            }) => expires_at,
+            _ => unreachable!("rejeu du refus attendu"),
+        };
+        assert_eq!(replay_expiry, rejection_expiry);
 
         let historic = handle_wrapper_message(
             "historique-012",
