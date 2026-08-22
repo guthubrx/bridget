@@ -225,6 +225,19 @@ struct AttachView {
 }
 
 impl AttachView {
+    #[cfg(test)]
+    fn suspended(subscription_id: impl Into<String>) -> Arc<Self> {
+        Arc::new(Self {
+            subscription_id: subscription_id.into(),
+            queue: Arc::new((
+                Mutex::new(AttachViewBuffer {
+                    messages: VecDeque::new(), bytes: 0, gap: None, closed: false,
+                }),
+                Condvar::new(),
+            )),
+        })
+    }
+
     fn start(subscription_id: String, writer: &Arc<Mutex<BufWriter<UnixStream>>>) -> Option<Arc<Self>> {
         let stream = writer.lock().ok()?.get_ref().try_clone().ok()?;
         let _ = stream.set_write_timeout(Some(ATTACH_VIEW_WRITE_TIMEOUT));
@@ -2809,6 +2822,66 @@ mod presence_tests {
             DaemonToWrapper::Unsubscribe { subscription_id: id } if id == subscription_id
         ));
         assert!(shared.lock().unwrap().attach_subscriptions.is_empty());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn vue_suspendue_coalesce_un_gap_et_ne_garde_pas_de_fragment_orphelin() {
+        let view = AttachView::suspended("sub-gap");
+        let bytes = vec![b'x'; 600 * 1024];
+        assert!(view.enqueue(DaemonToWrapper::JournalFragment {
+            subscription_id: "sub-gap".to_string(), seq: 41, offset: 0,
+            final_fragment: false, bytes: bytes.clone(),
+        }));
+        assert!(view.enqueue(DaemonToWrapper::JournalFragment {
+            subscription_id: "sub-gap".to_string(), seq: 42, offset: 0,
+            final_fragment: true, bytes,
+        }));
+        let queue = view.queue.0.lock().unwrap();
+        assert_eq!(queue.gap.as_ref().map(|gap| (gap.0, gap.1)), Some((41, 41)));
+        assert_eq!(queue.messages.len(), 1);
+        assert_eq!(queue.messages.front().and_then(|message| message.seq), Some(42));
+    }
+
+    #[test]
+    fn rejet_tardif_attach_est_reroute_puis_purge() {
+        let (mut state, config) = state_with_registered_agent("attach-late-reject");
+        let (writer, mut reader) = control_socket("attach-late-reject");
+        state.connections.insert("attach-1".to_string(), writer);
+        state.pending_attach_sends.insert("message-humain".to_string(), PendingAttachSend {
+            conn_id: "attach-1".to_string(), expires_at: Instant::now() + Duration::from_secs(60),
+        });
+        let shared = Arc::new(Mutex::new(state));
+        handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::DeliveryRejected {
+                id: "message-humain".to_string(), reason: "adaptateur refusé".to_string(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::DeliveryRejected { id, reason }
+                if id == "message-humain" && reason == "adaptateur refusé"
+        ));
+        assert!(shared.lock().unwrap().pending_attach_sends.is_empty());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn pending_attach_expire_et_sont_nettoyes_a_la_deconnexion() {
+        let (mut state, config) = state_with_registered_agent("attach-purge");
+        state.pending_attach_sends.insert("expired".to_string(), PendingAttachSend {
+            conn_id: "attach-1".to_string(), expires_at: Instant::now() - Duration::from_secs(1),
+        });
+        purge_expired_attach_sends(&mut state);
+        assert!(state.pending_attach_sends.is_empty());
+        state.pending_attach_sends.insert("live".to_string(), PendingAttachSend {
+            conn_id: "attach-1".to_string(), expires_at: Instant::now() + Duration::from_secs(60),
+        });
+        let controls = close_attach_subscriptions(&mut state, "attach-1");
+        assert!(controls.is_empty());
+        assert!(state.pending_attach_sends.is_empty());
         let _ = std::fs::remove_file(config.db_path);
     }
 
