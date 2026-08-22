@@ -1711,6 +1711,70 @@ fn handle_wrapper_message(
                 }),
             }
         }
+
+        WrapperToDaemon::LedgerProjection { scope, limit } => {
+            const MAX_LEDGER_PROJECTION: usize = 100;
+            let limit = usize::from(limit).clamp(1, MAX_LEDGER_PROJECTION);
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let wants_messages = matches!(scope, bridget_transport::protocol::LedgerScope::Messages | bridget_transport::protocol::LedgerScope::Both);
+            let wants_requests = matches!(scope, bridget_transport::protocol::LedgerScope::Requests | bridget_transport::protocol::LedgerScope::Both);
+
+            let messages = if wants_messages {
+                match st.store.recent_messages(limit) {
+                    Ok(entries) => entries
+                        .into_iter()
+                        .map(|entry| bridget_transport::protocol::LedgerMessage {
+                            id: entry.id,
+                            ts: entry.ts,
+                            sender: entry.sender,
+                            target: entry.target,
+                            body: entry.body,
+                        })
+                        .collect(),
+                    Err(error) => return Some(DaemonToWrapper::Nack {
+                        id: "ledger".to_string(),
+                        reason: error.to_string(),
+                    }),
+                }
+            } else {
+                Vec::new()
+            };
+
+            let requests = if wants_requests {
+                match st.store.recent_requests(limit) {
+                    Ok(entries) => match entries
+                        .into_iter()
+                        .map(|request| -> Result<_, crate::store::StoreError> {
+                            let deferred = st.store.latest_deferred_reminder(&request.id)?;
+                            Ok(bridget_transport::protocol::RequestInfo {
+                                id: request.id,
+                                target: request.target,
+                                state: request.state,
+                                deadline_at: request.deadline_at,
+                                cancel_reason: request.cancel_reason,
+                                deferred_reminder_level: deferred.map(|event| event.0),
+                                deferred_reminder_at: deferred.map(|event| event.1),
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                    {
+                        Ok(requests) => requests,
+                        Err(error) => return Some(DaemonToWrapper::Nack {
+                            id: "ledger".to_string(),
+                            reason: error.to_string(),
+                        }),
+                    },
+                    Err(error) => return Some(DaemonToWrapper::Nack {
+                        id: "ledger".to_string(),
+                        reason: error.to_string(),
+                    }),
+                }
+            } else {
+                Vec::new()
+            };
+
+            Some(DaemonToWrapper::LedgerProjection { messages, requests })
+        }
     }
 }
 
@@ -2167,6 +2231,36 @@ mod presence_tests {
         state.router.unregister_by_conn("conn-2");
         state.mark_stopped("conn-2");
         assert_eq!(state.agent_infos()[0].state, "stopped");
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    #[test]
+    fn projection_ledger_est_bornee_et_lit_le_store_du_daemon() {
+        let (state, config) = state_with_registered_agent("ledger-projection");
+        let mut first = bridget_core::BridgetMessage::new("alice", "bob", "bonjour");
+        first.id = "m-1".to_string();
+        let mut second = bridget_core::BridgetMessage::new("alice", "bob", "salut");
+        second.id = "m-2".to_string();
+        state.store.record_message(&first, "alice:bob").unwrap();
+        state.store.record_message(&second, "alice:bob").unwrap();
+        let shared = Arc::new(Mutex::new(state));
+
+        let response = handle_wrapper_message(
+            "conn-cli",
+            WrapperToDaemon::LedgerProjection {
+                scope: bridget_transport::protocol::LedgerScope::Messages,
+                limit: u16::MAX,
+            },
+            &shared,
+        );
+
+        assert!(matches!(
+            response,
+            Some(DaemonToWrapper::LedgerProjection { messages, requests })
+                if messages.len() == 2
+                    && messages.iter().any(|message| message.id == "m-1")
+                    && requests.is_empty()
+        ));
         let _ = std::fs::remove_file(&config.db_path);
     }
 

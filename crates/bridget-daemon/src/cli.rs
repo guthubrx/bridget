@@ -2,7 +2,7 @@
 
 use crate::daemon::{self, DaemonConfig};
 use bridget_core::BridgetMessage;
-use bridget_transport::protocol::{decode, encode, AgentInfo, RuntimeSource};
+use bridget_transport::protocol::{decode, encode, AgentInfo, LedgerMessage, LedgerScope, RuntimeSource};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
@@ -1325,34 +1325,68 @@ fn cmd_status() {
 }
 
 fn cmd_ledger() {
-    let config = DaemonConfig::default();
-    match crate::store::Store::open(&config.db_path) {
-        Ok(store) => match store.recent_messages(20) {
-            Ok(entries) => {
-                if entries.is_empty() {
-                    println!("Ledger vide.");
-                } else {
-                    println!("Derniers {} messages :", entries.len());
-                    for entry in entries.iter().rev() {
-                        println!(
-                            "  [{}] {} → {}: {}",
-                            entry.ts,
-                            entry.sender,
-                            entry.target,
-                            entry.body.chars().take(60).collect::<String>()
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("erreur lecture ledger: {}", e);
-                std::process::exit(1);
-            }
-        },
-        Err(e) => {
-            eprintln!("base inaccessible: {}", e);
+    match send_control_to_daemon(WrapperToDaemon::LedgerProjection {
+        scope: LedgerScope::Messages,
+        limit: 20,
+    }) {
+        Ok(DaemonToWrapper::LedgerProjection { messages, .. }) => {
+            print_ledger(&messages);
+        }
+        Ok(DaemonToWrapper::Nack { reason, .. }) => {
+            eprintln!("erreur lecture ledger: {reason}");
             std::process::exit(1);
         }
+        Ok(_) => {
+            eprintln!("réponse inattendue du daemon");
+            std::process::exit(1);
+        }
+        Err(_) => {
+            // Hors daemon, conserver la lecture locale historique pour les
+            // installations monoprocessus et les diagnostics hors ligne.
+            let config = DaemonConfig::default();
+            match crate::store::Store::open(&config.db_path) {
+                Ok(store) => match store.recent_messages(20) {
+                    Ok(entries) => {
+                        let messages = entries
+                            .into_iter()
+                            .map(|entry| LedgerMessage {
+                                id: entry.id,
+                                ts: entry.ts,
+                                sender: entry.sender,
+                                target: entry.target,
+                                body: entry.body,
+                            })
+                            .collect::<Vec<_>>();
+                        print_ledger(&messages);
+                    }
+                    Err(error) => {
+                        eprintln!("erreur lecture ledger: {error}");
+                        std::process::exit(1);
+                    }
+                },
+                Err(error) => {
+                    eprintln!("base inaccessible: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+}
+
+fn print_ledger(entries: &[LedgerMessage]) {
+    if entries.is_empty() {
+        println!("Ledger vide.");
+        return;
+    }
+    println!("Derniers {} messages :", entries.len());
+    for entry in entries.iter().rev() {
+        println!(
+            "  [{}] {} → {}: {}",
+            entry.ts,
+            entry.sender,
+            entry.target,
+            entry.body.chars().take(60).collect::<String>()
+        );
     }
 }
 
