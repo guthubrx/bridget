@@ -124,6 +124,14 @@ pub struct AcpTransport {
 }
 
 impl AcpTransport {
+    /// PID de l'adaptateur ACP, utilisé pour un marqueur local de filiation.
+    pub fn process_id(&self) -> u32 {
+        self.child
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .id()
+    }
+
     pub fn spawn(options: AcpOptions) -> Result<Self, TransportError> {
         Self::spawn_with_clock(options, Arc::new(SystemTime::now))
     }

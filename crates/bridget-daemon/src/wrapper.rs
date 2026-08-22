@@ -581,6 +581,14 @@ pub fn launch(
         .map_err(|e| format!("impossible de lancer '{}': {}", agent_binary, e))?;
 
     let agent_pid = child.id();
+    let marker_directory = socket_path().parent().unwrap().join("agent-pids");
+    crate::mcp_identity::write_marker(
+        &marker_directory,
+        agent_pid,
+        crate::managed_process::process_birth(agent_pid)?,
+        &instance_id,
+        &name_state_path,
+    )?;
 
     // 5. Thread d'écoute
     let writer_clone = writer.clone();
@@ -1681,6 +1689,15 @@ fn launch_acp_with_status(
         permissions: definition.permissions.clone(),
         notify_timeout_secs: definition.notify_timeout_secs,
     })?;
+    let marker_directory = socket.parent().unwrap().join("agent-pids");
+    let adapter_pid = transport.process_id();
+    crate::mcp_identity::write_marker(
+        &marker_directory,
+        adapter_pid,
+        crate::managed_process::process_birth(adapter_pid)?,
+        &instance_id,
+        &name_state_path,
+    )?;
     transport.enable_journal(home.join(".cache/bridget/sessions"), &my_name)?;
     let journal_directory = home.join(".cache/bridget/sessions").join(&my_name);
     let relay_writer = writer.clone();

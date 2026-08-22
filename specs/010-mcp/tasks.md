@@ -39,7 +39,7 @@ commit en review immuable, auteur ≠ relecteur, zéro trace IA, jamais de push)
   **Observable** : matrice de conformité FR-009 (15 cas) en fixtures ;
   golden test « aucun octet non-JSON-RPC sur stdout ».
 
-- [ ] **T1004** Identité d'appelant (FR-004) : résolution À CHAQUE appel —
+- [x] **T1004** Identité d'appelant (FR-004) : résolution À CHAQUE appel —
   fichier de nom courant (`BRIDGET_AGENT_NAME_FILE`) → filiation
   `agent-pids/` **typée** (marqueur enrichi : pid + naissance capturée au
   dépôt + `instance_id` + chemin du nom ; wrapper mis à jour pour l'écrire ;
