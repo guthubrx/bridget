@@ -273,6 +273,8 @@ impl IdempotencyStore {
             ],
         )?;
         if inserted == 1 {
+            #[cfg(feature = "test-support")]
+            crate::test_sync::checkpoint("after_prepared");
             return Ok(Reservation::Prepared { expires_at });
         }
 

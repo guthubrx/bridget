@@ -2041,6 +2041,8 @@ fn handle_idempotent_send(
     };
     let canonical = canonical_send(&key.issuer_scope, &key.idempotency_key, &message, issued_at);
     let now = unix_now_secs();
+    #[cfg(feature = "test-support")]
+    crate::test_sync::checkpoint("before_reservation");
     let reservation = match st.idempotency.reserve(
         &key,
         &canonical,
@@ -2182,13 +2184,18 @@ fn handle_idempotent_send(
                 .mark_sent(&prepared.content_key, &message.to);
             st.envelope_guard
                 .mark_relayed(&prepared.message_guard_id, &message.to);
-            issue_response(
+            #[cfg(feature = "test-support")]
+            crate::test_sync::checkpoint("after_delivery_before_issue");
+            let response = issue_response(
                 &key,
                 IdempotencyIssue::OutcomeUnknown {
                     expires_at,
                     delivery_id: Some(delivery.delivery_id),
                 },
-            )
+            );
+            #[cfg(feature = "test-support")]
+            crate::test_sync::checkpoint("after_issue_before_client_ack");
+            response
 }
 
 /// Traite un message wrapper et retourne une réponse optionnelle.
