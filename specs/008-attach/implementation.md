@@ -50,3 +50,18 @@ correction immédiate remplace le banc par deux vues attach réelles.
 - **Nettoyage** : tunnel, daemon de test, wrappers de test et socket distant de
   gate ont été arrêtés/supprimés. Aucune configuration persistante de
   fédération n'a été supprimée.
+
+### Reprise de tunnel
+
+Une vue attach distante a d'abord reçu le tour `resync avant coupure` avec
+`turn_end`. Après arrêt du seul processus SSH `-R`, un nouveau `bridget who`
+à distance a correctement signalé l'absence de socket. Au redémarrage du même
+tunnel vers le daemon isolé, la vue persistante a affiché `abonnement actif`,
+puis a envoyé et reçu le tour `resynchronisation réussie` avec `turn_end`.
+La reprise de la connexion attach après coupure est ainsi démontrée.
+
+Le banc distant SC-001 demeure non exécuté : aucun générateur déterministe de
+600 événements (10 événements/s pendant 60 s) ne fait partie de T809, et une
+génération par l'adaptateur Codex mesurerait sa latence de modèle plutôt que la
+latence append→rendu. Aucun p95 artificiel n'est consigné ; T809 reste
+décochée jusqu'à un banc distant adapté.
