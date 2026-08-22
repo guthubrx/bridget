@@ -4,7 +4,7 @@
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
 use bridget_transport::protocol::{
     AttachRefusal, CLIENT_CONTRACT_VERSION, ClientCapability, ClientRefusal, ConnectionRole,
-    IdempotencyIssue, decode, encode,
+    IdempotencyIssue, SpawnRefusal, StopOutcome, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use log::{error, info, warn};
@@ -22,6 +22,12 @@ use crate::idempotency::{
     ReplyTracking, SendDelivery,
 };
 use crate::store::Store;
+use crate::{
+    desired_state::DesiredStateStore,
+    fleet::{FleetConfig, FleetSupervisor, SpawnOrder as FleetSpawnOrder},
+    lifecycle::{PreparedSpawn, SourceEnvironment, SpawnDecision, source_environment, submit_spawn},
+    registry::AgentRegistry,
+};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use uuid::Uuid;
 
@@ -81,6 +87,13 @@ const PENDING_ATTACH_SEND_TTL: Duration = Duration::from_secs(300);
 const CLIENT_IDEMPOTENCY_HORIZON_SECS: i64 = 7 * 24 * 60 * 60;
 const CLIENT_ISSUED_AT_TOLERANCE_SECS: i64 = 60;
 const MAX_ACTIVE_ISSUER_SCOPES: usize = 4096;
+
+fn unix_timestamp() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 // Constante pour la période de grâce des timeouts (M-004)
 const TIMEOUT_GRACE_PERIOD: u64 = 30; // secondes
@@ -187,6 +200,19 @@ fn dirs_cache() -> PathBuf {
     cache_dir
 }
 
+fn desired_state_path(config: &DaemonConfig) -> PathBuf {
+    let production_home = config
+        .db_path
+        .parent()
+        .filter(|directory| directory.file_name().is_some_and(|name| name == "bridget"))
+        .and_then(|directory| directory.parent())
+        .filter(|directory| directory.file_name().is_some_and(|name| name == ".cache"))
+        .and_then(|directory| directory.parent());
+    production_home
+        .map(|home| home.join(".config/bridget/fleet.json"))
+        .unwrap_or_else(|| config.db_path.with_extension("fleet.json"))
+}
+
 /// État partagé du daemon.
 struct DaemonState {
     router: Router,
@@ -195,6 +221,13 @@ struct DaemonState {
     envelope_guard: EnvelopeGuard,
     store: Store,
     idempotency: IdempotencyStore,
+    fleet: FleetSupervisor,
+    registry: AgentRegistry,
+    source_env: SourceEnvironment,
+    recovering: bool,
+    /// T906 consommera cette file avec `managed-bootstrap`. Aucun succès n'est
+    /// émis tant que le Register réel corrélé n'a pas été observé.
+    pending_managed_spawns: VecDeque<PreparedSpawn>,
     connections: HashMap<String, Arc<Mutex<BufWriter<UnixStream>>>>,
     conn_names: HashMap<String, String>,
     conn_hosts: HashMap<String, String>,
@@ -791,6 +824,9 @@ impl DaemonState {
         std::fs::create_dir_all(config.socket_path.parent().unwrap())?;
         let store = Store::open(&config.db_path)?;
         let idempotency = IdempotencyStore::open(&config.db_path)?;
+        let desired = DesiredStateStore::at_path(desired_state_path(config));
+        let fleet = FleetSupervisor::open(&config.db_path, desired, FleetConfig::default())?;
+        let registry = AgentRegistry::load()?;
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
         Ok(DaemonState {
             router: Router::new(),
@@ -802,6 +838,11 @@ impl DaemonState {
             envelope_guard: EnvelopeGuard::new(Duration::from_secs(config.quarantine_window)),
             store,
             idempotency,
+            fleet,
+            registry,
+            source_env: source_environment(),
+            recovering: false,
+            pending_managed_spawns: VecDeque::new(),
             connections: HashMap::new(),
             conn_names: HashMap::new(),
             conn_hosts: HashMap::new(),
@@ -2391,6 +2432,78 @@ fn handle_wrapper_message(
         }),
         WrapperToDaemon::DeliverAcked { .. } | WrapperToDaemon::DeliveryIndeterminate { .. } => {
             None
+        }
+        WrapperToDaemon::SpawnOrder {
+            agent_type,
+            name,
+            cwd,
+            persistent,
+            command_id,
+            issued_at,
+            deadline_at,
+        } => {
+            let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let order = FleetSpawnOrder {
+                agent_type,
+                requested_name: name,
+                cwd: PathBuf::from(cwd),
+                persistent,
+                command_id: command_id.clone(),
+                issued_at,
+                deadline_at,
+            };
+            let decision = submit_spawn(
+                &st.fleet,
+                &st.registry,
+                &st.source_env,
+                &order,
+                unix_timestamp(),
+                st.recovering,
+            );
+            match decision {
+                Ok(SpawnDecision::Ready(prepared)) => {
+                    st.pending_managed_spawns.push_back(prepared);
+                    None
+                }
+                Ok(SpawnDecision::Await(_)) => None,
+                Ok(SpawnDecision::Accepted { name }) => {
+                    Some(DaemonToWrapper::SpawnAccepted { command_id, name })
+                }
+                Ok(SpawnDecision::Rejected(reason)) => {
+                    Some(DaemonToWrapper::SpawnRejected { command_id, reason })
+                }
+                Ok(SpawnDecision::EnvelopeMismatch) => {
+                    Some(DaemonToWrapper::IdempotencyResult {
+                        operation_kind: "spawn".to_string(),
+                        idempotency_key: command_id,
+                        issue: IdempotencyIssue::EnvelopeMismatch,
+                    })
+                }
+                Err(error) => Some(DaemonToWrapper::SpawnRejected {
+                    command_id,
+                    reason: SpawnRefusal::NegotiationFailed {
+                        detail: error.to_string(),
+                    },
+                }),
+            }
+        }
+        WrapperToDaemon::StopOrder { name, command_id } => {
+            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let outcome = if st
+                .pending_managed_spawns
+                .iter()
+                .any(|spawn| spawn.lease.name == name)
+            {
+                StopOutcome::Timeout {
+                    state: "starting".to_string(),
+                }
+            } else {
+                StopOutcome::NotFound
+            };
+            Some(DaemonToWrapper::StopResult {
+                command_id,
+                outcome,
+            })
         }
         WrapperToDaemon::Subscribe { agent, window } => {
             let (subscription_id, control) = {

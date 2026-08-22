@@ -205,6 +205,30 @@ impl FleetSupervisor {
             .clone()
     }
 
+    /// Consultation mémoire sans second lookup SQLite. Utilisée pendant la
+    /// phase Recovering : une clé connue doit conserver son chemin de rejeu,
+    /// tandis qu'une clé neuve est refusée sans créer d'état opérationnel.
+    pub fn knows_command(&self, command_id: &str) -> bool {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        inner.active_by_command.contains_key(command_id)
+            || inner.completed.contains_key(command_id)
+    }
+
+    pub fn quota(&self) -> usize {
+        self.config.quota
+    }
+
+    pub fn active_count(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .active_by_command
+            .len()
+    }
+
     /// Réserve une clé puis applique, sous le même verrou métier, les gardes
     /// mutables de nom et de quota. Une clé rejouée ne traverse jamais ces
     /// gardes et ne peut donc pas lancer une seconde génération.

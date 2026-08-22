@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_QUEUE_CAPACITY: usize = 32;
 const DEFAULT_NOTIFY_TIMEOUT_SECS: u64 = 600;
+const MAX_PASS_ENV_ENTRIES: usize = 64;
+const MAX_ENV_NAME_BYTES: usize = 128;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct AgentDefinition {
@@ -16,6 +18,10 @@ pub struct AgentDefinition {
     pub protocol: String,
     #[serde(default)]
     pub forbidden_env: Vec<String>,
+    /// Variables supplémentaires recopiées depuis l'environnement source du
+    /// daemon après application de la garde de facturation.
+    #[serde(default)]
+    pub pass_env: Vec<String>,
     #[serde(default = "default_permissions")]
     pub permissions: String,
     #[serde(default = "default_queue_capacity")]
@@ -87,6 +93,10 @@ impl AgentRegistry {
         })
     }
 
+    pub fn source(&self) -> &Path {
+        &self.source
+    }
+
     /// Alias des lanceurs interactifs historiques. Cette table ne vaut pas
     /// autorisation : `type_for_command` consulte toujours le registre.
     pub fn interactive_alias(command: &str) -> Option<&'static str> {
@@ -151,6 +161,7 @@ fn unknown_key_warnings(content: &str, source: &Path) -> Vec<String> {
         "args",
         "protocol",
         "forbidden_env",
+        "pass_env",
         "permissions",
         "queue_capacity",
         "notify_timeout_secs",
@@ -215,16 +226,79 @@ fn validate_registry(
                 source.display()
             ));
         }
+        if definition.pass_env.len() > MAX_PASS_ENV_ENTRIES {
+            return Err(format!(
+                "registre invalide {}: pass_env dépasse {MAX_PASS_ENV_ENTRIES} entrées pour '{name}'",
+                source.display()
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for variable in &definition.pass_env {
+            if !valid_env_name(variable) {
+                return Err(format!(
+                    "registre invalide {}: variable pass_env invalide '{variable}' pour '{name}'",
+                    source.display()
+                ));
+            }
+            if !seen.insert(variable) {
+                return Err(format!(
+                    "registre invalide {}: variable pass_env dupliquée '{variable}' pour '{name}'",
+                    source.display()
+                ));
+            }
+            if definition.forbidden_env.contains(variable) {
+                return Err(format!(
+                    "registre invalide {}: '{variable}' est à la fois dans pass_env et forbidden_env pour '{name}'",
+                    source.display()
+                ));
+            }
+        }
     }
     Ok(())
 }
 
-fn definition(command: &str, args: &[&str], forbidden_env: &[&str]) -> AgentDefinition {
+fn valid_env_name(variable: &str) -> bool {
+    let mut bytes = variable.bytes();
+    variable.len() <= MAX_ENV_NAME_BYTES
+        && bytes
+            .next()
+            .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+}
+
+pub(crate) fn allow_api_key_value(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+/// Retourne la première variable interdite présente dans la source. Cette
+/// fonction est l'unique garde partagée par le wrapper 007 et le spawn 009.
+pub(crate) fn forbidden_environment_variable(
+    definition: &AgentDefinition,
+    allow_api_key: bool,
+    is_present: impl Fn(&str) -> bool,
+) -> Option<String> {
+    if allow_api_key {
+        return None;
+    }
+    definition
+        .forbidden_env
+        .iter()
+        .find(|variable| is_present(variable))
+        .cloned()
+}
+
+fn definition(
+    command: &str,
+    args: &[&str],
+    forbidden_env: &[&str],
+    pass_env: &[&str],
+) -> AgentDefinition {
     AgentDefinition {
         command: command.to_string(),
         args: args.iter().map(ToString::to_string).collect(),
         protocol: "acp".to_string(),
         forbidden_env: forbidden_env.iter().map(ToString::to_string).collect(),
+        pass_env: pass_env.iter().map(ToString::to_string).collect(),
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
@@ -243,6 +317,20 @@ fn default_agents() -> BTreeMap<String, AgentDefinition> {
                     "model=\"gpt-5.5\"",
                 ],
                 &["OPENAI_API_KEY", "CODEX_API_KEY"],
+                &[
+                    "CODEX_HOME",
+                    "XDG_CONFIG_HOME",
+                    "XDG_CACHE_HOME",
+                    "XDG_DATA_HOME",
+                    "XDG_STATE_HOME",
+                    "SSH_AUTH_SOCK",
+                    "NPM_CONFIG_CACHE",
+                    "HTTPS_PROXY",
+                    "HTTP_PROXY",
+                    "NO_PROXY",
+                    "SSL_CERT_FILE",
+                    "SSL_CERT_DIR",
+                ],
             ),
         ),
         (
@@ -251,11 +339,28 @@ fn default_agents() -> BTreeMap<String, AgentDefinition> {
                 "npx",
                 &["@zed-industries/claude-code-acp@0.16.2"],
                 &["ANTHROPIC_API_KEY"],
+                &[
+                    "CLAUDE_CONFIG_DIR",
+                    "XDG_CONFIG_HOME",
+                    "XDG_CACHE_HOME",
+                    "SSH_AUTH_SOCK",
+                    "NPM_CONFIG_CACHE",
+                    "HTTPS_PROXY",
+                    "HTTP_PROXY",
+                    "NO_PROXY",
+                    "SSL_CERT_FILE",
+                    "SSL_CERT_DIR",
+                ],
             ),
         ),
         (
             "gemini".to_string(),
-            definition("gemini", &["--acp"], &["GEMINI_API_KEY", "GOOGLE_API_KEY"]),
+            definition(
+                "gemini",
+                &["--acp"],
+                &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+                &["XDG_CONFIG_HOME", "XDG_CACHE_HOME", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"],
+            ),
         ),
     ])
 }
@@ -282,6 +387,8 @@ mod tests {
         assert_eq!(codex.permissions, "allow");
         assert_eq!(codex.queue_capacity, 32);
         assert_eq!(codex.notify_timeout_secs, 600);
+        assert!(codex.pass_env.contains(&"CODEX_HOME".to_string()));
+        assert!(!codex.pass_env.contains(&"OPENAI_API_KEY".to_string()));
         assert_eq!(registry.get("gemini").unwrap().args, vec!["--acp"]);
     }
 
@@ -353,10 +460,37 @@ mod tests {
     #[test]
     fn valid_entry_keys_produce_no_warning() {
         let warnings = unknown_key_warnings(
-            r#"{"agents":{"codex":{"command":"codex","args":[],"protocol":"acp","forbidden_env":[],"permissions":"allow","queue_capacity":32,"notify_timeout_secs":600}}}"#,
+            r#"{"agents":{"codex":{"command":"codex","args":[],"protocol":"acp","forbidden_env":[],"pass_env":["CODEX_HOME"],"permissions":"allow","queue_capacity":32,"notify_timeout_secs":600}}}"#,
             Path::new("/tmp/agents.json"),
         );
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn pass_env_est_borne_et_valide_atomiquement() {
+        for (json, detail) in [
+            (
+                r#"{"agents":{"x":{"command":"x","pass_env":["INVALIDE-TIRET"]}}}"#,
+                "variable pass_env invalide",
+            ),
+            (
+                r#"{"agents":{"x":{"command":"x","pass_env":["HOME","HOME"]}}}"#,
+                "pass_env dupliquée",
+            ),
+            (
+                r#"{"agents":{"x":{"command":"x","pass_env":["API_KEY"],"forbidden_env":["API_KEY"]}}}"#,
+                "à la fois dans pass_env et forbidden_env",
+            ),
+        ] {
+            let error = AgentRegistry::from_json(json, "/tmp/agents.json").unwrap_err();
+            assert!(error.contains(detail), "erreur inattendue: {error}");
+        }
+        let entries = (0..=MAX_PASS_ENV_ENTRIES)
+            .map(|index| format!("VAR_{index}"))
+            .collect::<Vec<_>>();
+        let json = serde_json::json!({"agents":{"x":{"command":"x","pass_env":entries}}});
+        let error = AgentRegistry::from_json(&json.to_string(), "/tmp/agents.json").unwrap_err();
+        assert!(error.contains("pass_env dépasse"));
     }
 
     #[test]

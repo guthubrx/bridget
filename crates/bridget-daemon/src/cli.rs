@@ -3,7 +3,7 @@
 use crate::daemon::{self, DaemonConfig};
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{AgentInfo, AttachWindow, RuntimeSource, decode, encode};
-use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
+use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
@@ -89,6 +89,8 @@ pub fn run() {
         "daemon" => cmd_daemon(),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "attach" => cmd_attach(&args[2..]),
+        "spawn" => cmd_spawn(&args[2..]),
+        "stop" => cmd_stop(&args[2..]),
         "send" => cmd_send(&args[2..]),
         "cancel" => cmd_cancel(&args[2..]),
         "requests" => cmd_requests(&args[2..]),
@@ -183,6 +185,8 @@ fn print_usage() {
          Daemon & client :\n  \
            daemon                 Lance le daemon\n  \
            attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
+           spawn <TYPE>           Lance un équipier géré [--name N] [--persistent]\n  \
+           stop <N>               Arrête un équipier géré\n  \
            send --to <N> <MSG>    Envoie un message\n  \
            reply <MSG>            Répond au dernier expéditeur\n  \
            cancel <ID>            Annule une demande suivie [--reason <T>]\n  \
@@ -225,6 +229,309 @@ fn cmd_attach(args: &[String]) {
         eprintln!("bridget attach: {error}");
         std::process::exit(1);
     }
+}
+
+const DEFAULT_SPAWN_TIMEOUT_SECS: i64 = 10;
+
+#[derive(Debug)]
+struct ParsedSpawnArgs {
+    agent_type: String,
+    name: Option<String>,
+    cwd: Option<std::path::PathBuf>,
+    persistent: bool,
+    persistent_was_set: bool,
+    command_id: Option<String>,
+    timeout_secs: i64,
+    timeout_was_set: bool,
+}
+
+fn cmd_spawn(args: &[String]) {
+    let parsed = parse_spawn_args(args).unwrap_or_else(|error| {
+        eprintln!(
+            "usage: bridget spawn <type> [--name N] [--cwd CHEMIN] [--persistent] \
+             [--timeout S] [--command-id ID]"
+        );
+        eprintln!("erreur: {error}");
+        std::process::exit(2);
+    });
+    let now = unix_timestamp();
+    let current_dir = std::env::current_dir().unwrap_or_else(|error| {
+        eprintln!("bridget spawn: cwd inaccessible: {error}");
+        std::process::exit(1);
+    });
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            eprintln!("bridget spawn: HOME absent");
+            std::process::exit(1);
+        });
+    let order = resolve_spawn_order(&parsed, now, &current_dir, &home).unwrap_or_else(|error| {
+        eprintln!("bridget spawn: {error}");
+        std::process::exit(1);
+    });
+    let command_id = match &order {
+        WrapperToDaemon::SpawnOrder { command_id, .. } => command_id.clone(),
+        _ => unreachable!("resolve_spawn_order ne produit qu'un SpawnOrder"),
+    };
+    println!("command_id: {command_id}");
+    match send_control_to_daemon(order) {
+        Ok(DaemonToWrapper::SpawnAccepted { name, .. }) => {
+            println!("Équipier connecté : {name}");
+        }
+        Ok(DaemonToWrapper::SpawnRejected { reason, .. }) => {
+            eprintln!("SPAWN REFUSÉ: {}", display_spawn_refusal(&reason));
+            std::process::exit(1);
+        }
+        Ok(DaemonToWrapper::IdempotencyResult {
+            issue: bridget_transport::protocol::IdempotencyIssue::EnvelopeMismatch,
+            ..
+        }) => {
+            eprintln!("SPAWN REFUSÉ: command_id déjà associé à une autre enveloppe");
+            std::process::exit(1);
+        }
+        Ok(other) => {
+            eprintln!("réponse spawn inattendue du daemon: {other:?}");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("daemon inaccessible: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_stop(args: &[String]) {
+    let (name, command_id) = parse_stop_args(args).unwrap_or_else(|error| {
+        eprintln!("usage: bridget stop <nom> [--command-id ID]");
+        eprintln!("erreur: {error}");
+        std::process::exit(2);
+    });
+    println!("command_id: {command_id}");
+    match send_control_to_daemon(WrapperToDaemon::StopOrder {
+        name,
+        command_id: command_id.clone(),
+    }) {
+        Ok(DaemonToWrapper::StopResult { outcome, .. }) => match outcome {
+            StopOutcome::Stopped => println!("Équipier arrêté proprement."),
+            StopOutcome::StoppedForced { survivors_killed } => println!(
+                "Équipier arrêté de force ({survivors_killed} processus survivants terminés)."
+            ),
+            StopOutcome::NotManaged => {
+                eprintln!("STOP REFUSÉ: l'agent n'est pas géré par le daemon");
+                std::process::exit(1);
+            }
+            StopOutcome::NotFound => {
+                eprintln!("STOP REFUSÉ: équipier introuvable");
+                std::process::exit(1);
+            }
+            StopOutcome::Timeout { state } => {
+                eprintln!("STOP INCOMPLET: délai dépassé dans l'état {state}");
+                std::process::exit(1);
+            }
+        },
+        Ok(other) => {
+            eprintln!("réponse stop inattendue du daemon: {other:?}");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("daemon inaccessible: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn parse_spawn_args(args: &[String]) -> Result<ParsedSpawnArgs, String> {
+    let agent_type = args
+        .first()
+        .filter(|value| !value.starts_with('-'))
+        .cloned()
+        .ok_or_else(|| "type d'agent manquant".to_string())?;
+    validate_agent_name(&agent_type)?;
+    let mut parsed = ParsedSpawnArgs {
+        agent_type,
+        name: None,
+        cwd: None,
+        persistent: false,
+        persistent_was_set: false,
+        command_id: None,
+        timeout_secs: DEFAULT_SPAWN_TIMEOUT_SECS,
+        timeout_was_set: false,
+    };
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--persistent" => {
+                parsed.persistent = true;
+                parsed.persistent_was_set = true;
+                index += 1;
+            }
+            "--name" | "--cwd" | "--command-id" | "--timeout" => {
+                let option = args[index].as_str();
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| format!("valeur manquante pour {option}"))?;
+                match option {
+                    "--name" => {
+                        validate_agent_name(value)?;
+                        parsed.name = Some(value.clone());
+                    }
+                    "--cwd" => parsed.cwd = Some(std::path::PathBuf::from(value)),
+                    "--command-id" => {
+                        validate_command_id(value)?;
+                        parsed.command_id = Some(value.clone());
+                    }
+                    "--timeout" => {
+                        parsed.timeout_secs = value
+                            .parse::<i64>()
+                            .ok()
+                            .filter(|seconds| *seconds > 0 && *seconds <= 600)
+                            .ok_or_else(|| "--timeout doit être compris entre 1 et 600".to_string())?;
+                        parsed.timeout_was_set = true;
+                    }
+                    _ => unreachable!(),
+                }
+                index += 2;
+            }
+            option => return Err(format!("option spawn inconnue: {option}")),
+        }
+    }
+    Ok(parsed)
+}
+
+fn parse_stop_args(args: &[String]) -> Result<(String, String), String> {
+    let name = args.first().cloned().ok_or_else(|| "nom manquant".to_string())?;
+    validate_agent_name(&name)?;
+    let command_id = match args.get(1).map(String::as_str) {
+        None => uuid::Uuid::new_v4().to_string(),
+        Some("--command-id") if args.len() == 3 => {
+            validate_command_id(&args[2])?;
+            args[2].clone()
+        }
+        Some(_) => return Err("options stop invalides".to_string()),
+    };
+    Ok((name, command_id))
+}
+
+fn resolve_spawn_order(
+    parsed: &ParsedSpawnArgs,
+    now: i64,
+    current_dir: &std::path::Path,
+    home: &std::path::Path,
+) -> Result<WrapperToDaemon, String> {
+    let command_id = parsed
+        .command_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let path = spawn_order_path(home, &command_id);
+    if path.exists() {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|error| format!("ordre mémorisé illisible {}: {error}", path.display()))?;
+        let stored: WrapperToDaemon = decode(content.trim())
+            .map_err(|error| format!("ordre mémorisé invalide {}: {error}", path.display()))?;
+        validate_retry_options(parsed, &stored)?;
+        return Ok(stored);
+    }
+    let cwd = parsed.cwd.as_deref().unwrap_or(current_dir);
+    if !cwd.is_absolute() {
+        return Err("--cwd doit être absolu".to_string());
+    }
+    if !cwd.is_dir() {
+        return Err(format!("cwd absent ou non répertoire: {}", cwd.display()));
+    }
+    let order = WrapperToDaemon::SpawnOrder {
+        agent_type: parsed.agent_type.clone(),
+        name: parsed.name.clone(),
+        cwd: cwd.to_string_lossy().into_owned(),
+        persistent: parsed.persistent,
+        command_id,
+        issued_at: now,
+        deadline_at: now.saturating_add(parsed.timeout_secs),
+    };
+    let bytes = format!("{}\n", encode(&order).map_err(|error| error.to_string())?).into_bytes();
+    bridget_transport::fsutil::write_private_file_atomic(&path, &bytes)
+        .map_err(|error| format!("mémorisation de l'ordre impossible {}: {error}", path.display()))?;
+    Ok(order)
+}
+
+fn validate_retry_options(parsed: &ParsedSpawnArgs, stored: &WrapperToDaemon) -> Result<(), String> {
+    let WrapperToDaemon::SpawnOrder {
+        agent_type,
+        name,
+        cwd,
+        persistent,
+        ..
+    } = stored
+    else {
+        return Err("le command_id mémorisé n'est pas un ordre spawn".to_string());
+    };
+    if &parsed.agent_type != agent_type
+        || parsed.name.as_ref().is_some_and(|value| Some(value) != name.as_ref())
+        || parsed
+            .cwd
+            .as_ref()
+            .is_some_and(|value| value.to_string_lossy() != cwd.as_str())
+        || (parsed.persistent_was_set && !persistent)
+        || (parsed.timeout_was_set
+            && stored_spawn_timeout(stored).is_some_and(|value| value != parsed.timeout_secs))
+    {
+        return Err("--command-id rejoué avec des options divergentes".to_string());
+    }
+    Ok(())
+}
+
+fn stored_spawn_timeout(stored: &WrapperToDaemon) -> Option<i64> {
+    match stored {
+        WrapperToDaemon::SpawnOrder {
+            issued_at,
+            deadline_at,
+            ..
+        } => deadline_at.checked_sub(*issued_at),
+        _ => None,
+    }
+}
+
+fn spawn_order_path(home: &std::path::Path, command_id: &str) -> std::path::PathBuf {
+    home.join(".local/state/bridget/spawn-orders")
+        .join(format!("{command_id}.json"))
+}
+
+fn validate_command_id(command_id: &str) -> Result<(), String> {
+    if command_id.is_empty()
+        || command_id.len() > 128
+        || !command_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("command_id invalide (1..128 caractères alphanumériques, - ou _)".to_string());
+    }
+    Ok(())
+}
+
+fn display_spawn_refusal(reason: &SpawnRefusal) -> String {
+    match reason {
+        SpawnRefusal::UnknownType => "type d'agent inconnu".to_string(),
+        SpawnRefusal::CommandMissing { command, registry } => {
+            format!("commande '{command}' introuvable (registre {registry})")
+        }
+        SpawnRefusal::BillingGuard { variable } => {
+            format!("variable de facturation interdite présente: {variable}")
+        }
+        SpawnRefusal::NameActive => "nom déjà actif".to_string(),
+        SpawnRefusal::EnvUnfit { detail } => format!("environnement inapte: {detail}"),
+        SpawnRefusal::CwdGone => "répertoire de travail disparu".to_string(),
+        SpawnRefusal::NegotiationFailed { detail } => format!("négociation échouée: {detail}"),
+        SpawnRefusal::SpawnTimeout => "délai de lancement dépassé".to_string(),
+        SpawnRefusal::QuotaExceeded { limit } => format!("quota de flotte atteint ({limit})"),
+        SpawnRefusal::DaemonRecovering => "daemon en réconciliation".to_string(),
+        SpawnRefusal::IdempotencyExpired => "command_id expiré".to_string(),
+    }
+}
+
+fn unix_timestamp() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn parse_attach_args(args: &[String]) -> Result<(String, AttachWindow), String> {
@@ -437,7 +744,14 @@ fn send_to_daemon(msg: &BridgetMessage) -> Result<DaemonToWrapper, String> {
 }
 
 fn send_control_to_daemon(command: WrapperToDaemon) -> Result<DaemonToWrapper, String> {
-    let stream = UnixStream::connect(socket_path()).map_err(|e| e.to_string())?;
+    send_control_to_daemon_at(&socket_path(), command)
+}
+
+fn send_control_to_daemon_at(
+    socket: &std::path::Path,
+    command: WrapperToDaemon,
+) -> Result<DaemonToWrapper, String> {
+    let stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
     let mut writer = BufWriter::new(stream);
 
     let reg = WrapperToDaemon::Register {
@@ -1403,6 +1717,10 @@ fn cmd_ledger() {
 #[cfg(test)]
 mod hook_tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
+    use std::path::{Path, PathBuf};
+    use std::thread;
 
     /// Configuration réaliste : quatre hooks utilisateur déjà en place, dont
     /// un sur `Stop`. L'insertion doit être additive, jamais destructive.
@@ -1560,6 +1878,143 @@ mod hook_tests {
                 "1".to_string(),
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn spawn_cli_rejoue_l_enveloppe_memorisee_octet_pour_octet() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-cli-t905-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("work");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let args = vec![
+            "codex".to_string(),
+            "--name".to_string(),
+            "codex-managed".to_string(),
+            "--persistent".to_string(),
+            "--command-id".to_string(),
+            "command-retry".to_string(),
+        ];
+        let first = resolve_spawn_order(&parse_spawn_args(&args).unwrap(), 100, &cwd, &root)
+            .unwrap();
+        let retry_args = vec![
+            "codex".to_string(),
+            "--command-id".to_string(),
+            "command-retry".to_string(),
+        ];
+        let retry = resolve_spawn_order(
+            &parse_spawn_args(&retry_args).unwrap(),
+            999,
+            Path::new("/autre/cwd"),
+            &root,
+        )
+        .unwrap();
+        assert_eq!(encode(&first).unwrap(), encode(&retry).unwrap());
+        let state_path = spawn_order_path(&root, "command-retry");
+        assert_eq!(
+            std::fs::metadata(&state_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(resolve_spawn_order(
+            &parse_spawn_args(&[
+                "claude".to_string(),
+                "--command-id".to_string(),
+                "command-retry".to_string(),
+            ])
+            .unwrap(),
+            999,
+            &cwd,
+            &root,
+        )
+        .unwrap_err()
+        .contains("options divergentes"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spawn_roundtrip_rejoue_la_meme_issue_apres_reponse_perdue() {
+        let socket = PathBuf::from(format!(
+            "/tmp/bg-t905-{}-{}.sock",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let mut observed = Vec::new();
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(
+                    decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                    WrapperToDaemon::Register { .. }
+                ));
+                writeln!(
+                    writer,
+                    "{}",
+                    encode(&DaemonToWrapper::Registered {
+                        name: "cli-test".to_string()
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                writer.flush().unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                observed.push(line.trim().to_string());
+                writeln!(
+                    writer,
+                    "{}",
+                    encode(&DaemonToWrapper::SpawnAccepted {
+                        command_id: "command-lost".to_string(),
+                        name: "codex-managed".to_string(),
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                writer.flush().unwrap();
+            }
+            observed
+        });
+        let order = WrapperToDaemon::SpawnOrder {
+            agent_type: "codex".to_string(),
+            name: Some("codex-managed".to_string()),
+            cwd: "/tmp".to_string(),
+            persistent: false,
+            command_id: "command-lost".to_string(),
+            issued_at: 100,
+            deadline_at: 110,
+        };
+        for _ in 0..2 {
+            assert!(matches!(
+                send_control_to_daemon_at(&socket, order.clone()).unwrap(),
+                DaemonToWrapper::SpawnAccepted { ref command_id, ref name }
+                    if command_id == "command-lost" && name == "codex-managed"
+            ));
+        }
+        let observed = server.join().unwrap();
+        assert_eq!(observed[0], observed[1], "le retry doit être canonique");
+        let _ = std::fs::remove_file(socket);
+    }
+
+    #[test]
+    fn stop_cli_genere_ou_reutilise_un_command_id() {
+        let generated = parse_stop_args(&["codex-1".to_string()]).unwrap();
+        assert_eq!(generated.0, "codex-1");
+        assert!(!generated.1.is_empty());
+        assert_eq!(
+            parse_stop_args(&[
+                "codex-1".to_string(),
+                "--command-id".to_string(),
+                "stop-retry".to_string(),
+            ])
+            .unwrap(),
+            ("codex-1".to_string(), "stop-retry".to_string())
         );
     }
 }

@@ -1560,12 +1560,14 @@ pub fn launch_acp_with(
     if definition.protocol != "acp" {
         return Err(format!("le type '{agent_type}' n'utilise pas le protocole ACP").into());
     }
-    if let Some(error) = forbidden_env_error(
+    if let Some(variable) = crate::registry::forbidden_environment_variable(
         definition,
-        allow_api_key_value(std::env::var("BRIDGET_ALLOW_API_KEY").ok().as_deref()),
-        |variable| std::env::var_os(variable).is_some(),
+        crate::registry::allow_api_key_value(
+            std::env::var("BRIDGET_ALLOW_API_KEY").ok().as_deref(),
+        ),
+        |name| std::env::var_os(name).is_some(),
     ) {
-        return Err(error.into());
+        return Err(billing_guard_error(&variable).into());
     }
 
     let effective_name = explicit_name.map(str::to_owned);
@@ -1718,28 +1720,11 @@ pub fn launch_acp_with(
     Ok(())
 }
 
-fn allow_api_key_value(value: Option<&str>) -> bool {
-    value == Some("1")
-}
-
-fn forbidden_env_error(
-    definition: &crate::registry::AgentDefinition,
-    allow_api_key: bool,
-    is_present: impl Fn(&str) -> bool,
-) -> Option<String> {
-    if allow_api_key {
-        return None;
-    }
-    definition
-        .forbidden_env
-        .iter()
-        .find(|variable| is_present(variable))
-        .map(|variable| {
-            format!(
-                "variable d'environnement refusée pour l'équipier ACP : {variable} \
-                 (utilisez BRIDGET_ALLOW_API_KEY=1 uniquement si vous acceptez la facturation API)"
-            )
-        })
+fn billing_guard_error(variable: &str) -> String {
+    format!(
+        "variable d'environnement refusée pour l'équipier ACP : {variable} \
+         (utilisez BRIDGET_ALLOW_API_KEY=1 uniquement si vous acceptez la facturation API)"
+    )
 }
 
 fn send_wrapper_message(
@@ -1917,6 +1902,7 @@ mod reconnect_tests {
             args: Vec::new(),
             protocol: "acp".to_string(),
             forbidden_env: forbidden_env.iter().map(ToString::to_string).collect(),
+            pass_env: Vec::new(),
             permissions: "allow".to_string(),
             queue_capacity: 32,
             notify_timeout_secs: 600,
@@ -1937,12 +1923,13 @@ mod reconnect_tests {
 
     #[test]
     fn api_key_forbidden_refuse_le_lancement_en_nommant_la_variable() {
-        let error = forbidden_env_error(
+        let variable = crate::registry::forbidden_environment_variable(
             &acp_definition(&["OPENAI_API_KEY", "CODEX_API_KEY"]),
             false,
             |variable| matches!(variable, "OPENAI_API_KEY" | "CODEX_API_KEY"),
         )
         .expect("clé API refusée");
+        let error = billing_guard_error(&variable);
         assert!(error.contains("OPENAI_API_KEY"));
         assert!(!error.contains("CODEX_API_KEY"));
         assert!(error.contains("BRIDGET_ALLOW_API_KEY=1"));
@@ -1950,7 +1937,7 @@ mod reconnect_tests {
 
     #[test]
     fn api_key_forbidden_utilise_la_seconde_variable_si_elle_est_seule() {
-        let error = forbidden_env_error(
+        let error = crate::registry::forbidden_environment_variable(
             &acp_definition(&["OPENAI_API_KEY", "CODEX_API_KEY"]),
             false,
             |variable| variable == "CODEX_API_KEY",
@@ -1962,7 +1949,7 @@ mod reconnect_tests {
     #[test]
     fn api_key_forbidden_accepte_le_contournement_explicite() {
         assert!(
-            forbidden_env_error(
+            crate::registry::forbidden_environment_variable(
                 &acp_definition(&["ANTHROPIC_API_KEY"]),
                 true,
                 |variable| variable == "ANTHROPIC_API_KEY",
@@ -1973,10 +1960,10 @@ mod reconnect_tests {
 
     #[test]
     fn seul_le_contournement_egal_a_un_est_accepte() {
-        assert!(allow_api_key_value(Some("1")));
+        assert!(crate::registry::allow_api_key_value(Some("1")));
         for value in [None, Some("0"), Some("true"), Some("01")] {
             assert!(
-                !allow_api_key_value(value),
+                !crate::registry::allow_api_key_value(value),
                 "valeur non autorisée: {value:?}"
             );
         }

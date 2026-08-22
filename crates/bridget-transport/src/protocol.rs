@@ -47,6 +47,34 @@ pub enum ClientRefusal {
     MessageOutsideClientRole,
 }
 
+/// Table fermée des refus d'un ordre de lancement géré par le daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SpawnRefusal {
+    UnknownType,
+    CommandMissing { command: String, registry: String },
+    BillingGuard { variable: String },
+    NameActive,
+    EnvUnfit { detail: String },
+    CwdGone,
+    NegotiationFailed { detail: String },
+    SpawnTimeout,
+    QuotaExceeded { limit: usize },
+    DaemonRecovering,
+    IdempotencyExpired,
+}
+
+/// Résultat synchrone et fermé d'un ordre d'arrêt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StopOutcome {
+    Stopped,
+    StoppedForced { survivors_killed: usize },
+    NotManaged,
+    NotFound,
+    Timeout { state: String },
+}
+
 /// Issue calculée d'une opération client idempotente. `OutcomeUnknown` est
 /// informatif : il impose un `Lookup` ou le rejeu strict de la même enveloppe,
 /// jamais une nouvelle émission avec une nouvelle clé.
@@ -200,6 +228,19 @@ pub enum WrapperToDaemon {
         delivery_id: String,
         delivery_generation: u64,
     },
+    /// Ordre idempotent de lancement d'un équipier supervisé.
+    SpawnOrder {
+        agent_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        cwd: String,
+        persistent: bool,
+        command_id: String,
+        issued_at: i64,
+        deadline_at: i64,
+    },
+    /// Ordre corrélé d'arrêt d'un équipier supervisé.
+    StopOrder { name: String, command_id: String },
     /// Ouvrir un abonnement à la vue d'un équipier.
     Subscribe { agent: String, window: AttachWindow },
     /// Fermer un abonnement sans fermer la connexion attach.
@@ -374,6 +415,18 @@ pub enum DaemonToWrapper {
         operation_kind: String,
         idempotency_key: String,
         issue: IdempotencyIssue,
+    },
+    /// Succès d'un spawn, émis seulement après le `Register` réel.
+    SpawnAccepted { command_id: String, name: String },
+    /// Refus terminal et rejouable d'un spawn.
+    SpawnRejected {
+        command_id: String,
+        reason: SpawnRefusal,
+    },
+    /// Issue synchrone d'un ordre d'arrêt.
+    StopResult {
+        command_id: String,
+        outcome: StopOutcome,
     },
     /// Remise aval réservée au wrapper destinataire.
     DeliverIdempotent {
@@ -825,6 +878,61 @@ mod tests {
             } if operation_kind == "send" && idempotency_key == "message-1" && delivery_id == "delivery-1"
         ));
         assert!(!welcome.allowed_for_attach());
+    }
+
+    #[test]
+    fn lifecycle_messages_roundtrip_and_stay_outside_attach() {
+        let spawn = WrapperToDaemon::SpawnOrder {
+            agent_type: "codex".to_string(),
+            name: Some("codex-1".to_string()),
+            cwd: "/tmp".to_string(),
+            persistent: true,
+            command_id: "command-1".to_string(),
+            issued_at: 100,
+            deadline_at: 110,
+        };
+        assert!(matches!(
+            decode(&encode(&spawn).unwrap()).unwrap(),
+            WrapperToDaemon::SpawnOrder {
+                agent_type,
+                name: Some(name),
+                command_id,
+                ..
+            } if agent_type == "codex" && name == "codex-1" && command_id == "command-1"
+        ));
+        assert_eq!(
+            spawn.attach_refusal(),
+            Some(AttachRefusal::MessageOutsideAttachRole)
+        );
+        let rejection = DaemonToWrapper::SpawnRejected {
+            command_id: "command-1".to_string(),
+            reason: SpawnRefusal::BillingGuard {
+                variable: "OPENAI_API_KEY".to_string(),
+            },
+        };
+        assert!(matches!(
+            decode(&encode(&rejection).unwrap()).unwrap(),
+            DaemonToWrapper::SpawnRejected {
+                reason: SpawnRefusal::BillingGuard { variable },
+                ..
+            } if variable == "OPENAI_API_KEY"
+        ));
+        assert!(!rejection.allowed_for_attach());
+        let stop = DaemonToWrapper::StopResult {
+            command_id: "stop-1".to_string(),
+            outcome: StopOutcome::StoppedForced {
+                survivors_killed: 2,
+            },
+        };
+        assert!(matches!(
+            decode(&encode(&stop).unwrap()).unwrap(),
+            DaemonToWrapper::StopResult {
+                outcome: StopOutcome::StoppedForced {
+                    survivors_killed: 2
+                },
+                ..
+            }
+        ));
     }
 
     #[test]
