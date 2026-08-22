@@ -22,7 +22,7 @@ valide chaque tâche avant coche. Ne jamais committer automatiquement.
   **Observable** : transcription complète d'un tour ; **STOP session si échec**
   (l'hypothèse fondatrice tombe, retour à l'utilisateur).
 
-- [ ] **T702** [Fondation] Créer `docs/DEPRECATIONS.md` (colonnes : chemin,
+- [X] **T702** [Fondation] Créer `docs/DEPRECATIONS.md` (colonnes : chemin,
   remplacé par, supprimable quand) et l'ADR
   `docs/decisions/003-transport-acp.md` (contexte, décision — ACP comme
   transport de livraison, client JSON-RPC minimal maison —, conséquences

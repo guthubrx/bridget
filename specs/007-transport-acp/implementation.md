@@ -53,3 +53,30 @@ CODEX_HOME=/tmp/spike-codex-home npx @zed-industries/codex-acp@0.16.0
 
 Le répertoire `/tmp/spike-codex-home` a été supprimé après le test. Aucun
 adaptateur ne demande de clé API pendant les deux tentatives.
+
+### Self-review Article XIX/XX
+
+- **Nécessité** : valider la compatibilité ACP avant toute intégration évite de
+  construire sur un adaptateur inutilisable.
+- **Simplicité** : le spike utilise uniquement `node`, `npx` et JSON-RPC ; aucune
+  dépendance ni source Bridget n'a été ajoutée.
+- **Vérifications** : absence de `OPENAI_API_KEY`, deux cycles
+  `initialize`/`session/new`/`session/prompt`, retour `stopReason` sur la
+  tentative gagnante.
+- **Non vérifié** : les adaptateurs Claude et Gemini, prévus par T707 et T708.
+
+## T702 — Décision et dépréciations
+
+- **Statut** : terminé
+- **Fichiers** : `docs/decisions/003-transport-acp.md`,
+  `docs/DEPRECATIONS.md`
+
+### Self-review Article XIX/XX
+
+- **Nécessité** : la nouvelle frontière de protocole est une décision
+  structurante ; les chemins hérités doivent rester traçables.
+- **Simplicité** : un ADR et un tableau unique, sans nouvel outil ni format.
+- **Vérifications** : l'ADR reprend le cycle R-001 et l'arbitrage R-004 ; le
+  registre a les trois colonnes requises.
+- **Non vérifié** : aucun chemin de livraison hérité n'est encore remplacé ;
+  T703 et T705 alimenteront le registre au moment de leur suppression.
