@@ -224,6 +224,15 @@ vérifient la demande suivie, le corps riche octet pour octet, l'ordre du tour
 lent et de sa file, ainsi qu'une coupure et reconnexion réelles du socket du
 même wrapper. Le ledger final contient exactement quatre demandes `answered`.
 
+L'état `busy` et la relance différée ne s'appliquent pas à cette voie
+interactive : le wrapper tmux 007 livre les enveloppes sans signal de fin de
+tour (`wrapper.rs`, boucle de livraison historique autour des lignes
+1030–1070) et se reconnecte donc en état `connected`. La session 010 ne change
+pas cette baseline. Le test verrouille explicitement `connected` avant et après
+la coupure ainsi que l'absence de `deferred_reminder_level`, sans fabriquer de
+signal `TurnState`. Les deux oracles restent portés par le wrapper ACP, qui
+réenregistre son tour actif et émet `TurnState` (autour des lignes 2439–2488).
+
 La matrice `managed_parity_test::matrice_fr008_compare_le_meme_corpus_et_les_frames_attach`
 rejoue en complément le quickstart 007 §1 à §4 trois fois dans chacun des deux
 modes ACP de lancement. Les oracles restent indépendants de la simple parité :

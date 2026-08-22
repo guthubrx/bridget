@@ -792,18 +792,22 @@ fn run_interactive_prompt_corpus(
 
     // Quickstart 007 §4 : le faux CLI reste vivant pendant le tour lent,
     // une seconde demande est livrée à la même session, puis la connexion du
-    // wrapper est réellement coupée et reprise sans perdre l'ordre FIFO.
+    // wrapper est réellement coupée et reprise sans perdre l'ordre FIFO. Le
+    // wrapper tmux historique n'a pas de frontière de tour : `busy` et les
+    // relances différées restent donc réservés au corpus ACP ci-dessous.
     let slow = send_tracked_with_timeout(&mut peer, agent, "QUEUE-SLOW", 9);
     wait_path(
         &session.slow_started,
         "le même faux Codex n'a pas commencé le tour lent",
     );
+    assert_eq!(wait_agent(&mut peer, agent).state, "connected");
     let next = send_tracked_with_timeout(&mut peer, agent, "QUEUE-NEXT", 9);
     proxy.cut_wrapper_and_wait_for_reconnect();
     let reconnected = wait_reconnected(&mut peer, agent);
     assert_eq!(reconnected.transport, "unix");
+    assert_eq!(reconnected.state, "connected");
     assert_eq!(
-        receive_replies(&mut peer, &[slow, next]),
+        receive_replies(&mut peer, &[slow.clone(), next]),
         vec!["fixture-response-slow", "fixture-response-next"]
     );
 
@@ -814,6 +818,11 @@ fn run_interactive_prompt_corpus(
     match peer.recv() {
         DaemonToWrapper::RequestList { requests } => {
             assert_eq!(requests.len(), MATRIX_EXPECTED_TURNS);
+            let slow_request = requests
+                .iter()
+                .find(|request| request.id == slow)
+                .expect("demande lente absente du ledger interactif");
+            assert_eq!(slow_request.deferred_reminder_level, None);
             assert!(requests.iter().all(|request| request.state == "answered"));
         }
         other => panic!("liste des demandes du prompt inattendue: {other:?}"),
