@@ -44,7 +44,77 @@ pub enum AttachRefusal {
 }
 
 /// Taille maximale d'un fragment d'événement sur le fil attach.
-pub const MAX_ATTACH_FRAGMENT_BYTES: usize = 256 * 1024;
+pub const MAX_ATTACH_SERIALIZED_FRAME_BYTES: usize = 256 * 1024;
+/// Borne de charge utile avant encodage base64. Le worker vérifie ensuite la
+/// taille JSON réelle afin que la frame filaire reste sous la borne ci-dessus.
+pub const MAX_ATTACH_FRAGMENT_BYTES: usize = 190 * 1024;
+
+mod base64_bytes {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let value = (u32::from(chunk[0]) << 16)
+                | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+                | u32::from(*chunk.get(2).unwrap_or(&0));
+            encoded.push(TABLE[((value >> 18) & 0x3f) as usize] as char);
+            encoded.push(TABLE[((value >> 12) & 0x3f) as usize] as char);
+            encoded.push(if chunk.len() > 1 {
+                TABLE[((value >> 6) & 0x3f) as usize] as char
+            } else {
+                '='
+            });
+            encoded.push(if chunk.len() > 2 {
+                TABLE[(value & 0x3f) as usize] as char
+            } else {
+                '='
+            });
+        }
+        serializer.serialize_str(&encoded)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded = String::deserialize(deserializer)?;
+        if encoded.len() % 4 != 0 {
+            return Err(serde::de::Error::custom("base64 incomplet"));
+        }
+        let mut bytes = Vec::with_capacity(encoded.len() / 4 * 3);
+        for block in encoded.as_bytes().chunks(4) {
+            let value = block
+                .iter()
+                .enumerate()
+                .try_fold(0_u32, |value, (index, byte)| {
+                    let bits = match byte {
+                        b'A'..=b'Z' => byte - b'A',
+                        b'a'..=b'z' => byte - b'a' + 26,
+                        b'0'..=b'9' => byte - b'0' + 52,
+                        b'+' => 62,
+                        b'/' => 63,
+                        b'=' if index >= 2 => 0,
+                        _ => return Err(serde::de::Error::custom("base64 invalide")),
+                    };
+                    Ok((value << 6) | u32::from(bits))
+                })?;
+            bytes.push((value >> 16) as u8);
+            if block[2] != b'=' {
+                bytes.push((value >> 8) as u8);
+            }
+            if block[3] != b'=' {
+                bytes.push(value as u8);
+            }
+        }
+        Ok(bytes)
+    }
+}
 
 /// Messages envoyés par le wrapper vers le daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +135,7 @@ pub enum WrapperToDaemon {
         offset: u64,
         #[serde(rename = "final")]
         final_fragment: bool,
+        #[serde(with = "base64_bytes")]
         bytes: Vec<u8>,
     },
     /// Marque la frontière entre le rejeu et le suivi continu.
@@ -80,6 +151,13 @@ pub enum WrapperToDaemon {
         to_seq: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+    },
+    /// Ligne de journal illisible sans séquence exploitable.
+    JournalReadError {
+        subscription_id: String,
+        line: u64,
+        offset: u64,
+        reason: String,
     },
     /// Termine un abonnement, sans impliquer la fermeture de connexion.
     End {
@@ -221,6 +299,7 @@ pub enum DaemonToWrapper {
         offset: u64,
         #[serde(rename = "final")]
         final_fragment: bool,
+        #[serde(with = "base64_bytes")]
         bytes: Vec<u8>,
     },
     /// Le rejeu est terminé ; `through_seq` est absent si la fenêtre est vide.
@@ -236,6 +315,13 @@ pub enum DaemonToWrapper {
         to_seq: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+    },
+    /// Diagnostic relayé quand une ligne n'a pas de séquence à lacuner.
+    JournalReadError {
+        subscription_id: String,
+        line: u64,
+        offset: u64,
+        reason: String,
     },
     /// Fin motivée d'un abonnement attach.
     End {
@@ -295,11 +381,11 @@ impl DaemonToWrapper {
             self,
             Self::RoleAccepted {
                 role: ConnectionRole::Attach
-            }
-                | Self::Subscribed { .. }
+            } | Self::Subscribed { .. }
                 | Self::JournalFragment { .. }
                 | Self::SnapshotCaughtUp { .. }
                 | Self::Gap { .. }
+                | Self::JournalReadError { .. }
                 | Self::End { .. }
                 | Self::AttachRejected { .. }
                 | Self::Ack { .. }
@@ -614,11 +700,21 @@ mod tests {
                 subscription_id: Some("sub-1".to_string()),
                 reason: AttachRefusal::CommandQueueSaturated,
             },
+            WrapperToDaemon::JournalReadError {
+                subscription_id: "sub-1".to_string(),
+                line: 3,
+                offset: 42,
+                reason: "ligne illisible".to_string(),
+            },
         ];
         for message in messages {
-            assert_eq!(encode(&message).unwrap(), encode(&decode::<WrapperToDaemon>(&encode(&message).unwrap()).unwrap()).unwrap());
+            assert_eq!(
+                encode(&message).unwrap(),
+                encode(&decode::<WrapperToDaemon>(&encode(&message).unwrap()).unwrap()).unwrap()
+            );
         }
-        assert_eq!(MAX_ATTACH_FRAGMENT_BYTES, 256 * 1024);
+        assert_eq!(MAX_ATTACH_FRAGMENT_BYTES, 190 * 1024);
+        assert_eq!(MAX_ATTACH_SERIALIZED_FRAME_BYTES, 256 * 1024);
     }
 
     #[test]
@@ -663,6 +759,12 @@ mod tests {
                 subscription_id: None,
                 reason: AttachRefusal::AgentNotAcp,
             },
+            DaemonToWrapper::JournalReadError {
+                subscription_id: "sub-1".to_string(),
+                line: 3,
+                offset: 42,
+                reason: "ligne illisible".to_string(),
+            },
             DaemonToWrapper::DeliveryRejected {
                 id: "message-1".to_string(),
                 reason: "processus arrêté".to_string(),
@@ -677,6 +779,24 @@ mod tests {
             let decoded: DaemonToWrapper = decode(&json).unwrap();
             assert_eq!(json, encode(&decoded).unwrap());
             assert_eq!(decoded.allowed_for_attach(), reaches_attach);
+        }
+    }
+
+    #[test]
+    fn fragment_base64_reste_sous_la_borne_filaire_pour_des_octets_hostiles() {
+        for bytes in [
+            vec![0; MAX_ATTACH_FRAGMENT_BYTES],
+            vec![0xff; MAX_ATTACH_FRAGMENT_BYTES],
+            "équipier".as_bytes().repeat(MAX_ATTACH_FRAGMENT_BYTES / 9),
+        ] {
+            let message = WrapperToDaemon::JournalFragment {
+                subscription_id: "attach-0123456789abcdef".to_string(),
+                seq: 7,
+                offset: 0,
+                final_fragment: true,
+                bytes,
+            };
+            assert!(encode(&message).unwrap().len() <= MAX_ATTACH_SERIALIZED_FRAME_BYTES);
         }
     }
 
@@ -699,11 +819,12 @@ mod tests {
             WrapperToDaemon::Send(tracked_send).attach_refusal(),
             Some(AttachRefusal::ReplyNotAllowed)
         );
-        assert!(WrapperToDaemon::Send(BridgetMessage::new("humain", "codex-1", "bonjour"))
-            .attach_refusal()
-            .is_none());
-        assert!(!DaemonToWrapper::Deliver(BridgetMessage::new("a", "b", "x"))
-            .allowed_for_attach());
+        assert!(
+            WrapperToDaemon::Send(BridgetMessage::new("humain", "codex-1", "bonjour"))
+                .attach_refusal()
+                .is_none()
+        );
+        assert!(!DaemonToWrapper::Deliver(BridgetMessage::new("a", "b", "x")).allowed_for_attach());
     }
 
     #[test]
@@ -732,14 +853,23 @@ mod tests {
             .into_iter()
             .map(|message| decode::<DaemonToWrapper>(&encode(&message).unwrap()).unwrap())
             .collect::<Vec<_>>();
-        assert!(matches!(decoded[0], DaemonToWrapper::JournalFragment { seq: 11, .. }));
-        assert!(matches!(decoded[1], DaemonToWrapper::DeliveryRejected { ref id, .. } if id == "message-humain"));
-        assert!(matches!(decoded[2], DaemonToWrapper::JournalFragment { seq: 12, .. }));
+        assert!(matches!(
+            decoded[0],
+            DaemonToWrapper::JournalFragment { seq: 11, .. }
+        ));
+        assert!(
+            matches!(decoded[1], DaemonToWrapper::DeliveryRejected { ref id, .. } if id == "message-humain")
+        );
+        assert!(matches!(
+            decoded[2],
+            DaemonToWrapper::JournalFragment { seq: 12, .. }
+        ));
     }
 
     #[test]
     fn protocol_007_reste_compatible_sans_handshake() {
-        let json = r#"{"type":"Register","agent_type":"codex","name":null,"turn_in_progress":false}"#;
+        let json =
+            r#"{"type":"Register","agent_type":"codex","name":null,"turn_in_progress":false}"#;
         assert!(matches!(
             decode::<WrapperToDaemon>(json).unwrap(),
             WrapperToDaemon::Register { agent_type, .. } if agent_type == "codex"

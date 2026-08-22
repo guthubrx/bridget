@@ -1273,6 +1273,7 @@ fn handle_wrapper_message(
         | WrapperToDaemon::SnapshotCaughtUp { .. }
         | WrapperToDaemon::Gap { .. }
         | WrapperToDaemon::End { .. }
+        | WrapperToDaemon::JournalReadError { .. }
         | WrapperToDaemon::AttachRejected { .. } => None,
         WrapperToDaemon::Register {
             agent_type,

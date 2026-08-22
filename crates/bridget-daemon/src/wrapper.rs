@@ -2,17 +2,24 @@
 //!
 //! Appelé par le CLI quand l'utilisateur tape : bridget codex, bridget claude, etc.
 
-use bridget_transport::journal::{current_host_date, resolve_window, IncrementalJournalReader, JournalReadItem, JournalWindowError};
+use bridget_transport::journal::{
+    IncrementalJournalReader, JournalReadItem, JournalWindowError, current_host_date,
+    resolve_window,
+};
 use bridget_transport::protocol::{decode, encode};
-use bridget_transport::{AcpEvent, AcpOptions, AcpTransport, AttachRefusal, AttachWindow, DaemonToWrapper, TmuxTransport, Transport, WrapperToDaemon, MAX_ATTACH_FRAGMENT_BYTES};
+use bridget_transport::{
+    AcpEvent, AcpOptions, AcpTransport, AttachRefusal, AttachWindow, DaemonToWrapper,
+    MAX_ATTACH_FRAGMENT_BYTES, MAX_ATTACH_SERIALIZED_FRAME_BYTES, TmuxTransport, Transport,
+    WrapperToDaemon,
+};
 use log::{debug, error, info, warn};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -37,7 +44,7 @@ const RUNTIME_PROBE_INTERVAL: Duration = Duration::from_secs(20);
 // surcoût de 134 ms par minute.
 const RUNTIME_PATH_REFRESH: Duration = Duration::from_secs(60);
 const ATTACH_RELAY_COMMAND_CAPACITY: usize = 8;
-const ATTACH_RELAY_READ_BYTES: usize = 16 * 1024;
+const ATTACH_RELAY_READ_BYTES: usize = 128 * 1024;
 const ATTACH_RELAY_IDLE_WAIT: Duration = Duration::from_millis(10);
 
 fn socket_path() -> PathBuf {
@@ -53,9 +60,10 @@ fn socket_path() -> PathBuf {
 
 fn host_name() -> String {
     if let Ok(host) = std::env::var("HOSTNAME")
-        && !host.trim().is_empty() {
-            return host;
-        }
+        && !host.trim().is_empty()
+    {
+        return host;
+    }
     Command::new("hostname")
         .output()
         .ok()
@@ -67,9 +75,10 @@ fn host_name() -> String {
 
 fn transport_name() -> String {
     if let Ok(transport) = std::env::var("BRIDGET_TRANSPORT")
-        && !transport.trim().is_empty() {
-            return transport;
-        }
+        && !transport.trim().is_empty()
+    {
+        return transport;
+    }
     let config_path = std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
@@ -320,7 +329,10 @@ impl RuntimeProbe {
             self.path = resolved;
             self.path_resolved_at = Instant::now();
             if self.path.is_none() {
-                debug!("sonde runtime : aucun fichier de session pour le pid {}", self.pid);
+                debug!(
+                    "sonde runtime : aucun fichier de session pour le pid {}",
+                    self.pid
+                );
             }
         }
 
@@ -547,7 +559,8 @@ pub fn launch(
             return Err(format!(
                 "Argument non autorisé contient des caractères shell dangereux: '{}'",
                 arg
-            ).into());
+            )
+            .into());
         }
     }
 
@@ -595,8 +608,8 @@ pub fn launch(
         let mut last_heartbeat = Instant::now();
         // Seul Codex tient son fichier de session ouvert ; pour Claude, c'est
         // le hook `Stop` qui rapporte le runtime (research.md D-002).
-        let mut runtime_probe = (agent_type_for_thread == "codex")
-            .then(|| RuntimeProbe::new(agent_pid));
+        let mut runtime_probe =
+            (agent_type_for_thread == "codex").then(|| RuntimeProbe::new(agent_pid));
 
         'connection: while !stopping_for_thread.load(Ordering::SeqCst) {
             let mut line = String::new();
@@ -673,7 +686,11 @@ pub fn launch(
 
                     // Vérification proactive du socket (auto-reconnect)
                     // Vérifier toutes les X secondes si le socket existe toujours
-                    if Instant::now().duration_since(last_heartbeat).as_secs().is_multiple_of(SOCKET_CHECK_INTERVAL.as_secs()) {
+                    if Instant::now()
+                        .duration_since(last_heartbeat)
+                        .as_secs()
+                        .is_multiple_of(SOCKET_CHECK_INTERVAL.as_secs())
+                    {
                         if socket_path().exists() {
                             debug!("Socket Bridget détecté - daemon probablement disponible");
                         } else {
@@ -725,7 +742,9 @@ pub fn launch(
 
                     info!(
                         "🔄 Tentative de reconnexion {} pour « {} » (délai: {:.1}s)",
-                        failed_attempts, wanted_name, delay.as_secs_f64()
+                        failed_attempts,
+                        wanted_name,
+                        delay.as_secs_f64()
                     );
 
                     thread::sleep(delay);
@@ -765,9 +784,14 @@ pub fn launch(
                             if let Some(ref mut t) = transport {
                                 let notif = "🔄 Bridget: reconnecté au daemon".to_string();
                                 if let Err(e) = t.deliver(&bridget_core::BridgetMessage::new(
-                                    "bridget", &my_name_for_thread, &notif
+                                    "bridget",
+                                    &my_name_for_thread,
+                                    &notif,
                                 )) {
-                                    error!("Impossible d'afficher la notification de reconnexion: {}", e);
+                                    error!(
+                                        "Impossible d'afficher la notification de reconnexion: {}",
+                                        e
+                                    );
                                 }
                             }
 
@@ -885,10 +909,11 @@ pub fn launch(
     {
         if let Ok(json) = encode(&WrapperToDaemon::Unregister)
             && let Ok(mut writer) = writer_clone.lock()
-                && let Some(w) = writer.as_mut() {
-                    let _ = writeln!(w, "{}", json);
-                    let _ = w.flush();
-                }
+            && let Some(w) = writer.as_mut()
+        {
+            let _ = writeln!(w, "{}", json);
+            let _ = w.flush();
+        }
     }
 
     *writer.lock().unwrap() = None;
@@ -922,7 +947,15 @@ enum AttachRelayCommand {
 
 enum AttachRelayControl {
     Unsubscribe { subscription_id: String },
-    Stop,
+}
+
+const ATTACH_RELAY_CONTROL_IDS_CAPACITY: usize = ATTACH_RELAY_COMMAND_CAPACITY * 2;
+
+#[derive(Default)]
+struct AttachRelayControlState {
+    pending: HashSet<String>,
+    active: HashSet<String>,
+    cancelled: HashSet<String>,
 }
 
 struct RelaySubscription {
@@ -934,10 +967,17 @@ struct RelaySubscription {
     reader: Option<IncrementalJournalReader>,
     caught_up: bool,
     through_seq: Option<u64>,
+    pending_events: VecDeque<(u64, Vec<u8>)>,
+    pending_fragment: Option<(u64, Vec<u8>, usize)>,
 }
 
 impl RelaySubscription {
-    fn new(subscription_id: String, window: AttachWindow, directory: &std::path::Path, host_today: &str) -> Result<Self, JournalWindowError> {
+    fn new(
+        subscription_id: String,
+        window: AttachWindow,
+        directory: &std::path::Path,
+        host_today: &str,
+    ) -> Result<Self, JournalWindowError> {
         let resolved = resolve_window(directory, &window, host_today)?;
         Ok(Self {
             subscription_id,
@@ -948,16 +988,33 @@ impl RelaySubscription {
             reader: None,
             caught_up: false,
             through_seq: None,
+            pending_events: VecDeque::new(),
+            pending_fragment: None,
         })
     }
 
     fn refresh_files(&mut self, directory: &std::path::Path, host_today: &str) {
-        let Ok(resolved) = resolve_window(directory, &self.window, host_today) else {
+        let Ok(resolved) = resolve_window(directory, &AttachWindow::Seq(0), host_today) else {
             return;
         };
-        for path in resolved.files {
-            if !self.files.contains(&path) {
-                self.files.push(path);
+        if self.caught_up {
+            // Une fenêtre Today/Date borne le rejeu initial seulement. Une fois
+            // le snapshot atteint, seul un fichier plus récent que le curseur
+            // connu entre dans le suivi, jamais l'historique antérieur.
+            let latest_known = self.files.last().cloned();
+            for path in resolved.files {
+                if latest_known.as_ref().is_none_or(|latest| path > *latest) {
+                    self.files.push(path);
+                }
+            }
+        } else {
+            let Ok(initial) = resolve_window(directory, &self.window, host_today) else {
+                return;
+            };
+            for path in initial.files {
+                if !self.files.contains(&path) {
+                    self.files.push(path);
+                }
             }
         }
     }
@@ -969,10 +1026,15 @@ impl RelaySubscription {
         }
         self.reader.as_mut()
     }
+
+    fn has_pending_output(&self) -> bool {
+        self.pending_fragment.is_some() || !self.pending_events.is_empty()
+    }
 }
 
 #[derive(Clone)]
 struct AttachRelayHooks {
+    before_command: Arc<dyn Fn() + Send + Sync>,
     before_read: Arc<dyn Fn() + Send + Sync>,
     control_observed: Arc<dyn Fn() + Send + Sync>,
 }
@@ -980,6 +1042,7 @@ struct AttachRelayHooks {
 impl Default for AttachRelayHooks {
     fn default() -> Self {
         Self {
+            before_command: Arc::new(|| {}),
             before_read: Arc::new(|| {}),
             control_observed: Arc::new(|| {}),
         }
@@ -994,6 +1057,9 @@ struct AttachRelayWorker {
     commands: mpsc::SyncSender<AttachRelayCommand>,
     controls: mpsc::Sender<AttachRelayControl>,
     stopped: Arc<AtomicBool>,
+    control_state: Arc<Mutex<AttachRelayControlState>>,
+    generation: Arc<AtomicU64>,
+    generation_ack: Arc<(Mutex<u64>, Condvar)>,
     worker: Option<thread::JoinHandle<()>>,
     control: Option<thread::JoinHandle<()>>,
 }
@@ -1003,10 +1069,17 @@ type RelayEmitter = Arc<dyn Fn(WrapperToDaemon) + Send + Sync>;
 type RelayEvents = Arc<Mutex<Vec<WrapperToDaemon>>>;
 
 impl AttachRelayWorker {
-    fn start(directory: PathBuf, host_today: String, emit: RelayEmitter) -> Self {
-        Self::start_with(directory, host_today, ATTACH_RELAY_COMMAND_CAPACITY, emit, AttachRelayHooks::default())
+    fn start(directory: PathBuf, emit: RelayEmitter) -> Self {
+        Self::start_with_clock(
+            directory,
+            Arc::new(current_host_date),
+            ATTACH_RELAY_COMMAND_CAPACITY,
+            emit,
+            AttachRelayHooks::default(),
+        )
     }
 
+    #[cfg(test)]
     fn start_with(
         directory: PathBuf,
         host_today: String,
@@ -1014,78 +1087,155 @@ impl AttachRelayWorker {
         emit: RelayEmitter,
         hooks: AttachRelayHooks,
     ) -> Self {
+        let clock: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || host_today.clone());
+        Self::start_with_clock(directory, clock, capacity, emit, hooks)
+    }
+
+    fn start_with_clock(
+        directory: PathBuf,
+        host_today: Arc<dyn Fn() -> String + Send + Sync>,
+        capacity: usize,
+        emit: RelayEmitter,
+        hooks: AttachRelayHooks,
+    ) -> Self {
         let (command_sender, command_receiver) = mpsc::sync_channel(capacity);
         let (control_sender, control_receiver) = mpsc::channel();
         let stopped = Arc::new(AtomicBool::new(false));
-        let cancelled = Arc::new(Mutex::new(HashSet::new()));
+        let control_state = Arc::new(Mutex::new(AttachRelayControlState::default()));
+        let generation = Arc::new(AtomicU64::new(0));
+        let generation_ack = Arc::new((Mutex::new(0), Condvar::new()));
 
+        let control_for_thread = control_state.clone();
         let control_stopped = stopped.clone();
-        let control_cancelled = cancelled.clone();
         let control_hooks = hooks.clone();
         let control = thread::spawn(move || {
-            while let Ok(command) = control_receiver.recv() {
+            while !control_stopped.load(Ordering::SeqCst) {
+                let Ok(command) = control_receiver.recv_timeout(ATTACH_RELAY_IDLE_WAIT) else {
+                    continue;
+                };
                 match command {
                     AttachRelayControl::Unsubscribe { subscription_id } => {
-                        control_cancelled
+                        let mut state = control_for_thread
                             .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
-                            .insert(subscription_id);
-                        (control_hooks.control_observed)();
-                    }
-                    AttachRelayControl::Stop => {
-                        control_stopped.store(true, Ordering::SeqCst);
-                        (control_hooks.control_observed)();
-                        break;
+                            .unwrap_or_else(|poison| poison.into_inner());
+                        if state.pending.contains(&subscription_id)
+                            || state.active.contains(&subscription_id)
+                        {
+                            state.cancelled.insert(subscription_id);
+                            (control_hooks.control_observed)();
+                        }
                     }
                 }
             }
         });
 
         let worker_stopped = stopped.clone();
-        let worker_cancelled = cancelled.clone();
+        let worker_control = control_state.clone();
+        let worker_generation = generation.clone();
+        let worker_generation_ack = generation_ack.clone();
         let worker_emit = emit.clone();
         let worker = thread::spawn(move || {
             let mut subscriptions = BTreeMap::<String, RelaySubscription>::new();
+            let mut seen_generation = 0;
             while !worker_stopped.load(Ordering::SeqCst) {
-                match command_receiver.recv_timeout(ATTACH_RELAY_IDLE_WAIT) {
-                    Ok(AttachRelayCommand::Subscribe { subscription_id, window }) => {
-                        match RelaySubscription::new(subscription_id.clone(), window, &directory, &host_today) {
-                            Ok(subscription) => {
-                                worker_cancelled
-                                    .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner())
-                                    .remove(&subscription_id);
-                                worker_emit(WrapperToDaemon::Subscribed {
-                                    subscription_id: subscription_id.clone(),
-                                });
-                                subscriptions.insert(subscription_id, subscription);
-                            }
-                            Err(error) => worker_emit(WrapperToDaemon::AttachRejected {
+                let current_generation = worker_generation.load(Ordering::SeqCst);
+                if current_generation != seen_generation {
+                    subscriptions.clear();
+                    worker_control
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .active
+                        .clear();
+                    seen_generation = current_generation;
+                    let (ack, wake) = &*worker_generation_ack;
+                    *ack.lock().unwrap_or_else(|poison| poison.into_inner()) = seen_generation;
+                    wake.notify_all();
+                    continue;
+                }
+                (hooks.before_command)();
+                let command = if subscriptions.is_empty() {
+                    match command_receiver.recv_timeout(ATTACH_RELAY_IDLE_WAIT) {
+                        Ok(command) => Some(command),
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => None,
+                    }
+                } else {
+                    match command_receiver.try_recv() {
+                        Ok(command) => Some(command),
+                        Err(mpsc::TryRecvError::Disconnected) => break,
+                        Err(mpsc::TryRecvError::Empty) => None,
+                    }
+                };
+                if let Some(AttachRelayCommand::Subscribe {
+                    subscription_id,
+                    window,
+                }) = command
+                {
+                    let cancelled = {
+                        let mut state = worker_control
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner());
+                        state.pending.remove(&subscription_id);
+                        let cancelled = state.cancelled.remove(&subscription_id);
+                        if !cancelled {
+                            state.active.insert(subscription_id.clone());
+                        }
+                        cancelled
+                    };
+                    if cancelled {
+                        continue;
+                    }
+                    match RelaySubscription::new(
+                        subscription_id.clone(),
+                        window,
+                        &directory,
+                        &host_today(),
+                    ) {
+                        Ok(subscription) => {
+                            worker_emit(WrapperToDaemon::Subscribed {
+                                subscription_id: subscription_id.clone(),
+                            });
+                            subscriptions.insert(subscription_id, subscription);
+                        }
+                        Err(error) => {
+                            worker_control
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner())
+                                .active
+                                .remove(&subscription_id);
+                            worker_emit(WrapperToDaemon::AttachRejected {
                                 subscription_id: Some(subscription_id),
                                 reason: refusal_for_window(error),
-                            }),
+                            });
                         }
                     }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
                 }
 
                 // Aucune souscription => aucune lecture de fichier : le relais
                 // ne perturbe jamais l'écrivain JSONL d'un équipier inobservé.
                 let ids = subscriptions.keys().cloned().collect::<Vec<_>>();
                 for subscription_id in ids {
-                    if worker_cancelled
+                    if worker_control
                         .lock()
                         .unwrap_or_else(|poison| poison.into_inner())
+                        .cancelled
                         .remove(&subscription_id)
                     {
+                        worker_control
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .active
+                            .remove(&subscription_id);
                         subscriptions.remove(&subscription_id);
                         continue;
                     }
                     let Some(subscription) = subscriptions.get_mut(&subscription_id) else {
                         continue;
                     };
-                    subscription.refresh_files(&directory, &host_today);
+                    if emit_one_fragment(&worker_emit, subscription) {
+                        continue;
+                    }
+                    subscription.refresh_files(&directory, &host_today());
                     if subscription.file_index >= subscription.files.len() {
                         if !subscription.caught_up {
                             worker_emit(WrapperToDaemon::SnapshotCaughtUp {
@@ -1097,14 +1247,17 @@ impl AttachRelayWorker {
                         continue;
                     }
                     (hooks.before_read)();
-                    if worker_cancelled
+                    if worker_control
                         .lock()
                         .unwrap_or_else(|poison| poison.into_inner())
+                        .cancelled
                         .contains(&subscription_id)
                     {
                         continue;
                     }
-                    let reader = subscription.next_reader().expect("fichier de relais présent");
+                    let reader = subscription
+                        .next_reader()
+                        .expect("fichier de relais présent");
                     let items = match reader.read_chunk(ATTACH_RELAY_READ_BYTES) {
                         Ok(items) => items,
                         Err(error) => {
@@ -1117,27 +1270,85 @@ impl AttachRelayWorker {
                         }
                     };
                     for item in items {
-                        if let JournalReadItem::Event(event) = item
-                            && subscription.from_seq.is_none_or(|from_seq| event.seq >= from_seq)
-                        {
-                            emit_fragments(&worker_emit, &subscription.subscription_id, event.seq, &event.bytes);
-                            subscription.through_seq = Some(event.seq);
+                        match item {
+                            JournalReadItem::Event(event)
+                                if subscription
+                                    .from_seq
+                                    .is_none_or(|from_seq| event.seq >= from_seq) =>
+                            {
+                                subscription
+                                    .pending_events
+                                    .push_back((event.seq, event.bytes));
+                            }
+                            JournalReadItem::Oversized { seq: Some(seq), .. } => {
+                                worker_emit(WrapperToDaemon::Gap {
+                                    subscription_id: subscription.subscription_id.clone(),
+                                    from_seq: seq,
+                                    to_seq: seq,
+                                    reason: Some("event_too_large".to_string()),
+                                })
+                            }
+                            JournalReadItem::Oversized {
+                                seq: None,
+                                offset,
+                                line,
+                            } => worker_emit(WrapperToDaemon::JournalReadError {
+                                subscription_id: subscription.subscription_id.clone(),
+                                line,
+                                offset,
+                                reason: "event_too_large sans séquence".to_string(),
+                            }),
+                            JournalReadItem::Unreadable(line) => {
+                                worker_emit(WrapperToDaemon::JournalReadError {
+                                    subscription_id: subscription.subscription_id.clone(),
+                                    line: line.line,
+                                    offset: line.offset,
+                                    reason: "ligne de journal illisible".to_string(),
+                                })
+                            }
+                            JournalReadItem::Event(_) => {}
                         }
                     }
-                    let file_finished = subscription
-                        .reader
-                        .as_ref()
-                        .is_some_and(|reader| reader.next_offset() >= std::fs::metadata(&subscription.files[subscription.file_index]).map(|metadata| metadata.len()).unwrap_or(u64::MAX));
-                    if file_finished && subscription.file_index.saturating_add(1) < subscription.files.len() {
+                    let file_finished =
+                        match std::fs::metadata(&subscription.files[subscription.file_index]) {
+                            Ok(metadata) => subscription
+                                .reader
+                                .as_ref()
+                                .is_some_and(|reader| reader.next_offset() >= metadata.len()),
+                            Err(error) => {
+                                worker_emit(WrapperToDaemon::End {
+                                    subscription_id: subscription.subscription_id.clone(),
+                                    reason: format!("source de journal indisponible: {error}"),
+                                });
+                                worker_control
+                                    .lock()
+                                    .unwrap_or_else(|poison| poison.into_inner())
+                                    .active
+                                    .remove(&subscription_id);
+                                subscriptions.remove(&subscription_id);
+                                continue;
+                            }
+                        };
+                    if file_finished
+                        && subscription.file_index.saturating_add(1) < subscription.files.len()
+                    {
                         subscription.reader = None;
                         subscription.file_index = subscription.file_index.saturating_add(1);
-                    } else if file_finished && !subscription.caught_up {
+                    } else if file_finished
+                        && !subscription.caught_up
+                        && !subscription.has_pending_output()
+                    {
                         worker_emit(WrapperToDaemon::SnapshotCaughtUp {
                             subscription_id: subscription.subscription_id.clone(),
                             through_seq: subscription.through_seq,
                         });
                         subscription.caught_up = true;
                     }
+                }
+                if subscriptions.values().all(|subscription| {
+                    subscription.caught_up && !subscription.has_pending_output()
+                }) {
+                    thread::sleep(ATTACH_RELAY_IDLE_WAIT);
                 }
             }
         });
@@ -1146,28 +1357,84 @@ impl AttachRelayWorker {
             commands: command_sender,
             controls: control_sender,
             stopped,
+            control_state,
+            generation,
+            generation_ack,
             worker: Some(worker),
             control: Some(control),
         }
     }
 
-    fn subscribe(&self, subscription_id: String, window: AttachWindow) -> Result<(), AttachRefusal> {
+    fn subscribe(
+        &self,
+        subscription_id: String,
+        window: AttachWindow,
+    ) -> Result<(), AttachRefusal> {
+        {
+            let mut state = self
+                .control_state
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            if state.pending.len().saturating_add(state.active.len())
+                >= ATTACH_RELAY_CONTROL_IDS_CAPACITY
+            {
+                return Err(AttachRefusal::CommandQueueSaturated);
+            }
+            state.pending.insert(subscription_id.clone());
+        }
         self.commands
-            .try_send(AttachRelayCommand::Subscribe { subscription_id, window })
-            .map_err(|error| match error {
-                mpsc::TrySendError::Full(_) | mpsc::TrySendError::Disconnected(_) => AttachRefusal::CommandQueueSaturated,
+            .try_send(AttachRelayCommand::Subscribe {
+                subscription_id: subscription_id.clone(),
+                window,
+            })
+            .map_err(|error| {
+                self.control_state
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .pending
+                    .remove(&subscription_id);
+                match error {
+                    mpsc::TrySendError::Full(_) | mpsc::TrySendError::Disconnected(_) => {
+                        AttachRefusal::CommandQueueSaturated
+                    }
+                }
             })
     }
 
     fn unsubscribe(&self, subscription_id: String) {
-        let _ = self.controls.send(AttachRelayControl::Unsubscribe { subscription_id });
+        let _ = self
+            .controls
+            .send(AttachRelayControl::Unsubscribe { subscription_id });
+    }
+
+    fn reset_generation(&self) {
+        let mut state = self
+            .control_state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let pending = state.pending.iter().cloned().collect::<Vec<_>>();
+        state.cancelled.extend(pending);
+        state.active.clear();
+        drop(state);
+        let generation = self
+            .generation
+            .fetch_add(1, Ordering::SeqCst)
+            .saturating_add(1);
+        let (ack, wake) = &*self.generation_ack;
+        let mut acknowledged = ack.lock().unwrap_or_else(|poison| poison.into_inner());
+        while *acknowledged < generation {
+            acknowledged = wake
+                .wait(acknowledged)
+                .unwrap_or_else(|poison| poison.into_inner());
+        }
     }
 
     fn shutdown(&mut self) {
         if self.stopped.swap(true, Ordering::SeqCst) {
             return;
         }
-        let _ = self.controls.send(AttachRelayControl::Stop);
+        // Le Stop n'emprunte jamais une file : le worker observe ce drapeau
+        // avant chaque commande, même sous une rafale de souscriptions.
         if let Some(control) = self.control.take() {
             let _ = control.join();
         }
@@ -1191,21 +1458,56 @@ fn refusal_for_window(error: JournalWindowError) -> AttachRefusal {
     }
 }
 
-fn emit_fragments(
-    emit: &RelayEmitter,
-    subscription_id: &str,
-    seq: u64,
-    bytes: &[u8],
-) {
-    for (offset, chunk) in bytes.chunks(MAX_ATTACH_FRAGMENT_BYTES).enumerate() {
-        emit(WrapperToDaemon::JournalFragment {
-            subscription_id: subscription_id.to_string(),
-            seq,
-            offset: (offset * MAX_ATTACH_FRAGMENT_BYTES) as u64,
-            final_fragment: offset.saturating_add(1) * MAX_ATTACH_FRAGMENT_BYTES >= bytes.len(),
-            bytes: chunk.to_vec(),
-        });
+fn emit_one_fragment(emit: &RelayEmitter, subscription: &mut RelaySubscription) -> bool {
+    if subscription.pending_fragment.is_none()
+        && let Some((seq, bytes)) = subscription.pending_events.pop_front()
+    {
+        subscription.pending_fragment = Some((seq, bytes, 0));
     }
+    let Some((seq, bytes, offset)) = subscription.pending_fragment.as_ref() else {
+        return false;
+    };
+    let seq = *seq;
+    let offset = *offset;
+    let remaining = bytes.len().saturating_sub(offset);
+    if remaining == 0 {
+        subscription.pending_fragment = None;
+        subscription.through_seq = Some(seq);
+        return false;
+    }
+    let mut low = 1_usize;
+    let mut high = remaining.min(MAX_ATTACH_FRAGMENT_BYTES);
+    while low < high {
+        let candidate = (low + high).div_ceil(2);
+        let frame = WrapperToDaemon::JournalFragment {
+            subscription_id: subscription.subscription_id.clone(),
+            seq,
+            offset: offset as u64,
+            final_fragment: candidate == remaining,
+            bytes: bytes[offset..offset + candidate].to_vec(),
+        };
+        if encode(&frame).is_ok_and(|json| json.len() <= MAX_ATTACH_SERIALIZED_FRAME_BYTES) {
+            low = candidate;
+        } else {
+            high = candidate.saturating_sub(1);
+        }
+    }
+    let length = low;
+    let final_fragment = length == remaining;
+    emit(WrapperToDaemon::JournalFragment {
+        subscription_id: subscription.subscription_id.clone(),
+        seq,
+        offset: offset as u64,
+        final_fragment,
+        bytes: bytes[offset..offset + length].to_vec(),
+    });
+    if final_fragment {
+        subscription.pending_fragment = None;
+        subscription.through_seq = Some(seq);
+    } else if let Some((_, _, next_offset)) = subscription.pending_fragment.as_mut() {
+        *next_offset = offset.saturating_add(length);
+    }
+    true
 }
 
 fn launch_acp(
@@ -1217,7 +1519,14 @@ fn launch_acp(
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or("HOME absent pour le journal de session ACP")?;
-    launch_acp_with(agent_type, agent_args, explicit_name, &registry, &socket_path(), &home)
+    launch_acp_with(
+        agent_type,
+        agent_args,
+        explicit_name,
+        &registry,
+        &socket_path(),
+        &home,
+    )
 }
 
 /// Lance un équipier ACP avec ses dépendances de configuration et de chemins
@@ -1250,7 +1559,10 @@ pub fn launch_acp_with(
     let host = host_name();
     let os = operating_system();
     let instance_id = uuid::Uuid::new_v4().to_string();
-    let initial_domain = effective_name.as_deref().and_then(effective_domain).or_else(derive_domain);
+    let initial_domain = effective_name
+        .as_deref()
+        .and_then(effective_domain)
+        .or_else(derive_domain);
     let (mut reader, initial_writer, mut my_name) = connect_and_register_at(
         socket,
         agent_type,
@@ -1263,7 +1575,11 @@ pub fn launch_acp_with(
         false,
     )?;
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
-    let name_state_path = socket.parent().unwrap().join("agent-names").join(format!("active-{my_name}"));
+    let name_state_path = socket
+        .parent()
+        .unwrap()
+        .join("agent-names")
+        .join(format!("active-{my_name}"));
     if let Some(parent) = name_state_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -1280,7 +1596,6 @@ pub fn launch_acp_with(
     let relay_writer = writer.clone();
     let mut relay = AttachRelayWorker::start(
         journal_directory,
-        current_host_date(),
         Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
     );
 
@@ -1294,7 +1609,20 @@ pub fn launch_acp_with(
         let mut line = String::new();
         match reader.read_line(&mut line) {
             Ok(0) => {
-                let Some((new_reader, registered_name)) = reconnect_acp(socket, &writer, &transport, agent_type, &name_state_path, &host, &os, &instance_id, &my_name) else { break; };
+                relay.reset_generation();
+                let Some((new_reader, registered_name)) = reconnect_acp(
+                    socket,
+                    &writer,
+                    &transport,
+                    agent_type,
+                    &name_state_path,
+                    &host,
+                    &os,
+                    &instance_id,
+                    &my_name,
+                ) else {
+                    break;
+                };
                 reader = new_reader;
                 my_name = registered_name;
                 continue;
@@ -1302,7 +1630,13 @@ pub fn launch_acp_with(
             Ok(_) => match decode(line.trim()) {
                 Ok(DaemonToWrapper::Deliver(message)) => {
                     if let Err(error) = transport.deliver(&message) {
-                        send_wrapper_message(&writer, WrapperToDaemon::DeliveryRejected { id: message.id, reason: error.to_string() });
+                        send_wrapper_message(
+                            &writer,
+                            WrapperToDaemon::DeliveryRejected {
+                                id: message.id,
+                                reason: error.to_string(),
+                            },
+                        );
                     }
                 }
                 Ok(DaemonToWrapper::CancelDelivery { id, reason }) => {
@@ -1330,10 +1664,27 @@ pub fn launch_acp_with(
                 Ok(_) => {}
                 Err(error) => warn!("message ACP illisible: {}", error),
             },
-            Err(error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
             Err(error) => {
                 warn!("connexion daemon ACP perdue : {error}");
-                let Some((new_reader, registered_name)) = reconnect_acp(socket, &writer, &transport, agent_type, &name_state_path, &host, &os, &instance_id, &my_name) else { break; };
+                relay.reset_generation();
+                let Some((new_reader, registered_name)) = reconnect_acp(
+                    socket,
+                    &writer,
+                    &transport,
+                    agent_type,
+                    &name_state_path,
+                    &host,
+                    &os,
+                    &instance_id,
+                    &my_name,
+                ) else {
+                    break;
+                };
                 reader = new_reader;
                 my_name = registered_name;
                 continue;
@@ -1378,8 +1729,13 @@ fn forbidden_env_error(
         })
 }
 
-fn send_wrapper_message(writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>, message: WrapperToDaemon) {
-    let Ok(json) = encode(&message) else { return; };
+fn send_wrapper_message(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    message: WrapperToDaemon,
+) {
+    let Ok(json) = encode(&message) else {
+        return;
+    };
     let write_result = writer
         .lock()
         .unwrap_or_else(|err| err.into_inner())
@@ -1391,47 +1747,108 @@ fn send_wrapper_message(writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>, mess
 }
 
 #[allow(clippy::too_many_arguments)]
-fn reconnect_acp(socket: &std::path::Path, writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>, transport: &AcpTransport, agent_type: &str, name_state_path: &std::path::Path, host: &str, os: &str, instance_id: &str, fallback_name: &str) -> Option<(BufReader<UnixStream>, String)> {
+fn reconnect_acp(
+    socket: &std::path::Path,
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    transport: &AcpTransport,
+    agent_type: &str,
+    name_state_path: &std::path::Path,
+    host: &str,
+    os: &str,
+    instance_id: &str,
+    fallback_name: &str,
+) -> Option<(BufReader<UnixStream>, String)> {
     let mut attempts = 0_u32;
     while transport.is_alive() {
         thread::sleep(reconnect_delay(attempts));
         attempts = attempts.saturating_add(1);
         let wanted_name = resolve_current_name(name_state_path, fallback_name);
-        let busy = matches!(transport.state(), bridget_transport::TurnState::InProgress { .. });
-        match connect_and_register_at(socket, agent_type, Some(&wanted_name), host, "acp", os, instance_id, effective_domain(&wanted_name).as_deref(), busy) {
+        let busy = matches!(
+            transport.state(),
+            bridget_transport::TurnState::InProgress { .. }
+        );
+        match connect_and_register_at(
+            socket,
+            agent_type,
+            Some(&wanted_name),
+            host,
+            "acp",
+            os,
+            instance_id,
+            effective_domain(&wanted_name).as_deref(),
+            busy,
+        ) {
             Ok((reader, new_writer, registered_name)) if registered_name == wanted_name => {
                 *writer.lock().unwrap_or_else(|error| error.into_inner()) = Some(new_writer);
                 return Some((reader, registered_name));
             }
-            Ok((_, _, registered_name)) => warn!("reconnexion ACP refusée : nom inattendu « {} »", registered_name),
-            Err(error) => warn!("reconnexion ACP de « {} » impossible (tentative {}) : {}", wanted_name, attempts, error),
+            Ok((_, _, registered_name)) => warn!(
+                "reconnexion ACP refusée : nom inattendu « {} »",
+                registered_name
+            ),
+            Err(error) => warn!(
+                "reconnexion ACP de « {} » impossible (tentative {}) : {}",
+                wanted_name, attempts, error
+            ),
         }
     }
     None
 }
 
-fn forward_acp_events(writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>, my_name: &str, events: Vec<AcpEvent>) -> bool {
+fn forward_acp_events(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    my_name: &str,
+    events: Vec<AcpEvent>,
+) -> bool {
     let mut journal_failed = false;
     for event in events {
         match event {
-            AcpEvent::TurnStarted { .. } => send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: true }),
-            AcpEvent::TurnFinished { message, response, stop_reason } => {
+            AcpEvent::TurnStarted { .. } => {
+                send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: true })
+            }
+            AcpEvent::TurnFinished {
+                message,
+                response,
+                stop_reason,
+            } => {
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
                 if stop_reason_is_error(&stop_reason) {
-                    send_wrapper_message(writer, WrapperToDaemon::DeliveryRejected { id: message.id, reason: format!("stopReason ACP d'erreur : {stop_reason}") });
+                    send_wrapper_message(
+                        writer,
+                        WrapperToDaemon::DeliveryRejected {
+                            id: message.id,
+                            reason: format!("stopReason ACP d'erreur : {stop_reason}"),
+                        },
+                    );
                 } else if message.reply && !response.is_empty() {
-                    let mut reply = bridget_core::BridgetMessage::new(my_name, &message.from, response);
+                    let mut reply =
+                        bridget_core::BridgetMessage::new(my_name, &message.from, response);
                     reply.in_reply_to = Some(message.id);
                     send_wrapper_message(writer, WrapperToDaemon::Send(reply));
                 } else if message.reply {
-                    send_wrapper_message(writer, WrapperToDaemon::DeliveryRejected { id: message.id, reason: "réponse vide".to_string() });
+                    send_wrapper_message(
+                        writer,
+                        WrapperToDaemon::DeliveryRejected {
+                            id: message.id,
+                            reason: "réponse vide".to_string(),
+                        },
+                    );
                 }
             }
             AcpEvent::DeliveryRejected { message_id, reason } => {
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
-                send_wrapper_message(writer, WrapperToDaemon::DeliveryRejected { id: message_id, reason });
+                send_wrapper_message(
+                    writer,
+                    WrapperToDaemon::DeliveryRejected {
+                        id: message_id,
+                        reason,
+                    },
+                );
             }
-            AcpEvent::JournalFailed { detail } => { journal_failed = true; warn!("arrêt du transport ACP : {detail}"); }
+            AcpEvent::JournalFailed { detail } => {
+                journal_failed = true;
+                warn!("arrêt du transport ACP : {detail}");
+            }
             AcpEvent::Update { .. } | AcpEvent::Error { .. } => {}
         }
     }
@@ -1444,7 +1861,9 @@ fn stop_reason_is_error(stop_reason: &str) -> bool {
 
 #[cfg(test)]
 fn journal_failure_requires_shutdown(events: &[AcpEvent]) -> bool {
-    events.iter().any(|event| matches!(event, AcpEvent::JournalFailed { .. }))
+    events
+        .iter()
+        .any(|event| matches!(event, AcpEvent::JournalFailed { .. }))
 }
 
 #[cfg(test)]
@@ -1491,9 +1910,11 @@ mod reconnect_tests {
 
     #[test]
     fn journal_failure_requires_an_immediate_transport_shutdown() {
-        assert!(journal_failure_requires_shutdown(&[AcpEvent::JournalFailed {
-            detail: "journal ACP saturé".to_string(),
-        }]));
+        assert!(journal_failure_requires_shutdown(&[
+            AcpEvent::JournalFailed {
+                detail: "journal ACP saturé".to_string(),
+            }
+        ]));
         assert!(!journal_failure_requires_shutdown(&[AcpEvent::Error {
             detail: "diagnostic non terminal".to_string(),
         }]));
@@ -1525,19 +1946,24 @@ mod reconnect_tests {
 
     #[test]
     fn api_key_forbidden_accepte_le_contournement_explicite() {
-        assert!(forbidden_env_error(
-            &acp_definition(&["ANTHROPIC_API_KEY"]),
-            true,
-            |variable| variable == "ANTHROPIC_API_KEY",
-        )
-        .is_none());
+        assert!(
+            forbidden_env_error(
+                &acp_definition(&["ANTHROPIC_API_KEY"]),
+                true,
+                |variable| variable == "ANTHROPIC_API_KEY",
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn seul_le_contournement_egal_a_un_est_accepte() {
         assert!(allow_api_key_value(Some("1")));
         for value in [None, Some("0"), Some("true"), Some("01")] {
-            assert!(!allow_api_key_value(value), "valeur non autorisée: {value:?}");
+            assert!(
+                !allow_api_key_value(value),
+                "valeur non autorisée: {value:?}"
+            );
         }
     }
 
@@ -1570,7 +1996,10 @@ mod reconnect_tests {
         assert_eq!(derive_domain(), attendu);
         // Le domaine est un nom court, jamais un chemin.
         let domaine = derive_domain().unwrap();
-        assert!(!domaine.contains('/'), "le domaine ne doit pas être un chemin");
+        assert!(
+            !domaine.contains('/'),
+            "le domaine ne doit pas être un chemin"
+        );
     }
 
     #[test]
@@ -1587,10 +2016,7 @@ mod reconnect_tests {
 
         // Sans trace disque, on retombe sur le domaine dérivé.
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(
-            effective_domain("agent-de-test-domaine"),
-            derive_domain()
-        );
+        assert_eq!(effective_domain("agent-de-test-domaine"), derive_domain());
     }
 
     #[test]
@@ -1598,11 +2024,8 @@ mod reconnect_tests {
         // `bridget rename` n'écrit que dans ce fichier ; le wrapper doit s'y
         // référer, sinon un agent renommé revient sous son nom d'origine à
         // chaque coupure — y compris une rupture de tunnel en fédération SSH.
-        let path = std::env::temp_dir().join(format!(
-            "bridget-nom-{}-{}",
-            std::process::id(),
-            "renomme"
-        ));
+        let path =
+            std::env::temp_dir().join(format!("bridget-nom-{}-{}", std::process::id(), "renomme"));
         std::fs::write(&path, "agent-1\n").unwrap();
         assert_eq!(resolve_current_name(&path, "codex-8"), "agent-1");
         let _ = std::fs::remove_file(&path);
@@ -1627,13 +2050,20 @@ mod reconnect_tests {
         let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let probe = reads.clone();
         let hooks = AttachRelayHooks {
+            before_command: Arc::new(|| {}),
             before_read: Arc::new(move || {
                 probe.fetch_add(1, Ordering::SeqCst);
             }),
             ..AttachRelayHooks::default()
         };
         let (_, emitter) = relay_emitter();
-        let mut worker = AttachRelayWorker::start_with(root.clone(), "2026-08-22".to_string(), 1, emitter, hooks);
+        let mut worker = AttachRelayWorker::start_with(
+            root.clone(),
+            "2026-08-22".to_string(),
+            1,
+            emitter,
+            hooks,
+        );
         thread::sleep(Duration::from_millis(30));
         assert_eq!(reads.load(Ordering::SeqCst), 0);
         worker.shutdown();
@@ -1651,6 +2081,7 @@ mod reconnect_tests {
         let first_for_worker = first_read.clone();
         let (control_sender, control_receiver) = mpsc::channel();
         let hooks = AttachRelayHooks {
+            before_command: Arc::new(|| {}),
             before_read: Arc::new(move || {
                 if first_for_worker.swap(false, Ordering::SeqCst) {
                     barrier_for_worker.wait();
@@ -1662,13 +2093,28 @@ mod reconnect_tests {
             }),
         };
         let (events, emitter) = relay_emitter();
-        let mut worker = AttachRelayWorker::start_with(root.clone(), "2026-08-22".to_string(), 1, emitter, hooks);
-        worker.subscribe("sub-1".to_string(), AttachWindow::Today).unwrap();
+        let mut worker = AttachRelayWorker::start_with(
+            root.clone(),
+            "2026-08-22".to_string(),
+            1,
+            emitter,
+            hooks,
+        );
+        worker
+            .subscribe("sub-1".to_string(), AttachWindow::Today)
+            .unwrap();
         barrier.wait();
-        worker.subscribe("sub-2".to_string(), AttachWindow::Today).unwrap();
-        assert_eq!(worker.subscribe("sub-3".to_string(), AttachWindow::Today), Err(AttachRefusal::CommandQueueSaturated));
+        worker
+            .subscribe("sub-2".to_string(), AttachWindow::Today)
+            .unwrap();
+        assert_eq!(
+            worker.subscribe("sub-3".to_string(), AttachWindow::Today),
+            Err(AttachRefusal::CommandQueueSaturated)
+        );
         worker.unsubscribe("sub-1".to_string());
-        control_receiver.recv_timeout(Duration::from_millis(250)).expect("désabonnement reçu par le canal de contrôle");
+        control_receiver
+            .recv_timeout(Duration::from_millis(250))
+            .expect("désabonnement reçu par le canal de contrôle");
         barrier.wait();
         thread::sleep(Duration::from_millis(30));
         assert!(!events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, .. } if subscription_id == "sub-1")));
@@ -1681,9 +2127,19 @@ mod reconnect_tests {
         let root = relay_root("vide");
         std::fs::create_dir_all(&root).unwrap();
         let (events, emitter) = relay_emitter();
-        let mut worker = AttachRelayWorker::start_with(root.clone(), "2026-08-22".to_string(), 1, emitter, AttachRelayHooks::default());
-        worker.subscribe("sub-vide".to_string(), AttachWindow::Today).unwrap();
-        wait_for(|| events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::SnapshotCaughtUp { subscription_id, through_seq: None } if subscription_id == "sub-vide")));
+        let mut worker = AttachRelayWorker::start_with(
+            root.clone(),
+            "2026-08-22".to_string(),
+            1,
+            emitter,
+            AttachRelayHooks::default(),
+        );
+        worker
+            .subscribe("sub-vide".to_string(), AttachWindow::Today)
+            .unwrap();
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::SnapshotCaughtUp { subscription_id, through_seq: None } if subscription_id == "sub-vide"))
+        });
         worker.shutdown();
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1695,21 +2151,381 @@ mod reconnect_tests {
         std::fs::write(root.join("2026-08-22.jsonl"), b"{\"v\":1,\"seq\":5}\n").unwrap();
         std::fs::write(root.join("2026-08-23.jsonl"), b"{\"v\":1,\"seq\":6}\n").unwrap();
         let (events, emitter) = relay_emitter();
-        let mut worker = AttachRelayWorker::start_with(root.clone(), "2026-08-23".to_string(), 1, emitter, AttachRelayHooks::default());
-        worker.subscribe("sub-rotation".to_string(), AttachWindow::Seq(5)).unwrap();
-        wait_for(|| events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::SnapshotCaughtUp { subscription_id, through_seq: Some(6) } if subscription_id == "sub-rotation")));
+        let mut worker = AttachRelayWorker::start_with(
+            root.clone(),
+            "2026-08-23".to_string(),
+            1,
+            emitter,
+            AttachRelayHooks::default(),
+        );
+        worker
+            .subscribe("sub-rotation".to_string(), AttachWindow::Seq(5))
+            .unwrap();
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::SnapshotCaughtUp { subscription_id, through_seq: Some(6) } if subscription_id == "sub-rotation"))
+        });
         std::fs::write(root.join("2026-08-24.jsonl"), b"{\"v\":1,\"seq\":7}\n").unwrap();
-        wait_for(|| events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { seq: 7, subscription_id, .. } if subscription_id == "sub-rotation")));
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { seq: 7, subscription_id, .. } if subscription_id == "sub-rotation"))
+        });
         let sequences = events
             .lock()
             .unwrap()
             .iter()
             .filter_map(|message| match message {
-                WrapperToDaemon::JournalFragment { seq, subscription_id, final_fragment: true, .. } if subscription_id == "sub-rotation" => Some(*seq),
+                WrapperToDaemon::JournalFragment {
+                    seq,
+                    subscription_id,
+                    final_fragment: true,
+                    ..
+                } if subscription_id == "sub-rotation" => Some(*seq),
                 _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(sequences, vec![5, 6, 7]);
+        worker.shutdown();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unsubscribe_avant_consommation_annule_le_subscribe_sans_fuite() {
+        let root = relay_root("unsubscribe-avant-consommation");
+        std::fs::create_dir_all(&root).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let first_command = Arc::new(AtomicBool::new(true));
+        let barrier_for_worker = barrier.clone();
+        let first_for_worker = first_command.clone();
+        let (control_sender, control_receiver) = mpsc::channel();
+        let hooks = AttachRelayHooks {
+            before_command: Arc::new(move || {
+                if first_for_worker.swap(false, Ordering::SeqCst) {
+                    barrier_for_worker.wait();
+                    barrier_for_worker.wait();
+                }
+            }),
+            control_observed: Arc::new(move || {
+                let _ = control_sender.send(());
+            }),
+            ..AttachRelayHooks::default()
+        };
+        let (events, emitter) = relay_emitter();
+        let mut worker = AttachRelayWorker::start_with(
+            root.clone(),
+            "2026-08-22".to_string(),
+            1,
+            emitter,
+            hooks,
+        );
+        barrier.wait();
+        worker
+            .subscribe("sub-annule".to_string(), AttachWindow::Today)
+            .unwrap();
+        worker.unsubscribe("sub-annule".to_string());
+        control_receiver
+            .recv_timeout(Duration::from_millis(250))
+            .expect("annulation avant consommation");
+        barrier.wait();
+        thread::sleep(Duration::from_millis(30));
+        assert!(!events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::Subscribed { subscription_id } if subscription_id == "sub-annule")));
+
+        for index in 0..(ATTACH_RELAY_CONTROL_IDS_CAPACITY * 4) {
+            worker.unsubscribe(format!("inconnu-{index}"));
+        }
+        thread::sleep(Duration::from_millis(30));
+        let state = worker
+            .control_state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        assert!(state.pending.is_empty());
+        assert!(state.active.is_empty());
+        assert!(state.cancelled.is_empty());
+        drop(state);
+        worker.shutdown();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn shutdown_reste_borne_malgre_un_spam_de_commandes() {
+        let root = relay_root("stop-prioritaire");
+        std::fs::create_dir_all(&root).unwrap();
+        let (_, emitter) = relay_emitter();
+        let mut worker = AttachRelayWorker::start_with(
+            root.clone(),
+            "2026-08-22".to_string(),
+            1,
+            emitter,
+            AttachRelayHooks::default(),
+        );
+        let sender = worker.commands.clone();
+        let running = Arc::new(AtomicBool::new(true));
+        let sending = running.clone();
+        let spam = thread::spawn(move || {
+            let mut index = 0_u64;
+            while sending.load(Ordering::SeqCst) {
+                let _ = sender.try_send(AttachRelayCommand::Subscribe {
+                    subscription_id: format!("spam-{index}"),
+                    window: AttachWindow::Today,
+                });
+                index = index.saturating_add(1);
+            }
+        });
+        let started = std::time::Instant::now();
+        worker.shutdown();
+        running.store(false, Ordering::SeqCst);
+        spam.join().unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "le Stop ne doit pas attendre la file saturée"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lignes_illisibles_et_trop_grandes_signalent_puis_laissent_progresser() {
+        let root = relay_root("diagnostics-journal");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("2026-08-22.jsonl");
+        std::fs::write(&path, b"{invalide}\n").unwrap();
+        let mut too_large = b"{\"v\":1,\"seq\":8,\"payload\":\"".to_vec();
+        too_large.extend(std::iter::repeat_n(b'x', 4 * 1024 * 1024));
+        too_large.extend_from_slice(b"\"}\n{\"v\":1,\"seq\":9}\n");
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&too_large)
+            .unwrap();
+        let (events, emitter) = relay_emitter();
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let read_probe = reads.clone();
+        let hooks = AttachRelayHooks {
+            before_read: Arc::new(move || {
+                read_probe.fetch_add(1, Ordering::SeqCst);
+            }),
+            ..AttachRelayHooks::default()
+        };
+        let mut worker = AttachRelayWorker::start_with(
+            root.clone(),
+            "2026-08-22".to_string(),
+            2,
+            emitter,
+            hooks,
+        );
+        worker
+            .subscribe("sub-diagnostic".to_string(), AttachWindow::Today)
+            .unwrap();
+        wait_for(|| {
+            let messages = events.lock().unwrap();
+            messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalReadError { subscription_id, .. } if subscription_id == "sub-diagnostic"))
+                && messages.iter().any(|message| matches!(message, WrapperToDaemon::Gap { from_seq: 8, to_seq: 8, reason: Some(reason), .. } if reason == "event_too_large"))
+                && messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { seq: 9, final_fragment: true, .. }))
+        });
+        assert!(reads.load(Ordering::SeqCst) > 1);
+        worker.shutdown();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn queue_partielle_corrompue_devient_un_diagnostic_sans_bloquer_le_suivi() {
+        let root = relay_root("queue-partielle");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("2026-08-22.jsonl");
+        std::fs::write(&path, b"{incomplet").unwrap();
+        let (events, emitter) = relay_emitter();
+        let mut worker = AttachRelayWorker::start_with(
+            root.clone(),
+            "2026-08-22".to_string(),
+            1,
+            emitter,
+            AttachRelayHooks::default(),
+        );
+        worker
+            .subscribe("sub-partiel".to_string(), AttachWindow::Today)
+            .unwrap();
+        thread::sleep(Duration::from_millis(30));
+        assert!(
+            !events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|message| matches!(message, WrapperToDaemon::JournalReadError { .. }))
+        );
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"\n{\"v\":1,\"seq\":10}\n")
+            .unwrap();
+        wait_for(|| {
+            let messages = events.lock().unwrap();
+            messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalReadError { subscription_id, .. } if subscription_id == "sub-partiel"))
+                && messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 10, final_fragment: true, .. } if subscription_id == "sub-partiel"))
+        });
+        worker.shutdown();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn today_et_date_suivent_la_rotation_apres_le_snapshot() {
+        let root = relay_root("selecteurs-rotation");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("2026-08-22.jsonl"), b"{\"v\":1,\"seq\":1}\n").unwrap();
+        let date = Arc::new(Mutex::new("2026-08-22".to_string()));
+        let clock_date = date.clone();
+        let clock: Arc<dyn Fn() -> String + Send + Sync> =
+            Arc::new(move || clock_date.lock().unwrap().clone());
+        let (events, emitter) = relay_emitter();
+        let mut worker = AttachRelayWorker::start_with_clock(
+            root.clone(),
+            clock,
+            4,
+            emitter,
+            AttachRelayHooks::default(),
+        );
+        worker
+            .subscribe("sub-today".to_string(), AttachWindow::Today)
+            .unwrap();
+        worker
+            .subscribe(
+                "sub-date".to_string(),
+                AttachWindow::Date("2026-08-22".to_string()),
+            )
+            .unwrap();
+        wait_for(|| {
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|message| matches!(message, WrapperToDaemon::SnapshotCaughtUp { .. }))
+                .count()
+                == 2
+        });
+        *date.lock().unwrap() = "2026-08-23".to_string();
+        std::fs::write(root.join("2026-08-23.jsonl"), b"{\"v\":1,\"seq\":2}\n").unwrap();
+        wait_for(|| {
+            let messages = events.lock().unwrap();
+            ["sub-today", "sub-date"].iter().all(|subscription_id| messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id: actual, seq: 2, final_fragment: true, .. } if actual == subscription_id)))
+        });
+        worker.shutdown();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn disparition_d_un_fichier_termine_l_abonnement_sans_boucle() {
+        let root = relay_root("source-supprimee");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("2026-08-22.jsonl");
+        std::fs::write(&path, b"{\"v\":1,\"seq\":1}\n").unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let once = Arc::new(AtomicBool::new(true));
+        let barrier_worker = barrier.clone();
+        let once_worker = once.clone();
+        let hooks = AttachRelayHooks {
+            before_read: Arc::new(move || {
+                if once_worker.swap(false, Ordering::SeqCst) {
+                    barrier_worker.wait();
+                    barrier_worker.wait();
+                }
+            }),
+            ..AttachRelayHooks::default()
+        };
+        let (events, emitter) = relay_emitter();
+        let mut worker = AttachRelayWorker::start_with(
+            root.clone(),
+            "2026-08-22".to_string(),
+            1,
+            emitter,
+            hooks,
+        );
+        worker
+            .subscribe("sub-source".to_string(), AttachWindow::Today)
+            .unwrap();
+        barrier.wait();
+        std::fs::remove_file(path).unwrap();
+        barrier.wait();
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::End { subscription_id, reason } if subscription_id == "sub-source" && reason.contains("source de journal indisponible")))
+        });
+        worker.shutdown();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sorties_des_abonnements_restent_equitablement_entrelacees() {
+        let root = relay_root("equite-sortie");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut large = b"{\"v\":1,\"seq\":1,\"payload\":\"".to_vec();
+        large.extend(std::iter::repeat_n(b'a', MAX_ATTACH_FRAGMENT_BYTES * 4));
+        large.extend_from_slice(b"\"}\n");
+        std::fs::write(root.join("2026-08-22.jsonl"), large).unwrap();
+        std::fs::write(root.join("2026-08-23.jsonl"), b"").unwrap();
+        let (events, emitter) = relay_emitter();
+        let mut worker = AttachRelayWorker::start_with(
+            root.clone(),
+            "2026-08-23".to_string(),
+            4,
+            emitter,
+            AttachRelayHooks::default(),
+        );
+        worker
+            .subscribe("a-gros".to_string(), AttachWindow::Seq(0))
+            .unwrap();
+        worker
+            .subscribe(
+                "b-live".to_string(),
+                AttachWindow::Date("2026-08-23".to_string()),
+            )
+            .unwrap();
+        wait_for(|| {
+            let messages = events.lock().unwrap();
+            messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 1, .. } if subscription_id == "a-gros"))
+                && messages.iter().any(|message| matches!(message, WrapperToDaemon::SnapshotCaughtUp { subscription_id, .. } if subscription_id == "b-live"))
+        });
+        std::fs::write(root.join("2026-08-24.jsonl"), b"{\"v\":1,\"seq\":2}\n").unwrap();
+        wait_for(|| {
+            let messages = events.lock().unwrap();
+            messages.iter().filter(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 1, .. } if subscription_id == "a-gros")).count() >= 2
+                && messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 2, .. } if subscription_id == "b-live"))
+                && messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 1, final_fragment: true, .. } if subscription_id == "a-gros"))
+        });
+        let messages = events.lock().unwrap();
+        let b = messages.iter().position(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 2, .. } if subscription_id == "b-live")).expect("fragment B");
+        let a_final = messages.iter().position(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 1, final_fragment: true, .. } if subscription_id == "a-gros")).expect("final A");
+        assert!(b < a_final, "B doit passer avant le dernier fragment de A");
+        drop(messages);
+        worker.shutdown();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reset_generation_purge_le_rejeu_avant_un_nouvel_abonnement() {
+        let root = relay_root("reset-generation");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("2026-08-22.jsonl"), b"{\"v\":1,\"seq\":1}\n").unwrap();
+        let (events, emitter) = relay_emitter();
+        let mut worker = AttachRelayWorker::start_with(
+            root.clone(),
+            "2026-08-22".to_string(),
+            2,
+            emitter,
+            AttachRelayHooks::default(),
+        );
+        worker
+            .subscribe("ancienne-generation".to_string(), AttachWindow::Today)
+            .unwrap();
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 1, .. } if subscription_id == "ancienne-generation"))
+        });
+        worker.reset_generation();
+        std::fs::write(root.join("2026-08-23.jsonl"), b"{\"v\":1,\"seq\":2}\n").unwrap();
+        thread::sleep(Duration::from_millis(50));
+        assert!(!events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 2, .. } if subscription_id == "ancienne-generation")));
+        worker
+            .subscribe("nouvelle-generation".to_string(), AttachWindow::Seq(2))
+            .unwrap();
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 2, final_fragment: true, .. } if subscription_id == "nouvelle-generation"))
+        });
         worker.shutdown();
         std::fs::remove_dir_all(root).unwrap();
     }
