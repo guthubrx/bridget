@@ -87,6 +87,7 @@ pub fn run() {
     // --- Sous-commandes daemon / client ---
     match cmd.as_str() {
         "daemon" => cmd_daemon(),
+        "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "attach" => cmd_attach(&args[2..]),
         "send" => cmd_send(&args[2..]),
         "cancel" => cmd_cancel(&args[2..]),
@@ -126,6 +127,13 @@ pub fn run() {
                 std::process::exit(2);
             }
         }
+    }
+}
+
+fn cmd_managed_bootstrap(args: &[String]) {
+    if let Err(error) = crate::managed_process::run_managed_bootstrap(args) {
+        eprintln!("bridget managed-bootstrap: {error}");
+        std::process::exit(1);
     }
 }
 

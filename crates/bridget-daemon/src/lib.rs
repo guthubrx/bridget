@@ -4,6 +4,7 @@ pub mod daemon;
 pub mod desired_state;
 pub mod idempotency;
 pub mod managers;
+pub mod managed_process;
 pub mod registry;
 pub mod receipt_store;
 pub mod runtime;
