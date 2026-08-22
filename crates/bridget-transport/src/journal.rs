@@ -3,6 +3,7 @@
 use serde::Serialize;
 use serde_json::Value;
 use crate::acp::AcpEvent;
+use crate::fsutil::create_private_dir;
 use crate::protocol::AttachWindow;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -429,11 +430,6 @@ fn days_in_month(year: i32, month: u8) -> u8 {
         2 => 28,
         _ => 0,
     }
-}
-
-fn create_private_dir(path: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(path)?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
 
 fn last_sequence(directory: &Path) -> u64 {
