@@ -2,20 +2,28 @@
 //! entre les wrappers connectés, persiste l'état en SQLite.
 
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
-use bridget_transport::protocol::{decode, encode, AttachRefusal, ConnectionRole};
+use bridget_transport::protocol::{
+    AttachRefusal, CLIENT_CONTRACT_VERSION, ClientCapability, ClientRefusal, ConnectionRole,
+    IdempotencyIssue, decode, encode,
+};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use log::{error, info, warn};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::idempotency::{
+    IdempotencyKey, IdempotencyStore, LookupResult, OperationKind, Reservation,
+    ReplyTracking, SendDelivery,
+};
 use crate::store::Store;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use uuid::Uuid;
 
 // Métriques du daemon (M-005)
 pub struct Metrics {
@@ -70,6 +78,9 @@ const ATTACH_VIEW_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 /// Chaque entrée expire aussi après `PENDING_ATTACH_SEND_TTL`.
 const MAX_PENDING_ATTACH_SENDS: usize = 1024;
 const PENDING_ATTACH_SEND_TTL: Duration = Duration::from_secs(300);
+const CLIENT_IDEMPOTENCY_HORIZON_SECS: i64 = 7 * 24 * 60 * 60;
+const CLIENT_ISSUED_AT_TOLERANCE_SECS: i64 = 60;
+const MAX_ACTIVE_ISSUER_SCOPES: usize = 4096;
 
 // Constante pour la période de grâce des timeouts (M-004)
 const TIMEOUT_GRACE_PERIOD: u64 = 30; // secondes
@@ -165,7 +176,10 @@ fn dirs_cache() -> PathBuf {
             let perms = meta.permissions();
             let mode = perms.mode();
             if mode & 0o077 != 0 {
-                warn!("Permissions non sécurisées sur {:?} - autres utilisateurs peuvent lire/écrire", cache_dir);
+                warn!(
+                    "Permissions non sécurisées sur {:?} - autres utilisateurs peuvent lire/écrire",
+                    cache_dir
+                );
             }
         }
     }
@@ -180,6 +194,7 @@ struct DaemonState {
     deduplicator: Deduplicator,
     envelope_guard: EnvelopeGuard,
     store: Store,
+    idempotency: IdempotencyStore,
     connections: HashMap<String, Arc<Mutex<BufWriter<UnixStream>>>>,
     conn_names: HashMap<String, String>,
     conn_hosts: HashMap<String, String>,
@@ -188,6 +203,9 @@ struct DaemonState {
     /// Les clients attach négocient ce rôle explicite ; l'absence d'entrée
     /// reste un wrapper pour préserver les agents 007 déjà connectés.
     connection_roles: HashMap<String, ConnectionRole>,
+    /// Une négociation appartient à la connexion, tandis que le scope peut
+    /// volontairement être partagé par plusieurs retries coopératifs.
+    client_negotiations: HashMap<String, NegotiatedClient>,
     /// Souscriptions attach actives, distinctes de l'annuaire des équipiers.
     attach_subscriptions: HashMap<String, AttachSubscription>,
     attach_views: HashMap<String, Arc<AttachView>>,
@@ -210,6 +228,13 @@ struct AttachSubscription {
 struct PendingAttachSend {
     conn_id: String,
     expires_at: Instant,
+}
+
+#[derive(Clone)]
+struct NegotiatedClient {
+    version: u16,
+    issuer_scope: String,
+    capabilities: Vec<ClientCapability>,
 }
 
 struct QueuedAttachMessage {
@@ -248,7 +273,10 @@ impl AttachView {
         subscription_id: impl Into<String>,
     ) -> (Arc<Self>, Receiver<String>) {
         let (closed_tx, closed_rx) = mpsc::channel();
-        (Self::suspended_with_sender(subscription_id, closed_tx), closed_rx)
+        (
+            Self::suspended_with_sender(subscription_id, closed_tx),
+            closed_rx,
+        )
     }
 
     #[cfg(test)]
@@ -259,9 +287,13 @@ impl AttachView {
         Arc::new(Self {
             queue: Arc::new((
                 Mutex::new(AttachViewBuffer {
-                    messages: VecDeque::new(), bytes: 0, gap: None, dropping_seq: None,
+                    messages: VecDeque::new(),
+                    bytes: 0,
+                    gap: None,
+                    dropping_seq: None,
                     terminal_enqueued: false,
-                    closed: false, close_notified: false,
+                    closed: false,
+                    close_notified: false,
                 }),
                 Condvar::new(),
             )),
@@ -285,9 +317,13 @@ impl AttachView {
             .set_write_timeout(Some(ATTACH_VIEW_WRITE_TIMEOUT));
         let queue = Arc::new((
             Mutex::new(AttachViewBuffer {
-                messages: VecDeque::new(), bytes: 0, gap: None, dropping_seq: None,
+                messages: VecDeque::new(),
+                bytes: 0,
+                gap: None,
+                dropping_seq: None,
                 terminal_enqueued: false,
-                closed: false, close_notified: false,
+                closed: false,
+                close_notified: false,
             }),
             Condvar::new(),
         ));
@@ -310,20 +346,38 @@ impl AttachView {
                     }
                     if let Some((from_seq, to_seq, reason)) = buffer.gap.take() {
                         encode(&DaemonToWrapper::Gap {
-                            subscription_id: worker_subscription.clone(), from_seq, to_seq, reason,
-                        }).ok().map(|encoded| (encoded, false))
+                            subscription_id: worker_subscription.clone(),
+                            from_seq,
+                            to_seq,
+                            reason,
+                        })
+                        .ok()
+                        .map(|encoded| (encoded, false))
                     } else if let Some(message) = buffer.messages.pop_front() {
                         buffer.bytes = buffer.bytes.saturating_sub(message.encoded.len());
                         Some((message.encoded, message.terminal))
-                    } else { None }
+                    } else {
+                        None
+                    }
                 };
                 let Some((next, terminal)) = next else {
-                    if worker_queue.0.lock().unwrap_or_else(|e| e.into_inner()).closed { break; }
+                    if worker_queue
+                        .0
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .closed
+                    {
+                        break;
+                    }
                     continue;
                 };
                 let write_failed = worker_writer
                     .lock()
-                    .map(|mut writer| writeln!(writer, "{next}").and_then(|_| writer.flush()).is_err())
+                    .map(|mut writer| {
+                        writeln!(writer, "{next}")
+                            .and_then(|_| writer.flush())
+                            .is_err()
+                    })
                     .unwrap_or(true);
                 if write_failed {
                     let (lock, wake) = &*worker_queue;
@@ -352,7 +406,11 @@ impl AttachView {
 
     fn enqueue(&self, message: DaemonToWrapper) -> bool {
         let (seq, final_fragment, terminal) = match &message {
-            DaemonToWrapper::JournalFragment { seq, final_fragment, .. } => (Some(*seq), *final_fragment, false),
+            DaemonToWrapper::JournalFragment {
+                seq,
+                final_fragment,
+                ..
+            } => (Some(*seq), *final_fragment, false),
             DaemonToWrapper::End { .. } => (None, false, true),
             _ => (None, false, false),
         };
@@ -362,7 +420,9 @@ impl AttachView {
         };
         let (lock, wake) = &*self.queue;
         let mut buffer = lock.lock().unwrap_or_else(|e| e.into_inner());
-        if buffer.closed || buffer.terminal_enqueued { return false; }
+        if buffer.closed || buffer.terminal_enqueued {
+            return false;
+        }
         if terminal {
             // Le terminal clôt la file : les données restées en attente sont
             // explicitement abandonnées avant End, jamais écrites après lui.
@@ -371,7 +431,11 @@ impl AttachView {
             buffer.gap = None;
             buffer.dropping_seq = None;
             buffer.terminal_enqueued = true;
-            buffer.messages.push_back(QueuedAttachMessage { encoded, seq: None, terminal: true });
+            buffer.messages.push_back(QueuedAttachMessage {
+                encoded,
+                seq: None,
+                terminal: true,
+            });
             wake.notify_one();
             return true;
         }
@@ -391,13 +455,18 @@ impl AttachView {
                 };
                 let mut retained = VecDeque::new();
                 while let Some(item) = buffer.messages.pop_front() {
-                    if item.seq == Some(dropped_seq) { buffer.bytes = buffer.bytes.saturating_sub(item.encoded.len()); }
-                    else { retained.push_back(item); }
+                    if item.seq == Some(dropped_seq) {
+                        buffer.bytes = buffer.bytes.saturating_sub(item.encoded.len());
+                    } else {
+                        retained.push_back(item);
+                    }
                 }
                 buffer.messages = retained;
                 buffer.dropping_seq = Some(dropped_seq);
                 buffer.gap = Some(match buffer.gap.take() {
-                    Some((from, to, reason)) => (from.min(dropped_seq), to.max(dropped_seq), reason),
+                    Some((from, to, reason)) => {
+                        (from.min(dropped_seq), to.max(dropped_seq), reason)
+                    }
                     None => (dropped_seq, dropped_seq, Some("vue trop lente".to_string())),
                 });
             }
@@ -419,7 +488,11 @@ impl AttachView {
             return false;
         }
         buffer.bytes += encoded.len();
-        buffer.messages.push_back(QueuedAttachMessage { encoded, seq, terminal: false });
+        buffer.messages.push_back(QueuedAttachMessage {
+            encoded,
+            seq,
+            terminal: false,
+        });
         wake.notify_one();
         true
     }
@@ -489,7 +562,11 @@ enum ReminderAction {
         from_conn: String,
         timeout_secs: u64,
     },
-    Deferred { to: String, msg_id: String, level: u8 },
+    Deferred {
+        to: String,
+        msg_id: String,
+        level: u8,
+    },
 }
 
 // Type d'erreur pour la livraison de messages (H-002)
@@ -512,7 +589,11 @@ impl std::fmt::Display for DeliveryError {
     }
 }
 
-fn deliver_to_agent(writer: &Arc<Mutex<BufWriter<UnixStream>>>, target_name: &str, body: &str) -> Result<(), DeliveryError> {
+fn deliver_to_agent(
+    writer: &Arc<Mutex<BufWriter<UnixStream>>>,
+    target_name: &str,
+    body: &str,
+) -> Result<(), DeliveryError> {
     let msg = bridget_core::BridgetMessage::new("bridget", target_name, body);
     let dtw = DaemonToWrapper::Deliver(msg);
     let json = encode(&dtw).map_err(|e| {
@@ -521,7 +602,10 @@ fn deliver_to_agent(writer: &Arc<Mutex<BufWriter<UnixStream>>>, target_name: &st
     })?;
 
     let mut w = writer.lock().map_err(|e| {
-        error!("Impossible de verrouiller le writer pour {}: {}", target_name, e);
+        error!(
+            "Impossible de verrouiller le writer pour {}: {}",
+            target_name, e
+        );
         DeliveryError::Lock(e.to_string())
     })?;
 
@@ -588,7 +672,9 @@ fn defer_control(
 
 fn purge_expired_attach_sends(state: &mut DaemonState) {
     let now = Instant::now();
-    state.pending_attach_sends.retain(|_, pending| pending.expires_at > now);
+    state
+        .pending_attach_sends
+        .retain(|_, pending| pending.expires_at > now);
 }
 
 fn agent_uses_acp(state: &DaemonState, agent: &bridget_core::router::RegisteredAgent) -> bool {
@@ -652,7 +738,9 @@ fn close_attach_subscriptions(
             views.push(view);
         }
     }
-    state.pending_attach_sends.retain(|_, pending| pending.conn_id != conn_id);
+    state
+        .pending_attach_sends
+        .retain(|_, pending| pending.conn_id != conn_id);
     (controls, views)
 }
 
@@ -702,6 +790,7 @@ impl DaemonState {
     fn new(config: &DaemonConfig) -> Result<Self, Box<dyn std::error::Error>> {
         std::fs::create_dir_all(config.socket_path.parent().unwrap())?;
         let store = Store::open(&config.db_path)?;
+        let idempotency = IdempotencyStore::open(&config.db_path)?;
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
         Ok(DaemonState {
             router: Router::new(),
@@ -712,12 +801,14 @@ impl DaemonState {
             deduplicator: Deduplicator::new(config.dedup_window),
             envelope_guard: EnvelopeGuard::new(Duration::from_secs(config.quarantine_window)),
             store,
+            idempotency,
             connections: HashMap::new(),
             conn_names: HashMap::new(),
             conn_hosts: HashMap::new(),
             conn_operating_systems: HashMap::new(),
             conn_instances: HashMap::new(),
             connection_roles: HashMap::new(),
+            client_negotiations: HashMap::new(),
             attach_subscriptions: HashMap::new(),
             attach_views: HashMap::new(),
             view_closed_tx,
@@ -736,7 +827,8 @@ impl DaemonState {
 
     fn mark_unreachable(&mut self, conn_id: &str) {
         if let Some(instance_id) = self.conn_instances.remove(conn_id)
-            && let Some(presence) = self.presences.get_mut(&instance_id) {
+            && let Some(presence) = self.presences.get_mut(&instance_id)
+        {
                 presence.state = "unreachable".to_string();
                 presence.last_seen = Instant::now();
             }
@@ -744,16 +836,21 @@ impl DaemonState {
 
     fn mark_stopped(&mut self, conn_id: &str) {
         if let Some(instance_id) = self.conn_instances.remove(conn_id)
-            && let Some(presence) = self.presences.get_mut(&instance_id) {
+            && let Some(presence) = self.presences.get_mut(&instance_id)
+        {
                 presence.state = "stopped".to_string();
                 presence.last_seen = Instant::now();
             }
     }
 
     fn set_turn_state(&mut self, conn_id: &str, in_progress: bool) -> Result<(), String> {
-        let instance_id = self.conn_instances.get(conn_id)
+        let instance_id = self
+            .conn_instances
+            .get(conn_id)
             .ok_or_else(|| "état de tour reçu d'une connexion non enregistrée".to_string())?;
-        let presence = self.presences.get_mut(instance_id)
+        let presence = self
+            .presences
+            .get_mut(instance_id)
             .ok_or_else(|| "présence de l'équipier introuvable".to_string())?;
         presence.state = if in_progress { "busy" } else { "connected" }.to_string();
         presence.last_seen = Instant::now();
@@ -811,18 +908,12 @@ impl DaemonState {
                 }
             })
             .collect();
-        let live_names: std::collections::HashSet<String> = agents
-            .iter()
-            .map(|agent| agent.name.clone())
-            .collect();
-        for presence in self
-            .presences
-            .values()
-            .filter(|presence| {
+        let live_names: std::collections::HashSet<String> =
+            agents.iter().map(|agent| agent.name.clone()).collect();
+        for presence in self.presences.values().filter(|presence| {
                 matches!(presence.state.as_str(), "stopped" | "unreachable")
                     && !live_names.contains(&presence.name)
-            })
-        {
+        }) {
             agents.push(bridget_transport::protocol::AgentInfo {
                 name: presence.name.clone(),
                 agent_type: presence.agent_type.clone(),
@@ -917,7 +1008,10 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         if libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) != 0 {
             // Le verrou échoue = un autre daemon tourne
-            eprintln!("bridget: un daemon tourne déjà (verrou sur {})", pid_file.display());
+            eprintln!(
+                "bridget: un daemon tourne déjà (verrou sur {})",
+                pid_file.display()
+            );
             std::process::exit(0);
         }
     }
@@ -944,7 +1038,8 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         if let Ok(n) = st.store.purge_older_than_days(config.retention_days)
-            && n > 0 {
+            && n > 0
+        {
                 info!(
                     "purge: {} messages supprimés (> {} jours)",
                     n, config.retention_days
@@ -958,7 +1053,8 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Palier 3 (T) : notification d'échec à l'émetteur
     // Après T + 30s : abandon (retiré de la liste)
     let st_reminder = state.clone();
-    thread::spawn(move || loop {
+    thread::spawn(move || {
+        loop {
         thread::sleep(Duration::from_secs(1)); // Réduit de 3s à 1s pour meilleure réactivité
         let now = std::time::Instant::now();
 
@@ -981,7 +1077,8 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(target_writer) = st.connections.get(&target_conn) {
                         let body = format!(
                             "Rappel : {} attend ta reponse au message #{}.\nReponds avec: bridget reply \"ta reponse\"",
-                            from, &msg_id[..msg_id.len().min(8)]
+                                from,
+                                &msg_id[..msg_id.len().min(8)]
                         );
                         if let Err(e) = deliver_to_agent(target_writer, &to, &body) {
                             error!("Impossible de délivrer le rappel doux à {}: {}", to, e);
@@ -999,7 +1096,8 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(target_writer) = st.connections.get(&target_conn) {
                         let body = format!(
                             "URGENT : {} attend toujours ta reponse au message #{}.\nTu DOIS repondre maintenant avec: bridget reply \"ta reponse\"\nSi tu ne peux pas repondre, notifie-le : bridget reply \"impossible de repondre : <raison>\"",
-                            from, &msg_id[..msg_id.len().min(8)]
+                                from,
+                                &msg_id[..msg_id.len().min(8)]
                         );
                         if let Err(e) = deliver_to_agent(target_writer, &to, &body) {
                             error!("Impossible de délivrer le rappel ferme à {}: {}", to, e);
@@ -1019,10 +1117,15 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(sender_writer) = st.connections.get(&from_conn) {
                         let body = format!(
                             "{} n'a pas repondu en {}s au message #{}.\nTu peux reessayer, changer de destinataire ou abandonner.",
-                            to, timeout_secs, &msg_id[..msg_id.len().min(8)]
+                                to,
+                                timeout_secs,
+                                &msg_id[..msg_id.len().min(8)]
                         );
                         if let Err(e) = deliver_to_agent(sender_writer, &from, &body) {
-                            error!("Impossible de délivrer la notification de timeout à {}: {}", from, e);
+                                error!(
+                                    "Impossible de délivrer la notification de timeout à {}: {}",
+                                    from, e
+                                );
                         }
                         info!(
                             "palier 3 (timeout notifié à {} : {} n'a pas répondu)",
@@ -1031,7 +1134,11 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 ReminderAction::Deferred { to, msg_id, level } => {
-                    info!("relance différée (tour en cours) : palier {} pour {} sur demande {}", level, to, msg_id);
+                        info!(
+                            "relance différée (tour en cours) : palier {} pour {} sur demande {}",
+                            level, to, msg_id
+                        );
+                    }
                 }
             }
         }
@@ -1040,13 +1147,16 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Thread de purge périodique
     let st_purge = state.clone();
     let retention = config.retention_days;
-    thread::spawn(move || loop {
+    thread::spawn(move || {
+        loop {
         thread::sleep(Duration::from_secs(3600));
         let st = st_purge.lock().unwrap_or_else(|e| e.into_inner());
         if let Ok(n) = st.store.purge_older_than_days(retention)
-            && n > 0 {
+                && n > 0
+            {
                 info!("purge périodique: {} messages supprimés", n);
             }
+        }
     });
 
     // Setup signal handler — flag atomique global (pas de Mutex dans le handler)
@@ -1093,17 +1203,26 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             for writer in st.connections.values() {
                 let msg = DaemonToWrapper::Disconnect;
                 if let Ok(json) = encode(&msg)
-                    && let Ok(mut w) = writer.lock() {
+                    && let Ok(mut w) = writer.lock()
+                {
                         let _ = writeln!(w, "{}", json);
                         let _ = w.flush();
                     }
             }
             drop(st);
             if let Err(e) = std::fs::remove_file(&config.socket_path) {
-                log::warn!("Impossible de supprimer socket {}: {}", config.socket_path.display(), e);
+                log::warn!(
+                    "Impossible de supprimer socket {}: {}",
+                    config.socket_path.display(),
+                    e
+                );
             }
             if let Err(e) = std::fs::remove_file(config.socket_path.with_extension("pid")) {
-                log::warn!("Impossible de supprimer PID file {}: {}", config.socket_path.with_extension("pid").display(), e);
+                log::warn!(
+                    "Impossible de supprimer PID file {}: {}",
+                    config.socket_path.with_extension("pid").display(),
+                    e
+                );
             }
             info!("daemon arrêté proprement");
             return Ok(());
@@ -1200,6 +1319,7 @@ fn handle_connection(
         st.conn_hosts.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
+        st.client_negotiations.remove(&conn_id);
         (writer_opt, removed, controls, views)
     };
     let _ = execute_controls(controls);
@@ -1209,7 +1329,8 @@ fn handle_connection(
 
     // Nettoyage explicite du writer pour éviter fuites de ressources
     if let Some(writer_mutex) = writer_opt
-        && let Ok(mut writer) = writer_mutex.lock() {
+        && let Ok(mut writer) = writer_mutex.lock()
+    {
             use std::io::Write;
             let _ = writer.flush();
             // Le drop explicite fermera le stream proprement
@@ -1254,9 +1375,14 @@ fn handle_register(
         .parse()
         .unwrap_or(bridget_core::AgentType::Custom(agent_type));
 
-    match state.router.register(name.as_deref(), &parsed_type, conn_id) {
+    match state
+        .router
+        .register(name.as_deref(), &parsed_type, conn_id)
+    {
         Ok(final_name) => {
-            state.conn_names.insert(conn_id.to_string(), final_name.clone());
+            state
+                .conn_names
+                .insert(conn_id.to_string(), final_name.clone());
             state.conn_hosts.insert(
                 conn_id.to_string(),
                 host.clone().unwrap_or_else(|| "inconnu".to_string()),
@@ -1286,7 +1412,9 @@ fn handle_register(
                     .or_else(|| previous.and_then(|presence| presence.derived_domain.clone()));
                 let dnd_until = previous.and_then(|presence| presence.dnd_until);
 
-                state.conn_instances.insert(conn_id.to_string(), instance_id.clone());
+                state
+                    .conn_instances
+                    .insert(conn_id.to_string(), instance_id.clone());
                 state.presences.insert(
                     instance_id,
                     Presence {
@@ -1295,7 +1423,12 @@ fn handle_register(
                         host: host.unwrap_or_else(|| "inconnu".to_string()),
                         transport: transport.unwrap_or_else(|| "unix".to_string()),
                         os: os.unwrap_or_else(|| "inconnu".to_string()),
-                        state: if turn_in_progress { "busy" } else { "connected" }.to_string(),
+                        state: if turn_in_progress {
+                            "busy"
+                        } else {
+                            "connected"
+                        }
+                        .to_string(),
                         last_seen: Instant::now(),
                         reconnect_count,
                         model,
@@ -1415,7 +1548,11 @@ fn should_remind(target_is_undisturbed: bool, escalation_level: u8) -> bool {
     !target_is_undisturbed || escalation_level >= 2
 }
 
-fn deferred_reminder_level(target_is_busy: bool, elapsed_secs: u64, timeout_secs: u64) -> Option<u8> {
+fn deferred_reminder_level(
+    target_is_busy: bool,
+    elapsed_secs: u64,
+    timeout_secs: u64,
+) -> Option<u8> {
     if !target_is_busy {
         return None;
     }
@@ -1564,10 +1701,7 @@ fn claim_timeout(store: &Store, id: &str) -> bool {
 /// Même résolution que `handle_runtime` : les commandes de contrôle arrivent par
 /// le client CLI, dont la connexion est éphémère et distincte de celle de
 /// l'agent visé.
-fn presence_of_agent<'a>(
-    state: &'a mut DaemonState,
-    agent: &str,
-) -> Option<&'a mut Presence> {
+fn presence_of_agent<'a>(state: &'a mut DaemonState, agent: &str) -> Option<&'a mut Presence> {
     let instance_id = state
         .router
         .get_agent(agent)
@@ -1577,11 +1711,7 @@ fn presence_of_agent<'a>(
 }
 
 /// Remplace le domaine d'un agent, ou le ramène à son domaine dérivé.
-fn handle_domain(
-    agent: &str,
-    domain: Option<String>,
-    state: &mut DaemonState,
-) -> DaemonToWrapper {
+fn handle_domain(agent: &str, domain: Option<String>, state: &mut DaemonState) -> DaemonToWrapper {
     if let Some(Err(reason)) = domain.as_deref().map(validate_runtime_value) {
         return DaemonToWrapper::Nack {
             id: "domain".to_string(),
@@ -1599,11 +1729,7 @@ fn handle_domain(
         // Réinitialisation : on retombe sur ce que le wrapper avait annoncé.
         None => presence.derived_domain.clone(),
     };
-    log::debug!(
-        "domaine de '{}' : {:?}",
-        presence.name,
-        presence.domain
-    );
+    log::debug!("domaine de '{}' : {:?}", presence.name, presence.domain);
     DaemonToWrapper::Ack {
         id: "domain".to_string(),
     }
@@ -1642,6 +1768,429 @@ fn handle_availability(
     }
 }
 
+fn unix_now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .min(i64::MAX as u64) as i64
+}
+
+fn next_delivery_generation() -> u64 {
+    loop {
+        let generation = (Uuid::new_v4().as_u128() as u64) & i64::MAX as u64;
+        if generation != 0 {
+            return generation;
+        }
+    }
+}
+
+fn canonical_field(bytes: &mut Vec<u8>, value: &[u8]) {
+    bytes.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    bytes.extend_from_slice(value);
+}
+
+fn canonical_option<T: ToString>(bytes: &mut Vec<u8>, value: Option<T>) {
+    match value {
+        Some(value) => {
+            bytes.push(1);
+            canonical_field(bytes, value.to_string().as_bytes());
+        }
+        None => bytes.push(0),
+    }
+}
+
+/// Sérialisation binaire fermée et sans ambiguïté de l'enveloppe publiée.
+/// Elle ne dépend ni de l'ordre JSON ni des valeurs mutées lors du routage.
+fn canonical_send(
+    issuer_scope: &str,
+    message_id: &str,
+    message: &bridget_core::BridgetMessage,
+    issued_at: i64,
+) -> Vec<u8> {
+    let mut bytes = b"bridget/client-send/v1\0".to_vec();
+    canonical_field(&mut bytes, issuer_scope.as_bytes());
+    canonical_field(&mut bytes, message_id.as_bytes());
+    canonical_field(&mut bytes, message.to.as_bytes());
+    canonical_field(&mut bytes, message.body.as_bytes());
+    bytes.push(u8::from(message.reply));
+    canonical_field(&mut bytes, &message.hops.to_be_bytes());
+    canonical_option(&mut bytes, message.deadline_at);
+    canonical_option(&mut bytes, message.in_reply_to.as_deref());
+    canonical_field(&mut bytes, &issued_at.to_be_bytes());
+    bytes
+}
+
+fn issue_response(key: &IdempotencyKey, issue: IdempotencyIssue) -> DaemonToWrapper {
+    DaemonToWrapper::IdempotencyResult {
+        operation_kind: key.operation_kind.as_str().to_string(),
+        idempotency_key: key.idempotency_key.clone(),
+        issue,
+    }
+}
+
+fn replay_issue(
+    st: &DaemonState,
+    key: &IdempotencyKey,
+    result: LookupResult,
+) -> Result<IdempotencyIssue, String> {
+    match result {
+        LookupResult::Accepted { expires_at } => Ok(IdempotencyIssue::Accepted { expires_at }),
+        LookupResult::Rejected { category, reason } => {
+            Ok(IdempotencyIssue::Rejected { category, reason })
+        }
+        LookupResult::OutcomeUnknown { expires_at } => Ok(IdempotencyIssue::OutcomeUnknown {
+            expires_at,
+            delivery_id: st
+                .idempotency
+                .send_delivery(key)
+                .map_err(|error| error.to_string())?
+                .map(|delivery| delivery.delivery_id),
+        }),
+        LookupResult::IdempotencyExpired => Ok(IdempotencyIssue::IdempotencyExpired),
+    }
+}
+
+fn reject_idempotent_send(
+    st: &mut DaemonState,
+    key: &IdempotencyKey,
+    category: impl Into<String>,
+    reason: impl Into<String>,
+) -> Result<DaemonToWrapper, String> {
+    let category = category.into();
+    let reason = reason.into();
+    st.idempotency
+        .reject_prepared(key, &category, &reason)
+        .map_err(|error| error.to_string())?;
+    Ok(issue_response(
+        key,
+        IdempotencyIssue::Rejected { category, reason },
+    ))
+}
+
+/// Gardes communes précédant toute remise. Les deux appels publics conservent
+/// leurs identités de déduplication propres, mais partagent les invariants de
+/// réponse, DND, sauts et routage.
+struct PreparedDispatch {
+    content_key: String,
+    message_guard_id: String,
+    target_conn: String,
+    logical_sender: String,
+    reply_sender_conn: Option<String>,
+    valid_tracked_reply: bool,
+}
+
+fn prepare_dispatch(
+    st: &mut DaemonState,
+    message: &mut bridget_core::BridgetMessage,
+    conn_id: &str,
+    logical_sender: String,
+    content_key: String,
+    message_guard_id: String,
+) -> Result<PreparedDispatch, (&'static str, String)> {
+    let reply_sender_conn = st
+        .router
+        .get_agent(&message.from)
+        .map(|agent| agent.connection_id.clone());
+    if message.reply && reply_sender_conn.is_none() {
+        return Err((
+            "reply_sender_unavailable",
+            "--reply requiert un agent Bridget connecté ; lance la commande depuis un wrapper actif ou envoie sans --reply".to_string(),
+        ));
+    }
+
+    let valid_tracked_reply = message.in_reply_to.as_deref().is_some_and(|request_id| {
+        st.store
+            .get_request(request_id)
+            .ok()
+            .flatten()
+            .is_some_and(|request| {
+                request.state == "open"
+                    && request.sender == message.to
+                    && request.target == message.from
+            })
+    });
+
+    if !st.circuit_breaker.check(&logical_sender, &message.to) {
+        return Err((
+            "circuit_breaker",
+            format!(
+                "disjoncteur: limite {} échanges / {}s",
+                st.circuit_breaker.limit(),
+                st.circuit_breaker.window_secs()
+            ),
+        ));
+    }
+    if st.deduplicator.is_duplicate(&content_key, &message.to) {
+        return Err(("duplicate_content", "doublon de contenu".to_string()));
+    }
+    if st
+        .envelope_guard
+        .is_quarantined(&message_guard_id, &message.to)
+    {
+        return Err((
+            "quarantined",
+            "message déjà relayé (quarantaine)".to_string(),
+        ));
+    }
+    if !message.decrement_hops() {
+        return Err(("hops_exhausted", "budget de sauts épuisé".to_string()));
+    }
+    if !valid_tracked_reply
+        && let Some(presence) = presence_of_agent(st, &message.to)
+        && presence.is_dnd()
+    {
+        let minutes = presence.dnd_minutes_left();
+        let target = presence.name.clone();
+        return Err((
+            "dnd",
+            format!("« {target} » ne souhaite pas être dérangé (encore {minutes} min)"),
+        ));
+    }
+    let target_conn = match st
+        .router
+        .resolve(&message.from, &message.to, message.hops, conn_id)
+    {
+        RouterAction::Deliver { target_conn } => target_conn,
+        RouterAction::Reject(error) => return Err(("routing", error.to_string())),
+    };
+    Ok(PreparedDispatch {
+        content_key,
+        message_guard_id,
+        target_conn,
+        logical_sender,
+        reply_sender_conn,
+        valid_tracked_reply,
+    })
+}
+
+/// Rend durable l'attente d'une réponse après qu'une remise a été préparée.
+/// Le même mécanisme est partagé par les envois historiques et idempotents,
+/// afin que la reprise du daemon recharge la demande dans `pending_replies`.
+fn track_reply_cycle(
+    st: &mut DaemonState,
+    message: &bridget_core::BridgetMessage,
+    reply_sender_conn: Option<String>,
+    target_conn: String,
+) -> Result<(), String> {
+    if !message.reply {
+        return Ok(());
+    }
+    let timeout = message.reply_timeout.unwrap_or(60);
+    st.store
+        .create_request(&message.id, &message.from, &message.to, timeout)
+        .map_err(|error| format!("impossible de suivre la demande: {error}"))?;
+    remember_reply_cycle(st, message, reply_sender_conn, target_conn);
+    Ok(())
+}
+
+fn remember_reply_cycle(
+    st: &mut DaemonState,
+    message: &bridget_core::BridgetMessage,
+    reply_sender_conn: Option<String>,
+    target_conn: String,
+) {
+    if !message.reply {
+        return;
+    }
+    let timeout = message.reply_timeout.unwrap_or(60);
+    st.pending_replies.push(PendingReply {
+        msg_id: message.id.clone(),
+        from: message.from.clone(),
+        from_conn: reply_sender_conn
+            .expect("une réponse suivie a été validée avec un expéditeur connecté"),
+        to: message.to.clone(),
+        target_conn,
+        timeout_secs: timeout,
+        created_at: std::time::Instant::now(),
+        escalation_level: 0,
+        deferred_level: None,
+    });
+}
+
+fn handle_idempotent_send(
+    conn_id: &str,
+    mut message: bridget_core::BridgetMessage,
+    message_id: String,
+    issued_at: i64,
+    st: &mut DaemonState,
+) -> DaemonToWrapper {
+    let Some(negotiated) = st.client_negotiations.get(conn_id).cloned() else {
+        return DaemonToWrapper::ClientRejected {
+            reason: ClientRefusal::NegotiationRequired,
+        };
+    };
+    // L'identifiant métier est l'autorité publique ; l'ancien champ `id` de
+    // Bridget est donc normalisé avant toute comparaison ou garde mutable.
+    message.id = message_id.clone();
+    if message.reply && message.deadline_at.is_none() {
+        let timeout = message.reply_timeout.unwrap_or(60);
+        message.deadline_at = Some(
+            issued_at
+                .saturating_add(timeout as i64)
+                .max(0) as u64,
+        );
+    }
+    let key = match IdempotencyKey::new(negotiated.issuer_scope, OperationKind::Send, message_id) {
+        Ok(key) => key,
+        Err(_error) => {
+            return DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::MessageOutsideClientRole,
+            };
+        }
+    };
+    let canonical = canonical_send(&key.issuer_scope, &key.idempotency_key, &message, issued_at);
+    let now = unix_now_secs();
+    let reservation = match st.idempotency.reserve(
+        &key,
+        &canonical,
+        issued_at,
+        CLIENT_IDEMPOTENCY_HORIZON_SECS,
+        now,
+        CLIENT_ISSUED_AT_TOLERANCE_SECS,
+    ) {
+        Ok(reservation) => reservation,
+        Err(crate::idempotency::IdempotencyError::InvalidIssuedAt) => {
+            return issue_response(&key, IdempotencyIssue::InvalidIssuedAt);
+        }
+        Err(error) => {
+            error!("idempotence send: {error}");
+            return DaemonToWrapper::Nack {
+                id: key.idempotency_key.clone(),
+                reason: "erreur de persistance idempotente".to_string(),
+            };
+        }
+    };
+    let expires_at = match reservation {
+        Reservation::Prepared { expires_at } => expires_at,
+        Reservation::Replayed(LookupResult::OutcomeUnknown { expires_at }) => match st
+            .idempotency
+            .prepared_expiry(&key, now)
+        {
+            Ok(Some(expires_at)) => expires_at,
+            Ok(None) => {
+                return issue_response(
+                    &key,
+                    IdempotencyIssue::OutcomeUnknown {
+                        expires_at,
+                        delivery_id: st
+                            .idempotency
+                            .send_delivery(&key)
+                            .ok()
+                            .flatten()
+                            .map(|delivery| delivery.delivery_id),
+                    },
+                );
+            }
+            Err(error) => {
+                error!("idempotence reprise préparée: {error}");
+                return DaemonToWrapper::Nack {
+                    id: key.idempotency_key.clone(),
+                    reason: "issue idempotente illisible".to_string(),
+                };
+            }
+        },
+        Reservation::Replayed(result) => match replay_issue(st, &key, result) {
+            Ok(issue) => return issue_response(&key, issue),
+            Err(error) => {
+                error!("idempotence replay: {error}");
+                return DaemonToWrapper::Nack {
+                    id: key.idempotency_key.clone(),
+                    reason: "issue idempotente illisible".to_string(),
+                };
+            }
+        },
+        Reservation::EnvelopeMismatch => return issue_response(&key, IdempotencyIssue::EnvelopeMismatch),
+        Reservation::IdempotencyExpired => return issue_response(&key, IdempotencyIssue::IdempotencyExpired),
+    };
+            // Les gardes ci-dessous peuvent consulter ou modifier les limites
+            // historiques, mais seulement après la réservation d'une clé neuve.
+            // Les gardes historiques restent applicables à une clé neuve,
+            // mais leur espace est celui de l'émetteur idempotent : deux
+            // scopes sont deux émetteurs logiques et ne se contaminent pas.
+            let content_key = format!("{}:{}", key.issuer_scope, message.content_key());
+            let scoped_message_id = format!("{}:{}", key.issuer_scope, message.id);
+            let logical_sender = format!("client:{}", key.issuer_scope);
+            let prepared = match prepare_dispatch(
+                st,
+                &mut message,
+                conn_id,
+                logical_sender,
+                content_key,
+                scoped_message_id,
+            ) {
+                Ok(prepared) => prepared,
+                Err((category, reason)) => {
+                    return reject_idempotent_send(st, &key, category, reason).unwrap_or_else(
+                        |error| DaemonToWrapper::Nack {
+                            id: key.idempotency_key.clone(),
+                            reason: error,
+                        },
+                    );
+                }
+            };
+            let Some(recipient_instance_id) = st.conn_instances.get(&prepared.target_conn).cloned() else {
+                return reject_idempotent_send(
+                    st,
+                    &key,
+                    "recipient_unavailable",
+                    "instance destinataire inconnue",
+                )
+                .unwrap_or_else(|error| DaemonToWrapper::Nack {
+                    id: key.idempotency_key.clone(),
+                    reason: error,
+                });
+            };
+            let delivery = SendDelivery {
+                delivery_id: Uuid::new_v4().to_string(),
+                recipient_instance_id,
+                delivery_generation: next_delivery_generation(),
+                expires_at,
+            };
+            let reply_tracking = message.reply.then(|| ReplyTracking {
+                request_id: message.id.clone(),
+                sender: message.from.clone(),
+                target: message.to.clone(),
+                created_at: now,
+                deadline_at: message
+                    .deadline_at
+                    .expect("un reply idempotent est normalisé avant réservation")
+                    .min(i64::MAX as u64) as i64,
+            });
+            let delivery_result = match reply_tracking.as_ref() {
+                Some(reply) => st
+                    .idempotency
+                    .begin_send_delivery_with_reply(&key, &delivery, reply),
+                None => st.idempotency.begin_send_delivery(&key, &delivery),
+            };
+            if let Err(error) = delivery_result {
+                error!("idempotence dispatch: {error}");
+                return DaemonToWrapper::Nack {
+                    id: key.idempotency_key.clone(),
+                    reason: "impossible de préparer la remise".to_string(),
+                };
+            }
+            remember_reply_cycle(
+                st,
+                &message,
+                prepared.reply_sender_conn.clone(),
+                prepared.target_conn.clone(),
+            );
+            st.circuit_breaker
+                .record(&prepared.logical_sender, &message.to);
+            st.deduplicator
+                .mark_sent(&prepared.content_key, &message.to);
+            st.envelope_guard
+                .mark_relayed(&prepared.message_guard_id, &message.to);
+            issue_response(
+                &key,
+                IdempotencyIssue::OutcomeUnknown {
+                    expires_at,
+                    delivery_id: Some(delivery.delivery_id),
+                },
+            )
+}
+
 /// Traite un message wrapper et retourne une réponse optionnelle.
 fn handle_wrapper_message(
     conn_id: &str,
@@ -1656,6 +2205,20 @@ fn handle_wrapper_message(
     for view in views {
         view.close_and_join();
     }
+    if matches!(msg, WrapperToDaemon::ClientHello { .. })
+        && !state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .connection_roles
+            .contains_key(conn_id)
+    {
+        // Un hello client ne doit jamais sélectionner implicitement le rôle
+        // wrapper : l'ordre public est strict et sans effet de bord.
+        return Some(DaemonToWrapper::ClientRejected {
+            reason: ClientRefusal::RoleHandshakeRequired,
+        });
+    }
+
     if !matches!(msg, WrapperToDaemon::RoleHandshake { .. }) {
         // La première commande non négociée choisit définitivement la
         // compatibilité wrapper. Une tentative d'upgrade ultérieure vers
@@ -1669,6 +2232,11 @@ fn handle_wrapper_message(
     if let WrapperToDaemon::RoleHandshake { role } = &msg {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         if st.connection_roles.contains_key(conn_id) {
+            if *role == ConnectionRole::Client {
+                return Some(DaemonToWrapper::ClientRejected {
+                    reason: ClientRefusal::ClientRoleRequired,
+                });
+            }
             return Some(DaemonToWrapper::AttachRejected {
                 subscription_id: None,
                 reason: AttachRefusal::MessageOutsideAttachRole,
@@ -1691,8 +2259,139 @@ fn handle_wrapper_message(
         });
     }
 
+    let client_refusal = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        match st.connection_roles.get(conn_id) {
+            Some(ConnectionRole::Client) => match &msg {
+                WrapperToDaemon::ClientHello { .. }
+                    if st.client_negotiations.contains_key(conn_id) =>
+                {
+                    Some(ClientRefusal::AlreadyNegotiated)
+                }
+                WrapperToDaemon::SendIdempotent { .. } | WrapperToDaemon::Lookup { .. }
+                    if !st.client_negotiations.contains_key(conn_id) =>
+                {
+                    Some(ClientRefusal::NegotiationRequired)
+                }
+                WrapperToDaemon::SendIdempotent { .. }
+                    if st
+                        .client_negotiations
+                        .get(conn_id)
+                        .is_some_and(|negotiated| {
+                            negotiated.version != CLIENT_CONTRACT_VERSION
+                                || !negotiated
+                                    .capabilities
+                                    .contains(&ClientCapability::SendIdempotent)
+                        }) =>
+                {
+                    Some(ClientRefusal::CapabilityNotNegotiated)
+                }
+                WrapperToDaemon::Lookup { .. }
+                    if st
+                        .client_negotiations
+                        .get(conn_id)
+                        .is_some_and(|negotiated| {
+                            negotiated.version != CLIENT_CONTRACT_VERSION
+                                || !negotiated.capabilities.contains(&ClientCapability::Lookup)
+                        }) =>
+                {
+                    Some(ClientRefusal::CapabilityNotNegotiated)
+                }
+                WrapperToDaemon::ClientHello { .. }
+                | WrapperToDaemon::SendIdempotent { .. }
+                | WrapperToDaemon::Lookup { .. } => None,
+                _ => Some(ClientRefusal::MessageOutsideClientRole),
+            },
+            Some(ConnectionRole::Wrapper) | None
+                if matches!(
+                    msg,
+                    WrapperToDaemon::ClientHello { .. }
+                        | WrapperToDaemon::SendIdempotent { .. }
+                        | WrapperToDaemon::Lookup { .. }
+                ) =>
+            {
+                Some(ClientRefusal::ClientRoleRequired)
+            }
+            _ => None,
+        }
+    };
+    if let Some(reason) = client_refusal {
+        return Some(DaemonToWrapper::ClientRejected { reason });
+    }
+
     match msg {
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
+        WrapperToDaemon::ClientHello {
+            contract_version,
+            issuer_scope,
+            capabilities,
+        } => {
+            if contract_version != CLIENT_CONTRACT_VERSION {
+                return Some(DaemonToWrapper::ClientRejected {
+                    reason: ClientRefusal::UnsupportedVersion {
+                        supported_versions: vec![CLIENT_CONTRACT_VERSION],
+                    },
+                });
+            }
+            if crate::idempotency::validate_issuer_scope(&issuer_scope).is_err() {
+                return Some(DaemonToWrapper::ClientRejected {
+                    reason: ClientRefusal::InvalidIssuerScope,
+                });
+            }
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let active_scopes = st
+                .client_negotiations
+                .values()
+                .map(|negotiated| negotiated.issuer_scope.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            if !active_scopes.contains(issuer_scope.as_str())
+                && active_scopes.len() >= MAX_ACTIVE_ISSUER_SCOPES
+            {
+                return Some(DaemonToWrapper::ClientRejected {
+                    reason: ClientRefusal::ActiveScopeLimit,
+                });
+            }
+            let capabilities: Vec<ClientCapability> = capabilities
+                .into_iter()
+                .filter(|capability| {
+                    matches!(
+                        capability,
+                        ClientCapability::SendIdempotent | ClientCapability::Lookup
+                    )
+                })
+                .collect();
+            st.client_negotiations.insert(
+                conn_id.to_string(),
+                NegotiatedClient {
+                    version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope,
+                    capabilities: capabilities.clone(),
+                },
+            );
+            Some(DaemonToWrapper::ClientWelcome {
+                version: CLIENT_CONTRACT_VERSION,
+                horizon_secs: CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+                capabilities,
+            })
+        }
+        WrapperToDaemon::SendIdempotent {
+            message,
+            message_id,
+            issued_at,
+        } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            Some(handle_idempotent_send(
+                conn_id, message, message_id, issued_at, &mut st,
+            ))
+        }
+        WrapperToDaemon::Lookup { .. } => Some(DaemonToWrapper::Nack {
+            id: "lookup".to_string(),
+            reason: "Lookup sera activé par T1207".to_string(),
+        }),
+        WrapperToDaemon::DeliverAcked { .. } | WrapperToDaemon::DeliveryIndeterminate { .. } => {
+            None
+        }
         WrapperToDaemon::Subscribe { agent, window } => {
             let (subscription_id, control) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -1712,15 +2411,9 @@ fn handle_wrapper_message(
                     }
                 };
                 let subscription_id = format!("attach-{}", uuid::Uuid::new_v4());
-                let Some(view) = st
-                    .connections
-                    .get(conn_id)
-                    .and_then(|writer| AttachView::start(
-                        subscription_id.clone(),
-                        writer,
-                        st.view_closed_tx.clone(),
-                    ))
-                else {
+                let Some(view) = st.connections.get(conn_id).and_then(|writer| {
+                    AttachView::start(subscription_id.clone(), writer, st.view_closed_tx.clone())
+                }) else {
                     return Some(DaemonToWrapper::AttachRejected {
                         subscription_id: Some(subscription_id),
                         reason: AttachRefusal::WrapperUnavailable,
@@ -1746,7 +2439,8 @@ fn handle_wrapper_message(
                 });
                 (subscription_id, control)
             };
-            let accepted = control.is_some_and(|control| execute_controls(vec![control]).is_empty());
+            let accepted =
+                control.is_some_and(|control| execute_controls(vec![control]).is_empty());
             if accepted {
                 None
             } else {
@@ -1767,7 +2461,8 @@ fn handle_wrapper_message(
         WrapperToDaemon::Unsubscribe { subscription_id } => {
             let (control, view) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-                let Some(subscription) = st.attach_subscriptions.get(&subscription_id).cloned() else {
+                let Some(subscription) = st.attach_subscriptions.get(&subscription_id).cloned()
+                else {
                     // Une fin d'ancienne génération n'a pas le droit de toucher
                     // une souscription plus récente sur la même connexion.
                     return None;
@@ -1779,7 +2474,10 @@ fn handle_wrapper_message(
                     });
                 }
                 st.attach_subscriptions.remove(&subscription_id);
-                let control = st.connections.get(&subscription.wrapper_conn).map(|writer| DeferredControl {
+                let control = st
+                    .connections
+                    .get(&subscription.wrapper_conn)
+                    .map(|writer| DeferredControl {
                     writer: writer.clone(),
                     message: DaemonToWrapper::Unsubscribe {
                         subscription_id: subscription_id.clone(),
@@ -1811,20 +2509,25 @@ fn handle_wrapper_message(
                     subscription_id,
                     subscription.agent
                 );
-                st.connections.get(&subscription.attach_conn).map(|writer| DeferredControl {
+                st.connections
+                    .get(&subscription.attach_conn)
+                    .map(|writer| DeferredControl {
                     writer: writer.clone(),
                     message: DaemonToWrapper::Subscribed {
                         subscription_id: subscription_id.clone(),
                     },
                 })
             };
-            let delivered = control.is_some_and(|control| execute_controls(vec![control]).is_empty());
+            let delivered =
+                control.is_some_and(|control| execute_controls(vec![control]).is_empty());
             if !delivered {
                 let (control, view) = {
                     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                     let subscription = st.attach_subscriptions.remove(&subscription_id);
                     let control = subscription.and_then(|subscription| {
-                        st.connections.get(&subscription.wrapper_conn).map(|writer| DeferredControl {
+                        st.connections
+                            .get(&subscription.wrapper_conn)
+                            .map(|writer| DeferredControl {
                             writer: writer.clone(),
                             message: DaemonToWrapper::Unsubscribe {
                                 subscription_id: subscription_id.clone(),
@@ -1853,7 +2556,10 @@ fn handle_wrapper_message(
                 if subscription.wrapper_conn != conn_id {
                     return None;
                 }
-                let control = st.connections.get(&subscription.attach_conn).map(|writer| DeferredControl {
+                let control =
+                    st.connections
+                        .get(&subscription.attach_conn)
+                        .map(|writer| DeferredControl {
                     writer: writer.clone(),
                     message: DaemonToWrapper::AttachRejected {
                         subscription_id: Some(subscription_id.clone()),
@@ -1885,7 +2591,10 @@ fn handle_wrapper_message(
                 st.attach_views.remove(&subscription_id)
             };
             if let Some(view) = view {
-                let _ = view.enqueue(DaemonToWrapper::End { subscription_id, reason });
+                let _ = view.enqueue(DaemonToWrapper::End {
+                    subscription_id,
+                    reason,
+                });
                 view.close_and_join();
             }
             None
@@ -1914,41 +2623,70 @@ fn handle_wrapper_message(
             }
             None
         }
-        WrapperToDaemon::JournalFragment { subscription_id, seq, offset, final_fragment, bytes } => {
+        WrapperToDaemon::JournalFragment {
+            subscription_id,
+            seq,
+            offset,
+            final_fragment,
+            bytes,
+        } => {
             let view = {
                 let st = state.lock().unwrap_or_else(|e| e.into_inner());
-                st.attach_subscriptions.get(&subscription_id)
+                st.attach_subscriptions
+                    .get(&subscription_id)
                     .filter(|subscription| subscription.wrapper_conn == conn_id)
                     .and_then(|_| st.attach_views.get(&subscription_id).cloned())
             };
             if let Some(view) = view {
                 let _ = view.enqueue(DaemonToWrapper::JournalFragment {
-                    subscription_id, seq, offset, final_fragment, bytes,
+                    subscription_id,
+                    seq,
+                    offset,
+                    final_fragment,
+                    bytes,
                 });
             }
             None
         }
-        WrapperToDaemon::SnapshotCaughtUp { subscription_id, through_seq } => {
+        WrapperToDaemon::SnapshotCaughtUp {
+            subscription_id,
+            through_seq,
+        } => {
             let view = {
                 let st = state.lock().unwrap_or_else(|e| e.into_inner());
-                st.attach_subscriptions.get(&subscription_id)
+                st.attach_subscriptions
+                    .get(&subscription_id)
                     .filter(|subscription| subscription.wrapper_conn == conn_id)
                     .and_then(|_| st.attach_views.get(&subscription_id).cloned())
             };
             if let Some(view) = view {
-                let _ = view.enqueue(DaemonToWrapper::SnapshotCaughtUp { subscription_id, through_seq });
+                let _ = view.enqueue(DaemonToWrapper::SnapshotCaughtUp {
+                    subscription_id,
+                    through_seq,
+                });
             }
             None
         }
-        WrapperToDaemon::Gap { subscription_id, from_seq, to_seq, reason } => {
+        WrapperToDaemon::Gap {
+            subscription_id,
+            from_seq,
+            to_seq,
+            reason,
+        } => {
             let view = {
                 let st = state.lock().unwrap_or_else(|e| e.into_inner());
-                st.attach_subscriptions.get(&subscription_id)
+                st.attach_subscriptions
+                    .get(&subscription_id)
                     .filter(|subscription| subscription.wrapper_conn == conn_id)
                     .and_then(|_| st.attach_views.get(&subscription_id).cloned())
             };
             if let Some(view) = view {
-                let _ = view.enqueue(DaemonToWrapper::Gap { subscription_id, from_seq, to_seq, reason });
+                let _ = view.enqueue(DaemonToWrapper::Gap {
+                    subscription_id,
+                    from_seq,
+                    to_seq,
+                    reason,
+                });
             }
             None
         }
@@ -2004,7 +2742,7 @@ fn handle_wrapper_message(
                     return Some(DaemonToWrapper::Nack {
                         id: "rename".to_string(),
                         reason: format!("agent introuvable: {}", current_name),
-                    })
+                    });
                 }
             };
             match st.router.rename(&target_conn, &name) {
@@ -2068,131 +2806,45 @@ fn handle_wrapper_message(
                 }
             }
 
-            // Un client CLI temporaire se déconnecte dès qu'il a reçu l'Ack.
-            // Il ne peut donc pas recevoir une réponse différée. Une demande
-            // `--reply` n'est valide que si l'identité de l'émetteur désigne un
-            // wrapper encore connecté ; sinon on refuse l'envoi plutôt que de
-            // livrer une tâche dont la réponse sera inévitablement rejetée.
-            let reply_sender_conn = st
-                .router
-                .get_agent(&bridge_msg.from)
-                .map(|agent| agent.connection_id.clone());
+            let logical_sender = bridge_msg.from.clone();
+            let content_key = bridge_msg.content_key();
+            let message_guard_id = bridge_msg.id.clone();
+            let prepared = match prepare_dispatch(
+                &mut st,
+                &mut bridge_msg,
+                conn_id,
+                logical_sender,
+                content_key,
+                message_guard_id,
+            ) {
+                Ok(prepared) => prepared,
+                Err((_category, reason)) => {
+                    return Some(DaemonToWrapper::Nack {
+                        id: bridge_msg.id.clone(),
+                        reason,
+                    });
+                }
+            };
             let is_ephemeral_cli_sender = sender_name.starts_with("cli-send-")
-                && reply_sender_conn.as_deref() == Some(conn_id);
-            if bridge_msg.reply && (reply_sender_conn.is_none() || is_ephemeral_cli_sender) {
+                && prepared.reply_sender_conn.as_deref() == Some(conn_id);
+            if bridge_msg.reply && is_ephemeral_cli_sender {
                 return Some(DaemonToWrapper::Nack {
                     id: bridge_msg.id.clone(),
                     reason: "--reply requiert un agent Bridget connecté ; lance la commande depuis un wrapper actif ou envoie sans --reply".to_string(),
                 });
             }
-
-            // Une réponse suivie ne contourne DND et ne clôt le ledger que si
-            // sa demande est ouverte et lie exactement les deux participants.
-            // Cette vérification ne modifie aucun état : une référence forgée
-            // reste un message ordinaire.
-            let valid_tracked_reply = bridge_msg.in_reply_to.as_deref().is_some_and(|request_id| {
-                st.store.get_request(request_id).ok().flatten().is_some_and(|request| {
-                    request.state == "open"
-                        && request.sender == bridge_msg.to
-                        && request.target == bridge_msg.from
-                })
-            });
-
-            // 1. Disjoncteur
-            if !st.circuit_breaker.check(&bridge_msg.from, &bridge_msg.to) {
-                warn!(
-                    "DISJONCTEUR: {} ↔ {} — {} échanges dans la fenêtre",
-                    bridge_msg.from,
-                    bridge_msg.to,
-                    st.circuit_breaker.count(&bridge_msg.from, &bridge_msg.to)
-                );
-                return Some(DaemonToWrapper::Nack {
-                    id: bridge_msg.id.clone(),
-                    reason: format!(
-                        "disjoncteur: limite {} échanges / {}s",
-                        st.circuit_breaker.limit(),
-                        st.circuit_breaker.window_secs()
-                    ),
-                });
-            }
-
-            // 2. Déduplication par contenu
-            let content_key = bridge_msg.content_key();
-            if st.deduplicator.is_duplicate(&content_key, &bridge_msg.to) {
-                warn!(
-                    "DEDUP: doublon vers « {} » (clé {})",
-                    bridge_msg.to, content_key
-                );
-                return Some(DaemonToWrapper::Nack {
-                    id: bridge_msg.id.clone(),
-                    reason: "doublon de contenu".to_string(),
-                });
-            }
-
-            // 3. Quarantaine par ID
-            if st
-                .envelope_guard
-                .is_quarantined(&bridge_msg.id, &bridge_msg.to)
-            {
-                warn!(
-                    "QUARANTAINE: id {} déjà relayé vers « {} »",
-                    bridge_msg.id, bridge_msg.to
-                );
-                return Some(DaemonToWrapper::Nack {
-                    id: bridge_msg.id.clone(),
-                    reason: "message déjà relayé (quarantaine)".to_string(),
-                });
-            }
-
-            // 4. Décrémenter les hops
-            if !bridge_msg.decrement_hops() {
-                return Some(DaemonToWrapper::Nack {
-                    id: bridge_msg.id.clone(),
-                    reason: "budget de sauts épuisé".to_string(),
-                });
-            }
-
-            // 4 bis. Respecter le refus d'être dérangé du destinataire.
-            //
-            // Le contrôle est ici, dans le daemon, et non côté client : un
-            // client d'une version antérieure le contournerait, et il devrait
-            // interroger l'annuaire avant chaque envoi. L'émetteur reçoit la
-            // raison et le temps restant afin de décider lui-même s'il attend,
-            // insiste plus tard, ou s'adresse à quelqu'un d'autre.
-            if !valid_tracked_reply
-                && let Some(presence) = presence_of_agent(&mut st, &bridge_msg.to)
-                && presence.is_dnd() {
-                    let minutes = presence.dnd_minutes_left();
-                    let target = presence.name.clone();
-                    info!(
-                        "refus DND: « {} » ne veut pas être dérangé ({} min)",
-                        target, minutes
-                    );
-                    return Some(DaemonToWrapper::Nack {
-                        id: bridge_msg.id.clone(),
-                        reason: format!(
-                            "« {} » ne souhaite pas être dérangé (encore {} min)",
-                            target, minutes
-                        ),
-                    });
-                }
-
-            // 5. Router
-            let action =
-                st.router
-                    .resolve(&bridge_msg.from, &bridge_msg.to, bridge_msg.hops, conn_id);
-
-            match action {
-                RouterAction::Deliver { target_conn } => {
+            let target_conn = prepared.target_conn;
                     let conv_key = format!("{}|{}", bridge_msg.from, bridge_msg.to);
 
                     if let Err(e) = st.store.record_message(&bridge_msg, &conv_key) {
                         error!("store: {}", e);
                     }
-                    st.circuit_breaker.record(&bridge_msg.from, &bridge_msg.to);
-                    st.deduplicator.mark_sent(&content_key, &bridge_msg.to);
+                    st.circuit_breaker
+                        .record(&prepared.logical_sender, &bridge_msg.to);
+                    st.deduplicator
+                        .mark_sent(&prepared.content_key, &bridge_msg.to);
                     st.envelope_guard
-                        .mark_relayed(&bridge_msg.id, &bridge_msg.to);
+                        .mark_relayed(&prepared.message_guard_id, &bridge_msg.to);
 
                     // Le daemon est l'autorité de l'échéance : le wrapper ACP
                     // reçoit sa valeur absolue pour purger un tour devenu trop
@@ -2203,9 +2855,8 @@ fn handle_wrapper_message(
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs();
-                        delivered_message.deadline_at = Some(
-                            now.saturating_add(delivered_message.reply_timeout.unwrap_or(60)),
-                        );
+                        delivered_message.deadline_at =
+                            Some(now.saturating_add(delivered_message.reply_timeout.unwrap_or(60)));
                     }
                     // Push vers le destinataire
                     let dtw = DaemonToWrapper::Deliver(delivered_message);
@@ -2237,52 +2888,28 @@ fn handle_wrapper_message(
                     }
 
                     if delivery_succeeded
-                        && valid_tracked_reply
+                        && prepared.valid_tracked_reply
                         && let Some(request_id) = bridge_msg.in_reply_to.as_deref()
-                        && st.store.mark_answered(request_id, &bridge_msg.from, &bridge_msg.to).unwrap_or(false)
+                        && st
+                            .store
+                            .mark_answered(request_id, &bridge_msg.from, &bridge_msg.to)
+                            .unwrap_or(false)
                     {
-                        st.pending_replies.retain(|pending| pending.msg_id != request_id);
+                        st.pending_replies
+                            .retain(|pending| pending.msg_id != request_id);
                         info!("demande {} répondue après livraison", request_id);
                     }
 
-                    // Si reply=yes, enregistrer dans pending_replies pour escalade
-                    if bridge_msg.reply {
-                        let timeout = bridge_msg.reply_timeout.unwrap_or(60);
-                        if let Err(error) = st.store.create_request(
-                            &bridge_msg.id,
-                            &bridge_msg.from,
-                            &bridge_msg.to,
-                            timeout,
-                        ) {
-                            return Some(DaemonToWrapper::Nack {
-                                id: bridge_msg.id.clone(),
-                                reason: format!("impossible de suivre la demande: {}", error),
-                            });
-                        }
-                        st.pending_replies.push(PendingReply {
-                            msg_id: bridge_msg.id.clone(),
-                            from: bridge_msg.from.clone(),
-                            // Si l'envoi a été déclenché par `bridget send` dans
-                            // un agent, conn_id est un client CLI éphémère. Les
-                            // relances et le timeout doivent viser le wrapper
-                            // durable identifié ci-dessus.
-                            from_conn: reply_sender_conn
-                                .expect("un --reply a toujours un expéditeur connecté"),
-                            to: bridge_msg.to.clone(),
-                            target_conn: target_conn.clone(),
-                            timeout_secs: timeout,
-                            created_at: std::time::Instant::now(),
-                            escalation_level: 0,
-                            deferred_level: None,
+                    if let Err(reason) = track_reply_cycle(
+                        &mut st,
+                        &bridge_msg,
+                        prepared.reply_sender_conn.clone(),
+                        target_conn.clone(),
+                    ) {
+                        return Some(DaemonToWrapper::Nack {
+                            id: bridge_msg.id.clone(),
+                            reason,
                         });
-                        info!(
-                            "reply attendu: {} → {} (timeout={}s, escalade à {}/{}s)",
-                            bridge_msg.id,
-                            bridge_msg.to,
-                            timeout,
-                            timeout / 3,
-                            timeout * 2 / 3
-                        );
                     }
 
                     if is_attach {
@@ -2297,21 +2924,13 @@ fn handle_wrapper_message(
                     Some(DaemonToWrapper::Ack {
                         id: bridge_msg.id.clone(),
                     })
-                }
-                RouterAction::Reject(err) => {
-                    warn!("rejet: {}", err);
-                    Some(DaemonToWrapper::Nack {
-                        id: bridge_msg.id.clone(),
-                        reason: err.to_string(),
-                    })
-                }
-            }
         }
 
         WrapperToDaemon::Heartbeat => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(instance_id) = st.conn_instances.get(conn_id).cloned()
-                && let Some(presence) = st.presences.get_mut(&instance_id) {
+                && let Some(presence) = st.presences.get_mut(&instance_id)
+            {
                     presence.last_seen = Instant::now();
                 }
             None
@@ -2321,7 +2940,10 @@ fn handle_wrapper_message(
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             match st.set_turn_state(conn_id, in_progress) {
                 Ok(()) => None,
-                Err(reason) => Some(DaemonToWrapper::Nack { id: "turn-state".to_string(), reason }),
+                Err(reason) => Some(DaemonToWrapper::Nack {
+                    id: "turn-state".to_string(),
+                    reason,
+                }),
             }
         }
 
@@ -2358,7 +2980,10 @@ fn handle_wrapper_message(
                 let writer = st.connections.get(&pending.conn_id).cloned();
                 drop(st);
                 if let Some(writer) = writer {
-                    let _ = push_control_message(&writer, &DaemonToWrapper::DeliveryRejected { id, reason });
+                    let _ = push_control_message(
+                        &writer,
+                        &DaemonToWrapper::DeliveryRejected { id, reason },
+                    );
                 }
                 return None;
             }
@@ -2366,7 +2991,8 @@ fn handle_wrapper_message(
             if let Some(request) = request {
                 st.pending_replies.retain(|pending| pending.msg_id != id);
                 if (reason.contains("échéance") || reason.contains("timeout ACP"))
-                    && !claim_timeout(&st.store, &id) {
+                    && !claim_timeout(&st.store, &id)
+                {
                         return None;
                 }
                 if let Some(agent) = st.router.get_agent(&request.sender)
@@ -2377,7 +3003,10 @@ fn handle_wrapper_message(
                         &format!("Échec de livraison de la demande #{id} : {reason}"),
                     )
                 {
-                    error!("impossible de notifier l'échec ACP à {}: {}", request.sender, error);
+                    error!(
+                        "impossible de notifier l'échec ACP à {}: {}",
+                        request.sender, error
+                    );
                 }
             }
             None
@@ -2410,18 +3039,25 @@ fn handle_wrapper_message(
                         if is_acp {
                             let cancel = DaemonToWrapper::CancelDelivery {
                                 id: request.id.clone(),
-                                reason: request.cancel_reason.clone().unwrap_or_else(|| "demande annulée".to_string()),
+                                reason: request
+                                    .cancel_reason
+                                    .clone()
+                                    .unwrap_or_else(|| "demande annulée".to_string()),
                             };
-                            match encode(&cancel)
-                                .map_err(|error| error.to_string())
-                                .and_then(|json| {
-                                    let mut writer = writer.lock().map_err(|error| error.to_string())?;
-                                    writeln!(writer, "{json}").map_err(|error| error.to_string())?;
+                            match encode(&cancel).map_err(|error| error.to_string()).and_then(
+                                |json| {
+                                    let mut writer =
+                                        writer.lock().map_err(|error| error.to_string())?;
+                                    writeln!(writer, "{json}")
+                                        .map_err(|error| error.to_string())?;
                                     writer.flush().map_err(|error| error.to_string())
-                                })
-                            {
+                                },
+                            ) {
                                 Ok(()) => {}
-                                Err(error) => error!("Impossible de signaler l'annulation à {}: {}", request.target, error),
+                                Err(error) => error!(
+                                    "Impossible de signaler l'annulation à {}: {}",
+                                    request.target, error
+                                ),
                             }
                         } else if let Err(error) = deliver_to_agent(
                             writer,
@@ -2430,10 +3066,17 @@ fn handle_wrapper_message(
                                 "Demande #{} annulée par {}. Aucune réponse n'est requise.{}",
                                 request.id,
                                 sender,
-                                request.cancel_reason.as_deref().map(|reason| format!(" Motif : {reason}")).unwrap_or_default()
+                                request
+                                    .cancel_reason
+                                    .as_deref()
+                                    .map(|reason| format!(" Motif : {reason}"))
+                                    .unwrap_or_default()
                             ),
                         ) {
-                            error!("Impossible de délivrer l'annulation à {}: {}", request.target, error);
+                            error!(
+                                "Impossible de délivrer l'annulation à {}: {}",
+                                request.target, error
+                            );
                         }
                     }
                     Some(DaemonToWrapper::RequestCancelled {
@@ -2579,7 +3222,6 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
     }
 }
 
-
 #[derive(Default)]
 pub struct DaemonStatus {
     pub running: bool,
@@ -2590,6 +3232,7 @@ pub struct DaemonStatus {
 #[cfg(test)]
 mod presence_tests {
     use super::*;
+    use bridget_core::BridgetMessage;
     use std::io::Read;
 
     fn control_socket(label: &str) -> (Arc<Mutex<BufWriter<UnixStream>>>, BufReader<UnixStream>) {
@@ -2601,7 +3244,10 @@ mod presence_tests {
         let client = UnixStream::connect(&path).unwrap();
         let (server, _) = listener.accept().unwrap();
         std::fs::remove_file(path).unwrap();
-        (Arc::new(Mutex::new(BufWriter::new(server))), BufReader::new(client))
+        (
+            Arc::new(Mutex::new(BufWriter::new(server))),
+            BufReader::new(client),
+        )
     }
 
     fn read_control(reader: &mut BufReader<UnixStream>) -> DaemonToWrapper {
@@ -2612,15 +3258,29 @@ mod presence_tests {
 
     fn normalized_attach_frame(mut message: DaemonToWrapper) -> String {
         match &mut message {
-            DaemonToWrapper::JournalFragment { subscription_id, .. }
-            | DaemonToWrapper::SnapshotCaughtUp { subscription_id, .. }
-            | DaemonToWrapper::Gap { subscription_id, .. }
-            | DaemonToWrapper::JournalReadError { subscription_id, .. }
-            | DaemonToWrapper::End { subscription_id, .. }
+            DaemonToWrapper::JournalFragment {
+                subscription_id, ..
+            }
+            | DaemonToWrapper::SnapshotCaughtUp {
+                subscription_id, ..
+            }
+            | DaemonToWrapper::Gap {
+                subscription_id, ..
+            }
+            | DaemonToWrapper::JournalReadError {
+                subscription_id, ..
+            }
+            | DaemonToWrapper::End {
+                subscription_id, ..
+            }
             | DaemonToWrapper::Subscribed { subscription_id }
-            | DaemonToWrapper::Subscribe { subscription_id, .. }
+            | DaemonToWrapper::Subscribe {
+                subscription_id, ..
+            }
             | DaemonToWrapper::Unsubscribe { subscription_id } => subscription_id.clear(),
-            DaemonToWrapper::AttachRejected { subscription_id, .. } => *subscription_id = None,
+            DaemonToWrapper::AttachRejected {
+                subscription_id, ..
+            } => *subscription_id = None,
             _ => {}
         }
         encode(&message).unwrap()
@@ -2665,7 +3325,11 @@ mod presence_tests {
         let mut state = DaemonState::new(&config).unwrap();
         state
             .router
-            .register(Some("agent-distant-1"), &bridget_core::AgentType::Codex, "conn-1")
+            .register(
+                Some("agent-distant-1"),
+                &bridget_core::AgentType::Codex,
+                "conn-1",
+            )
             .unwrap();
         state
             .conn_instances
@@ -2693,7 +3357,13 @@ mod presence_tests {
 
         let agents = state.agent_infos();
         assert_eq!(agents.len(), 1);
-        assert_eq!(agents.iter().map(|agent| agent.name.as_str()).collect::<Vec<_>>(), vec!["agent-distant-1"]);
+        assert_eq!(
+            agents
+                .iter()
+                .map(|agent| agent.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["agent-distant-1"]
+        );
         assert_eq!(agents[0].host, "projet-a");
         assert_eq!(agents[0].os, "Linux");
         assert_eq!(agents[0].state, "unreachable");
@@ -2701,7 +3371,11 @@ mod presence_tests {
         assert_eq!(agents[0].model.as_deref(), Some("gpt-5.3-codex"));
         assert_eq!(agents[0].effort.as_deref(), Some("xhigh"));
         if let Err(e) = std::fs::remove_file(&config.db_path) {
-            log::warn!("Impossible de supprimer la base {}: {}", config.db_path.display(), e);
+            log::warn!(
+                "Impossible de supprimer la base {}: {}",
+                config.db_path.display(),
+                e
+            );
         }
     }
 
@@ -2830,10 +3504,577 @@ mod presence_tests {
     }
 
     #[test]
+    fn client_negocie_un_contrat_versionne_apres_son_role() {
+        let (state, config) = state_with_registered_agent("client-negotiation");
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-1",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            })
+        ));
+        let response = handle_wrapper_message(
+            "client-1",
+            WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: "012_scope_aaaaaaaaaaaa".to_string(),
+                capabilities: vec![ClientCapability::SendIdempotent, ClientCapability::Lookup],
+            },
+            &shared,
+        );
+        assert!(matches!(
+            response,
+            Some(DaemonToWrapper::ClientWelcome {
+                version: CLIENT_CONTRACT_VERSION,
+                horizon_secs: CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+                capabilities,
+            }) if capabilities == vec![ClientCapability::SendIdempotent, ClientCapability::Lookup]
+        ));
+        let negotiated = shared
+            .lock()
+            .unwrap()
+            .client_negotiations
+            .get("client-1")
+            .cloned()
+            .unwrap();
+        assert_eq!(negotiated.version, CLIENT_CONTRACT_VERSION);
+        assert_eq!(negotiated.issuer_scope, "012_scope_aaaaaaaaaaaa");
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn client_hello_avant_role_et_depuis_attach_sont_refuses_sans_negociation() {
+        let (state, config) = state_with_registered_agent("client-order");
+        let shared = Arc::new(Mutex::new(state));
+        let hello = || WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: "012_scope_bbbbbbbbbbbb".to_string(),
+            capabilities: vec![ClientCapability::Lookup],
+        };
+        assert!(matches!(
+            handle_wrapper_message("client-before-role", hello(), &shared),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::RoleHandshakeRequired
+            })
+        ));
+        assert!(
+            !shared
+            .lock()
+            .unwrap()
+            .connection_roles
+                .contains_key("client-before-role")
+        );
+        assert!(matches!(
+            handle_wrapper_message(
+                "attach-client-hello",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message("attach-client-hello", hello(), &shared),
+            Some(DaemonToWrapper::AttachRejected {
+                reason: AttachRefusal::MessageOutsideAttachRole,
+                ..
+            })
+        ));
+        assert!(shared.lock().unwrap().client_negotiations.is_empty());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn send_et_lookup_avant_welcome_ne_negocient_ni_ne_reservent() {
+        let (state, config) = state_with_registered_agent("client-before-welcome");
+        let shared = Arc::new(Mutex::new(state));
+        handle_wrapper_message(
+            "client-before-welcome",
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Client,
+            },
+            &shared,
+        );
+        let message = BridgetMessage::new("client", "agent-2", "sans welcome");
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-before-welcome",
+                WrapperToDaemon::SendIdempotent {
+                    message,
+                    message_id: "message-1".to_string(),
+                    issued_at: 1,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::NegotiationRequired
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-before-welcome",
+                WrapperToDaemon::Lookup {
+                    operation_kind: "send".to_string(),
+                    idempotency_key: "message-1".to_string(),
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::NegotiationRequired
+            })
+        ));
+        assert!(shared.lock().unwrap().client_negotiations.is_empty());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn client_refuse_version_et_scope_invalides_et_capacite_non_negociee() {
+        let (state, config) = state_with_registered_agent("client-validation");
+        let shared = Arc::new(Mutex::new(state));
+        for connection in ["client-version", "client-scope", "client-capability"] {
+            handle_wrapper_message(
+                connection,
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &shared,
+            );
+        }
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-version",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION + 1,
+                    issuer_scope: "012_scope_cccccccccccc".to_string(),
+                    capabilities: vec![ClientCapability::Lookup],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::UnsupportedVersion { supported_versions }
+            }) if supported_versions == vec![CLIENT_CONTRACT_VERSION]
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-scope",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: "invalide!".to_string(),
+                    capabilities: vec![ClientCapability::Lookup],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::InvalidIssuerScope
+            })
+        ));
+        handle_wrapper_message(
+            "client-capability",
+            WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: "012_scope_dddddddddddd".to_string(),
+                capabilities: vec![ClientCapability::Lookup],
+            },
+            &shared,
+        );
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-capability",
+                WrapperToDaemon::SendIdempotent {
+                    message: BridgetMessage::new("client", "agent-2", "hors capacite"),
+                    message_id: "message-2".to_string(),
+                    issued_at: 1,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::CapabilityNotNegotiated
+            })
+        ));
+        assert!(
+            shared
+                .lock()
+                .unwrap()
+                .client_negotiations
+                .contains_key("client-capability")
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn client_borne_les_scopes_actifs_sans_rejeter_un_scope_deja_actif() {
+        let (mut state, config) = state_with_registered_agent("client-scope-limit");
+        for number in 0..MAX_ACTIVE_ISSUER_SCOPES {
+            state.client_negotiations.insert(
+                format!("existing-{number}"),
+                NegotiatedClient {
+                    version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: format!("012_scope_{number:016x}"),
+                    capabilities: vec![ClientCapability::Lookup],
+                },
+            );
+        }
+        state
+            .connection_roles
+            .insert("client-limit".to_string(), ConnectionRole::Client);
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-limit",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: "012_scope_ffffffffffffffff".to_string(),
+                    capabilities: vec![ClientCapability::Lookup],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::ActiveScopeLimit
+            })
+        ));
+        shared
+            .lock()
+            .unwrap()
+            .connection_roles
+            .insert("client-retry".to_string(), ConnectionRole::Client);
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-retry",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: "012_scope_0000000000000000".to_string(),
+                    capabilities: vec![ClientCapability::Lookup],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientWelcome { .. })
+        ));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn wrapper_accepte_les_accuses_idempotents_et_register_historique_reste_wrapper() {
+        let (state, config) = state_with_registered_agent("client-wrapper-matrix");
+        let shared = Arc::new(Mutex::new(state));
+        assert!(
+            handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::DeliverAcked {
+                delivery_id: "delivery-1".to_string(),
+                delivery_generation: 1,
+            },
+            &shared,
+        )
+            .is_none()
+        );
+        assert_eq!(
+            shared.lock().unwrap().connection_roles.get("conn-1"),
+            Some(&ConnectionRole::Wrapper)
+        );
+        assert!(matches!(
+            handle_wrapper_message(
+                "historic-register",
+                WrapperToDaemon::Register {
+                    agent_type: "codex".to_string(),
+                    name: Some("historique-012".to_string()),
+                    host: None,
+                    transport: None,
+                    os: None,
+                    instance_id: None,
+                    domain: None,
+                    turn_in_progress: false,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::Registered { .. })
+        ));
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .connection_roles
+                .get("historic-register"),
+            Some(&ConnectionRole::Wrapper)
+        );
+        assert_eq!(shared.lock().unwrap().idempotency.record_count().unwrap(), 0);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    fn negotiate_idempotent_client(
+        shared: &Arc<Mutex<DaemonState>>,
+        connection: &str,
+        scope: &str,
+    ) {
+        assert!(matches!(
+            handle_wrapper_message(
+                connection,
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                connection,
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: scope.to_string(),
+                    capabilities: vec![ClientCapability::SendIdempotent],
+                },
+                shared,
+            ),
+            Some(DaemonToWrapper::ClientWelcome { .. })
+        ));
+    }
+
+    fn idempotent_message(body: &str) -> BridgetMessage {
+        let mut message = BridgetMessage::new("maicie", "agent-2", body);
+        message.hops = 4;
+        message
+    }
+
+    #[test]
+    fn canonical_send_ignore_le_nom_affiche_et_le_timeout_relatif() {
+        let mut original = idempotent_message("enveloppe stable");
+        original.reply = true;
+        original.reply_timeout = Some(20);
+        original.deadline_at = Some(123_456);
+        let mut renamed = original.clone();
+        renamed.from = "maicie-renommee".to_string();
+        renamed.reply_timeout = Some(90);
+        assert_eq!(
+            canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &original, 123_000),
+            canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &renamed, 123_000)
+        );
+    }
+
+    #[test]
+    fn send_idempotent_rejoue_sans_rerouter_et_isole_les_scopes() {
+        let (state, config) = state_with_registered_agent("idempotent-send");
+        let shared = Arc::new(Mutex::new(state));
+        let scope_a = "012_scope_aaaaaaaaaaaa";
+        let scope_b = "012_scope_bbbbbbbbbbbb";
+        negotiate_idempotent_client(&shared, "client-a", scope_a);
+        let issued_at = unix_now_secs();
+        let first = handle_wrapper_message(
+            "client-a",
+            WrapperToDaemon::SendIdempotent {
+                message: idempotent_message("tâche durable"),
+                message_id: "message-identique".to_string(),
+                issued_at,
+            },
+            &shared,
+        );
+        let first_delivery = match first {
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue:
+                    IdempotencyIssue::OutcomeUnknown {
+                        delivery_id: Some(delivery_id),
+                        ..
+                    },
+                ..
+            }) => delivery_id,
+            other => panic!("réponse inattendue: {other:?}"),
+        };
+        negotiate_idempotent_client(&shared, "client-b", scope_b);
+        let other_scope = handle_wrapper_message(
+            "client-b",
+            WrapperToDaemon::SendIdempotent {
+                message: idempotent_message("tâche durable"),
+                message_id: "message-identique".to_string(),
+                issued_at,
+            },
+            &shared,
+        );
+        assert!(matches!(
+            other_scope,
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown {
+                    delivery_id: Some(delivery_id),
+                    ..
+                },
+                ..
+            }) if delivery_id != first_delivery
+        ));
+        let state = shared.lock().unwrap();
+        let first_key = IdempotencyKey::new(scope_a, OperationKind::Send, "message-identique").unwrap();
+        let second_key = IdempotencyKey::new(scope_b, OperationKind::Send, "message-identique").unwrap();
+        assert_ne!(
+            state.idempotency.send_delivery(&first_key).unwrap().unwrap().delivery_generation,
+            state.idempotency.send_delivery(&second_key).unwrap().unwrap().delivery_generation
+        );
+        // Un rejeu est jugé avant tout routage : retirer ou renommer la cible
+        // n'autorise jamais une nouvelle résolution pour cette clé connue.
+        {
+            let mut state = shared.lock().unwrap();
+            state.router.rename("conn-1", "agent-renommé").unwrap();
+        }
+        let replay = handle_wrapper_message(
+            "client-a",
+            WrapperToDaemon::SendIdempotent {
+                message: idempotent_message("tâche durable"),
+                message_id: "message-identique".to_string(),
+                issued_at,
+            },
+            &shared,
+        );
+        assert!(matches!(
+            replay,
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown {
+                    delivery_id: Some(delivery_id),
+                    ..
+                },
+                ..
+            }) if delivery_id == first_delivery
+        ));
+        let mismatch = handle_wrapper_message(
+            "client-a",
+            WrapperToDaemon::SendIdempotent {
+                message: idempotent_message("tâche différente"),
+                message_id: "message-identique".to_string(),
+                issued_at,
+            },
+            &shared,
+        );
+        assert!(matches!(
+            mismatch,
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::EnvelopeMismatch,
+                ..
+            })
+        ));
+        assert_eq!(
+            state.idempotency.record_count().unwrap(),
+            2
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn send_idempotent_persiste_un_refus_et_la_voie_historique_ne_contamine_pas_le_socle() {
+        let (state, config) = state_with_registered_agent("idempotent-rejection");
+        let shared = Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(&shared, "client-reject", "012_scope_cccccccccccc");
+        let issued_at = unix_now_secs();
+        let mut unknown_target = BridgetMessage::new("maicie", "inconnu", "à refuser");
+        unknown_target.hops = 4;
+        let send = || WrapperToDaemon::SendIdempotent {
+            message: unknown_target.clone(),
+            message_id: "message-refuse".to_string(),
+            issued_at,
+        };
+        let rejected = handle_wrapper_message("client-reject", send(), &shared);
+        assert!(matches!(
+            rejected,
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::Rejected { ref category, .. },
+                ..
+            }) if category == "routing"
+        ));
+        let replay = handle_wrapper_message("client-reject", send(), &shared);
+        assert!(matches!(
+            replay,
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::Rejected { ref category, .. },
+                ..
+            }) if category == "routing"
+        ));
+
+        let historic = handle_wrapper_message(
+            "historique-012",
+            WrapperToDaemon::Send(BridgetMessage::new(
+                "historique",
+                "agent-2",
+                "ancienne voie",
+            )),
+            &shared,
+        );
+        assert!(matches!(historic, Some(DaemonToWrapper::Ack { .. })));
+        assert_eq!(
+            shared.lock().unwrap().idempotency.record_count().unwrap(),
+            1
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn send_idempotent_conserve_les_invariants_de_reponse_et_dnd() {
+        let (mut state, config) = state_with_registered_agent("idempotent-reply");
+        state
+            .router
+            .register(
+                Some("maicie"),
+                &bridget_core::AgentType::Codex,
+                "sender-wrapper",
+            )
+            .unwrap();
+        state
+            .store
+            .create_request("request-open", "agent-2", "maicie", 60)
+            .unwrap();
+        state.presences.get_mut("instance-1").unwrap().dnd_until =
+            Some(Instant::now() + Duration::from_secs(60));
+        let shared = Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(&shared, "client-reply", "012_scope_replyyyyyyyyy");
+        let mut reply = idempotent_message("réponse suivie");
+        reply.from = "maicie".to_string();
+        reply.reply = true;
+        reply.in_reply_to = Some("request-open".to_string());
+        let result = handle_wrapper_message(
+            "client-reply",
+            WrapperToDaemon::SendIdempotent {
+                message: reply,
+                message_id: "reply-idempotent".to_string(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            result,
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { .. },
+                ..
+            })
+        ));
+        let state = shared.lock().unwrap();
+        assert_eq!(
+            state
+                .store
+                .get_request("reply-idempotent")
+                .unwrap()
+                .unwrap()
+                .state,
+            "open"
+        );
+        assert!(state
+            .pending_replies
+            .iter()
+            .any(|pending| pending.msg_id == "reply-idempotent"));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
     fn envoi_attach_force_humain_et_ne_clot_pas_une_demande_forgee() {
         let (mut state, config) = state_with_registered_agent("attach-humain");
-        let listener = UnixListener::bind(config.socket_path.with_extension("target.sock")).unwrap();
-        let _receiver = UnixStream::connect(config.socket_path.with_extension("target.sock")).unwrap();
+        let listener =
+            UnixListener::bind(config.socket_path.with_extension("target.sock")).unwrap();
+        let _receiver =
+            UnixStream::connect(config.socket_path.with_extension("target.sock")).unwrap();
         let (target_stream, _) = listener.accept().unwrap();
         state.connections.insert(
             "conn-1".to_string(),
@@ -2872,8 +4113,12 @@ mod presence_tests {
         let (mut state, config) = state_with_registered_agent("attach-cycle");
         let (wrapper_writer, mut wrapper_reader) = control_socket("wrapper");
         let (attach_writer, mut attach_reader) = control_socket("attach");
-        state.connections.insert("conn-1".to_string(), wrapper_writer);
-        state.connections.insert("attach-1".to_string(), attach_writer);
+        state
+            .connections
+            .insert("conn-1".to_string(), wrapper_writer);
+        state
+            .connections
+            .insert("attach-1".to_string(), attach_writer);
         let shared = Arc::new(Mutex::new(state));
         assert!(matches!(
             handle_wrapper_message(
@@ -2888,7 +4133,8 @@ mod presence_tests {
             })
         ));
 
-        assert!(handle_wrapper_message(
+        assert!(
+            handle_wrapper_message(
             "attach-1",
             WrapperToDaemon::Subscribe {
                 agent: "agent-2".to_string(),
@@ -2896,21 +4142,36 @@ mod presence_tests {
             },
             &shared,
         )
-        .is_none());
+            .is_none()
+        );
         let first_id = match read_control(&mut wrapper_reader) {
-            DaemonToWrapper::Subscribe { subscription_id, .. } => subscription_id,
+            DaemonToWrapper::Subscribe {
+                subscription_id, ..
+            } => subscription_id,
             other => panic!("commande wrapper inattendue: {}", encode(&other).unwrap()),
         };
-        assert_eq!(shared.lock().unwrap().agent_infos().len(), 1, "attach reste hors de who");
-        assert!(shared.lock().unwrap().attach_subscriptions.contains_key(&first_id));
-        assert!(handle_wrapper_message(
+        assert_eq!(
+            shared.lock().unwrap().agent_infos().len(),
+            1,
+            "attach reste hors de who"
+        );
+        assert!(
+            shared
+                .lock()
+                .unwrap()
+                .attach_subscriptions
+                .contains_key(&first_id)
+        );
+        assert!(
+            handle_wrapper_message(
             "conn-1",
             WrapperToDaemon::Subscribed {
                 subscription_id: first_id.clone(),
             },
             &shared,
         )
-        .is_none());
+            .is_none()
+        );
         assert!(matches!(
             read_control(&mut attach_reader),
             DaemonToWrapper::Subscribed { subscription_id } if subscription_id == first_id
@@ -2944,7 +4205,9 @@ mod presence_tests {
             &shared,
         );
         let second_id = match read_control(&mut wrapper_reader) {
-            DaemonToWrapper::Subscribe { subscription_id, .. } => subscription_id,
+            DaemonToWrapper::Subscribe {
+                subscription_id, ..
+            } => subscription_id,
             other => panic!("commande wrapper inattendue: {}", encode(&other).unwrap()),
         };
         handle_wrapper_message(
@@ -2971,7 +4234,13 @@ mod presence_tests {
             read_control(&mut attach_reader),
             DaemonToWrapper::End { subscription_id, .. } if subscription_id == first_id
         ));
-        assert!(shared.lock().unwrap().attach_subscriptions.contains_key(&second_id));
+        assert!(
+            shared
+                .lock()
+                .unwrap()
+                .attach_subscriptions
+                .contains_key(&second_id)
+        );
 
         let (controls, views) = {
             let mut state = shared.lock().unwrap();
@@ -2993,11 +4262,7 @@ mod presence_tests {
     #[test]
     fn abonnement_attach_refuse_un_wrapper_tmux_malgre_son_type() {
         let (mut state, config) = state_with_registered_agent("attach-tmux");
-        state
-            .presences
-            .get_mut("instance-1")
-            .unwrap()
-            .transport = "unix".to_string();
+        state.presences.get_mut("instance-1").unwrap().transport = "unix".to_string();
         let shared = Arc::new(Mutex::new(state));
         assert!(matches!(
             handle_wrapper_message(
@@ -3033,8 +4298,12 @@ mod presence_tests {
         let (mut state, config) = state_with_registered_agent("attach-closed-view");
         let (wrapper_writer, mut wrapper_reader) = control_socket("wrapper-closed-view");
         let (attach_writer, attach_reader) = control_socket("attach-closed-view");
-        state.connections.insert("conn-1".to_string(), wrapper_writer);
-        state.connections.insert("attach-1".to_string(), attach_writer);
+        state
+            .connections
+            .insert("conn-1".to_string(), wrapper_writer);
+        state
+            .connections
+            .insert("attach-1".to_string(), attach_writer);
         let shared = Arc::new(Mutex::new(state));
         handle_wrapper_message(
             "attach-1",
@@ -3052,7 +4321,9 @@ mod presence_tests {
             &shared,
         );
         let subscription_id = match read_control(&mut wrapper_reader) {
-            DaemonToWrapper::Subscribe { subscription_id, .. } => subscription_id,
+            DaemonToWrapper::Subscribe {
+                subscription_id, ..
+            } => subscription_id,
             other => panic!("commande wrapper inattendue: {}", encode(&other).unwrap()),
         };
         drop(attach_reader);
@@ -3076,17 +4347,26 @@ mod presence_tests {
         let view = AttachView::suspended("sub-gap");
         let bytes = vec![b'x'; 600 * 1024];
         assert!(view.enqueue(DaemonToWrapper::JournalFragment {
-            subscription_id: "sub-gap".to_string(), seq: 41, offset: 0,
-            final_fragment: false, bytes: bytes.clone(),
+            subscription_id: "sub-gap".to_string(),
+            seq: 41,
+            offset: 0,
+            final_fragment: false,
+            bytes: bytes.clone(),
         }));
         assert!(view.enqueue(DaemonToWrapper::JournalFragment {
-            subscription_id: "sub-gap".to_string(), seq: 42, offset: 0,
-            final_fragment: true, bytes,
+            subscription_id: "sub-gap".to_string(),
+            seq: 42,
+            offset: 0,
+            final_fragment: true,
+            bytes,
         }));
         let queue = view.queue.0.lock().unwrap();
         assert_eq!(queue.gap.as_ref().map(|gap| (gap.0, gap.1)), Some((41, 41)));
         assert_eq!(queue.messages.len(), 1);
-        assert_eq!(queue.messages.front().and_then(|message| message.seq), Some(42));
+        assert_eq!(
+            queue.messages.front().and_then(|message| message.seq),
+            Some(42)
+        );
     }
 
     #[test]
@@ -3094,30 +4374,52 @@ mod presence_tests {
         let view = AttachView::suspended("sub-fragments");
         let bytes = vec![b'x'; 600 * 1024];
         assert!(view.enqueue(DaemonToWrapper::JournalFragment {
-            subscription_id: "sub-fragments".to_string(), seq: 41, offset: 0,
-            final_fragment: false, bytes: bytes.clone(),
+            subscription_id: "sub-fragments".to_string(),
+            seq: 41,
+            offset: 0,
+            final_fragment: false,
+            bytes: bytes.clone(),
         }));
         assert!(!view.enqueue(DaemonToWrapper::JournalFragment {
-            subscription_id: "sub-fragments".to_string(), seq: 41, offset: 1,
-            final_fragment: false, bytes: bytes.clone(),
+            subscription_id: "sub-fragments".to_string(),
+            seq: 41,
+            offset: 1,
+            final_fragment: false,
+            bytes: bytes.clone(),
         }));
         assert!(!view.enqueue(DaemonToWrapper::JournalFragment {
-            subscription_id: "sub-fragments".to_string(), seq: 41, offset: 2,
-            final_fragment: false, bytes: b"continuation evincee".to_vec(),
+            subscription_id: "sub-fragments".to_string(),
+            seq: 41,
+            offset: 2,
+            final_fragment: false,
+            bytes: b"continuation evincee".to_vec(),
         }));
         assert!(!view.enqueue(DaemonToWrapper::JournalFragment {
-            subscription_id: "sub-fragments".to_string(), seq: 41, offset: 3,
-            final_fragment: true, bytes: b"frontiere evincee".to_vec(),
+            subscription_id: "sub-fragments".to_string(),
+            seq: 41,
+            offset: 3,
+            final_fragment: true,
+            bytes: b"frontiere evincee".to_vec(),
         }));
         assert!(view.enqueue(DaemonToWrapper::JournalFragment {
-            subscription_id: "sub-fragments".to_string(), seq: 42, offset: 4,
-            final_fragment: true, bytes: b"sequence suivante admise".to_vec(),
+            subscription_id: "sub-fragments".to_string(),
+            seq: 42,
+            offset: 4,
+            final_fragment: true,
+            bytes: b"sequence suivante admise".to_vec(),
         }));
         let queue = view.queue.0.lock().unwrap();
         assert_eq!(queue.dropping_seq, None);
         assert!(queue.messages.iter().all(|message| message.seq != Some(41)));
         assert_eq!(queue.gap.as_ref().map(|gap| (gap.0, gap.1)), Some((41, 41)));
-        assert_eq!(queue.messages.iter().filter(|message| message.seq == Some(42)).count(), 1);
+        assert_eq!(
+            queue
+                .messages
+                .iter()
+                .filter(|message| message.seq == Some(42))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -3126,22 +4428,36 @@ mod presence_tests {
         let (wrapper_writer, _wrapper_reader) = control_socket("attach-non-seq-wrapper");
         let (attach_writer, _attach_reader) = control_socket("attach-non-seq-view");
         let view = AttachView::suspended_with_sender("sub-non-seq", state.view_closed_tx.clone());
-        state.connections.insert("conn-1".to_string(), wrapper_writer);
-        state.connections.insert("attach-1".to_string(), attach_writer);
-        state.attach_subscriptions.insert("sub-non-seq".to_string(), AttachSubscription {
-            agent: "agent-2".to_string(), attach_conn: "attach-1".to_string(),
+        state
+            .connections
+            .insert("conn-1".to_string(), wrapper_writer);
+        state
+            .connections
+            .insert("attach-1".to_string(), attach_writer);
+        state.attach_subscriptions.insert(
+            "sub-non-seq".to_string(),
+            AttachSubscription {
+                agent: "agent-2".to_string(),
+                attach_conn: "attach-1".to_string(),
             wrapper_conn: "conn-1".to_string(),
-        });
-        state.attach_views.insert("sub-non-seq".to_string(), view.clone());
+            },
+        );
+        state
+            .attach_views
+            .insert("sub-non-seq".to_string(), view.clone());
         {
             let mut queue = view.queue.0.lock().unwrap();
             queue.bytes = ATTACH_VIEW_BUFFER_BYTES;
         }
         assert!(!view.enqueue(DaemonToWrapper::SnapshotCaughtUp {
-            subscription_id: "sub-non-seq".to_string(), through_seq: Some(7),
+            subscription_id: "sub-non-seq".to_string(),
+            through_seq: Some(7),
         }));
         assert!(!view.enqueue(DaemonToWrapper::Gap {
-            subscription_id: "sub-non-seq".to_string(), from_seq: 8, to_seq: 9, reason: None,
+            subscription_id: "sub-non-seq".to_string(),
+            from_seq: 8,
+            to_seq: 9,
+            reason: None,
         }));
         let (controls, views) = collect_closed_attach_views(&mut state);
         let _ = execute_controls(controls);
@@ -3157,19 +4473,30 @@ mod presence_tests {
     fn end_abandonne_la_file_et_interdit_toute_frame_ulterieure() {
         let view = AttachView::suspended("sub-terminal");
         assert!(view.enqueue(DaemonToWrapper::JournalFragment {
-            subscription_id: "sub-terminal".to_string(), seq: 5, offset: 0,
-            final_fragment: true, bytes: b"avant-end".to_vec(),
+            subscription_id: "sub-terminal".to_string(),
+            seq: 5,
+            offset: 0,
+            final_fragment: true,
+            bytes: b"avant-end".to_vec(),
         }));
         assert!(view.enqueue(DaemonToWrapper::End {
-            subscription_id: "sub-terminal".to_string(), reason: "fin".to_string(),
+            subscription_id: "sub-terminal".to_string(),
+            reason: "fin".to_string(),
         }));
         assert!(!view.enqueue(DaemonToWrapper::JournalReadError {
-            subscription_id: "sub-terminal".to_string(), line: 7, offset: 42,
+            subscription_id: "sub-terminal".to_string(),
+            line: 7,
+            offset: 42,
             reason: "trop tard".to_string(),
         }));
         let queue = view.queue.0.lock().unwrap();
         assert_eq!(queue.messages.len(), 1);
-        assert!(queue.messages.front().is_some_and(|message| message.terminal));
+        assert!(
+            queue
+                .messages
+                .front()
+                .is_some_and(|message| message.terminal)
+        );
         assert!(queue.messages.iter().all(|message| message.seq.is_none()));
     }
 
@@ -3197,12 +4524,15 @@ mod presence_tests {
             let controls = (0..16)
                 .map(|number| DeferredControl {
                     writer: control_writer.clone(),
-                    message: DaemonToWrapper::Ack { id: format!("ack-{number}") },
+                    message: DaemonToWrapper::Ack {
+                        id: format!("ack-{number}"),
+                    },
                 })
                 .chain(std::iter::once(DeferredControl {
                     writer: control_writer.clone(),
                     message: DaemonToWrapper::End {
-                        subscription_id: "sub-serialise".to_string(), reason: "fin".to_string(),
+                        subscription_id: "sub-serialise".to_string(),
+                        reason: "fin".to_string(),
                     },
                 }))
                 .collect();
@@ -3210,8 +4540,11 @@ mod presence_tests {
         });
         for seq in 0..16 {
             assert!(view.enqueue(DaemonToWrapper::JournalFragment {
-                subscription_id: "sub-serialise".to_string(), seq, offset: seq,
-                final_fragment: true, bytes: vec![b'x'; 2048],
+                subscription_id: "sub-serialise".to_string(),
+                seq,
+                offset: seq,
+                final_fragment: true,
+                bytes: vec![b'x'; 2048],
             }));
         }
         barrier.wait();
@@ -3223,22 +4556,35 @@ mod presence_tests {
     #[test]
     fn end_indelivrable_force_l_eof_de_la_vue() {
         let (writer_stream, mut peer) = UnixStream::pair().unwrap();
-        writer_stream.set_write_timeout(Some(Duration::from_millis(50))).unwrap();
+        writer_stream
+            .set_write_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
         let writer = Arc::new(Mutex::new(BufWriter::new(writer_stream)));
         // Remplir le tampon noyau sans lire le pair, puis échouer sur End.
         let payload = "x".repeat(16 * 1024);
-        while push_control_message(&writer, &DaemonToWrapper::Ack { id: payload.clone() }) {}
-        assert!(!push_control_message(&writer, &DaemonToWrapper::End {
-            subscription_id: "sub-eof".to_string(), reason: "vue trop lente".to_string(),
-        }));
+        while push_control_message(
+            &writer,
+            &DaemonToWrapper::Ack {
+                id: payload.clone(),
+            },
+        ) {}
+        assert!(!push_control_message(
+            &writer,
+            &DaemonToWrapper::End {
+                subscription_id: "sub-eof".to_string(),
+                reason: "vue trop lente".to_string(),
+            }
+        ));
         peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         let mut bytes = [0_u8; 1024];
         loop {
             match peer.read(&mut bytes) {
                 Ok(0) => break,
                 Ok(_) => continue,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
-                    || error.kind() == std::io::ErrorKind::TimedOut => {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.kind() == std::io::ErrorKind::TimedOut =>
+                {
                         panic!("End ni EOF recus par la vue")
                     }
                 Err(error) => panic!("lecture pair: {error}"),
@@ -3251,14 +4597,19 @@ mod presence_tests {
         let (mut state, config) = state_with_registered_agent("attach-late-reject");
         let (writer, mut reader) = control_socket("attach-late-reject");
         state.connections.insert("attach-1".to_string(), writer);
-        state.pending_attach_sends.insert("message-humain".to_string(), PendingAttachSend {
-            conn_id: "attach-1".to_string(), expires_at: Instant::now() + Duration::from_secs(60),
-        });
+        state.pending_attach_sends.insert(
+            "message-humain".to_string(),
+            PendingAttachSend {
+                conn_id: "attach-1".to_string(),
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
         let shared = Arc::new(Mutex::new(state));
         handle_wrapper_message(
             "conn-1",
             WrapperToDaemon::DeliveryRejected {
-                id: "message-humain".to_string(), reason: "adaptateur refusé".to_string(),
+                id: "message-humain".to_string(),
+                reason: "adaptateur refusé".to_string(),
             },
             &shared,
         );
@@ -3274,14 +4625,22 @@ mod presence_tests {
     #[test]
     fn pending_attach_expire_et_sont_nettoyes_a_la_deconnexion() {
         let (mut state, config) = state_with_registered_agent("attach-purge");
-        state.pending_attach_sends.insert("expired".to_string(), PendingAttachSend {
-            conn_id: "attach-1".to_string(), expires_at: Instant::now() - Duration::from_secs(1),
-        });
+        state.pending_attach_sends.insert(
+            "expired".to_string(),
+            PendingAttachSend {
+                conn_id: "attach-1".to_string(),
+                expires_at: Instant::now() - Duration::from_secs(1),
+            },
+        );
         purge_expired_attach_sends(&mut state);
         assert!(state.pending_attach_sends.is_empty());
-        state.pending_attach_sends.insert("live".to_string(), PendingAttachSend {
-            conn_id: "attach-1".to_string(), expires_at: Instant::now() + Duration::from_secs(60),
-        });
+        state.pending_attach_sends.insert(
+            "live".to_string(),
+            PendingAttachSend {
+                conn_id: "attach-1".to_string(),
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
         let (controls, views) = close_attach_subscriptions(&mut state, "attach-1");
         assert!(controls.is_empty());
         for view in views {
@@ -3297,9 +4656,15 @@ mod presence_tests {
         let (wrapper_writer, _wrapper_reader) = control_socket("attach-two-wrapper");
         let (first_writer, mut first_reader) = control_socket("attach-two-first");
         let (second_writer, mut second_reader) = control_socket("attach-two-second");
-        state.connections.insert("conn-1".to_string(), wrapper_writer);
-        state.connections.insert("attach-1".to_string(), first_writer.clone());
-        state.connections.insert("attach-2".to_string(), second_writer.clone());
+        state
+            .connections
+            .insert("conn-1".to_string(), wrapper_writer);
+        state
+            .connections
+            .insert("attach-1".to_string(), first_writer.clone());
+        state
+            .connections
+            .insert("attach-2".to_string(), second_writer.clone());
         install_attach_view(&mut state, "sub-first", "attach-1", &first_writer);
         install_attach_view(&mut state, "sub-second", "attach-2", &second_writer);
         let shared = Arc::new(Mutex::new(state));
@@ -3336,18 +4701,31 @@ mod presence_tests {
             );
         }
 
-        let first = (0..3).map(|_| normalized_attach_frame(read_control(&mut first_reader))).collect::<Vec<_>>();
-        let second = (0..3).map(|_| normalized_attach_frame(read_control(&mut second_reader))).collect::<Vec<_>>();
-        assert_eq!(first, second, "les deux vues doivent recevoir les memes trames");
+        let first = (0..3)
+            .map(|_| normalized_attach_frame(read_control(&mut first_reader)))
+            .collect::<Vec<_>>();
+        let second = (0..3)
+            .map(|_| normalized_attach_frame(read_control(&mut second_reader)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            first, second,
+            "les deux vues doivent recevoir les memes trames"
+        );
 
         let (controls, views) = {
             let mut state = shared.lock().unwrap();
             let (controls, views) = close_attach_subscriptions(&mut state, "attach-1");
-            let (second_controls, second_views) = close_attach_subscriptions(&mut state, "attach-2");
+            let (second_controls, second_views) =
+                close_attach_subscriptions(&mut state, "attach-2");
             assert!(state.attach_subscriptions.is_empty());
             assert!(state.attach_views.is_empty());
-            (controls.into_iter().chain(second_controls).collect::<Vec<_>>(),
-             views.into_iter().chain(second_views).collect::<Vec<_>>())
+            (
+                controls
+                    .into_iter()
+                    .chain(second_controls)
+                    .collect::<Vec<_>>(),
+                views.into_iter().chain(second_views).collect::<Vec<_>>(),
+            )
         };
         let _ = execute_controls(controls);
         for view in &views {
@@ -3363,13 +4741,21 @@ mod presence_tests {
         let (wrapper_stream, _wrapper_peer) = UnixStream::pair().unwrap();
         let (slow_stream, _slow_peer) = UnixStream::pair().unwrap();
         let (fast_stream, fast_peer) = UnixStream::pair().unwrap();
-        fast_peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        fast_peer
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
         let wrapper_writer = Arc::new(Mutex::new(BufWriter::new(wrapper_stream)));
         let slow_writer = Arc::new(Mutex::new(BufWriter::new(slow_stream)));
         let fast_writer = Arc::new(Mutex::new(BufWriter::new(fast_stream)));
-        state.connections.insert("conn-1".to_string(), wrapper_writer);
-        state.connections.insert("attach-slow".to_string(), slow_writer.clone());
-        state.connections.insert("attach-fast".to_string(), fast_writer.clone());
+        state
+            .connections
+            .insert("conn-1".to_string(), wrapper_writer);
+        state
+            .connections
+            .insert("attach-slow".to_string(), slow_writer.clone());
+        state
+            .connections
+            .insert("attach-fast".to_string(), fast_writer.clone());
         install_attach_view(&mut state, "sub-slow", "attach-slow", &slow_writer);
         install_attach_view(&mut state, "sub-fast", "attach-fast", &fast_writer);
         let shared = Arc::new(Mutex::new(state));
@@ -3412,15 +4798,28 @@ mod presence_tests {
             let count = observer_state.lock().unwrap().agent_infos().len();
             let _ = observed_tx.send(count);
         });
-        assert_eq!(observed_rx.recv_timeout(Duration::from_millis(100)).unwrap(), 1);
+        assert_eq!(
+            observed_rx
+                .recv_timeout(Duration::from_millis(100))
+                .unwrap(),
+            1
+        );
 
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             handle_wrapper_message("conn-1", WrapperToDaemon::Heartbeat, &shared);
-            if !shared.lock().unwrap().attach_subscriptions.contains_key("sub-slow") {
+            if !shared
+                .lock()
+                .unwrap()
+                .attach_subscriptions
+                .contains_key("sub-slow")
+            {
                 break;
             }
-            assert!(Instant::now() < deadline, "la vue lente doit etre fermee dans la borne");
+            assert!(
+                Instant::now() < deadline,
+                "la vue lente doit etre fermee dans la borne"
+            );
             thread::sleep(Duration::from_millis(10));
         }
         let state = shared.lock().unwrap();
@@ -3468,7 +4867,10 @@ mod presence_tests {
             &mut state,
         );
         let agents = state.agent_infos();
-        assert_eq!(agents[0].model.as_deref(), Some("claude-haiku-4-5-20251001"));
+        assert_eq!(
+            agents[0].model.as_deref(),
+            Some("claude-haiku-4-5-20251001")
+        );
         assert_eq!(agents[0].effort, None);
 
         let _ = std::fs::remove_file(&config.db_path);
@@ -3620,7 +5022,13 @@ mod presence_tests {
 
         let agents = state.agent_infos();
         assert_eq!(agents.len(), 1);
-        assert_eq!(agents.iter().map(|agent| agent.name.as_str()).collect::<Vec<_>>(), vec!["agent-2"]);
+        assert_eq!(
+            agents
+                .iter()
+                .map(|agent| agent.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["agent-2"]
+        );
         assert_eq!(agents[0].state, "connected");
         assert_eq!(agents[0].model.as_deref(), Some("gpt-5.3-codex"));
         assert_eq!(agents[0].effort.as_deref(), Some("xhigh"));
@@ -3660,20 +5068,70 @@ mod presence_tests {
         });
 
         let first = collect_reminder_actions(&mut state, started + Duration::from_secs(20));
-        assert!(first.iter().any(|action| matches!(action, ReminderAction::Deferred { level: 1, .. })));
-        assert!(!first.iter().any(|action| matches!(action, ReminderAction::Gentle { .. } | ReminderAction::Firm { .. } | ReminderAction::Timeout { .. })));
-        assert_eq!(state.store.latest_deferred_reminder("request-busy").unwrap().map(|event| event.0), Some(1));
+        assert!(
+            first
+                .iter()
+                .any(|action| matches!(action, ReminderAction::Deferred { level: 1, .. }))
+        );
+        assert!(!first.iter().any(|action| matches!(
+            action,
+            ReminderAction::Gentle { .. }
+                | ReminderAction::Firm { .. }
+                | ReminderAction::Timeout { .. }
+        )));
+        assert_eq!(
+            state
+                .store
+                .latest_deferred_reminder("request-busy")
+                .unwrap()
+                .map(|event| event.0),
+            Some(1)
+        );
 
         let second = collect_reminder_actions(&mut state, started + Duration::from_secs(40));
-        assert!(second.iter().any(|action| matches!(action, ReminderAction::Deferred { level: 2, .. })));
-        assert!(!second.iter().any(|action| matches!(action, ReminderAction::Gentle { .. } | ReminderAction::Firm { .. } | ReminderAction::Timeout { .. })));
-        assert_eq!(state.store.latest_deferred_reminder("request-busy").unwrap().map(|event| event.0), Some(2));
+        assert!(
+            second
+                .iter()
+                .any(|action| matches!(action, ReminderAction::Deferred { level: 2, .. }))
+        );
+        assert!(!second.iter().any(|action| matches!(
+            action,
+            ReminderAction::Gentle { .. }
+                | ReminderAction::Firm { .. }
+                | ReminderAction::Timeout { .. }
+        )));
+        assert_eq!(
+            state
+                .store
+                .latest_deferred_reminder("request-busy")
+                .unwrap()
+                .map(|event| event.0),
+            Some(2)
+        );
 
         let timeout = collect_reminder_actions(&mut state, started + Duration::from_secs(60));
-        assert_eq!(timeout.iter().filter(|action| matches!(action, ReminderAction::Timeout { .. })).count(), 1);
-        assert_eq!(state.store.get_request("request-busy").unwrap().unwrap().state, "timed_out");
+        assert_eq!(
+            timeout
+                .iter()
+                .filter(|action| matches!(action, ReminderAction::Timeout { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            state
+                .store
+                .get_request("request-busy")
+                .unwrap()
+                .unwrap()
+                .state,
+            "timed_out"
+        );
         let repeated = collect_reminder_actions(&mut state, started + Duration::from_secs(61));
-        assert!(!repeated.iter().any(|action| matches!(action, ReminderAction::Timeout { .. })));
+        assert!(
+            !repeated
+                .iter()
+                .any(|action| matches!(action, ReminderAction::Timeout { .. }))
+        );
         let _ = std::fs::remove_file(&config.db_path);
     }
 
@@ -3687,7 +5145,18 @@ mod presence_tests {
         assert_eq!(agents[0].state, "busy");
         state.router.unregister_by_conn("conn-1");
         state.mark_unreachable("conn-1");
-        let response = handle_register("conn-2", "claude".to_string(), Some("agent-2".to_string()), Some("macbook".to_string()), Some("acp".to_string()), Some("macOS".to_string()), Some("instance-1".to_string()), None, true, &mut state);
+        let response = handle_register(
+            "conn-2",
+            "claude".to_string(),
+            Some("agent-2".to_string()),
+            Some("macbook".to_string()),
+            Some("acp".to_string()),
+            Some("macOS".to_string()),
+            Some("instance-1".to_string()),
+            None,
+            true,
+            &mut state,
+        );
         assert!(matches!(response, DaemonToWrapper::Registered { .. }));
         assert_eq!(state.agent_infos()[0].state, "busy");
         state.router.unregister_by_conn("conn-2");
@@ -3699,20 +5168,51 @@ mod presence_tests {
     #[test]
     fn expiration_transport_est_idempotente_cote_daemon() {
         let (mut state, config) = state_with_registered_agent("expiration-unique");
-        state.store.create_request("request-timeout", "sender", "agent-2", 60).unwrap();
-        state.pending_replies.push(PendingReply { msg_id: "request-timeout".to_string(), from: "sender".to_string(), from_conn: "conn-sender".to_string(), to: "agent-2".to_string(), target_conn: "conn-1".to_string(), timeout_secs: 60, created_at: Instant::now(), escalation_level: 0, deferred_level: None });
+        state
+            .store
+            .create_request("request-timeout", "sender", "agent-2", 60)
+            .unwrap();
+        state.pending_replies.push(PendingReply {
+            msg_id: "request-timeout".to_string(),
+            from: "sender".to_string(),
+            from_conn: "conn-sender".to_string(),
+            to: "agent-2".to_string(),
+            target_conn: "conn-1".to_string(),
+            timeout_secs: 60,
+            created_at: Instant::now(),
+            escalation_level: 0,
+            deferred_level: None,
+        });
         let shared = Arc::new(Mutex::new(state));
-        handle_wrapper_message("conn-1", WrapperToDaemon::DeliveryRejected { id: "request-timeout".to_string(), reason: "échéance de livraison dépassée".to_string() }, &shared);
+        handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::DeliveryRejected {
+                id: "request-timeout".to_string(),
+                reason: "échéance de livraison dépassée".to_string(),
+            },
+            &shared,
+        );
         let state = shared.lock().unwrap();
         assert!(state.pending_replies.is_empty());
-        assert_eq!(state.store.get_request("request-timeout").unwrap().unwrap().state, "timed_out");
+        assert_eq!(
+            state
+                .store
+                .get_request("request-timeout")
+                .unwrap()
+                .unwrap()
+                .state,
+            "timed_out"
+        );
         let _ = std::fs::remove_file(&config.db_path);
     }
 
     #[test]
     fn intercalage_timeout_et_transport_n_autorise_qu_une_notification() {
         let (state, config) = state_with_registered_agent("timeout-concurrent");
-        state.store.create_request("request-timeout", "sender", "agent-2", 60).unwrap();
+        state
+            .store
+            .create_request("request-timeout", "sender", "agent-2", 60)
+            .unwrap();
         assert!(claim_timeout(&state.store, "request-timeout"));
         assert!(!claim_timeout(&state.store, "request-timeout"));
         let _ = std::fs::remove_file(&config.db_path);
@@ -3721,10 +5221,22 @@ mod presence_tests {
     #[test]
     fn vue_requests_expose_le_dernier_report_differe() {
         let (state, config) = state_with_registered_agent("vue-report");
-        state.store.create_request("request-report", "agent-2", "cible", 60).unwrap();
-        state.store.record_deferred_reminder("request-report", 2).unwrap();
+        state
+            .store
+            .create_request("request-report", "agent-2", "cible", 60)
+            .unwrap();
+        state
+            .store
+            .record_deferred_reminder("request-report", 2)
+            .unwrap();
         let shared = Arc::new(Mutex::new(state));
-        let response = handle_wrapper_message("conn-1", WrapperToDaemon::ListRequests { sender: "agent-2".to_string() }, &shared);
+        let response = handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::ListRequests {
+                sender: "agent-2".to_string(),
+            },
+            &shared,
+        );
         match response {
             Some(DaemonToWrapper::RequestList { requests }) => {
                 assert_eq!(requests.len(), 1);
@@ -3766,7 +5278,11 @@ mod presence_tests {
         assert_eq!(state.pending_replies.len(), 1);
         assert_eq!(state.pending_replies[0].msg_id, "request-1");
         if let Err(e) = std::fs::remove_file(&config.db_path) {
-            log::warn!("Impossible de supprimer la base {}: {}", config.db_path.display(), e);
+            log::warn!(
+                "Impossible de supprimer la base {}: {}",
+                config.db_path.display(),
+                e
+            );
         }
     }
 }

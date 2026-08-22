@@ -1862,6 +1862,8 @@ fn forward_acp_events(
                 journal_failed = true;
                 warn!("arrêt du transport ACP : {detail}");
             }
+            // T1206b raccordera cette frontière durable au receipt_store.
+            AcpEvent::PromptDispatched { .. } => {}
             AcpEvent::Update { .. } | AcpEvent::Error { .. } => {}
         }
     }

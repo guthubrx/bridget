@@ -17,6 +17,57 @@ use serde::{Deserialize, Serialize};
 pub enum ConnectionRole {
     Wrapper,
     Attach,
+    Client,
+}
+
+/// Version actuellement publiée du contrat idempotent local.
+pub const CLIENT_CONTRACT_VERSION: u16 = 1;
+
+/// Capacité optionnelle du client idempotent. L'énumération fermée évite une
+/// dégradation silencieuse lorsqu'un client demande une capacité inconnue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientCapability {
+    SendIdempotent,
+    Lookup,
+}
+
+/// Refus structurés de la frontière publique client.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ClientRefusal {
+    RoleHandshakeRequired,
+    ClientRoleRequired,
+    NegotiationRequired,
+    AlreadyNegotiated,
+    UnsupportedVersion { supported_versions: Vec<u16> },
+    InvalidIssuerScope,
+    ActiveScopeLimit,
+    CapabilityNotNegotiated,
+    MessageOutsideClientRole,
+}
+
+/// Issue calculée d'une opération client idempotente. `OutcomeUnknown` est
+/// informatif : il impose un `Lookup` ou le rejeu strict de la même enveloppe,
+/// jamais une nouvelle émission avec une nouvelle clé.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum IdempotencyIssue {
+    Accepted {
+        expires_at: i64,
+    },
+    Rejected {
+        category: String,
+        reason: String,
+    },
+    OutcomeUnknown {
+        expires_at: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delivery_id: Option<String>,
+    },
+    EnvelopeMismatch,
+    IdempotencyExpired,
+    InvalidIssuedAt,
 }
 
 /// Fenêtre d'historique demandée par une vue attach.
@@ -122,6 +173,33 @@ mod base64_bytes {
 pub enum WrapperToDaemon {
     /// Négocie un rôle avant l'usage d'une connexion persistante.
     RoleHandshake { role: ConnectionRole },
+    /// Négocie le contrat client public, uniquement après RoleAccepted(Client).
+    ClientHello {
+        contract_version: u16,
+        issuer_scope: String,
+        capabilities: Vec<ClientCapability>,
+    },
+    /// Envoi à clé client. T1205 raccorde cette variante au socle durable.
+    SendIdempotent {
+        message: BridgetMessage,
+        message_id: String,
+        issued_at: i64,
+    },
+    /// Lecture d'une issue à l'intérieur de la portée négociée.
+    Lookup {
+        operation_kind: String,
+        idempotency_key: String,
+    },
+    /// Accusé durable de remise envoyé exclusivement par un wrapper.
+    DeliverAcked {
+        delivery_id: String,
+        delivery_generation: u64,
+    },
+    /// Le wrapper a persisté Seen sans pouvoir confirmer l'injection.
+    DeliveryIndeterminate {
+        delivery_id: String,
+        delivery_generation: u64,
+    },
     /// Ouvrir un abonnement à la vue d'un équipier.
     Subscribe { agent: String, window: AttachWindow },
     /// Fermer un abonnement sans fermer la connexion attach.
@@ -282,6 +360,29 @@ impl std::fmt::Display for RuntimeSource {
 pub enum DaemonToWrapper {
     /// Le rôle demandé est accepté pour cette connexion.
     RoleAccepted { role: ConnectionRole },
+    /// Contrat et capacités réellement négociés avec un client public.
+    ClientWelcome {
+        version: u16,
+        horizon_secs: i64,
+        issued_at_tolerance_secs: i64,
+        capabilities: Vec<ClientCapability>,
+    },
+    /// Refus motivé de la négociation ou de la matrice client.
+    ClientRejected { reason: ClientRefusal },
+    /// Issue durable ou calculée d'un `SendIdempotent`.
+    IdempotencyResult {
+        operation_kind: String,
+        idempotency_key: String,
+        issue: IdempotencyIssue,
+    },
+    /// Remise aval réservée au wrapper destinataire.
+    DeliverIdempotent {
+        delivery_id: String,
+        recipient_instance_id: String,
+        delivery_generation: u64,
+        expires_at: i64,
+        message: BridgetMessage,
+    },
     /// Souscription du daemon vers le wrapper lecteur du journal.
     Subscribe {
         subscription_id: String,
@@ -667,6 +768,63 @@ mod tests {
             decode(&encode(&unsubscribe).unwrap()).unwrap(),
             WrapperToDaemon::Unsubscribe { subscription_id } if subscription_id == "sub-1"
         ));
+    }
+
+    #[test]
+    fn client_idempotency_messages_roundtrip_and_stay_outside_attach() {
+        let hello = WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: "012_scope_aaaaaaaaaaaa".to_string(),
+            capabilities: vec![ClientCapability::SendIdempotent, ClientCapability::Lookup],
+        };
+        assert!(matches!(
+            decode(&encode(&hello).unwrap()).unwrap(),
+            WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope,
+                capabilities,
+            } if issuer_scope == "012_scope_aaaaaaaaaaaa"
+                && capabilities == vec![ClientCapability::SendIdempotent, ClientCapability::Lookup]
+        ));
+        assert_eq!(
+            hello.attach_refusal(),
+            Some(AttachRefusal::MessageOutsideAttachRole)
+        );
+        let welcome = DaemonToWrapper::ClientWelcome {
+            version: CLIENT_CONTRACT_VERSION,
+            horizon_secs: 60,
+            issued_at_tolerance_secs: 5,
+            capabilities: vec![ClientCapability::Lookup],
+        };
+        let decoded: DaemonToWrapper = decode(&encode(&welcome).unwrap()).unwrap();
+        assert!(matches!(
+            decoded,
+            DaemonToWrapper::ClientWelcome {
+                version: CLIENT_CONTRACT_VERSION,
+                capabilities,
+                ..
+            } if capabilities == vec![ClientCapability::Lookup]
+        ));
+        let result = DaemonToWrapper::IdempotencyResult {
+            operation_kind: "send".to_string(),
+            idempotency_key: "message-1".to_string(),
+            issue: IdempotencyIssue::OutcomeUnknown {
+                expires_at: 123,
+                delivery_id: Some("delivery-1".to_string()),
+            },
+        };
+        assert!(matches!(
+            decode(&encode(&result).unwrap()).unwrap(),
+            DaemonToWrapper::IdempotencyResult {
+                operation_kind,
+                idempotency_key,
+                issue: IdempotencyIssue::OutcomeUnknown {
+                    expires_at: 123,
+                    delivery_id: Some(delivery_id),
+                },
+            } if operation_kind == "send" && idempotency_key == "message-1" && delivery_id == "delivery-1"
+        ));
+        assert!(!welcome.allowed_for_attach());
     }
 
     #[test]
