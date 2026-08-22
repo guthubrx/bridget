@@ -434,6 +434,9 @@ impl DaemonConnection {
 }
 
 fn connect_nonblocking(socket: &Path, deadline: Instant) -> io::Result<UnixStream> {
+    if deadline <= Instant::now() {
+        return Err(io::Error::new(io::ErrorKind::TimedOut, "budget connexion dépassé"));
+    }
     let path = socket.as_os_str().as_bytes();
     let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
     if path.len() >= address.sun_path.len() {
@@ -1286,6 +1289,21 @@ mod tests {
     fn huit_connexions_simultanees_ont_des_noms_ephemeres_distincts_et_la_neuvieme_est_busy() {
         let started = Arc::new(Barrier::new(MAX_IN_FLIGHT_TOOL_CALLS + 1));
         let (started_tx, started_rx) = mpsc::channel();
+        let socket = test_socket("eight-registers");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (names_tx, names_rx) = mpsc::channel();
+        let daemon = thread::spawn(move || {
+            for _ in 0..MAX_IN_FLIGHT_TOOL_CALLS {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                match read_command(&mut reader) {
+                    WrapperToDaemon::Register { name: Some(name), .. } => names_tx.send(name).unwrap(),
+                    other => panic!("Register MCP attendu: {other:?}"),
+                }
+                write_command(&mut writer, DaemonToWrapper::Registered { name: "mcp".to_string() });
+            }
+        });
         let input = [
             json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
             json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
@@ -1299,12 +1317,14 @@ mod tests {
         .collect::<Vec<_>>()
         .join("\n");
         let barrier = Arc::clone(&started);
+        let socket_for_calls = socket.clone();
         let server = thread::spawn(move || {
             let resolver = || Ok(crate::mcp_identity::ResolvedIdentity {
                 name: "agent".to_string(),
                 instance_id: "instance".to_string(),
             });
             let execute = move |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| {
+                let _connection = registered_connection(&socket_for_calls).unwrap();
                 started_tx.send(()).unwrap();
                 barrier.wait();
                 Ok(json!({ "agents": [] }))
@@ -1325,9 +1345,20 @@ mod tests {
         assert_eq!(responses.iter().filter(|response| response["result"]["code"] == "busy").count(), 1);
 
         let names = (0..MAX_IN_FLIGHT_TOOL_CALLS)
-            .map(|_| ephemeral_connection_name())
+            .map(|_| names_rx.recv_timeout(Duration::from_secs(2)).unwrap())
             .collect::<BTreeSet<_>>();
         assert_eq!(names.len(), MAX_IN_FLIGHT_TOOL_CALLS);
+        daemon.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
+    fn connexion_non_bloquante_refuse_un_budget_expire_avant_toute_attente() {
+        let socket = test_socket("expired-connect");
+        let _listener = UnixListener::bind(&socket).unwrap();
+        let error = connect_nonblocking(&socket, Instant::now() - Duration::from_millis(1)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        std::fs::remove_file(socket).unwrap();
     }
 
     #[test]
