@@ -578,9 +578,18 @@ fn sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon() {
     );
     let final_fragments = Arc::clone(&harness.views[0].final_fragments);
     let final_sequences = Arc::clone(&harness.views[0].final_sequences);
+    let caught_up = Arc::clone(&harness.views[0].caught_up);
     wait_until(deadline, "rejeu historique absent", || {
         final_fragments.load(Ordering::SeqCst) >= 1
     });
+    wait_until(deadline, "SnapshotCaughtUp absent avant le suivi live", || {
+        caught_up.load(Ordering::SeqCst) == 1
+    });
+    assert_eq!(
+        caught_up.load(Ordering::SeqCst),
+        1,
+        "SnapshotCaughtUp ne doit être émis qu'une fois"
+    );
     assert_eq!(
         final_sequences
             .lock()
