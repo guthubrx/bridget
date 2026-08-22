@@ -14,16 +14,39 @@ pub fn create_private_dir(path: &Path) -> io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
 
+/// Ouvre un fichier privé (0600) pour un état durable nécessitant un verrou.
+pub fn open_private_file(path: &Path) -> io::Result<File> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("fichier sans parent"))?;
+    create_private_dir(parent)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(file)
+}
+
 /// Remplace atomiquement un fichier privé (0600) après synchronisation disque.
 ///
 /// Un échec avant le renommage nettoie le temporaire. Un échec après le
 /// renommage est propagé : l'appelant doit alors traiter l'issue comme
 /// indéterminée plutôt que supposer une écriture réussie.
 pub fn write_private_file_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let parent = path.parent().ok_or_else(|| io::Error::other("fichier sans parent"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("fichier sans parent"))?;
     create_private_dir(parent)?;
     let suffix = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
-    let temporary = parent.join(format!(".{}.{}.tmp", path.file_name().unwrap_or_default().to_string_lossy(), suffix));
+    let temporary = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().unwrap_or_default().to_string_lossy(),
+        suffix
+    ));
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -55,8 +78,14 @@ mod tests {
         write_private_file_atomic(&path, b"first").unwrap();
         write_private_file_atomic(&path, b"second").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"second");
-        assert_eq!(fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o700);
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         let _ = fs::remove_dir_all(root);
     }
 }
