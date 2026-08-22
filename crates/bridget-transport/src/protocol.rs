@@ -254,6 +254,8 @@ pub enum DaemonToWrapper {
     Ack { id: String },
     /// Refus d'un envoi avec raison.
     Nack { id: String, reason: String },
+    /// Échec terminal différé d'un envoi attach déjà acquitté.
+    DeliveryRejected { id: String, reason: String },
     /// Le daemon s'éteint.
     Disconnect,
     /// Réponse à ListAgents.
@@ -285,7 +287,10 @@ impl DaemonToWrapper {
     pub fn allowed_for_attach(&self) -> bool {
         matches!(
             self,
-            Self::Subscribed { .. }
+            Self::RoleAccepted {
+                role: ConnectionRole::Attach
+            }
+                | Self::Subscribed { .. }
                 | Self::JournalFragment { .. }
                 | Self::SnapshotCaughtUp { .. }
                 | Self::Gap { .. }
@@ -293,6 +298,7 @@ impl DaemonToWrapper {
                 | Self::AttachRejected { .. }
                 | Self::Ack { .. }
                 | Self::Nack { .. }
+                | Self::DeliveryRejected { .. }
         )
     }
 }
@@ -647,13 +653,15 @@ mod tests {
                 subscription_id: None,
                 reason: AttachRefusal::AgentNotAcp,
             },
+            DaemonToWrapper::DeliveryRejected {
+                id: "message-1".to_string(),
+                reason: "processus arrêté".to_string(),
+            },
         ];
         for message in messages {
             let reaches_attach = !matches!(
                 message,
-                DaemonToWrapper::RoleAccepted { .. }
-                    | DaemonToWrapper::Subscribe { .. }
-                    | DaemonToWrapper::Unsubscribe { .. }
+                DaemonToWrapper::Subscribe { .. } | DaemonToWrapper::Unsubscribe { .. }
             );
             let json = encode(&message).unwrap();
             let decoded: DaemonToWrapper = decode(&json).unwrap();
@@ -686,6 +694,37 @@ mod tests {
             .is_none());
         assert!(!DaemonToWrapper::Deliver(BridgetMessage::new("a", "b", "x"))
             .allowed_for_attach());
+    }
+
+    #[test]
+    fn issue_differee_attach_reste_correlee_parmi_le_flux() {
+        let flux = vec![
+            DaemonToWrapper::JournalFragment {
+                subscription_id: "sub-1".to_string(),
+                seq: 11,
+                offset: 0,
+                final_fragment: true,
+                bytes: b"premier".to_vec(),
+            },
+            DaemonToWrapper::DeliveryRejected {
+                id: "message-humain".to_string(),
+                reason: "file pleine".to_string(),
+            },
+            DaemonToWrapper::JournalFragment {
+                subscription_id: "sub-1".to_string(),
+                seq: 12,
+                offset: 0,
+                final_fragment: true,
+                bytes: b"second".to_vec(),
+            },
+        ];
+        let decoded = flux
+            .into_iter()
+            .map(|message| decode::<DaemonToWrapper>(&encode(&message).unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        assert!(matches!(decoded[0], DaemonToWrapper::JournalFragment { seq: 11, .. }));
+        assert!(matches!(decoded[1], DaemonToWrapper::DeliveryRejected { ref id, .. } if id == "message-humain"));
+        assert!(matches!(decoded[2], DaemonToWrapper::JournalFragment { seq: 12, .. }));
     }
 
     #[test]

@@ -1220,6 +1220,16 @@ fn handle_wrapper_message(
     msg: WrapperToDaemon,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Option<DaemonToWrapper> {
+    if !matches!(msg, WrapperToDaemon::RoleHandshake { .. }) {
+        // La première commande non négociée choisit définitivement la
+        // compatibilité wrapper. Une tentative d'upgrade ultérieure vers
+        // attach ne doit jamais élargir une connexion déjà active.
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        st.connection_roles
+            .entry(conn_id.to_string())
+            .or_insert(ConnectionRole::Wrapper);
+    }
+
     if let WrapperToDaemon::RoleHandshake { role } = &msg {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         if st.connection_roles.contains_key(conn_id) {
@@ -1334,6 +1344,7 @@ fn handle_wrapper_message(
                 bridge_msg.body.chars().take(40).collect::<String>()
             );
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let is_attach = st.connection_roles.get(conn_id) == Some(&ConnectionRole::Attach);
             let sender_name = st.conn_names.get(conn_id).cloned().unwrap_or_default();
             // Résolution de l'expéditeur :
             // - Si la connexion est un wrapper (agent enregistré sous son vrai nom),
@@ -1342,7 +1353,13 @@ fn handle_wrapper_message(
             //   le from du message correspond à un agent enregistré (ex: codex-1).
             //   Si oui, utiliser ce from (le CLI a été lancé depuis l'intérieur du wrapper).
             //   Si non, garder le from tel quel (envoi depuis terminal externe).
-            if !sender_name.is_empty() && !sender_name.starts_with("cli-send-") {
+            if is_attach {
+                // Le rôle attach ne peut pas emprunter l'identité d'un wrapper
+                // ni répondre à une demande suivie. T804a conservera cette
+                // règle quand il raccordera les envois aux abonnements.
+                bridge_msg.from = "humain".to_string();
+                bridge_msg.in_reply_to = None;
+            } else if !sender_name.is_empty() && !sender_name.starts_with("cli-send-") {
                 // Wrapper : utiliser le nom enregistré
                 bridge_msg.from = sender_name.clone();
             } else if st.router.get_agent(&bridge_msg.from).is_some() {
@@ -1998,6 +2015,86 @@ mod presence_tests {
         ));
         assert_eq!(shared.lock().unwrap().router.list_agents().len(), 1);
         let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn premier_message_wrapper_fige_le_role_avant_un_handshake_tardif() {
+        let (state, config) = state_with_registered_agent("role-fige");
+        let shared = Arc::new(Mutex::new(state));
+
+        let first = handle_wrapper_message(
+            "conn-role",
+            WrapperToDaemon::Runtime {
+                agent: "inconnu".to_string(),
+                model: "modele".to_string(),
+                effort: None,
+                source: bridget_transport::protocol::RuntimeSource::Declared,
+            },
+            &shared,
+        );
+        assert!(matches!(first, Some(DaemonToWrapper::Nack { .. })));
+        assert_eq!(
+            shared.lock().unwrap().connection_roles.get("conn-role"),
+            Some(&ConnectionRole::Wrapper)
+        );
+
+        let handshake = handle_wrapper_message(
+            "conn-role",
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Attach,
+            },
+            &shared,
+        );
+        assert!(matches!(
+            handshake,
+            Some(DaemonToWrapper::AttachRejected {
+                reason: AttachRefusal::MessageOutsideAttachRole,
+                ..
+            })
+        ));
+        assert_eq!(
+            shared.lock().unwrap().connection_roles.get("conn-role"),
+            Some(&ConnectionRole::Wrapper)
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn envoi_attach_force_humain_et_ne_clot_pas_une_demande_forgee() {
+        let (mut state, config) = state_with_registered_agent("attach-humain");
+        let listener = UnixListener::bind(config.socket_path.with_extension("target.sock")).unwrap();
+        let _receiver = UnixStream::connect(config.socket_path.with_extension("target.sock")).unwrap();
+        let (target_stream, _) = listener.accept().unwrap();
+        state.connections.insert(
+            "conn-1".to_string(),
+            Arc::new(Mutex::new(BufWriter::new(target_stream))),
+        );
+        state
+            .store
+            .create_request("request-1", "agent-2", "codex-1", 60)
+            .unwrap();
+        let shared = Arc::new(Mutex::new(state));
+        handle_wrapper_message(
+            "attach-1",
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Attach,
+            },
+            &shared,
+        );
+
+        let mut forged = bridget_core::BridgetMessage::new("codex-1", "agent-2", "réponse forgée");
+        forged.in_reply_to = Some("request-1".to_string());
+        let response = handle_wrapper_message("attach-1", WrapperToDaemon::Send(forged), &shared);
+        assert!(matches!(response, Some(DaemonToWrapper::Ack { .. })));
+
+        let state = shared.lock().unwrap();
+        assert_eq!(state.store.recent_messages(1).unwrap()[0].sender, "humain");
+        assert_eq!(
+            state.store.get_request("request-1").unwrap().unwrap().state,
+            "open"
+        );
+        let _ = std::fs::remove_file(config.db_path);
+        let _ = std::fs::remove_file(config.socket_path.with_extension("target.sock"));
     }
 
     #[test]
