@@ -99,12 +99,19 @@ valide chaque tâche avant coche. Ne jamais committer automatiquement.
   et échec motivé chez l'émetteur, mort du processus avec N messages en file →
   N échecs motivés.
 
-- [ ] **T706** [US1] **Journal de session JSONL** :
-  `~/.cache/bridget/sessions/<agent>/<date>.jsonl`, événements et champs de
-  `data-model.md`, append-only, un fichier par jour.
-  **Observable** : quickstart §7 — `turn_start`/`update`/`turn_end` horodatés
-  après les échanges des tâches précédentes ; test unitaire d'append et de
-  rotation par date.
+- [X] **T706** [US1] **Journal de session JSONL — schéma versionné v1** :
+  `~/.cache/bridget/sessions/<agent>/<date>.jsonl`, **schéma v1 complet de
+  `data-model.md`** (enrichi sur exigence de la contre-revue 008 : `v`, `seq`
+  strictement croissant traversant la rotation, `session_id`, `payload` typé
+  par événement avec expéditeur dans `turn_start.from`), écriture ligne entière
+  + flush, append-only, un fichier par jour.
+  **Observable** : quickstart §7 ; tests unitaires — append, rotation par date
+  avec continuité de `seq`, **récupération du prochain `seq` après
+  redémarrage** (cas : dernier fichier normal, vide, ligne finale partielle,
+  ligne finale corrompue), permissions 0700/0600 vérifiées, payloads conformes
+  par type (`turn_start.body` complet) ; **fixtures de compatibilité lecteur
+  versionnées** (tour complet, tour en erreur, permission, rotation, dernière
+  ligne partielle, ligne corrompue) destinées aux tests de la session 008.
 
 **Checkpoint MVP** : à la fin de la phase 1, la User Story 1 est démontrable de
 bout en bout (SC-001, SC-002).

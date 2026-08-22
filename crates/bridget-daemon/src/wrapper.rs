@@ -922,6 +922,10 @@ fn launch_acp(
         permissions: definition.permissions.clone(),
         notify_timeout_secs: definition.notify_timeout_secs,
     })?;
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or("HOME absent pour le journal de session ACP")?;
+    transport.enable_journal(home.join(".cache/bridget/sessions"), &my_name)?;
 
     loop {
         for event in transport.drain_events() {

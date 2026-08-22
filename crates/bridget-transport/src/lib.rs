@@ -3,6 +3,7 @@
 //! Définit les messages JSON qui circulent sur la socket locale.
 
 pub mod acp;
+pub mod journal;
 pub mod protocol;
 pub mod tmux;
 pub mod transport;

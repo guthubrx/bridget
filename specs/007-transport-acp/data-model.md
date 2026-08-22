@@ -111,14 +111,49 @@ d'`unreachable` :
 
 ## Journal de session (`~/.cache/bridget/sessions/<agent>/<date>.jsonl`)
 
-Un objet JSON par ligne, append-only (FR-010) :
+Un objet JSON par ligne, append-only (FR-010). **Schéma versionné v1** —
+enrichi sur exigence de la contre-revue de la spec 008 (le journal est le
+contrat de lecture de `bridget attach` ; il doit porter l'attribution, un
+curseur stable et des payloads typés) :
 
-| Champ | Contenu |
+| Champ | Présence | Contenu |
+|---|---|---|
+| `v` | toujours | version du schéma (`1`) |
+| `seq` | toujours | **curseur stable** : entier strictement croissant par agent (jamais réutilisé, y compris à travers la rotation quotidienne) — c'est la clé de la jonction rejeu→suivi sans perte ni doublon |
+| `ts` | toujours | horodatage ISO 8601 |
+| `session_id` | toujours | session ACP concernée |
+| `event` | toujours | `turn_start` \| `update` \| `permission` \| `turn_end` \| `error` |
+| `message_id` | si tour lié à un message Bridget | id du message d'origine |
+| `payload` | toujours | objet **typé par `event`** (voir ci-dessous) |
+
+Payloads par type d'événement :
+
+| `event` | Champs du `payload` |
 |---|---|
-| `ts` | horodatage ISO 8601 |
-| `event` | `turn_start` \| `update` \| `permission` \| `turn_end` \| `error` |
-| `message_id` | id du message Bridget à l'origine du tour (absent pour `update` internes) |
-| `detail` | texte : extrait de réponse, nom d'outil appelé, `stopReason`, motif d'erreur |
+| `turn_start` | `from` (expéditeur du message livré), `reply` (bool), `body` (corps **complet** du message — arbitré en contre-revue 008 : le journal contient déjà le texte intégral des réponses, tronquer l'entrant créerait une infidélité d'affichage ; la contrepartie est l'exigence de permissions ci-dessous) |
+| `update` | `kind` = `text` \| `tool_call` ; `text` : `content` (fragment de réponse) ; `tool_call` : `tool`, `summary` |
+| `permission` | `request` (résumé de la demande), `decision` (`allow`/`deny`, politique du registre) |
+| `turn_end` | `stop_reason`, `routed_to` (destinataire de la réponse si `reply=yes`, absent sinon) |
+| `error` | `reason` (motif : mort du processus, `stopReason` d'erreur, rejet de livraison…) |
+
+Exigences associées (observables de T706) :
+
+- une ligne est écrite **entière puis flush** — jamais de ligne partielle
+  visible d'un lecteur comme état final ; un lecteur doit néanmoins tolérer une
+  ligne incomplète en fin de fichier (écriture en cours) en attendant le
+  newline ;
+- `seq` traverse la rotation : le premier événement d'un nouveau fichier
+  quotidien continue la séquence de la veille ;
+- `seq` **survit au redémarrage et au crash du wrapper** : au démarrage, le
+  prochain `seq` est récupéré depuis le dernier événement valide des journaux
+  existants — y compris quand le dernier fichier est vide ou se termine par
+  une ligne partielle ou corrompue (elle est ignorée pour la récupération). Un
+  compteur mémoire repartant à 1 casserait la jonction rejeu→suivi de l'attach ;
+- **permissions** : répertoire `~/.cache/bridget/sessions/` en 0700, fichiers
+  de journal en 0600 dès création (ils contiennent l'intégralité des échanges) ;
+- **fixtures de compatibilité lecteur** versionnées : un jeu de fichiers JSONL
+  de référence (tour complet, tour en erreur, permission, rotation, dernière
+  ligne partielle) que les tests de la session 008 consommeront tels quels.
 
 Rotation : un fichier par jour et par agent ; pas de purge automatique dans
 cette session (hors périmètre, noté pour la session 08 qui lit ces journaux).

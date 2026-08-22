@@ -2,11 +2,13 @@
 //! worker FIFO. Le lecteur est l'unique propriétaire du flux de l'adaptateur.
 
 use crate::transport::{Transport, TransportError};
+use crate::journal::SessionJournal;
 use bridget_core::BridgetMessage;
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
@@ -59,6 +61,7 @@ pub enum AcpEvent {
 type Waiters = Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>;
 type Writer = Arc<Mutex<Option<ChildStdin>>>;
 type Completions = Arc<Mutex<HashMap<String, mpsc::Sender<()>>>>;
+type Journal = Arc<Mutex<Option<SessionJournal>>>;
 
 struct ActiveTurn {
     message_id: String,
@@ -85,6 +88,7 @@ struct TurnWorker {
     session_id: String,
     notify_timeout: Duration,
     child: Arc<Mutex<Child>>,
+    journal: Journal,
 }
 
 pub struct AcpTransport {
@@ -100,6 +104,7 @@ pub struct AcpTransport {
     child: Arc<Mutex<Child>>,
     reader_handle: Mutex<Option<thread::JoinHandle<()>>>,
     worker_handle: Mutex<Option<thread::JoinHandle<()>>>,
+    journal: Journal,
 }
 
 impl AcpTransport {
@@ -134,6 +139,7 @@ impl AcpTransport {
         let writer = Arc::new(Mutex::new(Some(stdin)));
         let waiters: Waiters = Arc::new(Mutex::new(HashMap::new()));
         let completions: Completions = Arc::new(Mutex::new(HashMap::new()));
+        let journal: Journal = Arc::new(Mutex::new(None));
         let next_id = Arc::new(AtomicU64::new(1));
         let queue = Arc::new((
             Mutex::new(QueueState {
@@ -156,6 +162,7 @@ impl AcpTransport {
             options.permissions.clone(),
             queue.clone(),
             active_session.clone(),
+            journal.clone(),
         );
 
         let setup = (|| -> Result<String, TransportError> {
@@ -220,6 +227,7 @@ impl AcpTransport {
             session_id: session_id.clone(),
             notify_timeout: Duration::from_secs(options.notify_timeout_secs),
             child: child.clone(),
+            journal: journal.clone(),
         });
         Ok(Self {
             connection_id: format!("acp-{pid}"),
@@ -234,6 +242,7 @@ impl AcpTransport {
             child,
             reader_handle: Mutex::new(Some(reader_handle)),
             worker_handle: Mutex::new(Some(worker_handle)),
+            journal,
         })
     }
 
@@ -242,6 +251,12 @@ impl AcpTransport {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .clone()
+    }
+
+    pub fn enable_journal(&self, root: impl AsRef<Path>, agent: &str) -> std::io::Result<()> {
+        *self.journal.lock().unwrap_or_else(|err| err.into_inner()) =
+            Some(SessionJournal::new(root, agent, &self.session_id)?);
+        Ok(())
     }
 
     pub fn drain_events(&self) -> Vec<AcpEvent> {
@@ -456,6 +471,11 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 .push_back(AcpEvent::TurnStarted {
                     message_id: message.id.clone(),
                 });
+            record_journal(&worker.journal, "turn_start", Some(&message.id), json!({
+                "from": &message.from,
+                "reply": message.reply,
+                "body": &message.body,
+            }));
             worker
                 .response
                 .lock()
@@ -492,6 +512,24 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
             *worker.state.lock().unwrap_or_else(|err| err.into_inner()) = TurnState::Idle;
             clear_active_turn(&worker.queue);
             let event = finish_turn(message, collected, result);
+            match &event {
+                AcpEvent::TurnFinished { message, stop_reason, .. } => record_journal(
+                    &worker.journal,
+                    "turn_end",
+                    Some(&message.id),
+                    json!({
+                        "stop_reason": stop_reason,
+                        "routed_to": message.reply.then_some(&message.from),
+                    }),
+                ),
+                AcpEvent::DeliveryRejected { message_id, reason } => record_journal(
+                    &worker.journal,
+                    "error",
+                    Some(message_id),
+                    json!({ "reason": reason }),
+                ),
+                _ => {}
+            }
             worker
                 .events
                 .lock()
@@ -503,6 +541,12 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
 
 fn clear_active_turn(queue: &Arc<(Mutex<QueueState>, Condvar)>) {
     queue.0.lock().unwrap_or_else(|err| err.into_inner()).active = None;
+}
+
+fn record_journal(journal: &Journal, event: &str, message_id: Option<&str>, payload: Value) {
+    if let Some(journal) = journal.lock().unwrap_or_else(|err| err.into_inner()).as_mut() {
+        let _ = journal.append(event, message_id, payload);
+    }
 }
 
 fn enqueue(
@@ -556,6 +600,7 @@ fn spawn_reader(
     permissions: String,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     active_session: Arc<Mutex<Option<String>>>,
+    journal: Journal,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
@@ -608,6 +653,7 @@ fn spawn_reader(
                                 detail: "update ACP ignorée après annulation du tour".to_string(),
                             });
                     } else if let Some(text) = update_text(&value, session_id.as_deref()) {
+                        record_journal(&journal, "update", None, json!({ "kind": "text", "content": text }));
                         response
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
@@ -618,12 +664,25 @@ fn spawn_reader(
                             .push_back(AcpEvent::Update {
                                 detail: text.to_string(),
                             });
+                    } else if matches!(
+                        value.pointer("/params/update/sessionUpdate").and_then(Value::as_str),
+                        Some("tool_call") | Some("tool_call_update")
+                    ) {
+                        record_journal(&journal, "update", None, json!({
+                            "kind": "tool_call",
+                            "tool": value.pointer("/params/update/content/name").and_then(Value::as_str).unwrap_or("inconnu"),
+                            "summary": value.pointer("/params/update/content/text").and_then(Value::as_str).unwrap_or(""),
+                        }));
                     }
                 }
                 Some("session/request_permission") => {
                     if let Some(reply) =
                         permission_response(&value, &permissions, active_turn_is_cancelled(&queue))
                     {
+                        record_journal(&journal, "permission", None, json!({
+                            "request": value.pointer("/params/options").cloned().unwrap_or(Value::Null),
+                            "decision": permissions,
+                        }));
                         let _ = write_json(&writer, reply);
                     }
                 }
@@ -1267,6 +1326,38 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             }
         }
         panic!("le faux adaptateur n'a pas terminé le tour");
+    }
+
+    #[test]
+    fn enabled_journal_records_a_complete_transport_turn() {
+        let script = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read request
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"réponse"}}}}'
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+"#;
+        let root = std::env::temp_dir().join(format!("bridget-acp-journal-{}", std::process::id()));
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(), args: vec!["-c".to_string(), script.to_string()],
+            queue_capacity: 2, permissions: "allow".to_string(), notify_timeout_secs: 1,
+        }).unwrap();
+        transport.enable_journal(&root, "codex-1").unwrap();
+        transport.deliver(&message("journal-message")).unwrap();
+        for _ in 0..30 {
+            thread::sleep(Duration::from_millis(10));
+            if transport.drain_events().iter().any(|event| matches!(event, AcpEvent::TurnFinished { .. })) {
+                let path = std::fs::read_dir(root.join("codex-1")).unwrap().next().unwrap().unwrap().path();
+                let events = crate::journal::valid_events(&path);
+                assert_eq!(events.iter().map(|event| event["event"].as_str().unwrap()).collect::<Vec<_>>(), vec!["turn_start", "update", "turn_end"]);
+                assert_eq!(events[0]["payload"]["body"], "journal-message");
+                std::fs::remove_dir_all(root).unwrap();
+                return;
+            }
+        }
+        panic!("le tour journalisé n'a pas terminé");
     }
 
     #[test]
