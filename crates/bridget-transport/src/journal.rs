@@ -13,6 +13,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const WRITER_QUEUE_CAPACITY: usize = 256;
+const MAX_INCREMENTAL_LINE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
 pub struct JournalEntry {
@@ -198,7 +199,6 @@ pub struct JournalReadEvent {
     pub offset: u64,
     pub line: u64,
     pub bytes: Vec<u8>,
-    pub value: Value,
 }
 
 /// Diagnostic non bloquant d'une ligne qui ne peut pas participer au flux.
@@ -212,6 +212,7 @@ pub struct JournalUnreadableLine {
 pub enum JournalReadItem {
     Event(JournalReadEvent),
     Unreadable(JournalUnreadableLine),
+    Oversized { seq: Option<u64>, offset: u64, line: u64 },
 }
 
 /// Lecteur incrémental : sa mémoire est bornée par une tranche plus la seule
@@ -222,6 +223,7 @@ pub struct IncrementalJournalReader {
     next_line: u64,
     pending_offset: u64,
     pending: Vec<u8>,
+    discarding: Option<(u64, u64, Option<u64>)>,
 }
 
 impl IncrementalJournalReader {
@@ -232,10 +234,13 @@ impl IncrementalJournalReader {
             next_line: 1,
             pending_offset: 0,
             pending: Vec::new(),
+            discarding: None,
         }
     }
 
     pub fn next_offset(&self) -> u64 { self.next_offset }
+    #[cfg(test)]
+    fn buffered_len(&self) -> usize { self.pending.len() }
 
     /// Lit au plus `max_bytes` octets nouveaux. Une queue partielle est gardée
     /// pour l'appel suivant et ne produit donc jamais un faux événement.
@@ -251,9 +256,31 @@ impl IncrementalJournalReader {
         let count = file.read(&mut chunk)?;
         chunk.truncate(count);
         self.next_offset = self.next_offset.saturating_add(count as u64);
-        self.pending.extend_from_slice(&chunk);
+        if let Some((_offset, _line, _seq)) = self.discarding {
+            if let Some(end) = chunk.iter().position(|byte| *byte == b'\n') {
+                self.pending_offset = self.next_offset.saturating_sub(count as u64).saturating_add((end + 1) as u64);
+                self.next_line = self.next_line.saturating_add(1);
+                self.discarding = None;
+                self.pending.extend_from_slice(&chunk[end + 1..]);
+            } else { return Ok(Vec::new()); }
+        } else { self.pending.extend_from_slice(&chunk); }
 
         let mut items = Vec::new();
+        if self.pending.len() > MAX_INCREMENTAL_LINE_BYTES {
+            let offset = self.pending_offset;
+            let line = self.next_line;
+            let seq = sequence_prefix(&self.pending);
+            items.push(JournalReadItem::Oversized { seq, offset, line });
+            if let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
+                self.pending.drain(..=end);
+                self.pending_offset = self.pending_offset.saturating_add((end + 1) as u64);
+                self.next_line = self.next_line.saturating_add(1);
+            } else {
+                self.pending.clear();
+                self.discarding = Some((offset, line, seq));
+                return Ok(items);
+            }
+        }
         while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
             let mut line = self.pending.drain(..=end).collect::<Vec<_>>();
             line.pop();
@@ -265,7 +292,7 @@ impl IncrementalJournalReader {
                 Ok(value) if value.get("v").and_then(Value::as_u64) == Some(1) => {
                     match value.get("seq").and_then(Value::as_u64) {
                         Some(seq) => items.push(JournalReadItem::Event(JournalReadEvent {
-                            seq, offset, line: line_number, bytes: line, value,
+                            seq, offset, line: line_number, bytes: line,
                         })),
                         None => items.push(JournalReadItem::Unreadable(JournalUnreadableLine {
                             line: line_number, offset,
@@ -279,6 +306,14 @@ impl IncrementalJournalReader {
         }
         Ok(items)
     }
+}
+
+fn sequence_prefix(bytes: &[u8]) -> Option<u64> {
+    let prefix = &bytes[..bytes.len().min(1024)];
+    let marker = b"\"seq\":";
+    let start = prefix.windows(marker.len()).position(|window| window == marker)? + marker.len();
+    let end = prefix[start..].iter().position(|byte| !byte.is_ascii_digit()).unwrap_or(prefix.len() - start);
+    std::str::from_utf8(&prefix[start..start + end]).ok()?.parse().ok()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -518,6 +553,17 @@ mod tests {
         let items = corrupt.read_chunk(16 * 1024).unwrap();
         assert!(matches!(items[0], JournalReadItem::Event(_)));
         assert!(matches!(items[1], JournalReadItem::Unreadable(JournalUnreadableLine { line: 2, offset }) if offset > 0));
+    }
+
+    #[test]
+    fn lecteur_borne_une_ligne_surdimensionnee_et_reprend_apres_newline() {
+        let root = root("oversized"); create_private_dir(&root).unwrap(); let path = root.join("x.jsonl");
+        fs::write(&path, [b"{\"v\":1,\"seq\":42,\"x\":\"".as_slice(), &vec![b'x'; MAX_INCREMENTAL_LINE_BYTES + 32], b"\"}\n{\"v\":1,\"seq\":43}\n"].concat()).unwrap();
+        let mut reader = IncrementalJournalReader::new(&path); let mut seen = Vec::new();
+        for _ in 0..80 { seen.extend(reader.read_chunk(65_536).unwrap()); assert!(reader.buffered_len() <= MAX_INCREMENTAL_LINE_BYTES); }
+        assert!(matches!(seen.iter().find(|item| matches!(item, JournalReadItem::Oversized { .. })), Some(JournalReadItem::Oversized { seq: Some(42), .. })));
+        assert!(matches!(seen.last(), Some(JournalReadItem::Event(JournalReadEvent { seq: 43, .. }))));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
