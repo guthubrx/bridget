@@ -1,3 +1,4 @@
+pub mod attach;
 pub mod cli;
 pub mod daemon;
 pub mod managers;
