@@ -110,6 +110,18 @@ pub struct SendDelivery {
     pub expires_at: i64,
 }
 
+/// Demande suivie créée avec la remise d'un `reply=yes` dans l'unique
+/// transaction SQLite : aucune remise idempotente ne peut survivre sans son
+/// cycle de réponse durable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplyTracking {
+    pub request_id: String,
+    pub sender: String,
+    pub target: String,
+    pub created_at: i64,
+    pub deadline_at: i64,
+}
+
 #[derive(Debug)]
 pub enum IdempotencyError {
     InvalidIssuerScope,
@@ -203,7 +215,18 @@ impl IdempotencyStore {
                     ON DELETE CASCADE
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_send_deliveries_operation
-                ON send_deliveries(issuer_scope, operation_kind, idempotency_key);",
+                ON send_deliveries(issuer_scope, operation_kind, idempotency_key);
+            CREATE TABLE IF NOT EXISTS tracked_requests (
+                id TEXT PRIMARY KEY,
+                sender TEXT NOT NULL,
+                target TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (state IN ('open', 'answered', 'cancelled', 'timed_out')),
+                created_at INTEGER NOT NULL,
+                deadline_at INTEGER NOT NULL,
+                escalation_level INTEGER NOT NULL DEFAULT 0,
+                cancel_reason TEXT,
+                completed_at INTEGER
+            );",
         )?;
         Ok(())
     }
@@ -265,6 +288,22 @@ impl IdempotencyStore {
         }
     }
 
+    /// Signale qu'une réservation a survécu sans remise : le daemon peut
+    /// reprendre ce seul état de récupération, jamais rerouter une remise
+    /// déjà créée.
+    pub fn prepared_expiry(
+        &self,
+        key: &IdempotencyKey,
+        now: i64,
+    ) -> Result<Option<i64>, IdempotencyError> {
+        Ok(match self.load_record(key)? {
+            Some(record) if record.state == RecordState::Prepared && record.expires_at > now => {
+                Some(record.expires_at)
+            }
+            _ => None,
+        })
+    }
+
     pub fn transition(
         &self,
         key: &IdempotencyKey,
@@ -305,6 +344,25 @@ impl IdempotencyStore {
         key: &IdempotencyKey,
         delivery: &SendDelivery,
     ) -> Result<(), IdempotencyError> {
+        self.begin_send_delivery_inner(key, delivery, None)
+    }
+
+    /// Prépare atomiquement la remise et le suivi d'une réponse attendue.
+    pub fn begin_send_delivery_with_reply(
+        &mut self,
+        key: &IdempotencyKey,
+        delivery: &SendDelivery,
+        reply: &ReplyTracking,
+    ) -> Result<(), IdempotencyError> {
+        self.begin_send_delivery_inner(key, delivery, Some(reply))
+    }
+
+    fn begin_send_delivery_inner(
+        &mut self,
+        key: &IdempotencyKey,
+        delivery: &SendDelivery,
+        reply: Option<&ReplyTracking>,
+    ) -> Result<(), IdempotencyError> {
         if key.operation_kind != OperationKind::Send || delivery.delivery_id.is_empty() {
             return Err(IdempotencyError::InvalidDelivery);
         }
@@ -334,6 +392,20 @@ impl IdempotencyStore {
                 delivery.expires_at,
             ],
         )?;
+        if let Some(reply) = reply {
+            tx.execute(
+                "INSERT INTO tracked_requests (
+                    id, sender, target, state, created_at, deadline_at, escalation_level
+                 ) VALUES (?1, ?2, ?3, 'open', ?4, ?5, 0)",
+                params![
+                    reply.request_id,
+                    reply.sender,
+                    reply.target,
+                    reply.created_at,
+                    reply.deadline_at,
+                ],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -598,15 +670,15 @@ mod tests {
         let store = IdempotencyStore::open_in_memory().unwrap();
         assert_eq!(
             reserve(&store, b"canon"),
-            Reservation::Prepared {
-                expires_at: NOW + HORIZON
-            }
-        );
-        assert_eq!(
-            reserve(&store, b"canon"),
             Reservation::Replayed(LookupResult::OutcomeUnknown {
                 expires_at: NOW + HORIZON
             })
+        );
+        assert_eq!(
+            reserve(&store, b"canon"),
+            Reservation::Prepared {
+                expires_at: NOW + HORIZON
+            }
         );
     }
 
@@ -810,6 +882,79 @@ mod tests {
             LookupResult::OutcomeUnknown { expires_at: NOW + HORIZON }
         );
         assert_eq!(store.send_delivery(&second).unwrap(), None);
+    }
+
+    #[test]
+    fn failed_reply_tracking_rolls_back_then_a_retry_after_restart_prepares_both() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-idempotency-reply-fault-{}-{}.db",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let key = key();
+        let delivery = SendDelivery {
+            delivery_id: "delivery-reply".to_string(),
+            recipient_instance_id: "instance-1".to_string(),
+            delivery_generation: 5,
+            expires_at: NOW + HORIZON,
+        };
+        let reply = ReplyTracking {
+            request_id: "request-reply".to_string(),
+            sender: "maicie".to_string(),
+            target: "agent-2".to_string(),
+            created_at: NOW,
+            deadline_at: NOW + 60,
+        };
+        {
+            let mut store = IdempotencyStore::open(&path).unwrap();
+            assert!(matches!(reserve(&store, b"canon"), Reservation::Prepared { .. }));
+            // Injection de faute : la clé primaire déjà présente force l'INSERT
+            // de suivi à échouer après l'INSERT de remise, dans la transaction.
+            store
+                .conn
+                .execute(
+                    "INSERT INTO tracked_requests (id, sender, target, state, created_at, deadline_at, escalation_level)
+                     VALUES ('request-reply', 'old', 'target', 'open', 1, 2, 0)",
+                    [],
+                )
+                .unwrap();
+            assert!(store
+                .begin_send_delivery_with_reply(&key, &delivery, &reply)
+                .is_err());
+            assert_eq!(store.send_delivery(&key).unwrap(), None);
+            assert_eq!(
+                store.lookup(&key, NOW).unwrap(),
+                LookupResult::OutcomeUnknown {
+                    expires_at: NOW + HORIZON
+                }
+            );
+        }
+        let mut reopened = IdempotencyStore::open(&path).unwrap();
+        assert!(matches!(
+            reserve(&reopened, b"canon"),
+            Reservation::Replayed(LookupResult::OutcomeUnknown { .. })
+        ));
+        assert_eq!(reopened.prepared_expiry(&key, NOW).unwrap(), Some(NOW + HORIZON));
+        reopened
+            .conn
+            .execute("DELETE FROM tracked_requests WHERE id = 'request-reply'", [])
+            .unwrap();
+        reopened
+            .begin_send_delivery_with_reply(&key, &delivery, &reply)
+            .unwrap();
+        assert_eq!(reopened.send_delivery(&key).unwrap(), Some(delivery));
+        assert_eq!(
+            reopened
+                .conn
+                .query_row(
+                    "SELECT sender || ':' || target FROM tracked_requests WHERE id = 'request-reply'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "maicie:agent-2"
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

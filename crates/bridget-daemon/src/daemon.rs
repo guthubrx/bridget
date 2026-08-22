@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use crate::idempotency::{
     IdempotencyKey, IdempotencyStore, LookupResult, OperationKind, Reservation,
-    SendDelivery,
+    ReplyTracking, SendDelivery,
 };
 use crate::store::Store;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -1980,6 +1980,20 @@ fn track_reply_cycle(
     st.store
         .create_request(&message.id, &message.from, &message.to, timeout)
         .map_err(|error| format!("impossible de suivre la demande: {error}"))?;
+    remember_reply_cycle(st, message, reply_sender_conn, target_conn);
+    Ok(())
+}
+
+fn remember_reply_cycle(
+    st: &mut DaemonState,
+    message: &bridget_core::BridgetMessage,
+    reply_sender_conn: Option<String>,
+    target_conn: String,
+) {
+    if !message.reply {
+        return;
+    }
+    let timeout = message.reply_timeout.unwrap_or(60);
     st.pending_replies.push(PendingReply {
         msg_id: message.id.clone(),
         from: message.from.clone(),
@@ -1992,7 +2006,6 @@ fn track_reply_cycle(
         escalation_level: 0,
         deferred_level: None,
     });
-    Ok(())
 }
 
 fn handle_idempotent_send(
@@ -2048,22 +2061,48 @@ fn handle_idempotent_send(
             };
         }
     };
-    match reservation {
-        Reservation::Replayed(result) => match replay_issue(st, &key, result) {
-            Ok(issue) => issue_response(&key, issue),
+    let expires_at = match reservation {
+        Reservation::Prepared { expires_at } => expires_at,
+        Reservation::Replayed(LookupResult::OutcomeUnknown { expires_at }) => match st
+            .idempotency
+            .prepared_expiry(&key, now)
+        {
+            Ok(Some(expires_at)) => expires_at,
+            Ok(None) => {
+                return issue_response(
+                    &key,
+                    IdempotencyIssue::OutcomeUnknown {
+                        expires_at,
+                        delivery_id: st
+                            .idempotency
+                            .send_delivery(&key)
+                            .ok()
+                            .flatten()
+                            .map(|delivery| delivery.delivery_id),
+                    },
+                );
+            }
             Err(error) => {
-                error!("idempotence replay: {error}");
-                DaemonToWrapper::Nack {
+                error!("idempotence reprise préparée: {error}");
+                return DaemonToWrapper::Nack {
                     id: key.idempotency_key.clone(),
                     reason: "issue idempotente illisible".to_string(),
-                }
+                };
             }
         },
-        Reservation::EnvelopeMismatch => issue_response(&key, IdempotencyIssue::EnvelopeMismatch),
-        Reservation::IdempotencyExpired => {
-            issue_response(&key, IdempotencyIssue::IdempotencyExpired)
-        }
-        Reservation::Prepared { expires_at } => {
+        Reservation::Replayed(result) => match replay_issue(st, &key, result) {
+            Ok(issue) => return issue_response(&key, issue),
+            Err(error) => {
+                error!("idempotence replay: {error}");
+                return DaemonToWrapper::Nack {
+                    id: key.idempotency_key.clone(),
+                    reason: "issue idempotente illisible".to_string(),
+                };
+            }
+        },
+        Reservation::EnvelopeMismatch => return issue_response(&key, IdempotencyIssue::EnvelopeMismatch),
+        Reservation::IdempotencyExpired => return issue_response(&key, IdempotencyIssue::IdempotencyExpired),
+    };
             // Les gardes ci-dessous peuvent consulter ou modifier les limites
             // historiques, mais seulement après la réservation d'une clé neuve.
             // Les gardes historiques restent applicables à une clé neuve,
@@ -2108,25 +2147,35 @@ fn handle_idempotent_send(
                 delivery_generation: next_delivery_generation(),
                 expires_at,
             };
-            if let Err(error) = st.idempotency.begin_send_delivery(&key, &delivery) {
+            let reply_tracking = message.reply.then(|| ReplyTracking {
+                request_id: message.id.clone(),
+                sender: message.from.clone(),
+                target: message.to.clone(),
+                created_at: now,
+                deadline_at: message
+                    .deadline_at
+                    .expect("un reply idempotent est normalisé avant réservation")
+                    .min(i64::MAX as u64) as i64,
+            });
+            let delivery_result = match reply_tracking.as_ref() {
+                Some(reply) => st
+                    .idempotency
+                    .begin_send_delivery_with_reply(&key, &delivery, reply),
+                None => st.idempotency.begin_send_delivery(&key, &delivery),
+            };
+            if let Err(error) = delivery_result {
                 error!("idempotence dispatch: {error}");
                 return DaemonToWrapper::Nack {
                     id: key.idempotency_key.clone(),
                     reason: "impossible de préparer la remise".to_string(),
                 };
             }
-            if let Err(reason) = track_reply_cycle(
+            remember_reply_cycle(
                 st,
                 &message,
                 prepared.reply_sender_conn.clone(),
                 prepared.target_conn.clone(),
-            ) {
-                error!("idempotence suivi réponse: {reason}");
-                return DaemonToWrapper::Nack {
-                    id: key.idempotency_key.clone(),
-                    reason,
-                };
-            }
+            );
             st.circuit_breaker
                 .record(&prepared.logical_sender, &message.to);
             st.deduplicator
@@ -2140,8 +2189,6 @@ fn handle_idempotent_send(
                     delivery_id: Some(delivery.delivery_id),
                 },
             )
-        }
-    }
 }
 
 /// Traite un message wrapper et retourne une réponse optionnelle.
@@ -3759,6 +3806,7 @@ mod presence_tests {
                 .get("historic-register"),
             Some(&ConnectionRole::Wrapper)
         );
+        assert_eq!(shared.lock().unwrap().idempotency.record_count().unwrap(), 0);
         let _ = std::fs::remove_file(config.db_path);
     }
 
