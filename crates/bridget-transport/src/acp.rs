@@ -1,15 +1,15 @@
 //! Transport ACP synchrone : un lecteur stdout, un writer sérialisé et un
 //! worker FIFO. Le lecteur est l'unique propriétaire du flux de l'adaptateur.
 
+use crate::journal::{JournalLiveFeed, JournalWriter};
 use crate::transport::{Transport, TransportError};
-use crate::journal::JournalWriter;
 use bridget_core::BridgetMessage;
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::path::Path;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
@@ -388,8 +388,23 @@ impl AcpTransport {
     }
 
     pub fn enable_journal(&self, root: impl AsRef<Path>, agent: &str) -> std::io::Result<()> {
+        self.enable_journal_with_live_feed(root, agent, None)
+    }
+
+    pub fn enable_journal_with_live_feed(
+        &self,
+        root: impl AsRef<Path>,
+        agent: &str,
+        live_feed: Option<JournalLiveFeed>,
+    ) -> std::io::Result<()> {
         *self.journal.lock().unwrap_or_else(|err| err.into_inner()) =
-            Some(JournalWriter::start(root, agent, &self.session_id, self.events.clone())?);
+            Some(JournalWriter::start_with_live_feed(
+                root,
+                agent,
+                &self.session_id,
+                self.events.clone(),
+                live_feed,
+            )?);
         Ok(())
     }
 
@@ -1281,6 +1296,7 @@ pub fn prompt_for(message: &BridgetMessage) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     fn queue() -> Arc<(Mutex<QueueState>, Condvar)> {
         Arc::new((
@@ -1633,6 +1649,101 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
         panic!("le faux adaptateur n'a pas terminé le tour");
     }
 
+    fn observation_case(view_count: usize, root: &std::path::Path) -> Vec<Duration> {
+        const TURNS: usize = 200;
+        let script = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+id=3
+while read request; do
+  printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$id"
+  id=$((id + 1))
+done
+"#;
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            queue_capacity: 1,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+        })
+        .unwrap();
+        transport.enable_journal(root, "codex-bench").unwrap();
+        let views = (0..view_count)
+            .map(|_| Arc::new(Mutex::new(Vec::<Vec<u8>>::new())))
+            .collect::<Vec<_>>();
+        for turn in 0..TURNS {
+            let message = BridgetMessage::new("humain", "codex-bench", format!("tour-{turn}"));
+            transport.deliver(&message).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let finished = transport.drain_events().into_iter().any(|event| {
+                    matches!(event, AcpEvent::TurnFinished { message: done, .. } if done.id == message.id)
+                });
+                if finished {
+                    // Deux vues attach simulées consomment la même projection
+                    // sans jamais entrer dans le thread d'append JSONL.
+                    let projection = format!("{}:{}", message.id, message.body).into_bytes();
+                    for view in &views {
+                        view.lock().unwrap().push(projection.clone());
+                    }
+                    break;
+                }
+                assert!(Instant::now() < deadline, "tour déterministe non terminé");
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+        let journal = transport
+            .journal
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("journal activé");
+        journal.stop();
+        let latencies = journal.take_append_latencies();
+        transport.shutdown();
+        assert!(views.iter().all(|view| view.lock().unwrap().len() == TURNS));
+        latencies
+    }
+
+    fn p95(samples: &[Duration]) -> Duration {
+        let mut ordered = samples.to_vec();
+        ordered.sort_unstable();
+        ordered[(ordered.len() * 95).div_ceil(100).saturating_sub(1)]
+    }
+
+    #[test]
+    #[ignore = "remplacé par le banc SC-005 à vues attach réelles"]
+    fn sc005_deux_vues_ne_degradent_pas_le_p95_d_append_de_plus_de_cinq_pourcent() {
+        const TURNS: usize = 200;
+        let root = std::env::temp_dir().join(format!(
+            "bridget-sc005-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let baseline = observation_case(0, &root.join("zero"));
+        let observed = observation_case(2, &root.join("two"));
+        assert!(
+            baseline.len() >= TURNS && observed.len() >= TURNS,
+            "append instrumentés insuffisants : 0 vue={}, 2 vues={}",
+            baseline.len(), observed.len()
+        );
+        let baseline_p95 = p95(&baseline);
+        let observed_p95 = p95(&observed);
+        eprintln!(
+            "SC-005 append p95: 0 vue={baseline_p95:?} ({} échantillons), 2 vues={observed_p95:?} ({} échantillons)",
+            baseline.len(),
+            observed.len(),
+        );
+        assert!(
+            observed_p95.as_nanos() * 100 < baseline_p95.as_nanos() * 105,
+            "p95 append 2 vues={observed_p95:?}, 0 vue={baseline_p95:?}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn prompt_dispatched_suit_le_flush_et_le_faux_adaptateur_lit_la_frame() {
         let script = r#"
@@ -1676,9 +1787,8 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
 read initialize
 echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
 read session
-echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
 exec 0<&-
-sleep 1
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
 "#;
         let (observer, observed_events) = mpsc::channel();
         let mut transport = AcpTransport::spawn_with_clock_and_cancel_grace(
@@ -1695,7 +1805,6 @@ sleep 1
             Some(observer),
         )
         .unwrap();
-        thread::sleep(Duration::from_millis(30));
         transport.deliver(&message("flush-failed")).unwrap();
         let mut dispatched = false;
         for _ in 0..20 {

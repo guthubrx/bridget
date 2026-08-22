@@ -678,7 +678,6 @@ fn execute_ledger(
     if matches!(scope, LedgerScope::Requests | LedgerScope::Both) {
         match connection.exchange(&WrapperToDaemon::ListRequests {
             sender: identity.to_string(),
-            limit,
         })? {
             DaemonToWrapper::RequestList { requests: result } => requests = result,
             other => return unexpected_response(other),
@@ -686,7 +685,7 @@ fn execute_ledger(
     }
     Ok(json!({
         "messages": messages.into_iter().map(ledger_message_dto).collect::<Vec<_>>(),
-        "requests": requests.into_iter().map(request_dto).collect::<Vec<_>>(),
+        "requests": requests.into_iter().map(|request| request_dto(identity, request)).collect::<Vec<_>>(),
     }))
 }
 
@@ -711,7 +710,7 @@ fn registered_connection(socket: &Path) -> Result<DaemonConnection, ToolError> {
 fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value {
     match issue {
         IdempotencyIssue::Accepted { .. } => json!({ "status": "accepted", "id": id, "issued_at": issued_at, "hops": 4 }),
-        IdempotencyIssue::Rejected { category, reason } => {
+        IdempotencyIssue::Rejected { category, reason, .. } => {
             json!({ "status": public_refusal_category(&category), "id": id, "issued_at": issued_at, "reason": reason })
         }
         IdempotencyIssue::OutcomeUnknown { .. } => json!({
@@ -836,14 +835,13 @@ fn ledger_message_dto(message: bridget_transport::protocol::LedgerMessage) -> Va
     })
 }
 
-fn request_dto(request: bridget_transport::protocol::RequestInfo) -> Value {
+fn request_dto(from: &str, request: bridget_transport::protocol::RequestInfo) -> Value {
     json!({
         "id": request.id,
-        "from": request.sender,
+        "from": from,
         "to": request.target,
         "state": request.state,
         "deadline": request.deadline_at,
-        "created": request.created_at,
     })
 }
 

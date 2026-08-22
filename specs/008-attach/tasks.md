@@ -50,7 +50,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
   corrupt-line) + fenêtre vide ; l'usage T706 (`valid_events`, récupération de
   `seq`) reste intact.
 
-- [ ] **T803b** [US1] **Worker de relais wrapper** : worker dédié à canal
+- [x] **T803b** [US1] **Worker de relais wrapper** : worker dédié à canal
   borné + **canal de contrôle séparé jamais refusé** ; curseur par abonnement ;
   équité rejeu/suivi par tranches ; suivi par offset (motif sonde runtime) ;
   zéro lecture sans abonné ; jamais bloquant pour l'écrivain du journal.
@@ -71,7 +71,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
   fin tardive d'ancienne génération ignorée, zéro état résiduel après
   déconnexion.
 
-- [ ] **T804b** [US1] **Daemon : tampons, écrivains, Gap et corrélation des
+- [x] **T804b** [US1] **Daemon : tampons, écrivains, Gap et corrélation des
   envois** : handler qui ne fait qu'enfiler (aucune E/S sous verrou global —
   interdiction du motif `daemon.rs:1334`), écrivain dédié par vue à délai
   borné (fermeture motivée de la vue lente), tampon en octets (1 Mio) avec
@@ -87,7 +87,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
   dépassement de tampon → `Gap` exact ; rejet tardif routé via la table puis
   purgé.
 
-- [ ] **T805a** [US1] **Client attach : socket, réassemblage, reconnexion**
+- [x] **T805a** [US1] **Client attach : socket, réassemblage, reconnexion**
   (`attach.rs` + sous-commande `cli.rs`) : connexion persistante (lecteur
   unique + dispatch `subscription_id`/`message_id`, writer sérialisé), état
   mémoire (`last_seq`, `initial_window`, `caught_up`, `pending_send`),
@@ -99,7 +99,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
   événement reçu exactement une fois** (FR-008/contrat) ; générations
   obsolètes ignorées côté client.
 
-- [ ] **T805b** [US1] **Client attach : rendu et sanitisation** : préfixes
+- [x] **T805b** [US1] **Client attach : rendu et sanitisation** : préfixes
   horodatés par type de payload v1, liste blanche Unicode (hors `Cc`/`Cf`,
   `␛` visible), continuations indentées, longueur bornée signalée, refus
   motivés (non-ACP → pointer le pane, inconnu → liste des attachables).
@@ -112,13 +112,13 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
 
 ## Phase 2 : US2 — Parler à l'équipier depuis la vue
 
-- [ ] **T806a** [US2] **Raw mode et restauration** : termios via `libc`
+- [x] **T806a** [US2] **Raw mode et restauration** : termios via `libc`
   (`ISIG` désactivé, `0x03` en boucle : restauration puis sortie ; garde RAII
   en filet ; stdin non-TTY → mode dégradé sans raw).
   **Observable** : tests pseudo-TTY (Ctrl-C, EOF, erreur, non-TTY) — terminal
   restauré sur chaque chemin de sortie.
 
-- [ ] **T806b** [US2] **Saisie, envoi et issues corrélées** : tampon de saisie
+- [x] **T806b** [US2] **Saisie, envoi et issues corrélées** : tampon de saisie
   applicatif réaffiché sous chaque événement ; envoi `Send` `reply=false` sur
   la connexion attach, `message_id` conservé, `pending_send` nettoyée sur
   issue terminale/expiration/fermeture réelle — jamais à `End` ; issues
@@ -132,19 +132,19 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
 
 ## Phase 3 : Critères mesurés
 
-- [ ] **T807** [US1] **Bancs SC-001/SC-002 (local)** : latence
+- [x] **T807** [US1] **Bancs SC-001/SC-002 (local)** : latence
   fin-d'append→rendu p95 < 1 s et max < 3 s à 10 evt/s sur 60 s ; jonction
   rejeu→suivi zéro perte/doublon par continuité de `seq`, rotation de minuit
   simulée comprise.
   **Observable** : bancs reproductibles en test, chiffres dans
   `implementation.md`.
 
-- [ ] **T808** [US3] **Banc SC-005 (budget d'observation)** : faux adaptateur
+- [x] **T808** [US3] **Banc SC-005 (budget d'observation)** : faux adaptateur
   déterministe (réutiliser 007-T704), N ≥ 200 tours identiques, dégradation
   p95 de latence d'append < 5 % avec 2 vues vs 0 vue.
   **Observable** : banc en test, chiffres consignés.
 
-- [ ] **T809** [US3] **Gate distant (SC-006) + banc distant** : quickstart §6
+- [x] **T809** [US3] **Gate distant (SC-006) + banc distant** : quickstart §6
   sur environnement aux répertoires **réellement distincts** : US1+US2 vers
   l'équipier distant, wrapper distant arrêté → message d'indisponibilité,
   resynchronisation après coupure de fédération ; **banc SC-001 distant :
@@ -156,7 +156,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
 
 ## Phase 4 : Finition
 
-- [ ] **T810** Non-régression, synchronisation 007 et documentation : **gate
+- [x] **T810** Non-régression, synchronisation 007 et documentation : **gate
   d'intégration — tous les commits 007 finalement validés (T707-T712 compris)
   sont intégrés à la branche 008 avant clôture** (pas de base MVP figée) ;
   suite complète + agents 007 inchangés ; section « Observer un équipier »

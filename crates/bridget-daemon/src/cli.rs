@@ -3,7 +3,8 @@
 use crate::daemon::{self, DaemonConfig};
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
-    AgentInfo, AttachWindow, LedgerMessage, LedgerScope, RuntimeSource, decode, encode,
+    AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole,
+    IdempotencyIssue, LedgerMessage, LedgerScope, RuntimeSource, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -23,6 +24,13 @@ fn launch_agent_wrapper(binary: &str, agent_type: &str, args: &[String]) -> ! {
 // Constantes de validation (H-001)
 const MAX_MESSAGE_LENGTH: usize = 10000;
 const MAX_AGENT_NAME_LENGTH: usize = 100;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IdempotentSendOptions {
+    id: String,
+    issued_at: i64,
+    issuer_scope: String,
+}
 
 /// Délai maximal d'attente d'une réponse du daemon pour une observation de
 /// runtime. Court volontairement : l'appelant est un hook exécuté dans la
@@ -91,7 +99,6 @@ pub fn run() {
         "daemon" => cmd_daemon(),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
-        "mcp" => cmd_mcp(),
         "attach" => cmd_attach(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
@@ -133,13 +140,6 @@ pub fn run() {
                 std::process::exit(2);
             }
         }
-    }
-}
-
-fn cmd_mcp() {
-    if let Err(error) = crate::mcp::run_stdio() {
-        eprintln!("bridget mcp: {error}");
-        std::process::exit(1);
     }
 }
 
@@ -206,7 +206,6 @@ fn print_usage() {
            -- <CMD> [ARGS...]     Agent personnalisé\n\n\
          Daemon & client :\n  \
            daemon                 Lance le daemon\n  \
-           mcp                    Lance le serveur MCP sur stdio\n  \
            attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            spawn <TYPE>           Lance un équipier géré [--name N] [--persistent]\n  \
            stop <N>               Arrête un équipier géré\n  \
@@ -230,6 +229,9 @@ fn print_usage() {
            --reply                Réponse attendue\n  \
            --timeout <S>          Délai avant échec (défaut: 60)\n  \
            --hops <N>             Sauts restants (défaut: 4)\n\n\
+           --id <clé>             Clé idempotente (avec --issued-at et --issuer-scope)\n  \
+           --issued-at <unix>     Instant d'émission idempotent\n  \
+           --issuer-scope <portée> Portée idempotente de l'émetteur\n\n\
          Usage interne :\n  \
            hook claude-runtime    Appelé par le hook Claude Code, lit stdin"
     );
@@ -648,6 +650,9 @@ fn cmd_send(args: &[String]) {
     let mut reply = false;
     let mut hops: i32 = 4;
     let mut timeout_secs: Option<u64> = None;
+    let mut id: Option<String> = None;
+    let mut issued_at: Option<String> = None;
+    let mut issuer_scope: Option<String> = None;
     let mut body_parts: Vec<String> = Vec::new();
 
     let mut i = 0;
@@ -680,6 +685,18 @@ fn cmd_send(args: &[String]) {
                     hops = args[i].parse().unwrap_or(4);
                 }
             }
+            "--id" => match option_value(args, &mut i, "--id") {
+                Ok(value) => id = Some(value),
+                Err(error) => send_usage_error(&error),
+            },
+            "--issued-at" => match option_value(args, &mut i, "--issued-at") {
+                Ok(value) => issued_at = Some(value),
+                Err(error) => send_usage_error(&error),
+            },
+            "--issuer-scope" => match option_value(args, &mut i, "--issuer-scope") {
+                Ok(value) => issuer_scope = Some(value),
+                Err(error) => send_usage_error(&error),
+            },
             _ => {
                 body_parts.push(args[i].clone());
             }
@@ -729,6 +746,36 @@ fn cmd_send(args: &[String]) {
         msg.reply_timeout = Some(60);
     }
 
+    let idempotent = match idempotent_options(id, issued_at, issuer_scope) {
+        Ok(options) => options,
+        Err(error) => send_usage_error(&error),
+    };
+
+    if let Some(options) = idempotent {
+        msg.id = options.id.clone();
+        match send_idempotent_to_daemon(&msg, &options) {
+            Ok(DaemonToWrapper::IdempotencyResult { issue, .. }) => {
+                print_idempotency_issue(&issue);
+                if !matches!(issue, IdempotencyIssue::Accepted { .. }) {
+                    std::process::exit(1);
+                }
+            }
+            Ok(DaemonToWrapper::ClientRejected { reason }) => {
+                eprintln!("REJET: {reason:?}");
+                std::process::exit(1);
+            }
+            Ok(_) => {
+                eprintln!("réponse inattendue du daemon");
+                std::process::exit(1);
+            }
+            Err(error) => {
+                eprintln!("daemon inaccessible: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     match send_to_daemon(&msg) {
         Ok(response) => match response {
             DaemonToWrapper::Ack { id } => {
@@ -762,8 +809,149 @@ fn cmd_send(args: &[String]) {
     }
 }
 
+fn option_value(args: &[String], index: &mut usize, option: &str) -> Result<String, String> {
+    *index += 1;
+    args.get(*index)
+        .cloned()
+        .filter(|value| !value.starts_with("--"))
+        .ok_or_else(|| format!("{option} requiert une valeur"))
+}
+
+fn idempotent_options(
+    id: Option<String>,
+    issued_at: Option<String>,
+    issuer_scope: Option<String>,
+) -> Result<Option<IdempotentSendOptions>, String> {
+    let provided = [id.is_some(), issued_at.is_some(), issuer_scope.is_some()];
+    if !provided.iter().any(|provided| *provided) {
+        return Ok(None);
+    }
+    if !provided.iter().all(|provided| *provided) {
+        return Err("--id, --issued-at et --issuer-scope sont obligatoires ensemble".to_string());
+    }
+    let issued_at = issued_at
+        .expect("présence vérifiée")
+        .parse::<i64>()
+        .map_err(|_| "--issued-at doit être un instant Unix entier".to_string())?;
+    Ok(Some(IdempotentSendOptions {
+        id: id.expect("présence vérifiée"),
+        issued_at,
+        issuer_scope: issuer_scope.expect("présence vérifiée"),
+    }))
+}
+
+fn send_usage_error(error: &str) -> ! {
+    eprintln!("erreur: {error}");
+    eprintln!(
+        "usage: bridget send --to <nom> [--id <clé> --issued-at <unix> --issuer-scope <portée>] <message>"
+    );
+    std::process::exit(2);
+}
+
+fn print_idempotency_issue(issue: &IdempotencyIssue) {
+    match issue {
+        IdempotencyIssue::Accepted { expires_at } => {
+            println!("OK: envoi idempotent accepté (expire à {expires_at})");
+        }
+        IdempotencyIssue::Rejected {
+            category, reason, ..
+        } => eprintln!("REJET: {category}: {reason}"),
+        IdempotencyIssue::OutcomeUnknown { delivery_id, .. } => {
+            eprintln!(
+                "ISSUE INCONNUE: livraison={}",
+                delivery_id.as_deref().unwrap_or("—")
+            );
+        }
+        IdempotencyIssue::EnvelopeMismatch => eprintln!("REJET: EnvelopeMismatch"),
+        IdempotencyIssue::IdempotencyExpired => eprintln!("REJET: IdempotencyExpired"),
+        IdempotencyIssue::InvalidIssuedAt => eprintln!("REJET: InvalidIssuedAt"),
+    }
+}
+
 fn send_to_daemon(msg: &BridgetMessage) -> Result<DaemonToWrapper, String> {
     send_control_to_daemon(WrapperToDaemon::Send(msg.clone()))
+}
+
+fn send_idempotent_to_daemon(
+    message: &BridgetMessage,
+    options: &IdempotentSendOptions,
+) -> Result<DaemonToWrapper, String> {
+    send_idempotent_to_daemon_at(&socket_path(), message, options)
+}
+
+fn send_idempotent_to_daemon_at(
+    path: &std::path::Path,
+    message: &BridgetMessage,
+    options: &IdempotentSendOptions,
+) -> Result<DaemonToWrapper, String> {
+    let stream = UnixStream::connect(path).map_err(|error| error.to_string())?;
+    let read_stream = stream.try_clone().map_err(|error| error.to_string())?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+
+    write_control_message(
+        &mut writer,
+        &WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Client,
+        },
+    )?;
+    match read_control_message(&mut reader)? {
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client,
+        } => {}
+        response => return Err(format!("handshake client refusé: {response:?}")),
+    }
+
+    write_control_message(
+        &mut writer,
+        &WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: options.issuer_scope.clone(),
+            capabilities: vec![ClientCapability::SendIdempotent],
+        },
+    )?;
+    match read_control_message(&mut reader)? {
+        DaemonToWrapper::ClientWelcome { capabilities, .. }
+            if capabilities.contains(&ClientCapability::SendIdempotent) => {}
+        DaemonToWrapper::ClientRejected { reason } => {
+            return Ok(DaemonToWrapper::ClientRejected { reason });
+        }
+        response => return Err(format!("négociation client refusée: {response:?}")),
+    }
+
+    write_control_message(
+        &mut writer,
+        &WrapperToDaemon::SendIdempotent {
+            message: message.clone(),
+            message_id: options.id.clone(),
+            issued_at: options.issued_at,
+        },
+    )?;
+    read_control_message(&mut reader)
+}
+
+fn write_control_message(
+    writer: &mut BufWriter<UnixStream>,
+    message: &WrapperToDaemon,
+) -> Result<(), String> {
+    writeln!(
+        writer,
+        "{}",
+        encode(message).map_err(|error| error.to_string())?
+    )
+    .map_err(|error| error.to_string())?;
+    writer.flush().map_err(|error| error.to_string())
+}
+
+fn read_control_message(reader: &mut BufReader<UnixStream>) -> Result<DaemonToWrapper, String> {
+    let mut line = String::new();
+    let bytes = reader
+        .read_line(&mut line)
+        .map_err(|error| error.to_string())?;
+    if bytes == 0 {
+        return Err("daemon a fermé la connexion".to_string());
+    }
+    decode(line.trim_end()).map_err(|error| error.to_string())
 }
 
 fn send_control_to_daemon(command: WrapperToDaemon) -> Result<DaemonToWrapper, String> {
@@ -847,7 +1035,6 @@ fn cmd_requests(args: &[String]) {
     let json_output = args.iter().any(|arg| arg == "--json");
     match send_control_to_daemon(WrapperToDaemon::ListRequests {
         sender: current_agent_name(),
-        limit: 200,
     }) {
         Ok(DaemonToWrapper::RequestList { requests }) if json_output => println!(
             "{}",
@@ -1707,52 +1894,69 @@ fn cmd_status() {
 }
 
 fn cmd_ledger() {
-    let messages = match send_control_to_daemon(WrapperToDaemon::LedgerProjection {
+    match send_control_to_daemon(WrapperToDaemon::LedgerProjection {
         scope: LedgerScope::Messages,
         limit: 20,
     }) {
-        Ok(DaemonToWrapper::LedgerProjection { messages, .. }) => Ok(messages),
-        Ok(DaemonToWrapper::Nack { reason, .. }) => Err(format!("erreur lecture ledger: {reason}")),
-        Ok(_) => Err("réponse inattendue du daemon".to_string()),
-        Err(_) => {
-            let config = DaemonConfig::default();
-            crate::store::Store::open(&config.db_path)
-                .map_err(|error| format!("base inaccessible: {error}"))
-                .and_then(|store| {
-                    crate::ledger::read_projection(&store, LedgerScope::Messages, 20)
-                        .map(|projection| projection.messages)
-                        .map_err(|error| format!("erreur lecture ledger: {error}"))
-                })
+        Ok(DaemonToWrapper::LedgerProjection { messages, .. }) => {
+            print_ledger(&messages);
         }
-    };
-    match messages {
-        Ok(messages) => print_ledger(&messages),
-        Err(error) => {
-            eprintln!("{error}");
+        Ok(DaemonToWrapper::Nack { reason, .. }) => {
+            eprintln!("erreur lecture ledger: {reason}");
             std::process::exit(1);
+        }
+        Ok(_) => {
+            eprintln!("réponse inattendue du daemon");
+            std::process::exit(1);
+        }
+        Err(_) => {
+            // Hors daemon, conserver la lecture locale historique pour les
+            // installations monoprocessus et les diagnostics hors ligne.
+            let config = DaemonConfig::default();
+            match crate::store::Store::open(&config.db_path) {
+                Ok(store) => match store.recent_messages(20) {
+                    Ok(entries) => {
+                        let messages = entries
+                            .into_iter()
+                            .map(|entry| LedgerMessage {
+                                id: entry.id,
+                                ts: entry.ts,
+                                sender: entry.sender,
+                                target: entry.target,
+                                body: entry.body,
+                            })
+                            .collect::<Vec<_>>();
+                        print_ledger(&messages);
+                    }
+                    Err(error) => {
+                        eprintln!("erreur lecture ledger: {error}");
+                        std::process::exit(1);
+                    }
+                },
+                Err(error) => {
+                    eprintln!("base inaccessible: {error}");
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
 
 fn print_ledger(entries: &[LedgerMessage]) {
-    print!("{}", render_ledger(entries));
-}
-
-pub(crate) fn render_ledger(entries: &[LedgerMessage]) -> String {
     if entries.is_empty() {
-        return "Ledger vide.\n".to_string();
+        println!("Ledger vide.");
+        return;
     }
-    let mut rendered = format!("Derniers {} messages :\n", entries.len());
+    println!("Derniers {} messages :", entries.len());
     for entry in entries.iter().rev() {
-        rendered.push_str(&format!(
-            "  [{}] {} → {}: {}\n",
+        println!(
+            "  [{}] {} → {}: {}",
             entry.ts,
             entry.sender,
             entry.target,
             entry.body.chars().take(60).collect::<String>()
-        ));
+        );
     }
-    rendered
 }
 
 #[cfg(test)]
@@ -1762,22 +1966,6 @@ mod hook_tests {
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
     use std::thread;
-
-    #[test]
-    fn rendu_ledger_cli_reste_octet_pour_octet_stable() {
-        let entries = vec![
-            LedgerMessage {
-                id: "ancien".to_string(), ts: 1, sender: "alice".to_string(), target: "bob".to_string(), body: "premier".to_string(),
-            },
-            LedgerMessage {
-                id: "recent".to_string(), ts: 2, sender: "bob".to_string(), target: "alice".to_string(), body: "corps riche $VAR\nintact".to_string(),
-            },
-        ];
-        assert_eq!(
-            render_ledger(&entries),
-            "Derniers 2 messages :\n  [2] bob → alice: corps riche $VAR\nintact\n  [1] alice → bob: premier\n"
-        );
-    }
 
     /// Configuration réaliste : quatre hooks utilisateur déjà en place, dont
     /// un sur `Stop`. L'insertion doit être additive, jamais destructive.
@@ -2073,5 +2261,339 @@ mod hook_tests {
             .unwrap(),
             ("codex-1".to_string(), "stop-retry".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod idempotency_projection_tests {
+    use super::*;
+    use rusqlite::params;
+    use std::os::unix::net::UnixListener;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SOCKET_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn temporary_socket_path() -> std::path::PathBuf {
+        let counter = SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "bridget-t1208-{}-{counter}.sock",
+            std::process::id()
+        ))
+    }
+
+    fn temporary_database_path() -> std::path::PathBuf {
+        let counter = SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "bridget-t1208-{}-{counter}.db",
+            std::process::id()
+        ))
+    }
+
+    fn start_real_daemon() -> (std::path::PathBuf, std::path::PathBuf) {
+        let socket_path = temporary_socket_path();
+        let db_path = temporary_database_path();
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&db_path);
+        let config = DaemonConfig {
+            socket_path: socket_path.clone(),
+            db_path: db_path.clone(),
+            log_path: db_path.with_extension("log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+        };
+        std::thread::spawn(move || {
+            let _ = daemon::run(config);
+        });
+        for _ in 0..100 {
+            if socket_path.exists() {
+                return (socket_path, db_path);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("daemon réel T1208 non démarré");
+    }
+
+    fn stored_canonical_bytes(
+        db_path: &std::path::Path,
+        options: &IdempotentSendOptions,
+    ) -> Vec<u8> {
+        let connection = rusqlite::Connection::open(db_path).unwrap();
+        connection
+            .query_row(
+                "SELECT canonical_bytes FROM idempotency_records
+                 WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2",
+                params![options.issuer_scope, options.id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn idempotency_issue(response: DaemonToWrapper) -> IdempotencyIssue {
+        match response {
+            DaemonToWrapper::IdempotencyResult { issue, .. } => issue,
+            unexpected => panic!("issue idempotente attendue : {unexpected:?}"),
+        }
+    }
+
+    fn write_response(writer: &mut BufWriter<UnixStream>, response: DaemonToWrapper) {
+        writeln!(writer, "{}", encode(&response).unwrap()).unwrap();
+        writer.flush().unwrap();
+    }
+
+    fn start_reference_server(
+        path: std::path::PathBuf,
+        expected_connections: usize,
+    ) -> std::thread::JoinHandle<Vec<String>> {
+        let listener = UnixListener::bind(&path).unwrap();
+        std::thread::spawn(move || {
+            let mut sends = Vec::new();
+            let mut first_send: Option<String> = None;
+            for _ in 0..expected_connections {
+                let (stream, _) = listener.accept().unwrap();
+                let read_stream = stream.try_clone().unwrap();
+                let mut reader = BufReader::new(read_stream);
+                let mut writer = BufWriter::new(stream);
+
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(
+                    decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
+                    WrapperToDaemon::RoleHandshake {
+                        role: ConnectionRole::Client
+                    }
+                ));
+                write_response(
+                    &mut writer,
+                    DaemonToWrapper::RoleAccepted {
+                        role: ConnectionRole::Client,
+                    },
+                );
+
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(
+                    decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
+                    WrapperToDaemon::ClientHello {
+                        contract_version: CLIENT_CONTRACT_VERSION,
+                        capabilities,
+                        ..
+                    } if capabilities == vec![ClientCapability::SendIdempotent]
+                ));
+                write_response(
+                    &mut writer,
+                    DaemonToWrapper::ClientWelcome {
+                        version: CLIENT_CONTRACT_VERSION,
+                        horizon_secs: 300,
+                        issued_at_tolerance_secs: 5,
+                        capabilities: vec![ClientCapability::SendIdempotent],
+                    },
+                );
+
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                let command: WrapperToDaemon = decode(line.trim_end()).unwrap();
+                let serialized = encode(&command).unwrap();
+                let issue = if first_send
+                    .as_ref()
+                    .is_some_and(|first| first != &serialized)
+                {
+                    IdempotencyIssue::EnvelopeMismatch
+                } else {
+                    first_send.get_or_insert_with(|| serialized.clone());
+                    IdempotencyIssue::Accepted {
+                        expires_at: 123_456,
+                    }
+                };
+                sends.push(serialized);
+                write_response(
+                    &mut writer,
+                    DaemonToWrapper::IdempotencyResult {
+                        operation_kind: "send".to_string(),
+                        idempotency_key: "message-t1208".to_string(),
+                        issue,
+                    },
+                );
+            }
+            std::fs::remove_file(path).unwrap();
+            sends
+        })
+    }
+
+    /// Client de référence volontairement indépendant de la projection CLI :
+    /// il déroule les trois étapes publiées du contrat sur le socket.
+    fn reference_client_send(
+        path: &std::path::Path,
+        message: &BridgetMessage,
+        options: &IdempotentSendOptions,
+    ) -> DaemonToWrapper {
+        let stream = UnixStream::connect(path).unwrap();
+        let read_stream = stream.try_clone().unwrap();
+        let mut writer = BufWriter::new(stream);
+        let mut reader = BufReader::new(read_stream);
+
+        write_control_message(
+            &mut writer,
+            &WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Client,
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            read_control_message(&mut reader).unwrap(),
+            DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            }
+        ));
+        write_control_message(
+            &mut writer,
+            &WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: options.issuer_scope.clone(),
+                capabilities: vec![ClientCapability::SendIdempotent],
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            read_control_message(&mut reader).unwrap(),
+            DaemonToWrapper::ClientWelcome { .. }
+        ));
+        write_control_message(
+            &mut writer,
+            &WrapperToDaemon::SendIdempotent {
+                message: message.clone(),
+                message_id: options.id.clone(),
+                issued_at: options.issued_at,
+            },
+        )
+        .unwrap();
+        read_control_message(&mut reader).unwrap()
+    }
+
+    fn example_options() -> IdempotentSendOptions {
+        IdempotentSendOptions {
+            id: "message-t1208".to_string(),
+            issued_at: 123_000,
+            issuer_scope: "012_scope_aaaaaaaaaaaa".to_string(),
+        }
+    }
+
+    #[test]
+    fn options_idempotentes_sont_obligatoires_ensemble() {
+        assert_eq!(idempotent_options(None, None, None).unwrap(), None);
+        for (id, issued_at, issuer_scope) in [
+            (Some("id".to_string()), None, None),
+            (None, Some("123".to_string()), None),
+            (None, None, Some("scope".to_string())),
+            (Some("id".to_string()), Some("123".to_string()), None),
+            (Some("id".to_string()), None, Some("scope".to_string())),
+            (None, Some("123".to_string()), Some("scope".to_string())),
+        ] {
+            assert!(idempotent_options(id, issued_at, issuer_scope).is_err());
+        }
+        assert!(
+            idempotent_options(
+                Some("id".to_string()),
+                Some("pas-un-instant".to_string()),
+                Some("scope".to_string())
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn projection_cli_et_client_reference_produisent_le_meme_envoi_et_le_meme_rejet() {
+        let path = temporary_socket_path();
+        let server = start_reference_server(path.clone(), 3);
+        let options = example_options();
+        let mut message = BridgetMessage::new("human", "codex-1", "bonjour");
+        message.id = options.id.clone();
+
+        let reference = reference_client_send(&path, &message, &options);
+        let cli = send_idempotent_to_daemon_at(&path, &message, &options).unwrap();
+        assert!(matches!(
+            (reference, cli),
+            (
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::Accepted { .. },
+                    ..
+                },
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::Accepted { .. },
+                    ..
+                }
+            )
+        ));
+
+        let mut divergent = message.clone();
+        divergent.body = "message différent".to_string();
+        assert!(matches!(
+            send_idempotent_to_daemon_at(&path, &divergent, &options).unwrap(),
+            DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::EnvelopeMismatch,
+                ..
+            }
+        ));
+
+        let sends = server.join().unwrap();
+        assert_eq!(sends[0], sends[1], "le canon publié est identique");
+        assert_ne!(sends[0], sends[2]);
+        assert!(sends[0].contains("bonjour"));
+        assert!(sends[2].contains("message différent"));
+    }
+
+    #[test]
+    fn projection_cli_et_reference_partagent_le_canon_du_daemon_reel() {
+        let (socket_path, db_path) = start_real_daemon();
+        let issued_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let options = IdempotentSendOptions {
+            id: "message-t1208-reel".to_string(),
+            issued_at,
+            issuer_scope: "012_scope_aaaaaaaaaaaa".to_string(),
+        };
+        let mut message = BridgetMessage::new("human", "destinataire-absent", "bonjour");
+        message.id = options.id.clone();
+        message.reply = true;
+        message.reply_timeout = Some(12);
+
+        let reference = idempotency_issue(reference_client_send(&socket_path, &message, &options));
+        let cli = idempotency_issue(
+            send_idempotent_to_daemon_at(&socket_path, &message, &options).unwrap(),
+        );
+        assert_eq!(reference, cli, "référence et CLI rejouent la même issue");
+        let canonical = stored_canonical_bytes(&db_path, &options);
+
+        let mut divergences = Vec::new();
+        let mut body = message.clone();
+        body.body = "bonjour divergent".to_string();
+        divergences.push(body);
+        let mut target = message.clone();
+        target.to = "autre-destinataire".to_string();
+        divergences.push(target);
+        let mut reply = message.clone();
+        reply.reply = false;
+        divergences.push(reply);
+        let mut deadline = message.clone();
+        deadline.deadline_at = Some((issued_at + 13) as u64);
+        divergences.push(deadline);
+
+        for divergent in divergences {
+            assert_eq!(
+                idempotency_issue(
+                    send_idempotent_to_daemon_at(&socket_path, &divergent, &options).unwrap(),
+                ),
+                IdempotencyIssue::EnvelopeMismatch,
+            );
+            assert_eq!(
+                stored_canonical_bytes(&db_path, &options),
+                canonical,
+                "EnvelopeMismatch ne doit jamais modifier le record initial",
+            );
+        }
     }
 }

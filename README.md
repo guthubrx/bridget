@@ -85,6 +85,32 @@ bridget send --to codex-1 "Analyse ce fichier" --reply
 bridget who
 ```
 
+## Envois idempotents
+
+Pour une délégation que votre programme pourra rejouer après une coupure,
+fournissez les trois valeurs durables ensemble : une portée opaque stable, une
+clé métier et son instant Unix d'émission. Bridget ne génère jamais ces valeurs
+à la place du client.
+
+```bash
+bridget send --to codex-1 \
+  --id delegation-42 \
+  --issued-at "$(date +%s)" \
+  --issuer-scope "012_scope_aaaaaaaaaaaa" \
+  "Analyse ce fichier"
+```
+
+Un retry réutilise exactement ces trois valeurs et la même enveloppe. Il
+rejoue alors l'issue durable (`Accepted`, refus motivé ou `OutcomeUnknown`) ;
+une enveloppe différente avec la même clé est refusée par
+`EnvelopeMismatch`. Après l'échéance annoncée par le daemon,
+`IdempotencyExpired` interdit toute réémission aveugle. Les trois options sont
+obligatoires ensemble ; un envoi historique sans elles reste inchangé.
+
+Cette garantie est disponible sur le protocole local et la CLI. La projection
+MCP est volontairement différée à la session 010 : elle ne doit pas être
+supposée équivalente avant sa propre preuve de conformité.
+
 ## Équipiers ACP
 
 Un équipier ACP reçoit les livraisons directement via l’Agent Client Protocol
@@ -107,6 +133,28 @@ employer seulement si la facturation API est voulue.
 Gemini reste déclaratif, mais les comptes individuels ne sont pas supportés au
 2026-08-22 : Google demande la migration vers Antigravity. Les agents tmux
 existants, lancés sans `--equipier`, conservent leur comportement `💬`.
+
+## Équipiers persistants
+
+Le daemon peut devenir propriétaire du cycle de vie d’un équipier ACP. Le
+terminal qui donne l’ordre peut alors se fermer sans arrêter l’équipier :
+
+```bash
+bridget spawn codex --name analyse --persistent
+bridget who
+bridget stop analyse
+```
+
+`--persistent` demande au daemon de relancer l’équipier après son propre
+redémarrage, sous le même nom et avec la même configuration. Un équipier lancé
+sans cette option reste actif après la fermeture du terminal donneur d’ordre,
+mais n’est pas recréé au prochain démarrage du daemon. `bridget stop` arrête le
+groupe complet, descendants `npx` compris, et retire un équipier persistant de
+l’état désiré afin qu’il ne revienne pas.
+
+Chaque `spawn` affiche un `command_id`. Si la réponse réseau est perdue,
+rejouez exactement l’ordre avec `--command-id <ID>` : Bridget restitue la même
+issue sans créer une seconde génération.
 
 ## Positionnement et modèle de confiance
 
@@ -229,8 +277,14 @@ répondre — sauf si un prompt est déjà fourni.
 | `bridget discover` | alias de `who` |
 | `bridget status` | santé du daemon, chemins, nombre d'agents et de messages |
 | `bridget ledger` | vingt derniers messages enregistrés |
+| `bridget attach <équipier> [--today \| --date AAAA-MM-JJ \| --from-seq N]` | ouvre une vue interactive d’un équipier ACP : historique, suivi en direct et saisie de messages ordinaires |
 | `bridget version` | version du binaire |
 | `bridget help` | aide en ligne, résumé de toutes les commandes |
+
+Une vue `attach` ne s’ajoute pas à l’annuaire et ne peut pas usurper un
+équipier. Elle rejoue d’abord la fenêtre demandée, puis suit le journal en
+direct. Les séquences de contrôle présentes dans les réponses sont rendues
+visibles et la saisie est conservée pendant l’arrivée d’un événement.
 
 ### Se décrire
 

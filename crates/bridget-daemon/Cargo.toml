@@ -9,8 +9,6 @@ name = "bridget_daemon"
 path = "src/lib.rs"
 
 [features]
-# Surface exclusivement destinée aux bancs d'intégration : elle n'est jamais
-# activée dans un binaire de distribution.
 test-support = []
 
 [[bin]]
@@ -31,4 +29,4 @@ libc = "0.2"
 
 [dev-dependencies]
 bridget-core = { path = "../bridget-core" }
-bridget-transport = { path = "../bridget-transport" }
+bridget-transport = { path = "../bridget-transport", features = ["test-support"] }

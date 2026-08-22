@@ -129,3 +129,68 @@ p95 **442,466 ms**, maximum **530,891 ms**, total **28,23 s**. Le seuil p95
 reste fixé à 10 s et le timeout global à 120 s. Le test échoue sur le premier
 spawn/refus, la première réponse manquante, une demande non close, le p95 ou
 le timeout global ; il ne relance aucun essai.
+
+## T910 — Persistance et arrêt de flotte
+
+Le scénario réel lance trois équipiers persistants et trois éphémères par le
+chemin `SpawnOrder` → bootstrap → `managed-wrapper` → `npx`. Il effectue trois
+redémarrages coopératifs complets du daemon. À chaque cycle, les anciens groupes
+de processus doivent avoir disparu avant le redémarrage ; les trois persistants
+reviennent connectés et les trois éphémères restent absents. Les instantanés de
+groupes observés ont été :
+
+- cycle initial : `[41008, 41090, 41137, 41157, 41226, 41272]` ;
+- deuxième cycle : `[41530, 41538, 41550]` ;
+- troisième cycle : `[41671, 41672, 41678]`.
+
+Chaque groupe est inspecté par `ps` et doit contenir le wrapper ainsi que son
+descendant `npx` (exposé comme `npm exec` par macOS). Le test attend ensuite la
+disparition effective de chaque PGID avec `kill(-pgid, 0)` ; une simple issue
+logique ne suffit donc pas.
+
+Le même scénario tue ensuite le daemon par `SIGKILL`. Les groupes
+`[41819, 41820, 41826]` survivent au crash, puis le daemon redémarré les
+réconcilie et crée exactement les trois nouvelles générations
+`[41869, 41870, 41876]`, sans réutiliser un ancien PGID. Enfin, trois
+`StopOrder` retirent durablement les trois persistants : un dernier redémarrage
+confirme leur absence **3/3**.
+
+Commande reproductible :
+
+```bash
+cargo test -p bridget-daemon --test managed_parity_test \
+  sc005_sc006_persistance_arrets_cooperatifs_et_reconciliation_sigkill \
+  -- --exact --nocapture
+```
+
+## T911 — Checklist des critères de succès
+
+| Critère | Preuve versionnée |
+|---|---|
+| **SC-001** | `sc001_vingt_spawns_survivent_a_la_fermeture_du_client_et_repondent` : N=20, 20/20 spawns et échanges suivis, p95 442,466 ms, maximum 530,891 ms, sous le seuil de 10 s. |
+| **SC-002** | `stop_apres_register_traverse_le_wrapper_et_le_superviseur_reels`, `stop_force_termine_l_intermediaire_npx_qui_ignore_l_annulation_et_son_descendant` et `timeout_d_arret_conserve_le_groupe_reel_et_sa_supervision_jusqu_a_disparition` couvrent l'arrêt synchrone, les descendants et la voie non terminale. |
+| **SC-003** | `matrice_sc003_couvre_les_onze_familles_sans_residu_operationnel` exerce les onze refus fermés avec motif typé et invariant sans état résiduel. |
+| **SC-004** | `matrice_fr008_compare_le_meme_corpus_et_les_frames_attach` exécute trois passages par mode, vérifie les corps attendus, la reconnexion busy et compare les frames attach normalisées sans tolérance. |
+| **SC-005** | `sc005_sc006_persistance_arrets_cooperatifs_et_reconciliation_sigkill` réalise trois redémarrages : persistants 3/3, éphémères 0/3, puis trois stops exclus 3/3. |
+| **SC-006** | Le même scénario compare les PGID de trois groupes avec descendants `npx`, exige leur disparition après arrêt coopératif et rejoue un SIGKILL réel ; `sigkill_daemon_reconcilie_l_ancien_groupe_avant_une_reprise_unique` isole aussi cette frontière. |
+
+### Gate d'intégration finale
+
+La branche contient les deux séries revues par des commits de fusion dédiés :
+
+- `8598694` intègre la tête finale 008 `3efcd4c` ;
+- `c9b1bfb` intègre la tête finale 012 `748cf8c`.
+
+Les deux commandes `git merge-base --is-ancestor 3efcd4c HEAD` et
+`git merge-base --is-ancestor 748cf8c HEAD` terminent avec le statut 0. La
+batterie post-fusion `cargo test --workspace` termine avec **327 tests passés**,
+**0 échec** et **7 ignorés explicitement**. Le lint
+`cargo clippy --workspace --all-targets -- -D warnings` termine sans
+avertissement.
+
+Deux oracles concurrents ont été rendus déterministes pendant cette gate sans
+modifier le comportement produit : une barrière contrôle la saturation du flux
+live avant le rattrapage journal, et l'inspection des groupes de processus
+tolère la course bornée `Connected` → `exec npx`. Le parseur de l'instantané
+`ps` accepte aussi l'alignement à espaces multiples des PID courts après le
+bouclage des PID macOS.

@@ -2,9 +2,11 @@
 //!
 //! Appelé par le CLI quand l'utilisateur tape : bridget codex, bridget claude, etc.
 
+#[cfg(test)]
+use bridget_transport::journal::JournalWriter;
 use bridget_transport::journal::{
-    IncrementalJournalReader, JournalReadItem, JournalSourceIdentity, JournalWindowError,
-    current_host_date, resolve_window,
+    IncrementalJournalReader, JournalLiveFeed, JournalReadItem, JournalSourceIdentity,
+    JournalWindowError, current_host_date, resolve_window,
 };
 use bridget_transport::protocol::{decode, encode};
 use bridget_transport::{
@@ -16,12 +18,14 @@ use log::{debug, error, info, warn};
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use crate::receipt_store::{ReceiptDecision, ReceiptQuota, ReceiptStore};
 
 // Constantes de reconnexion optimisées pour auto-reconnect transparent
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
@@ -47,16 +51,181 @@ const ATTACH_RELAY_COMMAND_CAPACITY: usize = 8;
 const ATTACH_RELAY_READ_BYTES: usize = 128 * 1024;
 const ATTACH_RELAY_IDLE_WAIT: Duration = Duration::from_millis(10);
 
-fn interactive_bridget_prompt(name: &str, mcp_enabled: bool) -> String {
-    if mcp_enabled {
-        return format!(
-            "Tu es l'agent \"{name}\" dans une session Bridget. Une ligne commençant par 💬 est un message d'un autre agent IA, pas de l'humain. reply=yes attend une réponse utile. reply=no est une notification, à traiter seulement si utile."
-        );
+#[derive(Debug, Clone)]
+struct PendingIdempotentDelivery {
+    delivery_id: String,
+    delivery_generation: u64,
+}
+
+enum PendingAcpDispatch {
+    Historic,
+    Idempotent(PendingIdempotentDelivery),
+}
+
+/// Raccorde l'observable ACP au reçu durable : aucun accusé n'est émis avant
+/// `PromptDispatched`, et tout état ambigu reste explicitement indéterminé.
+struct IdempotentDeliveryTracker {
+    instance_id: String,
+    receipts: ReceiptStore,
+    pending: BTreeMap<String, VecDeque<PendingAcpDispatch>>,
+}
+
+enum IdempotentDeliveryAction {
+    Inject {
+        message: bridget_core::BridgetMessage,
+        delivery_id: String,
+    },
+    Report(WrapperToDaemon),
+}
+
+impl IdempotentDeliveryTracker {
+    fn open(home: &std::path::Path, instance_id: &str) -> Result<Self, String> {
+        let state_home = home.join(".local/state");
+        Self::open_at(&state_home, instance_id)
     }
 
-    format!(
-        "Tu es l'agent \"{name}\" dans une session Bridget. Tu peux recevoir des messages d'autres agents IA. Quand tu vois une ligne qui commence par 💬 dans ton terminal, c'est un message d'un autre agent IA, pas de l'humain. Le format est : 💬 <expéditeur> → <toi> (reply=yes/no, ...)\n<message>\n\nRègles ABSOLUES :\n1. Réponds TOUJOURS avec: bridget send --to <expéditeur> \"ta réponse\"\n2. N'accuse JAMAIS réception (pas de \"bien reçu\", \"OK\", \"compris\")\n3. Ne fais PAS bridget who, bridget ledger ou bridget --help sans y être explicitement invité\n4. reply=no = notification, ne réponds que si utile. reply=yes = réponds avec du contenu.\n5. Ne réponds JAMAIS uniquement dans ton terminal — l'expéditeur ne te verrait pas.\n\nTu es maintenant en attente. Dis \"Bridget ready\" puis attends les messages."
-    )
+    fn open_at(state_home: &std::path::Path, instance_id: &str) -> Result<Self, String> {
+        let receipts = ReceiptStore::open(state_home, instance_id, ReceiptQuota::default())
+            .map_err(|error| format!("ouverture des reçus idempotents: {error}"))?;
+        Ok(Self {
+            instance_id: instance_id.to_string(),
+            receipts,
+            pending: BTreeMap::new(),
+        })
+    }
+
+    fn receive(
+        &mut self,
+        delivery_id: String,
+        recipient_instance_id: String,
+        delivery_generation: u64,
+        expires_at: i64,
+        message: bridget_core::BridgetMessage,
+        now: i64,
+    ) -> IdempotentDeliveryAction {
+        let indeterminate = || WrapperToDaemon::DeliveryIndeterminate {
+            delivery_id: delivery_id.clone(),
+            delivery_generation,
+        };
+        let acked = || WrapperToDaemon::DeliverAcked {
+            delivery_id: delivery_id.clone(),
+            delivery_generation,
+        };
+        if recipient_instance_id != self.instance_id {
+            return IdempotentDeliveryAction::Report(indeterminate());
+        }
+        match self.receipts.receive(&delivery_id, expires_at, now) {
+            Ok(ReceiptDecision::Inject) => {
+                let message_id = message.id.clone();
+                let pending_delivery_id = delivery_id.clone();
+                self.pending
+                    .entry(message_id)
+                    .or_default()
+                    .push_back(PendingAcpDispatch::Idempotent(PendingIdempotentDelivery {
+                        delivery_id,
+                        delivery_generation,
+                    }));
+                IdempotentDeliveryAction::Inject {
+                    message,
+                    delivery_id: pending_delivery_id,
+                }
+            }
+            Ok(ReceiptDecision::Acked) => IdempotentDeliveryAction::Report(acked()),
+            Ok(ReceiptDecision::Indeterminate | ReceiptDecision::RejectedQuota) | Err(_) => {
+                IdempotentDeliveryAction::Report(indeterminate())
+            }
+        }
+    }
+
+    fn prompt_dispatched(&mut self, message_id: &str, now: i64) -> Option<WrapperToDaemon> {
+        let pending = self.take_pending_by_message(message_id)?;
+        let PendingAcpDispatch::Idempotent(pending) = pending else {
+            return None;
+        };
+        let acknowledged = matches!(
+            self.receipts.acknowledge(&pending.delivery_id, now),
+            Ok(ReceiptDecision::Acked)
+        );
+        Some(if acknowledged {
+            WrapperToDaemon::DeliverAcked {
+                delivery_id: pending.delivery_id,
+                delivery_generation: pending.delivery_generation,
+            }
+        } else {
+            WrapperToDaemon::DeliveryIndeterminate {
+                delivery_id: pending.delivery_id,
+                delivery_generation: pending.delivery_generation,
+            }
+        })
+    }
+
+    fn injection_failed(&mut self, delivery_id: &str) -> Option<WrapperToDaemon> {
+        let message_id = self.pending.iter().find_map(|(message_id, deliveries)| {
+            deliveries
+                .iter()
+                .any(|pending| matches!(pending, PendingAcpDispatch::Idempotent(pending) if pending.delivery_id == delivery_id))
+                .then(|| message_id.clone())
+        })?;
+        let pending = {
+            let deliveries = self.pending.get_mut(&message_id)?;
+            let index = deliveries
+                .iter()
+                .position(|pending| matches!(pending, PendingAcpDispatch::Idempotent(pending) if pending.delivery_id == delivery_id))?;
+            deliveries.remove(index)?
+        };
+        if self
+            .pending
+            .get(&message_id)
+            .is_some_and(VecDeque::is_empty)
+        {
+            self.pending.remove(&message_id);
+        }
+        let PendingAcpDispatch::Idempotent(pending) = pending else {
+            return None;
+        };
+        Some(WrapperToDaemon::DeliveryIndeterminate {
+            delivery_id: pending.delivery_id,
+            delivery_generation: pending.delivery_generation,
+        })
+    }
+
+    fn injection_rejected(&mut self, message_id: &str) -> Option<WrapperToDaemon> {
+        let pending = self.take_pending_by_message(message_id)?;
+        let PendingAcpDispatch::Idempotent(pending) = pending else {
+            return None;
+        };
+        Some(WrapperToDaemon::DeliveryIndeterminate {
+            delivery_id: pending.delivery_id,
+            delivery_generation: pending.delivery_generation,
+        })
+    }
+
+    fn record_historic(&mut self, message_id: &str) {
+        self.pending
+            .entry(message_id.to_string())
+            .or_default()
+            .push_back(PendingAcpDispatch::Historic);
+    }
+
+    fn historic_injection_failed(&mut self, message_id: &str) {
+        let Some(deliveries) = self.pending.get_mut(message_id) else {
+            return;
+        };
+        if matches!(deliveries.back(), Some(PendingAcpDispatch::Historic)) {
+            deliveries.pop_back();
+        }
+        if deliveries.is_empty() {
+            self.pending.remove(message_id);
+        }
+    }
+
+    fn take_pending_by_message(&mut self, message_id: &str) -> Option<PendingAcpDispatch> {
+        let pending = self.pending.get_mut(message_id)?.pop_front()?;
+        if self.pending.get(message_id).is_some_and(VecDeque::is_empty) {
+            self.pending.remove(message_id);
+        }
+        Some(pending)
+    }
 }
 
 fn socket_path() -> PathBuf {
@@ -68,6 +237,14 @@ fn socket_path() -> PathBuf {
     } else {
         PathBuf::from("/tmp").join("bridget.sock")
     }
+}
+
+fn unix_now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .min(i64::MAX as u64) as i64
 }
 
 fn host_name() -> String {
@@ -521,30 +698,7 @@ pub fn launch(
     // (= --yolo) sinon le sandbox bloque la connexion socket vers le daemon.
     // Pour Claude Code : ajouter --dangerously-skip-permissions --permission-mode bypassPermissions
     // + injecter un prompt initial qui dit à l'agent de répondre via bridget.
-    let definition = crate::registry::AgentRegistry::load()?.get(agent_type)?.clone();
     let mut final_args: Vec<String> = Vec::new();
-    // Le garde possède le fichier Claude jusqu'à la sortie de `launch`. Son
-    // `Drop` couvre aussi tous les refus entre cette préparation et `wait()`.
-    let mut ephemeral_mcp_config = None;
-    let mcp_enabled = match definition.mcp.interactive.as_str() {
-        "codex" => {
-            final_args.push("-c".to_string());
-            final_args.push(codex_mcp_override(&mcp_server_entry()?)?);
-            true
-        }
-        "claude" => {
-            let config = claude_mcp_config(&mcp_server_entry()?, &instance_id)?;
-            final_args.extend([
-                "--strict-mcp-config".to_string(),
-                "--mcp-config".to_string(),
-                config.path().display().to_string(),
-            ]);
-            ephemeral_mcp_config = Some(config);
-            true
-        }
-        "none" | "unsupported" => false,
-        _ => return Err("configuration MCP interactive inconnue dans le registre".into()),
-    };
     if agent_type == "codex" {
         // Vérifier si l'utilisateur n'a pas déjà passé --yolo ou le bypass
         let already_bypassed = agent_args
@@ -574,17 +728,30 @@ pub fn launch(
     // qui n'est pas un flag --xxx), injecter le prompt bridget.
     let has_prompt = agent_args.iter().any(|a| !a.starts_with("--"));
     if !has_prompt && (agent_type == "codex" || agent_type == "claude") {
-        final_args.push(interactive_bridget_prompt(&my_name, mcp_enabled));
+        let bridget_prompt = format!(
+            "Tu es l'agent \"{}\" dans une session Bridget. Tu peux recevoir des messages d'autres agents IA. Quand tu vois une ligne qui commence par 💬 dans ton terminal, c'est un message d'un autre agent IA, pas de l'humain. Le format est : 💬 <expéditeur> → <toi> (reply=yes/no, ...)\n<message>\n\nRègles ABSOLUES :\n1. Réponds TOUJOURS avec: bridget send --to <expéditeur> \"ta réponse\"\n2. N'accuse JAMAIS réception (pas de \"bien reçu\", \"OK\", \"compris\")\n3. Ne fais PAS bridget who, bridget ledger ou bridget --help sans y être explicitement invité\n4. reply=no = notification, ne réponds que si utile. reply=yes = réponds avec du contenu.\n5. Ne réponds JAMAIS uniquement dans ton terminal — l'expéditeur ne te verrait pas.\n\nTu es maintenant en attente. Dis \"Bridget ready\" puis attends les messages.",
+            my_name
+        );
+        final_args.push(bridget_prompt);
     }
 
     final_args.extend(agent_args.iter().cloned());
 
     // L'autorisation est déclarative : un type absent du registre est refusé
     // avant le spawn, avec les types disponibles et le fichier concerné.
-    let _ = definition;
+    crate::registry::AgentRegistry::load()?.get(agent_type)?;
 
     // Validation des arguments pour prévenir injection
-    validate_wrapper_args(&final_args)?;
+    for arg in &final_args {
+        // Rejeter les tentatives d'injection de commandes
+        if arg.contains(';') || arg.contains('&') || arg.contains('|') || arg.contains('$') {
+            return Err(format!(
+                "Argument non autorisé contient des caractères shell dangereux: '{}'",
+                arg
+            )
+            .into());
+        }
+    }
 
     eprintln!(
         "[bridget] Lancement: {} {}",
@@ -596,7 +763,6 @@ pub fn launch(
         .args(&final_args)
         .env("BRIDGET_AGENT_NAME", &my_name)
         .env("BRIDGET_AGENT_NAME_FILE", &name_state_path)
-        .env("BRIDGET_AGENT_INSTANCE_ID", &instance_id)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -604,14 +770,6 @@ pub fn launch(
         .map_err(|e| format!("impossible de lancer '{}': {}", agent_binary, e))?;
 
     let agent_pid = child.id();
-    let marker_directory = socket_path().parent().unwrap().join("agent-pids");
-    crate::mcp_identity::write_marker(
-        &marker_directory,
-        agent_pid,
-        crate::managed_process::process_birth(agent_pid)?,
-        &instance_id,
-        &name_state_path,
-    )?;
 
     // 5. Thread d'écoute
     let writer_clone = writer.clone();
@@ -934,9 +1092,6 @@ pub fn launch(
 
     // 6. Attendre la fin de l'agent
     let status = child.wait()?;
-    // `ephemeral_mcp_config` est libéré ici. Le garde RAII couvre également
-    // toutes les sorties anticipées précédentes.
-    drop(ephemeral_mcp_config);
 
     // 7. Désenregistrement
     stopping.store(true, Ordering::SeqCst);
@@ -999,6 +1154,7 @@ struct RelaySubscription {
     reader_source: Option<JournalSourceIdentity>,
     caught_up: bool,
     through_seq: Option<u64>,
+    live_floor: Option<u64>,
     pending_events: VecDeque<(u64, Vec<u8>)>,
     pending_fragment: Option<(u64, Vec<u8>, usize)>,
 }
@@ -1009,12 +1165,19 @@ impl RelaySubscription {
         window: AttachWindow,
         directory: &std::path::Path,
         host_today: &str,
+        live_floor: Option<u64>,
     ) -> Result<Self, JournalWindowError> {
         let resolved = resolve_window(directory, &window, host_today)?;
         let follow_after = resolve_window(directory, &AttachWindow::Seq(0), host_today)?
             .files
             .last()
             .cloned();
+        let live_floor = match (live_floor, resolved.from_seq) {
+            (Some(floor), Some(from_seq)) => Some(floor.max(from_seq.saturating_sub(1))),
+            (Some(floor), None) => Some(floor),
+            (None, Some(from_seq)) => Some(from_seq.saturating_sub(1)),
+            (None, None) => None,
+        };
         Ok(Self {
             subscription_id,
             window,
@@ -1026,6 +1189,7 @@ impl RelaySubscription {
             reader_source: None,
             caught_up: false,
             through_seq: None,
+            live_floor,
             pending_events: VecDeque::new(),
             pending_fragment: None,
         })
@@ -1072,12 +1236,47 @@ impl RelaySubscription {
     fn has_pending_output(&self) -> bool {
         self.pending_fragment.is_some() || !self.pending_events.is_empty()
     }
+
+    fn restart_from_seq(
+        &mut self,
+        directory: &std::path::Path,
+        host_today: &str,
+        from_seq: u64,
+    ) -> Result<(), JournalWindowError> {
+        let resolved = resolve_window(directory, &AttachWindow::Seq(from_seq), host_today)?;
+        self.window = AttachWindow::Seq(from_seq);
+        self.from_seq = Some(from_seq);
+        self.files = resolved.files;
+        self.follow_after = self.files.last().cloned();
+        self.file_index = 0;
+        self.reader = None;
+        self.reader_source = None;
+        self.caught_up = false;
+        self.pending_events.clear();
+        self.pending_fragment = None;
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct LiveFanout {
+    cursor: Option<u64>,
+    pending_events: VecDeque<(u64, Vec<u8>)>,
+    pending_fragment: Option<(u64, Vec<u8>, usize)>,
+}
+
+impl LiveFanout {
+    fn reset_pending(&mut self) {
+        self.pending_events.clear();
+        self.pending_fragment = None;
+    }
 }
 
 #[derive(Clone)]
 struct AttachRelayHooks {
     before_command: Arc<dyn Fn() + Send + Sync>,
     before_read: Arc<dyn Fn() + Send + Sync>,
+    before_live_read: Arc<dyn Fn() + Send + Sync>,
     control_observed: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -1086,6 +1285,7 @@ impl Default for AttachRelayHooks {
         Self {
             before_command: Arc::new(|| {}),
             before_read: Arc::new(|| {}),
+            before_live_read: Arc::new(|| {}),
             control_observed: Arc::new(|| {}),
         }
     }
@@ -1111,11 +1311,12 @@ type RelayEmitter = Arc<dyn Fn(WrapperToDaemon) + Send + Sync>;
 type RelayEvents = Arc<Mutex<Vec<WrapperToDaemon>>>;
 
 impl AttachRelayWorker {
-    fn start(directory: PathBuf, emit: RelayEmitter) -> Self {
+    fn start(directory: PathBuf, live_feed: JournalLiveFeed, emit: RelayEmitter) -> Self {
         Self::start_with_clock(
             directory,
             Arc::new(current_host_date),
             ATTACH_RELAY_COMMAND_CAPACITY,
+            Some(live_feed),
             emit,
             AttachRelayHooks::default(),
         )
@@ -1130,13 +1331,27 @@ impl AttachRelayWorker {
         hooks: AttachRelayHooks,
     ) -> Self {
         let clock: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || host_today.clone());
-        Self::start_with_clock(directory, clock, capacity, emit, hooks)
+        Self::start_with_clock(directory, clock, capacity, None, emit, hooks)
+    }
+
+    #[cfg(test)]
+    fn start_with_live(
+        directory: PathBuf,
+        host_today: String,
+        capacity: usize,
+        live_feed: JournalLiveFeed,
+        emit: RelayEmitter,
+        hooks: AttachRelayHooks,
+    ) -> Self {
+        let clock: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || host_today.clone());
+        Self::start_with_clock(directory, clock, capacity, Some(live_feed), emit, hooks)
     }
 
     fn start_with_clock(
         directory: PathBuf,
         host_today: Arc<dyn Fn() -> String + Send + Sync>,
         capacity: usize,
+        live_feed: Option<JournalLiveFeed>,
         emit: RelayEmitter,
         hooks: AttachRelayHooks,
     ) -> Self {
@@ -1155,11 +1370,15 @@ impl AttachRelayWorker {
         let worker_emit = emit.clone();
         let worker = thread::spawn(move || {
             let mut subscriptions = BTreeMap::<String, RelaySubscription>::new();
+            let mut live_fanout = LiveFanout::default();
+            let mut had_live_subscriptions = false;
             let mut seen_generation = 0;
             while !worker_stopped.load(Ordering::SeqCst) {
                 let current_generation = worker_generation.load(Ordering::SeqCst);
                 if current_generation != seen_generation {
                     subscriptions.clear();
+                    live_fanout = LiveFanout::default();
+                    had_live_subscriptions = false;
                     worker_control
                         .lock()
                         .unwrap_or_else(|poison| poison.into_inner())
@@ -1209,6 +1428,7 @@ impl AttachRelayWorker {
                         window,
                         &directory,
                         &host_today(),
+                        live_feed.as_ref().and_then(JournalLiveFeed::latest_seq),
                     ) {
                         Ok(subscription) => {
                             worker_emit(WrapperToDaemon::Subscribed {
@@ -1252,6 +1472,9 @@ impl AttachRelayWorker {
                         continue;
                     };
                     if emit_one_fragment(&worker_emit, subscription) {
+                        continue;
+                    }
+                    if subscription.caught_up && live_feed.is_some() {
                         continue;
                     }
                     subscription.refresh_files(&directory, &host_today());
@@ -1378,6 +1601,67 @@ impl AttachRelayWorker {
                             through_seq: subscription.through_seq,
                         });
                         subscription.caught_up = true;
+                    }
+                }
+                if let Some(feed) = &live_feed {
+                    let live_ids = subscriptions
+                        .iter()
+                        .filter(|(_, subscription)| subscription.caught_up)
+                        .map(|(id, _)| id.clone())
+                        .collect::<Vec<_>>();
+                    if live_ids.is_empty() {
+                        had_live_subscriptions = false;
+                        live_fanout.reset_pending();
+                    } else {
+                        if !had_live_subscriptions {
+                            live_fanout.cursor = live_ids
+                                .iter()
+                                .filter_map(|id| subscriptions.get(id))
+                                .filter_map(|subscription| {
+                                    match (subscription.through_seq, subscription.live_floor) {
+                                        (Some(through), Some(floor)) => Some(through.max(floor)),
+                                        (through, floor) => through.or(floor),
+                                    }
+                                })
+                                .max();
+                            live_fanout.reset_pending();
+                            had_live_subscriptions = true;
+                        }
+                        if live_fanout.pending_fragment.is_none()
+                            && live_fanout.pending_events.is_empty()
+                        {
+                            (hooks.before_live_read)();
+                            let batch = feed.after(live_fanout.cursor);
+                            if let Some((from_seq, to_seq)) = batch.gap {
+                                for subscription_id in live_ids {
+                                    worker_emit(WrapperToDaemon::Gap {
+                                        subscription_id: subscription_id.clone(),
+                                        from_seq,
+                                        to_seq,
+                                        reason: Some("live_feed_overrun".to_string()),
+                                    });
+                                    if let Some(subscription) =
+                                        subscriptions.get_mut(&subscription_id)
+                                    {
+                                        let _ = subscription.restart_from_seq(
+                                            &directory,
+                                            &host_today(),
+                                            from_seq,
+                                        );
+                                    }
+                                }
+                                had_live_subscriptions = false;
+                                live_fanout.reset_pending();
+                            } else {
+                                for event in batch.events {
+                                    live_fanout.cursor = Some(event.seq);
+                                    live_fanout
+                                        .pending_events
+                                        .push_back((event.seq, event.bytes));
+                                }
+                            }
+                        }
+                        while emit_one_live_fragment(&worker_emit, &mut live_fanout) {}
                     }
                 }
                 if subscriptions.values().all(|subscription| {
@@ -1558,6 +1842,54 @@ fn emit_one_fragment(emit: &RelayEmitter, subscription: &mut RelaySubscription) 
     true
 }
 
+fn emit_one_live_fragment(emit: &RelayEmitter, fanout: &mut LiveFanout) -> bool {
+    if fanout.pending_fragment.is_none()
+        && let Some((seq, bytes)) = fanout.pending_events.pop_front()
+    {
+        fanout.pending_fragment = Some((seq, bytes, 0));
+    }
+    let Some((seq, bytes, offset)) = fanout.pending_fragment.as_ref() else {
+        return false;
+    };
+    let seq = *seq;
+    let offset = *offset;
+    let remaining = bytes.len().saturating_sub(offset);
+    if remaining == 0 {
+        fanout.pending_fragment = None;
+        return false;
+    }
+    let mut low = 1_usize;
+    let mut high = remaining.min(MAX_ATTACH_FRAGMENT_BYTES);
+    while low < high {
+        let candidate = (low + high).div_ceil(2);
+        let frame = WrapperToDaemon::LiveJournalFragment {
+            seq,
+            offset: offset as u64,
+            final_fragment: candidate == remaining,
+            bytes: bytes[offset..offset + candidate].to_vec(),
+        };
+        if encode(&frame).is_ok_and(|json| json.len() <= MAX_ATTACH_SERIALIZED_FRAME_BYTES) {
+            low = candidate;
+        } else {
+            high = candidate.saturating_sub(1);
+        }
+    }
+    let length = low;
+    let final_fragment = length == remaining;
+    emit(WrapperToDaemon::LiveJournalFragment {
+        seq,
+        offset: offset as u64,
+        final_fragment,
+        bytes: bytes[offset..offset + length].to_vec(),
+    });
+    if final_fragment {
+        fanout.pending_fragment = None;
+    } else if let Some((_, _, next_offset)) = fanout.pending_fragment.as_mut() {
+        *next_offset = offset.saturating_add(length);
+    }
+    true
+}
+
 fn launch_acp(
     agent_type: &str,
     agent_args: &[String],
@@ -1694,6 +2026,7 @@ fn launch_acp_with_status(
         false,
     )?;
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
+    let mut idempotent_deliveries = IdempotentDeliveryTracker::open(home, &instance_id)?;
     let name_state_path = socket
         .parent()
         .unwrap()
@@ -1703,44 +2036,29 @@ fn launch_acp_with_status(
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&name_state_path, &my_name)?;
-    let mcp_environment = vec![(("BRIDGET_AGENT_INSTANCE_ID").into(), instance_id.clone().into())];
-    let mcp_servers = definition
-        .mcp
-        .acp_session
-        .then(mcp_server_entry)
-        .transpose()?
-        .into_iter()
-        .collect();
-    let options = AcpOptions {
+    let spawn_transport = if managed_reporter.is_some() {
+        AcpTransport::spawn_inheriting_stderr
+    } else {
+        AcpTransport::spawn
+    };
+    let mut transport = spawn_transport(AcpOptions {
         command: definition.command.clone(),
         args: definition.args.clone(),
         queue_capacity: definition.queue_capacity,
         permissions: definition.permissions.clone(),
         notify_timeout_secs: definition.notify_timeout_secs,
-    };
-    let mut transport = if managed_reporter.is_some() {
-        AcpTransport::spawn_inheriting_stderr_with_environment_and_mcp(
-            options,
-            &mcp_environment,
-            mcp_servers,
-        )
-    } else {
-        AcpTransport::spawn_with_environment_and_mcp(options, &mcp_environment, mcp_servers)
-    }?;
-    let marker_directory = socket.parent().unwrap().join("agent-pids");
-    let adapter_pid = transport.process_id();
-    crate::mcp_identity::write_marker(
-        &marker_directory,
-        adapter_pid,
-        crate::managed_process::process_birth(adapter_pid)?,
-        &instance_id,
-        &name_state_path,
+    })?;
+    let live_feed = JournalLiveFeed::default();
+    transport.enable_journal_with_live_feed(
+        home.join(".cache/bridget/sessions"),
+        &my_name,
+        Some(live_feed.clone()),
     )?;
-    transport.enable_journal(home.join(".cache/bridget/sessions"), &my_name)?;
     let journal_directory = home.join(".cache/bridget/sessions").join(&my_name);
     let relay_writer = writer.clone();
     let mut relay = AttachRelayWorker::start(
         journal_directory,
+        live_feed,
         Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
     );
     if let Some(reporter) = managed_reporter.as_mut() {
@@ -1749,7 +2067,8 @@ fn launch_acp_with_status(
 
     loop {
         let events = transport.drain_events();
-        let journal_failed = forward_acp_events(&writer, &my_name, events);
+        let journal_failed =
+            forward_acp_events(&writer, &my_name, events, &mut idempotent_deliveries);
         if journal_failed {
             transport.shutdown();
             break;
@@ -1777,7 +2096,9 @@ fn launch_acp_with_status(
             }
             Ok(_) => match decode(line.trim()) {
                 Ok(DaemonToWrapper::Deliver(message)) => {
+                    idempotent_deliveries.record_historic(&message.id);
                     if let Err(error) = transport.deliver(&message) {
+                        idempotent_deliveries.historic_injection_failed(&message.id);
                         send_wrapper_message(
                             &writer,
                             WrapperToDaemon::DeliveryRejected {
@@ -1787,6 +2108,44 @@ fn launch_acp_with_status(
                         );
                     }
                 }
+                Ok(DaemonToWrapper::DeliverIdempotent {
+                    delivery_id,
+                    recipient_instance_id,
+                    delivery_generation,
+                    expires_at,
+                    message,
+                }) => match idempotent_deliveries.receive(
+                    delivery_id,
+                    recipient_instance_id,
+                    delivery_generation,
+                    expires_at,
+                    message,
+                    unix_now_secs(),
+                ) {
+                    IdempotentDeliveryAction::Report(report) => {
+                        send_wrapper_message(&writer, report);
+                    }
+                    IdempotentDeliveryAction::Inject {
+                        message,
+                        delivery_id,
+                    } => {
+                        let message_id = message.id.clone();
+                        if let Err(error) = transport.deliver(&message) {
+                            send_wrapper_message(
+                                &writer,
+                                WrapperToDaemon::DeliveryRejected {
+                                    id: message_id.clone(),
+                                    reason: error.to_string(),
+                                },
+                            );
+                            if let Some(report) =
+                                idempotent_deliveries.injection_failed(&delivery_id)
+                            {
+                                send_wrapper_message(&writer, report);
+                            }
+                        }
+                    }
+                },
                 Ok(DaemonToWrapper::CancelDelivery { id, reason }) => {
                     transport.cancel_delivery(&id, &reason);
                 }
@@ -1847,7 +2206,12 @@ fn launch_acp_with_status(
     // L'EOF peut fermer le transport entre deux itérations : vider une dernière
     // fois les événements terminaux avant Unregister afin que le daemon voie
     // chaque DeliveryRejected (tour actif comme file restante).
-    let _ = forward_acp_events(&writer, &my_name, transport.drain_events());
+    let _ = forward_acp_events(
+        &writer,
+        &my_name,
+        transport.drain_events(),
+        &mut idempotent_deliveries,
+    );
     send_wrapper_message(&writer, WrapperToDaemon::TurnState { in_progress: false });
     send_wrapper_message(&writer, WrapperToDaemon::Unregister);
     Ok(())
@@ -1858,120 +2222,6 @@ fn billing_guard_error(variable: &str) -> String {
         "variable d'environnement refusée pour l'équipier ACP : {variable} \
          (utilisez BRIDGET_ALLOW_API_KEY=1 uniquement si vous acceptez la facturation API)"
     )
-}
-
-fn mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    #[cfg(feature = "test-support")]
-    if let Some(server) = smoke_mcp_server_entry()? {
-        return Ok(server);
-    }
-
-    let command = std::env::current_exe()?.to_string_lossy().into_owned();
-    Ok(serde_json::json!({
-        "name": "bridget",
-        "type": "stdio",
-        "command": command,
-        "args": ["mcp"],
-        "env": []
-    }))
-}
-
-/// Injection réservée au banc d'intégration T1006. Cette surface est absente
-/// des builds distribués ; elle force le wrapper de production à construire
-/// réellement les options Codex/Claude/ACP autour du serveur MCP épinglé.
-#[cfg(feature = "test-support")]
-fn smoke_mcp_server_entry() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
-    let Ok(command) = std::env::var("BRIDGET_TEST_MCP_SERVER_COMMAND") else {
-        return Ok(None);
-    };
-    let args = match std::env::var("BRIDGET_TEST_MCP_SERVER_ARGS") {
-        Ok(value) => serde_json::from_str::<Vec<String>>(&value)?,
-        Err(std::env::VarError::NotPresent) => Vec::new(),
-        Err(error) => return Err(error.into()),
-    };
-    Ok(Some(serde_json::json!({
-        "name": "bridget",
-        "type": "stdio",
-        "command": command,
-        "args": args,
-        "env": []
-    })))
-}
-
-/// Configuration MCP Claude temporaire. Le fichier n'appartient jamais à la
-/// configuration utilisateur : il vit sous le répertoire d'état Bridget et
-/// le garde le retire quelle que soit l'issue du lancement.
-struct EphemeralMcpConfig {
-    path: PathBuf,
-}
-
-impl EphemeralMcpConfig {
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for EphemeralMcpConfig {
-    fn drop(&mut self) {
-        if let Err(error) = std::fs::remove_file(&self.path)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            warn!(
-                "nettoyage de la configuration MCP éphémère impossible {}: {}",
-                self.path.display(),
-                error
-            );
-        }
-    }
-}
-
-fn claude_mcp_config(
-    server: &serde_json::Value,
-    instance_id: &str,
-) -> Result<EphemeralMcpConfig, Box<dyn std::error::Error>> {
-    let socket = socket_path();
-    let directory = socket
-        .parent()
-        .ok_or("répertoire socket Bridget absent")?;
-    claude_mcp_config_in(directory, server, instance_id)
-}
-
-fn claude_mcp_config_in(
-    directory: &Path,
-    server: &serde_json::Value,
-    instance_id: &str,
-) -> Result<EphemeralMcpConfig, Box<dyn std::error::Error>> {
-    std::fs::create_dir_all(directory)?;
-    let path = directory.join(format!("mcp-{instance_id}.json"));
-    // `mcpServers` de Claude Code n'est pas l'enveloppe ACP : il attend une
-    // définition stdio indexée par son nom, sans les champs ACP `name`/`env`.
-    let command = server["command"].as_str().ok_or("commande MCP absente")?;
-    let args = server["args"].clone();
-    std::fs::write(&path, serde_json::to_vec(&serde_json::json!({
-        "mcpServers": {
-            "bridget": { "type": "stdio", "command": command, "args": args }
-        }
-    }))?)?;
-    Ok(EphemeralMcpConfig { path })
-}
-
-fn codex_mcp_override(server: &serde_json::Value) -> Result<String, Box<dyn std::error::Error>> {
-    let command = server["command"].as_str().ok_or("commande MCP absente")?;
-    Ok(format!("mcp_servers.bridget={{command={command:?},args=[\"mcp\"]}}"))
-}
-
-fn validate_wrapper_args(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    for argument in arguments {
-        // Rejeter les tentatives d'injection de commandes.
-        if argument.contains(';') || argument.contains('&') || argument.contains('|') || argument.contains('$') {
-            return Err(format!(
-                "Argument non autorisé contient des caractères shell dangereux: '{}'",
-                argument
-            )
-            .into());
-        }
-    }
-    Ok(())
 }
 
 fn send_wrapper_message(
@@ -2044,6 +2294,7 @@ fn forward_acp_events(
     writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
     my_name: &str,
     events: Vec<AcpEvent>,
+    idempotent_deliveries: &mut IdempotentDeliveryTracker,
 ) -> bool {
     let mut journal_failed = false;
     for event in events {
@@ -2082,6 +2333,9 @@ fn forward_acp_events(
             }
             AcpEvent::DeliveryRejected { message_id, reason } => {
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
+                if let Some(report) = idempotent_deliveries.injection_rejected(&message_id) {
+                    send_wrapper_message(writer, report);
+                }
                 send_wrapper_message(
                     writer,
                     WrapperToDaemon::DeliveryRejected {
@@ -2094,8 +2348,13 @@ fn forward_acp_events(
                 journal_failed = true;
                 warn!("arrêt du transport ACP : {detail}");
             }
-            // T1206b raccordera cette frontière durable au receipt_store.
-            AcpEvent::PromptDispatched { .. } => {}
+            AcpEvent::PromptDispatched { message_id } => {
+                if let Some(report) =
+                    idempotent_deliveries.prompt_dispatched(&message_id, unix_now_secs())
+                {
+                    send_wrapper_message(writer, report);
+                }
+            }
             AcpEvent::Update { .. } | AcpEvent::Error { .. } => {}
         }
     }
@@ -2104,30 +2363,6 @@ fn forward_acp_events(
 
 fn stop_reason_is_error(stop_reason: &str) -> bool {
     matches!(stop_reason, "error" | "failed" | "failure")
-}
-
-#[cfg(test)]
-mod prompt_tests {
-    use super::interactive_bridget_prompt;
-
-    const BEFORE: &str = include_str!("../tests/fixtures/prompts/v1-before.txt");
-    const AFTER: &str = include_str!("../tests/fixtures/prompts/v1-after.txt");
-
-    #[test]
-    fn prompt_mcp_produit_exactement_la_fixture_reduite_versionnee() {
-        assert_eq!(
-            interactive_bridget_prompt("agent-fixture", true),
-            AFTER.trim_end_matches('\n')
-        );
-    }
-
-    #[test]
-    fn prompt_sans_mcp_conserve_exactement_le_bloc_historique() {
-        assert_eq!(
-            interactive_bridget_prompt("agent-fixture", false),
-            BEFORE.trim_end_matches('\n')
-        );
-    }
 }
 
 #[cfg(test)]
@@ -2141,53 +2376,214 @@ fn journal_failure_requires_shutdown(events: &[AcpEvent]) -> bool {
 mod reconnect_tests {
     use super::*;
 
-    fn mcp_test_root(label: &str) -> PathBuf {
+    fn relay_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("bridget-relay-{name}-{}", std::process::id()))
+    }
+
+    fn receipt_root(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "bridget-mcp-wrapper-{label}-{}-{}",
+            "bridget-receipt-wrapper-{name}-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ))
     }
 
-    fn user_config_snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
-        fn visit(root: &Path, directory: &Path, snapshot: &mut BTreeMap<PathBuf, Vec<u8>>) {
-            let Ok(entries) = std::fs::read_dir(directory) else {
-                return;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    visit(root, &path, snapshot);
-                } else if path.is_file() {
-                    snapshot.insert(
-                        path.strip_prefix(root).unwrap().to_path_buf(),
-                        std::fs::read(&path).unwrap(),
-                    );
-                }
-            }
-        }
-
-        let mut snapshot = BTreeMap::new();
-        for relative in [".claude", ".codex", ".gemini"] {
-            visit(root, &root.join(relative), &mut snapshot);
-        }
-        snapshot
+    fn idempotent_message(id: &str) -> bridget_core::BridgetMessage {
+        let mut message = bridget_core::BridgetMessage::new("maicie", "equipier", "tâche");
+        message.id = id.to_string();
+        message
     }
 
-    fn write_user_config_sentinels(root: &Path) {
-        for (relative, contents) in [
-            (".claude/settings.json", b"claude-user-config".as_slice()),
-            (".codex/config.toml", b"codex-user-config".as_slice()),
-            (".gemini/settings.json", b"gemini-user-config".as_slice()),
-        ] {
-            let path = root.join(relative);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, contents).unwrap();
-        }
+    #[test]
+    fn redelivery_after_seen_never_injects_a_second_prompt() {
+        let root = receipt_root("seen");
+        let instance_id = "instance_012_aaaaaaaaaaaa";
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, instance_id).unwrap();
+        let first_action = tracker.receive(
+            "delivery_seen".to_string(),
+            instance_id.to_string(),
+            17,
+            500,
+            idempotent_message("prompt-unique"),
+            100,
+        );
+        assert!(matches!(
+            first_action,
+            IdempotentDeliveryAction::Inject { .. }
+        ));
+
+        // Simule le redémarrage du daemon après remise mais avant son issue :
+        // le wrapper vivant revoit la même remise et ne peut pas la réinjecter.
+        let redelivery = tracker.receive(
+            "delivery_seen".to_string(),
+            instance_id.to_string(),
+            17,
+            500,
+            idempotent_message("prompt-unique"),
+            101,
+        );
+        assert!(matches!(
+            redelivery,
+            IdempotentDeliveryAction::Report(WrapperToDaemon::DeliveryIndeterminate {
+                delivery_id,
+                delivery_generation: 17,
+            }) if delivery_id == "delivery_seen"
+        ));
+        drop(tracker);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
-    fn relay_root(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("bridget-relay-{name}-{}", std::process::id()))
+    #[test]
+    fn replaced_instance_is_indeterminate_without_injection() {
+        let root = receipt_root("replaced");
+        let mut tracker =
+            IdempotentDeliveryTracker::open_at(&root, "instance_012_newwrapper").unwrap();
+        let action = tracker.receive(
+            "delivery_replaced".to_string(),
+            "instance_012_oldwrapper".to_string(),
+            29,
+            500,
+            idempotent_message("prompt-replaced"),
+            100,
+        );
+        assert!(matches!(
+            action,
+            IdempotentDeliveryAction::Report(WrapperToDaemon::DeliveryIndeterminate {
+                delivery_id,
+                delivery_generation: 29,
+            }) if delivery_id == "delivery_replaced"
+        ));
+        drop(tracker);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prompt_dispatched_persists_the_ack_before_reporting_it() {
+        let root = receipt_root("ack");
+        let instance_id = "instance_012_aaaaaaaaaaaa";
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, instance_id).unwrap();
+        assert!(matches!(
+            tracker.receive(
+                "delivery_acked".to_string(),
+                instance_id.to_string(),
+                31,
+                500,
+                idempotent_message("prompt-acked"),
+                100,
+            ),
+            IdempotentDeliveryAction::Inject { .. }
+        ));
+        assert!(matches!(
+            tracker.prompt_dispatched("prompt-acked", 101),
+            Some(WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation: 31,
+            }) if delivery_id == "delivery_acked"
+        ));
+        assert!(matches!(
+            tracker.receive(
+                "delivery_acked".to_string(),
+                instance_id.to_string(),
+                31,
+                500,
+                idempotent_message("prompt-acked"),
+                102,
+            ),
+            IdempotentDeliveryAction::Report(WrapperToDaemon::DeliverAcked { .. })
+        ));
+        drop(tracker);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn same_message_id_from_two_scopes_keeps_each_delivery_acknowledgement() {
+        let root = receipt_root("same-message-id");
+        let instance_id = "instance_012_aaaaaaaaaaaa";
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, instance_id).unwrap();
+        for (delivery_id, generation) in [("delivery_scope_a", 41), ("delivery_scope_b", 43)] {
+            assert!(matches!(
+                tracker.receive(
+                    delivery_id.to_string(),
+                    instance_id.to_string(),
+                    generation,
+                    500,
+                    idempotent_message("same-client-message-id"),
+                    100,
+                ),
+                IdempotentDeliveryAction::Inject { .. }
+            ));
+        }
+        assert!(matches!(
+            tracker.prompt_dispatched("same-client-message-id", 101),
+            Some(WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation: 41,
+            }) if delivery_id == "delivery_scope_a"
+        ));
+        assert!(matches!(
+            tracker.prompt_dispatched("same-client-message-id", 102),
+            Some(WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation: 43,
+            }) if delivery_id == "delivery_scope_b"
+        ));
+        drop(tracker);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn historic_and_idempotent_same_message_id_keep_dispatch_order() {
+        let root = receipt_root("historic-order");
+        let instance_id = "instance_012_aaaaaaaaaaaa";
+        let message_id = "same-historic-and-idempotent";
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, instance_id).unwrap();
+        tracker.record_historic(message_id);
+        assert!(matches!(
+            tracker.receive(
+                "delivery_after_historic".to_string(),
+                instance_id.to_string(),
+                47,
+                500,
+                idempotent_message(message_id),
+                100,
+            ),
+            IdempotentDeliveryAction::Inject { .. }
+        ));
+        assert!(tracker.prompt_dispatched(message_id, 101).is_none());
+        assert!(matches!(
+            tracker.prompt_dispatched(message_id, 102),
+            Some(WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation: 47,
+            }) if delivery_id == "delivery_after_historic"
+        ));
+        drop(tracker);
+
+        let root_reverse = receipt_root("idempotent-order");
+        let mut reverse = IdempotentDeliveryTracker::open_at(&root_reverse, instance_id).unwrap();
+        assert!(matches!(
+            reverse.receive(
+                "delivery_before_historic".to_string(),
+                instance_id.to_string(),
+                53,
+                500,
+                idempotent_message(message_id),
+                100,
+            ),
+            IdempotentDeliveryAction::Inject { .. }
+        ));
+        reverse.record_historic(message_id);
+        assert!(matches!(
+            reverse.prompt_dispatched(message_id, 101),
+            Some(WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation: 53,
+            }) if delivery_id == "delivery_before_historic"
+        ));
+        assert!(reverse.prompt_dispatched(message_id, 102).is_none());
+        drop(reverse);
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(root_reverse).unwrap();
     }
 
     fn relay_emitter() -> (RelayEvents, RelayEmitter) {
@@ -2222,7 +2618,6 @@ mod reconnect_tests {
             permissions: "allow".to_string(),
             queue_capacity: 32,
             notify_timeout_secs: 600,
-            mcp: crate::registry::McpDefinition::default(),
         }
     }
 
@@ -2295,53 +2690,6 @@ mod reconnect_tests {
         ]);
         assert!(equipier);
         assert_eq!(remaining, vec!["resume", "session"]);
-    }
-
-    #[test]
-    fn branchement_mcp_n_ecrit_aucune_configuration_utilisateur() {
-        let root = mcp_test_root("config-vide");
-        write_user_config_sentinels(&root);
-        let before = user_config_snapshot(&root);
-        let server = mcp_server_entry().unwrap();
-
-        // Codex reçoit une surcharge de session, Claude un fichier sous l'état
-        // Bridget, Gemini reste explicitement sans branchement interactif et
-        // l'équipier ACP ne reçoit qu'une valeur `mcpServers` en mémoire.
-        let override_ = codex_mcp_override(&server).unwrap();
-        assert!(override_.contains("mcp_servers.bridget"));
-        let config = claude_mcp_config_in(&root.join(".cache/bridget"), &server, "fixture")
-            .unwrap();
-        assert!(config.path().exists());
-        let claude = serde_json::from_slice::<serde_json::Value>(
-            &std::fs::read(config.path()).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(claude["mcpServers"]["bridget"]["type"], "stdio");
-        assert!(claude["mcpServers"]["bridget"].get("name").is_none());
-        assert!(claude["mcpServers"]["bridget"].get("env").is_none());
-        assert_eq!(server["name"], "bridget");
-        drop(config);
-
-        assert_eq!(user_config_snapshot(&root), before);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn fichier_mcp_ephemere_est_nettoye_avant_un_refus_de_spawn() {
-        let root = mcp_test_root("refus-avant-spawn");
-        write_user_config_sentinels(&root);
-        let before = user_config_snapshot(&root);
-        let server = mcp_server_entry().unwrap();
-        let config = claude_mcp_config_in(&root.join(".cache/bridget"), &server, "refused")
-            .unwrap();
-        let path = config.path().to_path_buf();
-
-        assert!(validate_wrapper_args(&["interdit;".to_string()]).is_err());
-        drop(config);
-
-        assert!(!path.exists(), "le garde nettoie le fichier avant le spawn");
-        assert_eq!(user_config_snapshot(&root), before);
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2437,6 +2785,187 @@ mod reconnect_tests {
     }
 
     #[test]
+    fn bascule_snapshot_vers_live_preserve_la_continuite_sans_doublon() {
+        let journal_root = relay_root("bascule-live");
+        let root = journal_root.join("agent-live");
+        std::fs::create_dir_all(&root).unwrap();
+        let date = current_host_date();
+        std::fs::write(root.join(format!("{date}.jsonl")), b"{\"v\":1,\"seq\":1}\n").unwrap();
+        let feed = JournalLiveFeed::default();
+        let journal_events = Arc::new(Mutex::new(VecDeque::new()));
+        let writer = JournalWriter::start_with_live_feed(
+            &journal_root,
+            "agent-live",
+            "session-live",
+            journal_events,
+            Some(feed.clone()),
+        )
+        .unwrap();
+        let (events, emitter) = relay_emitter();
+        let mut worker = AttachRelayWorker::start_with_live(
+            root.clone(),
+            date,
+            4,
+            feed.clone(),
+            emitter,
+            AttachRelayHooks::default(),
+        );
+        worker
+            .subscribe("sub-live".to_string(), AttachWindow::Seq(0))
+            .unwrap();
+        wait_for(|| {
+            let messages = events.lock().unwrap();
+            messages.iter().any(|message| {
+                matches!(message, WrapperToDaemon::SnapshotCaughtUp { subscription_id, through_seq: Some(1) } if subscription_id == "sub-live")
+            })
+        });
+
+        writer
+            .enqueue("update", None, serde_json::json!({"content":"live"}))
+            .unwrap();
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| {
+                matches!(
+                    message,
+                    WrapperToDaemon::LiveJournalFragment {
+                        seq: 2,
+                        final_fragment: true,
+                        ..
+                    }
+                )
+            })
+        });
+
+        let seqs = events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|message| match message {
+                WrapperToDaemon::JournalFragment {
+                    subscription_id,
+                    seq,
+                    final_fragment: true,
+                    ..
+                } if subscription_id == "sub-live" => Some(*seq),
+                WrapperToDaemon::LiveJournalFragment {
+                    seq,
+                    final_fragment: true,
+                    ..
+                } => Some(*seq),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(seqs, vec![1, 2]);
+        assert!(!events.lock().unwrap().iter().any(|message| matches!(
+            message,
+            WrapperToDaemon::Gap { subscription_id, .. } if subscription_id == "sub-live"
+        )));
+        writer.stop();
+        worker.shutdown();
+        std::fs::remove_dir_all(journal_root).unwrap();
+    }
+
+    #[test]
+    fn perte_du_flux_live_signale_un_gap_puis_rattrape_le_journal() {
+        let journal_root = relay_root("gap-live");
+        let root = journal_root.join("agent-gap");
+        std::fs::create_dir_all(&root).unwrap();
+        let date = current_host_date();
+        let path = root.join(format!("{date}.jsonl"));
+        std::fs::write(&path, b"{\"v\":1,\"seq\":1}\n").unwrap();
+        let feed = JournalLiveFeed::new(1);
+        let journal_events = Arc::new(Mutex::new(VecDeque::new()));
+        let writer = JournalWriter::start_with_live_feed(
+            &journal_root,
+            "agent-gap",
+            "session-gap",
+            journal_events,
+            Some(feed.clone()),
+        )
+        .unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let arm = Arc::new(AtomicBool::new(false));
+        let worker_barrier = Arc::clone(&barrier);
+        let worker_arm = Arc::clone(&arm);
+        let hooks = AttachRelayHooks {
+            before_live_read: Arc::new(move || {
+                if worker_arm.swap(false, Ordering::SeqCst) {
+                    worker_barrier.wait();
+                    worker_barrier.wait();
+                }
+            }),
+            ..AttachRelayHooks::default()
+        };
+        let (events, emitter) = relay_emitter();
+        let mut worker = AttachRelayWorker::start_with_live(
+            root.clone(),
+            date,
+            4,
+            feed.clone(),
+            emitter,
+            hooks,
+        );
+        worker
+            .subscribe("sub-gap".to_string(), AttachWindow::Seq(0))
+            .unwrap();
+        wait_for(|| {
+            events.lock().unwrap().iter().any(|message| {
+                matches!(message, WrapperToDaemon::SnapshotCaughtUp { subscription_id, through_seq: Some(1) } if subscription_id == "sub-gap")
+            })
+        });
+
+        arm.store(true, Ordering::SeqCst);
+        barrier.wait();
+        writer
+            .enqueue("update", None, serde_json::json!({"content":"deux"}))
+            .unwrap();
+        writer
+            .enqueue("update", None, serde_json::json!({"content":"trois"}))
+            .unwrap();
+        writer.stop();
+        barrier.wait();
+
+        wait_for(|| {
+            let messages = events.lock().unwrap();
+            messages.iter().any(|message| {
+                matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 3, final_fragment: true, .. } if subscription_id == "sub-gap")
+            })
+        });
+        let messages = events.lock().unwrap();
+        let gaps = messages
+            .iter()
+            .filter(|message| {
+                matches!(
+                    message,
+                    WrapperToDaemon::Gap {
+                        subscription_id,
+                        from_seq: 2,
+                        to_seq: 3,
+                        reason: Some(reason),
+                    } if subscription_id == "sub-gap" && reason == "live_feed_overrun"
+                )
+            })
+            .count();
+        assert_eq!(gaps, 1, "la perte mémoire doit être coalescée");
+        let seqs = messages
+            .iter()
+            .filter_map(|message| match message {
+                WrapperToDaemon::JournalFragment {
+                    subscription_id,
+                    seq,
+                    final_fragment: true,
+                    ..
+                } if subscription_id == "sub-gap" => Some(*seq),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(seqs, vec![1, 2, 3]);
+        drop(messages);
+        worker.shutdown();
+        std::fs::remove_dir_all(journal_root).unwrap();
+    }
+
+    #[test]
     fn relais_refuse_la_saturation_et_le_controle_passe_pendant_un_rejeu_suspendu() {
         let root = relay_root("controle");
         std::fs::create_dir_all(&root).unwrap();
@@ -2454,6 +2983,7 @@ mod reconnect_tests {
                     barrier_for_worker.wait();
                 }
             }),
+            before_live_read: Arc::new(|| {}),
             control_observed: Arc::new(move || {
                 let _ = control_sender.send(());
             }),
@@ -2746,6 +3276,7 @@ mod reconnect_tests {
             root.clone(),
             clock,
             4,
+            None,
             emitter,
             AttachRelayHooks::default(),
         );
