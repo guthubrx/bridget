@@ -55,6 +55,7 @@ pub enum AcpEvent {
 }
 
 type Waiters = Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>;
+type Writer = Arc<Mutex<Option<ChildStdin>>>;
 
 struct QueueState {
     messages: VecDeque<BridgetMessage>,
@@ -64,7 +65,7 @@ struct QueueState {
 
 struct TurnWorker {
     queue: Arc<(Mutex<QueueState>, Condvar)>,
-    writer: Arc<Mutex<ChildStdin>>,
+    writer: Writer,
     waiters: Waiters,
     next_id: Arc<AtomicU64>,
     alive: Arc<AtomicBool>,
@@ -82,7 +83,7 @@ pub struct AcpTransport {
     events: Arc<Mutex<VecDeque<AcpEvent>>>,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     queue_capacity: usize,
-    writer: Arc<Mutex<ChildStdin>>,
+    writer: Writer,
     session_id: String,
     child: Arc<Mutex<Child>>,
     reader_handle: Mutex<Option<thread::JoinHandle<()>>>,
@@ -117,7 +118,7 @@ impl AcpTransport {
         let alive = Arc::new(AtomicBool::new(true));
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let response = Arc::new(Mutex::new(String::new()));
-        let writer = Arc::new(Mutex::new(stdin));
+        let writer = Arc::new(Mutex::new(Some(stdin)));
         let waiters: Waiters = Arc::new(Mutex::new(HashMap::new()));
         let next_id = Arc::new(AtomicU64::new(1));
         let queue = Arc::new((
@@ -279,6 +280,10 @@ impl AcpTransport {
                 "params": { "sessionId": self.session_id }
             }),
         );
+        self.writer
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take();
         let mut child = self.child.lock().unwrap_or_else(|err| err.into_inner());
         let _ = child.kill();
         let _ = child.wait();
@@ -454,7 +459,7 @@ fn finish_turn(
 #[allow(clippy::too_many_arguments)]
 fn spawn_reader(
     stdout: ChildStdout,
-    writer: Arc<Mutex<ChildStdin>>,
+    writer: Writer,
     waiters: Waiters,
     events: Arc<Mutex<VecDeque<AcpEvent>>>,
     response: Arc<Mutex<String>>,
@@ -561,7 +566,7 @@ fn drain_queue(queue: &mut QueueState, events: &Arc<Mutex<VecDeque<AcpEvent>>>, 
 }
 
 fn prompt_request(
-    writer: &Arc<Mutex<ChildStdin>>,
+    writer: &Writer,
     waiters: &Waiters,
     next_id: &AtomicU64,
     method: &str,
@@ -595,7 +600,7 @@ fn prompt_request(
 }
 
 fn request(
-    writer: &Arc<Mutex<ChildStdin>>,
+    writer: &Writer,
     waiters: &Waiters,
     next_id: &AtomicU64,
     method: &str,
@@ -684,10 +689,11 @@ fn fail_waiters(waiters: &Waiters, reason: &str) {
     }
 }
 
-fn write_json(writer: &Arc<Mutex<ChildStdin>>, value: Value) -> Result<(), TransportError> {
+fn write_json(writer: &Writer, value: Value) -> Result<(), TransportError> {
     let mut writer = writer
         .lock()
         .map_err(|err| TransportError::Io(err.to_string()))?;
+    let writer = writer.as_mut().ok_or(TransportError::AgentDead)?;
     writeln!(writer, "{value}").map_err(|err| TransportError::Io(err.to_string()))?;
     writer
         .flush()
@@ -999,5 +1005,67 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             }
         }
         panic!("le faux adaptateur n'a pas terminé le tour");
+    }
+
+    #[test]
+    fn false_adapter_handles_permission_during_a_prompt() {
+        let script = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read request
+echo '{"jsonrpc":"2.0","id":"permission-1","method":"session/request_permission","params":{"sessionId":"fixture-session","options":[{"optionId":"allow-1","kind":"allow_once"}]}}'
+read permission
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+"#;
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            queue_capacity: 2,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+        })
+        .unwrap();
+        transport.deliver(&message("permission-message")).unwrap();
+        for _ in 0..20 {
+            thread::sleep(Duration::from_millis(10));
+            if transport
+                .drain_events()
+                .iter()
+                .any(|event| matches!(event, AcpEvent::TurnFinished { .. }))
+            {
+                return;
+            }
+        }
+        panic!("la permission pendant le prompt n'a pas été traitée");
+    }
+
+    #[test]
+    fn false_adapter_eof_rejects_an_active_turn() {
+        let script = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read request
+exit 0
+"#;
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            queue_capacity: 2,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+        })
+        .unwrap();
+        transport.deliver(&message("eof-message")).unwrap();
+        for _ in 0..20 {
+            thread::sleep(Duration::from_millis(10));
+            if transport.drain_events().iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, reason } if message_id == "eof-message" && reason.contains("EOF ACP"))) {
+                return;
+            }
+        }
+        panic!("EOF actif non propagé au tour");
     }
 }
