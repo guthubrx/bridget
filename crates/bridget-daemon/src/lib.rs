@@ -2,6 +2,7 @@ pub mod attach;
 pub mod cli;
 pub mod daemon;
 pub mod desired_state;
+pub mod fleet;
 pub mod idempotency;
 pub mod managers;
 pub mod managed_process;
