@@ -743,9 +743,10 @@ fn recovery_prepared_reprend_le_dispatch_apres_crash_daemon() {
 }
 
 #[test]
-fn vrai_wrapper_acp_compte_un_prompt_a_travers_le_redemarrage_daemon() {
+fn recovery_terminal_acked_vrai_wrapper_rejoue_sans_second_prompt() {
     let root = test_root("acp-daemon-restart");
-    let daemon = spawn_daemon(&root, None);
+    let (sync, marker) = checkpoint_root(&root, "after_delivery_acked");
+    let daemon = spawn_daemon(&root, Some(&sync));
     let socket_path = socket(&root);
     let (registry, registry_root, counter) = registry_with_counting_acp_agent();
     let wrapper_home = registry_root.join("wrapper-home");
@@ -783,12 +784,15 @@ fn vrai_wrapper_acp_compte_un_prompt_a_travers_le_redemarrage_daemon() {
         }
     ));
     wait_for_counter(&counter, 1);
-    wait_for_accepted(&socket_path, &command);
+    // L'accusé provient du wrapper réel. Le jalon est atteint après son
+    // commit durable, mais avant que le daemon puisse poursuivre son cycle.
+    watch_marker(&sync, &marker);
 
     daemon.stop();
     let restarted = spawn_daemon(&root, None);
     let socket_path = socket(&root);
     wait_for_registered_agent(&socket_path, "acp-recipient");
+    wait_for_accepted(&socket_path, &command);
     thread::sleep(Duration::from_millis(250));
     assert_eq!(fs::read(&counter).expect("compteur ACP"), b"x");
     restarted.stop();

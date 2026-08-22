@@ -77,7 +77,7 @@ auteur ≠ relecteur.
   **Observable** : crash daemon après remise avant issue → redélivrance, un
   seul prompt ; rename/nouveau wrapper même nom → indéterminée.
 
-- [ ] **T1207** Lookup + finalisation `Accepted` sur accusé : résultat calculé
+- [x] **T1207** Lookup + finalisation `Accepted` sur accusé : résultat calculé
   aux 4 états, `OutcomeUnknown` en vol, `expires_at` retourné, `Accepted`
   écrit seulement sur `DeliverAcked`.
   **Observable** : les 4 états testés + « retry en vol → Unknown rejoué puis
