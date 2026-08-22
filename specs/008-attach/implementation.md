@@ -5,10 +5,10 @@
 - **Date** : 2026-08-22
 - **Banc réel** : `sc005_attach_budget::sc005_deux_vues_reelles_ne_degradent_pas_le_p95_d_append_de_plus_de_cinq_pourcent`.
 - **Adaptateur** : faux adaptateur ACP stdio déterministe, selon le mécanisme
-  introduit par T704 ; chaque phase exécute 20 tours de chauffe puis 200 tours
-  identiques mesurés. Les phases sont appariées dans le même daemon et le même
-  wrapper ; la charge avance sur la frontière d'append, sans être cadencée par
-  la réception des vues.
+  introduit par T704. Deux harness réels et simultanés exécutent chacun 100
+  tours de chauffe puis 1 000 tours mesurés : l'un sans vue, l'autre avec deux
+  vues. Les tours sont entrelacés en ordre AB/BA afin que chaque condition
+  subisse le même état de chauffe et la même charge machine.
 - **Métrique** : durée physique de `SessionJournal::append_entry`, relevée dans
   le thread écrivain du journal par une instrumentation limitée aux tests et
   aux événements `turn_start`/`turn_end`. Dans le cas observé, deux connexions
@@ -20,18 +20,32 @@ publié sans blocage après le flush puis multiplexé par le daemon. Le journal
 reste l'autorité du rejeu ; une saturation mémoire produit un `Gap` coalescé
 et un rattrapage disque. Le fichier du jour reste ouvert jusqu'à sa rotation.
 
-Résultat reproductible de deux exécutions complètes :
+Avant le correctif, le banc réel séquentiel avait exposé une régression
+systématique : environ 97 µs contre 297 µs (+206 %) puis 90 µs contre
+316 µs (+251 %). Le premier banc post-correctif restait sensible au
+démarrage à froid parce qu'il mesurait ses deux conditions en blocs successifs.
+
+Résultat final de six exécutions entrelacées consécutives :
 
 | Campagne | Vues attach réelles | Échantillons d'append | p95 |
 | --- | ---: | ---: | ---: |
-| 1 | 0 | 400 | 30,792 µs |
-| 1 | 2 | 400 | 30,333 µs |
-| 2 | 0 | 400 | 38,292 µs |
-| 2 | 2 | 400 | 28,208 µs |
+| 1 | 0 | 2 000 | 24,958 µs |
+| 1 | 2 | 2 000 | 24,250 µs |
+| 2 | 0 | 2 000 | 22,958 µs |
+| 2 | 2 | 2 000 | 22,417 µs |
+| 3 | 0 | 2 000 | 23,375 µs |
+| 3 | 2 | 2 000 | 23,958 µs |
+| 4 | 0 | 2 000 | 23,959 µs |
+| 4 | 2 | 2 000 | 23,291 µs |
+| 5 | 0 | 2 000 | 21,542 µs |
+| 5 | 2 | 2 000 | 21,875 µs |
+| 6 | 0 | 2 000 | 22,292 µs |
+| 6 | 2 | 2 000 | 23,375 µs |
 
-Le critère SC-005 (< 5 %) passe dans les deux exécutions : les variations
-mesurées sont respectivement de -1,5 % et -26,3 %. Le timeout global de
-30 secondes et le seuil contractuel restent inchangés.
+Le critère SC-005 (< 5 %) passe dans les six exécutions. Les variations sont
+respectivement de -2,8 %, -2,4 %, +2,5 %, -2,8 %, +1,5 % et +4,9 %. Le seuil
+contractuel reste inchangé ; le timeout global de 60 secondes ne sert qu'à
+faire échouer proprement un banc bloqué.
 
 **Dérogation T806a** : cette tâche a été commitée tandis que l'ancien banc à
   vues simulées était invalidé. Le banc réel qui le remplace est maintenant
