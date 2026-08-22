@@ -192,6 +192,9 @@ impl IdempotencyStore {
         if issued_at > now.saturating_add(issued_at_tolerance_secs.max(0)) {
             return Err(IdempotencyError::InvalidIssuedAt);
         }
+        if let Some(replay) = self.replay_existing(key, canonical_bytes, now)? {
+            return Ok(replay);
+        }
         if horizon_secs <= 0 {
             return Err(IdempotencyError::InvalidHorizon);
         }
@@ -221,14 +224,8 @@ impl IdempotencyStore {
             return Ok(Reservation::Prepared { expires_at });
         }
 
-        let record = self.load_record(key)?.ok_or(IdempotencyError::MissingRecord)?;
-        if record.expires_at <= now {
-            return Ok(Reservation::IdempotencyExpired);
-        }
-        if record.canonical_bytes != canonical_bytes {
-            return Ok(Reservation::EnvelopeMismatch);
-        }
-        Ok(Reservation::Replayed(record.lookup_result()?))
+        self.replay_existing(key, canonical_bytes, now)?
+            .ok_or(IdempotencyError::MissingRecord)
     }
 
     pub fn lookup(&self, key: &IdempotencyKey, now: i64) -> Result<LookupResult, IdempotencyError> {
@@ -338,6 +335,24 @@ impl IdempotencyStore {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    fn replay_existing(
+        &self,
+        key: &IdempotencyKey,
+        canonical_bytes: &[u8],
+        now: i64,
+    ) -> Result<Option<Reservation>, IdempotencyError> {
+        let Some(record) = self.load_record(key)? else {
+            return Ok(None);
+        };
+        if record.expires_at <= now {
+            return Ok(Some(Reservation::IdempotencyExpired));
+        }
+        if record.canonical_bytes != canonical_bytes {
+            return Ok(Some(Reservation::EnvelopeMismatch));
+        }
+        Ok(Some(Reservation::Replayed(record.lookup_result()?)))
     }
 }
 
@@ -496,6 +511,29 @@ mod tests {
         assert!(matches!(store.lookup(&key(), NOW + HORIZON - 1).unwrap(), LookupResult::OutcomeUnknown { .. }));
         assert_eq!(store.purge_expired(NOW + HORIZON).unwrap(), 1);
         assert_eq!(store.lookup(&key(), NOW + HORIZON).unwrap(), LookupResult::IdempotencyExpired);
+    }
+
+    #[test]
+    fn retry_keeps_the_original_horizon_after_a_configuration_drop() {
+        let store = IdempotencyStore::open_in_memory().unwrap();
+        assert!(matches!(reserve(&store, b"canon"), Reservation::Prepared { .. }));
+        assert_eq!(
+            store.reserve(&key(), b"canon", NOW, 10, NOW + 11, 30).unwrap(),
+            Reservation::Replayed(LookupResult::OutcomeUnknown { expires_at: NOW + HORIZON })
+        );
+    }
+
+    #[test]
+    fn invalid_horizons_are_refused_for_a_first_reservation() {
+        let store = IdempotencyStore::open_in_memory().unwrap();
+        assert!(matches!(
+            store.reserve(&key(), b"zero", NOW, 0, NOW, 30),
+            Err(IdempotencyError::InvalidHorizon)
+        ));
+        assert!(matches!(
+            store.reserve(&key(), b"negative", NOW, -1, NOW, 30),
+            Err(IdempotencyError::InvalidHorizon)
+        ));
     }
 
     #[test]
