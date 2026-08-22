@@ -352,7 +352,32 @@ fn connect_and_register(
     domain: Option<&str>,
     turn_in_progress: bool,
 ) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
-    let stream = UnixStream::connect(socket_path()).map_err(|e| e.to_string())?;
+    connect_and_register_at(
+        &socket_path(),
+        agent_type,
+        name,
+        host,
+        transport,
+        os,
+        instance_id,
+        domain,
+        turn_in_progress,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn connect_and_register_at(
+    socket: &std::path::Path,
+    agent_type: &str,
+    name: Option<&str>,
+    host: &str,
+    transport: &str,
+    os: &str,
+    instance_id: &str,
+    domain: Option<&str>,
+    turn_in_progress: bool,
+) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
+    let stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
     set_cloexec(&stream);
     let read_stream = stream.try_clone().map_err(|e| e.to_string())?;
     set_cloexec(&read_stream);
@@ -888,17 +913,34 @@ fn launch_acp(
     agent_args: &[String],
     explicit_name: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let registry = crate::registry::AgentRegistry::load()?;
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or("HOME absent pour le journal de session ACP")?;
+    launch_acp_with(agent_type, agent_args, explicit_name, &registry, &socket_path(), &home)
+}
+
+/// Lance un équipier ACP avec ses dépendances de configuration et de chemins
+/// explicites. Le flux de production passe par [`launch_acp`]; cette variante
+/// rend le même chemin vérifiable avec un registre et un daemon temporaires.
+pub fn launch_acp_with(
+    agent_type: &str,
+    agent_args: &[String],
+    explicit_name: Option<&str>,
+    registry: &crate::registry::AgentRegistry,
+    socket: &std::path::Path,
+    home: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     if !agent_args.is_empty() {
         return Err("le mode --equipier n'accepte pas d'arguments d'agent".into());
     }
-    let registry = crate::registry::AgentRegistry::load()?;
     let definition = registry.get(agent_type)?;
     if definition.protocol != "acp" {
         return Err(format!("le type '{agent_type}' n'utilise pas le protocole ACP").into());
     }
     if let Some(error) = forbidden_env_error(
         definition,
-        std::env::var("BRIDGET_ALLOW_API_KEY").ok().as_deref() == Some("1"),
+        allow_api_key_value(std::env::var("BRIDGET_ALLOW_API_KEY").ok().as_deref()),
         |variable| std::env::var_os(variable).is_some(),
     ) {
         return Err(error.into());
@@ -909,7 +951,8 @@ fn launch_acp(
     let os = operating_system();
     let instance_id = uuid::Uuid::new_v4().to_string();
     let initial_domain = effective_name.as_deref().and_then(effective_domain).or_else(derive_domain);
-    let (mut reader, initial_writer, mut my_name) = connect_and_register(
+    let (mut reader, initial_writer, mut my_name) = connect_and_register_at(
+        socket,
         agent_type,
         effective_name.as_deref(),
         &host,
@@ -920,7 +963,7 @@ fn launch_acp(
         false,
     )?;
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
-    let name_state_path = socket_path().parent().unwrap().join("agent-names").join(format!("active-{my_name}"));
+    let name_state_path = socket.parent().unwrap().join("agent-names").join(format!("active-{my_name}"));
     if let Some(parent) = name_state_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -932,9 +975,6 @@ fn launch_acp(
         permissions: definition.permissions.clone(),
         notify_timeout_secs: definition.notify_timeout_secs,
     })?;
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or("HOME absent pour le journal de session ACP")?;
     transport.enable_journal(home.join(".cache/bridget/sessions"), &my_name)?;
 
     loop {
@@ -947,7 +987,7 @@ fn launch_acp(
         let mut line = String::new();
         match reader.read_line(&mut line) {
             Ok(0) => {
-                let Some((new_reader, registered_name)) = reconnect_acp(&writer, &transport, agent_type, &name_state_path, &host, &os, &instance_id, &my_name) else { break; };
+                let Some((new_reader, registered_name)) = reconnect_acp(socket, &writer, &transport, agent_type, &name_state_path, &host, &os, &instance_id, &my_name) else { break; };
                 reader = new_reader;
                 my_name = registered_name;
                 continue;
@@ -968,7 +1008,7 @@ fn launch_acp(
             Err(error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
             Err(error) => {
                 warn!("connexion daemon ACP perdue : {error}");
-                let Some((new_reader, registered_name)) = reconnect_acp(&writer, &transport, agent_type, &name_state_path, &host, &os, &instance_id, &my_name) else { break; };
+                let Some((new_reader, registered_name)) = reconnect_acp(socket, &writer, &transport, agent_type, &name_state_path, &host, &os, &instance_id, &my_name) else { break; };
                 reader = new_reader;
                 my_name = registered_name;
                 continue;
@@ -986,6 +1026,10 @@ fn launch_acp(
     send_wrapper_message(&writer, WrapperToDaemon::TurnState { in_progress: false });
     send_wrapper_message(&writer, WrapperToDaemon::Unregister);
     Ok(())
+}
+
+fn allow_api_key_value(value: Option<&str>) -> bool {
+    value == Some("1")
 }
 
 fn forbidden_env_error(
@@ -1021,14 +1065,14 @@ fn send_wrapper_message(writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>, mess
 }
 
 #[allow(clippy::too_many_arguments)]
-fn reconnect_acp(writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>, transport: &AcpTransport, agent_type: &str, name_state_path: &std::path::Path, host: &str, os: &str, instance_id: &str, fallback_name: &str) -> Option<(BufReader<UnixStream>, String)> {
+fn reconnect_acp(socket: &std::path::Path, writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>, transport: &AcpTransport, agent_type: &str, name_state_path: &std::path::Path, host: &str, os: &str, instance_id: &str, fallback_name: &str) -> Option<(BufReader<UnixStream>, String)> {
     let mut attempts = 0_u32;
     while transport.is_alive() {
         thread::sleep(reconnect_delay(attempts));
         attempts = attempts.saturating_add(1);
         let wanted_name = resolve_current_name(name_state_path, fallback_name);
         let busy = matches!(transport.state(), bridget_transport::TurnState::InProgress { .. });
-        match connect_and_register(agent_type, Some(&wanted_name), host, "acp", os, instance_id, effective_domain(&wanted_name).as_deref(), busy) {
+        match connect_and_register_at(socket, agent_type, Some(&wanted_name), host, "acp", os, instance_id, effective_domain(&wanted_name).as_deref(), busy) {
             Ok((reader, new_writer, registered_name)) if registered_name == wanted_name => {
                 *writer.lock().unwrap_or_else(|error| error.into_inner()) = Some(new_writer);
                 return Some((reader, registered_name));
@@ -1108,11 +1152,23 @@ mod reconnect_tests {
         let error = forbidden_env_error(
             &acp_definition(&["OPENAI_API_KEY", "CODEX_API_KEY"]),
             false,
-            |variable| variable == "CODEX_API_KEY",
+            |variable| matches!(variable, "OPENAI_API_KEY" | "CODEX_API_KEY"),
         )
         .expect("clé API refusée");
-        assert!(error.contains("CODEX_API_KEY"));
+        assert!(error.contains("OPENAI_API_KEY"));
+        assert!(!error.contains("CODEX_API_KEY"));
         assert!(error.contains("BRIDGET_ALLOW_API_KEY=1"));
+    }
+
+    #[test]
+    fn api_key_forbidden_utilise_la_seconde_variable_si_elle_est_seule() {
+        let error = forbidden_env_error(
+            &acp_definition(&["OPENAI_API_KEY", "CODEX_API_KEY"]),
+            false,
+            |variable| variable == "CODEX_API_KEY",
+        )
+        .expect("seconde clé API refusée");
+        assert!(error.contains("CODEX_API_KEY"));
     }
 
     #[test]
@@ -1123,6 +1179,14 @@ mod reconnect_tests {
             |variable| variable == "ANTHROPIC_API_KEY",
         )
         .is_none());
+    }
+
+    #[test]
+    fn seul_le_contournement_egal_a_un_est_accepte() {
+        assert!(allow_api_key_value(Some("1")));
+        for value in [None, Some("0"), Some("true"), Some("01")] {
+            assert!(!allow_api_key_value(value), "valeur non autorisée: {value:?}");
+        }
     }
 
     #[test]
