@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 use crate::acp::AcpEvent;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
@@ -71,7 +71,10 @@ impl JournalWriter {
                         if let Err(error) = journal.append_entry(entry) {
                             let detail = format!("écriture du journal ACP impossible: {error}");
                             *thread_failure.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(detail.clone());
-                            events.lock().unwrap_or_else(|poison| poison.into_inner()).push_back(AcpEvent::Error { detail });
+                            events
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner())
+                                .push_back(AcpEvent::JournalFailed { detail });
                             break;
                         }
                     }
@@ -110,6 +113,19 @@ impl JournalWriter {
             let _ = done_receiver.recv();
         }
         let _ = handle.join();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn saturated_for_test() -> Self {
+        let (sender, receiver) = mpsc::sync_channel(0);
+        // Le récepteur reste volontairement vivant mais ne lit jamais :
+        // try_send doit donc échouer immédiatement avec Full.
+        std::mem::forget(receiver);
+        Self {
+            sender,
+            failure: Arc::new(Mutex::new(None)),
+            handle: Arc::new(Mutex::new(None)),
+        }
     }
 }
 
@@ -190,11 +206,18 @@ fn last_sequence(directory: &Path) -> u64 {
 /// d'un crash. Le fragment reste lisible comme ligne invalide, sans corrompre
 /// l'événement appendé qui le suit.
 fn isolate_partial_tail(path: &Path) -> std::io::Result<()> {
-    let Ok(contents) = fs::read(path) else {
+    let Ok(mut file) = OpenOptions::new().read(true).write(true).open(path) else {
         return Ok(());
     };
-    if !contents.is_empty() && !contents.ends_with(b"\n") {
-        let mut file = OpenOptions::new().append(true).open(path)?;
+    let length = file.metadata()?.len();
+    if length != 0 {
+        file.seek(SeekFrom::End(-1))?;
+        let mut last_byte = [0];
+        file.read_exact(&mut last_byte)?;
+        if last_byte[0] == b'\n' {
+            return Ok(());
+        }
+        file.seek(SeekFrom::End(0))?;
         file.write_all(b"\n")?;
         file.flush()?;
     }
@@ -288,6 +311,24 @@ mod tests {
         assert!(event.get("message_id").is_none());
         assert_eq!(event["payload"], json!({"reason":"global"}));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn writer_emits_a_terminal_event_when_an_append_fails() {
+        let root = root("write-failure");
+        let events = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let writer = JournalWriter::start(&root, "codex-1", "session-1", events.clone()).unwrap();
+        fs::remove_dir_all(root.join("codex-1")).unwrap();
+        writer.enqueue("error", None, json!({"reason":"test"})).unwrap();
+        for _ in 0..20 {
+            if events.lock().unwrap().iter().any(|event| matches!(event, AcpEvent::JournalFailed { .. })) {
+                writer.stop();
+                fs::remove_dir_all(root).unwrap();
+                return;
+            }
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("l'échec d'écriture du journal n'est pas devenu terminal");
     }
 
     #[test]

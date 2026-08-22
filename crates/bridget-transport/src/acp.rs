@@ -56,6 +56,11 @@ pub enum AcpEvent {
     Error {
         detail: String,
     },
+    /// L'écriture append-only est devenue non fiable : le wrapper doit arrêter
+    /// le transport afin de ne jamais continuer avec un journal incomplet.
+    JournalFailed {
+        detail: String,
+    },
 }
 
 type Waiters = Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>;
@@ -569,7 +574,10 @@ fn record_or_terminal(
     payload: Value,
 ) {
     if let Err(detail) = record_journal(journal, event, message_id, payload) {
-        events.lock().unwrap_or_else(|err| err.into_inner()).push_back(AcpEvent::Error { detail });
+        events
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .push_back(AcpEvent::JournalFailed { detail });
     }
 }
 
@@ -1295,6 +1303,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["first", "second"]
         );
+    }
+
+    #[test]
+    fn saturated_journal_becomes_a_terminal_event() {
+        let journal = Arc::new(Mutex::new(Some(crate::journal::JournalWriter::saturated_for_test())));
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        record_or_terminal(&journal, &events, "update", Some("m1"), json!({"kind":"text","content":"x"}));
+        assert!(matches!(events.lock().unwrap().pop_front(), Some(AcpEvent::JournalFailed { detail }) if detail == "journal ACP saturé"));
     }
 
     #[test]

@@ -135,3 +135,9 @@ API pendant cette tentative.
   historique ; les refus asynchrones et annulations sont typés ; le daemon ne
   clôt une demande suivie qu'après livraison réussie et ne contourne DND qu'une
   fois les participants de la demande validés sans mutation.
+
+## T706 — Journal de session JSONL
+
+- **Choix de file** : le canal reste borné pour borner la mémoire sous flux
+  soutenu ; saturation et erreur d'écriture produisent `JournalFailed`, ce qui
+  arrête immédiatement le transport puis draine ses livraisons terminales.

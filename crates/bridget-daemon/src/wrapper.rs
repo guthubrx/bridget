@@ -928,7 +928,9 @@ fn launch_acp(
     transport.enable_journal(home.join(".cache/bridget/sessions"), &my_name)?;
 
     loop {
-        for event in transport.drain_events() {
+        let events = transport.drain_events();
+        let journal_failed = journal_failure_requires_shutdown(&events);
+        for event in events {
             match event {
                 AcpEvent::TurnFinished { message, response, .. } if message.reply && !response.is_empty() => {
                     let mut reply = bridget_core::BridgetMessage::new(&my_name, &message.from, response);
@@ -941,8 +943,13 @@ fn launch_acp(
                 AcpEvent::DeliveryRejected { message_id, reason } => {
                     send_wrapper_message(&writer, WrapperToDaemon::DeliveryRejected { id: message_id, reason });
                 }
+                AcpEvent::JournalFailed { detail } => warn!("arrêt du transport ACP : {detail}"),
                 _ => {}
             }
+        }
+        if journal_failed {
+            transport.shutdown();
+            break;
         }
         let mut line = String::new();
         match reader.read_line(&mut line) {
@@ -984,6 +991,7 @@ fn launch_acp(
             AcpEvent::DeliveryRejected { message_id, reason } => {
                 send_wrapper_message(&writer, WrapperToDaemon::DeliveryRejected { id: message_id, reason });
             }
+            AcpEvent::JournalFailed { detail } => warn!("échec terminal du journal ACP : {detail}"),
             _ => {}
         }
     }
@@ -1003,9 +1011,23 @@ fn send_wrapper_message(writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>, mess
     }
 }
 
+fn journal_failure_requires_shutdown(events: &[AcpEvent]) -> bool {
+    events.iter().any(|event| matches!(event, AcpEvent::JournalFailed { .. }))
+}
+
 #[cfg(test)]
 mod reconnect_tests {
     use super::*;
+
+    #[test]
+    fn journal_failure_requires_an_immediate_transport_shutdown() {
+        assert!(journal_failure_requires_shutdown(&[AcpEvent::JournalFailed {
+            detail: "journal ACP saturé".to_string(),
+        }]));
+        assert!(!journal_failure_requires_shutdown(&[AcpEvent::Error {
+            detail: "diagnostic non terminal".to_string(),
+        }]));
+    }
 
     #[test]
     fn equipier_flag_is_removed_before_the_agent_is_started() {
