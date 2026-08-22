@@ -6,6 +6,8 @@ use bridget_transport::protocol::{
 };
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::mem::MaybeUninit;
+use std::os::fd::RawFd;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -18,6 +20,90 @@ const MAX_RENDERED_LABEL_CHARS: usize = 160;
 const MAX_CONSECUTIVE_COMBINING_MARKS: usize = 8;
 const RECONNECT_DELAY: Duration = Duration::from_millis(250);
 const RETIRED_SUBSCRIPTIONS_LIMIT: usize = 64;
+
+/// Garde minimale du terminal d'entrée. Le mode désactive le traitement des
+/// signaux afin que Ctrl-C arrive comme l'octet `0x03` à la boucle de saisie.
+/// Ainsi la boucle peut restaurer le terminal avant de quitter.
+#[allow(dead_code)] // La boucle de saisie T806b en devient le propriétaire.
+struct RawTerminal {
+    fd: RawFd,
+    original: libc::termios,
+    restored: bool,
+}
+
+#[allow(dead_code)] // API utilisée par la boucle T806b et les pseudo-TTY de T806a.
+impl RawTerminal {
+    fn enable_for_fd(fd: RawFd) -> Result<Option<Self>, String> {
+        let is_tty = unsafe { libc::isatty(fd) };
+        if is_tty == 0 {
+            return Ok(None);
+        }
+        if is_tty < 0 {
+            return Err(format!(
+                "détection du terminal impossible: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let mut original = MaybeUninit::<libc::termios>::uninit();
+        if unsafe { libc::tcgetattr(fd, original.as_mut_ptr()) } != 0 {
+            return Err(format!(
+                "lecture termios impossible: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let original = unsafe { original.assume_init() };
+        let mut raw = original;
+        let disabled = (libc::ICANON | libc::ECHO | libc::ISIG) as libc::tcflag_t;
+        raw.c_lflag &= !disabled;
+        raw.c_cc[libc::VMIN] = 1;
+        raw.c_cc[libc::VTIME] = 0;
+        if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
+            return Err(format!(
+                "activation du mode raw impossible: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(Some(Self {
+            fd,
+            original,
+            restored: false,
+        }))
+    }
+
+    fn restore(&mut self) -> Result<(), String> {
+        if self.restored {
+            return Ok(());
+        }
+        if unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &self.original) } != 0 {
+            return Err(format!(
+                "restauration termios impossible: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for RawTerminal {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
+#[allow(dead_code)] // Le mode dégradé sera appelé par la boucle T806b.
+fn with_raw_terminal<T>(
+    fd: RawFd,
+    operation: impl FnOnce(bool) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut terminal = RawTerminal::enable_for_fd(fd)?;
+    let result = operation(terminal.is_some());
+    if let Some(raw) = terminal.as_mut() {
+        raw.restore()?;
+    }
+    result
+}
 
 /// Événements neutres produits par la couche de transport puis projetés par le
 /// renderer sécurisé de ce module.
@@ -1005,8 +1091,74 @@ mod tests {
     use super::*;
     use bridget_transport::protocol::MAX_ATTACH_FRAGMENT_BYTES;
     use std::io::{BufRead, BufReader, Write};
+    use std::os::fd::RawFd;
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;
+
+    struct PseudoTerminal {
+        master: RawFd,
+        slave: RawFd,
+    }
+
+    impl PseudoTerminal {
+        fn open() -> Self {
+            let mut master = -1;
+            let mut slave = -1;
+            assert_eq!(
+                unsafe {
+                    libc::openpty(
+                        &mut master,
+                        &mut slave,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                },
+                0,
+                "openpty: {}",
+                std::io::Error::last_os_error()
+            );
+            Self { master, slave }
+        }
+
+        fn attrs(&self) -> libc::termios {
+            let mut attributes = MaybeUninit::<libc::termios>::uninit();
+            assert_eq!(
+                unsafe { libc::tcgetattr(self.slave, attributes.as_mut_ptr()) },
+                0,
+                "tcgetattr: {}",
+                std::io::Error::last_os_error()
+            );
+            unsafe { attributes.assume_init() }
+        }
+
+        fn close_master(&mut self) {
+            if self.master >= 0 {
+                assert_eq!(unsafe { libc::close(self.master) }, 0);
+                self.master = -1;
+            }
+        }
+    }
+
+    impl Drop for PseudoTerminal {
+        fn drop(&mut self) {
+            for fd in [self.master, self.slave] {
+                if fd >= 0 {
+                    unsafe { libc::close(fd) };
+                }
+            }
+        }
+    }
+
+    fn assert_terminal_restored(before: &libc::termios, after: &libc::termios) {
+        // Le pilote pseudo-TTY macOS peut rétablir ses bits ECHOCTL propres
+        // après une lecture. Les seuls bits mutés par notre garde doivent
+        // donc retrouver leur valeur initiale ; ils prouvent la restauration.
+        let raw_bits = (libc::ICANON | libc::ECHO | libc::ISIG) as libc::tcflag_t;
+        assert_eq!(after.c_lflag & raw_bits, before.c_lflag & raw_bits);
+        assert_eq!(after.c_cc[libc::VMIN], before.c_cc[libc::VMIN]);
+        assert_eq!(after.c_cc[libc::VTIME], before.c_cc[libc::VTIME]);
+    }
 
     fn fragment(
         subscription_id: &str,
@@ -1636,5 +1788,67 @@ mod tests {
         );
         assert!(unknown.contains("équipier « absent » inconnu"));
         assert!(unknown.contains("claude-acp, codex-acp"));
+    }
+
+    #[test]
+    fn raw_mode_lit_ctrl_c_comme_octet_et_restaure_le_pseudo_tty() {
+        let pseudo_tty = PseudoTerminal::open();
+        let before = pseudo_tty.attrs();
+        let mut raw = RawTerminal::enable_for_fd(pseudo_tty.slave)
+            .unwrap()
+            .expect("pseudo-TTY détecté");
+        let active = pseudo_tty.attrs();
+        assert_eq!(active.c_lflag & (libc::ICANON | libc::ECHO | libc::ISIG), 0);
+
+        assert_eq!(
+            unsafe { libc::write(pseudo_tty.master, [0x03_u8].as_ptr().cast(), 1) },
+            1
+        );
+        let mut byte = 0_u8;
+        assert_eq!(
+            unsafe { libc::read(pseudo_tty.slave, (&mut byte as *mut u8).cast(), 1) },
+            1
+        );
+        assert_eq!(byte, 0x03, "Ctrl-C doit arriver à la boucle de saisie");
+
+        raw.restore().unwrap();
+        assert_terminal_restored(&before, &pseudo_tty.attrs());
+    }
+
+    #[test]
+    fn raw_mode_restaure_le_terminal_apres_eof_du_pseudo_tty() {
+        let mut pseudo_tty = PseudoTerminal::open();
+        let before = pseudo_tty.attrs();
+        let raw = RawTerminal::enable_for_fd(pseudo_tty.slave)
+            .unwrap()
+            .expect("pseudo-TTY détecté");
+        pseudo_tty.close_master();
+        let mut byte = 0_u8;
+        let read = unsafe { libc::read(pseudo_tty.slave, (&mut byte as *mut u8).cast(), 1) };
+        assert!(read <= 0, "le pseudo-TTY fermé doit signaler EOF ou EIO");
+        drop(raw);
+        assert_terminal_restored(&before, &pseudo_tty.attrs());
+    }
+
+    #[test]
+    fn garde_raw_restaure_le_terminal_sur_erreur_et_degrade_un_pipe() {
+        let pseudo_tty = PseudoTerminal::open();
+        let before = pseudo_tty.attrs();
+        let result = with_raw_terminal(pseudo_tty.slave, |interactive| {
+            assert!(interactive);
+            Err::<(), _>("erreur de boucle simulée".to_string())
+        });
+        assert_eq!(result.unwrap_err(), "erreur de boucle simulée");
+        assert_terminal_restored(&before, &pseudo_tty.attrs());
+
+        let mut pipe = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        let result = with_raw_terminal(pipe[0], |interactive| {
+            assert!(!interactive, "un pipe ne passe jamais en raw mode");
+            Ok::<_, String>(())
+        });
+        assert!(result.is_ok());
+        assert_eq!(unsafe { libc::close(pipe[0]) }, 0);
+        assert_eq!(unsafe { libc::close(pipe[1]) }, 0);
     }
 }

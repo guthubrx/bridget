@@ -20,3 +20,7 @@ Résultat reproductible de la campagne :
 
 La variation observée est de -10,82 % ; elle est donc strictement sous la
 limite de dégradation de 5 % fixée par SC-005.
+
+**Dérogation T806a** : cette tâche est commitée alors que le seul test rouge
+du workspace est ce banc SC-005 invalidé par STOP-T808 (vues simulées) ; sa
+correction immédiate remplace le banc par deux vues attach réelles.
