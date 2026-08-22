@@ -296,14 +296,38 @@ fn push_control_message(
         .is_ok()
 }
 
-fn agent_uses_acp(agent: &bridget_core::router::RegisteredAgent) -> bool {
-    let agent_type = agent.agent_type.to_string();
-    crate::registry::AgentRegistry::load()
-        .ok()
-        .and_then(|registry| registry.get(&agent_type).ok().map(|definition| definition.protocol == "acp"))
-        // Un type ouvert par le registre de test de T708 reste ACP tant qu'il
-        // n'a pas déclaré explicitement un protocole tmux.
-        .unwrap_or(!matches!(agent.agent_type, bridget_core::AgentType::Shell))
+struct DeferredControl {
+    writer: Arc<Mutex<BufWriter<UnixStream>>>,
+    message: DaemonToWrapper,
+}
+
+fn execute_controls(controls: Vec<DeferredControl>) -> Vec<DeferredControl> {
+    controls
+        .into_iter()
+        .filter(|control| !push_control_message(&control.writer, &control.message))
+        .collect()
+}
+
+fn defer_control(
+    state: &DaemonState,
+    conn_id: &str,
+    message: DaemonToWrapper,
+    controls: &mut Vec<DeferredControl>,
+) {
+    if let Some(writer) = state.connections.get(conn_id) {
+        controls.push(DeferredControl {
+            writer: writer.clone(),
+            message,
+        });
+    }
+}
+
+fn agent_uses_acp(state: &DaemonState, agent: &bridget_core::router::RegisteredAgent) -> bool {
+    state
+        .conn_instances
+        .get(&agent.connection_id)
+        .and_then(|instance_id| state.presences.get(instance_id))
+        .is_some_and(|presence| presence.transport == "acp")
 }
 
 fn attach_refusal_for_subscription(
@@ -314,7 +338,7 @@ fn attach_refusal_for_subscription(
         .router
         .get_agent(agent)
         .ok_or(AttachRefusal::AgentUnknown)?;
-    if !agent_uses_acp(registered) {
+    if !agent_uses_acp(state, registered) {
         return Err(AttachRefusal::AgentNotAcp);
     }
     if !state.connections.contains_key(&registered.connection_id) {
@@ -323,7 +347,8 @@ fn attach_refusal_for_subscription(
     Ok(registered.connection_id.clone())
 }
 
-fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) {
+fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) -> Vec<DeferredControl> {
+    let mut controls = Vec::new();
     let affected = state
         .attach_subscriptions
         .iter()
@@ -335,22 +360,25 @@ fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) {
     for (subscription_id, subscription) in affected {
         state.attach_subscriptions.remove(&subscription_id);
         if subscription.attach_conn == conn_id {
-            if let Some(writer) = state.connections.get(&subscription.wrapper_conn) {
-                let _ = push_control_message(
-                    writer,
-                    &DaemonToWrapper::Unsubscribe { subscription_id },
-                );
-            }
-        } else if let Some(writer) = state.connections.get(&subscription.attach_conn) {
-            let _ = push_control_message(
-                writer,
-                &DaemonToWrapper::End {
+            defer_control(
+                state,
+                &subscription.wrapper_conn,
+                DaemonToWrapper::Unsubscribe { subscription_id },
+                &mut controls,
+            );
+        } else {
+            defer_control(
+                state,
+                &subscription.attach_conn,
+                DaemonToWrapper::End {
                     subscription_id,
                     reason: "wrapper indisponible".to_string(),
                 },
+                &mut controls,
             );
         }
     }
+    controls
 }
 
 // Fonction pour exposer les métriques publiquement (M-005)
@@ -846,9 +874,9 @@ fn handle_connection(
     }
 
     // Connexion fermée : désenregistrer avec nettoyage explicite pour éviter fuites
-    let (writer_opt, removed) = {
+    let (writer_opt, removed, controls) = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-        close_attach_subscriptions(&mut st, &conn_id);
+        let controls = close_attach_subscriptions(&mut st, &conn_id);
 
         // Récupérer le writer AVANT suppression pour nettoyage explicite
         let writer_opt = st.connections.remove(&conn_id);
@@ -859,8 +887,9 @@ fn handle_connection(
         st.conn_hosts.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
-        (writer_opt, removed)
+        (writer_opt, removed, controls)
     };
+    let _ = execute_controls(controls);
 
     // Nettoyage explicite du writer pour éviter fuites de ressources
     if let Some(writer_mutex) = writer_opt
@@ -1341,47 +1370,48 @@ fn handle_wrapper_message(
     match msg {
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
         WrapperToDaemon::Subscribe { agent, window } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            if st.connection_roles.get(conn_id) != Some(&ConnectionRole::Attach) {
-                return Some(DaemonToWrapper::AttachRejected {
-                    subscription_id: None,
-                    reason: AttachRefusal::MessageOutsideAttachRole,
-                });
-            }
-            let wrapper_conn = match attach_refusal_for_subscription(&st, &agent) {
-                Ok(connection_id) => connection_id,
-                Err(reason) => {
+            let (subscription_id, control) = {
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                if st.connection_roles.get(conn_id) != Some(&ConnectionRole::Attach) {
                     return Some(DaemonToWrapper::AttachRejected {
                         subscription_id: None,
-                        reason,
+                        reason: AttachRefusal::MessageOutsideAttachRole,
                     });
                 }
-            };
-            let subscription_id = format!("attach-{}", uuid::Uuid::new_v4());
-            st.attach_subscriptions.insert(
-                subscription_id.clone(),
-                AttachSubscription {
-                    agent: agent.clone(),
-                    attach_conn: conn_id.to_string(),
-                    wrapper_conn: wrapper_conn.clone(),
-                },
-            );
-            let accepted = st
-                .connections
-                .get(&wrapper_conn)
-                .is_some_and(|writer| {
-                    push_control_message(
-                        writer,
-                        &DaemonToWrapper::Subscribe {
-                            subscription_id: subscription_id.clone(),
-                            agent,
-                            window,
-                        },
-                    )
+                let wrapper_conn = match attach_refusal_for_subscription(&st, &agent) {
+                    Ok(connection_id) => connection_id,
+                    Err(reason) => {
+                        return Some(DaemonToWrapper::AttachRejected {
+                            subscription_id: None,
+                            reason,
+                        });
+                    }
+                };
+                let subscription_id = format!("attach-{}", uuid::Uuid::new_v4());
+                let writer = st.connections.get(&wrapper_conn).cloned();
+                st.attach_subscriptions.insert(
+                    subscription_id.clone(),
+                    AttachSubscription {
+                        agent: agent.clone(),
+                        attach_conn: conn_id.to_string(),
+                        wrapper_conn,
+                    },
+                );
+                let control = writer.map(|writer| DeferredControl {
+                    writer,
+                    message: DaemonToWrapper::Subscribe {
+                        subscription_id: subscription_id.clone(),
+                        agent,
+                        window,
+                    },
                 });
+                (subscription_id, control)
+            };
+            let accepted = control.is_some_and(|control| execute_controls(vec![control]).is_empty());
             if accepted {
                 None
             } else {
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                 st.attach_subscriptions.remove(&subscription_id);
                 Some(DaemonToWrapper::AttachRejected {
                     subscription_id: Some(subscription_id),
@@ -1390,26 +1420,29 @@ fn handle_wrapper_message(
             }
         }
         WrapperToDaemon::Unsubscribe { subscription_id } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            let Some(subscription) = st.attach_subscriptions.get(&subscription_id).cloned() else {
-                // Une fin d'ancienne génération n'a pas le droit de toucher
-                // une souscription plus récente sur la même connexion.
-                return None;
-            };
-            if subscription.attach_conn != conn_id {
-                return Some(DaemonToWrapper::AttachRejected {
-                    subscription_id: Some(subscription_id),
-                    reason: AttachRefusal::MessageOutsideAttachRole,
-                });
-            }
-            st.attach_subscriptions.remove(&subscription_id);
-            if let Some(writer) = st.connections.get(&subscription.wrapper_conn) {
-                let _ = push_control_message(
-                    writer,
-                    &DaemonToWrapper::Unsubscribe {
+            let control = {
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(subscription) = st.attach_subscriptions.get(&subscription_id).cloned() else {
+                    // Une fin d'ancienne génération n'a pas le droit de toucher
+                    // une souscription plus récente sur la même connexion.
+                    return None;
+                };
+                if subscription.attach_conn != conn_id {
+                    return Some(DaemonToWrapper::AttachRejected {
+                        subscription_id: Some(subscription_id),
+                        reason: AttachRefusal::MessageOutsideAttachRole,
+                    });
+                }
+                st.attach_subscriptions.remove(&subscription_id);
+                st.connections.get(&subscription.wrapper_conn).map(|writer| DeferredControl {
+                    writer: writer.clone(),
+                    message: DaemonToWrapper::Unsubscribe {
                         subscription_id: subscription_id.clone(),
                     },
-                );
+                })
+            };
+            if let Some(control) = control {
+                let _ = execute_controls(vec![control]);
             }
             Some(DaemonToWrapper::End {
                 subscription_id,
@@ -1417,21 +1450,41 @@ fn handle_wrapper_message(
             })
         }
         WrapperToDaemon::Subscribed { subscription_id } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
-            if subscription.wrapper_conn != conn_id {
-                return None;
-            }
-            log::debug!(
-                "abonnement attach {} accepté par {}",
-                subscription_id,
-                subscription.agent
-            );
-            let delivered = st.connections.get(&subscription.attach_conn).is_some_and(|writer| {
-                push_control_message(writer, &DaemonToWrapper::Subscribed { subscription_id: subscription_id.clone() })
-            });
+            let control = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
+                if subscription.wrapper_conn != conn_id {
+                    return None;
+                }
+                log::debug!(
+                    "abonnement attach {} accepté par {}",
+                    subscription_id,
+                    subscription.agent
+                );
+                st.connections.get(&subscription.attach_conn).map(|writer| DeferredControl {
+                    writer: writer.clone(),
+                    message: DaemonToWrapper::Subscribed {
+                        subscription_id: subscription_id.clone(),
+                    },
+                })
+            };
+            let delivered = control.is_some_and(|control| execute_controls(vec![control]).is_empty());
             if !delivered {
-                st.attach_subscriptions.remove(&subscription_id);
+                let control = {
+                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    let subscription = st.attach_subscriptions.remove(&subscription_id);
+                    subscription.and_then(|subscription| {
+                        st.connections.get(&subscription.wrapper_conn).map(|writer| DeferredControl {
+                            writer: writer.clone(),
+                            message: DaemonToWrapper::Unsubscribe {
+                                subscription_id: subscription_id.clone(),
+                            },
+                        })
+                    })
+                };
+                if let Some(control) = control {
+                    let _ = execute_controls(vec![control]);
+                }
             }
             None
         }
@@ -1439,43 +1492,51 @@ fn handle_wrapper_message(
             subscription_id,
             reason,
         } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            let subscription_id = subscription_id?;
-            let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
-            if subscription.wrapper_conn != conn_id {
-                return None;
-            }
-            if let Some(writer) = st.connections.get(&subscription.attach_conn) {
-                let _ = push_control_message(
-                    writer,
-                    &DaemonToWrapper::AttachRejected {
+            let control = {
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let subscription_id = subscription_id?;
+                let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
+                if subscription.wrapper_conn != conn_id {
+                    return None;
+                }
+                let control = st.connections.get(&subscription.attach_conn).map(|writer| DeferredControl {
+                    writer: writer.clone(),
+                    message: DaemonToWrapper::AttachRejected {
                         subscription_id: Some(subscription_id.clone()),
                         reason,
                     },
-                );
+                });
+                st.attach_subscriptions.remove(&subscription_id);
+                control
+            };
+            if let Some(control) = control {
+                let _ = execute_controls(vec![control]);
             }
-            st.attach_subscriptions.remove(&subscription_id);
             None
         }
         WrapperToDaemon::End {
             subscription_id,
             reason,
         } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
-            if subscription.wrapper_conn != conn_id {
-                return None;
-            }
-            if let Some(writer) = st.connections.get(&subscription.attach_conn) {
-                let _ = push_control_message(
-                    writer,
-                    &DaemonToWrapper::End {
+            let control = {
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
+                if subscription.wrapper_conn != conn_id {
+                    return None;
+                }
+                let control = st.connections.get(&subscription.attach_conn).map(|writer| DeferredControl {
+                    writer: writer.clone(),
+                    message: DaemonToWrapper::End {
                         subscription_id: subscription_id.clone(),
                         reason,
                     },
-                );
+                });
+                st.attach_subscriptions.remove(&subscription_id);
+                control
+            };
+            if let Some(control) = control {
+                let _ = execute_controls(vec![control]);
             }
-            st.attach_subscriptions.remove(&subscription_id);
             None
         }
         WrapperToDaemon::JournalReadError {
@@ -1484,21 +1545,24 @@ fn handle_wrapper_message(
             offset,
             reason,
         } => {
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
-            let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
-            if subscription.wrapper_conn != conn_id {
-                return None;
-            }
-            if let Some(writer) = st.connections.get(&subscription.attach_conn) {
-                let _ = push_control_message(
-                    writer,
-                    &DaemonToWrapper::JournalReadError {
+            let control = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let subscription = st.attach_subscriptions.get(&subscription_id).cloned()?;
+                if subscription.wrapper_conn != conn_id {
+                    return None;
+                }
+                st.connections.get(&subscription.attach_conn).map(|writer| DeferredControl {
+                    writer: writer.clone(),
+                    message: DaemonToWrapper::JournalReadError {
                         subscription_id,
                         line,
                         offset,
                         reason,
                     },
-                );
+                })
+            };
+            if let Some(control) = control {
+                let _ = execute_controls(vec![control]);
             }
             None
         }
@@ -1534,13 +1598,17 @@ fn handle_wrapper_message(
         }
 
         WrapperToDaemon::Unregister => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            close_attach_subscriptions(&mut st, conn_id);
-            st.router.unregister_by_conn(conn_id);
-            st.mark_stopped(conn_id);
-            st.conn_names.remove(conn_id);
-            st.conn_hosts.remove(conn_id);
-            st.conn_operating_systems.remove(conn_id);
+            let controls = {
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let controls = close_attach_subscriptions(&mut st, conn_id);
+                st.router.unregister_by_conn(conn_id);
+                st.mark_stopped(conn_id);
+                st.conn_names.remove(conn_id);
+                st.conn_hosts.remove(conn_id);
+                st.conn_operating_systems.remove(conn_id);
+                controls
+            };
+            let _ = execute_controls(controls);
             None
         }
 
@@ -2215,7 +2283,7 @@ mod presence_tests {
                 name: "agent-2".to_string(),
                 agent_type: "claude".to_string(),
                 host: "macbook".to_string(),
-                transport: "unix".to_string(),
+                transport: "acp".to_string(),
                 os: "macOS".to_string(),
                 state: "connected".to_string(),
                 last_seen: Instant::now(),
@@ -2456,15 +2524,98 @@ mod presence_tests {
         ));
         assert!(shared.lock().unwrap().attach_subscriptions.contains_key(&second_id));
 
-        {
+        let controls = {
             let mut state = shared.lock().unwrap();
-            close_attach_subscriptions(&mut state, "attach-1");
+            let controls = close_attach_subscriptions(&mut state, "attach-1");
             assert!(state.attach_subscriptions.is_empty());
-        }
+            controls
+        };
+        assert!(execute_controls(controls).is_empty());
         assert!(matches!(
             read_control(&mut wrapper_reader),
             DaemonToWrapper::Unsubscribe { subscription_id } if subscription_id == second_id
         ));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn abonnement_attach_refuse_un_wrapper_tmux_malgre_son_type() {
+        let (mut state, config) = state_with_registered_agent("attach-tmux");
+        state
+            .presences
+            .get_mut("instance-1")
+            .unwrap()
+            .transport = "unix".to_string();
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_wrapper_message(
+                "attach-1",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "attach-1",
+                WrapperToDaemon::Subscribe {
+                    agent: "agent-2".to_string(),
+                    window: bridget_transport::AttachWindow::Today,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::AttachRejected {
+                reason: AttachRefusal::AgentNotAcp,
+                ..
+            })
+        ));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn confirmation_vers_vue_fermee_desabonne_le_wrapper() {
+        let (mut state, config) = state_with_registered_agent("attach-closed-view");
+        let (wrapper_writer, mut wrapper_reader) = control_socket("wrapper-closed-view");
+        let (attach_writer, attach_reader) = control_socket("attach-closed-view");
+        state.connections.insert("conn-1".to_string(), wrapper_writer);
+        state.connections.insert("attach-1".to_string(), attach_writer);
+        let shared = Arc::new(Mutex::new(state));
+        handle_wrapper_message(
+            "attach-1",
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Attach,
+            },
+            &shared,
+        );
+        handle_wrapper_message(
+            "attach-1",
+            WrapperToDaemon::Subscribe {
+                agent: "agent-2".to_string(),
+                window: bridget_transport::AttachWindow::Today,
+            },
+            &shared,
+        );
+        let subscription_id = match read_control(&mut wrapper_reader) {
+            DaemonToWrapper::Subscribe { subscription_id, .. } => subscription_id,
+            other => panic!("commande wrapper inattendue: {}", encode(&other).unwrap()),
+        };
+        drop(attach_reader);
+        handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::Subscribed {
+                subscription_id: subscription_id.clone(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            read_control(&mut wrapper_reader),
+            DaemonToWrapper::Unsubscribe { subscription_id: id } if id == subscription_id
+        ));
+        assert!(shared.lock().unwrap().attach_subscriptions.is_empty());
         let _ = std::fs::remove_file(config.db_path);
     }
 
