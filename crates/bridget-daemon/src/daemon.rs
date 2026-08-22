@@ -5,11 +5,11 @@ use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAc
 use bridget_transport::protocol::{decode, encode, AttachRefusal, ConnectionRole};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use log::{error, info, warn};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -63,6 +63,10 @@ impl Metrics {
 
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 const PRESENCE_RETENTION: Duration = Duration::from_secs(300);
+const ATTACH_VIEW_BUFFER_BYTES: usize = 1024 * 1024;
+const ATTACH_VIEW_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_PENDING_ATTACH_SENDS: usize = 1024;
+const PENDING_ATTACH_SEND_TTL: Duration = Duration::from_secs(300);
 
 // Constante pour la période de grâce des timeouts (M-004)
 const TIMEOUT_GRACE_PERIOD: u64 = 30; // secondes
@@ -183,6 +187,8 @@ struct DaemonState {
     connection_roles: HashMap<String, ConnectionRole>,
     /// Souscriptions attach actives, distinctes de l'annuaire des équipiers.
     attach_subscriptions: HashMap<String, AttachSubscription>,
+    attach_views: HashMap<String, Arc<AttachView>>,
+    pending_attach_sends: HashMap<String, PendingAttachSend>,
     presences: HashMap<String, Presence>,
     conn_counter: u64,
     /// Messages --reply en attente de réponse : (msg_id, from, to, expire_at, target_conn)
@@ -194,6 +200,113 @@ struct AttachSubscription {
     agent: String,
     attach_conn: String,
     wrapper_conn: String,
+}
+
+struct PendingAttachSend {
+    conn_id: String,
+    expires_at: Instant,
+}
+
+struct QueuedAttachMessage {
+    encoded: String,
+    seq: Option<u64>,
+}
+
+struct AttachViewBuffer {
+    messages: VecDeque<QueuedAttachMessage>,
+    bytes: usize,
+    gap: Option<(u64, u64, Option<String>)>,
+    closed: bool,
+}
+
+struct AttachView {
+    subscription_id: String,
+    queue: Arc<(Mutex<AttachViewBuffer>, Condvar)>,
+}
+
+impl AttachView {
+    fn start(subscription_id: String, writer: &Arc<Mutex<BufWriter<UnixStream>>>) -> Option<Arc<Self>> {
+        let stream = writer.lock().ok()?.get_ref().try_clone().ok()?;
+        let _ = stream.set_write_timeout(Some(ATTACH_VIEW_WRITE_TIMEOUT));
+        let queue = Arc::new((
+            Mutex::new(AttachViewBuffer {
+                messages: VecDeque::new(), bytes: 0, gap: None, closed: false,
+            }),
+            Condvar::new(),
+        ));
+        let view = Arc::new(Self { subscription_id, queue });
+        let worker = view.clone();
+        thread::spawn(move || {
+            let mut writer = BufWriter::new(stream);
+            loop {
+                let next = {
+                    let (lock, wake) = &*worker.queue;
+                    let mut buffer = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    while buffer.messages.is_empty() && buffer.gap.is_none() && !buffer.closed {
+                        buffer = wake.wait(buffer).unwrap_or_else(|e| e.into_inner());
+                    }
+                    if let Some((from_seq, to_seq, reason)) = buffer.gap.take() {
+                        encode(&DaemonToWrapper::Gap {
+                            subscription_id: worker.subscription_id.clone(), from_seq, to_seq, reason,
+                        }).ok()
+                    } else if let Some(message) = buffer.messages.pop_front() {
+                        buffer.bytes = buffer.bytes.saturating_sub(message.encoded.len());
+                        Some(message.encoded)
+                    } else { None }
+                };
+                let Some(next) = next else {
+                    if worker.queue.0.lock().unwrap_or_else(|e| e.into_inner()).closed { break; }
+                    continue;
+                };
+                if writeln!(writer, "{next}").and_then(|_| writer.flush()).is_err() {
+                    worker.close();
+                    break;
+                }
+            }
+        });
+        Some(view)
+    }
+
+    fn enqueue(&self, message: DaemonToWrapper) -> bool {
+        let Ok(encoded) = encode(&message) else { return false; };
+        let seq = match message { DaemonToWrapper::JournalFragment { seq, .. } => Some(seq), _ => None };
+        let (lock, wake) = &*self.queue;
+        let mut buffer = lock.lock().unwrap_or_else(|e| e.into_inner());
+        if buffer.closed { return false; }
+        if let Some(seq) = seq {
+            while buffer.bytes.saturating_add(encoded.len()) > ATTACH_VIEW_BUFFER_BYTES {
+                let Some(dropped_seq) = buffer.messages.iter().find_map(|item| item.seq) else {
+                    buffer.gap = Some((seq, seq, Some("vue trop lente".to_string())));
+                    wake.notify_one();
+                    return false;
+                };
+                let mut retained = VecDeque::new();
+                while let Some(item) = buffer.messages.pop_front() {
+                    if item.seq == Some(dropped_seq) { buffer.bytes = buffer.bytes.saturating_sub(item.encoded.len()); }
+                    else { retained.push_back(item); }
+                }
+                buffer.messages = retained;
+                buffer.gap = Some(match buffer.gap.take() {
+                    Some((from, to, reason)) => (from.min(dropped_seq), to.max(dropped_seq), reason),
+                    None => (dropped_seq, dropped_seq, Some("vue trop lente".to_string())),
+                });
+            }
+        } else if buffer.bytes.saturating_add(encoded.len()) > ATTACH_VIEW_BUFFER_BYTES {
+            buffer.closed = true;
+            wake.notify_all();
+            return false;
+        }
+        buffer.bytes += encoded.len();
+        buffer.messages.push_back(QueuedAttachMessage { encoded, seq });
+        wake.notify_one();
+        true
+    }
+
+    fn close(&self) {
+        let (lock, wake) = &*self.queue;
+        lock.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
+        wake.notify_all();
+    }
 }
 
 struct PendingReply {
@@ -322,6 +435,11 @@ fn defer_control(
     }
 }
 
+fn purge_expired_attach_sends(state: &mut DaemonState) {
+    let now = Instant::now();
+    state.pending_attach_sends.retain(|_, pending| pending.expires_at > now);
+}
+
 fn agent_uses_acp(state: &DaemonState, agent: &bridget_core::router::RegisteredAgent) -> bool {
     state
         .conn_instances
@@ -359,6 +477,7 @@ fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) -> Vec<Def
         .collect::<Vec<_>>();
     for (subscription_id, subscription) in affected {
         state.attach_subscriptions.remove(&subscription_id);
+        if let Some(view) = state.attach_views.remove(&subscription_id) { view.close(); }
         if subscription.attach_conn == conn_id {
             defer_control(
                 state,
@@ -378,6 +497,7 @@ fn close_attach_subscriptions(state: &mut DaemonState, conn_id: &str) -> Vec<Def
             );
         }
     }
+    state.pending_attach_sends.retain(|_, pending| pending.conn_id != conn_id);
     controls
 }
 
@@ -410,6 +530,8 @@ impl DaemonState {
             conn_instances: HashMap::new(),
             connection_roles: HashMap::new(),
             attach_subscriptions: HashMap::new(),
+            attach_views: HashMap::new(),
+            pending_attach_sends: HashMap::new(),
             presences: HashMap::new(),
             conn_counter: 0,
             pending_replies: Vec::new(),
@@ -1388,6 +1510,16 @@ fn handle_wrapper_message(
                     }
                 };
                 let subscription_id = format!("attach-{}", uuid::Uuid::new_v4());
+                let Some(view) = st
+                    .connections
+                    .get(conn_id)
+                    .and_then(|writer| AttachView::start(subscription_id.clone(), writer))
+                else {
+                    return Some(DaemonToWrapper::AttachRejected {
+                        subscription_id: Some(subscription_id),
+                        reason: AttachRefusal::WrapperUnavailable,
+                    });
+                };
                 let writer = st.connections.get(&wrapper_conn).cloned();
                 st.attach_subscriptions.insert(
                     subscription_id.clone(),
@@ -1397,6 +1529,7 @@ fn handle_wrapper_message(
                         wrapper_conn,
                     },
                 );
+                st.attach_views.insert(subscription_id.clone(), view);
                 let control = writer.map(|writer| DeferredControl {
                     writer,
                     message: DaemonToWrapper::Subscribe {
@@ -1413,6 +1546,7 @@ fn handle_wrapper_message(
             } else {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                 st.attach_subscriptions.remove(&subscription_id);
+                if let Some(view) = st.attach_views.remove(&subscription_id) { view.close(); }
                 Some(DaemonToWrapper::AttachRejected {
                     subscription_id: Some(subscription_id),
                     reason: AttachRefusal::WrapperUnavailable,
@@ -1473,6 +1607,7 @@ fn handle_wrapper_message(
                 let control = {
                     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                     let subscription = st.attach_subscriptions.remove(&subscription_id);
+                    if let Some(view) = st.attach_views.remove(&subscription_id) { view.close(); }
                     subscription.and_then(|subscription| {
                         st.connections.get(&subscription.wrapper_conn).map(|writer| DeferredControl {
                             writer: writer.clone(),
@@ -1566,11 +1701,44 @@ fn handle_wrapper_message(
             }
             None
         }
-        // Le fan-out des fragments et des gaps est ajouté en T804b. Ces
-        // variantes restent décodables ici sans entrer dans le routage.
-        WrapperToDaemon::JournalFragment { .. }
-        | WrapperToDaemon::SnapshotCaughtUp { .. }
-        | WrapperToDaemon::Gap { .. } => None,
+        WrapperToDaemon::JournalFragment { subscription_id, seq, offset, final_fragment, bytes } => {
+            let view = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                st.attach_subscriptions.get(&subscription_id)
+                    .filter(|subscription| subscription.wrapper_conn == conn_id)
+                    .and_then(|_| st.attach_views.get(&subscription_id).cloned())
+            };
+            if let Some(view) = view {
+                let _ = view.enqueue(DaemonToWrapper::JournalFragment {
+                    subscription_id, seq, offset, final_fragment, bytes,
+                });
+            }
+            None
+        }
+        WrapperToDaemon::SnapshotCaughtUp { subscription_id, through_seq } => {
+            let view = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                st.attach_subscriptions.get(&subscription_id)
+                    .filter(|subscription| subscription.wrapper_conn == conn_id)
+                    .and_then(|_| st.attach_views.get(&subscription_id).cloned())
+            };
+            if let Some(view) = view {
+                let _ = view.enqueue(DaemonToWrapper::SnapshotCaughtUp { subscription_id, through_seq });
+            }
+            None
+        }
+        WrapperToDaemon::Gap { subscription_id, from_seq, to_seq, reason } => {
+            let view = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                st.attach_subscriptions.get(&subscription_id)
+                    .filter(|subscription| subscription.wrapper_conn == conn_id)
+                    .and_then(|_| st.attach_views.get(&subscription_id).cloned())
+            };
+            if let Some(view) = view {
+                let _ = view.enqueue(DaemonToWrapper::Gap { subscription_id, from_seq, to_seq, reason });
+            }
+            None
+        }
         WrapperToDaemon::Register {
             agent_type,
             name,
@@ -1648,6 +1816,13 @@ fn handle_wrapper_message(
             );
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let is_attach = st.connection_roles.get(conn_id) == Some(&ConnectionRole::Attach);
+            purge_expired_attach_sends(&mut st);
+            if is_attach && st.pending_attach_sends.len() >= MAX_PENDING_ATTACH_SENDS {
+                return Some(DaemonToWrapper::Nack {
+                    id: bridge_msg.id.clone(),
+                    reason: "trop d envois humains en attente".to_string(),
+                });
+            }
             let sender_name = st.conn_names.get(conn_id).cloned().unwrap_or_default();
             // Résolution de l'expéditeur :
             // - Si la connexion est un wrapper (agent enregistré sous son vrai nom),
@@ -1894,6 +2069,15 @@ fn handle_wrapper_message(
                         );
                     }
 
+                    if is_attach {
+                        st.pending_attach_sends.insert(
+                            bridge_msg.id.clone(),
+                            PendingAttachSend {
+                                conn_id: conn_id.to_string(),
+                                expires_at: Instant::now() + PENDING_ATTACH_SEND_TTL,
+                            },
+                        );
+                    }
                     Some(DaemonToWrapper::Ack {
                         id: bridge_msg.id.clone(),
                     })
@@ -1953,6 +2137,15 @@ fn handle_wrapper_message(
 
         WrapperToDaemon::DeliveryRejected { id, reason } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            purge_expired_attach_sends(&mut st);
+            if let Some(pending) = st.pending_attach_sends.remove(&id) {
+                let writer = st.connections.get(&pending.conn_id).cloned();
+                drop(st);
+                if let Some(writer) = writer {
+                    let _ = push_control_message(&writer, &DaemonToWrapper::DeliveryRejected { id, reason });
+                }
+                return None;
+            }
             let request = st.store.get_request(&id).ok().flatten();
             if let Some(request) = request {
                 st.pending_replies.retain(|pending| pending.msg_id != id);

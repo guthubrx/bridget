@@ -60,7 +60,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
   abonné ; saturation du canal de commandes → refus typé remonté ; fenêtre
   vide → `SnapshotCaughtUp` sans `through_seq`.
 
-- [ ] **T804a** [US1] **Daemon : rôle attach et cycle d'abonnement** :
+- [x] **T804a** [US1] **Daemon : rôle attach et cycle d'abonnement** :
   négociation du rôle (identité d'envoi **forcée à « humain » côté daemon**,
   `from` forgé réécrit/refusé), table des abonnements par agent,
   `subscription_id`, générations obsolètes ignorées, relais d'abonnement au
