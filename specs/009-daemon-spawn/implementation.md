@@ -129,3 +129,36 @@ p95 **442,466 ms**, maximum **530,891 ms**, total **28,23 s**. Le seuil p95
 reste fixé à 10 s et le timeout global à 120 s. Le test échoue sur le premier
 spawn/refus, la première réponse manquante, une demande non close, le p95 ou
 le timeout global ; il ne relance aucun essai.
+
+## T910 — Persistance et arrêt de flotte
+
+Le scénario réel lance trois équipiers persistants et trois éphémères par le
+chemin `SpawnOrder` → bootstrap → `managed-wrapper` → `npx`. Il effectue trois
+redémarrages coopératifs complets du daemon. À chaque cycle, les anciens groupes
+de processus doivent avoir disparu avant le redémarrage ; les trois persistants
+reviennent connectés et les trois éphémères restent absents. Les instantanés de
+groupes observés ont été :
+
+- cycle initial : `[41008, 41090, 41137, 41157, 41226, 41272]` ;
+- deuxième cycle : `[41530, 41538, 41550]` ;
+- troisième cycle : `[41671, 41672, 41678]`.
+
+Chaque groupe est inspecté par `ps` et doit contenir le wrapper ainsi que son
+descendant `npx` (exposé comme `npm exec` par macOS). Le test attend ensuite la
+disparition effective de chaque PGID avec `kill(-pgid, 0)` ; une simple issue
+logique ne suffit donc pas.
+
+Le même scénario tue ensuite le daemon par `SIGKILL`. Les groupes
+`[41819, 41820, 41826]` survivent au crash, puis le daemon redémarré les
+réconcilie et crée exactement les trois nouvelles générations
+`[41869, 41870, 41876]`, sans réutiliser un ancien PGID. Enfin, trois
+`StopOrder` retirent durablement les trois persistants : un dernier redémarrage
+confirme leur absence **3/3**.
+
+Commande reproductible :
+
+```bash
+cargo test -p bridget-daemon --test managed_parity_test \
+  sc005_sc006_persistance_arrets_cooperatifs_et_reconciliation_sigkill \
+  -- --exact --nocapture
+```

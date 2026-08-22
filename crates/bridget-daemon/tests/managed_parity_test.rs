@@ -1,4 +1,5 @@
 use bridget_core::BridgetMessage;
+use bridget_daemon::managed_process::{ManagedMarkerStore, group_exists};
 use bridget_transport::protocol::{AgentInfo, AttachWindow, ConnectionRole, decode, encode};
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::collections::BTreeMap;
@@ -18,6 +19,7 @@ const MATRIX_RUNS_PER_MODE: usize = 3;
 const MATRIX_EXPECTED_TURNS: usize = 4;
 const MATRIX_TIMEOUT: Duration = Duration::from_secs(10);
 const FROZEN_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+static MANAGED_BENCH_LOCK: Mutex<()> = Mutex::new(());
 
 fn unix_now() -> i64 {
     SystemTime::now()
@@ -150,12 +152,17 @@ impl DaemonProcess {
         let child = command.spawn().unwrap();
         let socket = root.join(".cache/bridget/bridget.sock");
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !socket.exists() && Instant::now() < deadline {
+        let mut accepting = false;
+        while Instant::now() < deadline {
+            if UnixStream::connect(&socket).is_ok() {
+                accepting = true;
+                break;
+            }
             thread::sleep(Duration::from_millis(10));
         }
         assert!(
-            socket.exists(),
-            "le daemon de parité n'a pas ouvert sa socket"
+            accepting,
+            "le daemon de parité n'accepte pas encore les connexions"
         );
         Self { child, socket }
     }
@@ -174,6 +181,13 @@ impl DaemonProcess {
         let _ = self.child.kill();
         let _ = self.child.wait();
         panic!("le daemon de parité n'a pas terminé après SIGTERM");
+    }
+
+    fn kill(mut self) {
+        unsafe {
+            libc::kill(self.child.id() as i32, libc::SIGKILL);
+        }
+        let _ = self.child.wait();
     }
 }
 
@@ -304,7 +318,10 @@ fn start_daemon_behind_proxy(root: &Path) -> (DaemonProcess, CutProxy) {
         thread::sleep(Duration::from_millis(10));
     }
     assert!(target.exists());
-    assert!(database.exists(), "le daemon n'a pas achevé son initialisation");
+    assert!(
+        database.exists(),
+        "le daemon n'a pas achevé son initialisation"
+    );
     fs::remove_file(&cache_link).unwrap();
     std::os::unix::fs::symlink(&proxy_cache, &cache_link).unwrap();
     let proxy_socket = proxy_cache.join("bridget.sock");
@@ -628,8 +645,119 @@ fn stop_managed(control: &mut Peer, name: &str, run: usize) {
     ));
 }
 
+fn spawn_managed(control: &mut Peer, root: &Path, name: &str, command_id: &str, persistent: bool) {
+    let now = unix_now();
+    control.send(&WrapperToDaemon::SpawnOrder {
+        agent_type: "parity".to_string(),
+        name: Some(name.to_string()),
+        cwd: root.to_string_lossy().into_owned(),
+        persistent,
+        command_id: command_id.to_string(),
+        issued_at: now,
+        deadline_at: now + 10,
+    });
+    assert!(matches!(
+        control.recv(),
+        DaemonToWrapper::SpawnAccepted { name: accepted, .. } if accepted == name
+    ));
+}
+
+fn wait_named_agents(socket: &Path, expected: &[String], absent: &[String]) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut control = Peer::register(socket, "persistence-observer");
+    loop {
+        control.send(&WrapperToDaemon::ListAgents);
+        let agents = match control.recv() {
+            DaemonToWrapper::AgentList { agents } => agents,
+            other => panic!("annuaire de persistance inattendu: {other:?}"),
+        };
+        let ready = expected.iter().all(|name| {
+            agents
+                .iter()
+                .any(|agent| agent.name == *name && agent.state == "connected")
+        });
+        let excluded = absent
+            .iter()
+            .all(|name| agents.iter().all(|agent| agent.name != *name));
+        if ready && excluded {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "annuaire persistant incomplet: attendu={expected:?}, absent={absent:?}, reçu={agents:?}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn process_group_members(pgid: u32) -> Vec<(u32, String)> {
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,pgid=,command="])
+        .output()
+        .expect("instantané ps");
+    assert!(output.status.success(), "ps doit réussir");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.trim().splitn(3, char::is_whitespace);
+            let pid = fields.next()?.parse::<u32>().ok()?;
+            let group = fields.next()?.trim().parse::<u32>().ok()?;
+            let command = fields.next()?.trim().to_string();
+            (group == pgid).then_some((pid, command))
+        })
+        .collect()
+}
+
+fn assert_npx_descendant(pgid: u32) -> Vec<(u32, String)> {
+    let members = process_group_members(pgid);
+    assert!(
+        members.len() >= 2,
+        "le groupe {pgid} doit contenir le wrapper et son descendant npx: {members:?}"
+    );
+    assert!(
+        members.iter().any(|(_, command)| {
+            command.contains("npx")
+                || command == "npm"
+                || command.contains("npm exec")
+                || command.contains("npm-cli.js exec")
+        }),
+        "aucun descendant npx dans le groupe {pgid}: {members:?}"
+    );
+    members
+}
+
+fn wait_groups_gone(pgids: &[u32]) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let survivors = pgids
+            .iter()
+            .copied()
+            .filter(|pgid| group_exists(*pgid).unwrap_or(false))
+            .collect::<Vec<_>>();
+        if survivors.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "groupes encore vivants après arrêt: {survivors:?}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn marker_pgids(root: &Path, names: &[String]) -> Vec<u32> {
+    let store = ManagedMarkerStore::for_home(root);
+    names
+        .iter()
+        .map(|name| store.load(name).unwrap().pgid)
+        .collect()
+}
+
 #[test]
 fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
+    let _serial = MANAGED_BENCH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     assert_eq!(MATRIX_VERSION, "fr-008-v1");
     assert_eq!(MATRIX_RUNS_PER_MODE, 3);
     for run in 0..MATRIX_RUNS_PER_MODE {
@@ -693,6 +821,9 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
 
 #[test]
 fn matrice_fr008_compare_la_garde_de_facturation() {
+    let _serial = MANAGED_BENCH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let root = test_root("billing");
     let adapter = write_fixture(&root);
     let daemon = DaemonProcess::start(&root, true, false);
@@ -742,6 +873,9 @@ fn matrice_fr008_compare_la_garde_de_facturation() {
 
 #[test]
 fn sc001_vingt_spawns_survivent_a_la_fermeture_du_client_et_repondent() {
+    let _serial = MANAGED_BENCH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     const SPAWNS: usize = 20;
     const SPAWN_P95_LIMIT: Duration = Duration::from_secs(10);
     const GLOBAL_BENCH_TIMEOUT: Duration = Duration::from_secs(120);
@@ -811,6 +945,107 @@ fn sc001_vingt_spawns_survivent_a_la_fermeture_du_client_et_repondent() {
     assert!(p95 < SPAWN_P95_LIMIT, "p95 spawn SC-001={p95:?}");
     assert!(Instant::now() < deadline, "timeout global SC-001");
 
+    daemon.stop();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sc005_sc006_persistance_arrets_cooperatifs_et_reconciliation_sigkill() {
+    let _serial = MANAGED_BENCH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    const CYCLES: usize = 3;
+    const FLEET_SIZE: usize = 3;
+    const GLOBAL_TIMEOUT: Duration = Duration::from_secs(120);
+
+    let root = test_root("persistence");
+    write_cached_npx_fixture(&root);
+    let persistent = (0..FLEET_SIZE)
+        .map(|index| format!("persistent-{index}"))
+        .collect::<Vec<_>>();
+    let ephemeral = (0..FLEET_SIZE)
+        .map(|index| format!("ephemeral-{index}"))
+        .collect::<Vec<_>>();
+    let deadline = Instant::now() + GLOBAL_TIMEOUT;
+
+    let mut daemon = DaemonProcess::start(&root, false, false);
+    let mut control = Peer::register(&daemon.socket, "persistence-orderer");
+    for (index, name) in persistent.iter().enumerate() {
+        spawn_managed(
+            &mut control,
+            &root,
+            name,
+            &format!("persistent-spawn-{index}"),
+            true,
+        );
+    }
+    for (index, name) in ephemeral.iter().enumerate() {
+        spawn_managed(
+            &mut control,
+            &root,
+            name,
+            &format!("ephemeral-spawn-{index}"),
+            false,
+        );
+    }
+    wait_named_agents(&daemon.socket, &persistent, &[]);
+    wait_named_agents(&daemon.socket, &ephemeral, &[]);
+
+    let mut cooperative_pgids = Vec::new();
+    for cycle in 0..CYCLES {
+        assert!(Instant::now() < deadline, "timeout global SC-005/SC-006");
+        let active_names = if cycle == 0 {
+            persistent
+                .iter()
+                .chain(ephemeral.iter())
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            persistent.clone()
+        };
+        let pgids = marker_pgids(&root, &active_names);
+        for pgid in &pgids {
+            let _ = assert_npx_descendant(*pgid);
+        }
+        cooperative_pgids.push(pgids.clone());
+        daemon.stop();
+        wait_groups_gone(&pgids);
+
+        daemon = DaemonProcess::start(&root, false, false);
+        wait_named_agents(&daemon.socket, &persistent, &ephemeral);
+    }
+
+    let pre_crash_pgids = marker_pgids(&root, &persistent);
+    daemon.kill();
+    assert!(
+        pre_crash_pgids
+            .iter()
+            .any(|pgid| group_exists(*pgid).unwrap_or(false)),
+        "SIGKILL doit laisser au moins un groupe à réconcilier"
+    );
+    daemon = DaemonProcess::start(&root, false, false);
+    wait_groups_gone(&pre_crash_pgids);
+    wait_named_agents(&daemon.socket, &persistent, &ephemeral);
+    let post_crash_pgids = marker_pgids(&root, &persistent);
+    assert!(
+        post_crash_pgids
+            .iter()
+            .all(|pgid| !pre_crash_pgids.contains(pgid)),
+        "la reprise doit créer une génération distincte"
+    );
+
+    let mut control = Peer::register(&daemon.socket, "persistence-stopper");
+    for (index, name) in persistent.iter().enumerate() {
+        stop_managed(&mut control, name, 10_000 + index);
+    }
+    daemon.stop();
+    daemon = DaemonProcess::start(&root, false, false);
+    wait_named_agents(&daemon.socket, &[], &persistent);
+
+    eprintln!(
+        "SC-005/SC-006 009: cycles={CYCLES}, persistants={persistent:?}, éphémères={ephemeral:?}, pgid_coopératifs={cooperative_pgids:?}, pgid_avant_sigkill={pre_crash_pgids:?}, pgid_après_reprise={post_crash_pgids:?}"
+    );
+    assert!(Instant::now() < deadline, "timeout global SC-005/SC-006");
     daemon.stop();
     fs::remove_dir_all(root).unwrap();
 }
