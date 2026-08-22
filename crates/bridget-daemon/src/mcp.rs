@@ -8,6 +8,8 @@ use bridget_transport::protocol::{
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::io::FromRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::collections::HashSet;
@@ -334,7 +336,7 @@ struct DaemonConnection {
 impl DaemonConnection {
     fn connect(socket: &Path) -> Result<Self, ToolError> {
         let deadline = Instant::now() + DAEMON_BUDGET;
-        let stream = UnixStream::connect(socket).map_err(|error| ToolError::Technical {
+        let stream = connect_nonblocking(socket, deadline).map_err(|error| ToolError::Technical {
             code: "daemon_unreachable",
             message: format!("daemon Bridget injoignable : {error}"),
         })?;
@@ -429,6 +431,61 @@ impl DaemonConnection {
                 message: format!("impossible de borner la lecture daemon : {error}"),
             })
     }
+}
+
+fn connect_nonblocking(socket: &Path, deadline: Instant) -> io::Result<UnixStream> {
+    let path = socket.as_os_str().as_bytes();
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    if path.len() >= address.sun_path.len() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "socket Unix trop long"));
+    }
+    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        address.sun_len = (std::mem::size_of::<libc::sa_family_t>() + path.len() + 1) as u8;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(path.as_ptr().cast(), address.sun_path.as_mut_ptr(), path.len());
+    }
+    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+    if fd < 0 { return Err(io::Error::last_os_error()); }
+    let close = |fd: libc::c_int| unsafe { libc::close(fd) };
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        close(fd);
+        return Err(io::Error::last_os_error());
+    }
+    let result = unsafe {
+        libc::connect(
+            fd,
+            (&address as *const libc::sockaddr_un).cast(),
+            std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t,
+        )
+    };
+    if result < 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EINPROGRESS) {
+            close(fd);
+            return Err(error);
+        }
+        let remaining = deadline.checked_duration_since(Instant::now())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "budget connexion dépassé"))?;
+        let timeout = remaining.as_millis().min(i32::MAX as u128) as libc::c_int;
+        let mut pollfd = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
+        if unsafe { libc::poll(&mut pollfd, 1, timeout) } <= 0 {
+            close(fd);
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "connexion daemon expirée"));
+        }
+        let mut so_error: libc::c_int = 0;
+        let mut length = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        if unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_ERROR, (&mut so_error as *mut libc::c_int).cast(), &mut length) } < 0 || so_error != 0 {
+            close(fd);
+            return Err(io::Error::from_raw_os_error(so_error));
+        }
+    }
+    let stream = unsafe { UnixStream::from_raw_fd(fd) };
+    stream.set_nonblocking(false)?;
+    Ok(stream)
 }
 
 fn execute_tool(
