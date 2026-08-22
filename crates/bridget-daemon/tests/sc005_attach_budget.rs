@@ -2,14 +2,15 @@ use bridget_core::BridgetMessage;
 use bridget_daemon::daemon::{self, DaemonConfig};
 use bridget_daemon::registry::AgentRegistry;
 use bridget_daemon::wrapper::launch_acp_with;
-use bridget_transport::journal::AppendLatencyProbe;
+use bridget_transport::journal::{AppendLatencyProbe, current_host_date};
 use bridget_transport::protocol::{AttachWindow, ConnectionRole, decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -17,6 +18,19 @@ const WARMUP_TURNS: usize = 100;
 const MEASURED_TURNS: usize = 1_000;
 const EVENTS_PER_TURN: usize = 2;
 const GLOBAL_TIMEOUT: Duration = Duration::from_secs(60);
+const SC001_TURNS: usize = 600;
+const SC001_CADENCE: Duration = Duration::from_millis(100);
+
+/// Les deux bancs de latence mesurent des délais de quelques microsecondes :
+/// ils doivent donc s'exclure mutuellement dans le même binaire de test.
+static LATENCY_BENCH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn lock_latency_bench() -> std::sync::MutexGuard<'static, ()> {
+    LATENCY_BENCH_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
 
 fn unique_root(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -85,6 +99,8 @@ fn wait_for_agent(socket: &Path, name: &str, deadline: Instant) {
 struct AttachViewConsumer {
     final_fragments: Arc<AtomicUsize>,
     caught_up: Arc<AtomicUsize>,
+    final_sequences: Arc<Mutex<Vec<u64>>>,
+    rendered_at: Arc<Mutex<HashMap<u64, Instant>>>,
     handle: thread::JoinHandle<Vec<String>>,
 }
 
@@ -123,6 +139,10 @@ fn connect_attach(socket: &Path, agent: &str) -> AttachViewConsumer {
     let observed = Arc::clone(&final_fragments);
     let caught_up = Arc::new(AtomicUsize::new(0));
     let observed_caught_up = Arc::clone(&caught_up);
+    let final_sequences = Arc::new(Mutex::new(Vec::new()));
+    let observed_sequences = Arc::clone(&final_sequences);
+    let rendered_at = Arc::new(Mutex::new(HashMap::new()));
+    let observed_rendered_at = Arc::clone(&rendered_at);
     let handle = thread::spawn(move || {
         let _writer_kept_alive = writer;
         let mut diagnostics = Vec::new();
@@ -133,11 +153,21 @@ fn connect_attach(socket: &Path, agent: &str) -> AttachViewConsumer {
                 Ok(_) => match decode::<DaemonToWrapper>(line.trim()) {
                     Ok(DaemonToWrapper::JournalFragment {
                         subscription_id: received,
+                        seq,
                         final_fragment,
                         ..
                     }) if received == subscription_id => {
                         if final_fragment {
                             observed.fetch_add(1, Ordering::SeqCst);
+                            observed_sequences
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner())
+                                .push(seq);
+                            observed_rendered_at
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner())
+                                .entry(seq)
+                                .or_insert_with(Instant::now);
                         }
                     }
                     Ok(DaemonToWrapper::SnapshotCaughtUp {
@@ -173,6 +203,8 @@ fn connect_attach(socket: &Path, agent: &str) -> AttachViewConsumer {
     AttachViewConsumer {
         final_fragments,
         caught_up,
+        final_sequences,
+        rendered_at,
         handle,
     }
 }
@@ -246,6 +278,8 @@ struct BenchHarness {
     root: PathBuf,
     socket: PathBuf,
     probe: AppendLatencyProbe,
+    planned_turns: usize,
+    historical_events: usize,
     sender: BufWriter<UnixStream>,
     sender_reader: BufReader<UnixStream>,
     wrapper_done: mpsc::Receiver<Result<(), String>>,
@@ -254,7 +288,14 @@ struct BenchHarness {
 }
 
 impl BenchHarness {
-    fn start(label: &str, view_count: usize, deadline: Instant) -> Self {
+    fn start(
+        label: &str,
+        view_count: usize,
+        planned_turns: usize,
+        historical_events: usize,
+        deadline: Instant,
+        prepare_journal: impl FnOnce(&Path),
+    ) -> Self {
         let root = unique_root(label);
         std::fs::create_dir_all(&root).expect("racine campagne");
         let config = daemon_config(&root);
@@ -264,10 +305,11 @@ impl BenchHarness {
 
         let journal_root = root.join("home/.cache/bridget/sessions");
         let probe = AppendLatencyProbe::install(&journal_root);
-        let registry = fake_registry(&root, WARMUP_TURNS + MEASURED_TURNS + 1);
+        let registry = fake_registry(&root, planned_turns + 1);
         let wrapper_socket = socket.clone();
         let wrapper_home = root.join("home");
         std::fs::create_dir_all(&wrapper_home).expect("home wrapper");
+        prepare_journal(&journal_root.join("codex-bench"));
         let (wrapper_done_tx, wrapper_done) = mpsc::channel();
         let wrapper = thread::spawn(move || {
             let result = launch_acp_with(
@@ -295,6 +337,8 @@ impl BenchHarness {
             root,
             socket,
             probe,
+            planned_turns,
+            historical_events,
             sender,
             sender_reader,
             wrapper_done,
@@ -329,7 +373,7 @@ impl BenchHarness {
     }
 
     fn finish(mut self, deadline: Instant) {
-        let expected_view = (WARMUP_TURNS + MEASURED_TURNS) * EVENTS_PER_TURN;
+        let expected_view = self.historical_events + self.planned_turns * EVENTS_PER_TURN;
         for view in &self.views {
             wait_until(deadline, "vue attach en retard en fin de campagne", || {
                 view.final_fragments.load(Ordering::SeqCst) >= expected_view
@@ -362,8 +406,22 @@ impl BenchHarness {
 
 fn run_interleaved_campaign() -> (Duration, usize, Duration, usize) {
     let deadline = Instant::now() + GLOBAL_TIMEOUT;
-    let mut baseline = BenchHarness::start("baseline", 0, deadline);
-    let mut observed = BenchHarness::start("observed", 2, deadline);
+    let mut baseline = BenchHarness::start(
+        "baseline",
+        0,
+        WARMUP_TURNS + MEASURED_TURNS,
+        0,
+        deadline,
+        |_| {},
+    );
+    let mut observed = BenchHarness::start(
+        "observed",
+        2,
+        WARMUP_TURNS + MEASURED_TURNS,
+        0,
+        deadline,
+        |_| {},
+    );
     for turn in 0..WARMUP_TURNS + MEASURED_TURNS {
         if turn % 2 == 0 {
             baseline.send_turn(turn);
@@ -399,6 +457,7 @@ fn run_interleaved_campaign() -> (Duration, usize, Duration, usize) {
 
 #[test]
 fn sc005_deux_vues_reelles_ne_degradent_pas_le_p95_d_append_de_plus_de_cinq_pourcent() {
+    let _lock = lock_latency_bench();
     let (baseline, baseline_count, observed, observed_count) = run_interleaved_campaign();
     eprintln!(
         "SC-005 append p95 entrelacé: 0 vue={baseline:?} ({baseline_count} échantillons), 2 vues={observed:?} ({observed_count} échantillons)"
@@ -407,4 +466,142 @@ fn sc005_deux_vues_reelles_ne_degradent_pas_le_p95_d_append_de_plus_de_cinq_pour
         observed.as_nanos() * 100 < baseline.as_nanos() * 105,
         "p95 append entrelacé avec 2 vues réelles={observed:?}, sans vue={baseline:?}"
     );
+}
+
+#[test]
+fn sc001_append_vers_rendu_attach_reel_reste_sous_les_seuils_locaux() {
+    let _lock = lock_latency_bench();
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(75);
+    let mut harness = BenchHarness::start(
+        "sc001-local",
+        2,
+        SC001_TURNS,
+        0,
+        deadline,
+        |_| {},
+    );
+
+    for turn in 0..SC001_TURNS {
+        let due = started + SC001_CADENCE * turn as u32;
+        if let Some(wait) = due.checked_duration_since(Instant::now()) {
+            thread::sleep(wait);
+        }
+        harness.send_turn(turn);
+    }
+
+    let expected_events = SC001_TURNS * EVENTS_PER_TURN;
+    harness.wait_for_appends(expected_events, deadline);
+    for view in &harness.views {
+        wait_until(deadline, "rendu attach absent après append", || {
+            view.final_fragments.load(Ordering::SeqCst) >= expected_events
+        });
+    }
+
+    let samples = harness.probe.take_samples();
+    assert_eq!(samples.len(), expected_events, "append incomplet");
+    let first_view = &harness.views[0];
+    let rendered = first_view
+        .rendered_at
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let mut latencies = samples
+        .iter()
+        .map(|sample| {
+            let rendered_at = rendered
+                .get(&sample.seq)
+                .copied()
+                .unwrap_or_else(|| panic!("seq {} non rendue", sample.seq));
+            rendered_at.checked_duration_since(sample.completed_at).unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    drop(rendered);
+    assert_eq!(latencies.len(), expected_events);
+    let p95 = percentile_95(&latencies);
+    let max = latencies.iter().copied().max().unwrap_or_default();
+    eprintln!(
+        "SC-001 append→rendu local: {} événements, p95={p95:?}, max={max:?}",
+        latencies.len()
+    );
+    assert!(p95 < Duration::from_secs(1), "p95 SC-001={p95:?}");
+    assert!(max < Duration::from_secs(3), "max SC-001={max:?}");
+    latencies.clear();
+    harness.finish(deadline);
+}
+
+fn previous_host_date() -> String {
+    let today = current_host_date();
+    let mut parts = today
+        .split('-')
+        .map(|part| part.parse::<u32>().expect("date hôte"));
+    let mut year = parts.next().expect("année");
+    let mut month = parts.next().expect("mois");
+    let mut day = parts.next().expect("jour");
+    if day > 1 {
+        day -= 1;
+    } else {
+        if month == 1 {
+            year -= 1;
+            month = 12;
+        } else {
+            month -= 1;
+        }
+        day = match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) => 29,
+            2 => 28,
+            _ => unreachable!("mois calendaire"),
+        };
+    }
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+#[test]
+fn sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon() {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let previous_date = previous_host_date();
+    let mut harness = BenchHarness::start(
+        "sc002-rotation",
+        1,
+        1,
+        1,
+        deadline,
+        move |journal_directory| {
+            std::fs::create_dir_all(journal_directory).expect("répertoire historique");
+            std::fs::write(
+                journal_directory.join(format!("{previous_date}.jsonl")),
+                b"{\"v\":1,\"seq\":5}\n",
+            )
+            .expect("événement avant minuit");
+        },
+    );
+    let final_fragments = Arc::clone(&harness.views[0].final_fragments);
+    let final_sequences = Arc::clone(&harness.views[0].final_sequences);
+    wait_until(deadline, "rejeu historique absent", || {
+        final_fragments.load(Ordering::SeqCst) >= 1
+    });
+    assert_eq!(
+        final_sequences
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_slice(),
+        [5]
+    );
+
+    harness.send_turn(0);
+    wait_until(deadline, "suivi live absent après rotation", || {
+        final_fragments.load(Ordering::SeqCst) >= 3
+    });
+    let seqs = final_sequences
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone();
+    assert_eq!(seqs, vec![5, 6, 7], "continuité rejeu→suivi");
+    let current_file = harness
+        .root
+        .join("home/.cache/bridget/sessions/codex-bench")
+        .join(format!("{}.jsonl", current_host_date()));
+    assert!(current_file.exists(), "rotation vers le fichier courant absente");
+    harness.finish(deadline);
 }

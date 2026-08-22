@@ -21,9 +21,19 @@ use std::collections::HashMap;
 use std::sync::{OnceLock, Weak};
 
 #[cfg(feature = "test-support")]
-type AppendSamples = Arc<Mutex<Vec<Duration>>>;
+type AppendSamples = Arc<Mutex<Vec<AppendLatencySample>>>;
 #[cfg(feature = "test-support")]
-type AppendProbeRegistry = Mutex<HashMap<PathBuf, Weak<Mutex<Vec<Duration>>>>>;
+type AppendProbeRegistry = Mutex<HashMap<PathBuf, Weak<Mutex<Vec<AppendLatencySample>>>>>;
+
+/// Observation post-flush limitée aux bancs d'intégration. `completed_at` est
+/// pris immédiatement après l'écriture complète de la ligne JSONL.
+#[cfg(feature = "test-support")]
+#[derive(Debug, Clone, Copy)]
+pub struct AppendLatencySample {
+    pub seq: u64,
+    pub completed_at: Instant,
+    pub elapsed: Duration,
+}
 
 const WRITER_QUEUE_CAPACITY: usize = 256;
 const MAX_INCREMENTAL_LINE_BYTES: usize = 4 * 1024 * 1024;
@@ -206,6 +216,20 @@ impl AppendLatencyProbe {
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner()),
         )
+        .into_iter()
+        .map(|sample| sample.elapsed)
+        .collect()
+    }
+
+    /// Prélève les observations complètes, dont la borne temporelle après le
+    /// flush, pour corréler append et rendu dans les bancs attach.
+    pub fn take_samples(&self) -> Vec<AppendLatencySample> {
+        std::mem::take(
+            &mut *self
+                .samples
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()),
+        )
     }
 }
 
@@ -283,6 +307,10 @@ impl JournalWriter {
                         };
                         #[cfg(any(test, feature = "test-support"))]
                         let append_elapsed = started.elapsed();
+                        #[cfg(feature = "test-support")]
+                        let completed_at = Instant::now();
+                        #[cfg(feature = "test-support")]
+                        let sequence = live_event.seq;
                         if let Some(feed) = &live_feed {
                             feed.publish(live_event);
                         }
@@ -296,7 +324,11 @@ impl JournalWriter {
                             samples
                                 .lock()
                                 .unwrap_or_else(|poison| poison.into_inner())
-                                .push(append_elapsed);
+                                .push(AppendLatencySample {
+                                    seq: sequence,
+                                    completed_at,
+                                    elapsed: append_elapsed,
+                                });
                         }
                     }
                     WriterCommand::Stop(done) => {

@@ -107,3 +107,24 @@ La reprise de la connexion attach après coupure est ainsi démontrée.
 - **Nettoyage** : le daemon, l'équipier, le tunnel et les sockets temporaires
   de gate ont été arrêtés après la campagne; aucune configuration persistante
   de fédération n'a été supprimée.
+
+## T807 — Bancs locaux SC-001 et SC-002
+
+- **Date** : 2026-08-22.
+- **SC-001** : le banc `sc001_append_vers_rendu_attach_reel_reste_sous_les_seuils_locaux`
+  utilise le faux adaptateur ACP déterministe de T704, un writer JSONL, le
+  wrapper et le daemon réels, puis deux connexions Unix négociant le rôle
+  `Attach` et consommant les frames. L'instrumentation de test prélève
+  l'horodatage juste après le flush de chaque ligne `turn_start`/`turn_end` et
+  le corrèle à son `seq` rendu par la première vue. Sur 600 tours (1 200
+  événements) cadencés à 10 tours/s pendant 60,92 s, le p95 append→rendu est
+  de **11,888459 ms** et le maximum de **13,178 ms** : les seuils locaux
+  respectifs de 1 s et 3 s sont satisfaits. Le timeout global de 75 s fait
+  échouer proprement le banc en cas de blocage.
+- **SC-002** : `sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon`
+  injecte l'événement `seq=5` dans le fichier de la veille, ouvre la vue et
+  attend `SnapshotCaughtUp`, puis démarre un tour actif qui crée le fichier du
+  jour et produit `seq=6,7` via le flux live. La suite finale strictement
+  observée est `[5, 6, 7]` : aucune perte ni doublon à la bascule
+  catch-up→live introduite par le relais mémoire, y compris à la rotation de
+  fichier simulée.

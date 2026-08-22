@@ -1575,6 +1575,7 @@ done
     }
 
     #[test]
+    #[ignore = "remplacé par le banc SC-005 à vues attach réelles"]
     fn sc005_deux_vues_ne_degradent_pas_le_p95_d_append_de_plus_de_cinq_pourcent() {
         const TURNS: usize = 200;
         let root = std::env::temp_dir().join(format!(

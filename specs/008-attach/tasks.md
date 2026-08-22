@@ -132,7 +132,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
 
 ## Phase 3 : Critères mesurés
 
-- [ ] **T807** [US1] **Bancs SC-001/SC-002 (local)** : latence
+- [x] **T807** [US1] **Bancs SC-001/SC-002 (local)** : latence
   fin-d'append→rendu p95 < 1 s et max < 3 s à 10 evt/s sur 60 s ; jonction
   rejeu→suivi zéro perte/doublon par continuité de `seq`, rotation de minuit
   simulée comprise.
