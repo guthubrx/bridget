@@ -232,6 +232,9 @@ pas cette baseline. Le test verrouille explicitement `connected` avant et après
 la coupure ainsi que l'absence de `deferred_reminder_level`, sans fabriquer de
 signal `TurnState`. Les deux oracles restent portés par le wrapper ACP, qui
 réenregistre son tour actif et émet `TurnState` (autour des lignes 2439–2488).
+Le scénario interactif et la matrice ACP utilisent des racines, daemons, bases
+SQLite et proxies distincts : leurs compteurs de tours et journaux ne peuvent
+plus s'intercaler lors d'une exécution chargée.
 
 La matrice `managed_parity_test::matrice_fr008_compare_le_meme_corpus_et_les_frames_attach`
 rejoue en complément le quickstart 007 §1 à §4 trois fois dans chacun des deux

@@ -1117,31 +1117,37 @@ fn marker_pgids(root: &Path, names: &[String]) -> Vec<u32> {
 }
 
 #[test]
+fn prompt_reduit_rejoue_le_corpus_dans_la_meme_session() {
+    let _serial = MANAGED_BENCH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(REDUCED_PROMPT.contains("reply=yes"));
+    assert!(REDUCED_PROMPT.contains("reply=no"));
+    assert!(!REDUCED_PROMPT.contains("bridget send"));
+
+    let root = test_root("prompt-corpus");
+    write_fixture(&root);
+    let (daemon, proxy) = start_daemon_behind_proxy(&root);
+    let prompt_name = "prompt-mcp";
+    let prompt_session = start_interactive_prompt_session(&root, prompt_name);
+    run_interactive_prompt_corpus(&daemon.socket, prompt_name, &proxy, prompt_session);
+    daemon.stop();
+    proxy.stop();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
     let _serial = MANAGED_BENCH_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     assert_eq!(MATRIX_VERSION, "fr-008-v1");
     assert_eq!(MATRIX_RUNS_PER_MODE, 3);
-    assert!(REDUCED_PROMPT.contains("reply=yes"));
-    assert!(REDUCED_PROMPT.contains("reply=no"));
-    assert!(!REDUCED_PROMPT.contains("bridget send"));
 
     for run in 0..MATRIX_RUNS_PER_MODE {
         let root = test_root(&format!("matrix-{run}"));
         let adapter = write_fixture(&root);
         let (daemon, proxy) = start_daemon_behind_proxy(&root);
-
-        if run == 0 {
-            let prompt_name = "prompt-mcp-0";
-            let prompt_session = start_interactive_prompt_session(&root, prompt_name);
-            run_interactive_prompt_corpus(
-                &daemon.socket,
-                prompt_name,
-                &proxy,
-                prompt_session,
-            );
-        }
 
         let terminal_name = format!("parity-terminal-{run}");
         let mut terminal = Command::new(env!("CARGO_BIN_EXE_bridget"))
