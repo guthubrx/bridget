@@ -150,3 +150,26 @@ le diff des quatre hashes est vide.
   `tools/list`, `ping`, les notifications, les identifiants mixtes et les
   erreurs de protocole. Le golden de pureté décode chaque octet de stdout
   comme réponse JSON-RPC.
+
+## T1007 — Prompt allégé
+
+### Phase A — Fixtures et mesure statique
+
+Les blocs v1 avant/après sont versionnés sous
+`crates/bridget-daemon/tests/fixtures/prompts/`. La fixture avant reprend le
+bloc interactif historique avec un nom d'agent stable ; la fixture après ne
+conserve que l'identité de session, la reconnaissance du préfixe `💬` et la
+sémantique `reply=yes`/`reply=no`. Elle ne contient plus de commande shell, de
+syntaxe d'envoi, de règle `Bridget ready` ni d'interdiction de consulter le
+binaire.
+
+Méthode de comptage SC-005 : nombre de valeurs scalaires Unicode retourné par
+`str::chars().count()` sur le contenu brut UTF-8 de chaque fixture, saut LF
+final inclus, sans normalisation Unicode. Résultat : **793 caractères avant**,
+**234 après**, soit une réduction de **70,49 %**. Le test
+`prompt_reduction_test` verrouille le seuil de 60 % et l'absence des règles de
+syntaxe supprimées.
+
+La phase B branchera exactement la fixture réduite dans le wrapper puis
+rejouera la matrice quickstart 007 §1 à §4 dès que T1005 et T1006 seront
+intégrées.
