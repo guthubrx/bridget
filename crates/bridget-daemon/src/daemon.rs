@@ -1663,18 +1663,28 @@ fn handle_wrapper_message(
         WrapperToDaemon::ListRequests { sender } => {
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
             match st.store.requests_for_sender(&sender) {
-                Ok(requests) => Some(DaemonToWrapper::RequestList {
-                    requests: requests
+                Ok(requests) => match requests
                         .into_iter()
-                        .map(|request| bridget_transport::protocol::RequestInfo {
-                            id: request.id,
-                            target: request.target,
-                            state: request.state,
-                            deadline_at: request.deadline_at,
-                            cancel_reason: request.cancel_reason,
+                        .map(|request| -> Result<_, crate::store::StoreError> {
+                            let deferred = st.store.latest_deferred_reminder(&request.id)?;
+                            Ok(bridget_transport::protocol::RequestInfo {
+                                id: request.id,
+                                target: request.target,
+                                state: request.state,
+                                deadline_at: request.deadline_at,
+                                cancel_reason: request.cancel_reason,
+                                deferred_reminder_level: deferred.map(|event| event.0),
+                                deferred_reminder_at: deferred.map(|event| event.1),
+                            })
                         })
-                        .collect(),
-                }),
+                        .collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(requests) => Some(DaemonToWrapper::RequestList { requests }),
+                    Err(error) => Some(DaemonToWrapper::Nack {
+                        id: "requests".to_string(),
+                        reason: error.to_string(),
+                    }),
+                },
                 Err(error) => Some(DaemonToWrapper::Nack {
                     id: "requests".to_string(),
                     reason: error.to_string(),
@@ -2120,6 +2130,24 @@ mod presence_tests {
         state.store.create_request("request-timeout", "sender", "agent-2", 60).unwrap();
         assert!(claim_timeout(&state.store, "request-timeout"));
         assert!(!claim_timeout(&state.store, "request-timeout"));
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    #[test]
+    fn vue_requests_expose_le_dernier_report_differe() {
+        let (state, config) = state_with_registered_agent("vue-report");
+        state.store.create_request("request-report", "agent-2", "cible", 60).unwrap();
+        state.store.record_deferred_reminder("request-report", 2).unwrap();
+        let shared = Arc::new(Mutex::new(state));
+        let response = handle_wrapper_message("conn-1", WrapperToDaemon::ListRequests { sender: "agent-2".to_string() }, &shared);
+        match response {
+            Some(DaemonToWrapper::RequestList { requests }) => {
+                assert_eq!(requests.len(), 1);
+                assert_eq!(requests[0].deferred_reminder_level, Some(2));
+                assert!(requests[0].deferred_reminder_at.is_some());
+            }
+            other => panic!("réponse requests inattendue: {other:?}"),
+        }
         let _ = std::fs::remove_file(&config.db_path);
     }
 

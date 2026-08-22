@@ -164,15 +164,15 @@ impl Store {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub fn deferred_reminder_levels(&self, id: &str) -> Result<Vec<u8>, StoreError> {
+    /// Dernier report différé, exposé par la vue publique des demandes.
+    pub fn latest_deferred_reminder(&self, id: &str) -> Result<Option<(u8, i64)>, StoreError> {
         let mut statement = self.conn.prepare(
-            "SELECT level FROM request_events WHERE request_id = ?1 AND event_type = 'reminder_deferred' ORDER BY ts, rowid",
+            "SELECT level, ts FROM request_events WHERE request_id = ?1 AND event_type = 'reminder_deferred' ORDER BY ts DESC, rowid DESC LIMIT 1",
         ).map_err(StoreError::Sqlite)?;
-        statement.query_map(rusqlite::params![id], |row| row.get(0))
-            .map_err(StoreError::Sqlite)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::Sqlite)
+        let mut rows = statement.query(rusqlite::params![id]).map_err(StoreError::Sqlite)?;
+        rows.next().map_err(StoreError::Sqlite)?.map(|row| {
+            Ok((row.get(0)?, row.get(1)?))
+        }).transpose().map_err(StoreError::Sqlite)
     }
 
     fn query_requests<P: rusqlite::Params>(
@@ -381,10 +381,10 @@ mod tests {
         let store = Store::open(&path).unwrap();
         store.create_request("request-1", "alice", "bob", 60).unwrap();
         store.record_deferred_reminder("request-1", 2).unwrap();
-        assert_eq!(store.deferred_reminder_levels("request-1").unwrap(), vec![2]);
+        assert_eq!(store.latest_deferred_reminder("request-1").unwrap().map(|event| event.0), Some(2));
         drop(store);
         let reopened = Store::open(&path).unwrap();
-        assert_eq!(reopened.deferred_reminder_levels("request-1").unwrap(), vec![2]);
+        assert_eq!(reopened.latest_deferred_reminder("request-1").unwrap().map(|event| event.0), Some(2));
         drop(reopened);
         let _ = std::fs::remove_file(path);
     }

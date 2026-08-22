@@ -495,13 +495,14 @@ fn cmd_requests(args: &[String]) {
                 .unwrap_or(4)
                 .max(4);
             println!(
-                "{:<id_width$}  {:<target_width$}  {:<state_width$}  ÉCHÉANCE",
+                "{:<id_width$}  {:<target_width$}  {:<state_width$}  ÉCHÉANCE  REPORT",
                 "ID", "DESTINATAIRE", "ÉTAT"
             );
             for request in requests {
                 println!(
-                    "{:<id_width$}  {:<target_width$}  {:<state_width$}  {}",
-                    request.id, request.target, request.state, request.deadline_at
+                    "{:<id_width$}  {:<target_width$}  {:<state_width$}  {}  {}",
+                    request.id, request.target, request.state, request.deadline_at,
+                    request.deferred_reminder_level.map(|level| format!("palier {level} @ {}", request.deferred_reminder_at.unwrap_or_default())).unwrap_or_else(|| "—".to_string())
                 );
             }
         }

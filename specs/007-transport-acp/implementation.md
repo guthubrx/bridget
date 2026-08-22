@@ -192,5 +192,6 @@ https://antigravity.google
 
 - **Choix de persistance** : une relance différée est enregistrée comme
   événement typé `reminder_deferred` dans le store des demandes. Elle relève
-  du cycle de vie d'une demande et reste ainsi lisible par la vue ledger, sans
-  détourner le journal JSONL de session ACP.
+  du cycle de vie d'une demande et est exposée par `ListRequests` et
+  `bridget requests` (niveau et horodatage du dernier report), sans détourner
+  le journal JSONL de session ACP.

@@ -98,6 +98,7 @@ struct TurnWorker {
     child: Arc<Mutex<Child>>,
     journal: Journal,
     clock: Clock,
+    test_observer: Option<mpsc::Sender<AcpEvent>>,
 }
 
 pub struct AcpTransport {
@@ -123,10 +124,22 @@ impl AcpTransport {
     }
 
     fn spawn_with_clock(options: AcpOptions, clock: Clock) -> Result<Self, TransportError> {
-        Self::spawn_with_clock_and_cancel_grace(options, clock, CANCEL_GRACE, CANCEL_POLL)
+        Self::spawn_with_clock_and_cancel_grace(
+            options,
+            clock,
+            CANCEL_GRACE,
+            CANCEL_POLL,
+            None,
+        )
     }
 
-    fn spawn_with_clock_and_cancel_grace(options: AcpOptions, clock: Clock, cancel_grace: Duration, poll_interval: Duration) -> Result<Self, TransportError> {
+    fn spawn_with_clock_and_cancel_grace(
+        options: AcpOptions,
+        clock: Clock,
+        cancel_grace: Duration,
+        poll_interval: Duration,
+        test_observer: Option<mpsc::Sender<AcpEvent>>,
+    ) -> Result<Self, TransportError> {
         if options.queue_capacity == 0 {
             return Err(TransportError::DeliveryFailed(
                 "queue ACP de capacité nulle".to_string(),
@@ -181,6 +194,7 @@ impl AcpTransport {
             queue.clone(),
             active_session.clone(),
             journal.clone(),
+            test_observer.clone(),
         );
 
         let setup = (|| -> Result<String, TransportError> {
@@ -249,6 +263,7 @@ impl AcpTransport {
             child: child.clone(),
             journal: journal.clone(),
             clock: clock.clone(),
+            test_observer,
         });
         Ok(Self {
             connection_id: format!("acp-{pid}"),
@@ -561,6 +576,9 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 ),
                 _ => {}
             }
+            if let Some(observer) = &worker.test_observer {
+                let _ = observer.send(event.clone());
+            }
             worker
                 .events
                 .lock()
@@ -650,6 +668,7 @@ fn spawn_reader(
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     active_session: Arc<Mutex<Option<String>>>,
     journal: Journal,
+    test_observer: Option<mpsc::Sender<AcpEvent>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
@@ -689,6 +708,13 @@ fn spawn_reader(
                         .lock()
                         .unwrap_or_else(|err| err.into_inner())
                         .clone();
+                    if let (Some(observer), Some(text)) =
+                        (&test_observer, update_text(&value, session_id.as_deref()))
+                    {
+                        let _ = observer.send(AcpEvent::Update {
+                            detail: text.to_string(),
+                        });
+                    }
                     if update_has_foreign_session(&value, session_id.as_deref()) {
                         let message_id = active_message_id(&queue);
                         record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": "update ACP ignorée pour une session étrangère" }));
@@ -714,12 +740,13 @@ fn spawn_reader(
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
                             .push_str(text);
+                        let event = AcpEvent::Update {
+                            detail: text.to_string(),
+                        };
                         events
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
-                            .push_back(AcpEvent::Update {
-                                detail: text.to_string(),
-                            });
+                            .push_back(event);
                     } else if matches!(
                         value.pointer("/params/update/sessionUpdate").and_then(Value::as_str),
                         Some("tool_call") | Some("tool_call_update")
@@ -1691,43 +1718,46 @@ echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
 read prompt
 echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"prompt-observe"}}}}'
 read cancel
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"cancel-observe"}}}}'
 while :; do :; done
 "#;
         let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
         let observed_now = Arc::new(AtomicU64::new(now));
         let clock_now = observed_now.clone();
         let clock: Clock = Arc::new(move || SystemTime::UNIX_EPOCH + Duration::from_secs(clock_now.load(Ordering::SeqCst)));
+        let (observer, observed_events) = mpsc::channel();
         let mut transport = AcpTransport::spawn_with_clock_and_cancel_grace(AcpOptions {
             command: "sh".to_string(),
             args: vec!["-c".to_string(), script.to_string()],
             queue_capacity: 2,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
-        }, clock, Duration::ZERO, Duration::ZERO)
+        }, clock, Duration::from_millis(100), Duration::from_millis(10), Some(observer))
         .unwrap();
         let mut active = message("deadline-active");
         active.reply = true;
         active.deadline_at = Some(now + 1);
         transport.deliver(&active).unwrap();
         transport.deliver(&message("deadline-queued")).unwrap();
-        let mut observed_prompt = false;
-        for _ in 0..100_000 {
-            observed_prompt |= transport.drain_events().iter().any(|event| matches!(event, AcpEvent::Update { detail } if detail == "prompt-observe"));
-            if observed_prompt { break; }
-            thread::yield_now();
-        }
-        assert!(observed_prompt, "le faux adaptateur n'a pas observé le prompt");
+        assert!(matches!(
+            observed_events.recv_timeout(Duration::from_secs(2)),
+            Ok(AcpEvent::Update { detail }) if detail == "prompt-observe"
+        ), "le faux adaptateur n'a pas observé le prompt");
         observed_now.store(now + 1, Ordering::SeqCst);
-        let mut terminal_events = Vec::new();
-        for _ in 0..100_000 {
-            terminal_events.extend(transport.drain_events());
-            if terminal_events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, reason } if message_id == "deadline-active" && reason.contains("timeout ACP")))
-                && terminal_events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, .. } if message_id == "deadline-queued")) {
-                return;
-            }
-            thread::yield_now();
-        }
-        panic!("l'échéance injectée n'a pas interrompu le prompt ACP");
+        assert!(matches!(
+            observed_events.recv_timeout(Duration::from_secs(2)),
+            Ok(AcpEvent::Update { detail }) if detail == "cancel-observe"
+        ), "le faux adaptateur n'a pas observé session/cancel avant la grâce");
+        assert!(matches!(
+            observed_events.recv_timeout(Duration::from_secs(2)),
+            Ok(AcpEvent::DeliveryRejected { message_id, reason })
+                if message_id == "deadline-active" && reason.contains("timeout ACP")
+        ), "l'échéance injectée n'a pas interrompu le prompt ACP");
+        let terminal_events = transport.drain_events();
+        assert!(terminal_events.iter().any(|event| matches!(
+            event,
+            AcpEvent::DeliveryRejected { message_id, .. } if message_id == "deadline-queued"
+        )), "la file n'a pas été drainée après l'annulation forcée");
     }
 
     #[test]

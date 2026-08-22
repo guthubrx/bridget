@@ -190,6 +190,10 @@ pub struct RequestInfo {
     pub state: String,
     pub deadline_at: i64,
     pub cancel_reason: Option<String>,
+    #[serde(default)]
+    pub deferred_reminder_level: Option<u8>,
+    #[serde(default)]
+    pub deferred_reminder_at: Option<i64>,
 }
 
 #[cfg(test)]
