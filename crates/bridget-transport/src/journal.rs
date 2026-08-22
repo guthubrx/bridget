@@ -3,6 +3,7 @@
 use serde::Serialize;
 use serde_json::Value;
 use crate::acp::AcpEvent;
+use crate::protocol::AttachWindow;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -190,6 +191,156 @@ pub fn valid_events(path: &Path) -> Vec<Value> {
         .collect()
 }
 
+/// Une ligne v1 lisible, accompagnée de sa position dans le fichier source.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JournalReadEvent {
+    pub seq: u64,
+    pub offset: u64,
+    pub line: u64,
+    pub bytes: Vec<u8>,
+    pub value: Value,
+}
+
+/// Diagnostic non bloquant d'une ligne qui ne peut pas participer au flux.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalUnreadableLine {
+    pub line: u64,
+    pub offset: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum JournalReadItem {
+    Event(JournalReadEvent),
+    Unreadable(JournalUnreadableLine),
+}
+
+/// Lecteur incrémental : sa mémoire est bornée par une tranche plus la seule
+/// ligne finale incomplète. Celle-ci n'est jamais interprétée avant son newline.
+pub struct IncrementalJournalReader {
+    path: PathBuf,
+    next_offset: u64,
+    next_line: u64,
+    pending_offset: u64,
+    pending: Vec<u8>,
+}
+
+impl IncrementalJournalReader {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            next_offset: 0,
+            next_line: 1,
+            pending_offset: 0,
+            pending: Vec::new(),
+        }
+    }
+
+    pub fn next_offset(&self) -> u64 { self.next_offset }
+
+    /// Lit au plus `max_bytes` octets nouveaux. Une queue partielle est gardée
+    /// pour l'appel suivant et ne produit donc jamais un faux événement.
+    pub fn read_chunk(&mut self, max_bytes: usize) -> std::io::Result<Vec<JournalReadItem>> {
+        assert!(max_bytes > 0, "une tranche de journal doit être non nulle");
+        let mut file = match OpenOptions::new().read(true).open(&self.path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        file.seek(SeekFrom::Start(self.next_offset))?;
+        let mut chunk = vec![0; max_bytes];
+        let count = file.read(&mut chunk)?;
+        chunk.truncate(count);
+        self.next_offset = self.next_offset.saturating_add(count as u64);
+        self.pending.extend_from_slice(&chunk);
+
+        let mut items = Vec::new();
+        while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let mut line = self.pending.drain(..=end).collect::<Vec<_>>();
+            line.pop();
+            let offset = self.pending_offset;
+            let line_number = self.next_line;
+            self.pending_offset = self.pending_offset.saturating_add((end + 1) as u64);
+            self.next_line = self.next_line.saturating_add(1);
+            match serde_json::from_slice::<Value>(&line) {
+                Ok(value) if value.get("v").and_then(Value::as_u64) == Some(1) => {
+                    match value.get("seq").and_then(Value::as_u64) {
+                        Some(seq) => items.push(JournalReadItem::Event(JournalReadEvent {
+                            seq, offset, line: line_number, bytes: line, value,
+                        })),
+                        None => items.push(JournalReadItem::Unreadable(JournalUnreadableLine {
+                            line: line_number, offset,
+                        })),
+                    }
+                }
+                _ => items.push(JournalReadItem::Unreadable(JournalUnreadableLine {
+                    line: line_number, offset,
+                })),
+            }
+        }
+        Ok(items)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JournalWindowError {
+    InvalidDate,
+    FutureDate,
+    DateOutsideRetention,
+}
+
+/// Fenêtre résolue par l'hôte du wrapper. `from_seq` est inclusif.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedJournalWindow {
+    pub files: Vec<PathBuf>,
+    pub from_seq: Option<u64>,
+}
+
+/// Résout `Today` et `Date` dans le calendrier de l'hôte du wrapper, passé
+/// explicitement par l'appelant afin de ne jamais emprunter le fuseau du client.
+pub fn resolve_window(
+    directory: &Path,
+    window: &AttachWindow,
+    host_today: &str,
+) -> Result<ResolvedJournalWindow, JournalWindowError> {
+    let mut files = fs::read_dir(directory)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "jsonl"))
+        .collect::<Vec<_>>();
+    files.sort();
+    match window {
+        AttachWindow::Seq(seq) => Ok(ResolvedJournalWindow { files, from_seq: Some(*seq) }),
+        AttachWindow::Today => Ok(ResolvedJournalWindow {
+            files: files.into_iter().filter(|path| file_date(path) == Some(host_today)).collect(),
+            from_seq: None,
+        }),
+        AttachWindow::Date(date) => {
+            if !is_date(date) { return Err(JournalWindowError::InvalidDate); }
+            if date.as_str() > host_today { return Err(JournalWindowError::FutureDate); }
+            let selected = files.into_iter().filter(|path| file_date(path) == Some(date)).collect::<Vec<_>>();
+            if selected.is_empty() { return Err(JournalWindowError::DateOutsideRetention); }
+            Ok(ResolvedJournalWindow { files: selected, from_seq: None })
+        }
+    }
+}
+
+fn file_date(path: &Path) -> Option<&str> {
+    path.file_stem().and_then(|stem| stem.to_str())
+}
+
+fn is_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes.iter().enumerate().all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+        && value[5..7].parse::<u8>().is_ok_and(|month| (1..=12).contains(&month))
+        && value[8..10].parse::<u8>().is_ok_and(|day| (1..=31).contains(&day))
+}
+
 fn create_private_dir(path: &Path) -> std::io::Result<()> {
     fs::create_dir_all(path)?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
@@ -345,5 +496,45 @@ mod tests {
         assert_eq!(rotated.iter().map(|event| event["seq"].as_u64()).collect::<Vec<_>>(), vec![Some(5), Some(6)]);
         assert_eq!(valid_events(&fixtures.join("partial-tail.jsonl")).len(), 1);
         assert_eq!(valid_events(&fixtures.join("corrupt-line.jsonl")).len(), 1);
+    }
+
+    #[test]
+    fn lecteur_incremental_garde_la_queue_partielle_et_signale_la_ligne_corrompue() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/journal");
+        let mut partial = IncrementalJournalReader::new(fixtures.join("partial-tail.jsonl"));
+        let mut partial_items = Vec::new();
+        for _ in 0..32 { partial_items.extend(partial.read_chunk(7).unwrap()); }
+        assert_eq!(partial_items.iter().filter(|item| matches!(item, JournalReadItem::Event(_))).count(), 1);
+        assert_eq!(partial_items.iter().filter(|item| matches!(item, JournalReadItem::Unreadable(_))).count(), 1);
+
+        let root = root("tail-without-newline");
+        create_private_dir(&root).unwrap();
+        let path = root.join("journal.jsonl");
+        fs::write(&path, b"{\"v\":1,\"seq\":9").unwrap();
+        assert!(IncrementalJournalReader::new(&path).read_chunk(64).unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+
+        let mut corrupt = IncrementalJournalReader::new(fixtures.join("corrupt-line.jsonl"));
+        let items = corrupt.read_chunk(16 * 1024).unwrap();
+        assert!(matches!(items[0], JournalReadItem::Event(_)));
+        assert!(matches!(items[1], JournalReadItem::Unreadable(JournalUnreadableLine { line: 2, offset }) if offset > 0));
+    }
+
+    #[test]
+    fn fenetres_resolvent_rotation_seq_inclusif_et_vide() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/journal");
+        let rotation = resolve_window(&fixtures.join("rotation"), &AttachWindow::Seq(5), "2026-08-24").unwrap();
+        assert_eq!(rotation.files.len(), 2);
+        assert_eq!(rotation.from_seq, Some(5));
+        let events = rotation.files.iter().flat_map(|path| valid_events(path)).collect::<Vec<_>>();
+        assert_eq!(events.iter().filter_map(|event| event["seq"].as_u64()).collect::<Vec<_>>(), vec![5, 6]);
+
+        let root = root("empty-window");
+        create_private_dir(&root).unwrap();
+        assert!(resolve_window(&root, &AttachWindow::Today, "2026-08-22").unwrap().files.is_empty());
+        assert_eq!(resolve_window(&root, &AttachWindow::Date("2026-08-23".to_string()), "2026-08-22"), Err(JournalWindowError::FutureDate));
+        assert_eq!(resolve_window(&root, &AttachWindow::Date("bad".to_string()), "2026-08-22"), Err(JournalWindowError::InvalidDate));
+        assert_eq!(resolve_window(&root, &AttachWindow::Date("2026-08-21".to_string()), "2026-08-22"), Err(JournalWindowError::DateOutsideRetention));
+        fs::remove_dir_all(root).unwrap();
     }
 }

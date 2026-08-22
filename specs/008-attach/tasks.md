@@ -42,7 +42,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
   ascendante (agents 007 inchangés) ; message wrapper-only sur connexion
   attach → refus typé testé.
 
-- [ ] **T803a** [US1] **Lecture incrémentale du journal + résolution de
+- [X] **T803a** [US1] **Lecture incrémentale du journal + résolution de
   fenêtre** (`journal.rs`) : lecture par tranches bornées avec positions/
   offsets, signalement des lignes illisibles (numéro + offset, `seq` inconnu),
   résolution `Today`/`Date`/`Seq` dans le fuseau de l'hôte (refus typés).
