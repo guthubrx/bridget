@@ -16,7 +16,7 @@ use log::{debug, error, info, warn};
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
@@ -511,6 +511,8 @@ pub fn launch(
     // + injecter un prompt initial qui dit à l'agent de répondre via bridget.
     let definition = crate::registry::AgentRegistry::load()?.get(agent_type)?.clone();
     let mut final_args: Vec<String> = Vec::new();
+    // Le garde possède le fichier Claude jusqu'à la sortie de `launch`. Son
+    // `Drop` couvre aussi tous les refus entre cette préparation et `wait()`.
     let mut ephemeral_mcp_config = None;
     match definition.mcp.interactive.as_str() {
         "codex" => {
@@ -519,7 +521,11 @@ pub fn launch(
         }
         "claude" => {
             let config = claude_mcp_config(&mcp_server_entry()?, &instance_id)?;
-            final_args.extend(["--strict-mcp-config".to_string(), "--mcp-config".to_string(), config.display().to_string()]);
+            final_args.extend([
+                "--strict-mcp-config".to_string(),
+                "--mcp-config".to_string(),
+                config.path().display().to_string(),
+            ]);
             ephemeral_mcp_config = Some(config);
         }
         "none" | "unsupported" => {}
@@ -568,16 +574,7 @@ pub fn launch(
     let _ = definition;
 
     // Validation des arguments pour prévenir injection
-    for arg in &final_args {
-        // Rejeter les tentatives d'injection de commandes
-        if arg.contains(';') || arg.contains('&') || arg.contains('|') || arg.contains('$') {
-            return Err(format!(
-                "Argument non autorisé contient des caractères shell dangereux: '{}'",
-                arg
-            )
-            .into());
-        }
-    }
+    validate_wrapper_args(&final_args)?;
 
     eprintln!(
         "[bridget] Lancement: {} {}",
@@ -927,9 +924,9 @@ pub fn launch(
 
     // 6. Attendre la fin de l'agent
     let status = child.wait()?;
-    if let Some(config) = ephemeral_mcp_config {
-        let _ = std::fs::remove_file(config);
-    }
+    // `ephemeral_mcp_config` est libéré ici. Le garde RAII couvre également
+    // toutes les sorties anticipées précédentes.
+    drop(ephemeral_mcp_config);
 
     // 7. Désenregistrement
     stopping.store(true, Ordering::SeqCst);
@@ -1863,20 +1860,74 @@ fn mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     }))
 }
 
-fn claude_mcp_config(server: &serde_json::Value, instance_id: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let path = socket_path()
+/// Configuration MCP Claude temporaire. Le fichier n'appartient jamais à la
+/// configuration utilisateur : il vit sous le répertoire d'état Bridget et
+/// le garde le retire quelle que soit l'issue du lancement.
+struct EphemeralMcpConfig {
+    path: PathBuf,
+}
+
+impl EphemeralMcpConfig {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for EphemeralMcpConfig {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(
+                "nettoyage de la configuration MCP éphémère impossible {}: {}",
+                self.path.display(),
+                error
+            );
+        }
+    }
+}
+
+fn claude_mcp_config(
+    server: &serde_json::Value,
+    instance_id: &str,
+) -> Result<EphemeralMcpConfig, Box<dyn std::error::Error>> {
+    let socket = socket_path();
+    let directory = socket
         .parent()
-        .ok_or("répertoire socket Bridget absent")?
-        .join(format!("mcp-{instance_id}.json"));
+        .ok_or("répertoire socket Bridget absent")?;
+    claude_mcp_config_in(directory, server, instance_id)
+}
+
+fn claude_mcp_config_in(
+    directory: &Path,
+    server: &serde_json::Value,
+    instance_id: &str,
+) -> Result<EphemeralMcpConfig, Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(directory)?;
+    let path = directory.join(format!("mcp-{instance_id}.json"));
     std::fs::write(&path, serde_json::to_vec(&serde_json::json!({
         "mcpServers": { "bridget": server }
     }))?)?;
-    Ok(path)
+    Ok(EphemeralMcpConfig { path })
 }
 
 fn codex_mcp_override(server: &serde_json::Value) -> Result<String, Box<dyn std::error::Error>> {
     let command = server["command"].as_str().ok_or("commande MCP absente")?;
     Ok(format!("mcp_servers.bridget={{command={command:?},args=[\"mcp\"]}}"))
+}
+
+fn validate_wrapper_args(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    for argument in arguments {
+        // Rejeter les tentatives d'injection de commandes.
+        if argument.contains(';') || argument.contains('&') || argument.contains('|') || argument.contains('$') {
+            return Err(format!(
+                "Argument non autorisé contient des caractères shell dangereux: '{}'",
+                argument
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 fn send_wrapper_message(
@@ -2022,6 +2073,51 @@ fn journal_failure_requires_shutdown(events: &[AcpEvent]) -> bool {
 mod reconnect_tests {
     use super::*;
 
+    fn mcp_test_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "bridget-mcp-wrapper-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    fn user_config_snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        fn visit(root: &Path, directory: &Path, snapshot: &mut BTreeMap<PathBuf, Vec<u8>>) {
+            let Ok(entries) = std::fs::read_dir(directory) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(root, &path, snapshot);
+                } else if path.is_file() {
+                    snapshot.insert(
+                        path.strip_prefix(root).unwrap().to_path_buf(),
+                        std::fs::read(&path).unwrap(),
+                    );
+                }
+            }
+        }
+
+        let mut snapshot = BTreeMap::new();
+        for relative in [".claude", ".codex", ".gemini"] {
+            visit(root, &root.join(relative), &mut snapshot);
+        }
+        snapshot
+    }
+
+    fn write_user_config_sentinels(root: &Path) {
+        for (relative, contents) in [
+            (".claude/settings.json", b"claude-user-config".as_slice()),
+            (".codex/config.toml", b"codex-user-config".as_slice()),
+            (".gemini/settings.json", b"gemini-user-config".as_slice()),
+        ] {
+            let path = root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+    }
+
     fn relay_root(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("bridget-relay-{name}-{}", std::process::id()))
     }
@@ -2131,6 +2227,46 @@ mod reconnect_tests {
         ]);
         assert!(equipier);
         assert_eq!(remaining, vec!["resume", "session"]);
+    }
+
+    #[test]
+    fn branchement_mcp_n_ecrit_aucune_configuration_utilisateur() {
+        let root = mcp_test_root("config-vide");
+        write_user_config_sentinels(&root);
+        let before = user_config_snapshot(&root);
+        let server = mcp_server_entry().unwrap();
+
+        // Codex reçoit une surcharge de session, Claude un fichier sous l'état
+        // Bridget, Gemini reste explicitement sans branchement interactif et
+        // l'équipier ACP ne reçoit qu'une valeur `mcpServers` en mémoire.
+        let override_ = codex_mcp_override(&server).unwrap();
+        assert!(override_.contains("mcp_servers.bridget"));
+        let config = claude_mcp_config_in(&root.join(".cache/bridget"), &server, "fixture")
+            .unwrap();
+        assert!(config.path().exists());
+        assert_eq!(server["name"], "bridget");
+        drop(config);
+
+        assert_eq!(user_config_snapshot(&root), before);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fichier_mcp_ephemere_est_nettoye_avant_un_refus_de_spawn() {
+        let root = mcp_test_root("refus-avant-spawn");
+        write_user_config_sentinels(&root);
+        let before = user_config_snapshot(&root);
+        let server = mcp_server_entry().unwrap();
+        let config = claude_mcp_config_in(&root.join(".cache/bridget"), &server, "refused")
+            .unwrap();
+        let path = config.path().to_path_buf();
+
+        assert!(validate_wrapper_args(&["interdit;".to_string()]).is_err());
+        drop(config);
+
+        assert!(!path.exists(), "le garde nettoie le fichier avant le spawn");
+        assert_eq!(user_config_snapshot(&root), before);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
