@@ -24,3 +24,29 @@ limite de dégradation de 5 % fixée par SC-005.
 **Dérogation T806a** : cette tâche est commitée alors que le seul test rouge
 du workspace est ce banc SC-005 invalidé par STOP-T808 (vues simulées) ; sa
 correction immédiate remplace le banc par deux vues attach réelles.
+
+## T809 — Gate distant fédéré
+
+- **Date** : 2026-08-22.
+- **Isolement** : daemon de test lancé avec `HOME=/tmp/bg-attach` et socket
+  `/tmp/bg-attach/.cache/bridget/bridget.sock`. Le tunnel SSH manuel publiait
+  ce socket uniquement à `/home/moi/.cache/bridget/bridget.sock` sur
+  `cartae.app:2222`; le daemon de production local est resté intact.
+- **US1 et US2 observés** : le client distant a affiché `t809-acp ... acp ...
+  connected` dans `bridget who`. `bridget attach t809-acp` a négocié
+  l'abonnement, rejoué le journal (`historique rattrapé jusqu'à 796` puis 852),
+  reçu le flux Codex, et une ligne saisie à distance a été réécrite en
+  `humain`, accusée (`envoi 039473eadabd4 accepté`) et suivie de la réponse ACP
+  et de `turn_end`.
+- **Indisponibilité contrôlée** : après l'arrêt du seul wrapper de test
+  `t809-acp`, `bridget attach t809-acp` distant a retourné le message motivé
+  `équipier « t809-acp » inconnu ; aucun équipier ACP n'est actuellement
+  attachable`, sans erreur brute.
+- **Résultat strict** : la resynchronisation d'une vue attach persistante après
+  coupure du tunnel n'a pas été démontrée : le wrapper ACP de remplacement est
+  sorti avant sa reconnexion et l'ancien wrapper est resté enregistré comme
+  présence obsolète. Le banc SC-001 distant de 60 s à 10 événements/s n'a donc
+  pas été lancé; son p95 < 3 s n'est pas établi. T809 reste décochée.
+- **Nettoyage** : tunnel, daemon de test, wrappers de test et socket distant de
+  gate ont été arrêtés/supprimés. Aucune configuration persistante de
+  fédération n'a été supprimée.
