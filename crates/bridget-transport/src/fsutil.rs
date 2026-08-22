@@ -8,6 +8,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
 
+/// Frontières observables d'un remplacement atomique.
+///
+/// L'observateur sert aux tests de crash par processus réel ; l'écriture de
+/// production utilise la même fonction avec un observateur vide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtomicWritePhase {
+    BeforeRename,
+    AfterRename,
+}
+
 /// Crée un répertoire d'état privé (0700), partagé avec le store de reçus 012.
 pub fn create_private_dir(path: &Path) -> io::Result<()> {
     fs::create_dir_all(path)?;
@@ -37,6 +47,19 @@ pub fn open_private_file(path: &Path) -> io::Result<File> {
 /// renommage est propagé : l'appelant doit alors traiter l'issue comme
 /// indéterminée plutôt que supposer une écriture réussie.
 pub fn write_private_file_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_private_file_atomic_observed(path, bytes, |_| Ok(()))
+}
+
+/// Même remplacement durable avec observation déterministe des frontières.
+///
+/// L'observateur ne décide jamais du résultat métier et n'injecte aucune
+/// erreur : il permet uniquement à un processus de test de se bloquer à une
+/// frontière réelle, puis d'être terminé par son parent.
+pub fn write_private_file_atomic_observed(
+    path: &Path,
+    bytes: &[u8],
+    mut observer: impl FnMut(AtomicWritePhase) -> io::Result<()>,
+) -> io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::other("fichier sans parent"))?;
@@ -56,7 +79,9 @@ pub fn write_private_file_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+        observer(AtomicWritePhase::BeforeRename)?;
         fs::rename(&temporary, path)?;
+        observer(AtomicWritePhase::AfterRename)?;
         File::open(parent)?.sync_all()
     })();
     if result.is_err() {

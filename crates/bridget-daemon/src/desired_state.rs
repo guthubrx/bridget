@@ -1,6 +1,6 @@
 //! État désiré durable des équipiers gérés par le daemon.
 
-use bridget_transport::fsutil::write_private_file_atomic;
+use bridget_transport::fsutil::{AtomicWritePhase, write_private_file_atomic_observed};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -109,11 +109,12 @@ impl std::error::Error for DesiredStateError {
     }
 }
 
-/// Propriétaire intra-processus des transitions durables de `fleet.json`.
+/// Écrivain unique intra-processus des transitions durables de `fleet.json`.
 ///
-/// Le daemon conserve une seule instance de ce store. Le verrou sérialise les
-/// lectures-modifications-écritures concurrentes ; aucun autre processus ne
-/// doit écrire le fichier lorsque le daemon fonctionne.
+/// T904 construit une seule instance au démarrage du daemon, appelle
+/// [`Self::load_at_startup`] avant d'accepter des ordres, puis conserve cet
+/// objet comme unique autorité d'écriture. Le verrou sérialise les transitions
+/// concurrentes ; aucun autre processus ne doit écrire lorsque le daemon vit.
 pub struct DesiredStateStore {
     path: PathBuf,
     transition_lock: Mutex<()>,
@@ -137,6 +138,11 @@ impl DesiredStateStore {
         &self.path
     }
 
+    /// Point d'entrée explicite de T904 pour charger l'état avant la reprise.
+    pub fn load_at_startup(&self) -> Result<DesiredFleet, DesiredStateError> {
+        self.load()
+    }
+
     /// Charge et valide le fichier en O(n), n étant le nombre d'équipiers.
     /// L'absence du fichier au premier démarrage représente une flotte vide.
     pub fn load(&self) -> Result<DesiredFleet, DesiredStateError> {
@@ -154,6 +160,20 @@ impl DesiredStateStore {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         self.persist_unlocked(fleet)
+    }
+
+    /// Exerce la même écriture de production avec une observation des deux
+    /// frontières du rename. Réservé aux crash-tests déterministes.
+    pub fn persist_observed(
+        &self,
+        fleet: &DesiredFleet,
+        observer: impl FnMut(AtomicWritePhase) -> io::Result<()>,
+    ) -> Result<(), DesiredStateError> {
+        let _transition = self
+            .transition_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        self.persist_unlocked_observed(fleet, observer)
     }
 
     /// Insère une génération sous sa clé stable, puis retourne l'ancienne.
@@ -221,6 +241,14 @@ impl DesiredStateStore {
     }
 
     fn persist_unlocked(&self, fleet: &DesiredFleet) -> Result<(), DesiredStateError> {
+        self.persist_unlocked_observed(fleet, |_| Ok(()))
+    }
+
+    fn persist_unlocked_observed(
+        &self,
+        fleet: &DesiredFleet,
+        observer: impl FnMut(AtomicWritePhase) -> io::Result<()>,
+    ) -> Result<(), DesiredStateError> {
         validate_fleet(&self.path, fleet)?;
         let mut bytes =
             serde_json::to_vec_pretty(fleet).map_err(|source| DesiredStateError::InvalidJson {
@@ -228,9 +256,11 @@ impl DesiredStateStore {
                 source,
             })?;
         bytes.push(b'\n');
-        write_private_file_atomic(&self.path, &bytes).map_err(|source| DesiredStateError::Io {
-            path: self.path.clone(),
-            source,
+        write_private_file_atomic_observed(&self.path, &bytes, observer).map_err(|source| {
+            DesiredStateError::Io {
+                path: self.path.clone(),
+                source,
+            }
         })
     }
 }
@@ -273,15 +303,15 @@ fn validate_fleet(path: &Path, fleet: &DesiredFleet) -> Result<(), DesiredStateE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::RawFd;
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
-    use std::thread;
-    use std::time::{Duration, Instant};
 
     const CRASH_CHILD_ENV: &str = "BRIDGET_T902_CRASH_CHILD";
-    const CRASH_MODE_ENV: &str = "BRIDGET_T902_CRASH_MODE";
     const CRASH_PATH_ENV: &str = "BRIDGET_T902_CRASH_PATH";
-    const CRASH_READY_ENV: &str = "BRIDGET_T902_CRASH_READY";
+    const BARRIER_READY_FD: RawFd = 110;
+    const BARRIER_RELEASE_FD: RawFd = 111;
 
     fn test_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -301,16 +331,60 @@ mod tests {
         }
     }
 
-    fn spawn_crash_writer(
-        path: &Path,
-        mode: &str,
-        ready_path: Option<&Path>,
-    ) -> std::process::Child {
+    struct BarrierChild {
+        child: std::process::Child,
+        ready: RawFd,
+        release: RawFd,
+    }
+
+    impl BarrierChild {
+        fn wait_phase(&self, phase: AtomicWritePhase) {
+            let mut poll = libc::pollfd {
+                fd: self.ready,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            assert_eq!(unsafe { libc::poll(&mut poll, 1, 5_000) }, 1);
+            let mut byte = 0_u8;
+            assert_eq!(
+                unsafe { libc::read(self.ready, (&mut byte as *mut u8).cast(), 1) },
+                1
+            );
+            let expected = match phase {
+                AtomicWritePhase::BeforeRename => b'B',
+                AtomicWritePhase::AfterRename => b'A',
+            };
+            assert_eq!(byte, expected);
+        }
+
+        fn release_barrier(&self) {
+            assert_eq!(
+                unsafe { libc::write(self.release, [b'R'].as_ptr().cast(), 1) },
+                1
+            );
+        }
+    }
+
+    impl Drop for BarrierChild {
+        fn drop(&mut self) {
+            unsafe {
+                libc::close(self.ready);
+                libc::close(self.release);
+            }
+        }
+    }
+
+    fn spawn_crash_writer(path: &Path) -> BarrierChild {
         let current_exe = std::env::current_exe().unwrap();
         assert_ne!(
             current_exe.file_name().and_then(|name| name.to_str()),
             Some("firefox")
         );
+        let mut ready_pipe = [-1; 2];
+        let mut release_pipe = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(ready_pipe.as_mut_ptr()) }, 0);
+        assert_eq!(unsafe { libc::pipe(release_pipe.as_mut_ptr()) }, 0);
+
         let mut command = Command::new(current_exe);
         command
             .arg("--exact")
@@ -319,23 +393,44 @@ mod tests {
             .arg("--nocapture")
             .arg("--test-threads=1")
             .env(CRASH_CHILD_ENV, "1")
-            .env(CRASH_MODE_ENV, mode)
             .env(CRASH_PATH_ENV, path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        if let Some(ready_path) = ready_path {
-            command.env(CRASH_READY_ENV, ready_path);
+        unsafe {
+            command.pre_exec(move || {
+                if libc::dup2(ready_pipe[1], BARRIER_READY_FD) < 0
+                    || libc::dup2(release_pipe[0], BARRIER_RELEASE_FD) < 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+                for fd in ready_pipe.into_iter().chain(release_pipe) {
+                    if fd != BARRIER_READY_FD && fd != BARRIER_RELEASE_FD {
+                        libc::close(fd);
+                    }
+                }
+                Ok(())
+            });
         }
-        command.spawn().unwrap()
+        let child = command.spawn().unwrap();
+        unsafe {
+            libc::close(ready_pipe[1]);
+            libc::close(release_pipe[0]);
+        }
+        BarrierChild {
+            child,
+            ready: ready_pipe[0],
+            release: release_pipe[1],
+        }
     }
 
-    fn terminate_test_child(child: &mut std::process::Child) {
+    fn terminate_test_child(process: &mut BarrierChild) {
         // Le PID vient du processus de test enfant créé par spawn_crash_writer :
         // ce signal ne peut viser ni Firefox ni un processus étranger.
-        let signal_result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+        assert!(process.child.try_wait().unwrap().is_none());
+        let signal_result = unsafe { libc::kill(process.child.id() as libc::pid_t, libc::SIGTERM) };
         assert_eq!(signal_result, 0);
-        assert!(!child.wait().unwrap().success());
+        assert!(!process.child.wait().unwrap().success());
     }
 
     #[test]
@@ -415,29 +510,8 @@ mod tests {
             .upsert("codex-1".to_string(), equipier("stable-command", 1))
             .unwrap();
 
-        let mut child = spawn_crash_writer(&path, "before_rename", None);
-
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let temporary_seen = loop {
-            let seen = fs::read_dir(&root)
-                .into_iter()
-                .flatten()
-                .filter_map(Result::ok)
-                .filter_map(|entry| entry.file_name().into_string().ok())
-                .any(|name| name.starts_with(".fleet.json.") && name.ends_with(".tmp"));
-            if seen {
-                break true;
-            }
-            if child.try_wait().unwrap().is_some() || Instant::now() >= deadline {
-                break false;
-            }
-            thread::sleep(Duration::from_millis(1));
-        };
-        assert!(
-            temporary_seen,
-            "le processus enfant n'a pas atteint le temporaire"
-        );
-
+        let mut child = spawn_crash_writer(&path);
+        child.wait_phase(AtomicWritePhase::BeforeRename);
         terminate_test_child(&mut child);
 
         let loaded = store.load().unwrap();
@@ -450,25 +524,15 @@ mod tests {
     fn crash_after_rename_exposes_the_new_fleet_on_reopen() {
         let root = test_root("crash-after");
         let path = root.join("fleet.json");
-        let ready_path = root.join("after-rename.ready");
         let store = DesiredStateStore::at_path(&path);
         store
             .upsert("codex-1".to_string(), equipier("stable-command", 1))
             .unwrap();
 
-        let mut child = spawn_crash_writer(&path, "after_rename", Some(&ready_path));
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !ready_path.exists() {
-            assert!(
-                child.try_wait().unwrap().is_none(),
-                "le writer est sorti avant la barrière post-rename"
-            );
-            assert!(
-                Instant::now() < deadline,
-                "la barrière post-rename n'a pas été atteinte"
-            );
-            thread::sleep(Duration::from_millis(1));
-        }
+        let mut child = spawn_crash_writer(&path);
+        child.wait_phase(AtomicWritePhase::BeforeRename);
+        child.release_barrier();
+        child.wait_phase(AtomicWritePhase::AfterRename);
         terminate_test_child(&mut child);
 
         let loaded = store.load().unwrap();
@@ -490,21 +554,30 @@ mod tests {
         let path = PathBuf::from(std::env::var_os(CRASH_PATH_ENV).unwrap());
         let store = DesiredStateStore::at_path(path);
         let mut replacement = DesiredFleet::default();
-        let mut entry = equipier("replacement-command", 2);
-        if std::env::var(CRASH_MODE_ENV).as_deref() == Ok("before_rename") {
-            // Une charge volumineuse maintient réellement le processus entre
-            // création du temporaire et rename, sans hook de production.
-            entry.agent_type = "x".repeat(128 * 1024 * 1024);
-        }
-        replacement.equipiers.insert("codex-1".to_string(), entry);
-        store.persist(&replacement).unwrap();
-        if std::env::var(CRASH_MODE_ENV).as_deref() == Ok("after_rename") {
-            let ready_path = PathBuf::from(std::env::var_os(CRASH_READY_ENV).unwrap());
-            fs::write(ready_path, b"renamed-and-synced\n").unwrap();
-            loop {
-                thread::sleep(Duration::from_secs(1));
-            }
-        }
-        panic!("le parent devait interrompre le processus avant le rename");
+        replacement
+            .equipiers
+            .insert("codex-1".to_string(), equipier("replacement-command", 2));
+        store
+            .persist_observed(&replacement, |phase| {
+                let signal = match phase {
+                    AtomicWritePhase::BeforeRename => b'B',
+                    AtomicWritePhase::AfterRename => b'A',
+                };
+                if unsafe { libc::write(BARRIER_READY_FD, (&signal as *const u8).cast(), 1) } != 1 {
+                    return Err(io::Error::last_os_error());
+                }
+                let mut release = 0_u8;
+                if unsafe { libc::read(BARRIER_RELEASE_FD, (&mut release as *mut u8).cast(), 1) }
+                    != 1
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "barrière fermée",
+                    ));
+                }
+                Ok(())
+            })
+            .unwrap();
+        unreachable!("le parent doit interrompre le processus à une barrière");
     }
 }
