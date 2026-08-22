@@ -774,7 +774,13 @@ impl ManagedStderrStore {
         private_directory(&generation)?;
         let path = generation.join("stderr.log");
         if path.exists() {
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+            let metadata = fs::symlink_metadata(&path)?;
+            if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o777 != 0o600 {
+                return Err(ManagedProcessError::Io(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("fichier stderr privé non conforme: {}", path.display()),
+                )));
+            }
         }
         let file = OpenOptions::new()
             .create(true)
@@ -1132,6 +1138,31 @@ mod tests {
             fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
             0o755
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stderr_refuse_un_fichier_existant_non_regulier_ou_trop_permissif() {
+        let root = test_root("stderr-file-permissions");
+        let store = ManagedStderrStore::at_directory(root.join("stderr"));
+        let (file, path) = store.open("codex-1", &identity()).unwrap();
+        drop(file);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let error = store.open("codex-1", &identity()).unwrap_err();
+        assert!(matches!(
+            error,
+            ManagedProcessError::Io(ref source)
+                if source.kind() == io::ErrorKind::PermissionDenied
+        ));
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o644);
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(matches!(
+            store.open("codex-1", &identity()),
+            Err(ManagedProcessError::Io(ref source))
+                if source.kind() == io::ErrorKind::PermissionDenied
+        ));
         let _ = fs::remove_dir_all(root);
     }
 
