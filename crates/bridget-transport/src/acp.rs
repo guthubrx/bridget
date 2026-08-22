@@ -608,6 +608,7 @@ fn spawn_reader(
                 break;
             };
             let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                record_journal(&journal, "error", None, json!({ "reason": "ligne ACP invalide" }));
                 events
                     .lock()
                     .unwrap_or_else(|err| err.into_inner())
@@ -639,6 +640,7 @@ fn spawn_reader(
                         .unwrap_or_else(|err| err.into_inner())
                         .clone();
                     if update_has_foreign_session(&value, session_id.as_deref()) {
+                        record_journal(&journal, "error", None, json!({ "reason": "update ACP ignorée pour une session étrangère" }));
                         events
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
@@ -646,6 +648,7 @@ fn spawn_reader(
                                 detail: "update ACP ignorée pour une session étrangère".to_string(),
                             });
                     } else if active_turn_is_cancelled(&queue) {
+                        record_journal(&journal, "error", None, json!({ "reason": "update ACP ignorée après annulation du tour" }));
                         events
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
@@ -690,6 +693,7 @@ fn spawn_reader(
                     if let Some(reply) = method_not_found_response(&value, method) {
                         let _ = write_json(&writer, reply);
                     }
+                    record_journal(&journal, "error", None, json!({ "reason": format!("méthode ACP inconnue: {method}") }));
                     events
                         .lock()
                         .unwrap_or_else(|err| err.into_inner())
@@ -697,18 +701,18 @@ fn spawn_reader(
                             detail: format!("méthode ACP inconnue: {method}"),
                         });
                 }
-                Some(method) => events
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner())
-                    .push_back(AcpEvent::Error {
+                Some(method) => {
+                    record_journal(&journal, "error", None, json!({ "reason": format!("notification ACP inconnue: {method}") }));
+                    events.lock().unwrap_or_else(|err| err.into_inner()).push_back(AcpEvent::Error {
                         detail: format!("notification ACP inconnue: {method}"),
-                    }),
-                None => events
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner())
-                    .push_back(AcpEvent::Error {
+                    });
+                }
+                None => {
+                    record_journal(&journal, "error", None, json!({ "reason": "message ACP inattendu" }));
+                    events.lock().unwrap_or_else(|err| err.into_inner()).push_back(AcpEvent::Error {
                         detail: "message ACP inattendu".to_string(),
-                    }),
+                    });
+                }
             }
         }
         alive.store(false, Ordering::SeqCst);
@@ -718,6 +722,7 @@ fn spawn_reader(
         drain_queue(&mut queue_state, &events, "EOF ACP");
         wakeup.notify_all();
         fail_waiters(&waiters, "EOF ACP");
+        record_journal(&journal, "error", None, json!({ "reason": "EOF ACP" }));
         events
             .lock()
             .unwrap_or_else(|err| err.into_inner())
@@ -1351,7 +1356,10 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             if transport.drain_events().iter().any(|event| matches!(event, AcpEvent::TurnFinished { .. })) {
                 let path = std::fs::read_dir(root.join("codex-1")).unwrap().next().unwrap().unwrap().path();
                 let events = crate::journal::valid_events(&path);
-                assert_eq!(events.iter().map(|event| event["event"].as_str().unwrap()).collect::<Vec<_>>(), vec!["turn_start", "update", "turn_end"]);
+                let kinds = events.iter().map(|event| event["event"].as_str().unwrap()).collect::<Vec<_>>();
+                assert!(kinds.starts_with(&["turn_start", "update"]));
+                assert!(kinds.contains(&"turn_end"));
+                assert!(kinds.contains(&"error"));
                 assert_eq!(events[0]["payload"]["body"], "journal-message");
                 std::fs::remove_dir_all(root).unwrap();
                 return;
