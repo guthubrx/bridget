@@ -265,6 +265,9 @@ struct DaemonState {
     conn_counter: u64,
     /// Messages --reply en attente de réponse : (msg_id, from, to, expire_at, target_conn)
     pending_replies: Vec<PendingReply>,
+    /// Remises idempotentes à écrire juste après la réponse `Registered`.
+    /// L'ordre rend le réenregistrement observable avant toute redélivrance.
+    pending_post_response_controls: HashMap<String, Vec<DeferredControl>>,
 }
 
 struct ManagedSpawnRecord {
@@ -1586,6 +1589,7 @@ impl DaemonState {
             presences: HashMap::new(),
             conn_counter: 0,
             pending_replies: Vec::new(),
+            pending_post_response_controls: HashMap::new(),
         })
     }
 
@@ -1900,6 +1904,68 @@ fn reserve_managed_recoveries(
             (recovery, stop)
         })
         .collect())
+}
+
+fn defer_idempotent_delivery(
+    state: &DaemonState,
+    target_conn: &str,
+    delivery: SendDelivery,
+    controls: &mut Vec<DeferredControl>,
+) -> Result<(), String> {
+    let message = serde_json::from_slice(&delivery.message_bytes)
+        .map_err(|error| format!("enveloppe de remise idempotente corrompue: {error}"))?;
+    defer_control(
+        state,
+        target_conn,
+        DaemonToWrapper::DeliverIdempotent {
+            delivery_id: delivery.delivery_id,
+            recipient_instance_id: delivery.recipient_instance_id,
+            delivery_generation: delivery.delivery_generation,
+            expires_at: delivery.expires_at,
+            message,
+        },
+        controls,
+    );
+    Ok(())
+}
+
+/// La reprise n'est déclenchée qu'au réenregistrement de l'instance ciblée :
+/// au démarrage, aucun socket wrapper n'existe encore. Les bytes persistés et
+/// le couple instance/génération sont les seules autorités ; aucun nom n'est
+/// résolu une seconde fois.
+fn schedule_idempotent_delivery_recovery(
+    state: &mut DaemonState,
+    conn_id: &str,
+    instance_id: &str,
+) {
+    let deliveries = match state
+        .idempotency
+        .dispatching_deliveries_for_instance(instance_id, unix_now_secs())
+    {
+        Ok(deliveries) => deliveries,
+        Err(error) => {
+            error!("reprise des remises idempotentes: {error}");
+            return;
+        }
+    };
+    let mut controls = Vec::new();
+    for delivery in deliveries {
+        if let Err(error) = defer_idempotent_delivery(state, conn_id, delivery.clone(), &mut controls) {
+            error!("reprise idempotente mise en quarantaine: {error}");
+            let _ = state.idempotency.mark_delivery_indeterminate(
+                &delivery.delivery_id,
+                &delivery.recipient_instance_id,
+                delivery.delivery_generation,
+            );
+        }
+    }
+    if !controls.is_empty() {
+        state
+            .pending_post_response_controls
+            .entry(conn_id.to_string())
+            .or_default()
+            .extend(controls);
+    }
 }
 
 /// Lance le daemon.
@@ -2270,6 +2336,13 @@ fn handle_connection(
             writeln!(my_writer, "{}", json)?;
             my_writer.flush()?;
         }
+        let post_response_controls = state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pending_post_response_controls
+            .remove(&conn_id)
+            .unwrap_or_default();
+        let _ = execute_controls(post_response_controls);
     }
 
     // Connexion fermée : désenregistrer avec nettoyage explicite pour éviter fuites
@@ -2383,7 +2456,7 @@ fn handle_register(
                     .conn_instances
                     .insert(conn_id.to_string(), instance_id.clone());
                 state.presences.insert(
-                    instance_id,
+                    instance_id.clone(),
                     Presence {
                         name: final_name.clone(),
                         agent_type: parsed_type.to_string(),
@@ -2405,6 +2478,7 @@ fn handle_register(
                         dnd_until,
                     },
                 );
+                schedule_idempotent_delivery_recovery(state, conn_id, &instance_id);
             }
 
             state.restore_pending_for_agent(&final_name, conn_id);
@@ -2803,8 +2877,16 @@ fn replay_issue(
 ) -> Result<IdempotencyIssue, String> {
     match result {
         LookupResult::Accepted { expires_at } => Ok(IdempotencyIssue::Accepted { expires_at }),
-        LookupResult::Rejected { category, reason } => {
-            Ok(IdempotencyIssue::Rejected { category, reason })
+        LookupResult::Rejected {
+            category,
+            reason,
+            expires_at,
+        } => {
+            Ok(IdempotencyIssue::Rejected {
+                category,
+                reason,
+                expires_at,
+            })
         }
         LookupResult::OutcomeUnknown { expires_at } => Ok(IdempotencyIssue::OutcomeUnknown {
             expires_at,
@@ -2815,6 +2897,51 @@ fn replay_issue(
                 .map(|delivery| delivery.delivery_id),
         }),
         LookupResult::IdempotencyExpired => Ok(IdempotencyIssue::IdempotencyExpired),
+    }
+}
+
+fn handle_idempotency_lookup(
+    conn_id: &str,
+    operation_kind: String,
+    idempotency_key: String,
+    st: &DaemonState,
+) -> DaemonToWrapper {
+    let Some(negotiated) = st.client_negotiations.get(conn_id) else {
+        return DaemonToWrapper::ClientRejected { reason: ClientRefusal::NegotiationRequired };
+    };
+    if operation_kind != "send" {
+        return DaemonToWrapper::Nack { id: idempotency_key, reason: "opération idempotente inconnue".to_string() };
+    }
+    let key = match IdempotencyKey::new(negotiated.issuer_scope.clone(), OperationKind::Send, idempotency_key) {
+        Ok(key) => key,
+        Err(error) => return DaemonToWrapper::Nack { id: "lookup".to_string(), reason: error.to_string() },
+    };
+    match st.idempotency.lookup(&key, unix_now_secs()) {
+        Ok(result) => match replay_issue(st, &key, result) {
+            Ok(issue) => issue_response(&key, issue),
+            Err(error) => DaemonToWrapper::Nack { id: key.idempotency_key, reason: error },
+        },
+        Err(error) => DaemonToWrapper::Nack { id: key.idempotency_key, reason: error.to_string() },
+    }
+}
+
+fn handle_delivery_ack(conn_id: &str, delivery_id: String, delivery_generation: u64, st: &mut DaemonState) -> Option<DaemonToWrapper> {
+    let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
+        return Some(DaemonToWrapper::Nack { id: delivery_id, reason: "accusé idempotent émis par une instance inconnue".to_string() });
+    };
+    match st
+        .idempotency
+        .acknowledge_send_delivery(&delivery_id, &instance_id, delivery_generation)
+    {
+        Ok(()) => {
+            #[cfg(feature = "test-support")]
+            crate::test_sync::checkpoint("after_delivery_acked");
+            None
+        }
+        Err(error) => Some(DaemonToWrapper::Nack {
+            id: delivery_id,
+            reason: error.to_string(),
+        }),
     }
 }
 
@@ -2829,9 +2956,18 @@ fn reject_idempotent_send(
     st.idempotency
         .reject_prepared(key, &category, &reason)
         .map_err(|error| error.to_string())?;
+    let expires_at = match st.idempotency.lookup(key, unix_now_secs()) {
+        Ok(LookupResult::Rejected { expires_at, .. }) => expires_at,
+        Ok(_) => return Err("refus idempotent non terminal".to_string()),
+        Err(error) => return Err(error.to_string()),
+    };
     Ok(issue_response(
         key,
-        IdempotencyIssue::Rejected { category, reason },
+        IdempotencyIssue::Rejected {
+            category,
+            reason,
+            expires_at,
+        },
     ))
 }
 
@@ -2981,6 +3117,7 @@ fn handle_idempotent_send(
     message_id: String,
     issued_at: i64,
     st: &mut DaemonState,
+    controls: &mut Vec<DeferredControl>,
 ) -> DaemonToWrapper {
     let Some(negotiated) = st.client_negotiations.get(conn_id).cloned() else {
         return DaemonToWrapper::ClientRejected {
@@ -3004,6 +3141,8 @@ fn handle_idempotent_send(
     };
     let canonical = canonical_send(&key.issuer_scope, &key.idempotency_key, &message, issued_at);
     let now = unix_now_secs();
+    #[cfg(feature = "test-support")]
+    crate::test_sync::checkpoint("before_reservation");
     let reservation = match st.idempotency.reserve(
         &key,
         &canonical,
@@ -3112,6 +3251,15 @@ fn handle_idempotent_send(
                 recipient_instance_id,
                 delivery_generation: next_delivery_generation(),
                 expires_at,
+                message_bytes: match serde_json::to_vec(&message) {
+                    Ok(message_bytes) => message_bytes,
+                    Err(error) => {
+                        return DaemonToWrapper::Nack {
+                            id: key.idempotency_key.clone(),
+                            reason: format!("impossible de sérialiser la remise: {error}"),
+                        };
+                    }
+                },
             };
             let reply_tracking = message.reply.then(|| ReplyTracking {
                 request_id: message.id.clone(),
@@ -3148,13 +3296,26 @@ fn handle_idempotent_send(
                 .mark_sent(&prepared.content_key, &message.to);
             st.envelope_guard
                 .mark_relayed(&prepared.message_guard_id, &message.to);
-            issue_response(
+            if let Err(error) = defer_idempotent_delivery(
+                st,
+                &prepared.target_conn,
+                delivery.clone(),
+                controls,
+            ) {
+                error!("remise idempotente préparée mais non sérialisable: {error}");
+            }
+            #[cfg(feature = "test-support")]
+            crate::test_sync::checkpoint("after_delivery_before_issue");
+            let response = issue_response(
                 &key,
                 IdempotencyIssue::OutcomeUnknown {
                     expires_at,
                     delivery_id: Some(delivery.delivery_id),
                 },
-            )
+            );
+            #[cfg(feature = "test-support")]
+            crate::test_sync::checkpoint("after_issue_before_client_ack");
+            response
 }
 
 /// Traite un message wrapper et retourne une réponse optionnelle.
@@ -3346,17 +3507,62 @@ fn handle_wrapper_message(
             message_id,
             issued_at,
         } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            Some(handle_idempotent_send(
-                conn_id, message, message_id, issued_at, &mut st,
-            ))
+            let (response, controls) = {
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut controls = Vec::new();
+                let response = handle_idempotent_send(
+                    conn_id,
+                    message,
+                    message_id,
+                    issued_at,
+                    &mut st,
+                    &mut controls,
+                );
+                (response, controls)
+            };
+            let _ = execute_controls(controls);
+            Some(response)
         }
-        WrapperToDaemon::Lookup { .. } => Some(DaemonToWrapper::Nack {
-            id: "lookup".to_string(),
-            reason: "Lookup sera activé par T1207".to_string(),
-        }),
-        WrapperToDaemon::DeliverAcked { .. } | WrapperToDaemon::DeliveryIndeterminate { .. } => {
-            None
+        WrapperToDaemon::Lookup { operation_kind, idempotency_key } => {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            Some(handle_idempotency_lookup(conn_id, operation_kind, idempotency_key, &st))
+        }
+        WrapperToDaemon::DeliverAcked { delivery_id, delivery_generation } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            handle_delivery_ack(conn_id, delivery_id, delivery_generation, &mut st)
+        }
+        WrapperToDaemon::DeliveryIndeterminate {
+            delivery_id,
+            delivery_generation,
+        } => {
+            let Some(instance_id) = state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .conn_instances
+                .get(conn_id)
+                .cloned()
+            else {
+                return Some(DaemonToWrapper::Nack {
+                    id: delivery_id,
+                    reason: "accusé indéterminé émis par une instance inconnue".to_string(),
+                });
+            };
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            match st.idempotency.mark_delivery_indeterminate(
+                &delivery_id,
+                &instance_id,
+                delivery_generation,
+            ) {
+                Ok(()) => {
+                    #[cfg(feature = "test-support")]
+                    crate::test_sync::checkpoint("after_delivery_indeterminate");
+                    None
+                }
+                Err(error) => Some(DaemonToWrapper::Nack {
+                    id: delivery_id,
+                    reason: error.to_string(),
+                }),
+            }
         }
         WrapperToDaemon::SpawnOrder {
             agent_type,
@@ -5621,7 +5827,38 @@ mod presence_tests {
 
     #[test]
     fn wrapper_accepte_les_accuses_idempotents_et_register_historique_reste_wrapper() {
-        let (state, config) = state_with_registered_agent("client-wrapper-matrix");
+        let (mut state, config) = state_with_registered_agent("client-wrapper-matrix");
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            "message-ack-wrapper",
+        )
+        .unwrap();
+        let now = unix_now_secs();
+        state
+            .idempotency
+            .reserve(
+                &key,
+                b"ack-wrapper",
+                now,
+                CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                now,
+                CLIENT_ISSUED_AT_TOLERANCE_SECS,
+            )
+            .unwrap();
+        state
+            .idempotency
+            .begin_send_delivery(
+                &key,
+                &SendDelivery {
+                    delivery_id: "delivery-1".to_string(),
+                    recipient_instance_id: "instance-1".to_string(),
+                    delivery_generation: 1,
+                    expires_at: now + CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                    message_bytes: b"ack-wrapper-message".to_vec(),
+                },
+            )
+            .unwrap();
         let shared = Arc::new(Mutex::new(state));
         assert!(
             handle_wrapper_message(
@@ -5638,6 +5875,7 @@ mod presence_tests {
             shared.lock().unwrap().connection_roles.get("conn-1"),
             Some(&ConnectionRole::Wrapper)
         );
+        let record_count_after_ack = shared.lock().unwrap().idempotency.record_count().unwrap();
         assert!(matches!(
             handle_wrapper_message(
                 "historic-register",
@@ -5665,7 +5903,7 @@ mod presence_tests {
         );
         assert_eq!(
             shared.lock().unwrap().idempotency.record_count().unwrap(),
-            0
+            record_count_after_ack
         );
         let _ = std::fs::remove_file(config.db_path);
     }
@@ -5851,20 +6089,35 @@ mod presence_tests {
         };
         let rejected = handle_wrapper_message("client-reject", send(), &shared);
         assert!(matches!(
-            rejected,
+            rejected.as_ref(),
             Some(DaemonToWrapper::IdempotencyResult {
-                issue: IdempotencyIssue::Rejected { ref category, .. },
+                issue: IdempotencyIssue::Rejected { category, .. },
                 ..
             }) if category == "routing"
         ));
         let replay = handle_wrapper_message("client-reject", send(), &shared);
         assert!(matches!(
-            replay,
+            replay.as_ref(),
             Some(DaemonToWrapper::IdempotencyResult {
-                issue: IdempotencyIssue::Rejected { ref category, .. },
+                issue: IdempotencyIssue::Rejected { category, .. },
                 ..
             }) if category == "routing"
         ));
+        let rejection_expiry = match rejected {
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::Rejected { expires_at, .. },
+                ..
+            }) => expires_at,
+            _ => unreachable!("refus idempotent attendu"),
+        };
+        let replay_expiry = match replay {
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::Rejected { expires_at, .. },
+                ..
+            }) => expires_at,
+            _ => unreachable!("rejeu du refus attendu"),
+        };
+        assert_eq!(replay_expiry, rejection_expiry);
 
         let historic = handle_wrapper_message(
             "historique-012",

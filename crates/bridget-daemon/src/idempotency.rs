@@ -87,7 +87,11 @@ pub enum PublicResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LookupResult {
     Accepted { expires_at: i64 },
-    Rejected { category: String, reason: String },
+    Rejected {
+        category: String,
+        reason: String,
+        expires_at: i64,
+    },
     OutcomeUnknown { expires_at: i64 },
     IdempotencyExpired,
 }
@@ -108,6 +112,10 @@ pub struct SendDelivery {
     pub recipient_instance_id: String,
     pub delivery_generation: u64,
     pub expires_at: i64,
+    /// Enveloppe de remise exacte, possédée par la saga `send_deliveries`.
+    /// Elle permet la reprise sans relire les structures éphémères du daemon
+    /// ni résoudre à nouveau le nom du destinataire.
+    pub message_bytes: Vec<u8>,
 }
 
 /// Demande suivie créée avec la remise d'un `reply=yes` dans l'unique
@@ -256,15 +264,15 @@ pub struct IdempotencyStore {
 
 impl IdempotencyStore {
     pub fn open(path: &Path) -> Result<Self, IdempotencyError> {
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(2))?;
-        Self::init_schema(&conn)?;
+        Self::init_schema(&mut conn)?;
         Ok(Self { conn })
     }
 
     pub fn open_in_memory() -> Result<Self, IdempotencyError> {
-        let conn = Connection::open_in_memory()?;
-        Self::init_schema(&conn)?;
+        let mut conn = Connection::open_in_memory()?;
+        Self::init_schema(&mut conn)?;
         Ok(Self { conn })
     }
 
@@ -292,7 +300,7 @@ impl IdempotencyStore {
         Ok(scope)
     }
 
-    fn init_schema(conn: &Connection) -> Result<(), IdempotencyError> {
+    fn init_schema(conn: &mut Connection) -> Result<(), IdempotencyError> {
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS idempotency_records (
@@ -319,6 +327,7 @@ impl IdempotencyStore {
                 delivery_generation INTEGER NOT NULL CHECK (delivery_generation > 0),
                 phase TEXT NOT NULL CHECK (phase IN ('dispatching', 'acked', 'indeterminate')),
                 expires_at INTEGER NOT NULL,
+                message_bytes BLOB,
                 FOREIGN KEY (issuer_scope, operation_kind, idempotency_key)
                     REFERENCES idempotency_records(issuer_scope, operation_kind, idempotency_key)
                     ON DELETE CASCADE
@@ -353,6 +362,9 @@ impl IdempotencyStore {
             );
             CREATE INDEX IF NOT EXISTS idx_spawn_commands_state
                 ON spawn_commands(state);
+            CREATE TABLE IF NOT EXISTS idempotency_schema_migrations (
+                version INTEGER PRIMARY KEY
+            );
             CREATE TABLE IF NOT EXISTS tracked_requests (
                 id TEXT PRIMARY KEY,
                 sender TEXT NOT NULL,
@@ -365,6 +377,36 @@ impl IdempotencyStore {
                 completed_at INTEGER
             );",
         )?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let migration_applied = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 2)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !migration_applied {
+            let has_message_bytes = tx
+                .prepare("PRAGMA table_info(send_deliveries)")?
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?
+                .iter()
+                .any(|column| column == "message_bytes");
+            if !has_message_bytes {
+                tx.execute("ALTER TABLE send_deliveries ADD COLUMN message_bytes BLOB", [])?;
+            }
+            // Une remise v1 sans enveloppe est irréparable sans reroutage :
+            // elle devient indéterminée dans la même migration avant v2.
+            tx.execute(
+                "UPDATE send_deliveries
+                 SET phase = 'indeterminate'
+                 WHERE phase = 'dispatching' AND message_bytes IS NULL",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO idempotency_schema_migrations(version) VALUES (2)",
+                [],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -410,6 +452,8 @@ impl IdempotencyStore {
             ],
         )?;
         if inserted == 1 {
+            #[cfg(feature = "test-support")]
+            crate::test_sync::checkpoint("after_prepared");
             return Ok(Reservation::Prepared { expires_at });
         }
 
@@ -780,6 +824,9 @@ impl IdempotencyStore {
         if key.operation_kind != OperationKind::Send || delivery.delivery_id.is_empty() {
             return Err(IdempotencyError::InvalidDelivery);
         }
+        if delivery.message_bytes.is_empty() || delivery.message_bytes.len() > MAX_CANONICAL_BYTES {
+            return Err(IdempotencyError::InvalidDelivery);
+        }
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -795,8 +842,8 @@ impl IdempotencyStore {
         tx.execute(
             "INSERT INTO send_deliveries (
                 delivery_id, issuer_scope, operation_kind, idempotency_key,
-                recipient_instance_id, delivery_generation, phase, expires_at
-             ) VALUES (?1, ?2, 'send', ?3, ?4, ?5, 'dispatching', ?6)",
+                recipient_instance_id, delivery_generation, phase, expires_at, message_bytes
+             ) VALUES (?1, ?2, 'send', ?3, ?4, ?5, 'dispatching', ?6, ?7)",
             params![
                 delivery.delivery_id,
                 key.issuer_scope,
@@ -804,6 +851,7 @@ impl IdempotencyStore {
                 delivery.recipient_instance_id,
                 delivery.delivery_generation,
                 delivery.expires_at,
+                delivery.message_bytes,
             ],
         )?;
         if let Some(reply) = reply {
@@ -875,7 +923,7 @@ impl IdempotencyStore {
     ) -> Result<Option<SendDelivery>, IdempotencyError> {
         self.conn
             .query_row(
-                "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at
+                "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at, message_bytes
                  FROM send_deliveries
                  WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2",
                 params![key.issuer_scope, key.idempotency_key],
@@ -885,11 +933,89 @@ impl IdempotencyStore {
                         recipient_instance_id: row.get(1)?,
                         delivery_generation: row.get(2)?,
                         expires_at: row.get(3)?,
+                        message_bytes: row.get(4)?,
                     })
                 },
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    /// Reprise bornée : seules les remises encore en cours pour l'instance
+    /// exacte sont relivrées. Une remise Acked ou Indeterminate ne l'est pas.
+    pub fn dispatching_deliveries_for_instance(
+        &self,
+        recipient_instance_id: &str,
+        now: i64,
+    ) -> Result<Vec<SendDelivery>, IdempotencyError> {
+        let mut statement = self.conn.prepare(
+            "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at, message_bytes
+             FROM send_deliveries
+             WHERE recipient_instance_id = ?1 AND phase = 'dispatching' AND expires_at > ?2
+             ORDER BY delivery_id",
+        )?;
+        statement
+            .query_map(params![recipient_instance_id, now], |row| {
+                Ok(SendDelivery {
+                    delivery_id: row.get(0)?,
+                    recipient_instance_id: row.get(1)?,
+                    delivery_generation: row.get(2)?,
+                    expires_at: row.get(3)?,
+                    message_bytes: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Une marque `Seen` sans observable d'injection reste indéterminée : le
+    /// daemon conserve OutcomeUnknown jusqu'à l'expiration et ne réinjecte pas.
+    pub fn mark_delivery_indeterminate(
+        &mut self,
+        delivery_id: &str,
+        recipient_instance_id: &str,
+        delivery_generation: u64,
+    ) -> Result<(), IdempotencyError> {
+        let updated = self.conn.execute(
+            "UPDATE send_deliveries SET phase = 'indeterminate'
+             WHERE delivery_id = ?1 AND recipient_instance_id = ?2
+               AND delivery_generation = ?3 AND phase = 'dispatching'",
+            params![delivery_id, recipient_instance_id, delivery_generation],
+        )?;
+        if updated == 1 {
+            Ok(())
+        } else {
+            Err(IdempotencyError::InvalidDelivery)
+        }
+    }
+
+    /// Accusé aval : la remise et le résultat public deviennent terminaux dans
+    /// une même transaction, après validation de l'instance et génération.
+    pub fn acknowledge_send_delivery(
+        &mut self,
+        delivery_id: &str,
+        recipient_instance_id: &str,
+        delivery_generation: u64,
+    ) -> Result<(), IdempotencyError> {
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row = tx.query_row(
+            "SELECT issuer_scope, idempotency_key, recipient_instance_id, delivery_generation, phase
+             FROM send_deliveries WHERE delivery_id = ?1",
+            params![delivery_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, u64>(3)?, row.get::<_, String>(4)?)),
+        ).optional()?.ok_or(IdempotencyError::InvalidDelivery)?;
+        if row.2 != recipient_instance_id || row.3 != delivery_generation { return Err(IdempotencyError::InvalidDelivery); }
+        if row.4 == "acked" { tx.commit()?; return Ok(()); }
+        if row.4 != "dispatching" { return Err(IdempotencyError::InvalidDelivery); }
+        let delivery = tx.execute("UPDATE send_deliveries SET phase = 'acked' WHERE delivery_id = ?1 AND phase = 'dispatching'", params![delivery_id])?;
+        let record = tx.execute(
+            "UPDATE idempotency_records SET state = 'terminal', public_result_kind = 'accepted', public_result_category = NULL, public_result_reason = NULL
+             WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2 AND state = 'dispatching'",
+            params![row.0, row.1],
+        )?;
+        if delivery != 1 || record != 1 { return Err(IdempotencyError::DispatchUnavailable); }
+        tx.commit()?;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -1132,6 +1258,7 @@ impl Record {
                     .public_result_reason
                     .clone()
                     .ok_or(IdempotencyError::CorruptRecord("motif absent"))?,
+                expires_at: self.expires_at,
             }),
             _ => Err(IdempotencyError::CorruptRecord("issue terminale absente")),
         }
@@ -1346,6 +1473,7 @@ mod tests {
             Reservation::Replayed(LookupResult::Rejected {
                 category: "dnd".to_string(),
                 reason: "occupé".to_string(),
+                expires_at: NOW + HORIZON,
             })
         );
     }
@@ -1443,6 +1571,7 @@ mod tests {
             recipient_instance_id: "instance-1".to_string(),
             delivery_generation: 1,
             expires_at: NOW + HORIZON,
+            message_bytes: b"message-1".to_vec(),
         };
         store.begin_send_delivery(&key, &delivery).unwrap();
         assert_eq!(store.send_delivery(&key).unwrap(), Some(delivery));
@@ -1451,6 +1580,30 @@ mod tests {
             LookupResult::OutcomeUnknown {
                 expires_at: NOW + HORIZON
             }
+        );
+    }
+
+    #[test]
+    fn retry_en_vol_rejoue_unknown_puis_accepted_apres_accuse() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let key = key();
+        assert!(matches!(reserve(&store, b"canon"), Reservation::Prepared { .. }));
+        let delivery = SendDelivery {
+            delivery_id: "delivery-retry".to_string(),
+            recipient_instance_id: "instance-1".to_string(),
+            delivery_generation: 9,
+            expires_at: NOW + HORIZON,
+            message_bytes: b"message-retry".to_vec(),
+        };
+        store.begin_send_delivery(&key, &delivery).unwrap();
+        assert_eq!(
+            reserve(&store, b"canon"),
+            Reservation::Replayed(LookupResult::OutcomeUnknown { expires_at: NOW + HORIZON })
+        );
+        store.acknowledge_send_delivery("delivery-retry", "instance-1", 9).unwrap();
+        assert_eq!(
+            reserve(&store, b"canon"),
+            Reservation::Replayed(LookupResult::Accepted { expires_at: NOW + HORIZON })
         );
     }
 
@@ -1470,6 +1623,7 @@ mod tests {
                     recipient_instance_id: "instance-1".to_string(),
                     delivery_generation: 2,
                     expires_at: NOW + HORIZON,
+                    message_bytes: b"message-expired".to_vec(),
                 },
             )
             .unwrap();
@@ -1496,6 +1650,7 @@ mod tests {
                     recipient_instance_id: "instance-1".to_string(),
                     delivery_generation: 3,
                     expires_at: NOW + HORIZON,
+                    message_bytes: b"message-first".to_vec(),
                 },
             )
             .unwrap();
@@ -1505,19 +1660,18 @@ mod tests {
                 .unwrap(),
             Reservation::Prepared { .. }
         ));
-        assert!(
-            store
-                .begin_send_delivery(
-                    &second,
-                    &SendDelivery {
-                        delivery_id: "same-delivery".to_string(),
-                        recipient_instance_id: "instance-1".to_string(),
-                        delivery_generation: 4,
-                        expires_at: NOW + HORIZON,
-                    },
-                )
-                .is_err()
-        );
+        assert!(store
+            .begin_send_delivery(
+                &second,
+                &SendDelivery {
+                    delivery_id: "same-delivery".to_string(),
+                    recipient_instance_id: "instance-1".to_string(),
+                    delivery_generation: 4,
+                    expires_at: NOW + HORIZON,
+                    message_bytes: b"message-second".to_vec(),
+                },
+            )
+            .is_err());
         assert_eq!(
             store.lookup(&second, NOW).unwrap(),
             LookupResult::OutcomeUnknown {
@@ -1540,6 +1694,7 @@ mod tests {
             recipient_instance_id: "instance-1".to_string(),
             delivery_generation: 5,
             expires_at: NOW + HORIZON,
+            message_bytes: b"message-reply".to_vec(),
         };
         let reply = ReplyTracking {
             request_id: "request-reply".to_string(),
@@ -1627,6 +1782,7 @@ mod tests {
             LookupResult::Rejected {
                 category: "routing".to_string(),
                 reason: "cible absente".to_string(),
+                expires_at: NOW + HORIZON,
             }
         );
     }
@@ -1642,6 +1798,92 @@ mod tests {
             store.reserve(&key(), b"negative", NOW, -1, NOW, 30),
             Err(IdempotencyError::InvalidHorizon)
         ));
+    }
+
+    #[test]
+    fn migration_v1_classe_les_remises_sans_payload_sans_bloquer_les_valides() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-idempotency-v1-{}-{}.db",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE idempotency_records (
+                issuer_scope TEXT NOT NULL,
+                operation_kind TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                canonical_bytes BLOB NOT NULL,
+                state TEXT NOT NULL,
+                public_result_kind TEXT,
+                public_result_category TEXT,
+                public_result_reason TEXT,
+                issued_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                PRIMARY KEY (issuer_scope, operation_kind, idempotency_key)
+            );
+            CREATE TABLE send_deliveries (
+                delivery_id TEXT PRIMARY KEY,
+                issuer_scope TEXT NOT NULL,
+                operation_kind TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                recipient_instance_id TEXT NOT NULL,
+                delivery_generation INTEGER NOT NULL,
+                phase TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                message_bytes BLOB
+            );",
+        )
+        .unwrap();
+        for (key, delivery) in [("legacy", "delivery-legacy"), ("valid", "delivery-valid")] {
+            conn.execute(
+                "INSERT INTO idempotency_records VALUES (?1, 'send', ?2, X'00', 'dispatching', NULL, NULL, NULL, ?3, ?4)",
+                params!["012_scope_aaaaaaaaaaaa", key, NOW, NOW + HORIZON],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO send_deliveries VALUES (?1, ?2, 'send', ?3, 'instance-1', 1, 'dispatching', ?4, ?5)",
+                params![
+                    delivery,
+                    "012_scope_aaaaaaaaaaaa",
+                    key,
+                    NOW + HORIZON,
+                    (key == "valid").then(|| b"payload".to_vec()),
+                ],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let store = IdempotencyStore::open(&path).unwrap();
+        let deliveries = store
+            .dispatching_deliveries_for_instance("instance-1", NOW)
+            .unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].delivery_id, "delivery-valid");
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT phase FROM send_deliveries WHERE delivery_id = 'delivery-legacy'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "indeterminate"
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM idempotency_schema_migrations WHERE version = 2",
+                    [],
+                    |row| row.get::<_, u32>(0),
+                )
+                .unwrap(),
+            1
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

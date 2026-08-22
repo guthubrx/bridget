@@ -11,4 +11,6 @@ pub mod registry;
 pub mod receipt_store;
 pub mod runtime;
 pub mod store;
+#[cfg(feature = "test-support")]
+pub mod test_sync;
 pub mod wrapper;

@@ -8,6 +8,9 @@ license.workspace = true
 name = "bridget_daemon"
 path = "src/lib.rs"
 
+[features]
+test-support = []
+
 [[bin]]
 name = "bridget"
 path = "src/main.rs"
