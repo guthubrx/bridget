@@ -132,7 +132,7 @@ Payloads par type d'événement :
 |---|---|
 | `turn_start` | `from` (expéditeur du message livré), `reply` (bool), `body` (corps **complet** du message — arbitré en contre-revue 008 : le journal contient déjà le texte intégral des réponses, tronquer l'entrant créerait une infidélité d'affichage ; la contrepartie est l'exigence de permissions ci-dessous) |
 | `update` | `kind` = `text` \| `tool_call` ; `text` : `content` (fragment de réponse) ; `tool_call` : `tool`, `summary` |
-| `permission` | `request` (résumé de la demande), `decision` (`allow`/`deny`, politique du registre) |
+| `permission` | payload typé (contre-revue T706) : `tool` (résumé de l'outil demandeur), `options` (les `optionId`+`kind` proposés), `decision` = **l'issue réellement émise** — `{ "outcome": "selected", "option_id": … }` ou `{ "outcome": "cancelled" }` — jamais la politique brute du registre (une politique `allow` peut aboutir à `cancelled` faute d'option compatible) |
 | `turn_end` | `stop_reason`, `routed_to` (destinataire de la réponse si `reply=yes`, absent sinon) |
 | `error` | `reason` (motif : mort du processus, `stopReason` d'erreur, rejet de livraison…) |
 
@@ -142,6 +142,16 @@ Exigences associées (observables de T706) :
   visible d'un lecteur comme état final ; un lecteur doit néanmoins tolérer une
   ligne incomplète en fin de fichier (écriture en cours) en attendant le
   newline ;
+- l'écriture passe par un **propriétaire de journal dédié** (thread + canal
+  borné, enqueue non bloquant) — jamais d'E/S synchrone depuis le lecteur
+  stdout ni le worker de tours ; saturation ou erreur d'écriture = erreur
+  terminale explicite, jamais une perte silencieuse ;
+- à la reprise sur un fichier du jour existant dont le dernier octet n'est pas
+  un newline, la queue partielle est **isolée** (newline d'isolement ou
+  troncature au dernier newline) avant le premier append — sans quoi le nouvel
+  événement se collerait au fragment et les deux seraient perdus ;
+- les champs optionnels **absents** ne sont jamais sérialisés à `null`
+  (`skip_serializing_if`) — la présence est contractuelle ;
 - `seq` traverse la rotation : le premier événement d'un nouveau fichier
   quotidien continue la séquence de la veille ;
 - `seq` **survit au redémarrage et au crash du wrapper** : au démarrage, le

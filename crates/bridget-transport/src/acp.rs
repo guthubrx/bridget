@@ -2,7 +2,7 @@
 //! worker FIFO. Le lecteur est l'unique propriétaire du flux de l'adaptateur.
 
 use crate::transport::{Transport, TransportError};
-use crate::journal::SessionJournal;
+use crate::journal::JournalWriter;
 use bridget_core::BridgetMessage;
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
@@ -61,7 +61,7 @@ pub enum AcpEvent {
 type Waiters = Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>;
 type Writer = Arc<Mutex<Option<ChildStdin>>>;
 type Completions = Arc<Mutex<HashMap<String, mpsc::Sender<()>>>>;
-type Journal = Arc<Mutex<Option<SessionJournal>>>;
+type Journal = Arc<Mutex<Option<JournalWriter>>>;
 
 struct ActiveTurn {
     message_id: String,
@@ -255,7 +255,7 @@ impl AcpTransport {
 
     pub fn enable_journal(&self, root: impl AsRef<Path>, agent: &str) -> std::io::Result<()> {
         *self.journal.lock().unwrap_or_else(|err| err.into_inner()) =
-            Some(SessionJournal::new(root, agent, &self.session_id)?);
+            Some(JournalWriter::start(root, agent, &self.session_id, self.events.clone())?);
         Ok(())
     }
 
@@ -347,6 +347,14 @@ impl AcpTransport {
             .take()
         {
             let _ = handle.join();
+        }
+        if let Some(journal) = self
+            .journal
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()
+        {
+            journal.stop();
         }
     }
 }
@@ -471,7 +479,7 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 .push_back(AcpEvent::TurnStarted {
                     message_id: message.id.clone(),
                 });
-            record_journal(&worker.journal, "turn_start", Some(&message.id), json!({
+            record_or_terminal(&worker.journal, &worker.events, "turn_start", Some(&message.id), json!({
                 "from": &message.from,
                 "reply": message.reply,
                 "body": &message.body,
@@ -513,17 +521,22 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
             clear_active_turn(&worker.queue);
             let event = finish_turn(message, collected, result);
             match &event {
-                AcpEvent::TurnFinished { message, stop_reason, .. } => record_journal(
+                AcpEvent::TurnFinished { message, stop_reason, .. } => {
+                    let mut payload = json!({ "stop_reason": stop_reason });
+                    if message.reply {
+                        payload["routed_to"] = json!(&message.from);
+                    }
+                    record_or_terminal(
                     &worker.journal,
+                    &worker.events,
                     "turn_end",
                     Some(&message.id),
-                    json!({
-                        "stop_reason": stop_reason,
-                        "routed_to": message.reply.then_some(&message.from),
-                    }),
-                ),
-                AcpEvent::DeliveryRejected { message_id, reason } => record_journal(
+                    payload,
+                );
+                }
+                AcpEvent::DeliveryRejected { message_id, reason } => record_or_terminal(
                     &worker.journal,
+                    &worker.events,
                     "error",
                     Some(message_id),
                     json!({ "reason": reason }),
@@ -543,10 +556,25 @@ fn clear_active_turn(queue: &Arc<(Mutex<QueueState>, Condvar)>) {
     queue.0.lock().unwrap_or_else(|err| err.into_inner()).active = None;
 }
 
-fn record_journal(journal: &Journal, event: &str, message_id: Option<&str>, payload: Value) {
-    if let Some(journal) = journal.lock().unwrap_or_else(|err| err.into_inner()).as_mut() {
-        let _ = journal.append(event, message_id, payload);
+fn record_journal(journal: &Journal, event: &str, message_id: Option<&str>, payload: Value) -> Result<(), String> {
+    let writer = journal.lock().unwrap_or_else(|err| err.into_inner()).clone();
+    writer.map_or(Ok(()), |writer| writer.enqueue(event, message_id, payload))
+}
+
+fn record_or_terminal(
+    journal: &Journal,
+    events: &Arc<Mutex<VecDeque<AcpEvent>>>,
+    event: &str,
+    message_id: Option<&str>,
+    payload: Value,
+) {
+    if let Err(detail) = record_journal(journal, event, message_id, payload) {
+        events.lock().unwrap_or_else(|err| err.into_inner()).push_back(AcpEvent::Error { detail });
     }
+}
+
+fn active_message_id(queue: &Arc<(Mutex<QueueState>, Condvar)>) -> Option<String> {
+    queue.0.lock().unwrap_or_else(|err| err.into_inner()).active.as_ref().map(|turn| turn.message_id.clone())
 }
 
 fn enqueue(
@@ -608,7 +636,8 @@ fn spawn_reader(
                 break;
             };
             let Ok(value) = serde_json::from_str::<Value>(&line) else {
-                record_journal(&journal, "error", None, json!({ "reason": "ligne ACP invalide" }));
+                let message_id = active_message_id(&queue);
+                record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": "ligne ACP invalide" }));
                 events
                     .lock()
                     .unwrap_or_else(|err| err.into_inner())
@@ -640,7 +669,8 @@ fn spawn_reader(
                         .unwrap_or_else(|err| err.into_inner())
                         .clone();
                     if update_has_foreign_session(&value, session_id.as_deref()) {
-                        record_journal(&journal, "error", None, json!({ "reason": "update ACP ignorée pour une session étrangère" }));
+                        let message_id = active_message_id(&queue);
+                        record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": "update ACP ignorée pour une session étrangère" }));
                         events
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
@@ -648,7 +678,8 @@ fn spawn_reader(
                                 detail: "update ACP ignorée pour une session étrangère".to_string(),
                             });
                     } else if active_turn_is_cancelled(&queue) {
-                        record_journal(&journal, "error", None, json!({ "reason": "update ACP ignorée après annulation du tour" }));
+                        let message_id = active_message_id(&queue);
+                        record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": "update ACP ignorée après annulation du tour" }));
                         events
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
@@ -656,7 +687,8 @@ fn spawn_reader(
                                 detail: "update ACP ignorée après annulation du tour".to_string(),
                             });
                     } else if let Some(text) = update_text(&value, session_id.as_deref()) {
-                        record_journal(&journal, "update", None, json!({ "kind": "text", "content": text }));
+                        let message_id = active_message_id(&queue);
+                        record_or_terminal(&journal, &events, "update", message_id.as_deref(), json!({ "kind": "text", "content": text }));
                         response
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
@@ -671,7 +703,8 @@ fn spawn_reader(
                         value.pointer("/params/update/sessionUpdate").and_then(Value::as_str),
                         Some("tool_call") | Some("tool_call_update")
                     ) {
-                        record_journal(&journal, "update", None, json!({
+                        let message_id = active_message_id(&queue);
+                        record_or_terminal(&journal, &events, "update", message_id.as_deref(), json!({
                             "kind": "tool_call",
                             "tool": value.pointer("/params/update/content/name").and_then(Value::as_str).unwrap_or("inconnu"),
                             "summary": value.pointer("/params/update/content/text").and_then(Value::as_str).unwrap_or(""),
@@ -679,13 +712,11 @@ fn spawn_reader(
                     }
                 }
                 Some("session/request_permission") => {
-                    if let Some(reply) =
+                    if let Some((reply, payload)) =
                         permission_response(&value, &permissions, active_turn_is_cancelled(&queue))
                     {
-                        record_journal(&journal, "permission", None, json!({
-                            "request": value.pointer("/params/options").cloned().unwrap_or(Value::Null),
-                            "decision": permissions,
-                        }));
+                        let message_id = active_message_id(&queue);
+                        record_or_terminal(&journal, &events, "permission", message_id.as_deref(), payload);
                         let _ = write_json(&writer, reply);
                     }
                 }
@@ -693,7 +724,8 @@ fn spawn_reader(
                     if let Some(reply) = method_not_found_response(&value, method) {
                         let _ = write_json(&writer, reply);
                     }
-                    record_journal(&journal, "error", None, json!({ "reason": format!("méthode ACP inconnue: {method}") }));
+                    let message_id = active_message_id(&queue);
+                    record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": format!("méthode ACP inconnue: {method}") }));
                     events
                         .lock()
                         .unwrap_or_else(|err| err.into_inner())
@@ -702,13 +734,15 @@ fn spawn_reader(
                         });
                 }
                 Some(method) => {
-                    record_journal(&journal, "error", None, json!({ "reason": format!("notification ACP inconnue: {method}") }));
+                    let message_id = active_message_id(&queue);
+                    record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": format!("notification ACP inconnue: {method}") }));
                     events.lock().unwrap_or_else(|err| err.into_inner()).push_back(AcpEvent::Error {
                         detail: format!("notification ACP inconnue: {method}"),
                     });
                 }
                 None => {
-                    record_journal(&journal, "error", None, json!({ "reason": "message ACP inattendu" }));
+                    let message_id = active_message_id(&queue);
+                    record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": "message ACP inattendu" }));
                     events.lock().unwrap_or_else(|err| err.into_inner()).push_back(AcpEvent::Error {
                         detail: "message ACP inattendu".to_string(),
                     });
@@ -722,7 +756,9 @@ fn spawn_reader(
         drain_queue(&mut queue_state, &events, "EOF ACP");
         wakeup.notify_all();
         fail_waiters(&waiters, "EOF ACP");
-        record_journal(&journal, "error", None, json!({ "reason": "EOF ACP" }));
+        let message_id = queue_state.active.as_ref().map(|turn| turn.message_id.clone());
+        drop(queue_state);
+        record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": "EOF ACP" }));
         events
             .lock()
             .unwrap_or_else(|err| err.into_inner())
@@ -999,13 +1035,25 @@ fn write_json(writer: &Writer, value: Value) -> Result<(), TransportError> {
         .map_err(|err| TransportError::Io(err.to_string()))
 }
 
-fn permission_response(value: &Value, permissions: &str, cancelled: bool) -> Option<Value> {
+fn permission_response(value: &Value, permissions: &str, cancelled: bool) -> Option<(Value, Value)> {
     let id = value.get("id")?;
     let options = value.pointer("/params/options")?.as_array()?;
+    let offered_options = options.iter().filter_map(|option| {
+        Some(json!({
+            "optionId": option.get("optionId")?.as_str()?,
+            "kind": option.get("kind")?.as_str()?,
+        }))
+    }).collect::<Vec<_>>();
+    let tool = value.pointer("/params/toolCall/title")
+        .or_else(|| value.pointer("/params/toolCall/name"))
+        .and_then(Value::as_str)
+        .unwrap_or("inconnu");
     if cancelled {
-        return Some(
-            json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": { "outcome": "cancelled" } } }),
-        );
+        let outcome = json!({ "outcome": "cancelled" });
+        return Some((
+            json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": outcome } }),
+            json!({ "tool": tool, "options": offered_options, "decision": outcome }),
+        ));
     }
     let accepted_kinds = if permissions == "allow" {
         ["allow_once", "allow_always"]
@@ -1023,12 +1071,20 @@ fn permission_response(value: &Value, permissions: &str, cancelled: bool) -> Opt
         .and_then(|option| option.get("optionId"))
         .and_then(Value::as_str)
     {
-        Some(option_id) => Some(
-            json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": { "outcome": "selected", "optionId": option_id } } }),
-        ),
-        None => Some(
-            json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": { "outcome": "cancelled" } } }),
-        ),
+        Some(option_id) => {
+            let outcome = json!({ "outcome": "selected", "optionId": option_id });
+            Some((
+                json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": outcome } }),
+                json!({ "tool": tool, "options": offered_options, "decision": { "outcome": "selected", "option_id": option_id } }),
+            ))
+        }
+        None => {
+            let outcome = json!({ "outcome": "cancelled" });
+            Some((
+                json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": outcome } }),
+                json!({ "tool": tool, "options": offered_options, "decision": { "outcome": "cancelled" } }),
+            ))
+        }
     }
 }
 
@@ -1096,11 +1152,22 @@ mod tests {
 
         let permission: Value = serde_json::from_str(lines[2]).unwrap();
         assert_eq!(
-            permission_response(&permission, "allow", false).unwrap()["result"],
+            permission_response(&permission, "allow", false).unwrap().0["result"],
             json!({"outcome":{"outcome":"selected","optionId":"allow-1"}})
         );
         assert_eq!(
-            permission_response(&permission, "deny", false).unwrap()["result"]["outcome"]["optionId"],
+            permission_response(&permission, "allow", false).unwrap().1,
+            json!({
+                "tool":"inconnu",
+                "options":[
+                    {"optionId":"allow-1","kind":"allow_once"},
+                    {"optionId":"reject-1","kind":"reject_once"}
+                ],
+                "decision":{"outcome":"selected","option_id":"allow-1"}
+            })
+        );
+        assert_eq!(
+            permission_response(&permission, "deny", false).unwrap().0["result"]["outcome"]["optionId"],
             "reject-1"
         );
         let invalid_permission = json!({
@@ -1111,8 +1178,12 @@ mod tests {
             ]}
         });
         assert_eq!(
-            permission_response(&invalid_permission, "allow", false).unwrap()["result"],
+            permission_response(&invalid_permission, "allow", false).unwrap().0["result"],
             json!({"outcome":{"outcome":"cancelled"}})
+        );
+        assert_eq!(
+            permission_response(&invalid_permission, "allow", false).unwrap().1["decision"],
+            json!({"outcome":"cancelled"})
         );
 
         let numeric: Value = serde_json::from_str(lines[3]).unwrap();
@@ -1310,6 +1381,8 @@ echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
 read request
 echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
 read request
+echo '{"jsonrpc":"2.0","id":"permission-1","method":"session/request_permission","params":{"sessionId":"fixture-session","options":[{"optionId":"allow-1","kind":"allow_once"},{"optionId":"reject-1","kind":"reject_once"}]}}'
+read permission
 echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"réponse"}}}}'
 echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
 "#;
@@ -1341,6 +1414,8 @@ echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
 read request
 echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
 read request
+echo '{"jsonrpc":"2.0","id":"permission-1","method":"session/request_permission","params":{"sessionId":"fixture-session","options":[{"optionId":"allow-1","kind":"allow_once"},{"optionId":"reject-1","kind":"reject_once"}]}}'
+read permission
 echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"réponse"}}}}'
 echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
 "#;
@@ -1354,13 +1429,41 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
         for _ in 0..30 {
             thread::sleep(Duration::from_millis(10));
             if transport.drain_events().iter().any(|event| matches!(event, AcpEvent::TurnFinished { .. })) {
+                transport.shutdown();
                 let path = std::fs::read_dir(root.join("codex-1")).unwrap().next().unwrap().unwrap().path();
-                let events = crate::journal::valid_events(&path);
-                let kinds = events.iter().map(|event| event["event"].as_str().unwrap()).collect::<Vec<_>>();
-                assert!(kinds.starts_with(&["turn_start", "update"]));
-                assert!(kinds.contains(&"turn_end"));
-                assert!(kinds.contains(&"error"));
-                assert_eq!(events[0]["payload"]["body"], "journal-message");
+                let events = crate::journal::valid_events(&path).into_iter().map(|mut event| {
+                    event.as_object_mut().unwrap().remove("seq");
+                    event.as_object_mut().unwrap().remove("ts");
+                    event
+                }).collect::<Vec<_>>();
+                assert!(events.contains(&json!({
+                    "v": 1, "session_id": "fixture-session", "event": "turn_start",
+                    "message_id": "journal-message",
+                    "payload": {"from":"alice", "reply":false, "body":"journal-message"}
+                })));
+                assert!(events.contains(&json!({
+                    "v": 1, "session_id": "fixture-session", "event": "update",
+                    "message_id": "journal-message",
+                    "payload": {"kind":"text", "content":"réponse"}
+                })));
+                assert!(events.contains(&json!({
+                    "v": 1, "session_id": "fixture-session", "event": "permission",
+                    "message_id": "journal-message",
+                    "payload": {
+                        "tool":"inconnu",
+                        "options":[
+                            {"optionId":"allow-1","kind":"allow_once"},
+                            {"optionId":"reject-1","kind":"reject_once"}
+                        ],
+                        "decision":{"outcome":"selected","option_id":"allow-1"}
+                    }
+                })));
+                assert!(events.contains(&json!({
+                    "v": 1, "session_id": "fixture-session", "event": "turn_end",
+                    "message_id": "journal-message",
+                    "payload": {"stop_reason":"end_turn"}
+                })));
+                assert!(events.iter().any(|event| event["event"] == "error" && event.get("message_id").is_none()));
                 std::fs::remove_dir_all(root).unwrap();
                 return;
             }
