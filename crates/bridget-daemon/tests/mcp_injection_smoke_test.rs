@@ -8,17 +8,27 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[cfg(feature = "test-support")]
+use std::io::{BufRead, BufReader, BufWriter, Write};
+#[cfg(feature = "test-support")]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(feature = "test-support")]
+use std::os::unix::net::UnixListener;
+#[cfg(feature = "test-support")]
 use std::thread;
 
+#[cfg(feature = "test-support")]
 use bridget_core::BridgetMessage;
+#[cfg(feature = "test-support")]
 use bridget_daemon::registry::AgentRegistry;
+#[cfg(feature = "test-support")]
 use bridget_daemon::wrapper::launch_acp_with;
+#[cfg(feature = "test-support")]
 use bridget_transport::protocol::{decode, encode};
+#[cfg(feature = "test-support")]
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 
 const PROBE_PROMPT: &str =
@@ -47,6 +57,7 @@ fn config_snapshot(home: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
         .collect()
 }
 
+#[cfg(feature = "test-support")]
 fn write_user_config_sentinels(home: &Path) {
     for (relative, contents) in [
         (".claude/settings.json", b"claude-user-config".as_slice()),
