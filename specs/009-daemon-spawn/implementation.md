@@ -81,7 +81,10 @@ premier passage lance le wrapper depuis un terminal ; le second passe par
 `SpawnOrder`, le bootstrap, le wrapper supervisé et un `Register` réel. Chaque
 passage couvre quatre tours : demande suivie nominale, corps multiligne avec
 apostrophe/guillemets/`$VAR`/backticks, puis deux demandes envoyées pendant un
-tour ralenti pour exercer la file FIFO.
+tour ralenti pour exercer la file FIFO. Pour ce dernier scénario, un proxy Unix
+coupe réellement la connexion wrapper→daemon au milieu du tour, dans les deux
+modes. La reconnexion doit rétablir la même génération en état `busy`, la
+relance différée doit être persistée, puis la file reprend dans l'ordre.
 
 Observables comparés sans tolérance : quatre accusés, quatre réponses dans
 l'ordre, quatre demandes finales `answered`, présence `acp/connected`, et les
@@ -91,10 +94,13 @@ les types d'événement, corps, texte des updates, `stop_reason` et routage de l
 réponse restent comparés octet pour octet. Total : 6 passages, 24 échanges
 suivis et 72 frames attach, zéro divergence. Une campagne séparée vérifie le
 refus réel `OPENAI_API_KEY` avant spawn dans les deux modes, avec le même motif
-`BillingGuard`.
+`BillingGuard`. La parité n'est pas le seul oracle : les quatre `turn_start`
+doivent aussi contenir exactement les quatre corps attendus, dont le corps
+multiligne complet ; une perte identique dans les deux modes échoue donc le
+test.
 
-Le banc est borné à dix secondes par opération et a terminé en 20,51 s sur la
-machine de validation. La commande reproductible est :
+Le banc est borné à dix secondes par opération et a terminé en environ 32 s
+sur la machine de validation. La commande reproductible est :
 
 ```bash
 cargo test -p bridget-daemon --test managed_parity_test -- --nocapture

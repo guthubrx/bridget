@@ -1727,6 +1727,18 @@ impl DaemonState {
     }
 
     fn restore_pending_for_agent(&mut self, name: &str, conn_id: &str) {
+        // Une reconnexion conserve le cycle suivi déjà en mémoire, mais son
+        // routage doit suivre la nouvelle connexion. Sans ce rattachement,
+        // l'état `busy` est restauré alors que les relances continuent de
+        // viser l'ancien identifiant et ne sont jamais différées.
+        for pending in &mut self.pending_replies {
+            if pending.to == name {
+                pending.target_conn = conn_id.to_string();
+            }
+            if pending.from == name {
+                pending.from_conn = conn_id.to_string();
+            }
+        }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -1774,7 +1786,6 @@ impl DaemonState {
                 deferred_level: None,
             });
         }
-        let _ = conn_id;
     }
 }
 

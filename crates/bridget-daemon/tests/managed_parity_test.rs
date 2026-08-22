@@ -1,13 +1,15 @@
 use bridget_core::BridgetMessage;
-use bridget_transport::protocol::{AttachWindow, ConnectionRole, decode, encode};
+use bridget_transport::protocol::{AgentInfo, AttachWindow, ConnectionRole, decode, encode};
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -55,7 +57,7 @@ for line in sys.stdin:
         turn += 1
         prompt = request["params"]["prompt"][0]["text"]
         if "QUEUE-SLOW" in prompt:
-            time.sleep(0.15)
+            time.sleep(2.2)
         update = {
             "jsonrpc":"2.0",
             "method":"session/update",
@@ -175,6 +177,142 @@ impl DaemonProcess {
     }
 }
 
+struct CutProxy {
+    socket: PathBuf,
+    latest_wrapper: Arc<Mutex<Option<(UnixStream, UnixStream)>>>,
+    wrapper_connections: Arc<AtomicUsize>,
+    stopping: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl CutProxy {
+    fn start(socket: PathBuf, target: PathBuf) -> Self {
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let latest_wrapper = Arc::new(Mutex::new(None));
+        let wrapper_connections = Arc::new(AtomicUsize::new(0));
+        let stopping = Arc::new(AtomicBool::new(false));
+        let observed_wrapper = Arc::clone(&latest_wrapper);
+        let observed_connections = Arc::clone(&wrapper_connections);
+        let observed_stop = Arc::clone(&stopping);
+        let handle = thread::spawn(move || {
+            while !observed_stop.load(Ordering::SeqCst) {
+                let client = match listener.accept() {
+                    Ok((client, _)) => client,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) => panic!("accept du proxy impossible: {error}"),
+                };
+                client.set_nonblocking(false).unwrap();
+                let target_stream = UnixStream::connect(&target).unwrap();
+                target_stream.set_nonblocking(false).unwrap();
+                let current_wrapper = Arc::clone(&observed_wrapper);
+                let connection_count = Arc::clone(&observed_connections);
+                thread::spawn(move || {
+                    let mut client_reader = BufReader::new(client.try_clone().unwrap());
+                    let mut target_writer = target_stream.try_clone().unwrap();
+                    let mut first_line = String::new();
+                    if client_reader.read_line(&mut first_line).unwrap() == 0 {
+                        return;
+                    }
+                    target_writer.write_all(first_line.as_bytes()).unwrap();
+                    target_writer.flush().unwrap();
+                    let is_wrapper = matches!(
+                        decode::<WrapperToDaemon>(first_line.trim_end()),
+                        Ok(WrapperToDaemon::Register { ref agent_type, .. }) if agent_type == "parity"
+                    );
+                    if is_wrapper {
+                        *current_wrapper
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner()) = Some((
+                            client.try_clone().unwrap(),
+                            target_stream.try_clone().unwrap(),
+                        ));
+                        connection_count.fetch_add(1, Ordering::SeqCst);
+                    }
+                    let mut target_reader = target_stream.try_clone().unwrap();
+                    let mut client_writer = client.try_clone().unwrap();
+                    let reverse = thread::spawn(move || {
+                        let _ = std::io::copy(&mut target_reader, &mut client_writer);
+                        let _ = client_writer.shutdown(std::net::Shutdown::Both);
+                    });
+                    let _ = std::io::copy(&mut client_reader, &mut target_writer);
+                    let _ = target_writer.shutdown(std::net::Shutdown::Both);
+                    let _ = reverse.join();
+                });
+            }
+        });
+        Self {
+            socket,
+            latest_wrapper,
+            wrapper_connections,
+            stopping,
+            handle: Some(handle),
+        }
+    }
+
+    fn wrapper_connection_count(&self) -> usize {
+        self.wrapper_connections.load(Ordering::SeqCst)
+    }
+
+    fn cut_wrapper_and_wait_for_reconnect(&self) {
+        let before = self.wrapper_connection_count();
+        let sockets = self
+            .latest_wrapper
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .take()
+            .expect("connexion wrapper à couper");
+        sockets.0.shutdown(std::net::Shutdown::Both).unwrap();
+        sockets.1.shutdown(std::net::Shutdown::Both).unwrap();
+        let deadline = Instant::now() + MATRIX_TIMEOUT;
+        while self.wrapper_connection_count() == before && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            self.wrapper_connection_count(),
+            before + 1,
+            "le wrapper ne s'est pas reconnecté après la coupure réelle"
+        );
+    }
+
+    fn stop(mut self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            handle.join().unwrap();
+        }
+        let _ = fs::remove_file(&self.socket);
+    }
+}
+
+fn start_daemon_behind_proxy(root: &Path) -> (DaemonProcess, CutProxy) {
+    let cache_parent = root.join(".cache");
+    let daemon_cache = root.join("daemon-cache");
+    let proxy_cache = root.join("proxy-cache");
+    fs::create_dir_all(&cache_parent).unwrap();
+    fs::create_dir_all(&daemon_cache).unwrap();
+    fs::create_dir_all(&proxy_cache).unwrap();
+    let cache_link = cache_parent.join("bridget");
+    std::os::unix::fs::symlink(&daemon_cache, &cache_link).unwrap();
+    let mut daemon = DaemonProcess::start(root, false, false);
+    let target = daemon_cache.join("bridget.sock");
+    let database = daemon_cache.join("bridget.db");
+    let deadline = Instant::now() + MATRIX_TIMEOUT;
+    while !database.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(target.exists());
+    assert!(database.exists(), "le daemon n'a pas achevé son initialisation");
+    fs::remove_file(&cache_link).unwrap();
+    std::os::unix::fs::symlink(&proxy_cache, &cache_link).unwrap();
+    let proxy_socket = proxy_cache.join("bridget.sock");
+    let proxy = CutProxy::start(proxy_socket, target);
+    daemon.socket = cache_link.join("bridget.sock");
+    (daemon, proxy)
+}
+
 struct Peer {
     reader: BufReader<UnixStream>,
     writer: BufWriter<UnixStream>,
@@ -253,18 +391,48 @@ struct ModeObservables {
     journal: Vec<String>,
 }
 
-fn wait_agent(control: &mut Peer, name: &str) -> (String, String) {
+fn wait_agent(control: &mut Peer, name: &str) -> AgentInfo {
     let deadline = Instant::now() + MATRIX_TIMEOUT;
     loop {
         control.send(&WrapperToDaemon::ListAgents);
         if let DaemonToWrapper::AgentList { agents } = control.recv()
             && let Some(agent) = agents.into_iter().find(|agent| agent.name == name)
         {
-            return (agent.transport, agent.state);
+            return agent;
         }
         assert!(
             Instant::now() < deadline,
             "l'équipier {name} ne s'est pas enregistré"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_busy_reconnected(control: &mut Peer, name: &str) -> AgentInfo {
+    let deadline = Instant::now() + MATRIX_TIMEOUT;
+    loop {
+        let agent = wait_agent(control, name);
+        if agent.state == "busy" && agent.reconnect_count >= 1 {
+            return agent;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{name} n'a pas conservé busy après sa reconnexion"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_agent_state(control: &mut Peer, name: &str, expected: &str) -> AgentInfo {
+    let deadline = Instant::now() + MATRIX_TIMEOUT;
+    loop {
+        let agent = wait_agent(control, name);
+        if agent.state == expected {
+            return agent;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{name} n'a pas atteint l'état {expected}"
         );
         thread::sleep(Duration::from_millis(10));
     }
@@ -369,11 +537,11 @@ fn collect_journal(socket: &Path, agent: &str) -> Vec<String> {
         .collect()
 }
 
-fn run_corpus(socket: &Path, agent: &str, run: usize) -> ModeObservables {
+fn run_corpus(socket: &Path, agent: &str, run: usize, proxy: &CutProxy) -> ModeObservables {
     let mut peer = Peer::register(socket, &format!("parity-sender-{run}"));
-    let (transport, state) = wait_agent(&mut peer, agent);
-    assert_eq!(transport, "acp");
-    assert_eq!(state, "connected");
+    let initial_agent = wait_agent(&mut peer, agent);
+    assert_eq!(initial_agent.transport, "acp");
+    assert_eq!(initial_agent.state, "connected");
 
     let first = send_tracked(&mut peer, agent, "TRACKED");
     let mut replies = receive_replies(&mut peer, &[first]);
@@ -383,7 +551,13 @@ fn run_corpus(socket: &Path, agent: &str, run: usize) -> ModeObservables {
 
     let slow = send_tracked(&mut peer, agent, "QUEUE-SLOW");
     let next = send_tracked(&mut peer, agent, "QUEUE-NEXT");
-    replies.extend(receive_replies(&mut peer, &[slow, next]));
+    let busy = wait_agent(&mut peer, agent);
+    assert_eq!(busy.state, "busy", "le tour lent doit être observable");
+    proxy.cut_wrapper_and_wait_for_reconnect();
+    let reconnected = wait_busy_reconnected(&mut peer, agent);
+    assert_eq!(reconnected.transport, "acp");
+    replies.extend(receive_replies(&mut peer, &[slow.clone(), next]));
+    let final_agent = wait_agent_state(&mut peer, agent, "connected");
     assert_eq!(
         replies,
         vec![
@@ -400,18 +574,43 @@ fn run_corpus(socket: &Path, agent: &str, run: usize) -> ModeObservables {
     let request_states: Vec<String> = match peer.recv() {
         DaemonToWrapper::RequestList { requests } => {
             assert_eq!(requests.len(), MATRIX_EXPECTED_TURNS);
+            let slow_request = requests
+                .iter()
+                .find(|request| request.id == slow)
+                .expect("demande lente absente du ledger");
+            assert!(
+                slow_request.deferred_reminder_level.is_some(),
+                "la relance différée doit être consignée pendant le tour busy"
+            );
             requests.into_iter().map(|request| request.state).collect()
         }
         other => panic!("liste de demandes inattendue: {other:?}"),
     };
     assert!(request_states.iter().all(|state| state == "answered"));
 
+    let journal = collect_journal(socket, agent);
+    let turn_starts = journal
+        .iter()
+        .filter(|entry| entry.starts_with("turn_start|"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        turn_starts,
+        vec![
+            "turn_start|reply=true|body=TRACKED".to_string(),
+            format!("turn_start|reply=true|body={exact}"),
+            "turn_start|reply=true|body=QUEUE-SLOW".to_string(),
+            "turn_start|reply=true|body=QUEUE-NEXT".to_string(),
+        ],
+        "l'oracle de corps doit détecter une perte commune aux deux modes"
+    );
+
     ModeObservables {
         replies,
         request_states,
-        agent_transport: transport,
-        agent_state: state,
-        journal: collect_journal(socket, agent),
+        agent_transport: final_agent.transport,
+        agent_state: final_agent.state,
+        journal,
     }
 }
 
@@ -436,7 +635,7 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
     for run in 0..MATRIX_RUNS_PER_MODE {
         let root = test_root(&format!("matrix-{run}"));
         let adapter = write_fixture(&root);
-        let daemon = DaemonProcess::start(&root, false, false);
+        let (daemon, proxy) = start_daemon_behind_proxy(&root);
 
         let terminal_name = format!("parity-terminal-{run}");
         let mut terminal = Command::new(env!("CARGO_BIN_EXE_bridget"))
@@ -457,7 +656,7 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let terminal_observables = run_corpus(&daemon.socket, &terminal_name, run * 2);
+        let terminal_observables = run_corpus(&daemon.socket, &terminal_name, run * 2, &proxy);
         unsafe {
             libc::kill(terminal.id() as i32, libc::SIGTERM);
         }
@@ -479,7 +678,7 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
             control.recv(),
             DaemonToWrapper::SpawnAccepted { ref name, .. } if name == &managed_name
         ));
-        let managed_observables = run_corpus(&daemon.socket, &managed_name, run * 2 + 1);
+        let managed_observables = run_corpus(&daemon.socket, &managed_name, run * 2 + 1, &proxy);
 
         assert_eq!(
             terminal_observables, managed_observables,
@@ -487,6 +686,7 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
         );
         stop_managed(&mut control, &managed_name, run);
         daemon.stop();
+        proxy.stop();
         fs::remove_dir_all(root).unwrap();
     }
 }
