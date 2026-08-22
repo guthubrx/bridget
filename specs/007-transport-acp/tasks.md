@@ -120,7 +120,7 @@ bout en bout (SC-001, SC-002).
 
 ## Phase 2 : US2 — Ouverture du registre (Claude, puis Gemini)
 
-- [ ] **T707** [US2] **Équipier Claude** : valider l'entrée `claude` du registre
+- [X] **T707** [US2] **Équipier Claude** : valider l'entrée `claude` du registre
   par défaut (`@zed-industries/claude-code-acp@0.16.2`) en déroulant quickstart
   §1-§3 avec un équipier Claude. **Capturer les fixtures Claude et les ajouter
   à la matrice R-004** (même couverture que Codex), sans régression Codex.

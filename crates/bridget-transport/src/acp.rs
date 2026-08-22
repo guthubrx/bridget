@@ -1237,6 +1237,26 @@ mod tests {
     }
 
     #[test]
+    fn claude_spike_fixture_collects_text_then_stop_reason() {
+        let mut text = String::new();
+        let mut stop_reason = None;
+        for line in include_str!("../tests/fixtures/acp/claude-spike.jsonl").lines() {
+            let value: Value = serde_json::from_str(line).unwrap();
+            if let Some(chunk) = update_text(&value, Some("claude-spike-session")) {
+                text.push_str(chunk);
+            }
+            if let Some((_, Ok(result))) = rpc_response(&value) {
+                stop_reason = result
+                    .get("stopReason")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+            }
+        }
+        assert_eq!(text, "CLAUDE_ACP_OK");
+        assert_eq!(stop_reason.as_deref(), Some("end_turn"));
+    }
+
+    #[test]
     fn responses_are_correlated_by_exact_id_even_out_of_order() {
         let waiters: Waiters = Arc::new(Mutex::new(HashMap::new()));
         let (numeric_sender, numeric_receiver) = mpsc::channel();

@@ -141,3 +141,30 @@ API pendant cette tentative.
 - **Choix de file** : le canal reste borné pour borner la mémoire sous flux
   soutenu ; saturation et erreur d'écriture produisent `JournalFailed`, ce qui
   arrête immédiatement le transport puis draine ses livraisons terminales.
+
+## T707 — Équipier Claude
+
+- **Statut** : terminé
+- **Précondition** : `ANTHROPIC_API_KEY` absent de l'environnement.
+- **Commande** : `npx @zed-industries/claude-code-acp@0.16.2` ; aucune
+  surcharge de modèle n'a été nécessaire.
+- **Transcription extraite** :
+
+```text
+> initialize (protocolVersion: 1)
+< agentInfo: @zed-industries/claude-code-acp 0.16.2 ; authMethods: claude-login
+> session/new
+< sessionId: claude-spike-session
+> session/prompt: « Réponds exactement : CLAUDE_ACP_OK »
+< session/update available_commands_update
+< session/update agent_message_chunk: "" ; "C" ; "LAUDE_ACP_OK"
+< result stopReason: "end_turn"
+```
+
+- **Quickstart §1–§3** : équipier `claude-t707` lancé par le registre par
+  défaut, demande suivie livrée puis réponse et clôture reçues ; le corps avec
+  apostrophe, guillemets, `$VAR` et backticks est revenu entre balises
+  `<echo>` sans transformation.
+- **Hygiène** : le script et la transcription bruts, créés en `0600`, sont
+  supprimés après extraction ; la fixture versionnée est minimisée et ne porte
+  pas la liste locale des commandes annoncées par l'adaptateur.

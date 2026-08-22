@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"claude-spike-session","update":{"sessionUpdate":"available_commands_update","availableCommands":[]}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"claude-spike-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":""}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"claude-spike-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"C"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"claude-spike-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"LAUDE_ACP_OK"}}}}
+{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}

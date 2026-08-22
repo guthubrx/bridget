@@ -126,6 +126,11 @@ chacun des trois adaptateurs pinnés :
 | message inattendu (méthode inconnue) | journalisé, ignoré ; répondre `method not found` si c'est une requête |
 | écritures concurrentes | sérialisées par le writer — aucun entrelacement possible |
 
+Les fixtures `generic.jsonl` portent les cas de la matrice communs aux
+adaptateurs ; les captures `codex-spike.jsonl` et `claude-spike.jsonl` valident
+pour chacun le flux réel `session/update` (dont notification intercalée) puis
+`stopReason: "end_turn"`.
+
 ## R-005 — Permissions en mode équipier headless
 
 Aujourd'hui, le wrapper lance déjà les agents avec contournement complet des
