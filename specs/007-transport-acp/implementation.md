@@ -195,3 +195,18 @@ https://antigravity.google
   du cycle de vie d'une demande et est exposée par `ListRequests` et
   `bridget requests` (niveau et horodatage du dernier report), sans détourner
   le journal JSONL de session ACP.
+
+## T708 — Ouverture déclarative validée
+
+- **Fixture** : `crates/bridget-daemon/tests/fixtures/registry/codex-claude.json`
+  ne contient initialement que Codex et Claude. Le test ajoute ensuite le type
+  `stdio-ouvert`, absent du code de production, puis charge le registre écrit
+  dans un fichier temporaire.
+- **Échange** : l'adaptateur stdio reçoit `initialize`, `session/new` et
+  `session/prompt`, retourne un chunk `fixture-response` et `end_turn`. Le test
+  traverse le daemon : livraison suivie, tour ACP, réponse avec `in_reply_to`,
+  puis demande en état `answered`.
+- **Contrôle mécanique SC-003** : avant le commit, la commande
+  `git diff --name-only d68ed09 -- crates | rg -v '^crates/[^/]+/tests/'`
+  ne produit aucune sortie. La modification Rust est donc limitée au test
+  d'intégration ; aucun fichier de code de production n'est modifié.

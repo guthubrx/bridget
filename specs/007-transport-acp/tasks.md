@@ -66,8 +66,9 @@ valide chaque tâche avant coche. Ne jamais committer automatiquement.
   pendant prompt, réponses hors ordre, ids chaîne/nombre, objet `error`, EOF,
   ligne invalide, méthode inconnue) plus tour normal/vide/erreur, permission,
   version incompatible ; tests de file : FIFO, dépassement de capacité → rejet
-  terminal, purge par id ; corps spéciaux intacts octet pour octet. (Les
-  fixtures Claude et Gemini sont ajoutées par T707 et T708.)
+  terminal, purge par id ; corps spéciaux intacts octet pour octet. (La
+  fixture de couche 2 Claude est ajoutée par T707 ; la preuve de couche 2 se
+  limite à Codex/Claude — Gemini indisponible, constat T708.)
 
 - [X] **T705** [US1] **Branchement wrapper équipier et protocole** : flag de
   lancement (`cli.rs`, nom du flag à fixer et documenter), mode ACP dans
@@ -118,7 +119,7 @@ bout en bout (SC-001, SC-002).
 
 ---
 
-## Phase 2 : US2 — Ouverture du registre (Claude, puis Gemini)
+## Phase 2 : US2 — Ouverture du registre (Claude, puis type inconnu du code)
 
 - [X] **T707** [US2] **Équipier Claude** : valider l'entrée `claude` du registre
   par défaut (`@zed-industries/claude-code-acp@0.16.2`) en déroulant quickstart
@@ -130,19 +131,22 @@ bout en bout (SC-001, SC-002).
   **Observable** : échange complet Claude (demande suivie → réponse → clôture) ;
   matrice de conformité au vert pour les deux adaptateurs.
 
-- [ ] **T708** [US2] **Test d'acceptation d'ouverture — Gemini sans code** :
-  preuve par **registre temporaire versionné** (round 2 de la contre-revue,
-  objection 5 : Gemini est déjà dans les défauts embarqués et le fichier
-  utilisateur est hors Git, un `git diff` ne prouverait rien) — test automatisé
-  qui charge une fixture de registre ne contenant initialement que
-  Codex/Claude, y ajoute dynamiquement l'entrée Gemini (`gemini --acp`), puis
-  lance l'équipier via ce fichier ; dérouler quickstart §1-§2 avec un équipier
-  Gemini réel. Capturer les fixtures Gemini dans la matrice R-004.
-  **Observable** : SC-003 prouvé — le diff de la tâche ne contient **aucun
-  fichier `.rs` modifié** (fixtures de config et de conformité versionnées
-  uniquement) et le scénario passe. Si un changement de code s'avère
-  nécessaire, la tâche échoue et le défaut d'ouverture est corrigé (retour
-  T703/T704) avant de recommencer.
+- [X] **T708** [US2] **Test d'acceptation d'ouverture — type inconnu sans
+  code de production** *(révisée le 2026-08-22, gate de support : Gemini
+  indisponible pour les comptes individuels — deux tentatives réelles 0.46.0
+  et 0.56.0, constat versionné en `0800d0a`)* : test d'intégration automatisé
+  — fixture de registre versionnée ne contenant initialement que Codex/Claude,
+  ajout dynamique d'une entrée de type **inconnu du code de production**
+  pointant vers l'adaptateur de test stdio (T704), lancement de l'équipier via
+  ce fichier, échange complet (livraison → tour → réponse → clôture).
+  L'entrée `gemini` reste au registre par défaut, documentée indisponible
+  (comptes individuels) dans research.md et README.
+  **Observable** : SC-003 révisé prouvé — le test d'intégration vit sous
+  `crates/*/tests/` (ou diff `.rs` strictement limité à `cfg(test)`), et un
+  **contrôle mécanique** vérifie qu'aucune ligne hors test/fixture n'a changé
+  (`git diff` filtré, consigné) ; l'échange passe de bout en bout via le
+  registre. Si un changement de production s'avère nécessaire, la tâche échoue
+  (défaut d'ouverture → retour T703/T704).
 
 ---
 

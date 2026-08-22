@@ -29,11 +29,11 @@ fin explicite avec raison. La sémantique « relance différée si tour en cours
 
 Vérifié le 2026-08-22 (npm + binaire local) :
 
-| Agent | Voie ACP | Version constatée | Lancement |
-|---|---|---|---|
-| Codex (priorité 1) | `@zed-industries/codex-acp` (npm, bin `codex-acp`) | 0.16.0 | `npx @zed-industries/codex-acp@0.16.0 -c model="gpt-5.5"` |
-| Claude (priorité 2) | `@zed-industries/claude-code-acp` (npm) | 0.16.2 | `npx @zed-industries/claude-code-acp@0.16.2` |
-| Gemini (priorité 3) | natif dans Gemini CLI | flag `--acp` présent sur le binaire local (`--experimental-acp` est **déprécié**) | `gemini --acp` |
+| Agent | Voie ACP | Version constatée | Lancement | Statut |
+|---|---|---|---|---|
+| Codex (priorité 1) | `@zed-industries/codex-acp` (npm, bin `codex-acp`) | 0.16.0 | `npx @zed-industries/codex-acp@0.16.0 -c model="gpt-5.5"` (pin issu du spike T701) | **validé** (T701/spike, quickstart) |
+| Claude (priorité 2) | `@zed-industries/claude-code-acp` (npm) | 0.16.2 | `npx @zed-industries/claude-code-acp@0.16.2` | **validé** (T707, sans surcharge) |
+| Gemini (priorité 3) | natif dans Gemini CLI | 0.46.0 (brew) et 0.56.0 (npm) testées | `gemini --acp` / `npx @google/gemini-cli@0.56.0 --acp` | **conditionnel/non validé** — voie individuelle fermée par Google (« migrate to the Antigravity suite », constat T708 du 2026-08-22) ; dépendrait d'un compte éligible |
 
 Décision : versions **pinnées** dans le registre d'agents (config), jamais de
 `@latest`. La version attendue fait partie de l'entrée de registre et est
@@ -43,35 +43,19 @@ paquet quand `npx` le permet).
 Note : les adaptateurs Zed sont explicitement publiés pour usage hors Zed
 (source : zed.dev/blog/codex-is-live-in-zed, consulté 2026-08-22).
 
-**Constat T708 (2026-08-22)** : la voie individuelle Gemini est indisponible.
-Le binaire Homebrew 0.46.0 puis le pin npm
-`@google/gemini-cli@0.56.0 --acp`, tous deux lancés avec login Google et sans
-`GEMINI_API_KEY` ni `GOOGLE_API_KEY`, échouent au `session/new` avec le même
-refus : « This client is no longer supported for Gemini Code Assist for
-individuals. To continue using Gemini, please migrate to the Antigravity suite
-of products: https://antigravity.google ». Aucun tour ACP ni `stopReason` ne
-peut donc être capturé ; la compatibilité Gemini est suspendue à une voie de
-support Google rétablie ou à la révision de la spec.
-
-### Constat spike T701 — 2026-08-22
-
-Le protocole ACP 1 est négocié avec `codex-acp` 0.16.0, sans demande de clé
-API : la méthode `initialize` annonce explicitement l'authentification ChatGPT
-par abonnement. Trois conditions de lancement ont été testées :
-
-1. Sans surcharge : `initialize` et `session/new` réussissent, mais
-   `session/prompt` échoue car le modèle configuré est trop récent pour le
-   coeur Codex embarqué par l'adaptateur.
-2. `-c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"high\"` : même échec
-   au `session/prompt` avec « The 'gpt-5.6-sol' model requires a newer version
-   of Codex ».
-3. `-c model=\"gpt-5.5\"` avec le home Codex courant : `initialize`,
-   `session/new`, `session/prompt` réussissent ; la réponse de tour porte
-   `stopReason: "end_turn"` et le texte `SPIKE_ACP_OK`.
-
-Conclusion : le pin `gpt-5.5` est ajouté à l'entrée Codex par défaut du
-registre. Les protections de facturation couvrent `OPENAI_API_KEY` et
-`CODEX_API_KEY`, deux méthodes d'authentification annoncées par l'adaptateur.
+**Constat spike T701 (2026-08-22, trois tentatives, transcriptions extraites
+dans `implementation.md`)** : le cœur Codex embarqué dans `codex-acp` 0.16.0
+refuse les modèles récents de la config utilisateur (`gpt-5.6-terra` **et**
+`gpt-5.6-sol` → erreur 400 « requires a newer version of Codex »). La
+résolution retenue (tentative 3, validée en pair review) : conserver le vrai
+`~/.codex` et **épingler un modèle compatible dans les args de l'adaptateur**
+(`-c model="gpt-5.5"`) — auth abonnement conservée, ni `OPENAI_API_KEY` ni
+`CODEX_API_KEY` présents ou demandés, `stopReason=end_turn` reçu. La piste
+« home isolé » (tentative 2) fonctionnait aussi mais a été écartée : inutile
+dès lors que la surcharge de modèle suffit, et porteuse de risques propres
+(sécurité de la copie d'`auth.json`, rotation de jetons). Le retour aux modèles
+récents pour les équipiers = bump du pin `codex-acp` quand Zed publie une
+version au cœur plus récent — une ligne de registre.
 
 ## R-003 — Facturation : abonnements, jamais de clé API
 

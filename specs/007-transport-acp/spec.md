@@ -78,29 +78,42 @@ Bridget n'apparaît dans le contexte de l'équipier.
 
 ---
 
-### User Story 2 - Registre d'agents ouvert : Claude puis Gemini sans nouveau code (Priority: P2)
+### User Story 2 - Registre d'agents ouvert : Claude, puis un type inconnu du code (Priority: P2)
 
 L'utilisateur déclare les types d'agents ACP dans une configuration (type →
-commande de lancement). Claude est ajouté comme deuxième type supporté. Gemini
-est ensuite activé par une simple entrée de configuration, sans modification du
-code de Bridget — c'est le test d'acceptation de l'ouverture demandée.
+commande de lancement). Claude est ajouté comme deuxième type supporté. Puis un
+type **absent du code de production** est activé par une simple entrée de
+configuration, sans modification de Bridget — c'est le test d'acceptation de
+l'ouverture demandée. *(Note de compatibilité conditionnelle : Gemini, cible
+initiale de ce troisième type, dépend d'un compte Google éligible — la voie
+individuelle est fermée par Google depuis le constat T708 du 2026-08-22 ; son
+entrée de registre est conservée, documentée non validée.)*
 
 **Why this priority** : l'ouverture « ajouter d'autres agents a posteriori »
 est une exigence explicite de l'utilisateur ; elle se vérifie au moment où le
-deuxième et le troisième type passent.
+deuxième type passe et où un type inconnu du code traverse tout le cycle.
 
-**Independent Test** : après le support Claude, ajouter l'entrée Gemini dans la
-configuration et dérouler le test de la User Story 1 avec un équipier Gemini,
-en vérifiant qu'aucun fichier source n'a changé (diff vide hors configuration).
+**Independent Test** : après le support Claude, ajouter dans une fixture de
+registre l'entrée d'un type pointant vers l'adaptateur de test stdio et
+dérouler le cycle complet de la User Story 1 avec ce type, en vérifiant
+mécaniquement qu'aucune ligne hors test/fixture n'a changé.
 
 **Acceptance Scenarios**:
 
 1. **Given** la configuration contient une entrée Claude, **When** l'utilisateur
    lance un équipier Claude, **Then** le scénario de la User Story 1 passe à
    l'identique.
-2. **Given** le support Codex et Claude fonctionne, **When** l'utilisateur
-   ajoute l'entrée Gemini en configuration, **Then** un équipier Gemini passe le
-   scénario de la User Story 1 **sans aucune modification de code source**.
+2. **Given** le support Codex et Claude fonctionne, **When** un type d'agent
+   supplémentaire — inconnu du code — est déclaré par configuration seule,
+   **Then** un équipier de ce type passe le scénario de la User Story 1 **sans
+   aucune modification de code de production**. *(Révision du 2026-08-22,
+   gate de support : ce scénario visait Gemini, dont la voie individuelle a
+   été fermée par Google — « migrate to the Antigravity suite », constaté sur
+   CLI 0.46.0 et 0.56.0, consigné dans research.md. La preuve d'ouverture se
+   fait par un type s'appuyant sur l'adaptateur de test stdio ; l'entrée
+   Gemini reste au registre par défaut, documentée comme indisponible pour les
+   comptes individuels — elle resterait fonctionnelle pour un compte
+   éligible.)*
 3. **Given** une entrée de configuration pointe vers une commande absente ou
    invalide, **When** l'utilisateur lance un équipier de ce type, **Then** le
    lancement échoue immédiatement avec un message qui nomme la commande fautive
@@ -233,8 +246,12 @@ en cours ; (b) exporter une clé API dans l'environnement, tenter de lancer un
 - **SC-002** : 100 % des messages d'un corpus de test contenant caractères
   spéciaux et multilignes transitent intacts dans les deux sens (aujourd'hui :
   échec dès la première apostrophe non échappée).
-- **SC-003** : l'ajout du type Gemini après Codex et Claude se fait avec **zéro
-  ligne de code modifiée** (diff limité à la configuration).
+- **SC-003** : l'ajout d'un **type d'agent inconnu du code** après Codex et
+  Claude se fait avec **zéro ligne de code de production modifiée** (diff
+  limité à la configuration et au code de test) — prouvé par un type
+  s'appuyant sur l'adaptateur de test stdio, via une fixture de registre
+  versionnée. *(Révisé le 2026-08-22 : Gemini, cible initiale, est
+  indisponible pour les comptes individuels — constat versionné.)*
 - **SC-004** : **zéro** relance émise vers un équipier dont le tour est en
   cours, sur un scénario de tâche longue dépassant l'échéance de relance.
 - **SC-005** : un lancement avec clé API dans l'environnement échoue avec
@@ -247,10 +264,13 @@ en cours ; (b) exporter une clé API dans l'environnement, tenter de lancer un
 
 ## Assumptions
 
-- Les adaptateurs ACP tiers (Codex, Claude) et le mode ACP natif (Gemini) sont
-  installables et fonctionnels sur les machines cibles ; leurs versions sont
-  pinnées dans la configuration. Un spike manuel de validation précède
-  l'implémentation (hors périmètre de cette spec).
+- Les adaptateurs ACP tiers **Codex et Claude** sont installables et
+  fonctionnels sur les machines cibles ; leurs versions sont pinnées dans la
+  configuration. Gemini dépend d'un **compte Google éligible** — non
+  vérifiable sur la voie individuelle depuis le constat T708 (2026-08-22) ;
+  son entrée reste déclarative, statut « conditionnel/non validé ». Un spike
+  manuel de validation précède l'implémentation (hors périmètre de cette
+  spec).
 - La consommation passe par les logins CLI des abonnements existants ; ACP ne
   change pas le canal de facturation (validé en recherche préalable).
 - Le périmètre « équipier » couvre les agents headless pilotés par Bridget ;

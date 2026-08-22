@@ -143,6 +143,168 @@ impl FakeAgent {
 mod tests {
     use super::*;
     use bridget_daemon::daemon::{self, DaemonConfig};
+    use bridget_daemon::registry::{AgentDefinition, AgentRegistry};
+    use bridget_transport::{AcpEvent, AcpOptions, AcpTransport, Transport};
+
+    fn registry_with_unknown_stdio_agent() -> (AgentDefinition, PathBuf) {
+        let mut fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "fixtures/registry/codex-claude.json"
+        ))
+        .expect("fixture de registre valide");
+        assert_eq!(
+            fixture["agents"]
+                .as_object()
+                .expect("agents de fixture")
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["claude".to_string(), "codex".to_string()],
+            "la fixture versionnée ne déclare initialement que Codex et Claude"
+        );
+        fixture["agents"]["stdio-ouvert"] = serde_json::json!({
+            "command": "sh",
+            "args": [
+                "-c",
+                r#"
+read initialize
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read new_session
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"stdio-ouvert"}}'
+read prompt
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"stdio-ouvert","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"fixture-response"}}}}'
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+"#
+            ],
+            "protocol": "acp",
+            "permissions": "allow",
+            "queue_capacity": 2,
+            "notify_timeout_secs": 1
+        });
+        let dir = std::env::temp_dir().join(format!(
+            "bridget-registry-fixture-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("horloge système")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("répertoire de registre temporaire");
+        let path = dir.join("agents.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&fixture).expect("registre sérialisable"),
+        )
+        .expect("registre dynamique écrit");
+        let registry = AgentRegistry::from_json(
+            &std::fs::read_to_string(&path).expect("registre dynamique lisible"),
+            &path,
+        )
+        .expect("registre dynamique chargé");
+        (registry.get("stdio-ouvert").expect("type inconnu chargé").clone(), dir)
+    }
+
+    fn wait_for_turn(transport: &AcpTransport) -> (BridgetMessage, String, String) {
+        for _ in 0..100 {
+            for event in transport.drain_events() {
+                if let AcpEvent::TurnFinished {
+                    message,
+                    response,
+                    stop_reason,
+                } = event
+                {
+                    return (message, response, stop_reason);
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("le faux adaptateur stdio n'a pas terminé le tour");
+    }
+
+    #[test]
+    fn test_unknown_registry_type_completes_a_tracked_exchange() {
+        let (definition, registry_dir) = registry_with_unknown_stdio_agent();
+        let socket = unique_socket_path();
+        let db_path = PathBuf::from(format!(
+            "/tmp/bridget-test-registry-open-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&socket);
+        let _ = std::fs::remove_file(&db_path);
+        let config = DaemonConfig {
+            socket_path: socket.clone(),
+            db_path: db_path.clone(),
+            log_path: PathBuf::from("/tmp/bridget-test-registry-open.log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+        };
+        thread::spawn(move || {
+            let _ = daemon::run(config);
+        });
+        for _ in 0..50 {
+            if socket.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(socket.exists(), "socket de daemon absente");
+
+        let mut sender = FakeAgent::connect(&socket, "codex", Some("sender")).unwrap();
+        let mut teammate = FakeAgent::connect(&socket, "stdio-ouvert", Some("extension")).unwrap();
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: definition.command,
+            args: definition.args,
+            queue_capacity: definition.queue_capacity,
+            permissions: definition.permissions,
+            notify_timeout_secs: definition.notify_timeout_secs,
+        })
+        .expect("adaptateur stdio lancé depuis le registre");
+
+        let mut request = BridgetMessage::new(&sender.name, &teammate.name, "réponds via ACP");
+        request.reply = true;
+        sender.send_message(request.clone()).unwrap();
+        assert!(matches!(sender.read_response().unwrap(), DaemonToWrapper::Ack { .. }));
+        let delivery = match teammate.read_response().unwrap() {
+            DaemonToWrapper::Deliver(message) => message,
+            other => panic!("livraison attendue pour le type inconnu : {other:?}"),
+        };
+        transport.deliver(&delivery).unwrap();
+        let (finished, response, stop_reason) = wait_for_turn(&transport);
+        assert_eq!(finished.id, request.id);
+        assert_eq!(response, "fixture-response");
+        assert_eq!(stop_reason, "end_turn");
+
+        let mut reply = BridgetMessage::new(&teammate.name, &sender.name, response);
+        reply.in_reply_to = Some(finished.id);
+        teammate.send_message(reply).unwrap();
+        assert!(matches!(teammate.read_response().unwrap(), DaemonToWrapper::Ack { .. }));
+        let returned = match sender.read_response().unwrap() {
+            DaemonToWrapper::Deliver(message) => message,
+            other => panic!("réponse ACP attendue : {other:?}"),
+        };
+        assert_eq!(returned.in_reply_to.as_deref(), Some(request.id.as_str()));
+        assert_eq!(returned.body, "fixture-response");
+
+        let list = WrapperToDaemon::ListRequests {
+            sender: sender.name.clone(),
+        };
+        writeln!(sender.writer, "{}", encode(&list).unwrap()).unwrap();
+        sender.writer.flush().unwrap();
+        match sender.read_response().unwrap() {
+            DaemonToWrapper::RequestList { requests } => {
+                assert_eq!(requests.len(), 1);
+                assert_eq!(requests[0].state, "answered");
+            }
+            other => panic!("vue des demandes attendue : {other:?}"),
+        }
+
+        transport.shutdown();
+        let _ = std::fs::remove_file(&socket);
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(registry_dir);
+    }
 
     #[test]
     fn test_two_agents_communicate() {

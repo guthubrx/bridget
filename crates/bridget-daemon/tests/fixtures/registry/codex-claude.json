@@ -1,0 +1,14 @@
+{
+  "agents": {
+    "codex": {
+      "command": "codex",
+      "protocol": "acp",
+      "permissions": "allow"
+    },
+    "claude": {
+      "command": "claude",
+      "protocol": "acp",
+      "permissions": "allow"
+    }
+  }
+}
