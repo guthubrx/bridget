@@ -50,7 +50,7 @@ const ATTACH_RELAY_IDLE_WAIT: Duration = Duration::from_millis(10);
 fn interactive_bridget_prompt(name: &str, mcp_enabled: bool) -> String {
     if mcp_enabled {
         return format!(
-            "Tu es l'agent \"{name}\" dans une session Bridget. Une ligne commençant par 💬 est un message d'un autre agent IA, pas de l'humain. reply=yes attend une réponse utile ; reply=no est une notification, à traiter seulement si utile."
+            "Tu es l'agent \"{name}\" dans une session Bridget. Une ligne commençant par 💬 est un message d'un autre agent IA, pas de l'humain. reply=yes attend une réponse utile. reply=no est une notification, à traiter seulement si utile."
         );
     }
 

@@ -209,6 +209,13 @@ le bloc historique octet pour octet. Deux tests unitaires comparent directement
 les chaînes produites aux fixtures versionnées : une reformulation non mesurée
 ne peut donc pas entrer par un second chemin.
 
+Le banc lance ensuite le vrai chemin `bridget codex` avec le MCP interactif du
+registre par défaut. Un exécutable Codex de fixture reste vivant pendant le
+dépôt du marqueur et capture les arguments effectivement reçus après
+`wrapper::launch`; le test exige que l'un d'eux soit exactement la fixture
+réduite, avec le nom de session substitué. Ce passage réel a détecté puis fait
+retirer un point-virgule que la garde d'arguments refusait avant le spawn.
+
 La matrice `managed_parity_test::matrice_fr008_compare_le_meme_corpus_et_les_frames_attach`
 rejoue le quickstart 007 §1 à §4 trois fois dans chacun des deux modes de
 lancement. Les oracles restent indépendants de la simple parité : présence ACP
@@ -218,5 +225,6 @@ réelle du socket wrapper puis reconnexion conservant `busy`. La fixture réduit
 est liée à ce banc et ne contient plus la syntaxe `bridget send`.
 
 Validation ciblée : **2/2** tests d'identité de prompt, **2/2** tests statiques
-de réduction, puis matrice comportementale **1/1** au vert en **32,61 s**
-(trois campagnes par mode, quatre tours par campagne).
+de réduction, capture du lancement MCP réel puis matrice comportementale
+**1/1** au vert en **33,06 s** (trois campagnes par mode, quatre tours par
+campagne).

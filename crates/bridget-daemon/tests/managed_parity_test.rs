@@ -99,6 +99,83 @@ for line in sys.stdin:
     adapter
 }
 
+fn capture_interactive_mcp_prompt(root: &Path, run: usize) {
+    let bin = root.join("prompt-bin");
+    let capture = root.join("captured-prompt.json");
+    let release = root.join("release-prompt-cli");
+    let codex = bin.join("codex");
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(
+        &codex,
+        r#"#!/usr/bin/python3
+import json
+import os
+import sys
+import time
+
+capture = os.environ["BRIDGET_PROMPT_CAPTURE"]
+temporary = capture + ".tmp"
+with open(temporary, "w", encoding="utf-8") as output:
+    json.dump(sys.argv[1:], output, ensure_ascii=False)
+os.replace(temporary, capture)
+while not os.path.exists(os.environ["BRIDGET_PROMPT_RELEASE"]):
+    time.sleep(0.01)
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let name = format!("prompt-mcp-{run}");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .args(["codex", "--name", &name])
+        .env_clear()
+        .env("HOME", root)
+        .env("PATH", format!("{}:{FROZEN_PATH}", bin.display()))
+        .env("USER", "parity-test")
+        .env("LANG", "C")
+        .env("TMPDIR", "/tmp")
+        .env("BRIDGET_PROMPT_CAPTURE", &capture)
+        .env("BRIDGET_PROMPT_RELEASE", &release)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + MATRIX_TIMEOUT;
+    while !capture.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    if !capture.exists() {
+        let _ = child.kill();
+        let output = child.wait_with_output().unwrap();
+        panic!(
+            "le vrai wrapper MCP n'a pas transmis son prompt : {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let arguments: Vec<String> = serde_json::from_slice(&fs::read(&capture).unwrap()).unwrap();
+    let actual = arguments
+        .iter()
+        .find(|argument| argument.starts_with("Tu es l'agent"))
+        .expect("prompt Bridget absent des arguments du CLI MCP");
+    let expected = REDUCED_PROMPT
+        .trim_end_matches('\n')
+        .replace("agent-fixture", &name);
+    assert_eq!(
+        actual, &expected,
+        "le lancement MCP n'utilise pas la fixture réduite"
+    );
+
+    fs::write(&release, b"release").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "le wrapper de capture a échoué : {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn write_cached_npx_fixture(root: &Path) {
     let adapter = write_fixture(root);
     let package = root.join("node_modules/parity-acp");
@@ -642,6 +719,18 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
     assert!(REDUCED_PROMPT.contains("reply=yes"));
     assert!(REDUCED_PROMPT.contains("reply=no"));
     assert!(!REDUCED_PROMPT.contains("bridget send"));
+
+    let prompt_root = PathBuf::from(format!(
+        "/tmp/bg10p-{}-{}",
+        std::process::id(),
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    ));
+    write_fixture(&prompt_root);
+    let prompt_daemon = DaemonProcess::start(&prompt_root, false, false);
+    capture_interactive_mcp_prompt(&prompt_root, 0);
+    prompt_daemon.stop();
+    fs::remove_dir_all(prompt_root).unwrap();
+
     for run in 0..MATRIX_RUNS_PER_MODE {
         let root = test_root(&format!("matrix-{run}"));
         let adapter = write_fixture(&root);
