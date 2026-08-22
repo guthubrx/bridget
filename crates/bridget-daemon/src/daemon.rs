@@ -367,6 +367,11 @@ enum ManagedSupervisorEvent {
         outcome: StopOutcome,
         completion: Arc<ManagedStopControl>,
     },
+    StopTimedOut {
+        lease: SpawnLease,
+        outcome: StopOutcome,
+        completion: Arc<ManagedStopControl>,
+    },
 }
 
 #[derive(Clone)]
@@ -944,6 +949,7 @@ struct SupervisedProcess {
     connected: bool,
     failure_sent: bool,
     stop: Arc<ManagedStopControl>,
+    stop_attempted: bool,
 }
 
 fn start_managed_supervisor(
@@ -951,6 +957,16 @@ fn start_managed_supervisor(
     config: &DaemonConfig,
     commands: Receiver<ManagedSupervisorCommand>,
     events: Sender<ManagedSupervisorEvent>,
+) {
+    start_managed_supervisor_with_executable(fleet, config, commands, events, None);
+}
+
+fn start_managed_supervisor_with_executable(
+    fleet: Arc<FleetSupervisor>,
+    config: &DaemonConfig,
+    commands: Receiver<ManagedSupervisorCommand>,
+    events: Sender<ManagedSupervisorEvent>,
+    executable_override: Option<PathBuf>,
 ) {
     let marker_store = ManagedMarkerStore::at_directory(
         config
@@ -982,6 +998,7 @@ fn start_managed_supervisor(
                     &stderr_store,
                     &events,
                     &mut active,
+                    executable_override.as_ref(),
                 ),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
@@ -994,6 +1011,7 @@ fn start_managed_supervisor(
                     &stderr_store,
                     &events,
                     &mut active,
+                    executable_override.as_ref(),
                 );
             }
             poll_managed_processes(&fleet, &events, &mut active);
@@ -1014,6 +1032,7 @@ fn handle_managed_command(
     stderr_store: &ManagedStderrStore,
     events: &Sender<ManagedSupervisorEvent>,
     active: &mut HashMap<String, SupervisedProcess>,
+    executable_override: Option<&PathBuf>,
 ) {
     match command {
         ManagedSupervisorCommand::Start { prepared, stop } => {
@@ -1024,7 +1043,10 @@ fn handle_managed_command(
             };
             let start = (|| {
                 let (stderr, _) = stderr_store.open(&prepared.lease.name, &identity)?;
-                let executable = std::env::current_exe()?;
+                let executable = executable_override
+                    .cloned()
+                    .map(Ok)
+                    .unwrap_or_else(std::env::current_exe)?;
                 let launch = ManagedLaunch {
                     bootstrap_executable: executable.clone(),
                     identity,
@@ -1069,6 +1091,7 @@ fn handle_managed_command(
                             connected: false,
                             failure_sent: false,
                             stop,
+                            stop_attempted: false,
                         },
                     );
                 }
@@ -1130,7 +1153,7 @@ fn poll_managed_processes(
 ) {
     let mut finished = Vec::new();
     for (instance_id, process) in active.iter_mut() {
-        if process.stop.is_actionable() {
+        if process.stop.is_actionable() && !process.stop_attempted {
             let outcome = match process.child.stop_group(
                 MANAGED_STOP_COOPERATIVE_GRACE,
                 MANAGED_STOP_FORCED_GRACE,
@@ -1147,14 +1170,23 @@ fn poll_managed_processes(
                     state: error.to_string(),
                 },
             };
-            let _ = events.send(ManagedSupervisorEvent::Stopped {
-                lease: process.prepared.lease.clone(),
-                conn_id: process.registered.as_ref().map(|value| value.0.clone()),
-                outcome,
-                completion: Arc::clone(&process.stop),
-            });
-            finished.push(instance_id.clone());
-            continue;
+            if matches!(outcome, StopOutcome::Timeout { .. }) {
+                process.stop_attempted = true;
+                let _ = events.send(ManagedSupervisorEvent::StopTimedOut {
+                    lease: process.prepared.lease.clone(),
+                    outcome,
+                    completion: Arc::clone(&process.stop),
+                });
+            } else {
+                let _ = events.send(ManagedSupervisorEvent::Stopped {
+                    lease: process.prepared.lease.clone(),
+                    conn_id: process.registered.as_ref().map(|value| value.0.clone()),
+                    outcome,
+                    completion: Arc::clone(&process.stop),
+                });
+                finished.push(instance_id.clone());
+                continue;
+            }
         }
         let status = process.child.try_status();
         match status {
@@ -1453,6 +1485,17 @@ fn drain_managed_events(
                         presence.state = "stopped".to_string();
                         presence.last_seen = Instant::now();
                     }
+                    stop_completion = Some((completion, outcome));
+                }
+                ManagedSupervisorEvent::StopTimedOut {
+                    lease,
+                    outcome,
+                    completion,
+                } => {
+                    warn!(
+                        "arrêt incomplet de l'équipier géré {} génération {} : groupe toujours supervisé",
+                        lease.name, lease.generation
+                    );
                     stop_completion = Some((completion, outcome));
                 }
             }
@@ -4152,7 +4195,10 @@ pub struct DaemonStatus {
 mod presence_tests {
     use super::*;
     use bridget_core::BridgetMessage;
+    use std::collections::BTreeMap;
+    use std::ffi::OsString;
     use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
 
     fn control_socket(label: &str) -> (Arc<Mutex<BufWriter<UnixStream>>>, BufReader<UnixStream>) {
         let path = std::env::temp_dir().join(format!(
@@ -6275,6 +6321,64 @@ mod presence_tests {
         (lease, stop)
     }
 
+    fn managed_test_binary() -> PathBuf {
+        let executable = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .and_then(std::path::Path::parent)
+            .unwrap()
+            .join("bridget");
+        assert!(executable.exists(), "binaire bridget de test absent");
+        executable
+    }
+
+    fn managed_test_prepared(lease: &SpawnLease, root: &std::path::Path) -> PreparedSpawn {
+        PreparedSpawn {
+            lease: lease.clone(),
+            agent_type: "fixture".to_string(),
+            command: "/bin/sh".to_string(),
+            args: Vec::new(),
+            cwd: root.to_path_buf(),
+            env: BTreeMap::from([
+                ("HOME".to_string(), root.as_os_str().to_owned()),
+                ("PATH".to_string(), OsString::from("/bin:/usr/bin")),
+                ("USER".to_string(), OsString::from("tester")),
+                ("LANG".to_string(), OsString::from("C")),
+                ("TMPDIR".to_string(), OsString::from("/tmp")),
+            ]),
+        }
+    }
+
+    fn running_managed_test_group(
+        lease: &SpawnLease,
+        root: &std::path::Path,
+        shell: &str,
+    ) -> RunningManagedChild {
+        let launch = ManagedLaunch {
+            bootstrap_executable: managed_test_binary(),
+            identity: ManagedIdentity {
+                instance_id: lease.instance_id.clone(),
+                command_id: lease.command_id.clone(),
+                generation: lease.generation,
+            },
+            wrapper_executable: PathBuf::from("/bin/sh"),
+            wrapper_args: vec!["-c".to_string(), shell.to_string()],
+            cwd: root.to_path_buf(),
+            env: managed_test_prepared(lease, root).env,
+        };
+        let marker_store = ManagedMarkerStore::at_directory(root.join("managed"));
+        let mut child = crate::managed_process::spawn_managed_bootstrap(&launch)
+            .unwrap()
+            .wait_ready()
+            .unwrap()
+            .persist_marker(&marker_store, &lease.name)
+            .unwrap()
+            .release()
+            .unwrap();
+        child.set_status_nonblocking().unwrap();
+        child
+    }
+
     #[test]
     fn stop_refuse_structurellement_un_wrapper_terminal() {
         let (state, config) = state_with_registered_agent("stop-not-managed");
@@ -6301,6 +6405,13 @@ mod presence_tests {
     fn stop_avant_marqueur_annule_la_generation_et_repond_apres_nettoyage() {
         let (mut state, config) = state_with_registered_agent("stop-before-marker");
         let (lease, stop) = install_managed_test_spawn(&mut state, "spawn-before-marker", false);
+        let process_root = PathBuf::from(format!(
+            "/tmp/bg907-before-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        std::fs::create_dir_all(&process_root).unwrap();
+        let prepared = managed_test_prepared(&lease, &process_root);
         let shared = Arc::new(Mutex::new(state));
         let caller_state = Arc::clone(&shared);
         let caller = thread::spawn(move || {
@@ -6323,14 +6434,24 @@ mod presence_tests {
             "un lancement sans wrapper doit être annulable immédiatement"
         );
         let (event_tx, event_rx) = mpsc::channel();
-        event_tx
-            .send(ManagedSupervisorEvent::Stopped {
-                lease,
-                conn_id: None,
-                outcome: StopOutcome::Stopped,
-                completion: stop,
-            })
-            .unwrap();
+        let marker_store = ManagedMarkerStore::at_directory(process_root.join("managed"));
+        let stderr_store = ManagedStderrStore::at_directory(process_root.join("stderr"));
+        let fleet = Arc::clone(&shared.lock().unwrap().fleet);
+        let mut active = HashMap::new();
+        handle_managed_command(
+            ManagedSupervisorCommand::Start {
+                prepared,
+                stop: Arc::clone(&stop),
+            },
+            &fleet,
+            &marker_store,
+            &stderr_store,
+            &event_tx,
+            &mut active,
+            Some(&managed_test_binary()),
+        );
+        assert!(active.is_empty());
+        assert!(marker_store.load("agent-2").is_err());
         drain_managed_events(&shared, &event_rx);
 
         assert!(matches!(
@@ -6341,6 +6462,88 @@ mod presence_tests {
             }) if command_id == "stop-before-marker"
         ));
         assert!(shared.lock().unwrap().managed_spawns.is_empty());
+        std::fs::remove_dir_all(process_root).unwrap();
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn stop_pendant_bootstrap_bloque_termine_le_processus_reel_avant_marqueur() {
+        let (mut state, config) = state_with_registered_agent("stop-bootstrap-blocked");
+        let (lease, stop) =
+            install_managed_test_spawn(&mut state, "spawn-bootstrap-blocked", false);
+        let process_root = PathBuf::from(format!(
+            "/tmp/bg907-blocked-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        std::fs::create_dir_all(&process_root).unwrap();
+        let barrier = process_root.join("bootstrap-entered");
+        let bootstrap = process_root.join("blocked-bootstrap.sh");
+        std::fs::write(
+            &bootstrap,
+            "#!/bin/sh\n: > \"$BRIDGET_TEST_BARRIER\"\ntrap 'exit 0' TERM\nwhile :; do sleep 1; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bootstrap, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut prepared = managed_test_prepared(&lease, &process_root);
+        prepared.env.insert(
+            "BRIDGET_TEST_BARRIER".to_string(),
+            barrier.as_os_str().to_owned(),
+        );
+        let shared = Arc::new(Mutex::new(state));
+        let fleet = Arc::clone(&shared.lock().unwrap().fleet);
+        let marker_store = ManagedMarkerStore::at_directory(process_root.join("managed"));
+        let marker_store_for_thread = marker_store.clone();
+        let stderr_store = ManagedStderrStore::at_directory(process_root.join("stderr"));
+        let (event_tx, event_rx) = mpsc::channel();
+        let stop_for_handler = Arc::clone(&stop);
+        let handler = thread::spawn(move || {
+            let mut active = HashMap::new();
+            handle_managed_command(
+                ManagedSupervisorCommand::Start {
+                    prepared,
+                    stop: stop_for_handler,
+                },
+                &fleet,
+                &marker_store_for_thread,
+                &stderr_store,
+                &event_tx,
+                &mut active,
+                Some(&bootstrap),
+            );
+            active
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !barrier.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "le bootstrap réel n'a pas atteint la barrière"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let caller_state = Arc::clone(&shared);
+        let caller = thread::spawn(move || {
+            handle_wrapper_message(
+                "control",
+                WrapperToDaemon::StopOrder {
+                    name: "agent-2".to_string(),
+                    command_id: "stop-bootstrap-blocked".to_string(),
+                },
+                &caller_state,
+            )
+        });
+        assert!(handler.join().unwrap().is_empty());
+        drain_managed_events(&shared, &event_rx);
+        assert!(matches!(
+            caller.join().unwrap(),
+            Some(DaemonToWrapper::StopResult {
+                outcome: StopOutcome::Stopped,
+                ..
+            })
+        ));
+        assert!(marker_store.load("agent-2").is_err());
+        assert!(shared.lock().unwrap().managed_spawns.is_empty());
+        std::fs::remove_dir_all(process_root).unwrap();
         let _ = std::fs::remove_file(config.db_path);
     }
 
@@ -6352,6 +6555,32 @@ mod presence_tests {
             .connections
             .insert("conn-1".to_string(), wrapper_writer);
         let (lease, stop) = install_managed_test_spawn(&mut state, "spawn-connected", true);
+        let process_root = PathBuf::from(format!(
+            "/tmp/bg907-connected-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        std::fs::create_dir_all(&process_root).unwrap();
+        let child = running_managed_test_group(
+            &lease,
+            &process_root,
+            "trap 'exit 0' TERM; while :; do sleep 1; done",
+        );
+        let pgid = child.marker().marker().pgid;
+        let marker_path = child.marker().path().to_path_buf();
+        let fleet = Arc::clone(&state.fleet);
+        let mut active = HashMap::from([(
+            lease.instance_id.clone(),
+            SupervisedProcess {
+                prepared: managed_test_prepared(&lease, &process_root),
+                child,
+                registered: Some(("conn-1".to_string(), "agent-2".to_string())),
+                connected: true,
+                failure_sent: false,
+                stop: Arc::clone(&stop),
+                stop_attempted: false,
+            },
+        )]);
         let shared = Arc::new(Mutex::new(state));
         let caller_state = Arc::clone(&shared);
         let caller = thread::spawn(move || {
@@ -6378,28 +6607,260 @@ mod presence_tests {
             thread::yield_now();
         }
         let (event_tx, event_rx) = mpsc::channel();
-        event_tx
-            .send(ManagedSupervisorEvent::Stopped {
-                lease,
-                conn_id: Some("conn-1".to_string()),
-                outcome: StopOutcome::Stopped,
-                completion: stop,
-            })
-            .unwrap();
+        poll_managed_processes(&fleet, &event_tx, &mut active);
+        assert!(active.is_empty(), "le groupe réel reste supervisé après sa disparition");
         drain_managed_events(&shared, &event_rx);
 
         assert!(matches!(
             caller.join().unwrap(),
             Some(DaemonToWrapper::StopResult {
                 command_id,
-                outcome: StopOutcome::Stopped,
+                outcome: StopOutcome::Stopped | StopOutcome::StoppedForced { .. },
             }) if command_id == "stop-connected"
         ));
         let state = shared.lock().unwrap();
         assert!(state.router.get_agent("agent-2").is_none());
         assert_eq!(state.presences["instance-1"].state, "stopped");
         drop(state);
+        assert!(!marker_path.exists());
+        assert!(!crate::managed_process::group_exists(pgid).unwrap());
+        std::fs::remove_dir_all(process_root).unwrap();
         let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn timeout_d_arret_conserve_le_groupe_reel_et_sa_supervision_jusqu_a_disparition() {
+        let (mut state, config) = state_with_registered_agent("stop-timeout-real");
+        let (wrapper_writer, mut wrapper_reader) = control_socket("stop-timeout-wrapper");
+        state
+            .connections
+            .insert("conn-1".to_string(), wrapper_writer);
+        let (lease, stop) = install_managed_test_spawn(&mut state, "spawn-timeout", true);
+        let process_root = PathBuf::from(format!(
+            "/tmp/bg907-timeout-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        std::fs::create_dir_all(&process_root).unwrap();
+        let child = running_managed_test_group(
+            &lease,
+            &process_root,
+            "trap '' TERM; while :; do sleep 1; done",
+        );
+        let pgid = child.marker().marker().pgid;
+        let marker_path = child.marker().path().to_path_buf();
+        let fleet = Arc::clone(&state.fleet);
+        let mut active = HashMap::from([(
+            lease.instance_id.clone(),
+            SupervisedProcess {
+                prepared: managed_test_prepared(&lease, &process_root),
+                child,
+                registered: Some(("conn-1".to_string(), "agent-2".to_string())),
+                connected: true,
+                failure_sent: false,
+                stop: Arc::clone(&stop),
+                stop_attempted: false,
+            },
+        )]);
+        let shared = Arc::new(Mutex::new(state));
+        let caller_state = Arc::clone(&shared);
+        let caller = thread::spawn(move || {
+            handle_wrapper_message(
+                "control",
+                WrapperToDaemon::StopOrder {
+                    name: "agent-2".to_string(),
+                    command_id: "stop-timeout".to_string(),
+                },
+                &caller_state,
+            )
+        });
+
+        assert!(matches!(
+            read_control(&mut wrapper_reader),
+            DaemonToWrapper::Disconnect
+        ));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !stop.is_actionable() {
+            assert!(Instant::now() < deadline, "stop non transmis au superviseur");
+            thread::yield_now();
+        }
+        let (event_tx, event_rx) = mpsc::channel();
+        poll_managed_processes(&fleet, &event_tx, &mut active);
+        assert!(active.contains_key(&lease.instance_id));
+        drain_managed_events(&shared, &event_rx);
+        assert!(matches!(
+            caller.join().unwrap(),
+            Some(DaemonToWrapper::StopResult {
+                outcome: StopOutcome::Timeout { .. },
+                ..
+            })
+        ));
+        {
+            let state = shared.lock().unwrap();
+            assert!(state.managed_spawns.contains_key(&lease.command_id));
+            assert_eq!(state.managed_by_instance.get(&lease.instance_id), Some(&lease.command_id));
+            assert!(state.router.get_agent("agent-2").is_some());
+            assert_eq!(state.presences["instance-1"].state, "connected");
+        }
+        assert!(marker_path.exists());
+        assert!(crate::managed_process::group_exists(pgid).unwrap());
+
+        crate::managed_process::signal_group(pgid, libc::SIGKILL).unwrap();
+        let cleanup_deadline = Instant::now() + Duration::from_secs(2);
+        while active.contains_key(&lease.instance_id) {
+            poll_managed_processes(&fleet, &event_tx, &mut active);
+            assert!(
+                Instant::now() < cleanup_deadline,
+                "le superviseur n'a pas observé la disparition réelle"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        drain_managed_events(&shared, &event_rx);
+        assert!(!marker_path.exists());
+        assert!(!crate::managed_process::group_exists(pgid).unwrap());
+        assert!(shared.lock().unwrap().managed_spawns.is_empty());
+        std::fs::remove_dir_all(process_root).unwrap();
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn stop_apres_register_traverse_le_wrapper_et_le_superviseur_reels() {
+        let root = PathBuf::from(format!(
+            "/tmp/bg907-e2e-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let cache = root.join(".cache/bridget");
+        let registry_path = root.join(".config/bridget/agents.json");
+        let adapter = root.join("adapter.sh");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &adapter,
+            "#!/bin/sh\nread initialize\necho '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1}}'\nread session\necho '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"fixture-session\"}}'\nwhile read line; do :; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&adapter, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(
+            &registry_path,
+            serde_json::to_vec(&serde_json::json!({
+                "agents": {
+                    "fixture": {
+                        "command": adapter,
+                        "protocol": "acp",
+                        "permissions": "allow",
+                        "queue_capacity": 2,
+                        "notify_timeout_secs": 1
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let config = DaemonConfig {
+            socket_path: cache.join("bridget.sock"),
+            db_path: cache.join("bridget.db"),
+            log_path: cache.join("daemon.log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+        };
+        let (managed_tx, managed_rx) = mpsc::channel();
+        let mut state = DaemonState::new(&config, managed_tx.clone()).unwrap();
+        let (lease, _stop) = install_managed_test_spawn(&mut state, "spawn-e2e", false);
+        let mut prepared = managed_test_prepared(&lease, &root);
+        prepared.agent_type = "fixture".to_string();
+        let shared = Arc::new(Mutex::new(state));
+        let listener = UnixListener::bind(&config.socket_path).unwrap();
+        let connection_state = Arc::clone(&shared);
+        let connection = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_connection(stream, connection_state).unwrap();
+        });
+        let (event_tx, event_rx) = mpsc::channel();
+        start_managed_supervisor_with_executable(
+            Arc::clone(&shared.lock().unwrap().fleet),
+            &config,
+            managed_rx,
+            event_tx,
+            Some(managed_test_binary()),
+        );
+        managed_tx
+            .send(ManagedSupervisorCommand::Start {
+                prepared,
+                stop: Arc::clone(&shared.lock().unwrap().managed_spawns[&lease.command_id].stop),
+            })
+            .unwrap();
+
+        let ready_deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            drain_managed_events(&shared, &event_rx);
+            let registered = shared
+                .lock()
+                .unwrap()
+                .managed_spawns
+                .get(&lease.command_id)
+                .and_then(|record| record.wrapper_conn.as_ref())
+                .is_some();
+            if registered {
+                break;
+            }
+            assert!(
+                Instant::now() < ready_deadline,
+                "le wrapper réel ne s'est pas enregistré"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let marker_store = ManagedMarkerStore::at_directory(cache.join("managed"));
+        let marker = marker_store.load("agent-2").unwrap();
+        assert!(crate::managed_process::group_exists(marker.pgid).unwrap());
+
+        let stop_state = Arc::clone(&shared);
+        let (result_tx, result_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = handle_wrapper_message(
+                "control",
+                WrapperToDaemon::StopOrder {
+                    name: "agent-2".to_string(),
+                    command_id: "stop-e2e".to_string(),
+                },
+                &stop_state,
+            );
+            result_tx.send(result).unwrap();
+        });
+        let stop_deadline = Instant::now() + Duration::from_secs(5);
+        let result = loop {
+            drain_managed_events(&shared, &event_rx);
+            if let Ok(result) = result_rx.try_recv() {
+                break result;
+            }
+            assert!(
+                Instant::now() < stop_deadline,
+                "la chaîne réelle stop n'a pas produit d'issue"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(matches!(
+            result,
+            Some(DaemonToWrapper::StopResult {
+                outcome: StopOutcome::Stopped | StopOutcome::StoppedForced { .. },
+                ..
+            })
+        ));
+        assert!(!crate::managed_process::group_exists(marker.pgid).unwrap());
+        assert!(marker_store.load("agent-2").is_err());
+        {
+            let state = shared.lock().unwrap();
+            assert!(state.managed_spawns.is_empty());
+            assert!(state.router.get_agent("agent-2").is_none());
+            assert_eq!(state.presences[&lease.instance_id].state, "stopped");
+        }
+        connection.join().unwrap();
+        drop(shared);
+        drop(managed_tx);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -6577,6 +7038,7 @@ mod presence_tests {
                 connected: true,
                 failure_sent: false,
                 stop: Arc::new(ManagedStopControl::new()),
+                stop_attempted: false,
             },
         )]);
         let (observed_tx, observed_rx) = mpsc::channel();
