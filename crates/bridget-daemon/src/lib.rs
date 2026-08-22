@@ -7,6 +7,7 @@ pub mod idempotency;
 pub mod lifecycle;
 pub mod managers;
 pub mod managed_process;
+pub mod mcp;
 pub mod registry;
 pub mod receipt_store;
 pub mod runtime;

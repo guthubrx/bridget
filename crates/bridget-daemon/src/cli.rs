@@ -89,6 +89,7 @@ pub fn run() {
         "daemon" => cmd_daemon(),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
+        "mcp" => cmd_mcp(),
         "attach" => cmd_attach(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
@@ -130,6 +131,13 @@ pub fn run() {
                 std::process::exit(2);
             }
         }
+    }
+}
+
+fn cmd_mcp() {
+    if let Err(error) = crate::mcp::run_stdio() {
+        eprintln!("bridget mcp: {error}");
+        std::process::exit(1);
     }
 }
 
@@ -196,6 +204,7 @@ fn print_usage() {
            -- <CMD> [ARGS...]     Agent personnalisé\n\n\
          Daemon & client :\n  \
            daemon                 Lance le daemon\n  \
+           mcp                    Lance le serveur MCP sur stdio\n  \
            attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            spawn <TYPE>           Lance un équipier géré [--name N] [--persistent]\n  \
            stop <N>               Arrête un équipier géré\n  \

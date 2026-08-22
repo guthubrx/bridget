@@ -135,3 +135,18 @@ le diff des quatre hashes est vide.
 - Aucun fichier source ou configuration utilisateur n’a été modifié.
 - La gate prouve les formes d’injection éphémère ; elle ne préjuge pas encore
   du serveur Bridget MCP, qui relève des tâches suivantes.
+
+## T1003 — Dispatcher MCP stdio
+
+- `bridget mcp` exécute un unique lecteur stdin et un writer stdout sérialisé.
+  Celui-ci ne produit que des lignes JSON-RPC 2.0 ; les diagnostics restent
+  sur stderr.
+- La négociation expose exclusivement la capacité `tools`, avec la version
+  MCP `2025-06-18`. Les réponses conservent l'identifiant JSON-RPC numérique
+  ou chaîne reçu.
+- La fixture versionnée
+  `crates/bridget-daemon/tests/fixtures/mcp/fr009.jsonl` contient les quinze
+  cas FR-009. Les tests vérifient notamment les rappels idempotents de
+  `tools/list`, `ping`, les notifications, les identifiants mixtes et les
+  erreurs de protocole. Le golden de pureté décode chaque octet de stdout
+  comme réponse JSON-RPC.

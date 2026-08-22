@@ -30,7 +30,7 @@ commit en review immuable, auteur ≠ relecteur, zéro trace IA, jamais de push)
 
 ## Phase 1 — Serveur et identité
 
-- [ ] **T1003** `mcp.rs` — dispatcher stdio : sous-commande `bridget mcp`,
+- [x] **T1003** `mcp.rs` — dispatcher stdio : sous-commande `bridget mcp`,
   lecteur stdin unique + corrélation d'ids (chaîne/nombre), writer stdout
   sérialisé, `initialize` (version pinnée, capacité `tools` seule),
   `initialized`, `tools/list` idempotente rappelable, `ping`, erreurs
