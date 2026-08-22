@@ -1964,6 +1964,37 @@ fn prepare_dispatch(
     })
 }
 
+/// Rend durable l'attente d'une réponse après qu'une remise a été préparée.
+/// Le même mécanisme est partagé par les envois historiques et idempotents,
+/// afin que la reprise du daemon recharge la demande dans `pending_replies`.
+fn track_reply_cycle(
+    st: &mut DaemonState,
+    message: &bridget_core::BridgetMessage,
+    reply_sender_conn: Option<String>,
+    target_conn: String,
+) -> Result<(), String> {
+    if !message.reply {
+        return Ok(());
+    }
+    let timeout = message.reply_timeout.unwrap_or(60);
+    st.store
+        .create_request(&message.id, &message.from, &message.to, timeout)
+        .map_err(|error| format!("impossible de suivre la demande: {error}"))?;
+    st.pending_replies.push(PendingReply {
+        msg_id: message.id.clone(),
+        from: message.from.clone(),
+        from_conn: reply_sender_conn
+            .expect("une réponse suivie a été validée avec un expéditeur connecté"),
+        to: message.to.clone(),
+        target_conn,
+        timeout_secs: timeout,
+        created_at: std::time::Instant::now(),
+        escalation_level: 0,
+        deferred_level: None,
+    });
+    Ok(())
+}
+
 fn handle_idempotent_send(
     conn_id: &str,
     mut message: bridget_core::BridgetMessage,
@@ -2082,6 +2113,18 @@ fn handle_idempotent_send(
                 return DaemonToWrapper::Nack {
                     id: key.idempotency_key.clone(),
                     reason: "impossible de préparer la remise".to_string(),
+                };
+            }
+            if let Err(reason) = track_reply_cycle(
+                st,
+                &message,
+                prepared.reply_sender_conn.clone(),
+                prepared.target_conn.clone(),
+            ) {
+                error!("idempotence suivi réponse: {reason}");
+                return DaemonToWrapper::Nack {
+                    id: key.idempotency_key.clone(),
+                    reason,
                 };
             }
             st.circuit_breaker
@@ -2810,44 +2853,16 @@ fn handle_wrapper_message(
                         info!("demande {} répondue après livraison", request_id);
                     }
 
-                    // Si reply=yes, enregistrer dans pending_replies pour escalade
-                    if bridge_msg.reply {
-                        let timeout = bridge_msg.reply_timeout.unwrap_or(60);
-                        if let Err(error) = st.store.create_request(
-                            &bridge_msg.id,
-                            &bridge_msg.from,
-                            &bridge_msg.to,
-                            timeout,
-                        ) {
-                            return Some(DaemonToWrapper::Nack {
-                                id: bridge_msg.id.clone(),
-                                reason: format!("impossible de suivre la demande: {}", error),
-                            });
-                        }
-                        st.pending_replies.push(PendingReply {
-                            msg_id: bridge_msg.id.clone(),
-                            from: bridge_msg.from.clone(),
-                            // Si l'envoi a été déclenché par `bridget send` dans
-                            // un agent, conn_id est un client CLI éphémère. Les
-                            // relances et le timeout doivent viser le wrapper
-                            // durable identifié ci-dessus.
-                            from_conn: prepared.reply_sender_conn
-                                .expect("un --reply a toujours un expéditeur connecté"),
-                            to: bridge_msg.to.clone(),
-                            target_conn: target_conn.clone(),
-                            timeout_secs: timeout,
-                            created_at: std::time::Instant::now(),
-                            escalation_level: 0,
-                            deferred_level: None,
+                    if let Err(reason) = track_reply_cycle(
+                        &mut st,
+                        &bridge_msg,
+                        prepared.reply_sender_conn.clone(),
+                        target_conn.clone(),
+                    ) {
+                        return Some(DaemonToWrapper::Nack {
+                            id: bridge_msg.id.clone(),
+                            reason,
                         });
-                        info!(
-                            "reply attendu: {} → {} (timeout={}s, escalade à {}/{}s)",
-                            bridge_msg.id,
-                            bridge_msg.to,
-                            timeout,
-                            timeout / 3,
-                            timeout * 2 / 3
-                        );
                     }
 
                     if is_attach {
@@ -3970,6 +3985,7 @@ mod presence_tests {
         negotiate_idempotent_client(&shared, "client-reply", "012_scope_replyyyyyyyyy");
         let mut reply = idempotent_message("réponse suivie");
         reply.from = "maicie".to_string();
+        reply.reply = true;
         reply.in_reply_to = Some("request-open".to_string());
         let result = handle_wrapper_message(
             "client-reply",
@@ -3987,6 +4003,20 @@ mod presence_tests {
                 ..
             })
         ));
+        let state = shared.lock().unwrap();
+        assert_eq!(
+            state
+                .store
+                .get_request("reply-idempotent")
+                .unwrap()
+                .unwrap()
+                .state,
+            "open"
+        );
+        assert!(state
+            .pending_replies
+            .iter()
+            .any(|pending| pending.msg_id == "reply-idempotent"));
         let _ = std::fs::remove_file(config.db_path);
     }
 
