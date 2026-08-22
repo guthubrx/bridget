@@ -204,10 +204,11 @@ https://antigravity.google
   dans un fichier temporaire.
 - **Échange** : l'adaptateur stdio reçoit `initialize`, `session/new` et
   `session/prompt`, retourne un chunk `fixture-response` et `end_turn`. Le test
-  traverse le daemon : livraison suivie, tour ACP, réponse avec `in_reply_to`,
-  puis demande en état `answered`.
+  lance le **wrapper réel** avec registre, socket et home injectés : livraison
+  suivie, tour ACP, réponse avec `in_reply_to`, puis demande en état
+  `answered`.
 - **Contrôle mécanique SC-003** : avant le commit, la commande
-  `git diff --name-only d68ed09 -- crates | rg -v '^crates/[^/]+/tests/'`
+  `git diff --name-only d9e725f -- crates | rg -v '^crates/[^/]+/tests/'`
   ne produit aucune sortie. La modification Rust est donc limitée au test
   d'intégration ; aucun fichier de code de production n'est modifié.
 
@@ -216,5 +217,6 @@ https://antigravity.google
 - Le lancement ACP refuse la première variable présente de `forbidden_env` et
   nomme la variable dans le message français, avec le contournement explicite
   `BRIDGET_ALLOW_API_KEY=1`.
-- Deux tests couvrent le refus (variable et contournement visibles dans le
-  message) et l'acceptation uniquement lorsque le contournement vaut `1`.
+- Les tests couvrent la priorité de `forbidden_env` (première clé si deux sont
+  présentes, seconde seule), et le parsing strict : seul exactement `"1"`
+  active le contournement.

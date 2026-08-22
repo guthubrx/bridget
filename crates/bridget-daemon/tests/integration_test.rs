@@ -143,10 +143,10 @@ impl FakeAgent {
 mod tests {
     use super::*;
     use bridget_daemon::daemon::{self, DaemonConfig};
-    use bridget_daemon::registry::{AgentDefinition, AgentRegistry};
-    use bridget_transport::{AcpEvent, AcpOptions, AcpTransport, Transport};
+    use bridget_daemon::registry::AgentRegistry;
+    use bridget_daemon::wrapper::launch_acp_with;
 
-    fn registry_with_unknown_stdio_agent() -> (AgentDefinition, PathBuf) {
+    fn registry_with_unknown_stdio_agent() -> (AgentRegistry, PathBuf) {
         let mut fixture: serde_json::Value = serde_json::from_str(include_str!(
             "fixtures/registry/codex-claude.json"
         ))
@@ -200,29 +200,12 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             &path,
         )
         .expect("registre dynamique chargé");
-        (registry.get("stdio-ouvert").expect("type inconnu chargé").clone(), dir)
-    }
-
-    fn wait_for_turn(transport: &AcpTransport) -> (BridgetMessage, String, String) {
-        for _ in 0..100 {
-            for event in transport.drain_events() {
-                if let AcpEvent::TurnFinished {
-                    message,
-                    response,
-                    stop_reason,
-                } = event
-                {
-                    return (message, response, stop_reason);
-                }
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        panic!("le faux adaptateur stdio n'a pas terminé le tour");
+        (registry, dir)
     }
 
     #[test]
     fn test_unknown_registry_type_completes_a_tracked_exchange() {
-        let (definition, registry_dir) = registry_with_unknown_stdio_agent();
+        let (registry, registry_dir) = registry_with_unknown_stdio_agent();
         let socket = unique_socket_path();
         let db_path = PathBuf::from(format!(
             "/tmp/bridget-test-registry-open-{}.db",
@@ -252,34 +235,37 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
         assert!(socket.exists(), "socket de daemon absente");
 
         let mut sender = FakeAgent::connect(&socket, "codex", Some("sender")).unwrap();
-        let mut teammate = FakeAgent::connect(&socket, "stdio-ouvert", Some("extension")).unwrap();
-        let mut transport = AcpTransport::spawn(AcpOptions {
-            command: definition.command,
-            args: definition.args,
-            queue_capacity: definition.queue_capacity,
-            permissions: definition.permissions,
-            notify_timeout_secs: definition.notify_timeout_secs,
-        })
-        .expect("adaptateur stdio lancé depuis le registre");
+        let home = registry_dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let wrapper_registry = registry.clone();
+        let wrapper_socket = socket.clone();
+        let wrapper = thread::spawn(move || {
+            launch_acp_with(
+                "stdio-ouvert",
+                &[],
+                Some("extension"),
+                &wrapper_registry,
+                &wrapper_socket,
+                &home,
+            )
+            .map_err(|error| error.to_string())
+        });
 
-        let mut request = BridgetMessage::new(&sender.name, &teammate.name, "réponds via ACP");
+        let mut request = BridgetMessage::new(&sender.name, "extension", "réponds via ACP");
         request.reply = true;
-        sender.send_message(request.clone()).unwrap();
-        assert!(matches!(sender.read_response().unwrap(), DaemonToWrapper::Ack { .. }));
-        let delivery = match teammate.read_response().unwrap() {
-            DaemonToWrapper::Deliver(message) => message,
-            other => panic!("livraison attendue pour le type inconnu : {other:?}"),
-        };
-        transport.deliver(&delivery).unwrap();
-        let (finished, response, stop_reason) = wait_for_turn(&transport);
-        assert_eq!(finished.id, request.id);
-        assert_eq!(response, "fixture-response");
-        assert_eq!(stop_reason, "end_turn");
-
-        let mut reply = BridgetMessage::new(&teammate.name, &sender.name, response);
-        reply.in_reply_to = Some(finished.id);
-        teammate.send_message(reply).unwrap();
-        assert!(matches!(teammate.read_response().unwrap(), DaemonToWrapper::Ack { .. }));
+        let mut delivered = false;
+        for _ in 0..100 {
+            sender.send_message(request.clone()).unwrap();
+            match sender.read_response().unwrap() {
+                DaemonToWrapper::Ack { .. } => {
+                    delivered = true;
+                    break;
+                }
+                DaemonToWrapper::Nack { .. } => thread::sleep(Duration::from_millis(10)),
+                other => panic!("accusé de livraison inattendu : {other:?}"),
+            }
+        }
+        assert!(delivered, "le wrapper réel ne s'est pas enregistré");
         let returned = match sender.read_response().unwrap() {
             DaemonToWrapper::Deliver(message) => message,
             other => panic!("réponse ACP attendue : {other:?}"),
@@ -300,7 +286,11 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             other => panic!("vue des demandes attendue : {other:?}"),
         }
 
-        transport.shutdown();
+        assert_eq!(
+            wrapper.join().expect("thread wrapper joint"),
+            Ok(()),
+            "le wrapper réel doit terminer proprement après EOF ACP"
+        );
         let _ = std::fs::remove_file(&socket);
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir_all(registry_dir);
