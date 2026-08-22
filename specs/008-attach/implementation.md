@@ -86,8 +86,24 @@ tunnel vers le daemon isolé, la vue persistante a affiché `abonnement actif`,
 puis a envoyé et reçu le tour `resynchronisation réussie` avec `turn_end`.
 La reprise de la connexion attach après coupure est ainsi démontrée.
 
-Le banc distant SC-001 demeure non exécuté : aucun générateur déterministe de
-600 événements (10 événements/s pendant 60 s) ne fait partie de T809, et une
-génération par l'adaptateur Codex mesurerait sa latence de modèle plutôt que la
-latence append→rendu. Aucun p95 artificiel n'est consigné ; T809 reste
-décochée jusqu'à un banc distant adapté.
+### Banc distant SC-001
+
+- **Topologie isolée** : le daemon de gate et son équipier ACP déterministe
+  tournaient avec `HOME=/tmp/bg-t809-local`; le tunnel SSH `-R` temporaire
+  publiait seulement son socket vers
+  `/tmp/bg-t809-remote/.cache/bridget/bridget.sock` sur `cartae.app`. La vue
+  distante utilisait `HOME=/tmp/bg-t809-remote`; aucun socket, daemon ou
+  répertoire de production n'a été utilisé.
+- **Méthode** : 600 appels `bridget send` locaux, cadencés toutes les 100 ms,
+  ont porté `T809C seq=NNNN emitted_at=<ns>`. La vue attach distante a écrit
+  son horodatage de rendu pour chaque ligne `turn_start` correspondante. La
+  campagne a duré 59,940889 s.
+- **Résultat** : 600/600 séquences distinctes reçues, zéro doublon ; minimum
+  14,906880 ms, p95 (rang 570) **60,302080 ms**, maximum 250,861312 ms. Le p95
+  est donc inférieur au seuil distant de 3 s.
+- **Réserve de mesure** : les différences utilisent les horloges NTP des deux
+  hôtes. Leur biais attendu, inférieur à 100 ms, reste négligeable au regard
+  du seuil de 3 s ; il est toutefois inclus dans les valeurs rapportées.
+- **Nettoyage** : le daemon, l'équipier, le tunnel et les sockets temporaires
+  de gate ont été arrêtés après la campagne; aucune configuration persistante
+  de fédération n'a été supprimée.

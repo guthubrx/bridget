@@ -144,7 +144,7 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
   p95 de latence d'append < 5 % avec 2 vues vs 0 vue.
   **Observable** : banc en test, chiffres consignés.
 
-- [ ] **T809** [US3] **Gate distant (SC-006) + banc distant** : quickstart §6
+- [x] **T809** [US3] **Gate distant (SC-006) + banc distant** : quickstart §6
   sur environnement aux répertoires **réellement distincts** : US1+US2 vers
   l'équipier distant, wrapper distant arrêté → message d'indisponibilité,
   resynchronisation après coupure de fédération ; **banc SC-001 distant :
