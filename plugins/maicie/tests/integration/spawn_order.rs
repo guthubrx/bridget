@@ -27,7 +27,9 @@ fn replay_exact_accepted_consomme_l_approbation_apres_l_issue_durable() {
     let expected = bytes.clone();
     let server = thread::spawn(move || accepted_server(listener, expected, DIGEST));
 
-    let report = reconcile_activation_startup_at(&mut store, &fixture.socket, 20).unwrap();
+    // La fenêtre [retry_until, dedup_retained_until) reste un replay-lookup
+    // sûr : Bridget peut encore connaître l'issue et doit être consulté.
+    let report = reconcile_activation_startup_at(&mut store, &fixture.socket, 81).unwrap();
     assert_eq!(
         report.actions,
         vec![ActivationReconcileAction::IssueTerminale {
@@ -56,7 +58,7 @@ fn replay_exact_accepted_consomme_l_approbation_apres_l_issue_durable() {
 }
 
 #[test]
-fn digest_divergent_est_refuse_terminalement_sans_reapprobation() {
+fn digest_divergent_est_journalise_apres_un_spawn_accepte() {
     let fixture = Fixture::new();
     let (mut store, bytes) = approved(&fixture);
     let listener = UnixListener::bind(&fixture.socket).unwrap();
@@ -78,6 +80,14 @@ fn digest_divergent_est_refuse_terminalement_sans_reapprobation() {
     );
     assert!(store.pending_activation_outboxes().unwrap().is_empty());
     server.join().unwrap();
+    let issue = activation_issue(&fixture.database);
+    assert_eq!(issue["kind"], "definition_digest_divergent");
+    assert_eq!(issue["agent_launched_without_followup"], true);
+    assert_eq!(issue["expected_definition_digest"], DIGEST);
+    assert_eq!(
+        issue["received_definition_digest"],
+        "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+    );
     fs::remove_file(&fixture.socket).unwrap();
     let listener = UnixListener::bind(&fixture.socket).unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -99,7 +109,7 @@ fn hors_horizon_refuse_sans_ouvrir_de_socket_ni_nouvelle_approbation() {
     let (mut store, bytes) = approved(&fixture);
     let listener = UnixListener::bind(&fixture.socket).unwrap();
     listener.set_nonblocking(true).unwrap();
-    let report = reconcile_activation_startup_at(&mut store, &fixture.socket, 81).unwrap();
+    let report = reconcile_activation_startup_at(&mut store, &fixture.socket, 101).unwrap();
     assert_eq!(
         report.actions,
         vec![ActivationReconcileAction::IssueTerminale {
@@ -107,8 +117,8 @@ fn hors_horizon_refuse_sans_ouvrir_de_socket_ni_nouvelle_approbation() {
         }]
     );
     assert!(store.pending_activation_outboxes().unwrap().is_empty());
-    // Mutation discriminante : supprimer le garde `observed_at >= retry_until`
-    // ferait ouvrir cette socket et échouerait ici.
+    // Mutation discriminante : comparer à retry_until au lieu de la rétention
+    // rendrait ce test vert avec un délai qui ne correspond pas au contrat.
     assert_no_connection(&listener);
     assert_eq!(approval_state(&fixture.database), "consumed");
 }
@@ -292,6 +302,16 @@ fn approval_state(database: &PathBuf) -> String {
             row.get(0)
         })
         .unwrap()
+}
+
+fn activation_issue(database: &PathBuf) -> serde_json::Value {
+    let raw: Vec<u8> = Connection::open(database)
+        .unwrap()
+        .query_row("SELECT last_issue_json FROM activation_outbox", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    serde_json::from_slice(&raw).unwrap()
 }
 
 fn split(stream: UnixStream) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {

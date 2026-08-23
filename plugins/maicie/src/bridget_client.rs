@@ -180,7 +180,6 @@ fn default_hops() -> i32 {
 /// `deny_unknown_fields` est intentionnelle et ne s'applique pas aux nouveaux
 /// messages construits via [`PublicMessage`].
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // T008 est gelée : cette projection ne sert qu'à sa reprise durable.
 struct ReplayPublicMessage {
     id: String,
     from: String,
@@ -199,7 +198,6 @@ struct ReplayPublicMessage {
 }
 
 impl ReplayPublicMessage {
-    #[allow(dead_code)] // Voir ReplayPublicMessage : la reprise attend la reprise de T008.
     fn into_public_message(self) -> PublicMessage {
         PublicMessage {
             id: self.id,
@@ -495,7 +493,6 @@ impl BridgetClient {
     /// public afin qu'une reprise ne transforme jamais une ancienne enveloppe
     /// valide en message poison. Les octets sont insérés tels quels dans la
     /// commande `SendIdempotent` ; seuls les champs stables sont vérifiés.
-    #[allow(dead_code)] // T008 est gelée : la reprise octet pour octet est prête.
     pub(crate) fn replay_idempotent_bytes(
         &mut self,
         message_bytes: &[u8],
@@ -844,7 +841,6 @@ pub(crate) fn validate_send_idempotent_frame(
     Ok(())
 }
 
-#[allow(dead_code)] // Appelé par la reprise T008, actuellement gelée.
 fn replay_idempotent_request(
     message_bytes: &[u8],
     message_id: &str,
@@ -967,7 +963,6 @@ impl WireConnection {
         result
     }
 
-    #[allow(dead_code)] // Appelé par la reprise T008, actuellement gelée.
     fn request_raw_json(&mut self, json_bytes: &[u8]) -> Result<Value, BridgetClientError> {
         let deadline = Instant::now() + self.limits.io_timeout;
         self.request_raw_json_until(json_bytes, deadline)

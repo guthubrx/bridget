@@ -31,6 +31,9 @@ pub struct LoadedProfile {
 /// Définition effective renvoyée par le contrat public Bridget après la
 /// résolution du registre. Les arguments restent exactement ceux de Bridget.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Miroir volontairement strict du contrat Bridget v1. Une extension de la
+// définition résolue doit être ajoutée ici avant activation : ne jamais faire
+// croire qu'un digest vérifié couvre un champ que Maicie ignore.
 #[serde(deny_unknown_fields)]
 pub struct ResolvedAgentDefinition {
     pub command: String,

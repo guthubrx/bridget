@@ -1109,10 +1109,50 @@ impl MaicieStore {
         outcome: &SpawnOutcome,
         observed_at: i64,
     ) -> Result<(), StoreError> {
+        self.record_activation_outcome_with_issue(command_id, outcome, observed_at, None)
+    }
+
+    /// Conserve qu'un SpawnOrder a été accepté, mais que le digest de sa
+    /// définition résolue ne correspond plus à celui approuvé. L'agent a bien
+    /// été lancé : le représenter comme un refus serait un faux historique.
+    pub fn record_activation_definition_divergence(
+        &mut self,
+        command_id: Uuid,
+        outcome: &SpawnOutcome,
+        expected_digest: &[u8],
+        received_digest: &str,
+        observed_at: i64,
+    ) -> Result<(), StoreError> {
+        let SpawnOutcome::Accepted { command_id: accepted_id, name } = outcome else {
+            return Err(StoreError::Invalid("une divergence exige SpawnAccepted"));
+        };
+        if accepted_id != &command_id.to_string() {
+            return Err(StoreError::Invalid("command_id d'issue divergent"));
+        }
+        let issue = serde_json::to_vec(&json!({
+            "kind": "definition_digest_divergent",
+            "command_id": accepted_id,
+            "name": name,
+            "expected_definition_digest": hex_digest(expected_digest),
+            "received_definition_digest": received_digest,
+            "agent_launched_without_followup": true,
+        }))
+        .map_err(StoreError::Json)?;
+        self.record_activation_outcome_with_issue(command_id, outcome, observed_at, Some(issue))
+    }
+
+    fn record_activation_outcome_with_issue(
+        &mut self,
+        command_id: Uuid,
+        outcome: &SpawnOutcome,
+        observed_at: i64,
+        issue_override: Option<Vec<u8>>,
+    ) -> Result<(), StoreError> {
         if observed_at <= 0 {
             return Err(StoreError::Invalid("observed_at invalide"));
         }
-        let (next_state, issue_bytes) = activation_issue(command_id, outcome)?;
+        let (next_state, default_issue_bytes) = activation_issue(command_id, outcome)?;
+        let issue_bytes = issue_override.unwrap_or(default_issue_bytes);
         let tx = self.connection.transaction().map_err(StoreError::Sql)?;
         let row: Option<StoredActivationOutcome> = tx
             .query_row(
@@ -2065,6 +2105,10 @@ fn activation_issue(
     serde_json::to_vec(&value)
         .map(|bytes| (EtatActivationOutbox::Applied, bytes))
         .map_err(StoreError::Json)
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn decision_state_name(state: EtatDecision) -> &'static str {

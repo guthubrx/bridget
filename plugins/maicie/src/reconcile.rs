@@ -296,7 +296,11 @@ pub fn reconcile_activation_startup_at_observed(
     for pending in store.pending_activation_outboxes()? {
         let activation = &pending.activation;
         let command_id = activation.command_id;
-        let action = if observed_at >= activation.retry_until {
+        // `retry_until` borne la tentative initiale, mais la tombstone 009
+        // reste encore consultable jusqu'à `dedup_retained_until`. Dans cette
+        // fenêtre, le replay exact est le lookup sûr : il peut rendre une
+        // issue durable sans créer de second SpawnOrder.
+        let action = if observed_at >= activation.dedup_retained_until {
             record_activation_terminal(
                 store,
                 command_id,
@@ -327,13 +331,15 @@ pub fn reconcile_activation_startup_at_observed(
                     }
                     SpawnOutcome::Accepted { .. } => {
                         observer(ActivationReconcilePhase::AfterIssueBeforeStoreCommit)?;
-                        record_activation_terminal(
-                            store,
+                        // Le spawn a réellement eu lieu : le persister comme
+                        // refus mentirait. L'issue terminale conserve donc
+                        // `accepted` et journalise explicitement l'agent
+                        // lancé sans suivi Maicie implicite.
+                        store.record_activation_definition_divergence(
                             command_id,
-                            SpawnOutcome::Rejected {
-                                command_id: command_id.to_string(),
-                                reason: json!({"kind":"definition_digest_mismatch"}),
-                            },
+                            &replay.outcome,
+                            &pending.approval.context_hash,
+                            replay.definition_digest.as_deref().unwrap_or_default(),
                             observed_at,
                         )?;
                         ActivationReconcileAction::DefinitionDivergente { command_id }

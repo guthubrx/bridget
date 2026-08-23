@@ -151,10 +151,13 @@ contexte après connexion est une Délégation normale, donc livré par
 `OutboxDélégation` avec les bytes dont le hash a été approuvé.
 
 Un `SpawnAccepted` doit porter le digest de définition résolue épinglé à
-l'approbation. Son absence ou sa divergence produit un refus terminal
-journalisé ; Maicie ne recrée jamais une approbation ni un `command_id` de sa
-propre initiative. Après l'horizon, `IdempotencyExpired` est tout aussi
-terminal : une nouvelle activation exige une décision humaine explicite.
+l'approbation. Son absence ou sa divergence est un terminal journalisé qui
+conserve le fait `accepted` et signale « agent lancé sans suivi Maicie » ;
+Maicie ne recrée jamais une approbation ni un `command_id` de sa propre
+initiative. Entre `retry_until` et `dedup_retained_until`, le replay exact
+reste le lookup sûr de cette issue. Après `dedup_retained_until` seulement,
+`IdempotencyExpired` devient terminal : une nouvelle activation exige une
+décision humaine explicite.
 
 ## Invariants
 
@@ -174,11 +177,12 @@ terminal : une nouvelle activation exige une décision humaine explicite.
 ## Décision d'arbitrage (2026-08-23, T008)
 
 `IdempotencyExpired` est **terminal** (`Rejected`, motif `idempotency_expired`)
-— jamais rejoué par la réconciliation, même si `retry_until` n'est pas
-atteint : sans distinction protocolaire entre identifiant jamais vu et
-tombstone purgé, rejouer après expiration serait deviner, et le contrat
-échoue toujours vers la non-duplication. La progression remonte au domaine :
+uniquement après `dedup_retained_until` : à ce point, sans distinction
+protocolaire entre identifiant jamais vu et tombstone purgé, rejouer serait
+deviner, et le contrat échoue toujours vers la non-duplication. Entre
+`retry_until` et `dedup_retained_until`, le replay exact reste au contraire le
+lookup sûr de la tombstone encore retenue. La progression remonte au domaine :
 créer une nouvelle tentative de délégation (nouveau `message_id`) est une
 décision de coordination explicite et journalisée, pas un rejeu de transport.
-Le « replay exact » de la tâche T008 s'applique sous l'horizon uniquement
-(`Prepared`/`OutcomeUnknown` → lookup → replay).
+Le « replay exact » de la tâche T008 s'applique donc jusqu'à la fin de la
+rétention (`Prepared`/`OutcomeUnknown` → lookup → replay).

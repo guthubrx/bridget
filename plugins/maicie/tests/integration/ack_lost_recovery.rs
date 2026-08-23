@@ -419,13 +419,14 @@ fn reprise_lente_sur_toutes_les_phases_reste_dans_le_budget_global() {
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         let (mut reader, mut writer) = split(stream);
-        // Les trois premières réponses consomment 60 ms. Le replay ne peut
-        // donc attendre que le reliquat de l'échéance globale (40 ms). Après
-        // le replay, le serveur garde explicitement la socket ouverte 100 ms :
-        // le client correct expire avant, tandis que la mutation
+        // Les trois premières réponses consomment 300 ms. Après le replay,
+        // le serveur garde explicitement la socket ouverte : le client correct
+        // expire sur l'échéance globale, tandis que la mutation
         // `connect_with_limits_until` -> `connect_with_limits` réinitialise
-        // l'échéance et dépasse nécessairement la borne de 150 ms.
-        let phase_delay = Duration::from_millis(20);
+        // cette échéance et dépasse nécessairement la borne ci-dessous.
+        // Les marges restent suffisamment larges pour les timers coalescés de
+        // macOS sous QoS d'arrière-plan.
+        let phase_delay = Duration::from_millis(100);
 
         assert_eq!(
             read_json(&mut reader),
@@ -454,21 +455,23 @@ fn reprise_lente_sur_toutes_les_phases_reste_dans_le_budget_global() {
         let replay = read_line(&mut reader);
         assert!(replay.contains("\"type\":\"SendIdempotent\""));
         assert!(replay.contains(std::str::from_utf8(&expected_message).unwrap()));
-        // La cinquième opération atteint sa borne : aucune issue n'est écrite
-        // avant 150 ms. Cette attente rend le harnais discriminant contre
-        // l'absence de propagation de l'échéance absolue.
-        thread::sleep(Duration::from_millis(100));
+        // La cinquième opération dépasse l'échéance partagée. La marge est
+        // volontairement large pour rester fiable sous coalescence des timers
+        // macOS : la mutation décrite ci-dessus laisse le quatrième échange
+        // attendre 1 s après les 300 ms déjà consommés et échoue donc sous la
+        // borne de 1,15 s. Cette calibration est la preuve de discriminance.
+        thread::sleep(Duration::from_millis(1_200));
     });
     let limits = BridgetClientLimits {
-        connect_timeout: Duration::from_millis(100),
-        io_timeout: Duration::from_millis(100),
+        connect_timeout: Duration::from_millis(1_000),
+        io_timeout: Duration::from_millis(1_000),
         max_frame_bytes: BridgetClientLimits::default().max_frame_bytes,
     };
 
     let started = Instant::now();
     let report = reconcile_startup_at_with_limits(&mut store, &socket, 1_010, limits).unwrap();
     assert!(
-        started.elapsed() < Duration::from_millis(150),
+        started.elapsed() < Duration::from_millis(1_150),
         "la reprise complète ne doit pas dépasser son budget global"
     );
     assert!(matches!(
