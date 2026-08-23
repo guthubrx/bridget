@@ -1,7 +1,7 @@
 # Plan 015 — Guichet Maicie : identité joignable et demandes corrélées
 
-**Branche** : `session-15-guichet-maicie` | **Date** : 2026-08-23  
-**Spec** : `specs/015-guichet-maicie/spec.md`  
+**Branche** : `session-15-guichet-maicie` | **Date** : 2026-08-23
+**Spec** : `specs/015-guichet-maicie/spec.md`
 **Statut** : plan de conception ; l'implémentation, les tâches détaillées et
 les artefacts de contrat ne sont pas encore autorisés.
 
@@ -128,8 +128,8 @@ plan. Les responsabilités suivantes évitent les collisions de fichiers :
 ### Lot A — Contrat et guichet durable Bridget (codeur A)
 
 **Propriété** : protocole public, rôle/service Bridget, persistance et reprise
-de guichet, tests socket/daemon.  
-**Dépendances** : aucune modification Maicie.  
+de guichet, tests socket/daemon.
+**Dépendances** : aucune modification Maicie.
 **Livrables** : capacité négociée, dépôt idempotent, relève/ack, réponse liée,
 événements de demande corrélés, table de récupération, corpus de compatibilité
 et trois frontières de crash.
@@ -145,9 +145,9 @@ et trois frontières de crash.
 ### Lot B — Greffe et cas d'usage Maicie (codeur B)
 
 **Propriété** : domaine de requête structurée, SQLite Maicie, transaction de
-réception/décision/transition et tests unitaires de la matrice.  
+réception/décision/transition et tests unitaires de la matrice.
 **Dépendances** : contrat du lot A gelé, mais le store peut être préparé contre
-des fixtures contractuelles.  
+des fixtures contractuelles.
 **Livrables** : reçu idempotent, validation relationnelle, réponses
 déterministes et interdiction structurelle de toute approbation ou texte libre.
 
@@ -160,8 +160,8 @@ déterministes et interdiction structurelle de toute approbation ou texte libre.
 ### Lot C — Adaptateur Maicie, CLI et gate réel (codeur C)
 
 **Propriété** : seul adaptateur public Bridget de Maicie, relève bornée à
-l'ouverture de commande, projection JSON et tests d'intégration.  
-**Dépendances** : lots A et B intégrés sur leurs interfaces gelées.  
+l'ouverture de commande, projection JSON et tests d'intégration.
+**Dépendances** : lots A et B intégrés sur leurs interfaces gelées.
 **Livrables** : budget global, rendu honnête des deux vérités, réponses liées,
 bench et gate de bout en bout avec agent réellement absent puis joignable.
 
