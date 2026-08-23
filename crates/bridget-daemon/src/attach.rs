@@ -1019,6 +1019,7 @@ impl BlockRenderer {
             return;
         };
         let Some(key) = record.key else {
+            self.flush_incomplete(input, output);
             self.emit_standalone(&record.rendered, input, output);
             return;
         };
@@ -2147,6 +2148,52 @@ mod tests {
         assert!(output.contains("Réponse live"));
         assert!(output.contains("historique rattrapé jusqu’à 1"));
         assert!(output.contains("tour terminé : end_turn"));
+    }
+
+    #[test]
+    fn perte_de_correlation_apres_snapshot_evacuant_le_tour_incomplet() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), false, true);
+        let mut output = Vec::new();
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 1,
+                bytes: journal_record(1, "turn_start", json!({"from":"humain","body":"Question"})),
+                live: false,
+            }),
+            &input,
+            &mut output,
+        );
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::SnapshotCaughtUp {
+                through_seq: Some(1),
+            }),
+            &input,
+            &mut output,
+        );
+        let journal_sans_correlation = serde_json::to_vec(&json!({
+            "v": 1,
+            "seq": 2,
+            "ts": "2026-08-23T09:07:01Z",
+            "event": "error",
+            "payload": {"reason":"corrélation absente"},
+        }))
+        .unwrap();
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 2,
+                bytes: journal_sans_correlation,
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+
+        assert!(renderer.current.is_none());
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("historique rattrapé jusqu’à 1"));
+        assert!(output.contains("[tour incomplet]"));
+        assert!(output.contains("corrélation absente"));
     }
 
     #[test]
