@@ -19,13 +19,13 @@ push ; tests de crash RÉELS (processus tués), jamais simulés.
 
 ## Phase 0 — Fondations
 
-- [ ] **T901** Setup + ADR : worktree `.worktrees/009-daemon-spawn` (branche
+- [x] **T901** Setup + ADR : worktree `.worktrees/009-daemon-spawn` (branche
   `session-09-daemon-spawn` depuis `session-12-contrat-client-idempotent`),
   copie des artefacts, `docs/decisions/006-daemon-spawn.md` (ADR : daemon
   lance le wrapper, bootstrap à octet, réconciliation, consommation du socle).
   **Observable** : ADR auto-portant, commit docs(009).
 
-- [ ] **T902** `desired_state.rs` : `fleet.json` schéma 1 (clé stable,
+- [x] **T902** `desired_state.rs` : `fleet.json` schéma 1 (clé stable,
   `command_id`+génération), écriture durable via `fsutil` (temp+fsync+rename+
   fsync répertoire), daemon seul écrivain, chargement au démarrage.
   **Observable** : tests — frontière temp→rename prouvée par **processus
@@ -34,7 +34,7 @@ push ; tests de crash RÉELS (processus tués), jamais simulés.
   d'E/S), réouverture et vérification ancien/nouvel état ; schéma versionné ;
   retrait durable.
 
-- [ ] **T903** `managed_process.rs` : sous-mode `managed-bootstrap` (spawn
+- [x] **T903** `managed_process.rs` : sous-mode `managed-bootstrap` (spawn
   standard, `setsid`, `BootstrapReady{pid,pgid,birth,instance_id,command_id,
   generation}` sur le FD de statut hérité, attente `read_exact(1)` octet
   `RELEASE`, EOF→`_exit`, `exec` wrapper) ; discipline des FDs (RELEASE et
@@ -48,7 +48,7 @@ push ; tests de crash RÉELS (processus tués), jamais simulés.
 
 ## Phase 1 — Ordres et machine d'états *(gate daemon)*
 
-- [ ] **T904** `fleet.rs` orchestration : machine
+- [x] **T904** `fleet.rs` orchestration : machine
   `Requested→Reserved→Starting→Connected|Failed|Cancelled` (réservation
   atomique nom+slot+quota sous le verrou d'état, générations), consommation
   du **socle 012** avec la CLÉ COMPLÈTE : un **`issuer_scope` interne du
@@ -66,7 +66,7 @@ push ; tests de crash RÉELS (processus tués), jamais simulés.
   retrouvé, même `command_id` → même issue), `EnvelopeMismatch` sur ordre
   divergent, `IdempotencyExpired`.
 
-- [ ] **T905** Ordres client + refus typés + projection CLI : `SpawnOrder`/
+- [x] **T905** Ordres client + refus typés + projection CLI : `SpawnOrder`/
   `SpawnAccepted`, `StopOrder`/`StopOutcome` (5 issues), la table fermée des
   11 refus (contrat) ; **CLI observable par l'humain** : `bridget spawn` /
   `bridget stop` génèrent et AFFICHENT le `command_id`, option
@@ -81,7 +81,7 @@ push ; tests de crash RÉELS (processus tués), jamais simulés.
   environnement nettoyé** (preuve que baseline+pass_env suffisent aux CLIs
   réels — D-505) ; quickstart §3 échantillon.
 
-- [ ] **T906** Canal de statut + supervision : `StartupFailed{kind,reason}`
+- [x] **T906** Canal de statut + supervision : `StartupFailed{kind,reason}`
   via hook `managed-status` du wrapper (FD hérité), `waitpid` non bloquant au
   tick (enfants du daemon courant), mort spontanée → chemins 007
   (DeliveryRejected, états, `End` attach FR-011ter), stderr par équipier :
@@ -104,7 +104,7 @@ push ; tests de crash RÉELS (processus tués), jamais simulés.
   Register / marqueur périmé ; adaptateur ignorant l'annulation ; descendant
   `npx` ; `stop` d'un wrapper-terminal → refus.
 
-- [ ] **T908** Réconciliation + phase `Recovering` : au démarrage — scan
+- [x] **T908** Réconciliation + phase `Recovering` : au démarrage — scan
   `managed/`, validation naissance+instance, terminaison des groupes périmés
   (`killpg`+polling borné, `ECHILD` documenté), marqueurs supprimés sur
   disparition confirmée, PUIS réservation ordonnée des reprises avant
@@ -117,7 +117,7 @@ push ; tests de crash RÉELS (processus tués), jamais simulés.
 
 ## Phase 3 — Parité et finition
 
-- [ ] **T909** Matrice de parité FR-008 : corpus commun (quickstart 007 §1-§5
+- [x] **T909** Matrice de parité FR-008 : corpus commun (quickstart 007 §1-§5
   automatisés) exécuté wrapper-terminal PUIS daemon-géré, observables
   comparés (N et tolérances versionnés) ; suite de frames attach comparée sur
   la même fixture dans les deux modes.
