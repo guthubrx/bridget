@@ -110,8 +110,14 @@ durable `(deposited_sequence ASC)`. `deposited_sequence` est allouée par le
 store dans sa transaction d'insertion, jamais par une horloge. Le choix et le
 claim sont atomiques : une transaction `IMMEDIATE` sélectionne la première
 ligne `queued`, puis applique `queued → claimed` avec `claim_owner` égal à
-l'identifiant de connexion de service et une `claim_lease` bornée. L'`UPDATE`
-doit modifier exactement une ligne avant que le daemon retourne ses octets.
+l'identifiant de connexion de service, un `claim_generation` monotone, un
+`claim_token` opaque et une `claim_lease` bornée. Le token et la génération
+sont durables ; l'`UPDATE` doit modifier exactement une ligne avant que le
+daemon retourne ses octets.
+
+`claim_token` est un secret de corrélation opaque d'au moins 128 bits, encodé
+en base64url sans padding. Il n'est révélé qu'au service qui gagne le claim et
+fait partie des octets canoniques de toute réponse qui consomme ce claim.
 
 Une demande `claimed` dont la connexion de service a disparu, dont le lease
 expire ou dont le daemon redémarre redevient `queued` avec sa séquence de dépôt
@@ -119,6 +125,13 @@ d'origine : un crash ne change donc pas l'ordre. Deux `GuichetClaimNext`
 concurrents ne peuvent donc jamais retourner le même élément : le second voit
 l'élément suivant, ou `guichet_empty`. La réponse est `guichet_claimed` (et
 révèle alors `issuer_scope` et `request_id`) ou `guichet_empty`.
+
+La réponse de `GuichetClaimNext` est la même forme complète que celle d'un
+claim précis :
+
+```json
+{"type":"guichet_claimed","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01","canonical_request":"<base64 des octets ServiceRequest>","claimed_at":1787500000,"claim_generation":1,"claim_token":"claim-01","claim_lease_expires_at":1787500060,"expires_at":1787500300}
+```
 
 La pagination est implicitement bornée à un élément par appel. Le client répète
 `GuichetClaimNext` seulement jusqu'à son échéance globale négociée ; le daemon
@@ -129,18 +142,24 @@ amorcé à sa prochaine commande sans connaître de clé préalable.
 Après cette première réponse, un retry précis peut employer `GuichetClaim` :
 
 ```json
-{"type":"guichet_claim","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01"}
+{"type":"guichet_claim","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01","claim_token":"claim-01"}
 ```
 
 Le daemon répond soit par :
 
 ```json
-{"type":"guichet_claimed","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01","canonical_request":"<base64 des octets ServiceRequest>","claimed_at":1787500000,"expires_at":1787500300}
+{"type":"guichet_claimed","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01","canonical_request":"<base64 des octets ServiceRequest>","claimed_at":1787500000,"claim_generation":1,"claim_token":"claim-01","claim_lease_expires_at":1787500060,"expires_at":1787500300}
 ```
 
-Le claim ne prend jamais une décision Maicie. Une demande `claimed` non
-finalisée redevient relevable après un redémarrage : elle garde le même
-`request_id` et les mêmes octets.
+Le claim ne prend jamais une décision Maicie. Tant que le lease est valide,
+seule la même connexion de service, munie du même token, peut rejouer les mêmes
+octets de `guichet_claimed` : un retry ne renouvelle ni le lease ni le token.
+`GuichetClaim` ne réattribue jamais une demande : propriétaire ou token non
+courant retourne `claim_stale`; seule `GuichetClaimNext` peut prendre une ligne
+`queued` et créer une nouvelle génération.
+Une demande `claimed` non finalisée redevient relevable après un redémarrage :
+elle garde le même `request_id`, les mêmes octets et sa séquence FIFO, mais sa
+prochaine relève produit un token et une génération neufs.
 
 ### 2.3 Consultation et retry : `GuichetLookup`
 
@@ -158,7 +177,7 @@ Le retry re-soumet exactement les mêmes octets, y compris `issuer_scope` et
 ### 2.4 Réponse : `GuichetReply`
 
 ```json
-{"type":"guichet_reply","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01","response_message_id":"msg-02","in_reply_to":"msg-01","outcome":"accepted","payload":{"kind":"delivery_report","objective_id":"obj-01","delegation_id":"del-01","delivery_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
+{"type":"guichet_reply","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01","claim_generation":1,"claim_token":"claim-01","response_message_id":"msg-02","in_reply_to":"msg-01","outcome":"accepted","payload":{"kind":"delivery_report","objective_id":"obj-01","delegation_id":"del-01","delivery_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
 ```
 
 `GuichetReply` est réservé à la connexion de service ayant négocié
@@ -172,9 +191,25 @@ Le retry re-soumet exactement les mêmes octets, y compris `issuer_scope` et
   déclaré n'est pas joignable ;
 - `refused` : refus déterministe de la relève, sans effet métier Bridget.
 
-Une réponse déjà durable est reconstruite octet pour octet au retry. Un retry
-avec le même `request_id` mais des octets différents retourne
-`canonical_bytes_mismatch` sans modifier la demande, sa réponse ou son claim.
+Avant toute écriture, Bridget conditionne la transition `claimed → replied` à
+la conjonction durable suivante : `claim_owner` est la connexion courante,
+`claim_generation` et `claim_token` sont ceux de la ligne, et
+`claim_lease_expires_at` n'est pas dépassé. L'`UPDATE` doit modifier exactement
+une ligne. Sinon, `claim_stale` est retourné sans modifier la demande, sa
+réponse, le claim, ni aucun résultat ou événement durable. Une réponse déjà
+durable est reconstruite octet pour octet au retry, y compris son token et sa
+génération ; un retry avec le même `request_id` mais des octets différents
+retourne `canonical_bytes_mismatch` sans modifier la demande, sa réponse ou son
+claim.
+
+Le lease borne tous les droits ouverts par le claim. Aujourd'hui,
+`GuichetReply` est la seule trame de service qui puisse modifier une demande
+claimée. `RequestLifecycleEvent` et les accusés de résultat sont exclusivement
+produits par Bridget après la réponse durable déjà validée : ils ne peuvent donc
+pas être écrits par un détenteur périmé. Toute future trame de service qui
+modifie la demande, sa réponse, son événement ou son accusé DOIT porter le
+même `claim_generation` et `claim_token`, et employer la même transition
+conditionnelle ; elle est refusée `claim_stale` sinon.
 L'accusé de `GuichetReply` est un `guichet_result` avec le `expires_at` figé
 de la demande : le client ne recalcule jamais cette échéance depuis sa
 configuration courante.
@@ -197,9 +232,9 @@ Maicie depuis une horloge ou une absence de message.
 La machine de transport est indépendante du registre Maicie :
 
 ```text
-queued ──claim──> claimed ──GuichetReply durable──> replied
+queued ──claim(token, génération, lease)──> claimed ──GuichetReply sous lease──> replied
   │                  │                                  │
-  └──refus──> rejected└──crash/reprise──> queued          └──retry──> même réponse
+  └──refus──> rejected└──crash/lease expiré──> queued      └──retry──> même réponse
 ```
 
 `rejected` et `replied` sont terminaux. La clé de dépôt est
@@ -213,7 +248,7 @@ Maicie ne crée jamais un nouvel identifiant à la place du demandeur.
 |---|---|---|
 | avant insertion | aucune demande ou refus explicite | dépôt unique possible |
 | après dépôt, avant claim | `queued` + scope + octets canoniques + `expires_at` | même demande relevable |
-| après `ClaimNext`, avant résultat | `claimed` + `deposited_sequence` immuable + propriétaire/lease | lease libéré au redémarrage ou expiration, même élément FIFO relivable, sans seconde demande |
+| après `ClaimNext`, avant résultat | `claimed` + `deposited_sequence` immuable + propriétaire/génération/token/lease | lease libéré au redémarrage ou expiration, même élément FIFO relivable sous une génération neuve, sans seconde demande |
 | après résultat, avant retour client | réponse + issue + `expires_at` durables | même `GuichetReply` reconstruite |
 | après terminal Bridget | événement unique durable | même `event_id`, jamais de seconde transition |
 
@@ -237,6 +272,7 @@ couple fermé `(in_reply_to, response_message_id)` : le rapport et l'événement
 | `canonical_bytes_mismatch` | même `request_id`, octets différents | aucune mutation du record existant |
 | `request_already_terminal` | claim/réponse incompatible avec un terminal | terminal conservé |
 | `idempotency_expired` | tombstone hors rétention | aucune réémission |
+| `claim_stale` | token, génération, propriétaire ou lease du claim non courant | aucune réponse, événement, accusé ou transition |
 | `transition_invalid` | transition hors machine guichet | état durable inchangé |
 
 La matrice est fermée : une variante future de `ServiceRequest`,
@@ -265,19 +301,40 @@ l'ordre canonique, pas d'un format de rendu humain.
 
 Ces sept lignes donnent respectivement `queued` avec `expires_at`, puis les
 trois événements durables. La `guichet_claim_next` qui les suit rend
-`req-delivery`, premier dépôt FIFO, sous forme de `guichet_claimed`. Le test
+`req-delivery`, premier dépôt FIFO, sous forme de `guichet_claimed` avec
+`claim_token`, `claim_generation` et `claim_lease_expires_at`. Le test
 normatif dépose pendant l'absence de Maicie, ouvre une connexion de service
 fraîche, appelle cette unique trame puis constate que la première demande est
 relevée. Une barrière ouvre deux connexions de service sur deux dépôts FIFO :
 un seul reçoit le premier élément ; l'autre reçoit le second ou `guichet_empty`.
 Après crash, le premier élément non finalisé conserve sa séquence et redevient
-relevable. Retirer l'`UPDATE` conditionnel `queued → claimed` fait échouer cet
-oracle ; retirer l'écriture atomique de l'événement terminal fait échouer
-l'oracle de redémarrage ; retirer `issuer_scope` fait échouer la validation de
-la clé composite ; remplacer la sélection FIFO par une clé exigée fait échouer
-l'amorçage.
+relevable sous une génération neuve. Une course normée expire le lease de A,
+fait relever l'élément par B, puis envoie la `guichet_reply` de A avec son ancien
+token : elle retourne `claim_stale`, ne crée ni réponse ni événement. La
+réponse de B seule devient durable. Retirer l'`UPDATE` conditionnel
+`queued → claimed`, ou la condition propriétaire/token/génération/lease de
+`claimed → replied`, fait échouer cet oracle ; retirer l'écriture atomique de
+l'événement terminal fait échouer l'oracle de redémarrage ; retirer
+`issuer_scope` fait échouer la validation de la clé composite ; remplacer la
+sélection FIFO par une clé exigée fait échouer l'amorçage.
 
-### 5.2 Refus complets
+### 5.2 Course de lease normée
+
+Le même dépôt est d'abord claimé par A, puis son lease expire. B appelle
+`guichet_claim_next` et reçoit une génération et un token neufs. La trame
+suivante de A doit retourner `claim_stale`; le store conserve alors `claimed`
+par B sans réponse ni événement :
+
+```json
+{"type":"guichet_reply","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-delivery","claim_generation":1,"claim_token":"claim-A","response_message_id":"msg-A","in_reply_to":"msg-01","outcome":"accepted","payload":{"kind":"delivery_report","objective_id":"obj-01","delegation_id":"del-01","delivery_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
+```
+
+La même réponse portée par `claim_generation:2` et `claim_token:"claim-B"`
+est la seule qui puisse rendre la demande `replied`. Mutation discriminante :
+retirer l'un des quatre prédicats `claim_owner`, génération, token ou lease de
+l'`UPDATE` laisse A gagner ou autorise une mutation durable après son expiration.
+
+### 5.3 Refus complets
 
 Chaque trame suivante porte l'issue exacte et la mutation que sa fixture doit
 détecter. Elle est envoyée à une connexion de dépôt déjà enregistrée, sauf le
