@@ -96,3 +96,7 @@ et 23,419 ms (plage 22,969–29,390 ms), toutes sous le budget SC-008 de
 250 ms. À cette charge, la capture éphémère ne justifie donc pas un runtime
 résident v2 ; toute hausse future du nombre d'équipiers ou de la charge devra
 être mesurée par ce même banc avant d'étendre la surface.
+
+La performance ne justifie pas de runtime résident : le runtime v2 ne pourra
+être justifié que par la boucle de réponse et une identité Maicie joignable,
+conclusion de T015b, jamais par SC-008.
