@@ -397,3 +397,13 @@ plus vite ; le coût net est un report, pas une perte.
   interactifs. Second constat lié : après un redémarrage daemon, les
   modèles des interactifs disparaissent jusqu'à leur prochaine activité
   (sonde pilotée par mtime) — acceptable mais à documenter dans who.
+- **La présence riche écrasée par l'identité MCP** (observation utilisateur,
+  23/08 soir — « j'ai vu le modèle de coder2 un instant puis tout a
+  disparu ») : quand un équipier géré ENVOIE par son outil MCP, le serveur
+  MCP de sa session revendique son identité par filiation et ré-enregistre
+  une présence MINIMALE (transport unix, sans mode/domaine/modèle) qui
+  écrase celle du wrapper. Contre-preuve : prospective2, jamais émetteur,
+  garde sa présence intacte. Correctif : l'enregistrement par filiation doit
+  FUSIONNER (compléter, jamais écraser les champs attestés existants) — ou
+  être ignoré si une présence wrapper vit sur le même nom. Recoupe la
+  lacune « modèle des gérés depuis la définition ».
