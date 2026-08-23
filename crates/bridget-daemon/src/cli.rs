@@ -1888,6 +1888,7 @@ fn cmd_who(args: &[String]) {
 
     print!("{}", render_who(&agents, filter.as_deref()));
     println!("Daemon build-id: {build_id}");
+    emit_stale_daemon_warning(Some(&build_id));
 }
 
 /// Rend l'annuaire sans dépendre d'un terminal : les appels non-TTY reçoivent
@@ -1988,6 +1989,17 @@ fn cmd_status() {
     println!("Agents connectés: {}", status.agents.len());
     println!("Messages en base: {}", status.message_count);
     println!("Build-id daemon: {}", status.build_id.as_deref().unwrap_or("inconnu"));
+    emit_stale_daemon_warning(status.build_id.as_deref());
+}
+
+fn stale_daemon_warning_for_status(build_id: Option<&str>) -> Option<String> {
+    crate::build_info::stale_daemon_warning(build_id.unwrap_or("unknown"))
+}
+
+fn emit_stale_daemon_warning(build_id: Option<&str>) {
+    if let Some(warning) = stale_daemon_warning_for_status(build_id) {
+        eprintln!("{warning}");
+    }
 }
 
 fn cmd_ledger() {
@@ -2762,5 +2774,16 @@ mod idempotency_projection_tests {
         assert!(rendered.contains("tmux"));
         assert!(rendered.contains("cli"));
         assert!(!rendered.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn who_et_status_signalent_exactement_un_daemon_perime() {
+        assert!(stale_daemon_warning_for_status(Some(crate::build_info::BUILD_ID)).is_none());
+        let warning = stale_daemon_warning_for_status(Some("daemon-ancien")).unwrap();
+        assert!(warning.starts_with("daemon périmé (daemon-ancien vs"));
+        assert!(warning.contains("launchctl kickstart -k gui/"));
+        assert!(stale_daemon_warning_for_status(None)
+            .unwrap()
+            .starts_with("daemon build-id inconnu"));
     }
 }
