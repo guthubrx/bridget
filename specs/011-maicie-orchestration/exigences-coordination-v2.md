@@ -56,3 +56,14 @@ le profil Maicie affiche le type et ses paramètres épinglés à l'approbation.
 Évolution Bridget possible plus tard : paramètres modèle/effort par spawn.
 À intégrer à T021 (validation des profils : champs type/modèle/effort
 obligatoires dans la fixture).
+
+**Compléments (dialogue utilisateur, suite)** : (a) le pin gpt-5.5 des
+équipiers codex est une CONTRAINTE de l'adaptateur codex-acp@0.16.0 (son cœur
+refusait gpt-5.6-* au spike 007), pas un choix — à RE-TESTER à chaque montée
+de version de l'adaptateur (vérification périodique, les 5.6 terra/luna/sol
+sont la préférence utilisateur) ; (b) la palette cible est PAR CLASSE DE
+TÂCHE : revue hostile/arbitrage = haut calibre (fable ou 5.6 effort haut),
+codage = 5.6 effort haut, mécanique/smoke = modèle léger effort bas — jamais
+de haut calibre pour du travail de greffe. L'agent coordinateur propose le
+profil par nature de tâche ; l'humain approuve la palette ; Maicie n'accepte
+que l'approuvé.
