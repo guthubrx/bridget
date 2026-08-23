@@ -373,10 +373,7 @@ elif command == "delete-buffer":
         .env("BRIDGET_PROMPT_WHO", &who)
         .env("BRIDGET_PROMPT_INBOX", &inbox)
         .env("BRIDGET_PROMPT_SLOW", &slow_started)
-        .env(
-            "BRIDGET_PROMPT_BOOTSTRAP_REJECTED",
-            &bootstrap_rejected,
-        )
+        .env("BRIDGET_PROMPT_BOOTSTRAP_REJECTED", &bootstrap_rejected)
         .env(
             "BRIDGET_REQUIRE_RESUME_BOOTSTRAP",
             if resume_arguments.is_some() { "1" } else { "0" },
@@ -388,7 +385,8 @@ elif command == "delete-buffer":
         .env("BRIDGET_FAKE_TMUX_ROOT", &fake_tmux_root)
         .env(
             "BRIDGET_FAKE_LAST_SENDER",
-            root.join(".cache/bridget").join(format!("last-sender-{name}")),
+            root.join(".cache/bridget")
+                .join(format!("last-sender-{name}")),
         )
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -427,7 +425,11 @@ elif command == "delete-buffer":
             .position(|argument| argument.starts_with("Tu reprends la session"))
             .expect("amorçage Bridget absent de la reprise");
         assert!(resume < session && session < cd && cd + 1 < bootstrap);
-        assert_eq!(bootstrap, arguments.len() - 1, "l'amorçage doit être PROMPT");
+        assert_eq!(
+            bootstrap,
+            arguments.len() - 1,
+            "l'amorçage doit être PROMPT"
+        );
         let actual = &arguments[bootstrap];
         assert!(actual.contains(name), "identité absente de l'amorçage");
         assert!(actual.contains("mcp__bridget__*"));
@@ -466,8 +468,7 @@ elif command == "delete-buffer":
                 String::from_utf8_lossy(&output.stderr)
             );
         }
-        let observed: serde_json::Value =
-            serde_json::from_slice(&fs::read(who).unwrap()).unwrap();
+        let observed: serde_json::Value = serde_json::from_slice(&fs::read(who).unwrap()).unwrap();
         assert!(
             observed["result"]["structuredContent"]["agents"]
                 .as_array()
@@ -506,7 +507,11 @@ fn write_cached_npx_fixture(root: &Path) {
     registry["agents"]["parity"]["command"] = serde_json::json!("npx");
     registry["agents"]["parity"]["args"] =
         serde_json::json!(["--offline", "--no-install", "parity-acp"]);
-    fs::write(&registry_path, serde_json::to_vec_pretty(&registry).unwrap()).unwrap();
+    fs::write(
+        &registry_path,
+        serde_json::to_vec_pretty(&registry).unwrap(),
+    )
+    .unwrap();
     fs::set_permissions(&registry_path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
@@ -752,8 +757,8 @@ fn start_daemon_behind_proxy(root: &Path) -> (DaemonProcess, CutProxy) {
 /// Le fichier SQLite existe dès `Connection::open`, avant les DDL du store.
 /// La bascule du proxy attend donc l'observable utile pour le premier Send.
 fn daemon_ledger_is_ready(database: &Path) -> bool {
-    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let Ok(connection) = rusqlite::Connection::open_with_flags(database, flags) else {
         return false;
     };
@@ -1029,7 +1034,10 @@ fn run_interactive_prompt_corpus(
     }
 
     let processed = session.finish();
-    assert_eq!(processed, vec!["TRACKED", exact, "QUEUE-SLOW", "QUEUE-NEXT"]);
+    assert_eq!(
+        processed,
+        vec!["TRACKED", exact, "QUEUE-SLOW", "QUEUE-NEXT"]
+    );
 }
 
 fn normalized_entry(bytes: &[u8]) -> String {
@@ -1390,8 +1398,7 @@ fn reprise_codex_sans_amorcage_ne_decouvre_pas_mcp() {
         "--cd",
         root_argument.as_str(),
     ];
-    let session =
-        start_interactive_prompt_session(&root, name, Some(&resume_arguments), true);
+    let session = start_interactive_prompt_session(&root, name, Some(&resume_arguments), true);
     let mut peer = Peer::register(&daemon.socket, "prompt-mutation-sender");
     wait_agent(&mut peer, name);
 

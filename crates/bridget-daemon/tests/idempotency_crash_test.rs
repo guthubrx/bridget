@@ -7,12 +7,12 @@
 //! `DeliverIdempotent` : elles partagent les mêmes jalons et le même harnais.
 
 use bridget_core::BridgetMessage;
-use bridget_daemon::test_sync::DIRECTORY_ENV;
 use bridget_daemon::registry::AgentRegistry;
 use bridget_daemon::store::Store;
+use bridget_daemon::test_sync::DIRECTORY_ENV;
 use bridget_daemon::wrapper::launch_acp_with;
 use bridget_transport::protocol::{
-    decode, encode, ClientCapability, ConnectionRole, IdempotencyIssue, CLIENT_CONTRACT_VERSION,
+    CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::ffi::CString;
@@ -154,7 +154,9 @@ impl McpProcess {
         .expect("requête MCP écrite");
         self.input.flush().expect("requête MCP vidée");
         let mut line = String::new();
-        self.output.read_line(&mut line).expect("réponse MCP lisible");
+        self.output
+            .read_line(&mut line)
+            .expect("réponse MCP lisible");
         serde_json::from_str(&line).expect("réponse MCP JSON")
     }
 
@@ -475,8 +477,11 @@ done
         }
     });
     let path = directory.join("agents.json");
-    fs::write(&path, serde_json::to_string_pretty(&definition).expect("registre sérialisable"))
-        .expect("registre ACP écrit");
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&definition).expect("registre sérialisable"),
+    )
+    .expect("registre ACP écrit");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
         .expect("permissions privées du registre ACP");
     let registry = AgentRegistry::from_json(
@@ -490,7 +495,10 @@ done
 fn wait_for_counter(counter: &Path, expected: usize) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while fs::read(counter).map_or(0, |bytes| bytes.len()) < expected {
-        assert!(Instant::now() < deadline, "frame session/prompt absente dans la borne");
+        assert!(
+            Instant::now() < deadline,
+            "frame session/prompt absente dans la borne"
+        );
         thread::sleep(Duration::from_millis(20));
     }
 }
@@ -506,7 +514,10 @@ fn wait_for_registered_agent(socket: &Path, name: &str) {
         ) {
             return;
         }
-        assert!(Instant::now() < deadline, "wrapper ACP non enregistré dans la borne");
+        assert!(
+            Instant::now() < deadline,
+            "wrapper ACP non enregistré dans la borne"
+        );
         thread::sleep(Duration::from_millis(20));
     }
 }
@@ -626,12 +637,18 @@ fn matrice_crash_sc001_redelivre_cinquante_prompts_uniques() {
         let first_replay = retry_command_issue(&socket_path, command.clone());
         let second_replay = retry_command_issue(&socket_path, command.clone());
         assert_eq!(first_replay, second_replay, "le rejeu en vol est stable");
-        assert!(matches!(first_replay, IdempotencyIssue::OutcomeUnknown { .. }));
+        assert!(matches!(
+            first_replay,
+            IdempotencyIssue::OutcomeUnknown { .. }
+        ));
         wait_for_counter(&counter, serial + 1);
         wait_for_accepted(&socket_path, &command);
         let first_terminal = retry_command_issue(&socket_path, command.clone());
         let second_terminal = retry_command_issue(&socket_path, command.clone());
-        assert_eq!(first_terminal, second_terminal, "le rejeu terminal est stable");
+        assert_eq!(
+            first_terminal, second_terminal,
+            "le rejeu terminal est stable"
+        );
         assert!(matches!(first_terminal, IdempotencyIssue::Accepted { .. }));
         if serial + 1 < MATRIX_CYCLES {
             arm_checkpoint(&sync, &points, points[(serial + 1) % points.len()]);
@@ -866,23 +883,28 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
     }));
 
     let issued_at = issued_at();
-    let call = |id, in_reply_to| serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": "tools/call",
-        "params": {
-            "name": "bridget_send",
-            "arguments": {
-                "to": "recipient",
-                "body": "réponse MCP liée",
-                "in_reply_to": in_reply_to,
-                "id": "mcp-linked-retry",
-                "issued_at": issued_at
+    let call = |id, in_reply_to| {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {
+                "name": "bridget_send",
+                "arguments": {
+                    "to": "recipient",
+                    "body": "réponse MCP liée",
+                    "in_reply_to": in_reply_to,
+                    "id": "mcp-linked-retry",
+                    "issued_at": issued_at
+                }
             }
-        }
-    });
+        })
+    };
     let first = mcp.request(call(2, "request-a"));
-    assert_eq!(first["result"]["structuredContent"]["status"], "outcome_unknown");
+    assert_eq!(
+        first["result"]["structuredContent"]["status"],
+        "outcome_unknown"
+    );
     let (delivery_id, delivery_generation) = match receive_delivery(&mut recipient) {
         DaemonToWrapper::DeliverIdempotent {
             delivery_id,
@@ -897,7 +919,10 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
     });
 
     let accepted = mcp.request(call(3, "request-a"));
-    assert_eq!(accepted["result"]["structuredContent"]["status"], "accepted");
+    assert_eq!(
+        accepted["result"]["structuredContent"]["status"],
+        "accepted"
+    );
     let tool_ledger = mcp.request(serde_json::json!({
         "jsonrpc": "2.0",
         "id": 4,

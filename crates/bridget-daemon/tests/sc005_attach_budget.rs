@@ -5,10 +5,10 @@ use bridget_daemon::wrapper::launch_acp_with;
 use bridget_transport::journal::{AppendLatencyProbe, current_host_date};
 use bridget_transport::protocol::{AttachWindow, ConnectionRole, decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
@@ -503,14 +503,7 @@ fn sc001_append_vers_rendu_attach_reel_reste_sous_les_seuils_locaux() {
     let _lock = lock_latency_bench();
     let started = Instant::now();
     let deadline = started + Duration::from_secs(75);
-    let mut harness = BenchHarness::start(
-        "sc001-local",
-        2,
-        SC001_TURNS,
-        0,
-        deadline,
-        |_| {},
-    );
+    let mut harness = BenchHarness::start("sc001-local", 2, SC001_TURNS, 0, deadline, |_| {});
 
     for turn in 0..SC001_TURNS {
         let due = started + SC001_CADENCE * turn as u32;
@@ -542,7 +535,9 @@ fn sc001_append_vers_rendu_attach_reel_reste_sous_les_seuils_locaux() {
                 .get(&sample.seq)
                 .copied()
                 .unwrap_or_else(|| panic!("seq {} non rendue", sample.seq));
-            rendered_at.checked_duration_since(sample.completed_at).unwrap_or_default()
+            rendered_at
+                .checked_duration_since(sample.completed_at)
+                .unwrap_or_default()
         })
         .collect::<Vec<_>>();
     drop(rendered);
@@ -612,9 +607,11 @@ fn sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon() {
     wait_until(deadline, "rejeu historique absent", || {
         final_fragments.load(Ordering::SeqCst) >= 1
     });
-    wait_until(deadline, "SnapshotCaughtUp absent avant le suivi live", || {
-        caught_up.load(Ordering::SeqCst) == 1
-    });
+    wait_until(
+        deadline,
+        "SnapshotCaughtUp absent avant le suivi live",
+        || caught_up.load(Ordering::SeqCst) == 1,
+    );
     assert_eq!(
         caught_up.load(Ordering::SeqCst),
         1,
@@ -641,6 +638,9 @@ fn sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon() {
         .root
         .join("home/.cache/bridget/sessions/codex-bench")
         .join(format!("{}.jsonl", current_host_date()));
-    assert!(current_file.exists(), "rotation vers le fichier courant absente");
+    assert!(
+        current_file.exists(),
+        "rotation vers le fichier courant absente"
+    );
     harness.finish(deadline);
 }

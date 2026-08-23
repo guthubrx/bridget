@@ -123,21 +123,24 @@ impl FakeAgent {
 
     /// Thread qui écoute les messages entrants en push.
     fn start_receiver(agent_arc: Arc<Mutex<FakeAgent>>) {
-        thread::spawn(move || loop {
-            let mut line = String::new();
-            {
-                let mut agent = agent_arc.lock().unwrap();
-                match agent.reader.read_line(&mut line) {
-                    Ok(0) => break,
-                    Ok(_) => {}
-                    Err(_) => break,
+        thread::spawn(move || {
+            loop {
+                let mut line = String::new();
+                {
+                    let mut agent = agent_arc.lock().unwrap();
+                    match agent.reader.read_line(&mut line) {
+                        Ok(0) => break,
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
                 }
-            }
-            if let Ok(msg) = decode::<DaemonToWrapper>(line.trim())
-                && let DaemonToWrapper::Deliver(bm) = msg {
+                if let Ok(msg) = decode::<DaemonToWrapper>(line.trim())
+                    && let DaemonToWrapper::Deliver(bm) = msg
+                {
                     let agent = agent_arc.lock().unwrap();
                     agent.received.lock().unwrap().push(bm);
                 }
+            }
         });
     }
 }
@@ -190,7 +193,10 @@ mod tests {
             }
             // Cet enfant est créé juste au-dessus par ce test ; SIGTERM interrompt
             // le vrai processus daemon, sans passer par sa fermeture applicative.
-            assert_eq!(unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM) }, 0);
+            assert_eq!(
+                unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM) },
+                0
+            );
             let deadline = Instant::now() + Duration::from_secs(5);
             while Instant::now() < deadline {
                 if self.child.try_wait().expect("attente daemon").is_some() {
@@ -215,7 +221,10 @@ mod tests {
             .as_nanos();
         // Le daemon ajoute `.cache/bridget/bridget.sock` : garder la racine
         // sous `/tmp` évite de dépasser SUN_LEN sur les TMPDIR macOS longs.
-        let root = PathBuf::from(format!("/tmp/br-ren-{label}-{}-{nanos}", std::process::id()));
+        let root = PathBuf::from(format!(
+            "/tmp/br-ren-{label}-{}-{nanos}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).expect("répertoire de test");
         root
     }
@@ -233,10 +242,9 @@ mod tests {
     }
 
     fn registry_with_unknown_stdio_agent() -> (AgentRegistry, PathBuf) {
-        let mut fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "fixtures/registry/codex-claude.json"
-        ))
-        .expect("fixture de registre valide");
+        let mut fixture: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/registry/codex-claude.json"))
+                .expect("fixture de registre valide");
         assert_eq!(
             fixture["agents"]
                 .as_object()
@@ -313,8 +321,8 @@ sleep 2
         );
         fixture["agents"]["stdio-ouvert"]["args"] = serde_json::json!(["-c", script]);
         std::fs::write(&path, serde_json::to_string_pretty(&fixture).unwrap()).unwrap();
-        let registry = AgentRegistry::from_json(&std::fs::read_to_string(&path).unwrap(), &path)
-            .unwrap();
+        let registry =
+            AgentRegistry::from_json(&std::fs::read_to_string(&path).unwrap(), &path).unwrap();
         (registry, directory, counter)
     }
 
@@ -803,10 +811,10 @@ sleep 2
         let name_state = root.join("agent-name");
         let daemon = DaemonProcess::start(&root);
 
-        let _reserved = FakeAgent::connect(&socket, "claude", Some("nom-pris"))
-            .expect("nom réservé");
-        let mut agent = FakeAgent::connect(&socket, "codex", Some("codex-originel"))
-            .expect("agent à renommer");
+        let _reserved =
+            FakeAgent::connect(&socket, "claude", Some("nom-pris")).expect("nom réservé");
+        let mut agent =
+            FakeAgent::connect(&socket, "codex", Some("codex-originel")).expect("agent à renommer");
         std::fs::write(&name_state, &agent.name).expect("nom initial persistant");
 
         for refused_name in ["nom-pris", "invalide "] {

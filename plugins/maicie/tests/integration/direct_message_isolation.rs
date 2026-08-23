@@ -1,5 +1,5 @@
-use maicie::app::{route_direct_message, DirectBridgetMessage, DirectMessageRoute};
 use maicie::MAICIE_IDENTITY;
+use maicie::app::{DirectBridgetMessage, DirectMessageRoute, route_direct_message};
 
 #[test]
 fn un_message_direct_hors_maicie_ne_peut_pas_creer_delegation_ni_objectif() {

@@ -4,14 +4,14 @@ pub mod daemon;
 pub mod desired_state;
 pub mod fleet;
 pub mod idempotency;
-pub mod lifecycle;
 pub mod ledger;
-pub mod managers;
+pub mod lifecycle;
 pub mod managed_process;
+pub mod managers;
 pub mod mcp;
 pub mod mcp_identity;
-pub mod registry;
 pub mod receipt_store;
+pub mod registry;
 pub mod runtime;
 pub mod store;
 #[cfg(feature = "test-support")]

@@ -1,6 +1,6 @@
 use maicie::domain::EtatOutboxDelegation;
 use maicie::store::MaicieStore;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -34,9 +34,11 @@ fn deux_delegations_cli_avec_la_meme_cle_rejouent_les_memes_ids_sans_seconde_out
     assert!(first_message.as_str().is_some_and(|id| !id.is_empty()));
     assert_eq!(first_json["delegations"][0]["duration"], "courte");
     assert_eq!(first_json["delegations"][0]["timeout_secs"], 30);
-    assert!(first_json["delegations"][0]["deadline_contractuelle"]
-        .as_i64()
-        .is_some_and(|deadline| deadline > 0));
+    assert!(
+        first_json["delegations"][0]["deadline_contractuelle"]
+            .as_i64()
+            .is_some_and(|deadline| deadline > 0)
+    );
 
     let second = run_delegate(&fixture, "conversation/delegate-1");
     assert!(
@@ -180,9 +182,11 @@ fn serve_client_handshake_io(reader: &mut BufReader<UnixStream>, writer: &mut Un
     write_json(writer, json!({"type": "RoleAccepted", "role": "client"}));
     let hello = read_json(reader);
     assert_eq!(hello["type"], "ClientHello");
-    assert!(hello["issuer_scope"]
-        .as_str()
-        .is_some_and(|scope| !scope.is_empty()));
+    assert!(
+        hello["issuer_scope"]
+            .as_str()
+            .is_some_and(|scope| !scope.is_empty())
+    );
     write_json(
         writer,
         json!({

@@ -373,10 +373,7 @@ pub enum WrapperToDaemon {
     ListRequests { sender: String, limit: u16 },
     /// Projeter le ledger détenu par le daemon, pour un client fédéré qui ne
     /// possède pas sa base SQLite locale.
-    LedgerProjection {
-        scope: LedgerScope,
-        limit: u16,
-    },
+    LedgerProjection { scope: LedgerScope, limit: u16 },
     /// Signal de vie (périodique).
     Heartbeat,
     /// Demander la liste des agents connectés.
@@ -777,7 +774,8 @@ mod tests {
 
     #[test]
     fn register_historique_conserve_un_mode_inconnu() {
-        let json = r#"{"type":"Register","agent_type":"codex","name":null,"turn_in_progress":false}"#;
+        let json =
+            r#"{"type":"Register","agent_type":"codex","name":null,"turn_in_progress":false}"#;
         let decoded: WrapperToDaemon = decode(json).unwrap();
         assert!(matches!(
             decoded,
@@ -897,7 +895,10 @@ mod tests {
             decode::<RuntimeSource>(&encoded).unwrap(),
             RuntimeSource::ClaudeTranscript
         );
-        assert_eq!(RuntimeSource::ClaudeTranscript.to_string(), "claude-transcript");
+        assert_eq!(
+            RuntimeSource::ClaudeTranscript.to_string(),
+            "claude-transcript"
+        );
     }
 
     #[test]
@@ -1268,7 +1269,10 @@ mod tests {
                 r#"{"type":"SpawnAccepted","command_id":"legacy","name":"ancien"}"#
             )
             .unwrap(),
-            DaemonToWrapper::SpawnAccepted { definition: None, .. }
+            DaemonToWrapper::SpawnAccepted {
+                definition: None,
+                ..
+            }
         ));
     }
 
@@ -1374,7 +1378,10 @@ mod tests {
         };
         assert!(matches!(
             decode::<WrapperToDaemon>(&encode(&request).unwrap()).unwrap(),
-            WrapperToDaemon::LedgerProjection { scope: LedgerScope::Both, limit: 20 }
+            WrapperToDaemon::LedgerProjection {
+                scope: LedgerScope::Both,
+                limit: 20
+            }
         ));
 
         let response = DaemonToWrapper::LedgerProjection {

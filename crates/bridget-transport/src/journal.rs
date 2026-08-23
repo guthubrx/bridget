@@ -53,7 +53,14 @@ pub struct JournalEntry {
 }
 
 impl JournalEntry {
-    fn new(sequence: u64, timestamp: &str, session_id: &str, event: &str, message_id: Option<&str>, payload: Value) -> Self {
+    fn new(
+        sequence: u64,
+        timestamp: &str,
+        session_id: &str,
+        event: &str,
+        message_id: Option<&str>,
+        payload: Value,
+    ) -> Self {
         Self {
             v: 1,
             seq: sequence,
@@ -348,20 +355,42 @@ impl JournalWriter {
         })
     }
 
-    pub fn enqueue(&self, event: &str, message_id: Option<&str>, payload: Value) -> Result<(), String> {
-        if let Some(error) = self.failure.lock().unwrap_or_else(|poison| poison.into_inner()).clone() {
+    pub fn enqueue(
+        &self,
+        event: &str,
+        message_id: Option<&str>,
+        payload: Value,
+    ) -> Result<(), String> {
+        if let Some(error) = self
+            .failure
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+        {
             return Err(error);
         }
         let (_, timestamp) = now_date_and_timestamp();
         let entry = JournalEntry::new(0, &timestamp, "", event, message_id, payload);
-        self.sender.try_send(WriterCommand::Entry(entry)).map_err(|error| match error {
-            mpsc::TrySendError::Full(_) => "journal ACP saturé".to_string(),
-            mpsc::TrySendError::Disconnected(_) => self.failure.lock().unwrap_or_else(|poison| poison.into_inner()).clone().unwrap_or_else(|| "journal ACP arrêté".to_string()),
-        })
+        self.sender
+            .try_send(WriterCommand::Entry(entry))
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => "journal ACP saturé".to_string(),
+                mpsc::TrySendError::Disconnected(_) => self
+                    .failure
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .clone()
+                    .unwrap_or_else(|| "journal ACP arrêté".to_string()),
+            })
     }
 
     pub fn stop(&self) {
-        let Some(handle) = self.handle.lock().unwrap_or_else(|poison| poison.into_inner()).take() else {
+        let Some(handle) = self
+            .handle
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .take()
+        else {
             return;
         };
         let (done_sender, done_receiver) = mpsc::channel();
@@ -515,7 +544,11 @@ pub struct JournalUnreadableLine {
 pub enum JournalReadItem {
     Event(JournalReadEvent),
     Unreadable(JournalUnreadableLine),
-    Oversized { seq: Option<u64>, offset: u64, line: u64 },
+    Oversized {
+        seq: Option<u64>,
+        offset: u64,
+        line: u64,
+    },
 }
 
 /// Identité du fichier réellement ouvert pour une tranche de lecture.
@@ -555,14 +588,19 @@ impl IncrementalJournalReader {
         }
     }
 
-    pub fn next_offset(&self) -> u64 { self.next_offset }
+    pub fn next_offset(&self) -> u64 {
+        self.next_offset
+    }
     #[cfg(test)]
-    fn buffered_len(&self) -> usize { self.pending.len() }
+    fn buffered_len(&self) -> usize {
+        self.pending.len()
+    }
 
     /// Lit au plus `max_bytes` octets nouveaux. Une queue partielle est gardée
     /// pour l'appel suivant et ne produit donc jamais un faux événement.
     pub fn read_chunk(&mut self, max_bytes: usize) -> std::io::Result<Vec<JournalReadItem>> {
-        self.read_chunk_with_source(max_bytes).map(|(items, _)| items)
+        self.read_chunk_with_source(max_bytes)
+            .map(|(items, _)| items)
     }
 
     /// Lit une tranche et expose l'identité du descripteur effectivement lu.
@@ -575,7 +613,9 @@ impl IncrementalJournalReader {
         assert!(max_bytes > 0, "une tranche de journal doit être non nulle");
         let mut file = match OpenOptions::new().read(true).open(&self.path) {
             Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), None)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((Vec::new(), None));
+            }
             Err(error) => return Err(error),
         };
         let metadata = file.metadata()?;
@@ -591,12 +631,19 @@ impl IncrementalJournalReader {
         self.next_offset = self.next_offset.saturating_add(count as u64);
         if let Some((_offset, _line, _seq)) = self.discarding {
             if let Some(end) = chunk.iter().position(|byte| *byte == b'\n') {
-                self.pending_offset = self.next_offset.saturating_sub(count as u64).saturating_add((end + 1) as u64);
+                self.pending_offset = self
+                    .next_offset
+                    .saturating_sub(count as u64)
+                    .saturating_add((end + 1) as u64);
                 self.next_line = self.next_line.saturating_add(1);
                 self.discarding = None;
                 self.pending.extend_from_slice(&chunk[end + 1..]);
-            } else { return Ok((Vec::new(), Some(source))); }
-        } else { self.pending.extend_from_slice(&chunk); }
+            } else {
+                return Ok((Vec::new(), Some(source)));
+            }
+        } else {
+            self.pending.extend_from_slice(&chunk);
+        }
 
         let mut items = Vec::new();
         loop {
@@ -631,15 +678,20 @@ impl IncrementalJournalReader {
                 Ok(value) if value.get("v").and_then(Value::as_u64) == Some(1) => {
                     match value.get("seq").and_then(Value::as_u64) {
                         Some(seq) => items.push(JournalReadItem::Event(JournalReadEvent {
-                            seq, offset, line: line_number, bytes: line,
+                            seq,
+                            offset,
+                            line: line_number,
+                            bytes: line,
                         })),
                         None => items.push(JournalReadItem::Unreadable(JournalUnreadableLine {
-                            line: line_number, offset,
+                            line: line_number,
+                            offset,
                         })),
                     }
                 }
                 _ => items.push(JournalReadItem::Unreadable(JournalUnreadableLine {
-                    line: line_number, offset,
+                    line: line_number,
+                    offset,
                 })),
             }
         }
@@ -650,9 +702,18 @@ impl IncrementalJournalReader {
 fn sequence_prefix(bytes: &[u8]) -> Option<u64> {
     let prefix = &bytes[..bytes.len().min(1024)];
     let marker = b"\"seq\":";
-    let start = prefix.windows(marker.len()).position(|window| window == marker)? + marker.len();
-    let end = prefix[start..].iter().position(|byte| !byte.is_ascii_digit()).unwrap_or(prefix.len() - start);
-    std::str::from_utf8(&prefix[start..start + end]).ok()?.parse().ok()
+    let start = prefix
+        .windows(marker.len())
+        .position(|window| window == marker)?
+        + marker.len();
+    let end = prefix[start..]
+        .iter()
+        .position(|byte| !byte.is_ascii_digit())
+        .unwrap_or(prefix.len() - start);
+    std::str::from_utf8(&prefix[start..start + end])
+        .ok()?
+        .parse()
+        .ok()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -682,21 +743,42 @@ pub fn resolve_window(
         .flatten()
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "jsonl"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jsonl")
+        })
         .collect::<Vec<_>>();
     files.sort();
     match window {
-        AttachWindow::Seq(seq) => Ok(ResolvedJournalWindow { files, from_seq: Some(*seq) }),
+        AttachWindow::Seq(seq) => Ok(ResolvedJournalWindow {
+            files,
+            from_seq: Some(*seq),
+        }),
         AttachWindow::Today => Ok(ResolvedJournalWindow {
-            files: files.into_iter().filter(|path| file_date(path) == Some(host_today)).collect(),
+            files: files
+                .into_iter()
+                .filter(|path| file_date(path) == Some(host_today))
+                .collect(),
             from_seq: None,
         }),
         AttachWindow::Date(date) => {
-            if !is_date(date) { return Err(JournalWindowError::InvalidDate); }
-            if date.as_str() > host_today { return Err(JournalWindowError::FutureDate); }
-            let selected = files.into_iter().filter(|path| file_date(path) == Some(date)).collect::<Vec<_>>();
-            if selected.is_empty() { return Err(JournalWindowError::DateOutsideRetention); }
-            Ok(ResolvedJournalWindow { files: selected, from_seq: None })
+            if !is_date(date) {
+                return Err(JournalWindowError::InvalidDate);
+            }
+            if date.as_str() > host_today {
+                return Err(JournalWindowError::FutureDate);
+            }
+            let selected = files
+                .into_iter()
+                .filter(|path| file_date(path) == Some(date))
+                .collect::<Vec<_>>();
+            if selected.is_empty() {
+                return Err(JournalWindowError::DateOutsideRetention);
+            }
+            Ok(ResolvedJournalWindow {
+                files: selected,
+                from_seq: None,
+            })
         }
     }
 }
@@ -735,10 +817,16 @@ fn days_in_month(year: i32, month: u8) -> u8 {
 }
 
 fn last_sequence(directory: &Path) -> u64 {
-    fs::read_dir(directory).ok().into_iter().flatten().filter_map(Result::ok)
+    fs::read_dir(directory)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
         .flat_map(|entry| valid_events(&entry.path()))
-        .filter_map(|value| value.get("seq").and_then(Value::as_u64)).max().unwrap_or(0)
+        .filter_map(|value| value.get("seq").and_then(Value::as_u64))
+        .max()
+        .unwrap_or(0)
 }
 
 /// Empêche qu'un nouvel événement soit concaténé à une queue incomplète issue
@@ -769,9 +857,15 @@ pub fn current_host_date() -> String {
 }
 
 fn now_date_and_timestamp() -> (String, String) {
-    let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
     let (year, month, day, hour, minute, second) = civil_time(seconds);
-    (format!("{year:04}-{month:02}-{day:02}"), format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"))
+    (
+        format!("{year:04}-{month:02}-{day:02}"),
+        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"),
+    )
 }
 
 fn civil_time(seconds: i64) -> (i64, u32, u32, i64, i64, i64) {
@@ -787,7 +881,14 @@ fn civil_time(seconds: i64) -> (i64, u32, u32, i64, i64, i64) {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = mp + if mp < 10 { 3 } else { -9 };
     let year = year + i64::from(month <= 2);
-    (year, month as u32, day as u32, day_seconds / 3600, day_seconds / 60 % 60, day_seconds % 60)
+    (
+        year,
+        month as u32,
+        day as u32,
+        day_seconds / 3600,
+        day_seconds / 60 % 60,
+        day_seconds % 60,
+    )
 }
 
 #[cfg(test)]
@@ -795,27 +896,64 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn root(name: &str) -> PathBuf { std::env::temp_dir().join(format!("bridget-journal-{name}-{}", std::process::id())) }
+    fn root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("bridget-journal-{name}-{}", std::process::id()))
+    }
 
     #[test]
     fn sequence_survives_rotation_and_payload_is_versioned() {
         let root = root("rotation");
         let mut journal = SessionJournal::new(&root, "codex-1", "session-1").unwrap();
-        assert_eq!(journal.append_at("2026-08-22", "2026-08-22T00:00:00Z", "turn_start", Some("m1"), json!({"from":"alice","reply":true,"body":"bonjour"})).unwrap(), 1);
-        assert_eq!(journal.append_at("2026-08-23", "2026-08-23T00:00:00Z", "turn_end", Some("m1"), json!({"stop_reason":"end_turn","routed_to":"alice"})).unwrap(), 2);
-        let event = valid_events(&root.join("codex-1/2026-08-23.jsonl")).pop().unwrap();
+        assert_eq!(
+            journal
+                .append_at(
+                    "2026-08-22",
+                    "2026-08-22T00:00:00Z",
+                    "turn_start",
+                    Some("m1"),
+                    json!({"from":"alice","reply":true,"body":"bonjour"})
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            journal
+                .append_at(
+                    "2026-08-23",
+                    "2026-08-23T00:00:00Z",
+                    "turn_end",
+                    Some("m1"),
+                    json!({"stop_reason":"end_turn","routed_to":"alice"})
+                )
+                .unwrap(),
+            2
+        );
+        let event = valid_events(&root.join("codex-1/2026-08-23.jsonl"))
+            .pop()
+            .unwrap();
         assert_eq!(event["v"], 1);
         assert_eq!(event["seq"], 2);
         assert_eq!(event["payload"]["routed_to"], "alice");
-        assert_eq!(fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o700);
-        assert_eq!(fs::metadata(root.join("codex-1/2026-08-23.jsonl")).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(root.join("codex-1/2026-08-23.jsonl"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn next_sequence_recovers_from_normal_empty_partial_and_corrupt_tails() {
         for (name, contents, expected) in [
-            ("normal", "{\"v\":1,\"seq\":4}\n", 5), ("empty", "", 1),
+            ("normal", "{\"v\":1,\"seq\":4}\n", 5),
+            ("empty", "", 1),
             ("partial", "{\"v\":1,\"seq\":4}\n{\"v\":1,\"seq\":", 5),
             ("corrupt", "{\"v\":1,\"seq\":4}\nnot-json\n", 5),
         ] {
@@ -824,7 +962,18 @@ mod tests {
             create_private_dir(&directory).unwrap();
             fs::write(directory.join("2026-08-22.jsonl"), contents).unwrap();
             let mut journal = SessionJournal::new(&root, "codex-1", "session-1").unwrap();
-            assert_eq!(journal.append_at("2026-08-23", "2026-08-23T00:00:00Z", "error", None, json!({"reason":"test"})).unwrap(), expected);
+            assert_eq!(
+                journal
+                    .append_at(
+                        "2026-08-23",
+                        "2026-08-23T00:00:00Z",
+                        "error",
+                        None,
+                        json!({"reason":"test"})
+                    )
+                    .unwrap(),
+                expected
+            );
             fs::remove_dir_all(root).unwrap();
         }
     }
@@ -837,9 +986,26 @@ mod tests {
         let path = directory.join("2026-08-22.jsonl");
         fs::write(&path, "{\"v\":1,\"seq\":4}\n{\"v\":1,\"seq\":").unwrap();
         let mut journal = SessionJournal::new(&root, "codex-1", "session-1").unwrap();
-        assert_eq!(journal.append_at("2026-08-22", "2026-08-22T01:00:00Z", "error", None, json!({"reason":"reprise"})).unwrap(), 5);
+        assert_eq!(
+            journal
+                .append_at(
+                    "2026-08-22",
+                    "2026-08-22T01:00:00Z",
+                    "error",
+                    None,
+                    json!({"reason":"reprise"})
+                )
+                .unwrap(),
+            5
+        );
         let entries = valid_events(&path);
-        assert_eq!(entries.iter().map(|entry| entry["seq"].as_u64()).collect::<Vec<_>>(), vec![Some(4), Some(5)]);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry["seq"].as_u64())
+                .collect::<Vec<_>>(),
+            vec![Some(4), Some(5)]
+        );
         assert_eq!(entries[1]["payload"]["reason"], "reprise");
         fs::remove_dir_all(root).unwrap();
     }
@@ -847,10 +1013,23 @@ mod tests {
     #[test]
     fn writer_omits_an_absent_message_id() {
         let root = root("optional-message-id");
-        let writer = JournalWriter::start(&root, "codex-1", "session-1", Arc::new(Mutex::new(std::collections::VecDeque::new()))).unwrap();
-        writer.enqueue("error", None, json!({"reason":"global"})).unwrap();
+        let writer = JournalWriter::start(
+            &root,
+            "codex-1",
+            "session-1",
+            Arc::new(Mutex::new(std::collections::VecDeque::new())),
+        )
+        .unwrap();
+        writer
+            .enqueue("error", None, json!({"reason":"global"}))
+            .unwrap();
         writer.stop();
-        let path = std::fs::read_dir(root.join("codex-1")).unwrap().next().unwrap().unwrap().path();
+        let path = std::fs::read_dir(root.join("codex-1"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         let event = valid_events(&path).pop().unwrap();
         assert!(event.get("message_id").is_none());
         assert_eq!(event["payload"], json!({"reason":"global"}));
@@ -863,9 +1042,16 @@ mod tests {
         let events = Arc::new(Mutex::new(std::collections::VecDeque::new()));
         let writer = JournalWriter::start(&root, "codex-1", "session-1", events.clone()).unwrap();
         fs::remove_dir_all(root.join("codex-1")).unwrap();
-        writer.enqueue("error", None, json!({"reason":"test"})).unwrap();
+        writer
+            .enqueue("error", None, json!({"reason":"test"}))
+            .unwrap();
         for _ in 0..20 {
-            if events.lock().unwrap().iter().any(|event| matches!(event, AcpEvent::JournalFailed { .. })) {
+            if events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, AcpEvent::JournalFailed { .. }))
+            {
                 writer.stop();
                 fs::remove_dir_all(root).unwrap();
                 return;
@@ -882,11 +1068,19 @@ mod tests {
         assert_eq!(valid_events(&fixtures.join("error.jsonl")).len(), 1);
         assert_eq!(valid_events(&fixtures.join("permission.jsonl")).len(), 1);
         let rotation = fixtures.join("rotation");
-        let mut rotated = std::fs::read_dir(rotation).unwrap()
-            .filter_map(Result::ok).flat_map(|entry| valid_events(&entry.path()))
+        let mut rotated = std::fs::read_dir(rotation)
+            .unwrap()
+            .filter_map(Result::ok)
+            .flat_map(|entry| valid_events(&entry.path()))
             .collect::<Vec<_>>();
         rotated.sort_by_key(|event| event["seq"].as_u64());
-        assert_eq!(rotated.iter().map(|event| event["seq"].as_u64()).collect::<Vec<_>>(), vec![Some(5), Some(6)]);
+        assert_eq!(
+            rotated
+                .iter()
+                .map(|event| event["seq"].as_u64())
+                .collect::<Vec<_>>(),
+            vec![Some(5), Some(6)]
+        );
         assert_eq!(valid_events(&fixtures.join("partial-tail.jsonl")).len(), 1);
         assert_eq!(valid_events(&fixtures.join("corrupt-line.jsonl")).len(), 1);
     }
@@ -896,31 +1090,74 @@ mod tests {
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/journal");
         let mut partial = IncrementalJournalReader::new(fixtures.join("partial-tail.jsonl"));
         let mut partial_items = Vec::new();
-        for _ in 0..32 { partial_items.extend(partial.read_chunk(7).unwrap()); }
-        assert_eq!(partial_items.iter().filter(|item| matches!(item, JournalReadItem::Event(_))).count(), 1);
-        assert_eq!(partial_items.iter().filter(|item| matches!(item, JournalReadItem::Unreadable(_))).count(), 1);
+        for _ in 0..32 {
+            partial_items.extend(partial.read_chunk(7).unwrap());
+        }
+        assert_eq!(
+            partial_items
+                .iter()
+                .filter(|item| matches!(item, JournalReadItem::Event(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            partial_items
+                .iter()
+                .filter(|item| matches!(item, JournalReadItem::Unreadable(_)))
+                .count(),
+            1
+        );
 
         let root = root("tail-without-newline");
         create_private_dir(&root).unwrap();
         let path = root.join("journal.jsonl");
         fs::write(&path, b"{\"v\":1,\"seq\":9").unwrap();
-        assert!(IncrementalJournalReader::new(&path).read_chunk(64).unwrap().is_empty());
+        assert!(
+            IncrementalJournalReader::new(&path)
+                .read_chunk(64)
+                .unwrap()
+                .is_empty()
+        );
         fs::remove_dir_all(root).unwrap();
 
         let mut corrupt = IncrementalJournalReader::new(fixtures.join("corrupt-line.jsonl"));
         let items = corrupt.read_chunk(16 * 1024).unwrap();
         assert!(matches!(items[0], JournalReadItem::Event(_)));
-        assert!(matches!(items[1], JournalReadItem::Unreadable(JournalUnreadableLine { line: 2, offset }) if offset > 0));
+        assert!(
+            matches!(items[1], JournalReadItem::Unreadable(JournalUnreadableLine { line: 2, offset }) if offset > 0)
+        );
     }
 
     #[test]
     fn lecteur_borne_une_ligne_surdimensionnee_et_reprend_apres_newline() {
-        let root = root("oversized"); create_private_dir(&root).unwrap(); let path = root.join("x.jsonl");
-        fs::write(&path, [b"{\"v\":1,\"seq\":42,\"x\":\"".as_slice(), &vec![b'x'; MAX_INCREMENTAL_LINE_BYTES + 32], b"\"}\n{\"v\":1,\"seq\":43}\n"].concat()).unwrap();
-        let mut reader = IncrementalJournalReader::new(&path); let mut seen = Vec::new();
-        for _ in 0..80 { seen.extend(reader.read_chunk(65_536).unwrap()); assert!(reader.buffered_len() <= MAX_INCREMENTAL_LINE_BYTES); }
-        assert!(matches!(seen.iter().find(|item| matches!(item, JournalReadItem::Oversized { .. })), Some(JournalReadItem::Oversized { seq: Some(42), .. })));
-        assert!(matches!(seen.last(), Some(JournalReadItem::Event(JournalReadEvent { seq: 43, .. }))));
+        let root = root("oversized");
+        create_private_dir(&root).unwrap();
+        let path = root.join("x.jsonl");
+        fs::write(
+            &path,
+            [
+                b"{\"v\":1,\"seq\":42,\"x\":\"".as_slice(),
+                &vec![b'x'; MAX_INCREMENTAL_LINE_BYTES + 32],
+                b"\"}\n{\"v\":1,\"seq\":43}\n",
+            ]
+            .concat(),
+        )
+        .unwrap();
+        let mut reader = IncrementalJournalReader::new(&path);
+        let mut seen = Vec::new();
+        for _ in 0..80 {
+            seen.extend(reader.read_chunk(65_536).unwrap());
+            assert!(reader.buffered_len() <= MAX_INCREMENTAL_LINE_BYTES);
+        }
+        assert!(matches!(
+            seen.iter()
+                .find(|item| matches!(item, JournalReadItem::Oversized { .. })),
+            Some(JournalReadItem::Oversized { seq: Some(42), .. })
+        ));
+        assert!(matches!(
+            seen.last(),
+            Some(JournalReadItem::Event(JournalReadEvent { seq: 43, .. }))
+        ));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -930,7 +1167,12 @@ mod tests {
             let prefix = format!("{{\"v\":1,\"seq\":{seq},\"body\":\"").into_bytes();
             let suffix = b"\"}";
             assert!(length >= prefix.len() + suffix.len());
-            [prefix.as_slice(), &vec![b'x'; length - prefix.len() - suffix.len()], suffix].concat()
+            [
+                prefix.as_slice(),
+                &vec![b'x'; length - prefix.len() - suffix.len()],
+                suffix,
+            ]
+            .concat()
         }
 
         let root = root("incremental-boundaries");
@@ -941,12 +1183,21 @@ mod tests {
         near_contents.extend_from_slice(b"\n{\"v\":1,\"seq\":41}\n");
         fs::write(&near, near_contents).unwrap();
         let mut near_reader = IncrementalJournalReader::new(&near);
-        let near_items = near_reader.read_chunk(MAX_INCREMENTAL_LINE_BYTES + 64).unwrap();
-        assert!(near_items.iter().all(|item| !matches!(item, JournalReadItem::Oversized { .. })));
+        let near_items = near_reader
+            .read_chunk(MAX_INCREMENTAL_LINE_BYTES + 64)
+            .unwrap();
+        assert!(
+            near_items
+                .iter()
+                .all(|item| !matches!(item, JournalReadItem::Oversized { .. }))
+        );
         assert_eq!(
             near_items
                 .iter()
-                .filter_map(|item| match item { JournalReadItem::Event(event) => Some(event.seq), _ => None })
+                .filter_map(|item| match item {
+                    JournalReadItem::Event(event) => Some(event.seq),
+                    _ => None,
+                })
                 .collect::<Vec<_>>(),
             vec![40, 41]
         );
@@ -955,15 +1206,25 @@ mod tests {
         let mut exact_contents = valid_line(42, MAX_INCREMENTAL_LINE_BYTES);
         exact_contents.push(b'\n');
         fs::write(&exact, exact_contents).unwrap();
-        let exact_items = IncrementalJournalReader::new(&exact).read_chunk(MAX_INCREMENTAL_LINE_BYTES + 1).unwrap();
-        assert!(matches!(exact_items.as_slice(), [JournalReadItem::Event(JournalReadEvent { seq: 42, .. })]));
+        let exact_items = IncrementalJournalReader::new(&exact)
+            .read_chunk(MAX_INCREMENTAL_LINE_BYTES + 1)
+            .unwrap();
+        assert!(matches!(
+            exact_items.as_slice(),
+            [JournalReadItem::Event(JournalReadEvent { seq: 42, .. })]
+        ));
 
         let too_large = root.join("too-large.jsonl");
         let mut too_large_contents = valid_line(43, MAX_INCREMENTAL_LINE_BYTES + 1);
         too_large_contents.push(b'\n');
         fs::write(&too_large, too_large_contents).unwrap();
-        let too_large_items = IncrementalJournalReader::new(&too_large).read_chunk(MAX_INCREMENTAL_LINE_BYTES + 2).unwrap();
-        assert!(matches!(too_large_items.as_slice(), [JournalReadItem::Oversized { seq: Some(43), .. }]));
+        let too_large_items = IncrementalJournalReader::new(&too_large)
+            .read_chunk(MAX_INCREMENTAL_LINE_BYTES + 2)
+            .unwrap();
+        assert!(matches!(
+            too_large_items.as_slice(),
+            [JournalReadItem::Oversized { seq: Some(43), .. }]
+        ));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -971,7 +1232,12 @@ mod tests {
     #[test]
     fn fenetres_resolvent_rotation_seq_inclusif_et_vide() {
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/journal");
-        let rotation = resolve_window(&fixtures.join("rotation"), &AttachWindow::Seq(5), "2026-08-24").unwrap();
+        let rotation = resolve_window(
+            &fixtures.join("rotation"),
+            &AttachWindow::Seq(5),
+            "2026-08-24",
+        )
+        .unwrap();
         assert_eq!(rotation.files.len(), 2);
         assert_eq!(rotation.from_seq, Some(5));
 
@@ -980,17 +1246,30 @@ mod tests {
         while first.next_offset() < fs::metadata(&rotation.files[0]).unwrap().len() {
             first_items.extend(first.read_chunk(9).unwrap());
         }
-        assert_eq!(first.next_offset(), fs::metadata(&rotation.files[0]).unwrap().len());
-        assert!(matches!(first_items.as_slice(), [JournalReadItem::Event(event)] if event.seq == 5 && event.offset == 0 && event.line == 1));
-        assert!(first.read_chunk(9).unwrap().is_empty(), "le premier fichier est consommé avant la rotation");
+        assert_eq!(
+            first.next_offset(),
+            fs::metadata(&rotation.files[0]).unwrap().len()
+        );
+        assert!(
+            matches!(first_items.as_slice(), [JournalReadItem::Event(event)] if event.seq == 5 && event.offset == 0 && event.line == 1)
+        );
+        assert!(
+            first.read_chunk(9).unwrap().is_empty(),
+            "le premier fichier est consommé avant la rotation"
+        );
 
         let mut second = IncrementalJournalReader::new(&rotation.files[1]);
         let mut second_items = Vec::new();
         while second.next_offset() < fs::metadata(&rotation.files[1]).unwrap().len() {
             second_items.extend(second.read_chunk(9).unwrap());
         }
-        assert_eq!(second.next_offset(), fs::metadata(&rotation.files[1]).unwrap().len());
-        assert!(matches!(second_items.as_slice(), [JournalReadItem::Event(event)] if event.seq == 6 && event.offset == 0 && event.line == 1));
+        assert_eq!(
+            second.next_offset(),
+            fs::metadata(&rotation.files[1]).unwrap().len()
+        );
+        assert!(
+            matches!(second_items.as_slice(), [JournalReadItem::Event(event)] if event.seq == 6 && event.offset == 0 && event.line == 1)
+        );
         assert_eq!(
             first_items
                 .iter()
@@ -1009,24 +1288,56 @@ mod tests {
         while old.next_offset() < fs::metadata(&partial_tail).unwrap().len() {
             old_items.extend(old.read_chunk(7).unwrap());
         }
-        assert!(matches!(old_items.first(), Some(JournalReadItem::Event(event)) if event.seq == 7 && event.offset == 0));
-        assert!(matches!(old_items.get(1), Some(JournalReadItem::Unreadable(_))));
-        assert!(old.read_chunk(7).unwrap().is_empty(), "la queue partielle ancienne ne bloque pas la rotation");
+        assert!(
+            matches!(old_items.first(), Some(JournalReadItem::Event(event)) if event.seq == 7 && event.offset == 0)
+        );
+        assert!(matches!(
+            old_items.get(1),
+            Some(JournalReadItem::Unreadable(_))
+        ));
+        assert!(
+            old.read_chunk(7).unwrap().is_empty(),
+            "la queue partielle ancienne ne bloque pas la rotation"
+        );
         let partial_root = root("partial-tail-before-next");
         create_private_dir(&partial_root).unwrap();
         let path_after_partial = partial_root.join("2026-08-25.jsonl");
         fs::write(&path_after_partial, b"{\"v\":1,\"seq\":8}\n").unwrap();
         let mut next = IncrementalJournalReader::new(path_after_partial);
         let next_items = next.read_chunk(32).unwrap();
-        assert!(matches!(next_items.as_slice(), [JournalReadItem::Event(event)] if event.seq == 8 && event.offset == 0));
+        assert!(
+            matches!(next_items.as_slice(), [JournalReadItem::Event(event)] if event.seq == 8 && event.offset == 0)
+        );
         fs::remove_dir_all(partial_root).unwrap();
 
         let root = root("empty-window");
         create_private_dir(&root).unwrap();
-        assert!(resolve_window(&root, &AttachWindow::Today, "2026-08-22").unwrap().files.is_empty());
-        assert_eq!(resolve_window(&root, &AttachWindow::Date("2026-08-23".to_string()), "2026-08-22"), Err(JournalWindowError::FutureDate));
-        assert_eq!(resolve_window(&root, &AttachWindow::Date("bad".to_string()), "2026-08-22"), Err(JournalWindowError::InvalidDate));
-        assert_eq!(resolve_window(&root, &AttachWindow::Date("2026-08-21".to_string()), "2026-08-22"), Err(JournalWindowError::DateOutsideRetention));
+        assert!(
+            resolve_window(&root, &AttachWindow::Today, "2026-08-22")
+                .unwrap()
+                .files
+                .is_empty()
+        );
+        assert_eq!(
+            resolve_window(
+                &root,
+                &AttachWindow::Date("2026-08-23".to_string()),
+                "2026-08-22"
+            ),
+            Err(JournalWindowError::FutureDate)
+        );
+        assert_eq!(
+            resolve_window(&root, &AttachWindow::Date("bad".to_string()), "2026-08-22"),
+            Err(JournalWindowError::InvalidDate)
+        );
+        assert_eq!(
+            resolve_window(
+                &root,
+                &AttachWindow::Date("2026-08-21".to_string()),
+                "2026-08-22"
+            ),
+            Err(JournalWindowError::DateOutsideRetention)
+        );
         assert!(!is_date("2026-02-31"));
         assert!(is_date("2024-02-29"));
         assert!(!is_date("2026-02-29"));

@@ -1,9 +1,9 @@
-use maicie::app::{delegate, DelegateRequest, DelegateResult, DelegationCandidate};
+use maicie::app::{DelegateRequest, DelegateResult, DelegationCandidate, delegate};
 use maicie::bridget_client::IdempotencyIssue;
 use maicie::config::DurationClasses;
 use maicie::domain::ClasseDuree;
 use maicie::store::MaicieStore;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -31,9 +31,8 @@ fn status_sur_cent_objectifs_respecte_le_budget_p95() {
 
     let (ready_tx, ready_rx) = mpsc::channel();
     let socket = fixture.socket.clone();
-    let server = thread::spawn(move || {
-        serve_statuses(&socket, WARMUP_RUNS + MEASURED_RUNS, ready_tx)
-    });
+    let server =
+        thread::spawn(move || serve_statuses(&socket, WARMUP_RUNS + MEASURED_RUNS, ready_tx));
     ready_rx.recv().expect("serveur de benchmark prêt");
 
     run_status(&fixture, OBJECTIVE_COUNT);

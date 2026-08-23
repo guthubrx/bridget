@@ -163,7 +163,11 @@ impl AcpTransport {
             CANCEL_GRACE,
             CANCEL_POLL,
             None,
-            SpawnContext { inherit_stderr: false, environment, mcp_servers },
+            SpawnContext {
+                inherit_stderr: false,
+                environment,
+                mcp_servers,
+            },
         )
     }
 
@@ -192,18 +196,16 @@ impl AcpTransport {
             CANCEL_GRACE,
             CANCEL_POLL,
             None,
-            SpawnContext { inherit_stderr: true, environment, mcp_servers },
+            SpawnContext {
+                inherit_stderr: true,
+                environment,
+                mcp_servers,
+            },
         )
     }
 
     fn spawn_with_clock(options: AcpOptions, clock: Clock) -> Result<Self, TransportError> {
-        Self::spawn_with_clock_and_cancel_grace(
-            options,
-            clock,
-            CANCEL_GRACE,
-            CANCEL_POLL,
-            None,
-        )
+        Self::spawn_with_clock_and_cancel_grace(options, clock, CANCEL_GRACE, CANCEL_POLL, None)
     }
 
     fn spawn_with_clock_and_cancel_grace(
@@ -219,7 +221,11 @@ impl AcpTransport {
             cancel_grace,
             poll_interval,
             test_observer,
-            SpawnContext { inherit_stderr: false, environment: &[], mcp_servers: Vec::new() },
+            SpawnContext {
+                inherit_stderr: false,
+                environment: &[],
+                mcp_servers: Vec::new(),
+            },
         )
     }
 
@@ -559,8 +565,7 @@ fn message_expired_at(message: &BridgetMessage, now: SystemTime) -> bool {
     let Some(deadline_at) = message.deadline_at else {
         return false;
     };
-    now
-        .duration_since(SystemTime::UNIX_EPOCH)
+    now.duration_since(SystemTime::UNIX_EPOCH)
         .map(|now| now.as_secs() >= deadline_at)
         .unwrap_or(false)
 }
@@ -624,11 +629,17 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 .push_back(AcpEvent::TurnStarted {
                     message_id: message.id.clone(),
                 });
-            record_or_terminal(&worker.journal, &worker.events, "turn_start", Some(&message.id), json!({
-                "from": &message.from,
-                "reply": message.reply,
-                "body": &message.body,
-            }));
+            record_or_terminal(
+                &worker.journal,
+                &worker.events,
+                "turn_start",
+                Some(&message.id),
+                json!({
+                    "from": &message.from,
+                    "reply": message.reply,
+                    "body": &message.body,
+                }),
+            );
             worker
                 .response
                 .lock()
@@ -668,18 +679,22 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
             clear_active_turn(&worker.queue);
             let event = finish_turn(message, collected, result);
             match &event {
-                AcpEvent::TurnFinished { message, stop_reason, .. } => {
+                AcpEvent::TurnFinished {
+                    message,
+                    stop_reason,
+                    ..
+                } => {
                     let mut payload = json!({ "stop_reason": stop_reason });
                     if message.reply {
                         payload["routed_to"] = json!(&message.from);
                     }
                     record_or_terminal(
-                    &worker.journal,
-                    &worker.events,
-                    "turn_end",
-                    Some(&message.id),
-                    payload,
-                );
+                        &worker.journal,
+                        &worker.events,
+                        "turn_end",
+                        Some(&message.id),
+                        payload,
+                    );
                 }
                 AcpEvent::DeliveryRejected { message_id, reason } => record_or_terminal(
                     &worker.journal,
@@ -706,8 +721,16 @@ fn clear_active_turn(queue: &Arc<(Mutex<QueueState>, Condvar)>) {
     queue.0.lock().unwrap_or_else(|err| err.into_inner()).active = None;
 }
 
-fn record_journal(journal: &Journal, event: &str, message_id: Option<&str>, payload: Value) -> Result<(), String> {
-    let writer = journal.lock().unwrap_or_else(|err| err.into_inner()).clone();
+fn record_journal(
+    journal: &Journal,
+    event: &str,
+    message_id: Option<&str>,
+    payload: Value,
+) -> Result<(), String> {
+    let writer = journal
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone();
     writer.map_or(Ok(()), |writer| writer.enqueue(event, message_id, payload))
 }
 
@@ -727,7 +750,13 @@ fn record_or_terminal(
 }
 
 fn active_message_id(queue: &Arc<(Mutex<QueueState>, Condvar)>) -> Option<String> {
-    queue.0.lock().unwrap_or_else(|err| err.into_inner()).active.as_ref().map(|turn| turn.message_id.clone())
+    queue
+        .0
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .active
+        .as_ref()
+        .map(|turn| turn.message_id.clone())
 }
 
 fn enqueue(
@@ -796,7 +825,13 @@ fn spawn_reader(
             };
             let Ok(value) = serde_json::from_str::<Value>(&line) else {
                 let message_id = active_message_id(&queue);
-                record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": "ligne ACP invalide" }));
+                record_or_terminal(
+                    &journal,
+                    &events,
+                    "error",
+                    message_id.as_deref(),
+                    json!({ "reason": "ligne ACP invalide" }),
+                );
                 events
                     .lock()
                     .unwrap_or_else(|err| err.into_inner())
@@ -818,7 +853,8 @@ fn spawn_reader(
                 continue;
             }
             if let Some((id, _)) = rpc_result.as_ref()
-                && complete_request(&completions, id) {
+                && complete_request(&completions, id)
+            {
                 continue;
             }
             match value.get("method").and_then(Value::as_str) {
@@ -836,7 +872,13 @@ fn spawn_reader(
                     }
                     if update_has_foreign_session(&value, session_id.as_deref()) {
                         let message_id = active_message_id(&queue);
-                        record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": "update ACP ignorée pour une session étrangère" }));
+                        record_or_terminal(
+                            &journal,
+                            &events,
+                            "error",
+                            message_id.as_deref(),
+                            json!({ "reason": "update ACP ignorée pour une session étrangère" }),
+                        );
                         events
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
@@ -845,7 +887,13 @@ fn spawn_reader(
                             });
                     } else if active_turn_is_cancelled(&queue) {
                         let message_id = active_message_id(&queue);
-                        record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": "update ACP ignorée après annulation du tour" }));
+                        record_or_terminal(
+                            &journal,
+                            &events,
+                            "error",
+                            message_id.as_deref(),
+                            json!({ "reason": "update ACP ignorée après annulation du tour" }),
+                        );
                         events
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
@@ -854,7 +902,13 @@ fn spawn_reader(
                             });
                     } else if let Some(text) = update_text(&value, session_id.as_deref()) {
                         let message_id = active_message_id(&queue);
-                        record_or_terminal(&journal, &events, "update", message_id.as_deref(), json!({ "kind": "text", "content": text }));
+                        record_or_terminal(
+                            &journal,
+                            &events,
+                            "update",
+                            message_id.as_deref(),
+                            json!({ "kind": "text", "content": text }),
+                        );
                         response
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
@@ -867,7 +921,9 @@ fn spawn_reader(
                             .unwrap_or_else(|err| err.into_inner())
                             .push_back(event);
                     } else if matches!(
-                        value.pointer("/params/update/sessionUpdate").and_then(Value::as_str),
+                        value
+                            .pointer("/params/update/sessionUpdate")
+                            .and_then(Value::as_str),
                         Some("tool_call") | Some("tool_call_update")
                     ) {
                         let message_id = active_message_id(&queue);
@@ -885,7 +941,13 @@ fn spawn_reader(
                         permission_response(&value, &permissions, active_turn_is_cancelled(&queue))
                     {
                         let message_id = active_message_id(&queue);
-                        record_or_terminal(&journal, &events, "permission", message_id.as_deref(), payload);
+                        record_or_terminal(
+                            &journal,
+                            &events,
+                            "permission",
+                            message_id.as_deref(),
+                            payload,
+                        );
                         let _ = write_json(&writer, reply);
                     }
                 }
@@ -894,7 +956,13 @@ fn spawn_reader(
                         let _ = write_json(&writer, reply);
                     }
                     let message_id = active_message_id(&queue);
-                    record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": format!("méthode ACP inconnue: {method}") }));
+                    record_or_terminal(
+                        &journal,
+                        &events,
+                        "error",
+                        message_id.as_deref(),
+                        json!({ "reason": format!("méthode ACP inconnue: {method}") }),
+                    );
                     events
                         .lock()
                         .unwrap_or_else(|err| err.into_inner())
@@ -904,17 +972,35 @@ fn spawn_reader(
                 }
                 Some(method) => {
                     let message_id = active_message_id(&queue);
-                    record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": format!("notification ACP inconnue: {method}") }));
-                    events.lock().unwrap_or_else(|err| err.into_inner()).push_back(AcpEvent::Error {
-                        detail: format!("notification ACP inconnue: {method}"),
-                    });
+                    record_or_terminal(
+                        &journal,
+                        &events,
+                        "error",
+                        message_id.as_deref(),
+                        json!({ "reason": format!("notification ACP inconnue: {method}") }),
+                    );
+                    events
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .push_back(AcpEvent::Error {
+                            detail: format!("notification ACP inconnue: {method}"),
+                        });
                 }
                 None => {
                     let message_id = active_message_id(&queue);
-                    record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": "message ACP inattendu" }));
-                    events.lock().unwrap_or_else(|err| err.into_inner()).push_back(AcpEvent::Error {
-                        detail: "message ACP inattendu".to_string(),
-                    });
+                    record_or_terminal(
+                        &journal,
+                        &events,
+                        "error",
+                        message_id.as_deref(),
+                        json!({ "reason": "message ACP inattendu" }),
+                    );
+                    events
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .push_back(AcpEvent::Error {
+                            detail: "message ACP inattendu".to_string(),
+                        });
                 }
             }
         }
@@ -925,9 +1011,18 @@ fn spawn_reader(
         drain_queue(&mut queue_state, &events, "EOF ACP");
         wakeup.notify_all();
         fail_waiters(&waiters, "EOF ACP");
-        let message_id = queue_state.active.as_ref().map(|turn| turn.message_id.clone());
+        let message_id = queue_state
+            .active
+            .as_ref()
+            .map(|turn| turn.message_id.clone());
         drop(queue_state);
-        record_or_terminal(&journal, &events, "error", message_id.as_deref(), json!({ "reason": "EOF ACP" }));
+        record_or_terminal(
+            &journal,
+            &events,
+            "error",
+            message_id.as_deref(),
+            json!({ "reason": "EOF ACP" }),
+        );
         events
             .lock()
             .unwrap_or_else(|err| err.into_inner())
@@ -1015,7 +1110,8 @@ fn prompt_request(
     let started = std::time::Instant::now();
     loop {
         let timed_out = deadline_at.is_some_and(|deadline| {
-            (clock)().duration_since(SystemTime::UNIX_EPOCH)
+            (clock)()
+                .duration_since(SystemTime::UNIX_EPOCH)
                 .map(|now| now.as_secs() >= deadline)
                 .unwrap_or(false)
         }) || timeout.is_some_and(|timeout| started.elapsed() >= timeout);
@@ -1047,10 +1143,15 @@ fn prompt_request(
             }
             return Err(TransportError::DeliveryFailed(reason));
         }
-        let remaining = deadline_at.map(|deadline| {
-            let now = (clock)().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-            Duration::from_secs(deadline.saturating_sub(now))
-        }).or(timeout)
+        let remaining = deadline_at
+            .map(|deadline| {
+                let now = (clock)()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                Duration::from_secs(deadline.saturating_sub(now))
+            })
+            .or(timeout)
             .map(|timeout| timeout.saturating_sub(started.elapsed()))
             .unwrap_or(CANCEL_POLL);
         let poll = remaining.min(poll_interval);
@@ -1236,11 +1337,7 @@ fn tool_call_journal_payload(value: &Value, tool_titles: &mut HashMap<String, St
         (None, Some(title)) => Some(title.to_string()),
         (None, None) => None,
     };
-    let tool = title
-        .as_deref()
-        .or(name)
-        .or(tool_kind)
-        .unwrap_or("inconnu");
+    let tool = title.as_deref().or(name).or(tool_kind).unwrap_or("inconnu");
     let summary = update
         .get("text")
         .or_else(|| content.get("text"))
@@ -1282,16 +1379,24 @@ fn write_json(writer: &Writer, value: Value) -> Result<(), TransportError> {
         .map_err(|err| TransportError::Io(err.to_string()))
 }
 
-fn permission_response(value: &Value, permissions: &str, cancelled: bool) -> Option<(Value, Value)> {
+fn permission_response(
+    value: &Value,
+    permissions: &str,
+    cancelled: bool,
+) -> Option<(Value, Value)> {
     let id = value.get("id")?;
     let options = value.pointer("/params/options")?.as_array()?;
-    let offered_options = options.iter().filter_map(|option| {
-        Some(json!({
-            "optionId": option.get("optionId")?.as_str()?,
-            "kind": option.get("kind")?.as_str()?,
-        }))
-    }).collect::<Vec<_>>();
-    let tool = value.pointer("/params/toolCall/title")
+    let offered_options = options
+        .iter()
+        .filter_map(|option| {
+            Some(json!({
+                "optionId": option.get("optionId")?.as_str()?,
+                "kind": option.get("kind")?.as_str()?,
+            }))
+        })
+        .collect::<Vec<_>>();
+    let tool = value
+        .pointer("/params/toolCall/title")
         .or_else(|| value.pointer("/params/toolCall/name"))
         .and_then(Value::as_str)
         .unwrap_or("inconnu");
@@ -1427,11 +1532,15 @@ mod tests {
             ]}
         });
         assert_eq!(
-            permission_response(&invalid_permission, "allow", false).unwrap().0["result"],
+            permission_response(&invalid_permission, "allow", false)
+                .unwrap()
+                .0["result"],
             json!({"outcome":{"outcome":"cancelled"}})
         );
         assert_eq!(
-            permission_response(&invalid_permission, "allow", false).unwrap().1["decision"],
+            permission_response(&invalid_permission, "allow", false)
+                .unwrap()
+                .1["decision"],
             json!({"outcome":"cancelled"})
         );
 
@@ -1461,10 +1570,13 @@ mod tests {
     fn tool_call_journal_prefers_title_then_name_then_kind() {
         let update = |fields: Value| json!({"params":{"update":fields}});
         let mut tool_titles = HashMap::new();
-        let titled = tool_call_journal_payload(&update(json!({
-            "toolCallId":"tool-1", "title":"Read src/main.rs", "name":"read_file", "kind":"read",
-            "content":{"text":"lecture"}
-        })), &mut tool_titles);
+        let titled = tool_call_journal_payload(
+            &update(json!({
+                "toolCallId":"tool-1", "title":"Read src/main.rs", "name":"read_file", "kind":"read",
+                "content":{"text":"lecture"}
+            })),
+            &mut tool_titles,
+        );
         assert_eq!(titled["tool"], "Read src/main.rs");
         assert_eq!(titled["title"], "Read src/main.rs");
         assert_eq!(titled["tool_call_id"], "tool-1");
@@ -1608,7 +1720,8 @@ while read line; do :; done
             },
             &[],
             vec![json!({ "name": "bridget", "command": "bridget", "args": ["mcp"], "env": [] })],
-        ).unwrap();
+        )
+        .unwrap();
         transport.shutdown();
     }
 
@@ -1632,10 +1745,20 @@ while read line; do :; done
 
     #[test]
     fn saturated_journal_becomes_a_terminal_event() {
-        let journal = Arc::new(Mutex::new(Some(crate::journal::JournalWriter::saturated_for_test())));
+        let journal = Arc::new(Mutex::new(Some(
+            crate::journal::JournalWriter::saturated_for_test(),
+        )));
         let events = Arc::new(Mutex::new(VecDeque::new()));
-        record_or_terminal(&journal, &events, "update", Some("m1"), json!({"kind":"text","content":"x"}));
-        assert!(matches!(events.lock().unwrap().pop_front(), Some(AcpEvent::JournalFailed { detail }) if detail == "journal ACP saturé"));
+        record_or_terminal(
+            &journal,
+            &events,
+            "update",
+            Some("m1"),
+            json!({"kind":"text","content":"x"}),
+        );
+        assert!(
+            matches!(events.lock().unwrap().pop_front(), Some(AcpEvent::JournalFailed { detail }) if detail == "journal ACP saturé")
+        );
     }
 
     #[test]
@@ -1819,14 +1942,18 @@ done
         let root = std::env::temp_dir().join(format!(
             "bridget-sc005-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let baseline = observation_case(0, &root.join("zero"));
         let observed = observation_case(2, &root.join("two"));
         assert!(
             baseline.len() >= TURNS && observed.len() >= TURNS,
             "append instrumentés insuffisants : 0 vue={}, 2 vues={}",
-            baseline.len(), observed.len()
+            baseline.len(),
+            observed.len()
         );
         let baseline_p95 = p95(&baseline);
         let observed_p95 = p95(&observed);
@@ -1873,10 +2000,13 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             observed_events.recv_timeout(Duration::from_secs(2)),
             Ok(AcpEvent::PromptDispatched { message_id }) if message_id == "prompt-dispatched"
         ));
-        assert!(matches!(
-            observed_events.recv_timeout(Duration::from_secs(2)),
-            Ok(AcpEvent::Update { detail }) if detail == "prompt-lu"
-        ), "le faux adaptateur n'a pas lu la frame session/prompt");
+        assert!(
+            matches!(
+                observed_events.recv_timeout(Duration::from_secs(2)),
+                Ok(AcpEvent::Update { detail }) if detail == "prompt-lu"
+            ),
+            "le faux adaptateur n'a pas lu la frame session/prompt"
+        );
     }
 
     #[test]
@@ -1897,7 +2027,10 @@ touch "__BRIDGET_STDIN_CLOSED__"
 echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
 sleep 30
 "#
-        .replace("__BRIDGET_STDIN_CLOSED__", &stdin_closed.display().to_string());
+        .replace(
+            "__BRIDGET_STDIN_CLOSED__",
+            &stdin_closed.display().to_string(),
+        );
         let (observer, observed_events) = mpsc::channel();
         let mut transport = AcpTransport::spawn_with_clock_and_cancel_grace(
             AcpOptions {
@@ -1916,7 +2049,10 @@ sleep 30
         // La réponse session/new n'est écrite par l'adaptateur qu'après la
         // fermeture de stdin et ce jalon. spawn() est donc une barrière : le
         // prompt ne peut pas être tenté contre un lecteur encore ouvert.
-        assert!(stdin_closed.exists(), "le jalon de fermeture stdin est absent");
+        assert!(
+            stdin_closed.exists(),
+            "le jalon de fermeture stdin est absent"
+        );
         transport.deliver(&message("flush-failed")).unwrap();
         match observed_events.recv_timeout(Duration::from_secs(2)) {
             Ok(AcpEvent::DeliveryRejected { message_id, .. }) => {
@@ -1950,21 +2086,37 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
 "#;
         let root = std::env::temp_dir().join(format!("bridget-acp-journal-{}", std::process::id()));
         let mut transport = AcpTransport::spawn(AcpOptions {
-            command: "sh".to_string(), args: vec!["-c".to_string(), script.to_string()],
-            queue_capacity: 2, permissions: "allow".to_string(), notify_timeout_secs: 1,
-        }).unwrap();
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            queue_capacity: 2,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+        })
+        .unwrap();
         transport.enable_journal(&root, "codex-1").unwrap();
         transport.deliver(&message("journal-message")).unwrap();
         for _ in 0..30 {
             thread::sleep(Duration::from_millis(10));
-            if transport.drain_events().iter().any(|event| matches!(event, AcpEvent::TurnFinished { .. })) {
+            if transport
+                .drain_events()
+                .iter()
+                .any(|event| matches!(event, AcpEvent::TurnFinished { .. }))
+            {
                 transport.shutdown();
-                let path = std::fs::read_dir(root.join("codex-1")).unwrap().next().unwrap().unwrap().path();
-                let events = crate::journal::valid_events(&path).into_iter().map(|mut event| {
-                    event.as_object_mut().unwrap().remove("seq");
-                    event.as_object_mut().unwrap().remove("ts");
-                    event
-                }).collect::<Vec<_>>();
+                let path = std::fs::read_dir(root.join("codex-1"))
+                    .unwrap()
+                    .next()
+                    .unwrap()
+                    .unwrap()
+                    .path();
+                let events = crate::journal::valid_events(&path)
+                    .into_iter()
+                    .map(|mut event| {
+                        event.as_object_mut().unwrap().remove("seq");
+                        event.as_object_mut().unwrap().remove("ts");
+                        event
+                    })
+                    .collect::<Vec<_>>();
                 assert!(events.contains(&json!({
                     "v": 1, "session_id": "fixture-session", "event": "turn_start",
                     "message_id": "journal-message",
@@ -2192,47 +2344,73 @@ read cancel
 echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"cancel-observe"}}}}'
 while :; do :; done
 "#;
-        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let observed_now = Arc::new(AtomicU64::new(now));
         let clock_now = observed_now.clone();
-        let clock: Clock = Arc::new(move || SystemTime::UNIX_EPOCH + Duration::from_secs(clock_now.load(Ordering::SeqCst)));
+        let clock: Clock = Arc::new(move || {
+            SystemTime::UNIX_EPOCH + Duration::from_secs(clock_now.load(Ordering::SeqCst))
+        });
         let (observer, observed_events) = mpsc::channel();
-        let mut transport = AcpTransport::spawn_with_clock_and_cancel_grace(AcpOptions {
-            command: "sh".to_string(),
-            args: vec!["-c".to_string(), script.to_string()],
-            queue_capacity: 2,
-            permissions: "allow".to_string(),
-            notify_timeout_secs: 1,
-        }, clock, Duration::from_millis(100), Duration::from_millis(10), Some(observer))
+        let mut transport = AcpTransport::spawn_with_clock_and_cancel_grace(
+            AcpOptions {
+                command: "sh".to_string(),
+                args: vec!["-c".to_string(), script.to_string()],
+                queue_capacity: 2,
+                permissions: "allow".to_string(),
+                notify_timeout_secs: 1,
+            },
+            clock,
+            Duration::from_millis(100),
+            Duration::from_millis(10),
+            Some(observer),
+        )
         .unwrap();
         let mut active = message("deadline-active");
         active.reply = true;
         active.deadline_at = Some(now + 1);
         transport.deliver(&active).unwrap();
         transport.deliver(&message("deadline-queued")).unwrap();
-        assert!(matches!(
-            observed_events.recv_timeout(Duration::from_secs(2)),
-            Ok(AcpEvent::PromptDispatched { message_id }) if message_id == "deadline-active"
-        ), "la frontière write+flush n'a pas été publiée");
-        assert!(matches!(
-            observed_events.recv_timeout(Duration::from_secs(2)),
-            Ok(AcpEvent::Update { detail }) if detail == "prompt-observe"
-        ), "le faux adaptateur n'a pas observé le prompt");
+        assert!(
+            matches!(
+                observed_events.recv_timeout(Duration::from_secs(2)),
+                Ok(AcpEvent::PromptDispatched { message_id }) if message_id == "deadline-active"
+            ),
+            "la frontière write+flush n'a pas été publiée"
+        );
+        assert!(
+            matches!(
+                observed_events.recv_timeout(Duration::from_secs(2)),
+                Ok(AcpEvent::Update { detail }) if detail == "prompt-observe"
+            ),
+            "le faux adaptateur n'a pas observé le prompt"
+        );
         observed_now.store(now + 1, Ordering::SeqCst);
-        assert!(matches!(
-            observed_events.recv_timeout(Duration::from_secs(2)),
-            Ok(AcpEvent::Update { detail }) if detail == "cancel-observe"
-        ), "le faux adaptateur n'a pas observé session/cancel avant la grâce");
-        assert!(matches!(
-            observed_events.recv_timeout(Duration::from_secs(2)),
-            Ok(AcpEvent::DeliveryRejected { message_id, reason })
-                if message_id == "deadline-active" && reason.contains("timeout ACP")
-        ), "l'échéance injectée n'a pas interrompu le prompt ACP");
+        assert!(
+            matches!(
+                observed_events.recv_timeout(Duration::from_secs(2)),
+                Ok(AcpEvent::Update { detail }) if detail == "cancel-observe"
+            ),
+            "le faux adaptateur n'a pas observé session/cancel avant la grâce"
+        );
+        assert!(
+            matches!(
+                observed_events.recv_timeout(Duration::from_secs(2)),
+                Ok(AcpEvent::DeliveryRejected { message_id, reason })
+                    if message_id == "deadline-active" && reason.contains("timeout ACP")
+            ),
+            "l'échéance injectée n'a pas interrompu le prompt ACP"
+        );
         let terminal_events = transport.drain_events();
-        assert!(terminal_events.iter().any(|event| matches!(
-            event,
-            AcpEvent::DeliveryRejected { message_id, .. } if message_id == "deadline-queued"
-        )), "la file n'a pas été drainée après l'annulation forcée");
+        assert!(
+            terminal_events.iter().any(|event| matches!(
+                event,
+                AcpEvent::DeliveryRejected { message_id, .. } if message_id == "deadline-queued"
+            )),
+            "la file n'a pas été drainée après l'annulation forcée"
+        );
     }
 
     #[test]

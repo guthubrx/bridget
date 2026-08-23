@@ -5,11 +5,13 @@
 //! décision durable à `app`. Après le commit, elle délègue l'émission au
 //! réconciliateur d'outbox commun : aucun second chemin d'envoi n'existe.
 
+use maicie::MAICIE_IDENTITY;
 use maicie::app::{
-    LocalProfileApproval, ProfileActivationError, ProfileActivationProposalRequest,
-    add_participant, approve_profile_activation, close, delegate, delegated_participants,
+    DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, LocalProfileApproval,
+    ObjectiveError, ProfileActivationError, ProfileActivationProposalRequest, add_participant,
+    approve_profile_activation, close, delegate, delegated_participants,
     propose_profile_activation, remove_participant, status, stored_profile_activation_proposal,
-    summarize, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, ObjectiveError,
+    summarize,
 };
 use maicie::bridget_client::{
     AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits,
@@ -18,11 +20,14 @@ use maicie::config::{ConfigError, MaicieConfig};
 use maicie::domain::{
     ClasseDuree, DecisionCoordination, Delegation, EtatFlux, ObjectifCoordonne, SourceSnapshot,
 };
-use maicie::profiles::{ApprovalProfileView, ProfileError, ResolvedAgentDefinition, approval_view, load_profiles};
-use maicie::reconcile::{reconcile_activation_startup_at, reconcile_startup_with_limits, ReconcileError};
+use maicie::profiles::{
+    ApprovalProfileView, ProfileError, ResolvedAgentDefinition, approval_view, load_profiles,
+};
+use maicie::reconcile::{
+    ReconcileError, reconcile_activation_startup_at, reconcile_startup_with_limits,
+};
 use maicie::runtime::{RuntimeNature, RuntimeObservation, RuntimeSignal, RuntimeSubscription};
 use maicie::store::{MaicieStore, ObjectiveSnapshot, StoreError};
-use maicie::MAICIE_IDENTITY;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::env;
@@ -175,7 +180,7 @@ fn capture_runtime_agent(
         match RuntimeSubscription::open_until(client, participant, AttachWindow::Today, deadline) {
             Ok(subscription) => subscription,
             Err(error) => {
-                return RuntimeAgentOutput::unknown(participant, &capture_runtime_reason(&error))
+                return RuntimeAgentOutput::unknown(participant, &capture_runtime_reason(&error));
             }
         };
     let subscription_id = subscription.subscription_id().to_string();
@@ -230,7 +235,7 @@ fn capture_runtime_agent(
                 };
             }
             Err(error) => {
-                return RuntimeAgentOutput::unknown(participant, &capture_runtime_reason(&error))
+                return RuntimeAgentOutput::unknown(participant, &capture_runtime_reason(&error));
             }
         }
     }
@@ -377,7 +382,8 @@ fn run_profile(arguments: ProfileArgs) -> Result<String, CliError> {
             persistent,
             reason,
         } => {
-            let (screen, profile_hash) = approval_screen(&config, &profile_id, &arguments.definition)?;
+            let (screen, profile_hash) =
+                approval_screen(&config, &profile_id, &arguments.definition)?;
             let retry_until = deadline_from(now, config.durations.long_secs)?;
             let proposal = propose_profile_activation(
                 &mut store,
@@ -411,13 +417,9 @@ fn run_profile(arguments: ProfileArgs) -> Result<String, CliError> {
         }
         ProfileAction::Approve { approval_id } => {
             let retry_until = deadline_from(now, config.durations.long_secs)?;
-            let proposal = stored_profile_activation_proposal(
-                &store,
-                approval_id,
-                retry_until,
-                retry_until,
-            )
-            .map_err(CliError::ProfileActivation)?;
+            let proposal =
+                stored_profile_activation_proposal(&store, approval_id, retry_until, retry_until)
+                    .map_err(CliError::ProfileActivation)?;
             let (screen, profile_hash) = approval_screen(
                 &config,
                 &proposal.approval.profile_id,
@@ -475,8 +477,12 @@ fn confirm_local_profile_approval(
         .map_err(|_| CliError::Usage("écran d'approbation indisponible"))?;
     writeln!(output, "  profil={}", screen.display_name)
         .map_err(|_| CliError::Usage("écran d'approbation indisponible"))?;
-    writeln!(output, "  type={} modèle={} effort={}", screen.agent_type, screen.model, screen.effort)
-        .map_err(|_| CliError::Usage("écran d'approbation indisponible"))?;
+    writeln!(
+        output,
+        "  type={} modèle={} effort={}",
+        screen.agent_type, screen.model, screen.effort
+    )
+    .map_err(|_| CliError::Usage("écran d'approbation indisponible"))?;
     writeln!(output, "  command={}", screen.command)
         .map_err(|_| CliError::Usage("écran d'approbation indisponible"))?;
     writeln!(output, "  args={args}")
@@ -515,8 +521,8 @@ fn approval_screen(
         .iter()
         .find(|profile| profile.id == profile_id)
         .ok_or(CliError::Usage("profil inconnu"))?;
-    let definition_bytes = fs::read(definition_path)
-        .map_err(|_| CliError::Usage("définition résolue illisible"))?;
+    let definition_bytes =
+        fs::read(definition_path).map_err(|_| CliError::Usage("définition résolue illisible"))?;
     let definition: ResolvedAgentDefinition = serde_json::from_slice(&definition_bytes)
         .map_err(|_| CliError::Usage("définition résolue invalide"))?;
     let profile_bytes = serde_json::to_vec(profile_config)
@@ -695,10 +701,7 @@ fn parse_profile_propose(
     let mut index = 0;
     while index < tail.len() {
         match tail[index].as_str() {
-            "--config" => set_once_path(
-                &mut config,
-                next_value(tail, &mut index, "--config")?,
-            )?,
+            "--config" => set_once_path(&mut config, next_value(tail, &mut index, "--config")?)?,
             "--definition" => set_once_path(
                 &mut definition,
                 next_value(tail, &mut index, "--definition")?,
@@ -760,10 +763,7 @@ fn parse_profile_approve(
     let mut index = 0;
     while index < tail.len() {
         match tail[index].as_str() {
-            "--config" => set_once_path(
-                &mut config,
-                next_value(tail, &mut index, "--config")?,
-            )?,
+            "--config" => set_once_path(&mut config, next_value(tail, &mut index, "--config")?)?,
             "--definition" => set_once_path(
                 &mut definition,
                 next_value(tail, &mut index, "--definition")?,
@@ -772,7 +772,12 @@ fn parse_profile_approve(
         }
         index += 1;
     }
-    Ok((ProfileAction::Approve { approval_id }, config, definition, json))
+    Ok((
+        ProfileAction::Approve { approval_id },
+        config,
+        definition,
+        json,
+    ))
 }
 
 fn parse_status(arguments: &[String]) -> Result<StatusArgs, CliError> {
@@ -1513,7 +1518,7 @@ impl fmt::Display for CliError {
 
 #[cfg(test)]
 mod tests {
-    use super::{candidates_from, parse_command, sanitize_terminal, Command, DelegateOutput};
+    use super::{Command, DelegateOutput, candidates_from, parse_command, sanitize_terminal};
     use maicie::bridget_client::AgentInfo;
     use maicie::config::{DurationClasses, MaicieConfig, ProfileConfig};
     use std::path::PathBuf;

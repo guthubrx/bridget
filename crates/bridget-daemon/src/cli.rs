@@ -41,10 +41,19 @@ const RUNTIME_REPLY_TIMEOUT_SECS: u64 = 2;
 /// Valide un nom d'agent Bridget (H-001)
 fn validate_agent_name(name: &str) -> Result<(), String> {
     if name.len() > MAX_AGENT_NAME_LENGTH {
-        return Err(format!("nom d'agent trop long (max {} caractères)", MAX_AGENT_NAME_LENGTH));
+        return Err(format!(
+            "nom d'agent trop long (max {} caractères)",
+            MAX_AGENT_NAME_LENGTH
+        ));
     }
-    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-        return Err("nom d'agent contient des caractères invalides (alphanumériques, -, _ uniquement)".to_string());
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(
+            "nom d'agent contient des caractères invalides (alphanumériques, -, _ uniquement)"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -52,7 +61,10 @@ fn validate_agent_name(name: &str) -> Result<(), String> {
 /// Valide le corps d'un message (H-001)
 fn validate_message_body(body: &str) -> Result<(), String> {
     if body.len() > MAX_MESSAGE_LENGTH {
-        return Err(format!("message trop long (max {} caractères)", MAX_MESSAGE_LENGTH));
+        return Err(format!(
+            "message trop long (max {} caractères)",
+            MAX_MESSAGE_LENGTH
+        ));
     }
     // Vérifier les caractères de contrôle potentiellement dangereux
     if body.contains('\x00') || body.contains('\x1b') {
@@ -427,7 +439,9 @@ fn parse_spawn_args(args: &[String]) -> Result<ParsedSpawnArgs, String> {
                             .parse::<i64>()
                             .ok()
                             .filter(|seconds| *seconds > 0 && *seconds <= 600)
-                            .ok_or_else(|| "--timeout doit être compris entre 1 et 600".to_string())?;
+                            .ok_or_else(|| {
+                                "--timeout doit être compris entre 1 et 600".to_string()
+                            })?;
                         parsed.timeout_was_set = true;
                     }
                     _ => unreachable!(),
@@ -441,7 +455,10 @@ fn parse_spawn_args(args: &[String]) -> Result<ParsedSpawnArgs, String> {
 }
 
 fn parse_stop_args(args: &[String]) -> Result<(String, String), String> {
-    let name = args.first().cloned().ok_or_else(|| "nom manquant".to_string())?;
+    let name = args
+        .first()
+        .cloned()
+        .ok_or_else(|| "nom manquant".to_string())?;
     validate_agent_name(&name)?;
     let command_id = match args.get(1).map(String::as_str) {
         None => uuid::Uuid::new_v4().to_string(),
@@ -490,12 +507,19 @@ fn resolve_spawn_order(
         deadline_at: now.saturating_add(parsed.timeout_secs),
     };
     let bytes = format!("{}\n", encode(&order).map_err(|error| error.to_string())?).into_bytes();
-    bridget_transport::fsutil::write_private_file_atomic(&path, &bytes)
-        .map_err(|error| format!("mémorisation de l'ordre impossible {}: {error}", path.display()))?;
+    bridget_transport::fsutil::write_private_file_atomic(&path, &bytes).map_err(|error| {
+        format!(
+            "mémorisation de l'ordre impossible {}: {error}",
+            path.display()
+        )
+    })?;
     Ok(order)
 }
 
-fn validate_retry_options(parsed: &ParsedSpawnArgs, stored: &WrapperToDaemon) -> Result<(), String> {
+fn validate_retry_options(
+    parsed: &ParsedSpawnArgs,
+    stored: &WrapperToDaemon,
+) -> Result<(), String> {
     let WrapperToDaemon::SpawnOrder {
         agent_type,
         name,
@@ -507,7 +531,10 @@ fn validate_retry_options(parsed: &ParsedSpawnArgs, stored: &WrapperToDaemon) ->
         return Err("le command_id mémorisé n'est pas un ordre spawn".to_string());
     };
     if &parsed.agent_type != agent_type
-        || parsed.name.as_ref().is_some_and(|value| Some(value) != name.as_ref())
+        || parsed
+            .name
+            .as_ref()
+            .is_some_and(|value| Some(value) != name.as_ref())
         || parsed
             .cwd
             .as_ref()
@@ -641,12 +668,13 @@ fn cmd_rename(args: &[String]) {
 
 fn current_agent_name() -> String {
     if let Ok(path) = std::env::var("BRIDGET_AGENT_NAME_FILE")
-        && let Ok(name) = std::fs::read_to_string(path) {
-            let name = name.trim();
-            if !name.is_empty() {
-                return name.to_string();
-            }
+        && let Ok(name) = std::fs::read_to_string(path)
+    {
+        let name = name.trim();
+        if !name.is_empty() {
+            return name.to_string();
         }
+    }
     std::env::var("BRIDGET_AGENT_NAME").unwrap_or_else(|_| "human".to_string())
 }
 
@@ -1090,8 +1118,17 @@ fn cmd_requests(args: &[String]) {
             for request in requests {
                 println!(
                     "{:<id_width$}  {:<target_width$}  {:<state_width$}  {}  {}",
-                    request.id, request.target, request.state, request.deadline_at,
-                    request.deferred_reminder_level.map(|level| format!("palier {level} @ {}", request.deferred_reminder_at.unwrap_or_default())).unwrap_or_else(|| "—".to_string())
+                    request.id,
+                    request.target,
+                    request.state,
+                    request.deadline_at,
+                    request
+                        .deferred_reminder_level
+                        .map(|level| format!(
+                            "palier {level} @ {}",
+                            request.deferred_reminder_at.unwrap_or_default()
+                        ))
+                        .unwrap_or_else(|| "—".to_string())
                 );
             }
         }
@@ -1161,7 +1198,9 @@ fn send_runtime_to_daemon(
     // d'une version antérieure qui ignore ce message — bloquerait le hook, donc
     // la fin de tour de l'agent observé. Constaté en test réel.
     read_stream
-        .set_read_timeout(Some(std::time::Duration::from_secs(RUNTIME_REPLY_TIMEOUT_SECS)))
+        .set_read_timeout(Some(std::time::Duration::from_secs(
+            RUNTIME_REPLY_TIMEOUT_SECS,
+        )))
         .map_err(|e| e.to_string())?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(read_stream);
@@ -1438,9 +1477,7 @@ fn insert_bridget_hook(settings: &mut serde_json::Value) -> bool {
         eprintln!("le fichier de configuration n'est pas un objet JSON");
         return false;
     };
-    let hooks = root
-        .entry("hooks")
-        .or_insert_with(|| serde_json::json!({}));
+    let hooks = root.entry("hooks").or_insert_with(|| serde_json::json!({}));
     let Some(hooks) = hooks.as_object_mut() else {
         eprintln!("la section « hooks » n'est pas un objet JSON");
         return false;
@@ -1486,9 +1523,9 @@ fn entry_is_bridget(entry: &serde_json::Value) -> bool {
         .get("hooks")
         .and_then(|hooks| hooks.as_array())
         .map(|hooks| {
-            hooks.iter().any(|hook| {
-                hook.get("command").and_then(|c| c.as_str()) == Some(HOOK_COMMAND)
-            })
+            hooks
+                .iter()
+                .any(|hook| hook.get("command").and_then(|c| c.as_str()) == Some(HOOK_COMMAND))
         })
         .unwrap_or(false)
 }
@@ -1499,9 +1536,9 @@ fn timestamp() -> String {
         .arg("+%Y%m%d-%H%M%S")
         .output();
     match output {
-        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .to_string(),
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
         _ => std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs().to_string())
@@ -1527,10 +1564,11 @@ fn cmd_domain(args: &[String]) {
         std::process::exit(2);
     }
     if let Some(name) = &requested
-        && let Err(reason) = validate_agent_name(name) {
-            eprintln!("erreur: {}", reason);
-            std::process::exit(2);
-        }
+        && let Err(reason) = validate_agent_name(name)
+    {
+        eprintln!("erreur: {}", reason);
+        std::process::exit(2);
+    }
 
     let agent = current_agent_name();
     if agent == "human" {
@@ -1558,7 +1596,10 @@ fn cmd_domain(args: &[String]) {
                 }
                 None => {
                     let _ = std::fs::remove_file(&path);
-                    println!("Domaine de « {} » réinitialisé sur le dépôt courant.", agent);
+                    println!(
+                        "Domaine de « {} » réinitialisé sur le dépôt courant.",
+                        agent
+                    );
                 }
             }
         }
@@ -1871,9 +1912,15 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
     let location_w = column("LOCALISATION", &|a: &AgentInfo| {
         cell(a.location.as_deref()).to_string()
     });
-    let domain_w = column("DOMAINE", &|a: &AgentInfo| cell(a.domain.as_deref()).to_string());
-    let model_w = column("MODÈLE", &|a: &AgentInfo| cell(a.model.as_deref()).to_string());
-    let effort_w = column("EFFORT", &|a: &AgentInfo| cell(a.effort.as_deref()).to_string());
+    let domain_w = column("DOMAINE", &|a: &AgentInfo| {
+        cell(a.domain.as_deref()).to_string()
+    });
+    let model_w = column("MODÈLE", &|a: &AgentInfo| {
+        cell(a.model.as_deref()).to_string()
+    });
+    let effort_w = column("EFFORT", &|a: &AgentInfo| {
+        cell(a.effort.as_deref()).to_string()
+    });
 
     let mut output = String::new();
     match filter {
@@ -2043,11 +2090,17 @@ mod hook_tests {
             Some("attention.sh mark")
         );
         // Les autres événements sont intacts.
-        assert_eq!(settings["hooks"]["SessionEnd"], original["hooks"]["SessionEnd"]);
+        assert_eq!(
+            settings["hooks"]["SessionEnd"],
+            original["hooks"]["SessionEnd"]
+        );
         assert_eq!(settings["model"], original["model"]);
 
         assert!(remove_bridget_hook(&mut settings));
-        assert_eq!(settings, original, "le retrait doit rendre le fichier d'origine");
+        assert_eq!(
+            settings, original,
+            "le retrait doit rendre le fichier d'origine"
+        );
     }
 
     #[test]
@@ -2097,17 +2150,15 @@ mod hook_tests {
         let path = std::env::temp_dir().join(format!("bridget-atomic-{}.json", std::process::id()));
         std::fs::write(&path, "{\"origine\":true}\n").unwrap();
         write_atomically(&path, "{\"nouveau\":true}\n").unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"nouveau\":true}\n");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\"nouveau\":true}\n"
+        );
         // Aucun fichier temporaire ne subsiste dans le répertoire.
         let restes = std::fs::read_dir(std::env::temp_dir())
             .unwrap()
             .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .contains(".bridget-")
-            })
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".bridget-"))
             .count();
         assert_eq!(restes, 0);
         let _ = std::fs::remove_file(path);
@@ -2192,8 +2243,8 @@ mod hook_tests {
             "--command-id".to_string(),
             "command-retry".to_string(),
         ];
-        let first = resolve_spawn_order(&parse_spawn_args(&args).unwrap(), 100, &cwd, &root)
-            .unwrap();
+        let first =
+            resolve_spawn_order(&parse_spawn_args(&args).unwrap(), 100, &cwd, &root).unwrap();
         let retry_args = vec![
             "codex".to_string(),
             "--command-id".to_string(),
@@ -2212,19 +2263,21 @@ mod hook_tests {
             std::fs::metadata(&state_path).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        assert!(resolve_spawn_order(
-            &parse_spawn_args(&[
-                "claude".to_string(),
-                "--command-id".to_string(),
-                "command-retry".to_string(),
-            ])
-            .unwrap(),
-            999,
-            &cwd,
-            &root,
-        )
-        .unwrap_err()
-        .contains("options divergentes"));
+        assert!(
+            resolve_spawn_order(
+                &parse_spawn_args(&[
+                    "claude".to_string(),
+                    "--command-id".to_string(),
+                    "command-retry".to_string(),
+                ])
+                .unwrap(),
+                999,
+                &cwd,
+                &root,
+            )
+            .unwrap_err()
+            .contains("options divergentes")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2347,10 +2400,7 @@ mod idempotency_projection_tests {
 
     fn temporary_database_path() -> std::path::PathBuf {
         let counter = SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "bridget-t1208-{}-{counter}.db",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("bridget-t1208-{}-{counter}.db", std::process::id()))
     }
 
     fn start_real_daemon() -> (std::path::PathBuf, std::path::PathBuf) {
@@ -2682,7 +2732,11 @@ mod idempotency_projection_tests {
         let rendered = render_who(
             &[
                 agent("acp-gere", Some(PresenceMode::Acp), None),
-                agent("tmux-interactif", Some(PresenceMode::Tmux), Some("bridget:4.2")),
+                agent(
+                    "tmux-interactif",
+                    Some(PresenceMode::Tmux),
+                    Some("bridget:4.2"),
+                ),
                 agent("cli-ephemere", Some(PresenceMode::Cli), None),
             ],
             None,

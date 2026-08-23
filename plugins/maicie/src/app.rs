@@ -348,7 +348,9 @@ pub fn stored_profile_activation_proposal(
     dedup_retained_until: i64,
 ) -> Result<ProfileActivationProposal, ProfileActivationError> {
     if retry_until <= 0 || retry_until > dedup_retained_until {
-        return Err(ProfileActivationError::Invalid("horizon de reprise invalide"));
+        return Err(ProfileActivationError::Invalid(
+            "horizon de reprise invalide",
+        ));
     }
     let (decision, approval) = store
         .activation_proposal(approval_id)
@@ -499,7 +501,9 @@ fn one_objective(
 fn objective_store_error(error: StoreError) -> ObjectiveError {
     match error {
         StoreError::NotFound(_) => ObjectiveError::NotFound(Uuid::nil()),
-        StoreError::Invalid("objectif déjà clos") => ObjectiveError::Invalid("objectif déjà clos"),
+        StoreError::Invalid("objectif déjà clos") => {
+            ObjectiveError::Invalid("objectif déjà clos")
+        }
         other => ObjectiveError::Store(other.to_string()),
     }
 }

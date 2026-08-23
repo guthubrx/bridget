@@ -1,4 +1,4 @@
-use maicie::app::{delegate, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate};
+use maicie::app::{DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, delegate};
 use maicie::config::DurationClasses;
 use maicie::domain::ClasseDuree;
 use maicie::store::MaicieStore;

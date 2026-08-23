@@ -254,13 +254,12 @@ impl IdempotentDeliveryTracker {
             Ok(ReceiptDecision::Inject) => {
                 let message_id = message.id.clone();
                 let pending_delivery_id = delivery_id.clone();
-                self.pending
-                    .entry(message_id)
-                    .or_default()
-                    .push_back(PendingAcpDispatch::Idempotent(PendingIdempotentDelivery {
+                self.pending.entry(message_id).or_default().push_back(
+                    PendingAcpDispatch::Idempotent(PendingIdempotentDelivery {
                         delivery_id,
                         delivery_generation,
-                    }));
+                    }),
+                );
                 IdempotentDeliveryAction::Inject {
                     message,
                     delivery_id: pending_delivery_id,
@@ -664,10 +663,11 @@ struct ClaudeTranscriptLocator {
 
 impl ClaudeTranscriptLocator {
     fn new(directory: PathBuf) -> Self {
-        let baseline = Self::transcripts(&directory)
-            .into_iter()
-            .collect();
-        Self { directory, baseline }
+        let baseline = Self::transcripts(&directory).into_iter().collect();
+        Self {
+            directory,
+            baseline,
+        }
     }
 
     fn transcripts(directory: &Path) -> Vec<(PathBuf, SystemTime)> {
@@ -1001,7 +1001,9 @@ pub fn launch(
     // (= --yolo) sinon le sandbox bloque la connexion socket vers le daemon.
     // Pour Claude Code : ajouter --dangerously-skip-permissions --permission-mode bypassPermissions
     // + injecter un prompt initial qui dit à l'agent de répondre via bridget.
-    let definition = crate::registry::AgentRegistry::load()?.get(agent_type)?.clone();
+    let definition = crate::registry::AgentRegistry::load()?
+        .get(agent_type)?
+        .clone();
     let mut final_args: Vec<String> = Vec::new();
     // Le garde possède le fichier Claude jusqu'à la sortie de `launch`. Son
     // `Drop` couvre aussi tous les refus entre cette préparation et `wait()`.
@@ -1051,15 +1053,13 @@ pub fn launch(
     }
 
     if agent_type == "codex" {
-        final_args.extend(prepare_codex_agent_args(
-            &agent_args,
-            &my_name,
-            mcp_enabled,
-        ));
+        final_args.extend(prepare_codex_agent_args(&agent_args, &my_name, mcp_enabled));
     } else {
         // Claude n'a pas de sous-commande `resume` dans la forme pilotée ici.
         // Conserver son contrat historique et placer le prompt avant les args.
-        let has_prompt = agent_args.iter().any(|argument| !argument.starts_with("--"));
+        let has_prompt = agent_args
+            .iter()
+            .any(|argument| !argument.starts_with("--"));
         if !has_prompt && agent_type == "claude" {
             final_args.push(interactive_bridget_prompt(&my_name, mcp_enabled));
         }
@@ -1394,7 +1394,9 @@ pub fn launch(
                         message,
                         unix_now_secs(),
                         |message| match transport.as_mut() {
-                            Some(transport) => transport.deliver(message).map_err(|error| error.to_string()),
+                            Some(transport) => transport
+                                .deliver(message)
+                                .map_err(|error| error.to_string()),
                             None => Err("aucun pane tmux pour la livraison idempotente".into()),
                         },
                     );
@@ -2288,10 +2290,8 @@ pub fn launch_managed_acp(
         .ok_or("canal managed-status absent du wrapper supervisé")?;
     let mut managed_command = None;
     let result = (|| {
-        let registry = crate::registry::AgentRegistry::from_resolved(
-            agent_type,
-            resolved_definition,
-        )?;
+        let registry =
+            crate::registry::AgentRegistry::from_resolved(agent_type, resolved_definition)?;
         managed_command = Some(registry.get(agent_type)?.command.clone());
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
@@ -2708,9 +2708,7 @@ fn claude_mcp_config(
     instance_id: &str,
 ) -> Result<EphemeralMcpConfig, Box<dyn std::error::Error>> {
     let socket = socket_path();
-    let directory = socket
-        .parent()
-        .ok_or("répertoire socket Bridget absent")?;
+    let directory = socket.parent().ok_or("répertoire socket Bridget absent")?;
     claude_mcp_config_in(directory, server, instance_id)
 }
 
@@ -2725,25 +2723,28 @@ fn claude_mcp_config_in(
     // définition stdio indexée par son nom, sans le champ ACP `name`.
     let command = server["command"].as_str().ok_or("commande MCP absente")?;
     let args = server["args"].clone();
-    let environment = server["env"].as_object().ok_or("environnement MCP absent")?;
-    std::fs::write(&path, serde_json::to_vec(&serde_json::json!({
-        "mcpServers": {
-            "bridget": {
-                "type": "stdio",
-                "command": command,
-                "args": args,
-                "env": environment
+    let environment = server["env"]
+        .as_object()
+        .ok_or("environnement MCP absent")?;
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "mcpServers": {
+                "bridget": {
+                    "type": "stdio",
+                    "command": command,
+                    "args": args,
+                    "env": environment
+                }
             }
-        }
-    }))?)?;
+        }))?,
+    )?;
     Ok(EphemeralMcpConfig { path })
 }
 
 fn codex_mcp_override(server: &serde_json::Value) -> Result<String, Box<dyn std::error::Error>> {
     let command = server["command"].as_str().ok_or("commande MCP absente")?;
-    let home = server["env"]["HOME"]
-        .as_str()
-        .ok_or("HOME MCP absent")?;
+    let home = server["env"]["HOME"].as_str().ok_or("HOME MCP absent")?;
     let environment = format!("{{HOME={home:?}}}");
     Ok(format!(
         "mcp_servers.bridget={{command={command:?},args=[\"mcp\"],env={environment}}}"
@@ -2913,9 +2914,7 @@ fn stop_reason_is_error(stop_reason: &str) -> bool {
 
 #[cfg(test)]
 mod prompt_tests {
-    use super::{
-        codex_resume_bootstrap, interactive_bridget_prompt, prepare_codex_agent_args,
-    };
+    use super::{codex_resume_bootstrap, interactive_bridget_prompt, prepare_codex_agent_args};
 
     const BEFORE: &str = include_str!("../tests/fixtures/prompts/v1-before.txt");
     const AFTER: &str = include_str!("../tests/fixtures/prompts/v1-after.txt");
@@ -2955,7 +2954,10 @@ mod prompt_tests {
 
         assert_eq!(&prepared[..2], &["-c", override_]);
         assert_eq!(&prepared[2..2 + args.len()], &args);
-        assert_eq!(prepared.last().unwrap(), &codex_resume_bootstrap("prospective"));
+        assert_eq!(
+            prepared.last().unwrap(),
+            &codex_resume_bootstrap("prospective")
+        );
         assert!(prepared.last().unwrap().contains("ALL_TOOLS"));
         assert!(prepared.last().unwrap().contains("mcp__bridget__*"));
         assert!(
@@ -2998,7 +3000,10 @@ mod prompt_tests {
         let prepared = prepare_codex_agent_args(&args, "cxbridget", true);
 
         assert_eq!(&prepared[..args.len()], &args);
-        assert_eq!(prepared.last().unwrap(), &codex_resume_bootstrap("cxbridget"));
+        assert_eq!(
+            prepared.last().unwrap(),
+            &codex_resume_bootstrap("cxbridget")
+        );
     }
 
     #[test]
@@ -3019,7 +3024,10 @@ mod prompt_tests {
         let prepared = prepare_codex_agent_args(&args, "cxbridget", true);
 
         assert_eq!(&prepared[..args.len()], &args);
-        assert_eq!(prepared.last().unwrap(), &codex_resume_bootstrap("cxbridget"));
+        assert_eq!(
+            prepared.last().unwrap(),
+            &codex_resume_bootstrap("cxbridget")
+        );
     }
 
     #[test]
@@ -3178,10 +3186,9 @@ mod reconnect_tests {
         let config =
             claude_mcp_config_in(&root.join(".cache/bridget"), &server, "fixture").unwrap();
         assert!(config.path().exists());
-        let claude = serde_json::from_slice::<serde_json::Value>(
-            &std::fs::read(config.path()).unwrap(),
-        )
-        .unwrap();
+        let claude =
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(config.path()).unwrap())
+                .unwrap();
         assert_eq!(claude["mcpServers"]["bridget"]["type"], "stdio");
         assert!(claude["mcpServers"]["bridget"].get("name").is_none());
         assert_eq!(
@@ -3782,14 +3789,8 @@ mod reconnect_tests {
             ..AttachRelayHooks::default()
         };
         let (events, emitter) = relay_emitter();
-        let mut worker = AttachRelayWorker::start_with_live(
-            root.clone(),
-            date,
-            4,
-            feed.clone(),
-            emitter,
-            hooks,
-        );
+        let mut worker =
+            AttachRelayWorker::start_with_live(root.clone(), date, 4, feed.clone(), emitter, hooks);
         worker
             .subscribe("sub-gap".to_string(), AttachWindow::Seq(0))
             .unwrap();

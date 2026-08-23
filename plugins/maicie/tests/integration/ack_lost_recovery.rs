@@ -3,13 +3,13 @@ use maicie::domain::{
     ClasseDuree, Delegation, EtatDelegation, EtatObjectif, EtatOutboxDelegation, ModeObjectif,
     ObjectifCoordonne, OutboxDelegation,
 };
-use maicie::outbox::{stable_body_hash, PreparedDelegation};
+use maicie::outbox::{PreparedDelegation, stable_body_hash};
 use maicie::reconcile::{
-    reconcile_startup_at, reconcile_startup_at_observed, reconcile_startup_at_with_limits,
-    ReconcileAction,
+    ReconcileAction, reconcile_startup_at, reconcile_startup_at_observed,
+    reconcile_startup_at_with_limits,
 };
 use maicie::store::{LocalFailureReason, MaicieStore};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs::{self, DirBuilder};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::os::unix::fs::DirBuilderExt;
@@ -294,10 +294,12 @@ fn trame_trop_grande_devient_rejet_local_durable_sans_rejeu() {
     );
     server.join().unwrap();
 
-    assert!(reconcile_startup_at(&mut store, &socket, 1_011)
-        .unwrap()
-        .actions
-        .is_empty());
+    assert!(
+        reconcile_startup_at(&mut store, &socket, 1_011)
+            .unwrap()
+            .actions
+            .is_empty()
+    );
     drop(store);
     fs::remove_dir_all(root).unwrap();
 }
@@ -331,10 +333,12 @@ fn enveloppe_corrompue_devient_rejet_local_sans_ouvrir_de_socket() {
             reason: LocalFailureReason::InvalidEnvelope,
         }] if *objective_id == uuid(OBJECTIVE_ID) && *message_id == uuid(MESSAGE_ID)
     ));
-    assert!(reconcile_startup_at(&mut store, &socket, 1_011)
-        .unwrap()
-        .actions
-        .is_empty());
+    assert!(
+        reconcile_startup_at(&mut store, &socket, 1_011)
+            .unwrap()
+            .actions
+            .is_empty()
+    );
     drop(store);
     fs::remove_dir_all(root).unwrap();
 }

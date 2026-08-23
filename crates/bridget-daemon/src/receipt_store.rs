@@ -188,7 +188,7 @@ impl ReceiptStore {
                 }
             },
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(ReceiptDecision::Indeterminate)
+                return Ok(ReceiptDecision::Indeterminate);
             }
             Err(error) => return Err(error.into()),
         };
@@ -418,8 +418,8 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Barrier,
+        atomic::{AtomicU64, Ordering},
     };
     use std::thread;
 

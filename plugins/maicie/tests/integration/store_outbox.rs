@@ -3,7 +3,7 @@ use maicie::domain::{
     ClasseDuree, Delegation, EtatDelegation, EtatObjectif, EtatOutboxDelegation, ModeObjectif,
     ObjectifCoordonne, OutboxDelegation,
 };
-use maicie::outbox::{stable_body_hash, PreparedDelegation, StoreCommitPhase, MAX_MESSAGE_BYTES};
+use maicie::outbox::{MAX_MESSAGE_BYTES, PreparedDelegation, StoreCommitPhase, stable_body_hash};
 use maicie::store::{DelegationRecoveryEntry, LocalFailureReason, MaicieStore};
 use serde_json::json;
 use std::fs::{self, OpenOptions};
@@ -113,18 +113,10 @@ fn enveloppe_locale_corrompue_devient_un_rejet_terminal_et_n_est_jamais_reprise(
         }]
     );
     store
-        .record_local_failure_at(
-            uuid(MESSAGE_ID),
-            LocalFailureReason::InvalidEnvelope,
-            1_010,
-        )
+        .record_local_failure_at(uuid(MESSAGE_ID), LocalFailureReason::InvalidEnvelope, 1_010)
         .unwrap();
     store
-        .record_local_failure_at(
-            uuid(MESSAGE_ID),
-            LocalFailureReason::InvalidEnvelope,
-            1_010,
-        )
+        .record_local_failure_at(uuid(MESSAGE_ID), LocalFailureReason::InvalidEnvelope, 1_010)
         .unwrap();
     assert!(store.delegation_recovery_entries().unwrap().is_empty());
     let snapshots = store.objective_snapshots(Some(objective_id)).unwrap();
@@ -345,30 +337,34 @@ fn prepare_refuse_une_trame_finale_poison_et_des_champs_hors_contrat() {
     let mut at_limit = base.outbox.clone();
     at_limit.body_bytes = body.clone();
     at_limit.body_hash = stable_body_hash(&body);
-    assert!(PreparedDelegation::new(
-        base.objective.clone(),
-        base.delegation.clone(),
-        at_limit,
-        store.issuer_scope(),
-        base.issued_at,
-        FRAME_LIMIT,
-    )
-    .is_ok());
+    assert!(
+        PreparedDelegation::new(
+            base.objective.clone(),
+            base.delegation.clone(),
+            at_limit,
+            store.issuer_scope(),
+            base.issued_at,
+            FRAME_LIMIT,
+        )
+        .is_ok()
+    );
 
     let mut body_over_limit = body;
     body_over_limit.push(b'x');
     let mut oversized = base.outbox.clone();
     oversized.body_bytes = body_over_limit.clone();
     oversized.body_hash = stable_body_hash(&body_over_limit);
-    assert!(PreparedDelegation::new(
-        base.objective.clone(),
-        base.delegation.clone(),
-        oversized,
-        store.issuer_scope(),
-        base.issued_at,
-        FRAME_LIMIT,
-    )
-    .is_err());
+    assert!(
+        PreparedDelegation::new(
+            base.objective.clone(),
+            base.delegation.clone(),
+            oversized,
+            store.issuer_scope(),
+            base.issued_at,
+            FRAME_LIMIT,
+        )
+        .is_err()
+    );
 
     let base_message: PublicMessage = serde_json::from_slice(&base.message_bytes).unwrap();
     let runtime_frame_bytes = serde_json::to_vec(&json!({
@@ -380,27 +376,31 @@ fn prepare_refuse_une_trame_finale_poison_et_des_champs_hors_contrat() {
     .unwrap()
     .len()
         + 1;
-    assert!(PreparedDelegation::new(
-        base.objective.clone(),
-        base.delegation.clone(),
-        base.outbox.clone(),
-        store.issuer_scope(),
-        base.issued_at,
-        runtime_frame_bytes - 1,
-    )
-    .is_err());
+    assert!(
+        PreparedDelegation::new(
+            base.objective.clone(),
+            base.delegation.clone(),
+            base.outbox.clone(),
+            store.issuer_scope(),
+            base.issued_at,
+            runtime_frame_bytes - 1,
+        )
+        .is_err()
+    );
 
     let mut timeout = base.outbox.clone();
     timeout.timeout_secs = 7 * 24 * 60 * 60 + 1;
-    assert!(PreparedDelegation::new(
-        base.objective.clone(),
-        base.delegation.clone(),
-        timeout,
-        store.issuer_scope(),
-        base.issued_at,
-        FRAME_LIMIT,
-    )
-    .is_err());
+    assert!(
+        PreparedDelegation::new(
+            base.objective.clone(),
+            base.delegation.clone(),
+            timeout,
+            store.issuer_scope(),
+            base.issued_at,
+            FRAME_LIMIT,
+        )
+        .is_err()
+    );
 
     let mut wrong_hops = base.clone();
     let mut message: PublicMessage = serde_json::from_slice(&wrong_hops.message_bytes).unwrap();
@@ -552,13 +552,15 @@ fn issue_et_incertitude_sont_des_transitions_transactionnelles() {
             1_012,
         )
         .unwrap();
-    assert!(store
-        .record_lookup_issue(
-            uuid(MESSAGE_ID),
-            &IdempotencyIssue::IdempotencyExpired,
-            1_013,
-        )
-        .is_err());
+    assert!(
+        store
+            .record_lookup_issue(
+                uuid(MESSAGE_ID),
+                &IdempotencyIssue::IdempotencyExpired,
+                1_013,
+            )
+            .is_err()
+    );
     assert!(store.pending_delegation_outboxes().unwrap().is_empty());
     let terminal = store.recovery_snapshot(uuid(MESSAGE_ID)).unwrap().unwrap();
     assert_eq!(terminal.outbox.state, EtatOutboxDelegation::Accepted);
@@ -600,9 +602,11 @@ fn tous_les_refus_durables_convergent_vers_rejected_terminal() {
         assert_eq!(snapshot.outbox.state, EtatOutboxDelegation::Rejected);
         assert_eq!(snapshot.last_issue.unwrap()["kind"], expected_kind);
         assert_eq!(snapshot.issue_observed_at, Some(1_010));
-        assert!(store
-            .record_transport_uncertainty(uuid(MESSAGE_ID), 1_012)
-            .is_err());
+        assert!(
+            store
+                .record_transport_uncertainty(uuid(MESSAGE_ID), 1_012)
+                .is_err()
+        );
         drop(store);
         fs::remove_dir_all(root).unwrap();
     }

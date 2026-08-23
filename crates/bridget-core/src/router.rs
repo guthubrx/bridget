@@ -88,13 +88,13 @@ impl Router {
             None => {
                 // Auto-incrément
                 let counter = self.counters.entry(type_str.clone()).or_insert(0);
-                    loop {
-                        *counter += 1;
-                        let candidate = format!("{}-{}", type_str, counter);
-                        if !self.agents.contains_key(&candidate) {
-                            break candidate;
-                        }
+                loop {
+                    *counter += 1;
+                    let candidate = format!("{}-{}", type_str, counter);
+                    if !self.agents.contains_key(&candidate) {
+                        break candidate;
                     }
+                }
             }
         };
 
@@ -122,12 +122,18 @@ impl Router {
     }
 
     /// Remplace atomiquement le nom d'un agent identifié par sa connexion.
-    pub fn rename(&mut self, connection_id: &str, requested_name: &str) -> Result<(String, String), RouterError> {
+    pub fn rename(
+        &mut self,
+        connection_id: &str,
+        requested_name: &str,
+    ) -> Result<(String, String), RouterError> {
         let name = requested_name.trim();
         if name.is_empty() || name != requested_name {
             return Err(RouterError::InvalidName(requested_name.to_string()));
         }
-        let old_name = self.agents.iter()
+        let old_name = self
+            .agents
+            .iter()
             .find(|(_, agent)| agent.connection_id == connection_id)
             .map(|(name, _)| name.clone())
             .ok_or_else(|| RouterError::AgentNotFound(connection_id.to_string()))?;
@@ -145,13 +151,7 @@ impl Router {
 
     /// Résout un message : vérifie le destinataire, les hops, l'auto-envoi.
     /// Retourne l'action à effectuer.
-    pub fn resolve(
-        &self,
-        _from: &str,
-        to: &str,
-        hops: i32,
-        from_conn: &str,
-    ) -> RouterAction {
+    pub fn resolve(&self, _from: &str, to: &str, hops: i32, from_conn: &str) -> RouterAction {
         // Vérifier le budget de hops
         if hops <= 0 {
             return RouterAction::Reject(RouterError::HopsExhausted);
@@ -212,14 +212,18 @@ mod tests {
     #[test]
     fn test_register_explicit_name() {
         let mut router = Router::new();
-        let name = router.register(Some("analyse"), &AgentType::Codex, "conn-1").unwrap();
+        let name = router
+            .register(Some("analyse"), &AgentType::Codex, "conn-1")
+            .unwrap();
         assert_eq!(name, "analyse");
     }
 
     #[test]
     fn test_register_duplicate_rejected() {
         let mut router = Router::new();
-        router.register(Some("bob"), &AgentType::Codex, "conn-1").unwrap();
+        router
+            .register(Some("bob"), &AgentType::Codex, "conn-1")
+            .unwrap();
         let result = router.register(Some("bob"), &AgentType::Codex, "conn-2");
         assert!(result.is_err());
     }
@@ -238,7 +242,10 @@ mod tests {
     fn test_resolve_not_found() {
         let router = Router::new();
         let action = router.resolve("a", "ghost", 3, "conn-1");
-        assert!(matches!(action, RouterAction::Reject(RouterError::AgentNotFound(_))));
+        assert!(matches!(
+            action,
+            RouterAction::Reject(RouterError::AgentNotFound(_))
+        ));
     }
 
     #[test]
@@ -246,7 +253,10 @@ mod tests {
         let mut router = Router::new();
         router.register(None, &AgentType::Codex, "conn-1").unwrap();
         let action = router.resolve("codex-1", "codex-1", 3, "conn-1");
-        assert!(matches!(action, RouterAction::Reject(RouterError::SelfSend)));
+        assert!(matches!(
+            action,
+            RouterAction::Reject(RouterError::SelfSend)
+        ));
     }
 
     #[test]
@@ -255,7 +265,10 @@ mod tests {
         router.register(None, &AgentType::Codex, "conn-1").unwrap();
         router.register(None, &AgentType::Claude, "conn-2").unwrap();
         let action = router.resolve("claude-1", "codex-1", 0, "conn-2");
-        assert!(matches!(action, RouterAction::Reject(RouterError::HopsExhausted)));
+        assert!(matches!(
+            action,
+            RouterAction::Reject(RouterError::HopsExhausted)
+        ));
     }
 
     #[test]
@@ -271,8 +284,13 @@ mod tests {
     #[test]
     fn test_rename_replaces_the_lookup_key() {
         let mut router = Router::new();
-        router.register(Some("avant"), &AgentType::Codex, "conn-1").unwrap();
-        assert_eq!(router.rename("conn-1", "apres").unwrap(), ("avant".into(), "apres".into()));
+        router
+            .register(Some("avant"), &AgentType::Codex, "conn-1")
+            .unwrap();
+        assert_eq!(
+            router.rename("conn-1", "apres").unwrap(),
+            ("avant".into(), "apres".into())
+        );
         assert!(router.get_agent("avant").is_none());
         assert_eq!(router.get_agent("apres").unwrap().connection_id, "conn-1");
     }
