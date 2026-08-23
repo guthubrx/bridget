@@ -217,18 +217,10 @@ impl Store {
         msg: &bridget_core::BridgetMessage,
         conversation_key: &str,
     ) -> Result<(), StoreError> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
-        self.conn
-            .execute(
-                "INSERT OR REPLACE INTO ledger (id, ts, sender, target, body, conversation_key) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![msg.id, now, msg.from, msg.to, msg.body, conversation_key,],
-            )
+        let transaction = self.conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        record_message_in_transaction(&transaction, msg, conversation_key)
             .map_err(StoreError::Sqlite)?;
+        transaction.commit().map_err(StoreError::Sqlite)?;
         Ok(())
     }
 
@@ -337,6 +329,28 @@ pub(crate) fn mark_answered_in_transaction(
         rusqlite::params![now_secs(), id, recipient, responder],
     )?;
     Ok(changed == 1)
+}
+
+/// Insère le message livré dans le ledger sans quitter la transaction en
+/// cours. La clé `(id, target)` rend une reprise du même message idempotente.
+pub(crate) fn record_message_in_transaction(
+    transaction: &Transaction<'_>,
+    msg: &bridget_core::BridgetMessage,
+    conversation_key: &str,
+) -> Result<(), rusqlite::Error> {
+    transaction.execute(
+        "INSERT OR REPLACE INTO ledger (id, ts, sender, target, body, conversation_key)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            msg.id,
+            now_secs(),
+            msg.from,
+            msg.to,
+            msg.body,
+            conversation_key,
+        ],
+    )?;
+    Ok(())
 }
 
 fn now_secs() -> i64 {

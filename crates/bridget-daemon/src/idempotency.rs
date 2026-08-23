@@ -1022,16 +1022,20 @@ impl IdempotencyStore {
             params![row.0, row.1],
         )?;
         if delivery != 1 || record != 1 { return Err(IdempotencyError::DispatchUnavailable); }
-        let answered_request = if let Some(message) = message
-            && let Some(request_id) = message.in_reply_to.as_deref()
-        {
-            let changed = crate::store::mark_answered_in_transaction(
-                &tx,
-                request_id,
-                &message.from,
-                &message.to,
-            )?;
-            changed.then(|| request_id.to_string())
+        let answered_request = if let Some(message) = message {
+            let conversation_key = format!("{}|{}", message.from, message.to);
+            crate::store::record_message_in_transaction(&tx, &message, &conversation_key)?;
+            if let Some(request_id) = message.in_reply_to.as_deref() {
+                let changed = crate::store::mark_answered_in_transaction(
+                    &tx,
+                    request_id,
+                    &message.from,
+                    &message.to,
+                )?;
+                changed.then(|| request_id.to_string())
+            } else {
+                None
+            }
         } else {
             None
         };

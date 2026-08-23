@@ -893,6 +893,47 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
 
     let accepted = mcp.request(call(3, "request-a"));
     assert_eq!(accepted["result"]["structuredContent"]["status"], "accepted");
+    let tool_ledger = mcp.request(serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "bridget_ledger",
+            "arguments": { "view": "messages", "limit": 20 }
+        }
+    }));
+    let tool_messages = tool_ledger["result"]["structuredContent"]["messages"]
+        .as_array()
+        .expect("projection MCP messages");
+    assert_eq!(
+        tool_messages
+            .iter()
+            .filter(|entry| entry["id"] == "mcp-linked-retry")
+            .count(),
+        1,
+        "le retry idempotent ne doit pas dupliquer le ledger MCP"
+    );
+    let cli_ledger = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .arg("ledger")
+        .env("HOME", &root)
+        .output()
+        .expect("ledger CLI exécuté");
+    assert!(cli_ledger.status.success(), "ledger CLI: {cli_ledger:?}");
+    let cli_output = String::from_utf8(cli_ledger.stdout).expect("ledger CLI UTF-8");
+    assert!(
+        cli_output.contains("réponse MCP liée"),
+        "le renderer CLI doit exposer l'envoi MCP livré: {cli_output}"
+    );
+    assert_eq!(
+        store
+            .recent_messages(20)
+            .expect("ledger persistant lisible")
+            .iter()
+            .filter(|entry| entry.id == "mcp-linked-retry")
+            .count(),
+        1,
+        "le ledger persistant ne contient qu'une remise acquittée"
+    );
     let before_a = store
         .get_request("request-a")
         .expect("demande A lisible")
@@ -904,7 +945,7 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
     assert_eq!(before_a.state, "answered");
     assert_eq!(before_b.state, "open");
 
-    let mismatch = mcp.request(call(4, "request-b"));
+    let mismatch = mcp.request(call(5, "request-b"));
     assert_eq!(
         mismatch["result"]["structuredContent"]["status"],
         "envelope_mismatch"
