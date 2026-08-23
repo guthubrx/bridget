@@ -28,6 +28,7 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::fmt;
 use std::fs;
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -422,6 +423,8 @@ fn run_profile(arguments: ProfileArgs) -> Result<String, CliError> {
                 &proposal.approval.profile_id,
                 &arguments.definition,
             )?;
+            let screen = ApprovalScreenOutput::from(screen);
+            confirm_local_profile_approval(approval_id, &screen)?;
             let activation = approve_profile_activation(
                 &mut store,
                 &proposal,
@@ -443,12 +446,58 @@ fn run_profile(arguments: ProfileArgs) -> Result<String, CliError> {
                     approval_id,
                     command_id: activation.command_id,
                     actor: "local_human",
-                    screen: ApprovalScreenOutput::from(screen),
+                    screen,
                 },
-                arguments.json,
+                false,
             )
         }
     }
+}
+
+/// L'approbation n'est volontairement disponible que depuis un vrai terminal
+/// local. Les options CLI sont donc insuffisantes à elles seules : l'humain
+/// voit les champs neutralisés puis tape une confirmation explicite.
+fn confirm_local_profile_approval(
+    approval_id: Uuid,
+    screen: &ApprovalScreenOutput,
+) -> Result<(), CliError> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err(CliError::Usage(
+            "approbation = terminal interactif uniquement",
+        ));
+    }
+    let args = serde_json::to_string(&screen.args)
+        .map_err(|_| CliError::Usage("arguments d'approbation illisibles"))?;
+    let forbidden_env = serde_json::to_string(&screen.forbidden_env)
+        .map_err(|_| CliError::Usage("environnement d'approbation illisible"))?;
+    let mut output = io::stdout().lock();
+    writeln!(output, "Approbation locale du profil :")
+        .map_err(|_| CliError::Usage("écran d'approbation indisponible"))?;
+    writeln!(output, "  profil={}", screen.display_name)
+        .map_err(|_| CliError::Usage("écran d'approbation indisponible"))?;
+    writeln!(output, "  type={} modèle={} effort={}", screen.agent_type, screen.model, screen.effort)
+        .map_err(|_| CliError::Usage("écran d'approbation indisponible"))?;
+    writeln!(output, "  command={}", screen.command)
+        .map_err(|_| CliError::Usage("écran d'approbation indisponible"))?;
+    writeln!(output, "  args={args}")
+        .map_err(|_| CliError::Usage("écran d'approbation indisponible"))?;
+    writeln!(output, "  forbidden_env={forbidden_env}")
+        .map_err(|_| CliError::Usage("écran d'approbation indisponible"))?;
+    write!(output, "Tapez oui pour approuver {approval_id} : ")
+        .map_err(|_| CliError::Usage("écran d'approbation indisponible"))?;
+    output
+        .flush()
+        .map_err(|_| CliError::Usage("écran d'approbation indisponible"))?;
+    drop(output);
+
+    let mut confirmation = String::new();
+    io::stdin()
+        .read_line(&mut confirmation)
+        .map_err(|_| CliError::Usage("confirmation locale illisible"))?;
+    if confirmation.trim() != "oui" {
+        return Err(CliError::Usage("approbation locale refusée"));
+    }
+    Ok(())
 }
 
 fn approval_screen(
@@ -707,8 +756,7 @@ fn parse_profile_approve(
         .map_err(|_| CliError::Usage("identifiant approbation UUID invalide"))?;
     let mut config = None;
     let mut definition = None;
-    let mut confirmed = false;
-    let mut json = false;
+    let json = false;
     let mut index = 0;
     while index < tail.len() {
         match tail[index].as_str() {
@@ -720,24 +768,9 @@ fn parse_profile_approve(
                 &mut definition,
                 next_value(tail, &mut index, "--definition")?,
             )?,
-            "--confirm" => {
-                if confirmed {
-                    return Err(CliError::Usage("option --confirm dupliquée"));
-                }
-                confirmed = true;
-            }
-            "--json" => {
-                if json {
-                    return Err(CliError::Usage("option --json dupliquée"));
-                }
-                json = true;
-            }
             _ => return Err(CliError::Usage("option profile approve inconnue")),
         }
         index += 1;
-    }
-    if !confirmed {
-        return Err(CliError::Usage("--confirm est obligatoire"));
     }
     Ok((ProfileAction::Approve { approval_id }, config, definition, json))
 }

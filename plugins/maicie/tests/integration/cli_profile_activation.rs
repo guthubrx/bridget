@@ -1,9 +1,11 @@
 use maicie::store::MaicieStore;
 use serde_json::{Value, json};
 use std::fs;
+use std::io::{Read, Write};
+use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
 use uuid::Uuid;
 
 #[test]
@@ -49,29 +51,32 @@ fn profile_propose_puis_approve_expose_le_consentement_local_et_l_outbox() {
         &approval_id,
         "--definition",
         fixture.definition.to_str().unwrap(),
-        "--json",
     ]);
     assert!(!refused.status.success());
-    assert!(String::from_utf8_lossy(&refused.stderr).contains("--confirm est obligatoire"));
+    assert!(String::from_utf8_lossy(&refused.stderr)
+        .contains("approbation = terminal interactif uniquement"));
 
-    let approved = fixture.run(&[
+    let scripted = fixture.run(&[
         "profile",
         "approve",
         &approval_id,
         "--definition",
         fixture.definition.to_str().unwrap(),
         "--confirm",
-        "--json",
     ]);
+    assert!(!scripted.status.success());
+    assert!(String::from_utf8_lossy(&scripted.stderr)
+        .contains("option profile approve inconnue"));
+
+    let (status, rendered) = fixture.approve_in_pseudo_tty(&approval_id, "oui\n");
     assert!(
-        approved.status.success(),
-        "{}",
-        String::from_utf8_lossy(&approved.stderr)
+        status.success(),
+        "{rendered}"
     );
-    let approved: Value = serde_json::from_slice(&approved.stdout).unwrap();
-    assert_eq!(approved["kind"], "approved");
-    assert_eq!(approved["actor"], "local_human");
-    assert_eq!(approved["screen"]["args"], json!(["--model", "claude-fable-5"]));
+    assert!(rendered.contains("Approbation locale du profil"));
+    assert!(rendered.contains("args=[\"--model\",\"claude-fable-5\"]"));
+    assert!(rendered.contains("Tapez oui pour approuver"));
+    assert!(rendered.contains("actor=local_human"));
     let pending = MaicieStore::open(&fixture.database)
         .unwrap()
         .pending_activation_outboxes()
@@ -149,6 +154,107 @@ impl Fixture {
         command.args(tail);
         command.args(["--config", self.config.to_str().unwrap()]);
         command.output().unwrap()
+    }
+
+    fn approve_in_pseudo_tty(&self, approval_id: &str, confirmation: &str) -> (ExitStatus, String) {
+        let pseudo_tty = PseudoTerminal::open();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_maicie"));
+        command.args([
+            "profile",
+            "approve",
+            approval_id,
+            "--definition",
+            self.definition.to_str().unwrap(),
+            "--config",
+            self.config.to_str().unwrap(),
+        ]);
+        command
+            .stdin(Stdio::from(pseudo_tty.slave_file()))
+            .stdout(Stdio::from(pseudo_tty.slave_file()))
+            .stderr(Stdio::from(pseudo_tty.slave_file()));
+        let mut child = command.spawn().unwrap();
+        pseudo_tty.write_all(confirmation.as_bytes());
+        let status = child.wait().unwrap();
+        (status, String::from_utf8_lossy(&pseudo_tty.read_available()).into_owned())
+    }
+}
+
+/// Réutilise le motif `openpty` des tests attach du chantier : le test traverse
+/// le binaire avec stdin et stdout réellement TTY, sans simuler la branche de
+/// sécurité dans le processus parent.
+struct PseudoTerminal {
+    master: RawFd,
+    slave: RawFd,
+}
+
+impl PseudoTerminal {
+    fn open() -> Self {
+        let mut master = -1;
+        let mut slave = -1;
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0,
+            "openpty: {}",
+            std::io::Error::last_os_error()
+        );
+        Self { master, slave }
+    }
+
+    fn slave_file(&self) -> fs::File {
+        let fd = unsafe { libc::dup(self.slave) };
+        assert!(fd >= 0, "dup slave: {}", std::io::Error::last_os_error());
+        unsafe { fs::File::from_raw_fd(fd) }
+    }
+
+    fn write_all(&self, bytes: &[u8]) {
+        let fd = unsafe { libc::dup(self.master) };
+        assert!(fd >= 0, "dup master: {}", std::io::Error::last_os_error());
+        let mut file = unsafe { fs::File::from_raw_fd(fd) };
+        file.write_all(bytes).unwrap();
+        file.flush().unwrap();
+    }
+
+    fn read_available(&self) -> Vec<u8> {
+        let fd = unsafe { libc::dup(self.master) };
+        assert!(fd >= 0, "dup master: {}", std::io::Error::last_os_error());
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        assert!(flags >= 0, "fcntl F_GETFL: {}", std::io::Error::last_os_error());
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0,
+            "fcntl F_SETFL: {}",
+            std::io::Error::last_os_error()
+        );
+        let mut file = unsafe { fs::File::from_raw_fd(fd) };
+        let mut output = Vec::new();
+        loop {
+            let mut chunk = [0_u8; 4096];
+            match file.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => output.extend_from_slice(&chunk[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("lecture pseudo-TTY: {error}"),
+            }
+        }
+        output
+    }
+}
+
+impl Drop for PseudoTerminal {
+    fn drop(&mut self) {
+        for fd in [self.master, self.slave] {
+            if fd >= 0 {
+                assert_eq!(unsafe { libc::close(fd) }, 0);
+            }
+        }
     }
 }
 
