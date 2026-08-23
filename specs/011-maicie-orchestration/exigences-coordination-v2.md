@@ -208,10 +208,18 @@ fleet.json, replay de contexte automatique au-delà de la carte de réveil.
   auparavant, après un reboot machine, zéro équipier géré ne revenait : la condition (b) de la
   revue reprise-crash est fausse aujourd'hui, empiriquement. Doctrine à
   adopter : --persistent par défaut pour les équipiers d'équipe.
-- **Pas de détection de binaire périmé** : le daemon a tourné 8h40 sur un
-  binaire chargé avant le correctif sécurité mergé 36 min plus tard ; rien ne
-  signale l'écart binaire-sur-disque vs binaire-en-mémoire. Candidat : build-id
-  dans `who`/status + avertissement de décalage au premier contact.
+- **Binaire périmé : détection ET rituel** (incident ×2 le 2026-08-23 — 8h40
+  de retard l'après-midi, puis le daemon pré-014 servant encore le refus
+  menteur le soir même, DEUX HEURES après le merge du correctif). Deux
+  volets : (1) DÉTECTION — build-id (hash git) embarqué à la compilation,
+  échangé au hello ; tout client dont le build-id diverge de celui du daemon
+  affiche un avertissement franc « daemon périmé (X vs Y) : launchctl
+  kickstart -k … » ; le même écart apparaît dans who/status ; (2) RITUEL de
+  clôture de session — quand un merge touche les crates daemon/wrapper, le
+  redémarrage du daemon fait partie de la checklist de clôture, au même titre
+  que le rebuild ; consigné comme étape, pas comme souvenir. La résurrection
+  automatique des persistants (validée en production ce soir : fable-reviewer
+  gen-11) rend ce redémarrage indolore.
 - **Vue attach : générations mélangées et titres d'adaptateur nus** (séance
   d'observation utilisateur, 2026-08-23 soir) : le journal par nom+jour rejoue
   l'archéologie du prédécesseur sans délimiteur (« inconnu »/UTC = vieux
