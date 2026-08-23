@@ -192,8 +192,9 @@ fleet.json, replay de contexte automatique au-delà de la carte de réveil.
   runtime codex-only). Ajouter une colonne mode (acp/tmux/cli) et étendre la
   sonde aux claude.
 - **Aucun équipier persistant en pratique** (constaté 2026-08-23 soir) :
-  fleet.json n'existe pas — aucun spawn n'a jamais utilisé --persistent. Après
-  un reboot machine, zéro équipier géré ne revient : la condition (b) de la
+  avant le 2026-08-23 21h, aucun spawn n'avait jamais utilisé --persistent
+  (fleet.json créé ce soir-là par le premier spawn persistant — fable-reviewer) ;
+  auparavant, après un reboot machine, zéro équipier géré ne revenait : la condition (b) de la
   revue reprise-crash est fausse aujourd'hui, empiriquement. Doctrine à
   adopter : --persistent par défaut pour les équipiers d'équipe.
 - **Pas de détection de binaire périmé** : le daemon a tourné 8h40 sur un

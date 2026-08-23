@@ -2,7 +2,7 @@
 
 **Feature Branch**: `session-06-identite-agent-robuste`
 **Created**: 2026-08-17
-**Status**: Obsolète — besoin couvert par la filiation agent-pids livrée en sessions 008-010 (identité stable vérifiée en production le 2026-08-23) ; commit exploratoire 4e121fc archivé en patch local
+**Status**: Obsolète — besoin couvert par la filiation agent-pids livrée en sessions 008-010 (identité stable vérifiée en production le 2026-08-23) ; commit exploratoire 4e121fc archivé en patch local ET conservé sur origin/session-06-identite-agent-robuste
 **Input**: défaut constaté en usage réel — un agent qui envoie un message par
 `bridget send` apparaît parfois sous un nom jetable `cli-send-<pid>`, ce qui rend
 toute réponse impossible.
