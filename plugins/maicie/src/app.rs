@@ -46,6 +46,34 @@ pub enum DirectMessageRoute {
     AddressedToMaicie,
 }
 
+/// Enregistrement immuable d'un message libre réellement destiné à Maicie.
+/// Il conserve le corps tel quel, sans en déduire une intention d'objectif.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationRecord {
+    pub sender: String,
+    pub body: String,
+}
+
+/// Aide locale structurée : elle décrit la seule commande mutante disponible,
+/// mais ne construit ni n'émet jamais un message Bridget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConversationHelp {
+    pub command: &'static str,
+    pub usage: &'static str,
+}
+
+/// Résultat fermé du traitement d'un message direct. Ce type ne contient
+/// aucun ordre de transport : une conversation ne peut pas devenir une
+/// délégation ou une réponse réseau implicite.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirectMessageHandling {
+    IgnoredOutsideMaicie,
+    Conversation {
+        record: ConversationRecord,
+        help: ConversationHelp,
+    },
+}
+
 /// Garde structurel de la frontière conversationnelle : cette fonction est
 /// pure et ne peut ni créer objectif/délégation, ni construire un envoi
 /// Bridget. Une délégation reste exclusivement créée par [`delegate`].
@@ -57,6 +85,28 @@ pub fn route_direct_message(
         DirectMessageRoute::AddressedToMaicie
     } else {
         DirectMessageRoute::OutsideMaicie
+    }
+}
+
+/// Traite un message libre destiné à Maicie comme une conversation locale
+/// immuable. La création d'objectif reste exclusivement derrière la commande
+/// explicite [`delegate`].
+pub fn handle_direct_message(
+    message: &DirectBridgetMessage<'_>,
+    maicie_identity: &str,
+) -> DirectMessageHandling {
+    match route_direct_message(message, maicie_identity) {
+        DirectMessageRoute::OutsideMaicie => DirectMessageHandling::IgnoredOutsideMaicie,
+        DirectMessageRoute::AddressedToMaicie => DirectMessageHandling::Conversation {
+            record: ConversationRecord {
+                sender: message.from.to_string(),
+                body: message.body.to_string(),
+            },
+            help: ConversationHelp {
+                command: "maicie delegate",
+                usage: "maicie delegate --goal <texte> [--to <agent>] [--duration courte|normale|longue]",
+            },
+        },
     }
 }
 
