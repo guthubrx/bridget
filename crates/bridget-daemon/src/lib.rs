@@ -1,4 +1,5 @@
 pub mod attach;
+pub mod build_info;
 pub mod cli;
 pub mod daemon;
 pub mod desired_state;

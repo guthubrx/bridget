@@ -3601,6 +3601,7 @@ fn handle_wrapper_message(
             );
             Some(DaemonToWrapper::ClientWelcome {
                 version: CLIENT_CONTRACT_VERSION,
+                build_id: crate::build_info::BUILD_ID.to_string(),
                 horizon_secs: CLIENT_IDEMPOTENCY_HORIZON_SECS,
                 issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
                 capabilities,
@@ -4716,6 +4717,8 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
         return DaemonStatus::default();
     }
 
+    let build_id = daemon_build_id(&config.socket_path);
+
     let stream = match UnixStream::connect(&config.socket_path) {
         Ok(s) => s,
         Err(_) => return DaemonStatus::default(),
@@ -4795,6 +4798,42 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
         running: true,
         agents,
         message_count,
+        build_id,
+    }
+}
+
+fn daemon_build_id(socket_path: &std::path::Path) -> Option<String> {
+    use std::io::{BufRead, BufReader, BufWriter, Write};
+    use std::os::unix::net::UnixStream;
+
+    let stream = UnixStream::connect(socket_path).ok()?;
+    let read_stream = stream.try_clone().ok()?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    writeln!(writer, "{}", encode(&WrapperToDaemon::RoleHandshake {
+        role: ConnectionRole::Client,
+    }).ok()?).ok()?;
+    writer.flush().ok()?;
+    let mut line = String::new();
+    if reader.read_line(&mut line).ok()? == 0 {
+        return None;
+    }
+    if !matches!(decode(line.trim()).ok()?, DaemonToWrapper::RoleAccepted { role: ConnectionRole::Client }) {
+        return None;
+    }
+    writeln!(writer, "{}", encode(&WrapperToDaemon::ClientHello {
+        contract_version: CLIENT_CONTRACT_VERSION,
+        issuer_scope: "status_build_id_probe".to_string(),
+        capabilities: Vec::new(),
+    }).ok()?).ok()?;
+    writer.flush().ok()?;
+    line.clear();
+    match reader.read_line(&mut line).ok()? {
+        0 => None,
+        _ => match decode(line.trim()).ok()? {
+            DaemonToWrapper::ClientWelcome { build_id, .. } => Some(build_id),
+            _ => None,
+        },
     }
 }
 
@@ -4803,6 +4842,7 @@ pub struct DaemonStatus {
     pub running: bool,
     pub agents: Vec<bridget_transport::protocol::AgentInfo>,
     pub message_count: usize,
+    pub build_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -5790,10 +5830,12 @@ mod presence_tests {
             response,
             Some(DaemonToWrapper::ClientWelcome {
                 version: CLIENT_CONTRACT_VERSION,
+                build_id,
                 horizon_secs: CLIENT_IDEMPOTENCY_HORIZON_SECS,
                 issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
                 capabilities,
-            }) if capabilities == vec![ClientCapability::SendIdempotent, ClientCapability::Lookup]
+            }) if build_id == crate::build_info::BUILD_ID
+                && capabilities == vec![ClientCapability::SendIdempotent, ClientCapability::Lookup]
         ));
         let negotiated = shared
             .lock()

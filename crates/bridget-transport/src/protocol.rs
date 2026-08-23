@@ -478,6 +478,8 @@ pub enum DaemonToWrapper {
     /// Contrat et capacités réellement négociés avec un client public.
     ClientWelcome {
         version: u16,
+        #[serde(default = "unknown_build_id")]
+        build_id: String,
         horizon_secs: i64,
         issued_at_tolerance_secs: i64,
         capabilities: Vec<ClientCapability>,
@@ -604,6 +606,10 @@ pub enum DaemonToWrapper {
         messages: Vec<LedgerMessage>,
         requests: Vec<RequestInfo>,
     },
+}
+
+fn unknown_build_id() -> String {
+    "unknown".to_string()
 }
 
 /// Sous-ensembles fermés de la projection de lecture du ledger.
@@ -1001,6 +1007,7 @@ mod tests {
         );
         let welcome = DaemonToWrapper::ClientWelcome {
             version: CLIENT_CONTRACT_VERSION,
+            build_id: "fixture-build".to_string(),
             horizon_secs: 60,
             issued_at_tolerance_secs: 5,
             capabilities: vec![ClientCapability::Lookup],
@@ -1010,9 +1017,10 @@ mod tests {
             decoded,
             DaemonToWrapper::ClientWelcome {
                 version: CLIENT_CONTRACT_VERSION,
+                build_id,
                 capabilities,
                 ..
-            } if capabilities == vec![ClientCapability::Lookup]
+            } if build_id == "fixture-build" && capabilities == vec![ClientCapability::Lookup]
         ));
         let result = DaemonToWrapper::IdempotencyResult {
             operation_kind: "send".to_string(),
@@ -1034,6 +1042,18 @@ mod tests {
             } if operation_kind == "send" && idempotency_key == "message-1" && delivery_id == "delivery-1"
         ));
         assert!(!welcome.allowed_for_attach());
+    }
+
+    #[test]
+    fn client_welcome_historique_signale_un_build_id_inconnu() {
+        let decoded: DaemonToWrapper = decode(
+            r#"{"type":"ClientWelcome","version":1,"horizon_secs":60,"issued_at_tolerance_secs":5,"capabilities":[]}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            decoded,
+            DaemonToWrapper::ClientWelcome { build_id, .. } if build_id == "unknown"
+        ));
     }
 
     #[test]
