@@ -1,0 +1,51 @@
+{
+  "mode_objectif": [
+    "collaboratif",
+    "delegue"
+  ],
+  "etat_objectif": [
+    "ouvert",
+    "en_coordination",
+    "a_evaluer",
+    "synthetise",
+    "clos"
+  ],
+  "classe_duree": [
+    "courte",
+    "normale",
+    "longue"
+  ],
+  "etat_delegation": [
+    "creee",
+    "a_evaluer",
+    "terminee",
+    "annulee"
+  ],
+  "etat_outbox_delegation": [
+    "prepared",
+    "outcome_unknown",
+    "accepted"
+  ],
+  "source_snapshot": [
+    "bridget",
+    "acp_subscription"
+  ],
+  "etat_flux": [
+    "fresh",
+    "gap",
+    "ended",
+    "unavailable"
+  ],
+  "etat_activation_profil": [
+    "inactif",
+    "proposition",
+    "approuve",
+    "lance",
+    "connecte"
+  ],
+  "etat_activation_outbox": [
+    "dispatching",
+    "outcome_unknown",
+    "applied"
+  ]
+}

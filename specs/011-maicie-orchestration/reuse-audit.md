@@ -31,6 +31,7 @@ contrats publics sessions 008 et 009 sont des gates avant leurs lots respectifs.
 | Annuaire | ListAgents/AgentInfo | `crates/bridget-transport/src/protocol.rs:47-48,129-170` | sélection déterministe par tags |
 | Abonnement runtime | Subscribe/Seq/Gap/End session 008 | `specs/008-attach/contracts/abonnement-attach.md` | gate obligatoire, aucune lecture interne |
 | Lifecycle agent | SpawnOrder session 009 | `specs/009-daemon-spawn/` | gate obligatoire, aucun spawn Maicie |
+| Budget I/O client public | `libc` déjà employé par Bridget | `crates/bridget-transport/Cargo.toml:15`, `crates/bridget-daemon/Cargo.toml:28` | `libc.workspace = true` pour le connect non bloquant/pollé de T004 ; la bibliothèque standard ne fournit pas cette borne portable macOS |
 
 ## Existant potentiellement pertinent non mentionne
 
