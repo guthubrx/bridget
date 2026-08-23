@@ -55,3 +55,9 @@ Le premier passage a refusé `reply=true` avec `reply_sender_unavailable` :
 Maicie est un client public durable, non un wrapper Bridget joignable. Le MVP
 émet donc sans demande de réponse ; T015b devra fournir une identité Maicie
 connectée avant d'activer une corrélation de réponse.
+
+## Dérogation T017-2
+
+La validation complète est bloquée par
+`reprise_lente_sur_toutes_les_phases_reste_dans_le_budget_global`, rouge
+reproductible hors runtime (assertion `SendIdempotent` suivie d'un

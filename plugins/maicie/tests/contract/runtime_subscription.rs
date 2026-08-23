@@ -11,6 +11,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
+use std::time::{Duration, Instant};
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
@@ -81,8 +82,14 @@ fn consomme_fragments_gap_et_fin_uniquement_via_subscribe_public() {
     });
 
     let client = BridgetClient::connect(fixture.path(), "maicie-instance-runtime").unwrap();
-    let mut runtime =
-        RuntimeSubscription::open(&client, "prospective", AttachWindow::Today).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut runtime = RuntimeSubscription::open_until(
+        &client,
+        "prospective",
+        AttachWindow::Today,
+        deadline,
+    )
+    .unwrap();
     assert_eq!(runtime.subscription_id(), "sub-7");
     assert_eq!(
         runtime.stream_state(),
@@ -90,7 +97,7 @@ fn consomme_fragments_gap_et_fin_uniquement_via_subscribe_public() {
         "Subscribed seul ne rend pas la vue fraîche"
     );
 
-    let RuntimeSignal::Observation(observation) = runtime.next_signal().unwrap() else {
+    let RuntimeSignal::Observation(observation) = runtime.next_signal_until(deadline).unwrap() else {
         panic!("le premier signal doit être une observation factuelle");
     };
     assert_eq!(observation.agent, "prospective");
@@ -113,7 +120,7 @@ fn consomme_fragments_gap_et_fin_uniquement_via_subscribe_public() {
     );
 
     assert!(matches!(
-        runtime.next_signal().unwrap(),
+        runtime.next_signal_until(deadline).unwrap(),
         RuntimeSignal::SnapshotCaughtUp {
             through_seq: Some(7),
             ..
@@ -121,7 +128,7 @@ fn consomme_fragments_gap_et_fin_uniquement_via_subscribe_public() {
     ));
     assert_eq!(runtime.stream_state(), EtatFlux::Fresh);
     assert!(matches!(
-        runtime.next_signal().unwrap(),
+        runtime.next_signal_until(deadline).unwrap(),
         RuntimeSignal::Gap {
             from_seq: 8,
             to_seq: 9,
@@ -129,7 +136,7 @@ fn consomme_fragments_gap_et_fin_uniquement_via_subscribe_public() {
         }
     ));
     assert_eq!(runtime.stream_state(), EtatFlux::Gap);
-    let RuntimeSignal::Observation(after_gap) = runtime.next_signal().unwrap() else {
+    let RuntimeSignal::Observation(after_gap) = runtime.next_signal_until(deadline).unwrap() else {
         panic!("une ligne valide après Gap reste une observation, pas une guérison implicite");
     };
     assert_eq!(after_gap.seq, 10);
@@ -144,7 +151,7 @@ fn consomme_fragments_gap_et_fin_uniquement_via_subscribe_public() {
         "Gap doit rester visible jusqu'à une nouvelle souscription"
     );
     assert!(matches!(
-        runtime.next_signal().unwrap(),
+        runtime.next_signal_until(deadline).unwrap(),
         RuntimeSignal::End { ref reason, .. } if reason == "wrapper_parti"
     ));
     assert_eq!(runtime.stream_state(), EtatFlux::Ended);

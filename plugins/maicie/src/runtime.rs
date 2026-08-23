@@ -12,6 +12,7 @@ use crate::domain::{EtatFlux, SourceSnapshot};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt;
+use std::time::Instant;
 
 /// Borne de réassemblage imposée par le contrat Attach session 008.
 pub const MAX_REASSEMBLED_EVENT_BYTES: usize = 4 * 1024 * 1024;
@@ -129,12 +130,30 @@ impl RuntimeSubscription {
         agent: impl Into<String>,
         initial_window: AttachWindow,
     ) -> Result<Self, RuntimeError> {
+        let limits = client.limits();
+        Self::open_until(
+            client,
+            agent,
+            initial_window,
+            Instant::now() + limits.connect_timeout + limits.io_timeout * 3,
+        )
+    }
+
+    /// Ouvre une génération Attach dans le budget global de la consultation.
+    /// Une souscription confirmée n'est pas encore fraîche : seule la trame
+    /// `SnapshotCaughtUp` de cette génération peut lever cet état incomplet.
+    pub fn open_until(
+        client: &BridgetClient,
+        agent: impl Into<String>,
+        initial_window: AttachWindow,
+        deadline: Instant,
+    ) -> Result<Self, RuntimeError> {
         let agent = agent.into();
         if agent.trim().is_empty() {
             return Err(RuntimeError::Protocol("agent Attach vide".to_string()));
         }
-        let mut subscription = client.subscribe(&agent, initial_window.clone())?;
-        let subscription_id = match subscription.next_event()? {
+        let mut subscription = client.subscribe_until(&agent, initial_window.clone(), deadline)?;
+        let subscription_id = match subscription.next_event_until(deadline)? {
             SubscriptionEvent::Subscribed { subscription_id } => subscription_id,
             event => {
                 return Err(RuntimeError::Protocol(format!(
@@ -186,6 +205,25 @@ impl RuntimeSubscription {
 
         loop {
             let event = self.subscription.next_event()?;
+            if !matches_subscription(&event, &self.subscription_id) {
+                continue;
+            }
+            if let Some(signal) = self.handle_event(event)? {
+                return Ok(signal);
+            }
+        }
+    }
+
+    /// Lit le prochain signal sans dépasser l'échéance absolue fournie par
+    /// l'appelant. Chaque lecture consomme le budget restant ; il n'est jamais
+    /// réinitialisé entre les fragments d'une même consultation.
+    pub fn next_signal_until(&mut self, deadline: Instant) -> Result<RuntimeSignal, RuntimeError> {
+        if self.stream_state == EtatFlux::Ended {
+            return Err(RuntimeError::Ended);
+        }
+
+        loop {
+            let event = self.subscription.next_event_until(deadline)?;
             if !matches_subscription(&event, &self.subscription_id) {
                 continue;
             }
