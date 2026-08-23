@@ -33,7 +33,7 @@ fn migrations_idempotentes_et_base_privee() {
     let database = root.join("maicie.sqlite3");
     let first_scope = {
         let store = MaicieStore::open(&database).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 4);
+        assert_eq!(store.schema_version().unwrap(), 5);
         store.issuer_scope().to_string()
     };
     let connection = rusqlite::Connection::open(&database).unwrap();
@@ -43,7 +43,7 @@ fn migrations_idempotentes_et_base_privee() {
         .unwrap();
     drop(connection);
     let reopened = MaicieStore::open(&database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 4);
+    assert_eq!(reopened.schema_version().unwrap(), 5);
     assert_eq!(reopened.issuer_scope(), first_scope);
     assert_eq!(mode(&root), 0o700);
     assert_eq!(mode(&database), 0o600);
@@ -56,7 +56,7 @@ fn schema_futur_et_enveloppe_corrompue_sont_refuses_fail_closed() {
     let future_database = future_root.join("maicie.sqlite3");
     drop(MaicieStore::open(&future_database).unwrap());
     let connection = rusqlite::Connection::open(&future_database).unwrap();
-    connection.pragma_update(None, "user_version", 5).unwrap();
+    connection.pragma_update(None, "user_version", 6).unwrap();
     drop(connection);
     assert!(MaicieStore::open(&future_database).is_err());
     fs::remove_dir_all(future_root).unwrap();
@@ -176,7 +176,7 @@ fn migration_v1_convertit_un_refus_terminal_historique_en_rejected() {
     drop(connection);
 
     let store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 4);
+    assert_eq!(store.schema_version().unwrap(), 5);
     let snapshot = store.recovery_snapshot(uuid(MESSAGE_ID)).unwrap().unwrap();
     assert_eq!(snapshot.outbox.state, EtatOutboxDelegation::Rejected);
     assert_eq!(snapshot.last_issue.unwrap()["kind"], "invalid_issued_at");
@@ -185,7 +185,7 @@ fn migration_v1_convertit_un_refus_terminal_historique_en_rejected() {
 }
 
 #[test]
-fn migration_v2_vers_v4_conserve_les_donnees_historiques_et_cree_l_activation() {
+fn migration_v2_vers_v5_conserve_les_donnees_historiques_et_cree_les_tables_requises() {
     let root = unique_root("migration-activation");
     let database = root.join("maicie.sqlite3");
     let mut store = MaicieStore::open(&database).unwrap();
@@ -213,29 +213,29 @@ fn migration_v2_vers_v4_conserve_les_donnees_historiques_et_cree_l_activation() 
     drop(connection);
 
     let store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 4);
+    assert_eq!(store.schema_version().unwrap(), 5);
     let pending = store.pending_delegation_outboxes().unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].message_bytes, prepared.message_bytes);
     drop(store);
 
     let connection = rusqlite::Connection::open(&database).unwrap();
-    let activation_tables: i64 = connection
+    let required_tables: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master\n\
              WHERE type = 'table'\n\
-               AND name IN ('coordination_decisions', 'activation_approvals', 'activation_outbox')",
+               AND name IN ('coordination_decisions', 'activation_approvals', 'activation_outbox', 'delegate_idempotency')",
             [],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(activation_tables, 3);
+    assert_eq!(required_tables, 4);
     drop(connection);
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn migration_v3_vers_v4_ajoute_la_preuve_d_issue_activation() {
+fn migration_v3_vers_v5_ajoute_les_preuves_et_la_reservation_delegate() {
     let root = unique_root("migration-activation-issue");
     let database = root.join("maicie.sqlite3");
     drop(MaicieStore::open(&database).unwrap());
@@ -269,7 +269,7 @@ fn migration_v3_vers_v4_ajoute_la_preuve_d_issue_activation() {
     drop(connection);
 
     let store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 4);
+    assert_eq!(store.schema_version().unwrap(), 5);
     drop(store);
 
     let connection = rusqlite::Connection::open(&database).unwrap();
@@ -282,6 +282,14 @@ fn migration_v3_vers_v4_ajoute_la_preuve_d_issue_activation() {
         .unwrap();
     assert!(columns.contains(&"last_issue_json".to_string()));
     assert!(columns.contains(&"issue_observed_at".to_string()));
+    let delegate_table: String = connection
+        .query_row(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'delegate_idempotency'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(delegate_table, "delegate_idempotency");
     drop(connection);
     fs::remove_dir_all(root).unwrap();
 }
@@ -592,6 +600,10 @@ fn crash_reel_avant_et_apres_commit_respecte_l_atomicite() {
         let store = MaicieStore::open(root.join("maicie.sqlite3")).unwrap();
         let snapshot = store.recovery_snapshot(uuid(MESSAGE_ID)).unwrap();
         assert_eq!(snapshot.is_some(), committed, "frontière {phase}");
+        let replay = store
+            .lookup_delegate_replay("crash-reservation", b"delegate-v1")
+            .unwrap();
+        assert_eq!(replay.is_some(), committed, "réservation {phase}");
         if let Some(snapshot) = snapshot {
             assert_eq!(
                 snapshot.outbox.message_bytes,
@@ -669,12 +681,17 @@ fn crash_child() {
                 StoreCommitPhase::AfterCommit
             };
             store
-                .create_prepared_delegation_observed(&prepared, |phase| {
-                    if phase == barrier {
-                        block_at_barrier(&mode);
-                    }
-                    Ok(())
-                })
+                .lookup_or_reserve_delegate_observed(
+                    "crash-reservation",
+                    b"delegate-v1",
+                    &prepared,
+                    |phase| {
+                        if phase == barrier {
+                            block_at_barrier(&mode);
+                        }
+                        Ok(())
+                    },
+                )
                 .unwrap();
         }
         "before_send" | "after_send" => {

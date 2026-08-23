@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -52,6 +52,25 @@ pub struct MaicieStore {
     path: PathBuf,
     connection: Connection,
     issuer_scope: String,
+}
+
+/// Résultat durable d'une commande `delegate` idempotente. Les identifiants
+/// sont conservés séparément de l'outbox afin qu'un rejeu local ne dépende pas
+/// de la disponibilité du transport Bridget.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredDelegateResult {
+    pub objective_id: Uuid,
+    pub delegation_id: Uuid,
+    pub message_id: Uuid,
+    pub participant: String,
+    pub timeout_secs: u64,
+}
+
+/// Issue de la réservation atomique d'une commande `delegate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DelegateReservation {
+    Created,
+    Replay(StoredDelegateResult),
 }
 
 /// Motif local fermé quand les octets durables ne peuvent jamais produire une
@@ -189,6 +208,120 @@ impl MaicieStore {
         tx.commit().map_err(StoreError::Sql)?;
         observer(StoreCommitPhase::AfterCommit)?;
         Ok(())
+    }
+
+    /// Lit un résultat durable déjà réservé pour une clé de commande. Les
+    /// octets canoniques font partie de l'identité : une clé réemployée pour
+    /// une autre enveloppe est refusée sans écrire quoi que ce soit.
+    pub fn lookup_delegate_replay(
+        &self,
+        idempotency_key: &str,
+        canonical_request_bytes: &[u8],
+    ) -> Result<Option<StoredDelegateResult>, StoreError> {
+        validate_delegate_idempotency_key(idempotency_key)?;
+        let stored = self
+            .connection
+            .query_row(
+                "SELECT canonical_request_bytes, objective_id, delegation_id, message_id, participant, timeout_secs\n\
+                 FROM delegate_idempotency WHERE idempotency_key = ?1",
+                [idempotency_key],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        stored
+            .map(|stored| decode_delegate_result(stored, canonical_request_bytes))
+            .transpose()
+    }
+
+    /// Réserve dans la même transaction l'agrégat et son résultat de commande.
+    /// Le second lookup protège aussi une course entre le lookup optimiste du
+    /// cas d'usage et l'insertion effective.
+    pub fn lookup_or_reserve_delegate(
+        &mut self,
+        idempotency_key: &str,
+        canonical_request_bytes: &[u8],
+        prepared: &PreparedDelegation,
+    ) -> Result<DelegateReservation, StoreError> {
+        self.lookup_or_reserve_delegate_observed(
+            idempotency_key,
+            canonical_request_bytes,
+            prepared,
+            |_| Ok(()),
+        )
+    }
+
+    /// Variante instrumentable pour les crash-tests à la frontière de commit.
+    pub fn lookup_or_reserve_delegate_observed(
+        &mut self,
+        idempotency_key: &str,
+        canonical_request_bytes: &[u8],
+        prepared: &PreparedDelegation,
+        mut observer: impl FnMut(StoreCommitPhase) -> Result<(), StoreError>,
+    ) -> Result<DelegateReservation, StoreError> {
+        validate_delegate_idempotency_key(idempotency_key)?;
+        prepared.validate().map_err(StoreError::Outbox)?;
+        if prepared.issuer_scope != self.issuer_scope {
+            return Err(StoreError::Conflict(
+                "issuer_scope différent de l'identité durable du store",
+            ));
+        }
+
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        let stored = tx
+            .query_row(
+                "SELECT canonical_request_bytes, objective_id, delegation_id, message_id, participant, timeout_secs\n\
+                 FROM delegate_idempotency WHERE idempotency_key = ?1",
+                [idempotency_key],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        if let Some(stored) = stored {
+            return decode_delegate_result(stored, canonical_request_bytes)
+                .map(DelegateReservation::Replay);
+        }
+
+        insert_prepared(&tx, prepared)?;
+        tx.execute(
+            "INSERT INTO delegate_idempotency(\n\
+                 idempotency_key, canonical_request_bytes, objective_id, delegation_id,\n\
+                 message_id, participant, timeout_secs\n\
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                idempotency_key,
+                canonical_request_bytes,
+                prepared.objective.id.to_string(),
+                prepared.delegation.id.to_string(),
+                prepared.outbox.message_id.to_string(),
+                prepared.delegation.participant,
+                i64::try_from(prepared.outbox.timeout_secs)
+                    .map_err(|_| StoreError::Invalid("timeout_secs hors borne SQLite"))?,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+        observer(StoreCommitPhase::BeforeCommit)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        observer(StoreCommitPhase::AfterCommit)?;
+        Ok(DelegateReservation::Created)
     }
 
     /// Retourne uniquement les outboxes non terminales, avec l'enveloppe
@@ -929,6 +1062,15 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
              ON objectives(state) WHERE state != 'clos';\n\
          CREATE INDEX IF NOT EXISTS delegation_outbox_pending_idx\n\
              ON delegation_outbox(terminal, state, retry_until, message_id);
+         CREATE TABLE IF NOT EXISTS delegate_idempotency (
+             idempotency_key TEXT PRIMARY KEY,
+             canonical_request_bytes BLOB NOT NULL,
+             objective_id TEXT NOT NULL UNIQUE REFERENCES objectives(id),
+             delegation_id TEXT NOT NULL UNIQUE REFERENCES delegations(id),
+             message_id TEXT NOT NULL UNIQUE REFERENCES delegation_outbox(message_id),
+             participant TEXT NOT NULL,
+             timeout_secs INTEGER NOT NULL CHECK(timeout_secs > 0)
+         );
          CREATE TABLE IF NOT EXISTS coordination_decisions (
              id TEXT PRIMARY KEY,
              objective_id TEXT NOT NULL,
@@ -1099,6 +1241,45 @@ fn insert_prepared(tx: &Transaction<'_>, prepared: &PreparedDelegation) -> Resul
         ],
     )
     .map_err(StoreError::Sql)?;
+    Ok(())
+}
+
+type RawDelegateResult = (Vec<u8>, String, String, String, String, i64);
+
+fn decode_delegate_result(
+    stored: RawDelegateResult,
+    expected_canonical_request_bytes: &[u8],
+) -> Result<StoredDelegateResult, StoreError> {
+    let (
+        canonical_request_bytes,
+        objective_id,
+        delegation_id,
+        message_id,
+        participant,
+        timeout_secs,
+    ) = stored;
+    if canonical_request_bytes != expected_canonical_request_bytes {
+        return Err(StoreError::EnvelopeMismatch);
+    }
+    if participant.is_empty() || timeout_secs <= 0 {
+        return Err(StoreError::Corrupt(
+            "résultat de délégation idempotente invalide",
+        ));
+    }
+    Ok(StoredDelegateResult {
+        objective_id: parse_uuid(&objective_id)?,
+        delegation_id: parse_uuid(&delegation_id)?,
+        message_id: parse_uuid(&message_id)?,
+        participant,
+        timeout_secs: u64::try_from(timeout_secs)
+            .map_err(|_| StoreError::Corrupt("timeout idempotent invalide"))?,
+    })
+}
+
+fn validate_delegate_idempotency_key(key: &str) -> Result<(), StoreError> {
+    if key.is_empty() || key.len() > 128 || key.chars().any(char::is_control) {
+        return Err(StoreError::Invalid("clé d'idempotence delegate invalide"));
+    }
     Ok(())
 }
 
@@ -1452,6 +1633,7 @@ fn parse_uuid(value: &str) -> Result<Uuid, StoreError> {
 pub enum StoreError {
     Invalid(&'static str),
     Conflict(&'static str),
+    EnvelopeMismatch,
     NotFound(&'static str),
     Corrupt(&'static str),
     UnsupportedSchema { found: i64, supported: i64 },
@@ -1467,6 +1649,7 @@ impl fmt::Display for StoreError {
         match self {
             Self::Invalid(reason) => write!(formatter, "store invalide : {reason}"),
             Self::Conflict(reason) => write!(formatter, "conflit store : {reason}"),
+            Self::EnvelopeMismatch => write!(formatter, "enveloppe idempotente divergente"),
             Self::NotFound(reason) => write!(formatter, "store introuvable : {reason}"),
             Self::Corrupt(reason) => write!(formatter, "store corrompu : {reason}"),
             Self::UnsupportedSchema { found, supported } => write!(
@@ -1492,6 +1675,7 @@ impl std::error::Error for StoreError {
             Self::Domain(_) => None,
             Self::Invalid(_)
             | Self::Conflict(_)
+            | Self::EnvelopeMismatch
             | Self::NotFound(_)
             | Self::Corrupt(_)
             | Self::UnsupportedSchema { .. } => None,
