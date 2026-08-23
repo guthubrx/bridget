@@ -2001,7 +2001,7 @@ fn cmd_who(args: &[String]) {
     }
 
     let filter = extract_domain_filter(args);
-    let build_id = status.build_id.clone().unwrap_or_else(|| "inconnu".to_string());
+    let build_id = status.build_id.as_deref().unwrap_or("inconnu");
     let agents: Vec<_> = match &filter {
         Some(domain) => status
             .agents
@@ -2013,7 +2013,7 @@ fn cmd_who(args: &[String]) {
 
     print!("{}", render_who(&agents, filter.as_deref()));
     println!("Daemon build-id: {build_id}");
-    emit_stale_daemon_warning(Some(&build_id));
+    emit_stale_daemon_warning(status.build_id.as_deref());
 }
 
 /// Rend l'annuaire sans dépendre d'un terminal : les appels non-TTY reçoivent
