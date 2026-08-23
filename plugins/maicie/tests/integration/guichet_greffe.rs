@@ -1,10 +1,10 @@
 use maicie::app::{
-    DelegateRequest, DelegateResult, DelegationCandidate, GuichetError, GuichetProcessResult,
-    delegate, process_guichet_claim, record_guichet_lifecycle_event,
+    delegate, process_guichet_claim, record_guichet_lifecycle_event, DelegateRequest,
+    DelegateResult, DelegationCandidate, GuichetError, GuichetProcessResult,
 };
 use maicie::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use maicie::config::DurationClasses;
-use maicie::domain::guichet::{RequeteGuichet, parse_claim};
+use maicie::domain::guichet::{parse_claim, RequeteGuichet};
 use maicie::domain::{ClasseDuree, EtatDelegation, EtatObjectif};
 use maicie::store::{GuichetCommitPhase, MaicieStore};
 use rusqlite::Connection;
@@ -144,10 +144,8 @@ fn rapport_puis_answered_rejoue_les_memes_octets_sans_seconde_decision() {
     assert!(regenerated.replayed);
     assert_ne!(regenerated.reply_bytes, first.reply_bytes);
     assert!(String::from_utf8_lossy(&regenerated.reply_bytes).contains("\"claim_generation\":2"));
-    assert!(
-        String::from_utf8_lossy(&regenerated.reply_bytes)
-            .contains("claim-abcdef0123456789abcdef0123456789")
-    );
+    assert!(String::from_utf8_lossy(&regenerated.reply_bytes)
+        .contains("claim-abcdef0123456789abcdef0123456789"));
     let mut divergent = claim.clone();
     divergent.canonical_request = String::from_utf8(divergent.canonical_request)
         .unwrap()
@@ -238,7 +236,7 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
         .unwrap();
     drop(connection);
 
-    let store = MaicieStore::open(&database).unwrap();
+    let mut store = MaicieStore::open(&database).unwrap();
     assert_eq!(store.schema_version().unwrap(), 7);
     assert_eq!(
         store
@@ -247,7 +245,19 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
             .len(),
         1
     );
+    let claim = delivery_claim("request-migration-v7", &created);
+    let first = process_guichet_claim(&mut store, &claim, "response-migration-v7", 1_010).unwrap();
     drop(store);
+
+    // Une seconde ouverture d'une base déjà v7 est la vraie preuve
+    // d'idempotence : la migration ne doit ni recréer, ni vider les tables.
+    let mut reopened = MaicieStore::open(&database).unwrap();
+    assert_eq!(reopened.schema_version().unwrap(), 7);
+    let replay = process_guichet_claim(&mut reopened, &claim, "ignored", 1_020).unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.reply_bytes, first.reply_bytes);
+    drop(reopened);
+
     let connection = Connection::open(&database).unwrap();
     let tables: i64 = connection
         .query_row(
@@ -258,6 +268,76 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
         )
         .unwrap();
     assert_eq!(tables, 3);
+    let receptions: i64 = connection
+        .query_row("SELECT COUNT(*) FROM guichet_receptions", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let correlations: i64 = connection
+        .query_row("SELECT COUNT(*) FROM guichet_correlations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!((receptions, correlations), (1, 1));
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn faute_apres_decision_annule_decision_et_transition_dans_la_meme_transaction() {
+    let root = root("atomic-decision-transition");
+    let database = root.join("maicie.sqlite3");
+    let created = seed(&database);
+    let claim = delivery_claim("request-atomic-decision", &created);
+    let canonical = parse_claim(&claim).unwrap();
+    let RequeteGuichet::DeliveryReport(report) = &canonical.request else {
+        panic!("rapport attendu")
+    };
+    let mut store = MaicieStore::open(&database).unwrap();
+    let result = store.graft_delivery_report_observed(
+        &claim,
+        &canonical,
+        report,
+        "response-atomic-decision",
+        1_010,
+        |phase| {
+            if phase == GuichetCommitPhase::AfterDecisionInsert {
+                return Err(maicie::store::StoreError::Conflict(
+                    "faute injectée après décision",
+                ));
+            }
+            Ok(())
+        },
+    );
+    assert!(result.is_err());
+    drop(store);
+
+    let store = MaicieStore::open(&database).unwrap();
+    let snapshot = store
+        .objective_snapshots(Some(created.objective_id))
+        .unwrap()
+        .remove(0);
+    assert_eq!(snapshot.objective.etat, EtatObjectif::EnCoordination);
+    assert_eq!(snapshot.delegations[0].etat, EtatDelegation::Creee);
+    assert!(snapshot.decisions.is_empty());
+    drop(store);
+
+    let connection = Connection::open(&database).unwrap();
+    for table in [
+        "coordination_decisions",
+        "guichet_receptions",
+        "guichet_correlations",
+    ] {
+        let count: i64 = connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        // Mutation discriminante : si la transition ou la décision sort de
+        // la transaction IMMEDIATE, cette cardinalité ou l'état ci-dessus
+        // devient non nul malgré la faute et le test échoue.
+        assert_eq!(count, 0, "écriture partielle visible dans {table}");
+    }
     drop(connection);
     fs::remove_dir_all(root).unwrap();
 }

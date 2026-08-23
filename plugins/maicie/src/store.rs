@@ -7,7 +7,7 @@
 use crate::app::ConversationRecord;
 use crate::bridget_client::{GuichetClaim, IdempotencyIssue, SpawnOutcome};
 use crate::domain::guichet::{
-    EvenementCycleGuichet, RapportLivraison, RequeteCanonique, delivery_reply_bytes,
+    delivery_reply_bytes, EvenementCycleGuichet, RapportLivraison, RequeteCanonique,
 };
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
@@ -16,14 +16,14 @@ use crate::domain::{
     ReceptionGreffe, RecuCorrelation, TypeDecision,
 };
 use crate::outbox::{
-    MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
-    StoreCommitPhase,
+    OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot, StoreCommitPhase,
+    MAX_MESSAGE_BYTES,
 };
 use rusqlite::{
-    Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
+    params, Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fmt;
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -177,6 +177,7 @@ pub enum GuichetLifecycleResult {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuichetCommitPhase {
+    AfterDecisionInsert,
     BeforeCommit,
     AfterCommit,
 }
@@ -425,6 +426,7 @@ impl MaicieStore {
         if inserted != 1 {
             return Err(StoreError::Conflict("décision de greffe non enregistrée"));
         }
+        observer(GuichetCommitPhase::AfterDecisionInsert)?;
 
         let operation = operation_name(OperationGuichet::DeliveryReport);
         let outcome = issue_name(issue);
