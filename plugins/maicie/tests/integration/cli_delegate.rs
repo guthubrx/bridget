@@ -56,6 +56,27 @@ fn deux_delegations_cli_avec_la_meme_cle_rejouent_les_memes_ids_sans_seconde_out
     assert_eq!(snapshot.outbox.state, EtatOutboxDelegation::Accepted);
     drop(store);
     server.join().unwrap();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_maicie"))
+        .args([
+            "status",
+            "--config",
+            fixture.config.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    let status_json: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["transport_snapshot"], "unknown");
+    assert_eq!(
+        status_json["coordination"][0]["remises_locales"][0]["state"],
+        "accepted"
+    );
+    assert_eq!(
+        status_json["coordination"][0]["remises_locales"][0]["issue"]["kind"],
+        "accepted"
+    );
 }
 
 #[test]
@@ -68,6 +89,28 @@ fn erreur_d_usage_est_json_et_sort_avec_le_code_contractuel() {
     assert!(output.stdout.is_empty());
     let error: Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(error["error"]["code"], "usage");
+}
+
+#[test]
+fn echec_d_expedition_post_commit_conserve_une_unique_outbox_prepared() {
+    let fixture = Fixture::new();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let socket = fixture.socket.clone();
+    let server = thread::spawn(move || serve_list_only_fixture(&socket, ready_tx));
+    ready_rx.recv().unwrap();
+
+    let output = run_delegate(&fixture, "conversation/post-commit-unavailable");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    server.join().unwrap();
+
+    let store = MaicieStore::open(&fixture.database).unwrap();
+    let pending = store.pending_delegation_outboxes().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].state, EtatOutboxDelegation::Prepared);
 }
 
 fn run_delegate(fixture: &Fixture, idempotency_key: &str) -> std::process::Output {
@@ -99,6 +142,15 @@ fn serve_delegate_fixture(socket: &Path, ready: mpsc::Sender<()>) {
     serve_agent_list(stream);
     let (stream, _) = listener.accept().unwrap();
     serve_reconcile_send(stream);
+    let (stream, _) = listener.accept().unwrap();
+    serve_client_handshake(stream);
+    let (stream, _) = listener.accept().unwrap();
+    serve_agent_list(stream);
+}
+
+fn serve_list_only_fixture(socket: &Path, ready: mpsc::Sender<()>) {
+    let listener = UnixListener::bind(socket).unwrap();
+    ready.send(()).unwrap();
     let (stream, _) = listener.accept().unwrap();
     serve_client_handshake(stream);
     let (stream, _) = listener.accept().unwrap();

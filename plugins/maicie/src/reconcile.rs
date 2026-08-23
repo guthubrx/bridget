@@ -12,7 +12,7 @@ use crate::outbox::{OutboxError, PendingDelegationOutbox};
 use crate::store::{DelegationRecoveryEntry, LocalFailureReason, MaicieStore, StoreError};
 use std::fmt;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 /// Frontières observables des crash-tests de reprise.
@@ -194,11 +194,23 @@ pub fn reconcile_startup_at_observed_with_limits(
     }
     let socket = bridget_socket.as_ref();
     let mut report = ReconcileReport::default();
+    let deadline = Instant::now() + reconciliation_budget(limits);
     for entry in store.delegation_recovery_entries()? {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            break;
+        };
+        let entry_limits = limits_for_remaining_budget(limits, remaining);
         let action = match entry {
             DelegationRecoveryEntry::Pending(outbox) => {
                 observer(ReconcilePhase::BeforeSocket)?;
-                reconcile_one(store, socket, &outbox, observed_at, limits, &mut observer)?
+                reconcile_one(
+                    store,
+                    socket,
+                    &outbox,
+                    observed_at,
+                    entry_limits,
+                    &mut observer,
+                )?
             }
             DelegationRecoveryEntry::LocalFailure {
                 objective_id,
@@ -214,9 +226,42 @@ pub fn reconcile_startup_at_observed_with_limits(
                 }
             }
         };
+        let socket_unavailable = matches!(
+            action,
+            ReconcileAction::TransportIndisponible { .. }
+                | ReconcileAction::TransportIncertain { .. }
+        );
         report.actions.push(action);
+        // Toutes les lignes visent le même socket. Après une indisponibilité,
+        // retenter chaque outbox ne produit aucune information supplémentaire
+        // et transformerait une commande CLI en boucle O(N × délai).
+        if socket_unavailable {
+            break;
+        }
     }
     Ok(report)
+}
+
+/// Borne une passe d'ouverture entière, pas chaque outbox séparément.
+/// Les échanges locaux sains restent quasi immédiats ; un daemon absent ne
+/// consomme jamais davantage qu'un délai client.
+fn reconciliation_budget(limits: BridgetClientLimits) -> Duration {
+    limits.connect_timeout.max(limits.io_timeout)
+}
+
+/// Une ligne peut au pire négocier, lookup puis rejouer. En divisant le temps
+/// restant entre ces phases, les délais de `BridgetClient` ne peuvent pas
+/// repousser la borne globale de la passe.
+fn limits_for_remaining_budget(
+    limits: BridgetClientLimits,
+    remaining: Duration,
+) -> BridgetClientLimits {
+    let per_operation = (remaining / 4).max(Duration::from_millis(1));
+    BridgetClientLimits {
+        connect_timeout: limits.connect_timeout.min(per_operation),
+        io_timeout: limits.io_timeout.min(per_operation),
+        max_frame_bytes: limits.max_frame_bytes,
+    }
 }
 
 fn reconcile_one(

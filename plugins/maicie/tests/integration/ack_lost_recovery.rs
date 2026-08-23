@@ -19,7 +19,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const OBJECTIVE_ID: &str = "41000000-0000-4000-8000-000000000001";
@@ -362,6 +362,45 @@ fn connexion_indisponible_conserve_l_outbox_prepared() {
             .state,
         EtatOutboxDelegation::Prepared
     );
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reprise_bornee_court_circuite_apres_la_premiere_indisponibilite() {
+    let root = unique_root("global-budget");
+    let database = root.join("maicie.sqlite3");
+    let socket = root.join("bridget.sock");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let first = fixture(store.issuer_scope());
+    let second = fixture_with_ids(
+        store.issuer_scope(),
+        "41000000-0000-4000-8000-000000000011",
+        "42000000-0000-4000-8000-000000000012",
+        "43000000-0000-4000-8000-000000000013",
+    );
+    store.create_prepared_delegation(&first).unwrap();
+    store.create_prepared_delegation(&second).unwrap();
+
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = thread::spawn(move || {
+        let (_stream, _) = listener.accept().unwrap();
+        thread::sleep(Duration::from_millis(120));
+    });
+    let limits = BridgetClientLimits {
+        connect_timeout: Duration::from_millis(40),
+        io_timeout: Duration::from_millis(40),
+        max_frame_bytes: BridgetClientLimits::default().max_frame_bytes,
+    };
+    let started = Instant::now();
+    let report = reconcile_startup_at_with_limits(&mut store, &socket, 1_010, limits).unwrap();
+    assert!(started.elapsed() < Duration::from_millis(100));
+    assert!(matches!(
+        &report.actions[..],
+        [ReconcileAction::TransportIndisponible { .. }]
+    ));
+    assert_eq!(store.pending_delegation_outboxes().unwrap().len(), 2);
+    server.join().unwrap();
     drop(store);
     fs::remove_dir_all(root).unwrap();
 }
@@ -749,6 +788,29 @@ fn fixture_with_body(
         issuer_scope,
         ISSUED_AT,
         max_frame_bytes,
+    )
+    .unwrap()
+}
+
+fn fixture_with_ids(
+    issuer_scope: &str,
+    objective_id: &str,
+    delegation_id: &str,
+    message_id: &str,
+) -> PreparedDelegation {
+    let mut prepared = fixture(issuer_scope);
+    prepared.objective.id = uuid(objective_id);
+    prepared.delegation.id = uuid(delegation_id);
+    prepared.delegation.objectif_id = prepared.objective.id;
+    prepared.outbox.message_id = uuid(message_id);
+    prepared.outbox.delegation_id = prepared.delegation.id;
+    PreparedDelegation::new(
+        prepared.objective,
+        prepared.delegation,
+        prepared.outbox,
+        issuer_scope,
+        ISSUED_AT,
+        BridgetClientLimits::default().max_frame_bytes,
     )
     .unwrap()
 }

@@ -563,6 +563,8 @@ struct SnapshotOutput {
     objective: ObjectifCoordonne,
     delegations: Vec<Delegation>,
     decisions: Vec<DecisionCoordination>,
+    /// Issue durable enregistrée par Maicie, distincte du snapshot transport.
+    remises_locales: Vec<maicie::store::RemiseLocale>,
 }
 
 impl From<ObjectiveSnapshot> for SnapshotOutput {
@@ -571,6 +573,7 @@ impl From<ObjectiveSnapshot> for SnapshotOutput {
             objective: snapshot.objective,
             delegations: snapshot.delegations,
             decisions: snapshot.decisions,
+            remises_locales: snapshot.remises_locales,
         }
     }
 }

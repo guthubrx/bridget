@@ -18,8 +18,8 @@ use crate::outbox::{
 use rusqlite::{
     Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
 };
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::fmt;
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -80,11 +80,26 @@ pub enum DelegateReservation {
 /// Vue corrélée d'un objectif privée de toute interprétation du transport.
 /// Les décisions y figurent afin que les commandes explicites restent
 /// auditables même lorsqu'elles ne créent aucune nouvelle délégation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ObjectiveSnapshot {
     pub objective: ObjectifCoordonne,
     pub delegations: Vec<crate::domain::Delegation>,
     pub decisions: Vec<DecisionCoordination>,
+    /// Registre local de remise, distinct de toute observation ACP live.
+    pub remises_locales: Vec<RemiseLocale>,
+}
+
+/// Projection honnête de l'outbox durable pour `maicie status`.
+///
+/// Elle atteste ce que Maicie a persisté après un échange Bridget ; elle ne
+/// remplace ni la fraîcheur, ni les événements du futur abonnement ACP T018.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RemiseLocale {
+    pub delegation_id: Uuid,
+    pub message_id: Uuid,
+    pub state: EtatOutboxDelegation,
+    pub issue: Option<Value>,
+    pub observed_at: Option<i64>,
 }
 
 /// Motif local fermé quand les octets durables ne peuvent jamais produire une
@@ -266,10 +281,49 @@ impl MaicieStore {
             }
             let delegations = self.delegations_for(objective.id)?;
             let decisions = self.decisions_for(objective.id)?;
+            let remises_locales = self.remises_locales_for(objective.id)?;
             Ok(ObjectiveSnapshot {
                 objective,
                 delegations,
                 decisions,
+                remises_locales,
+            })
+        })
+        .collect()
+    }
+
+    fn remises_locales_for(&self, objective_id: Uuid) -> Result<Vec<RemiseLocale>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT delegation_id, message_id, state, last_issue_json, issue_observed_at\n\
+                 FROM delegation_outbox WHERE objective_id = ?1 ORDER BY message_id",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([objective_id.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                ))
+            })
+            .map_err(StoreError::Sql)?;
+        rows.map(|row| {
+            let (delegation_id, message_id, state, issue, observed_at) =
+                row.map_err(StoreError::Sql)?;
+            Ok(RemiseLocale {
+                delegation_id: Uuid::parse_str(&delegation_id)
+                    .map_err(|_| StoreError::Corrupt("delegation_id outbox invalide"))?,
+                message_id: Uuid::parse_str(&message_id)
+                    .map_err(|_| StoreError::Corrupt("message_id outbox invalide"))?,
+                state: parse_outbox_state(&state)?,
+                issue: issue
+                    .map(|bytes| serde_json::from_slice(&bytes).map_err(StoreError::Json))
+                    .transpose()?,
+                observed_at,
             })
         })
         .collect()
