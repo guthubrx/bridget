@@ -935,9 +935,19 @@ mod tests {
             .iter()
             .map(|line| line.as_str().map_or_else(|| line.to_string(), str::to_string))
             .collect::<Vec<_>>()
-            .join("\n");
+        .join("\n");
         let mut stdout = Vec::new();
-        serve(input.as_bytes(), &mut stdout).unwrap();
+        let identity = || Ok(crate::mcp_identity::ResolvedIdentity {
+            name: "fixture-agent".to_string(),
+            instance_id: "fixture-instance".to_string(),
+        });
+        let execute = |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| {
+            Err(ToolError::Technical {
+                code: "daemon_unreachable",
+                message: "daemon de fixture absent".to_string(),
+            })
+        };
+        serve_with(input.as_bytes(), &mut stdout, &identity, &execute).unwrap();
         String::from_utf8(stdout)
             .unwrap()
             .lines()
