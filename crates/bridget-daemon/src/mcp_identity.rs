@@ -60,19 +60,17 @@ pub fn resolve_current() -> Result<String, IdentityError> {
 /// Résout atomiquement le nom affiché et la portée stable d'instance.
 pub fn resolve_current_identity() -> Result<ResolvedIdentity, IdentityError> {
     let name_file = std::env::var_os("BRIDGET_AGENT_NAME_FILE").map(PathBuf::from);
-    let instance_id = std::env::var("BRIDGET_AGENT_INSTANCE_ID")
+    let expected_instance_id = std::env::var("BRIDGET_AGENT_INSTANCE_ID")
         .ok()
-        .filter(|value| !value.is_empty())
-        .ok_or(IdentityError::IdentityNotFound)?;
+        .filter(|value| !value.is_empty());
     let home = std::env::var_os("HOME").ok_or(IdentityError::IdentityNotFound)?;
-    let name = resolve_with(
+    resolve_identity_with(
         name_file.as_deref(),
         &PathBuf::from(home).join(".cache/bridget/agent-pids"),
-        Some(&instance_id),
+        expected_instance_id.as_deref(),
         std::process::id(),
         &SystemProcessTree,
-    )?;
-    Ok(ResolvedIdentity { name, instance_id })
+    )
 }
 
 /// Identifiant d'instance stable du wrapper qui héberge la façade MCP.
@@ -132,10 +130,33 @@ pub fn resolve_with(
     pid: u32,
     processes: &impl ProcessTree,
 ) -> Result<String, IdentityError> {
-    if let Some(path) = name_file
+    resolve_identity_with(
+        name_file,
+        marker_directory,
+        expected_instance_id,
+        pid,
+        processes,
+    )
+    .map(|identity| identity.name)
+}
+
+/// Résout l'identité complète. Si le processus MCP ne reçoit pas les
+/// variables applicatives du wrapper, le marqueur typé valide devient la
+/// source de vérité du nom et de l'instance.
+pub fn resolve_identity_with(
+    name_file: Option<&Path>,
+    marker_directory: &Path,
+    expected_instance_id: Option<&str>,
+    pid: u32,
+    processes: &impl ProcessTree,
+) -> Result<ResolvedIdentity, IdentityError> {
+    if let (Some(instance_id), Some(path)) = (expected_instance_id, name_file)
         && let Some(name) = read_name(path)
     {
-        return Ok(name);
+        return Ok(ResolvedIdentity {
+            name,
+            instance_id: instance_id.to_string(),
+        });
     }
     let mut current = Some(pid);
     for _ in 0..MAX_ANCESTORS {
@@ -148,11 +169,14 @@ pub fn resolve_with(
                 serde_json::from_str(&raw).map_err(|_| IdentityError::LegacyMarker)?;
             if marker.pid == candidate
                 && !marker.instance_id.is_empty()
-                && expected_instance_id == Some(marker.instance_id.as_str())
+                && expected_instance_id.is_none_or(|expected| expected == marker.instance_id)
                 && processes.birth(candidate) == Some(marker.birth)
                 && let Some(name) = read_name(&marker.name_file)
             {
-                return Ok(name);
+                return Ok(ResolvedIdentity {
+                    name,
+                    instance_id: marker.instance_id,
+                });
             }
         }
         current = processes
@@ -284,6 +308,24 @@ mod tests {
             resolve_with(None, &markers, Some("instance-1"), 70, &chain),
             Ok("agent".into())
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resout_la_filiation_sans_variables_applicatives() {
+        let root = root("sans-env");
+        let markers = root.join("agent-pids");
+        let _ = marker(&root, 20, 200, "instance-marquee", "agent");
+        let chain = Fixture(BTreeMap::from([(42, (420, 20)), (20, (200, 1))]));
+
+        assert_eq!(
+            resolve_identity_with(None, &markers, None, 42, &chain),
+            Ok(ResolvedIdentity {
+                name: "agent".into(),
+                instance_id: "instance-marquee".into(),
+            })
+        );
+
         fs::remove_dir_all(root).unwrap();
     }
 
