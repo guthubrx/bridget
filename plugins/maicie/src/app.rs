@@ -92,21 +92,28 @@ pub fn route_direct_message(
 /// immuable. La création d'objectif reste exclusivement derrière la commande
 /// explicite [`delegate`].
 pub fn handle_direct_message(
+    store: &mut MaicieStore,
     message: &DirectBridgetMessage<'_>,
     maicie_identity: &str,
-) -> DirectMessageHandling {
+) -> Result<DirectMessageHandling, ObjectiveError> {
     match route_direct_message(message, maicie_identity) {
-        DirectMessageRoute::OutsideMaicie => DirectMessageHandling::IgnoredOutsideMaicie,
-        DirectMessageRoute::AddressedToMaicie => DirectMessageHandling::Conversation {
-            record: ConversationRecord {
+        DirectMessageRoute::OutsideMaicie => Ok(DirectMessageHandling::IgnoredOutsideMaicie),
+        DirectMessageRoute::AddressedToMaicie => {
+            let record = ConversationRecord {
                 sender: message.from.to_string(),
                 body: message.body.to_string(),
-            },
-            help: ConversationHelp {
-                command: "maicie delegate",
-                usage: "maicie delegate --goal <texte> [--to <agent>] [--duration courte|normale|longue]",
-            },
-        },
+            };
+            store
+                .record_conversation(&record)
+                .map_err(objective_store_error)?;
+            Ok(DirectMessageHandling::Conversation {
+                record,
+                help: ConversationHelp {
+                    command: "maicie delegate",
+                    usage: "maicie delegate --goal <texte> [--to <agent>] [--duration courte|normale|longue]",
+                },
+            })
+        }
     }
 }
 

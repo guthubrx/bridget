@@ -4,6 +4,7 @@
 //! transaction unique. Aucune méthode de reprise ne reconstruit l'enveloppe :
 //! les octets préparés avant I/O sont l'autorité.
 
+use crate::app::ConversationRecord;
 use crate::bridget_client::{IdempotencyIssue, SpawnOutcome};
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, DecisionCoordination, DomainError,
@@ -26,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -191,6 +192,45 @@ impl MaicieStore {
         self.connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(StoreError::Sql)
+    }
+
+    /// Ajoute un message libre destiné à Maicie au journal privé append-only.
+    /// Cette table est volontairement disjointe des agrégats d'orchestration :
+    /// aucune écriture conversationnelle ne peut créer ou modifier un objectif,
+    /// une délégation ou une outbox.
+    pub fn record_conversation(&mut self, record: &ConversationRecord) -> Result<(), StoreError> {
+        let inserted = self
+            .connection
+            .execute(
+                "INSERT INTO conversation_records(sender, body_bytes) VALUES (?1, ?2)",
+                params![record.sender, record.body.as_bytes()],
+            )
+            .map_err(StoreError::Sql)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("conversation non enregistrée"));
+        }
+        Ok(())
+    }
+
+    /// Relit les conversations dans leur ordre append-only. Les octets du
+    /// corps sont décodés sans transformation : une corruption est fail-closed.
+    pub fn conversations(&self) -> Result<Vec<ConversationRecord>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT sender, body_bytes FROM conversation_records ORDER BY sequence ASC")
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .map_err(StoreError::Sql)?;
+        rows.map(|row| {
+            let (sender, body_bytes) = row.map_err(StoreError::Sql)?;
+            let body = String::from_utf8(body_bytes)
+                .map_err(|_| StoreError::Corrupt("corps de conversation non UTF-8"))?;
+            Ok(ConversationRecord { sender, body })
+        })
+        .collect()
     }
 
     /// Lit les objectifs Maicie avec leurs délégations et décisions locales.
@@ -1324,6 +1364,22 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
         tx.execute_batch(
             "ALTER TABLE activation_outbox ADD COLUMN last_issue_json BLOB;
              ALTER TABLE activation_outbox ADD COLUMN issue_observed_at INTEGER;",
+        )
+        .map_err(StoreError::Sql)?;
+    }
+    if current_version < 6 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS conversation_records (
+                 sequence INTEGER PRIMARY KEY,
+                 sender TEXT NOT NULL,
+                 body_bytes BLOB NOT NULL
+             );
+             CREATE TRIGGER IF NOT EXISTS conversation_records_append_only_update
+                 BEFORE UPDATE ON conversation_records
+                 BEGIN SELECT RAISE(ABORT, 'conversation append-only'); END;
+             CREATE TRIGGER IF NOT EXISTS conversation_records_append_only_delete
+                 BEFORE DELETE ON conversation_records
+                 BEGIN SELECT RAISE(ABORT, 'conversation append-only'); END;",
         )
         .map_err(StoreError::Sql)?;
     }
