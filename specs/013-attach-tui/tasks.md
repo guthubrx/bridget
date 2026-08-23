@@ -4,7 +4,7 @@
 **Règles** : celles de `docs/regles-chantier.md` + validations avant commit,
 commit en review immuable, auteur ≠ relecteur, zéro trace IA, jamais de push.
 
-- [ ] T1301 Renderer de blocs (D-1301, D-1303, D-1304, D-1306) : tour rendu
+- [x] T1301 Renderer de blocs (D-1301, D-1303, D-1304, D-1306) : tour rendu
   en place (ANSI), clé de bloc session_id+message_id, tampon borné 64Kio/400
   lignes à troncature visible, un seul thread écrivain stdout (zéro I/O sous
   le verrou screen — corrige attach.rs:1017) ; matrice stdin×stdout 4 cas,
@@ -12,14 +12,14 @@ commit en review immuable, auteur ≠ relecteur, zéro trace IA, jamais de push.
   **Observable** : golden stdout non-TTY byte-à-byte (4 cas), test bascule
   replay→live sans doublon/trou, démo TTY.
 
-- [ ] T1302 Capture ET étiquetage des outils (D-1302, D-1307, D-1308) : le
+- [x] T1302 Capture ET étiquetage des outils (D-1302, D-1307, D-1308) : le
   mapping title→name→kind est capturé AU JOURNAL (acp.rs — champ additif
   compatible v1), le renderer l'affiche sanitizé (Cc/Cf/ANSI), kinds
   inconnus inclus ; exception golden versionnée pour ce délta transport.
   **Observable** : fixture hostile (Read/Bash/kind-inconnu/titre ESC-OSC-bidi)
   → lignes étiquetées et assainies ; constat n° 11 clos À LA SOURCE.
 
-- [ ] T1303 Rattrapage compact : historique rendu en blocs clos (zéro
+- [x] T1303 Rattrapage compact : historique rendu en blocs clos (zéro
   re-streaming), bascule rattrapage→live signalée, Gap/End inchangés.
   **Observable** : fixture de rattrapage → blocs compacts ; bancs 008
   intacts (SC-003).
@@ -33,3 +33,11 @@ commit en review immuable, auteur ≠ relecteur, zéro trace IA, jamais de push.
   déterministe 3 tours (lignes comptées avant/après, timeout global),
   README section vue attach mise à jour, DEPRECATIONS relu.
   **Observable** : chiffres consignés dans implementation.md.
+
+## Ajout en cours de session
+
+- [ ] T1305b Constat no 17 (observation utilisateur) : message d'erreur
+  attach incohérent pour un équipier ARRÊTÉ — dit « inconnu » en le listant
+  comme attachable. Correctif : distinguer inconnu/arrêté (« équipier arrêté,
+  historique consultable via … » le cas échéant) et ne lister comme
+  attachables que les vivants (ou afficher leur état). À absorber avec T1305.
