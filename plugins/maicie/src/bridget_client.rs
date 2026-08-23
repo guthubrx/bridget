@@ -12,12 +12,32 @@ use std::fmt;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// Version du contrat public client Bridget consommee par Maicie.
 pub const CLIENT_CONTRACT_VERSION: u16 = 1;
 
 /// Capacites du contrat idempotent que Maicie exige avant tout envoi.
 pub const REQUIRED_CLIENT_CAPABILITIES: [&str; 2] = ["send_idempotent", "lookup"];
+
+/// Bornes de la frontière locale : une réponse Bridget ne peut ni suspendre
+/// Maicie indéfiniment ni lui faire accumuler une ligne JSONL illimitée.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BridgetClientLimits {
+    pub connect_timeout: Duration,
+    pub io_timeout: Duration,
+    pub max_frame_bytes: usize,
+}
+
+impl Default for BridgetClientLimits {
+    fn default() -> Self {
+        Self {
+            connect_timeout: Duration::from_secs(5),
+            io_timeout: Duration::from_secs(5),
+            max_frame_bytes: 256 * 1024,
+        }
+    }
+}
 
 /// Erreurs explicites de la frontiere de transport Maicie → Bridget.
 #[derive(Debug)]
@@ -49,6 +69,13 @@ pub enum BridgetClientError {
         id: String,
         reason: String,
     },
+    Timeout {
+        operation: &'static str,
+    },
+    FrameTooLarge {
+        max_frame_bytes: usize,
+    },
+    InvalidLimits(String),
     InvalidEnvelope(String),
 }
 
@@ -75,6 +102,14 @@ impl fmt::Display for BridgetClientError {
             }
             Self::ClientRejected { reason } => write!(formatter, "client Bridget refuse: {reason}"),
             Self::RemoteNack { id, reason } => write!(formatter, "Bridget refuse {id}: {reason}"),
+            Self::Timeout { operation } => {
+                write!(formatter, "echeance Bridget depassee pendant {operation}")
+            }
+            Self::FrameTooLarge { max_frame_bytes } => write!(
+                formatter,
+                "trame Bridget superieure a la borne de {max_frame_bytes} octets"
+            ),
+            Self::InvalidLimits(detail) => write!(formatter, "bornes Bridget invalides: {detail}"),
             Self::InvalidEnvelope(detail) => write!(formatter, "enveloppe Maicie invalide: {detail}"),
         }
     }
@@ -253,6 +288,7 @@ pub enum SpawnOutcome {
 pub struct BridgetClient {
     socket_path: PathBuf,
     issuer_scope: String,
+    limits: BridgetClientLimits,
     connection: WireConnection,
     negotiated: NegotiatedContract,
 }
@@ -263,9 +299,20 @@ impl BridgetClient {
         socket_path: impl AsRef<Path>,
         issuer_scope: impl Into<String>,
     ) -> Result<Self, BridgetClientError> {
+        Self::connect_with_limits(socket_path, issuer_scope, BridgetClientLimits::default())
+    }
+
+    /// Variante explicite pour les appels CLI/tests qui exigent un budget plus
+    /// court. Les bornes sont posees avant le premier handshake.
+    pub fn connect_with_limits(
+        socket_path: impl AsRef<Path>,
+        issuer_scope: impl Into<String>,
+        limits: BridgetClientLimits,
+    ) -> Result<Self, BridgetClientError> {
+        validate_limits(limits)?;
         let socket_path = socket_path.as_ref().to_path_buf();
         let issuer_scope = issuer_scope.into();
-        let mut connection = WireConnection::connect(&socket_path)?;
+        let mut connection = WireConnection::connect(&socket_path, limits)?;
 
         let role = connection.request(json!({"type": "RoleHandshake", "role": "client"}))?;
         expect_role_accepted(&role, "client")?;
@@ -294,6 +341,7 @@ impl BridgetClient {
         Ok(Self {
             socket_path,
             issuer_scope,
+            limits,
             connection,
             negotiated,
         })
@@ -309,6 +357,10 @@ impl BridgetClient {
 
     pub fn negotiated(&self) -> &NegotiatedContract {
         &self.negotiated
+    }
+
+    pub fn limits(&self) -> BridgetClientLimits {
+        self.limits
     }
 
     /// Envoie l'enveloppe exacte fournie par l'outbox, sans generer ni muter
@@ -351,7 +403,7 @@ impl BridgetClient {
 
     /// Lit l'annuaire public Bridget sur une connexion ponctuelle non mutante.
     pub fn list_agents(&self) -> Result<Vec<AgentInfo>, BridgetClientError> {
-        Self::list_agents_at(&self.socket_path)
+        Self::list_agents_at_with_limits(&self.socket_path, self.limits)
     }
 
     /// Lit l'annuaire avant toute negociation client. Cette operation reste
@@ -360,7 +412,14 @@ impl BridgetClient {
     pub fn list_agents_at(
         socket_path: impl AsRef<Path>,
     ) -> Result<Vec<AgentInfo>, BridgetClientError> {
-        let mut connection = WireConnection::connect(socket_path.as_ref())?;
+        Self::list_agents_at_with_limits(socket_path, BridgetClientLimits::default())
+    }
+
+    pub fn list_agents_at_with_limits(
+        socket_path: impl AsRef<Path>,
+        limits: BridgetClientLimits,
+    ) -> Result<Vec<AgentInfo>, BridgetClientError> {
+        let mut connection = WireConnection::connect(socket_path.as_ref(), limits)?;
         let response = connection.request(json!({"type": "ListAgents"}))?;
         match response_type(&response)? {
             "AgentList" => {
@@ -385,7 +444,7 @@ impl BridgetClient {
         sender: &str,
         reason: Option<&str>,
     ) -> Result<Cancellation, BridgetClientError> {
-        let mut connection = WireConnection::connect(&self.socket_path)?;
+        let mut connection = WireConnection::connect(&self.socket_path, self.limits)?;
         let response = connection.request(json!({
             "type": "CancelRequest",
             "id": id,
@@ -411,7 +470,7 @@ impl BridgetClient {
         agent: &str,
         window: AttachWindow,
     ) -> Result<Subscription, BridgetClientError> {
-        let mut connection = WireConnection::connect(&self.socket_path)?;
+        let mut connection = WireConnection::connect(&self.socket_path, self.limits)?;
         let role = connection.request(json!({"type": "RoleHandshake", "role": "attach"}))?;
         expect_role_accepted(&role, "attach")?;
         connection.send(json!({
@@ -425,7 +484,7 @@ impl BridgetClient {
     /// Emet un SpawnOrder deja approuve. Cette methode ne construit aucun
     /// processus et ne relance pas d'elle-meme l'ordre en cas d'incertitude.
     pub fn spawn_order(&self, order: &SpawnOrder) -> Result<SpawnOutcome, BridgetClientError> {
-        let mut connection = WireConnection::connect(&self.socket_path)?;
+        let mut connection = WireConnection::connect(&self.socket_path, self.limits)?;
         let response = connection.request(json!({
             "type": "SpawnOrder",
             "agent_type": order.agent_type,
@@ -492,45 +551,148 @@ impl Subscription {
 struct WireConnection {
     reader: BufReader<UnixStream>,
     writer: BufWriter<UnixStream>,
+    limits: BridgetClientLimits,
 }
 
 impl WireConnection {
-    fn connect(path: &Path) -> Result<Self, BridgetClientError> {
+    fn connect(path: &Path, limits: BridgetClientLimits) -> Result<Self, BridgetClientError> {
+        validate_limits(limits)?;
+        let started = Instant::now();
         let stream = UnixStream::connect(path).map_err(|source| BridgetClientError::Connect {
             path: path.to_path_buf(),
             source,
         })?;
+        if started.elapsed() > limits.connect_timeout {
+            return Err(BridgetClientError::Timeout {
+                operation: "connexion",
+            });
+        }
+        stream
+            .set_read_timeout(Some(limits.io_timeout))
+            .map_err(BridgetClientError::Read)?;
+        stream
+            .set_write_timeout(Some(limits.io_timeout))
+            .map_err(BridgetClientError::Write)?;
         let reader = BufReader::new(stream.try_clone().map_err(BridgetClientError::Read)?);
         Ok(Self {
             reader,
             writer: BufWriter::new(stream),
+            limits,
         })
     }
 
     fn request(&mut self, value: Value) -> Result<Value, BridgetClientError> {
-        self.send(value)?;
-        self.receive()
+        let deadline = Instant::now() + self.limits.io_timeout;
+        self.send_until(value, deadline)?;
+        self.receive_until(deadline)
     }
 
     fn send(&mut self, value: Value) -> Result<(), BridgetClientError> {
-        serde_json::to_writer(&mut self.writer, &value).map_err(BridgetClientError::Encode)?;
+        self.send_until(value, Instant::now() + self.limits.io_timeout)
+    }
+
+    fn send_until(&mut self, value: Value, deadline: Instant) -> Result<(), BridgetClientError> {
+        let mut bytes = serde_json::to_vec(&value).map_err(BridgetClientError::Encode)?;
+        if bytes.len() + 1 > self.limits.max_frame_bytes {
+            return Err(BridgetClientError::FrameTooLarge {
+                max_frame_bytes: self.limits.max_frame_bytes,
+            });
+        }
+        bytes.push(b'\n');
         self.writer
-            .write_all(b"\n")
+            .get_ref()
+            .set_write_timeout(Some(remaining(deadline)?))
             .map_err(BridgetClientError::Write)?;
-        self.writer.flush().map_err(BridgetClientError::Write)
+        self.writer.write_all(&bytes).map_err(write_error)?;
+        self.writer.flush().map_err(write_error)
     }
 
     fn receive(&mut self) -> Result<Value, BridgetClientError> {
-        let mut line = String::new();
-        let read = self
-            .reader
-            .read_line(&mut line)
-            .map_err(BridgetClientError::Read)?;
-        if read == 0 {
-            return Err(BridgetClientError::Closed);
+        self.receive_until(Instant::now() + self.limits.io_timeout)
+    }
+
+    fn receive_until(&mut self, _deadline: Instant) -> Result<Value, BridgetClientError> {
+        let mut frame = Vec::new();
+        loop {
+            // Le timeout configure a l'ouverture de la socket borne chaque
+            // lecture. Le conserver evite de reconfigurer une socket dont le
+            // pair a deja ferme son cote entre deux frames tamponnees.
+            let buffer = self.reader.fill_buf().map_err(read_error)?;
+            if buffer.is_empty() {
+                return Err(BridgetClientError::Closed);
+            }
+            if let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
+                if frame.len() + newline > self.limits.max_frame_bytes {
+                    return Err(BridgetClientError::FrameTooLarge {
+                        max_frame_bytes: self.limits.max_frame_bytes,
+                    });
+                }
+                frame.extend_from_slice(&buffer[..newline]);
+                self.reader.consume(newline + 1);
+                break;
+            }
+            if frame.len() + buffer.len() > self.limits.max_frame_bytes {
+                return Err(BridgetClientError::FrameTooLarge {
+                    max_frame_bytes: self.limits.max_frame_bytes,
+                });
+            }
+            let consumed = buffer.len();
+            frame.extend_from_slice(buffer);
+            self.reader.consume(consumed);
         }
-        serde_json::from_str(line.trim_end())
-            .map_err(|source| BridgetClientError::Decode { line, source })
+        let line = String::from_utf8(frame).map_err(|error| {
+            BridgetClientError::Protocol(format!("trame Bridget non UTF-8: {error}"))
+        })?;
+        serde_json::from_str(&line).map_err(|source| BridgetClientError::Decode { line, source })
+    }
+}
+
+fn validate_limits(limits: BridgetClientLimits) -> Result<(), BridgetClientError> {
+    if limits.connect_timeout.is_zero() || limits.io_timeout.is_zero() {
+        return Err(BridgetClientError::InvalidLimits(
+            "les delais doivent etre strictement positifs".to_string(),
+        ));
+    }
+    if limits.max_frame_bytes == 0 {
+        return Err(BridgetClientError::InvalidLimits(
+            "max_frame_bytes doit etre strictement positif".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn remaining(deadline: Instant) -> Result<Duration, BridgetClientError> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|duration| !duration.is_zero())
+        .ok_or(BridgetClientError::Timeout {
+            operation: "I/O socket",
+        })
+}
+
+fn read_error(source: std::io::Error) -> BridgetClientError {
+    if matches!(
+        source.kind(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+    ) {
+        BridgetClientError::Timeout {
+            operation: "lecture socket",
+        }
+    } else {
+        BridgetClientError::Read(source)
+    }
+}
+
+fn write_error(source: std::io::Error) -> BridgetClientError {
+    if matches!(
+        source.kind(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+    ) {
+        BridgetClientError::Timeout {
+            operation: "ecriture socket",
+        }
+    } else {
+        BridgetClientError::Write(source)
     }
 }
 

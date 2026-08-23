@@ -1,6 +1,6 @@
 use maicie::bridget_client::{
-    AttachWindow, BridgetClient, BridgetClientError, IdempotencyIssue, PublicMessage,
-    SubscriptionEvent,
+    AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits, IdempotencyIssue,
+    PublicMessage, SubscriptionEvent,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -9,6 +9,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
+use std::time::Duration;
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
@@ -247,6 +248,72 @@ fn annuaire_est_lisible_sans_negociation_et_une_base_bridget_ne_peut_etre_lue() 
         b"base Bridget a ne pas lire"
     );
     fs::remove_file(database_path).unwrap();
+}
+
+#[test]
+fn daemon_muet_expire_le_handshake_dans_le_budget_configure() {
+    let fixture = SocketFixture::new("timeout");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("client attendu");
+        let (mut reader, _writer) = split(stream);
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type": "RoleHandshake", "role": "client"})
+        );
+        thread::sleep(Duration::from_millis(80));
+    });
+    let limits = BridgetClientLimits {
+        connect_timeout: Duration::from_secs(1),
+        io_timeout: Duration::from_millis(10),
+        max_frame_bytes: 1024,
+    };
+
+    let error = match BridgetClient::connect_with_limits(fixture.path(), "scope-client-012", limits)
+    {
+        Ok(_) => panic!("un daemon muet ne doit pas negocier"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, BridgetClientError::Timeout { .. }));
+    server.join().expect("serveur termine");
+}
+
+#[test]
+fn trame_sans_fin_de_ligne_depasse_la_borne_sans_croitre_sans_limite() {
+    let fixture = SocketFixture::new("frame-limit");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("client attendu");
+        let (mut reader, mut writer) = split(stream);
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type": "RoleHandshake", "role": "client"})
+        );
+        writer
+            .write_all(&[b'x'; 129])
+            .expect("trame sans fin ecrite");
+        writer.flush().expect("trame sans fin videe");
+    });
+    let limits = BridgetClientLimits {
+        connect_timeout: Duration::from_secs(1),
+        io_timeout: Duration::from_secs(1),
+        max_frame_bytes: 128,
+    };
+
+    let error = match BridgetClient::connect_with_limits(fixture.path(), "scope-client-012", limits)
+    {
+        Ok(_) => panic!("une trame hors borne doit etre refusee"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        BridgetClientError::FrameTooLarge {
+            max_frame_bytes: 128
+        }
+    ));
+    server.join().expect("serveur termine");
 }
 
 fn message(body: &str) -> PublicMessage {
