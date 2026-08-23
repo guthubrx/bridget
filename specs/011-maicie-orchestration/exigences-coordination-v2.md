@@ -345,7 +345,15 @@ plus vite ; le coût net est un report, pas une perte.
 - **Maicie greffière du catalogue — CŒUR DE MAICIE, exigence produit**
   (décision utilisateur 2026-08-24 : « je voudrais éviter que ce soit une
   spécificité de notre session… je voudrais que ce soit dans le cœur de
-  Maicie ») — bloc F, après 015. Statut : ENGAGEMENT, pas candidate — la
+  Maicie ») — bloc F, après 015. FORMULATION DIRECTRICE (utilisateur,
+  2026-08-24) : « Maicie écrit déjà tout ce qui a été fait [le greffe des
+  missions]. Ce que je veux, c'est systématiser le RESTE À FAIRE — le
+  "j'ai découvert, donc je dois faire". » Le journal du DÛ doit avoir la
+  même rigueur que le journal du FAIT : entrées nées d'événements (mission,
+  incident, review), liées à leur source, à états et transitions journalisés
+  — Maicie PROPOSE FORTEMENT (tri sur faits : récurrence, sévérité déclarée,
+  âge, gate raté), ne JUGE JAMAIS (la promotion en tâche reste au chief of
+  staff/humain — même partage que FR-014/FR-022). Statut : ENGAGEMENT — la
   discipline du journal de bord ne doit dépendre d'aucune session, d'aucun
   référent, d'aucune convention locale ; elle sera un comportement livré,
   testé et documenté de Maicie, utilisable tel quel par toute équipe. l'hygiène du journal de bord collectif repose sur la
