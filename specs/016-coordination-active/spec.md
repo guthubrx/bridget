@@ -2,7 +2,7 @@
 
 **Branche** : `session-16-coordination-active`
 **Créée le** : 2026-08-23
-**Statut** : brouillon soumis à revue hostile
+**Statut** : conception amendée après revue hostile ; re-review requise
 **Source** : politiques 1 à 3 de
 `specs/011-maicie-orchestration/exigences-coordination-v2.md`
 
@@ -44,6 +44,10 @@ assurée par les outboxes durables existantes.
    repli sont figés lors de la création de la délégation. Un changement de
    configuration ne réécrit pas le passé et ne modifie que les nouvelles
    délégations.
+6. **La couverture F27 v1 est volontairement partielle** : elle automatise les
+   messagers après clôture durable d'objectif et ouverture de délégation, mais
+   ne clôt pas elle-même un objectif et ne prétend pas couvrir tout événement
+   attendu. La clôture reste un acte attesté fourni à la politique.
 
 ## Scénarios utilisateurs et tests
 
@@ -105,6 +109,12 @@ indépendant de l'ordre des événements.
 4. **Étant donné** un prérequis annulé ou échoué, **quand** son terminal est
    greffé, **alors** le dépendant reste bloqué avec le motif attesté ; Maicie ne
    transforme pas un échec en réussite ni ne choisit une stratégie de repli.
+5. **Étant donné** une arête utilisant le mode par défaut `hash_greffé`,
+   **quand** le rapport de livraison et son hash sont greffés durablement,
+   **alors** le prérequis qualifie sans prétendre que son contenu a été évalué.
+6. **Étant donné** une arête déclarée `exiger_clôture_évaluée`, **quand** seul
+   le hash de livraison est greffé, **alors** le dépendant reste bloqué jusqu'à
+   la clôture évaluée durable correspondante.
 
 ---
 
@@ -131,15 +141,25 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
    participant.
 2. **Étant donné** la `N`e relance et une chaîne de repli valide, **quand**
    l'événement est traité, **alors** l'ancienne génération devient
-   `réassignée`, une génération successeur est créée et son ouverture est
-   notifiée dans une transaction unique.
+   `réassignée`, une génération successeur est créée, l'annulation de la
+   demande suivie source, la nouvelle demande suivie et les notifications au
+   sortant et au successeur sont préparées dans une transaction unique.
 3. **Étant donné** une livraison durable qui gagne la course avec la `N`e
    relance, **quand** les deux événements sont rejoués dans l'un ou l'autre
    ordre, **alors** une livraison déjà terminale n'est jamais réassignée.
-4. **Étant donné** une chaîne épuisée, un candidat absent de l'objectif ou une
-   observation Bridget non fraîche, **quand** le seuil est atteint, **alors**
+4. **Étant donné** une chaîne épuisée, un candidat absent du snapshot de
+   registre épinglé ou un événement Bridget non frais, **quand** le seuil est
+   atteint, **alors**
    Maicie enregistre `intervention_humaine_requise`, notifie le référent et ne
    crée ni participant ni agent.
+5. **Étant donné** une réponse `answered` corrélée à une relance de la
+   génération active, **quand** elle est greffée, **alors** le compteur de
+   relances consécutives revient à zéro ; seules les relances attestées
+   postérieures peuvent le réarmer.
+6. **Étant donné** une annulation ou clôture administrative de la délégation,
+   **quand** elle gagne la transaction, **alors** le compteur est inhibé, la
+   demande source reçoit une intention d'annulation et le participant sortant
+   une notification durable ; aucune réassignation ultérieure n'est créée.
 
 ### Cas limites communs
 
@@ -154,6 +174,13 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
   tardif lié à son ancienne génération ; elle ne reprend pas l'autorité sur la
   génération active.
 - Une relance répétée avec le même identifiant ne compte qu'une fois.
+- Dans un même lot relevé, un `delivery_report` corrélé à une génération est
+  appliqué avant tout `reminder_sent` de cette génération, indépendamment de
+  l'ordre filaire du lot. Une livraison présente dans le lot gagne donc avant
+  le seuil ; deux lots déjà committés restent ordonnés par leurs transactions.
+- Une réponse corrélée à une relance remet à zéro le compteur de la génération
+  sans constituer une livraison. Une relance distincte ultérieure recommence
+  un nouvel épisode à un.
 - Une suppression ou modification de politique après création n'altère pas le
   snapshot épinglé de la délégation.
 
@@ -168,11 +195,14 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
   fait qui les rend dues. L'envoi est idempotent et reprend les octets exacts.
 - **FR-1603 — Graphe borné (F28)** : les dépendances sont déclarées uniquement
   entre délégations d'un même objectif, sans cycle, doublon ni modification
-  rétroactive après ouverture.
+  rétroactive après ouverture. Chaque arête épingle un mode de qualification
+  fermé : `hash_greffé` par défaut ou `clôture_évaluée_exigée`.
 - **FR-1604 — Ouverture déterministe** : une délégation dépendante s'ouvre si
-  et seulement si tous ses prérequis ont un terminal qualifiant durable. Une
-  annulation, un échec, une observation absente ou non fraîche ne qualifient
-  jamais implicitement.
+  et seulement si tous ses prérequis satisfont durablement le mode épinglé sur
+  leur arête. Le mode par défaut atteste une greffe de hash, pas une évaluation
+  humaine : cet écart à la règle de vérification avant relais est explicite.
+  Une annulation, un échec ou une observation absente ne qualifient jamais
+  implicitement.
 - **FR-1605 — Notification de déblocage** : l'ouverture d'une délégation écrit
   une notification durable à son participant dans la transaction de
   transition. Son rejeu ne peut ni rouvrir la délégation ni renvoyer un autre
@@ -180,17 +210,29 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
 - **FR-1606 — Relances attestées (F29)** : seules les relances émises par
   Bridget et reçues comme événements versionnés, corrélés et idempotents
   peuvent alimenter le compteur de politique. Le temps local et le texte libre
-  ne comptent jamais.
+  ne comptent jamais. Un `answered` corrélé remet le compteur de relances
+  consécutives à zéro sans valoir livraison ; une annulation ou clôture
+  administrative l'inhibe définitivement pour cette génération.
 - **FR-1607 — Politique par classe** : chaque classe de délai définit un seuil
   entier strictement positif et une stratégie de repli déclarative. La version,
-  le seuil et la chaîne ordonnée sont épinglés à la délégation avant toute I/O.
+  le seuil, la chaîne ordonnée et les faits d'appartenance au registre Maicie
+  sont épinglés à la délégation avant toute I/O. La v1 ne consulte pas la
+  disponibilité volatile de candidats tiers dans Bridget.
 - **FR-1608 — Réassignation linéarisée** : au seuil, Maicie DOIT décider dans
   une transaction unique entre livraison déjà terminale, réassignation unique
-  ou intervention humaine. Deux processus concurrents ne peuvent créer deux
-  successeurs.
+  ou intervention humaine. Une réassignation écrit aussi, dans cette même
+  transaction locale, les intentions immuables d'annuler la demande suivie
+  source, de créer la demande suivie du successeur et de notifier les deux
+  participants. Deux processus concurrents ne peuvent créer deux successeurs.
+- **FR-1608a — Arbitrage de relève** : dans un même lot relevé, Maicie DOIT
+  appliquer les `delivery_report` corrélés avant les `reminder_sent` de la même
+  génération, quel que soit leur ordre filaire. Les effets déjà committés dans
+  des lots antérieurs ne sont pas réordonnés.
 - **FR-1609 — Candidats préautorisés** : une chaîne de repli ne contient que
-  des participants existants du même objectif. Une réassignation ne peut
-  appeler aucun chemin de profil, d'approbation ou de spawn.
+  des participants existants du même objectif au snapshot épinglé. Une
+  réassignation ne peut appeler aucun chemin de profil, d'approbation ou de
+  spawn, ni substituer une observation de disponibilité Bridget aux faits du
+  registre.
 - **FR-1610 — Deux vérités** : les décisions citent séparément le fait local
   Maicie et l'événement Bridget avec sa fraîcheur. Une observation incomplète
   bloque l'effet automatique sans être transformée en état métier.
@@ -220,9 +262,13 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
 - **NotificationOutbox** : enveloppe immuable, état `prepared`,
   `outcome_unknown`, `accepted` ou `rejected`, rejouée sans reconstruction.
 - **PolitiqueRéassignation** : version, classe de délai, seuil et chaîne de
-  repli épinglés à une délégation.
+  repli épinglés à une délégation, avec les faits d'appartenance au registre
+  qui autorisent chaque candidat.
 - **LignéeDélégation** : générations successives reliées par un motif de
   réassignation ; une seule génération est active.
+- **ÉpisodeRelance** : demande suivie, génération, compteur consécutif et
+  dernier `answered` corrélé ; une réponse remet le compteur à zéro, une
+  annulation administrative le rend inactif.
 
 ## Critères mesurables
 
@@ -234,13 +280,19 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
   ouvertures attendues, 0 ouverture prématurée et les refus typés prévus.
 - **SC-1603** : pour chaque classe de délai, `N-1` relances produisent 0
   réassignation et la `N`e produit exactement 1 successeur sur 100 répétitions,
-  y compris avec deux processus concurrents et redémarrage.
+  y compris avec deux processus concurrents et redémarrage ; chaque successeur
+  possède une nouvelle demande suivie et l'ancienne demande une annulation
+  durable, avec une notification unique au sortant et au successeur.
 - **SC-1604** : les deux ordres de la course livraison/relance et les quatre
   frontières de crash convergent vers le même terminal, sans double génération
-  ni perte de livraison tardive.
+  ni perte de livraison tardive. Un corpus par lots inverse l'ordre filaire
+  `delivery_report`/`reminder_sent` et conserve la priorité à la livraison ; un
+  `answered` intercalé remet le compteur à zéro et une annulation
+  administrative interdit tout successeur.
 - **SC-1605** : 100 % des tentatives de réassignation vers un participant non
-  déclaré, sans observation fraîche ou après épuisement de chaîne aboutissent à
-  `intervention_humaine_requise`, avec 0 spawn et 0 approbation.
+  déclaré dans le snapshot épinglé, avec événement source non frais ou après
+  épuisement de chaîne aboutissent à `intervention_humaine_requise`, avec 0
+  spawn et 0 approbation.
 - **SC-1606** : une mutation retirant le fait durable, remplaçant l'événement
   attesté par du texte ou autorisant une observation `Gap` fait échouer un
   oracle dédié ; le corpus nominal reste déterministe sur 100 replays.
@@ -255,12 +307,15 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
 ## Hypothèses et dépendances
 
 - Le guichet 015 et ses événements corrélés sont gelés avant le branchement de
-  la session 016. Si l'événement de relance attestée manque au contrat final,
-  son ajout versionné est une gate du lot contrat, pas une déduction locale.
+  la session 016. Le lot A ne peut commencer qu'après merge et gel explicite
+  du contrat 015. Si l'événement de relance attestée manque au contrat final,
+  son ajout versionné est une extension 016 négociée, pas une déduction locale.
 - Les participants de repli existent déjà dans l'objectif et ont été admis par
   les voies d'approbation antérieures. La session ne gère pas leur naissance.
-- Le terminal qualifiant v1 d'un prérequis est une livraison durable validée
-  par Maicie ; une simple acceptation transport ne suffit pas.
+- Le terminal qualifiant v1 par défaut est la greffe durable du hash de
+  livraison. Une arête qui exige la règle stricte de vérification avant relais
+  porte explicitement `clôture_évaluée_exigée` ; une simple acceptation
+  transport ne suffit jamais dans les deux modes.
 - Les politiques s'appliquent à un objectif à la fois. Les dépendances entre
   objectifs, routines récurrentes et planification calendaire restent hors
   périmètre.
@@ -283,7 +338,7 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
 |---|---|---|---|
 | F27 / politique 1 | commits, verdicts et fins de banc muets ; le référent devait annoncer chaque hash | FR-1601, FR-1602, FR-1613 | SC-1601, SC-1607 |
 | F28 / politique 2 | prospective est restée en attente d'interfaces et de gates déjà livrés jusqu'au réveil manuel | FR-1603 à FR-1605 | SC-1602, SC-1607 |
-| F29 / politique 3 | creux d'agents constatés par l'utilisateur ; deux relances factuelles sans commit avant réassignation manuelle | FR-1606 à FR-1609 | SC-1603 à SC-1605, SC-1607 |
+| F29 / politique 3 | creux d'agents constatés par l'utilisateur ; deux relances factuelles sans commit avant réassignation manuelle | FR-1606 à FR-1609, FR-1608a | SC-1603 à SC-1605, SC-1607 |
 | Relais manuels et corrélation perdue | des réponses non liées ont provoqué des rappels et doubles réponses ; les crashs imposaient de retrouver le terminal réel | FR-1613, FR-1614 | SC-1601, SC-1604 |
 | Politiques manuelles purement factuelles | aucune des trois politiques exécutées ce jour-là ne nécessitait de lire le contenu livré | FR-1611 | SC-1606 |
 | Tentatives répétées de préserver la porte humaine | une réassignation opérationnelle ne valait ni approbation ni naissance d'agent | FR-1609, FR-1612 | SC-1605 |

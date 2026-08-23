@@ -2,7 +2,7 @@
 
 **Branche** : `session-16-coordination-active` | **Date** : 2026-08-23
 **Spec** : `specs/016-coordination-active/spec.md`
-**Statut** : conception soumise à revue hostile ; tâches et code non autorisés
+**Statut** : conception amendée après revue hostile ; tâches et code non autorisés avant re-review
 
 ## Résumé
 
@@ -56,17 +56,26 @@ Les clés sont dérivées d'identifiants durables, pas du contenu rendu :
 
 - notification F27 : `(event_id, recipient_id, policy_version)` ;
 - ouverture F28 : `(delegation_id, generation, opened_event_id)` ;
-- réassignation F29 : `(delegation_id, source_generation, threshold_event_id)`.
+- réassignation F29 : `(delegation_id, source_generation, threshold_event_id,
+  effect_kind, recipient_id?)`, afin que l'annulation, la nouvelle demande et
+  les deux notifications aient chacune une clé stable distincte.
 
 Un crash avant commit ne laisse aucun effet ; après commit, toute reprise voit
 exactement les mêmes outboxes.
 
-### D-1603 — Graphe local par objectif, sémantique `tous réussis`
+### D-1603 — Graphe local par objectif, qualification épinglée par arête
 
 Le graphe est un DAG borné entre délégations d'un même objectif. Les arêtes
-sont ajoutées avant l'ouverture du dépendant. La v1 retient une seule règle :
-le dépendant s'ouvre lorsque tous ses prérequis ont une livraison durable
-qualifiante. Annulation et échec restent des blocages explicites.
+sont ajoutées avant l'ouverture du dépendant et portent un mode fermé :
+`hash_greffé` par défaut ou `clôture_évaluée_exigée`. Le dépendant s'ouvre
+lorsque tous ses prérequis satisfont leur mode. Annulation et échec restent des
+blocages explicites.
+
+Le défaut `hash_greffé` est un choix mécanique et minimal : il prouve qu'une
+livraison corrélée a été greffée, pas qu'un humain l'a évaluée. Il constitue
+donc un écart explicite à la règle stricte de vérification avant relais. Le
+déclarant qui sait que son arête exige cette preuve choisit
+`clôture_évaluée_exigée` ; Maicie ne l'infère jamais du corps du rapport.
 
 Une règle `any`, des conditions booléennes ou des dépendances inter-objectifs
 seraient un langage de workflow nouveau sans incident fondateur. Elles sont
@@ -76,15 +85,21 @@ La validation de cycle parcourt uniquement le sous-graphe de l'objectif lors
 de l'ajout. L'évaluation d'une fin utilise un index `prérequis → dépendants` et
 ne rescane pas tous les objectifs.
 
-### D-1604 — Politique épinglée par délégation
+### D-1604 — Politique et admissibilité épinglées par délégation
 
 La configuration associe à chaque classe de délai un seuil `N > 0`. À la
 création, la délégation reçoit un snapshot immuable comprenant version, seuil
-et chaîne ordonnée de participants de repli. Un changement de configuration
-ne modifie que les nouvelles délégations.
+et chaîne ordonnée de participants de repli. Chaque entrée épingle aussi les
+faits Maicie qui l'autorisent : `objective_id`, `participant_id`, version
+d'appartenance au registre et exclusion du pilote. Un changement de
+configuration ou d'annuaire ne modifie que les nouvelles délégations.
 
 Ce snapshot supprime une double source de vérité : la configuration courante
 explique le futur ; le snapshot explique toute décision passée ou rejouée.
+La v1 choisit uniquement à partir de ces faits de registre. Elle ne consulte
+pas une présence ou disponibilité Bridget volatile pour départager ou sauter
+un candidat ; l'issue de livraison ultérieure reste une vérité transport
+séparée.
 
 ### D-1605 — Réassignation par génération, jamais par remplacement en place
 
@@ -94,13 +109,25 @@ comme `réassignée`, puis crée une génération successeur vers le premier
 candidat admissible de la chaîne épinglée.
 
 L'admissibilité est fermée : participant du même objectif, différent du pilote
-et de la génération source, non déjà consommé par la lignée, observation
-Bridget fraîche et disponible. Si aucun candidat ne satisfait ces faits,
-Maicie écrit `intervention_humaine_requise`. Elle n'appelle jamais les voies
-profil, approbation ou spawn.
+et de la génération source, présent dans le snapshot épinglé, non déjà consommé
+par la lignée. Si aucun candidat ne satisfait ces faits, Maicie écrit
+`intervention_humaine_requise`. Elle n'appelle jamais les voies profil,
+approbation ou spawn.
+
+La même transaction locale crée quatre effets immuables : une intention
+`CancelRequest` pour la demande suivie source, une nouvelle demande suivie avec
+sa propre échéance pour la génération successeur, une notification au
+participant sortant et une notification au successeur. Il ne s'agit pas d'une
+transaction distribuée : le commit rend ces quatre outboxes indissociables,
+puis leur livraison idempotente fait converger Bridget. Une génération 2 est
+donc observable et relançable selon F29 comme la génération 1.
 
 Une livraison tardive de l'ancienne génération est conservée comme fait tardif
 et ne réactive pas cette génération.
+
+Une annulation ou clôture administrative gagnante inhibe immédiatement le
+compteur, prépare l'annulation de la demande suivie et notifie le participant
+sortant. Elle ne crée jamais de successeur.
 
 ### D-1606 — Bridget garde l'horloge et atteste les relances
 
@@ -108,6 +135,17 @@ Maicie ne calcule jamais « il est temps de relancer ». Bridget émet déjà le
 relances et possède leurs échéances. La session exige un événement de guichet
 `reminder_sent` corrélé à la demande, au message de relance, au destinataire et
 à son instant. Seuls des `event_id` distincts comptent.
+
+Un `answered` attesté et corrélé à une relance de la génération active ne vaut
+pas livraison, mais termine l'épisode de silence : le compteur consécutif est
+remis à zéro. Une relance distincte postérieure le réarme à un. Cette règle
+protège une réponse réelle sans transformer son contenu en preuve de livraison.
+
+La relève normalise chaque lot avant réduction : tous les `delivery_report`
+corrélés d'une génération sont appliqués avant ses `reminder_sent`, même si le
+fil les présente dans l'ordre inverse. Une livraison présente dans le même lot
+gagne donc la course. La normalisation ne réordonne jamais des lots déjà
+committés.
 
 Si 015 ne publie pas encore cet événement, le lot contrat l'ajoute de manière
 versionnée. Une lecture directe du ledger, une déduction depuis l'âge ou un
@@ -160,9 +198,14 @@ dispatcher d'outbox idempotent
    déclarée avant cette clôture.
 3. Le dispatcher envoie les notifications. Un accusé perdu rejoue la même clé.
 
+La v1 ne produit pas la clôture de l'objectif : elle automatise uniquement le
+messager dû après cette clôture attestée, ainsi que le messager d'ouverture de
+délégation. Cette couverture partielle de F27 est mesurée telle quelle.
+
 ### Flux F28 — déblocage
 
-1. Une livraison qualifiante termine un prérequis.
+1. Une greffe de hash ou une clôture évaluée satisfait le mode épinglé de
+   l'arête du prérequis.
 2. Le store charge seulement les dépendants indexés par ce prérequis.
 3. Pour chacun, il vérifie tous les prérequis dans le même snapshot.
 4. Le dernier prérequis ouvre la délégation et crée sa notification ; les
@@ -170,19 +213,23 @@ dispatcher d'outbox idempotent
 
 ### Flux F29 — réassignation
 
-1. Bridget dépose `reminder_sent` au guichet.
-2. Maicie déduplique l'événement et compte les relances distinctes de la
-   génération active.
+1. Bridget dépose `reminder_sent`, `answered` et `delivery_report` corrélés au
+   guichet.
+2. Maicie priorise les rapports du lot, déduplique les événements et compte les
+   relances consécutives de la génération active ; `answered` remet ce compte à
+   zéro.
 3. Avant le seuil : aucun effet. Au seuil : la transaction arbitre entre une
    livraison déjà durable, un successeur admissible ou l'intervention humaine.
-4. Le successeur reçoit une notification d'ouverture via l'outbox commune.
+4. Le commit prépare l'annulation source, la demande suivie successeur et les
+   notifications au sortant et au successeur ; le dispatcher les fait
+   converger après commit.
 
 ## Frontières de propriété
 
 | Élément | Autorité | Interdit |
 |---|---|---|
 | échéance, relance envoyée, message, demande, transport, fraîcheur | Bridget | choisir le successeur ou ouvrir une délégation |
-| objectif, DAG, états de délégation, lignée, politique épinglée, décision | registre Maicie | fabriquer une relance, un participant ou une observation transport |
+| objectif, DAG, états de délégation, lignée, politique et candidats épinglés, décision | registre Maicie | fabriquer une relance, un participant ou une observation transport |
 | notifications | outbox Maicie + livraison Bridget | effet avant commit ou reconstruction depuis le corps humain |
 | profils et naissance d'agents | approbation locale FR-014 | accès par F27, F28 ou F29 |
 
@@ -194,10 +241,33 @@ dispatcher d'outbox idempotent
 | FR-014 / approbation | PASS | réassignation limitée aux participants préexistants ; épuisement → intervention humaine |
 | Deux vérités | PASS | événements/fraîcheur Bridget et états Maicie restent séparés dans les décisions |
 | État durable | PASS sous tests de crash | décision, transition et outbox partagent une transaction locale ; livraison reprise par idempotence |
-| Minimalisme XIX | PASS | DAG `tous réussis`, chaîne déclarée et un événement de relance ; aucun moteur de workflow générique |
+| Minimalisme XIX | PASS | DAG `tous prérequis satisfaits`, modes d'arête fermés, chaîne déclarée et événements attestés ; aucun moteur de workflow générique |
 | Complexité XVIII | PASS sous index | traitement proportionnel aux destinataires/dépendants concernés, sans scan global ni polling |
 | Responsabilité future XX | PASS | politiques versionnées et explicables ; chaque automatisme possède un oracle de mutation |
 | Compatibilité | PASS sous négociation | l'événement de relance est additif ; sans politique active, aucun comportement historique ne change |
+
+## Gate d'entrée G-1600
+
+Le lot A reste fermé jusqu'à ce que le contrat 015 soit mergé, déclaré gelé et
+que ses fixtures publiques soient pinnées. L'éventuel `reminder_sent` absent
+est alors une extension 016 versionnée et relue, jamais une interprétation
+locale d'un message 015. Aucun code A, B ou C ne peut consommer un DTO
+provisoire avant cette gate.
+
+## Fermeture de la revue hostile
+
+| Constat | Décision vérifiable |
+|---|---|
+| C1, C5b | La transaction F29 crée l'annulation source, la demande suivie successeur et les notifications au sortant et au successeur. |
+| C2 | Chaque arête épingle `hash_greffé` par défaut ou `clôture_évaluée_exigée` ; l'écart du mode par défaut avec la vérification humaine est écrit. |
+| C3 | La v1 choisit uniquement dans le snapshot des faits du registre Maicie épinglé, jamais depuis une disponibilité Bridget volatile. |
+| C4 | Un `answered` corrélé remet le compteur consécutif à zéro ; une relance ultérieure le réarme. |
+| C5a | Une annulation ou clôture administrative inhibe le compteur et ne peut produire de successeur. |
+| C6 | Un `delivery_report` du même lot est réduit avant les relances de sa génération, indépendamment de l'ordre filaire. |
+| C7 | G-1600 interdit le lot A avant merge et gel du contrat 015. |
+| C8 | F27 v1 est explicitement partielle : elle transporte la clôture, elle ne la décide pas. |
+| C9 | Les clés F29 distinguent chaque effet et les bornes anti-tempête restent fermées par génération et destinataire. |
+| C10 | Le lot B possède dans `store.rs` la couture de toutes les clôtures vers la transaction FR-1602 et son oracle de mutation. |
 
 ## Structure projet envisagée
 
@@ -258,11 +328,17 @@ ne peut se faire passer pour une relance.
   notifications ;
 - réducteur pur et matrice fermée des effets ;
 - transaction décision/transition/outbox ;
+- couture de **tous** les chemins de clôture d'objectif existants vers une API
+  commune qui écrit la clôture et les outboxes FR-1602 dans la même transaction
+  de `store.rs` ; aucun appelant ne peut clôturer puis notifier séparément ;
 - validation DAG, index inversé et arbitrage atomique livraison/réassignation ;
+- modes de qualification par arête, épisodes de relance, annulation
+  administrative et cycle complet des demandes inter-générations ;
 - crashs réels et tests SQLite concurrents.
 
-**Gate B** : une mutation séparant transition et outbox, retirant le contrôle
-de génération ou autorisant un cycle fait échouer un test nommé.
+**Gate B** : une mutation séparant transition et outbox, contournant la couture
+FR-1602 depuis un chemin de clôture existant, retirant le contrôle de
+génération ou autorisant un cycle fait échouer un test nommé.
 
 ### Lot C — Application, configuration et gate de bout en bout (codeur C)
 
@@ -286,7 +362,8 @@ si une voie de politique atteint profil/approve/spawn.
 
 ### Discipline d'intégration
 
-1. A fige le contrat et ses fixtures avant consommation par C.
+1. G-1600 exige le contrat 015 mergé et gelé ; A fige ensuite l'extension 016 et
+   ses fixtures avant consommation par C.
 2. B publie les DTO et signatures du store avant le branchement de C ; C ne
    modifie jamais `store.rs` ou `domain.rs`.
 3. Les couloirs valident leurs cibles pendant le travail ; le workspace complet
@@ -299,10 +376,10 @@ si une voie de politique atteint profil/approve/spawn.
 
 | Exigences | Décisions | Propriétaire | Gate principal |
 |---|---|---|---|
-| FR-1601, FR-1602 | D-1602, D-1608 | B puis C | clôture + outboxes atomiques, crashs et zéro doublon |
+| FR-1601, FR-1602 | D-1602, D-1608 | B puis C | couture de toutes les clôtures + outboxes atomiques, crashs et zéro doublon |
 | FR-1603 à FR-1605 | D-1602, D-1603 | B | corpus DAG, concurrence du dernier prérequis, notification unique |
-| FR-1606 | D-1601, D-1606 | A puis C | événement attesté versionné, texte libre refusé |
-| FR-1607 à FR-1609 | D-1604, D-1605 | B puis C | seuils par classe, génération unique, aucun accès profil/spawn |
+| FR-1606 | D-1601, D-1606 | A puis C | relance/answered attestés, reset du compteur, texte libre refusé |
+| FR-1607 à FR-1609, FR-1608a | D-1604 à D-1606 | B puis C | candidats registre épinglés, priorité du lot, cycle complet des demandes, aucun accès profil/spawn |
 | FR-1610 | D-1607 | A et C | Gap/Unavailable/non frais bloquent tout effet automatique |
 | FR-1611 | D-1601 | B | replay déterministe et mutations d'oracle sans réseau/horloge |
 | FR-1612 | D-1605 | B et C | routes d'approbation structurellement inaccessibles |
@@ -322,6 +399,12 @@ si une voie de politique atteint profil/approve/spawn.
 
 - deux connexions concurrentes terminent deux prérequis du même dépendant ;
 - livraison et `N`e relance courent sur la même génération ;
+- `delivery_report` et `reminder_sent` apparaissent dans le même lot dans les
+  deux ordres filaires et la livraison gagne dans les deux cas ;
+- `answered` remet le compteur à zéro, une relance postérieure le réarme et une
+  annulation administrative interdit toute réassignation ;
+- une réassignation crée atomiquement annulation source, demande successeur et
+  notifications aux deux participants ;
 - deux relèves consomment le même événement ;
 - faute injectée après décision mais avant transition/outbox entraîne rollback
   total, puis reprise unique.
