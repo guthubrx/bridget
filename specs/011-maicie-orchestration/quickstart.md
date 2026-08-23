@@ -47,7 +47,12 @@ MVP existent ; le scénario d'activation exige la clôture de T023.
 4. Vérifier qu'une issue Bridget ou une consultation utilisateur est nécessaire
    pour modifier la vue de coordination.
 
-## 5. Profil inactif
+## 5. Profil inactif — API/test-only
+
+La surface CLI `profile` / `approve` / `refuse` n'est pas encore exposée.
+Ce scénario valide les contrats applicatifs et les tests d'intégration de T023 ;
+il ne constitue pas une suite de commandes utilisateur praticables. La surface
+CLI d'approbation humaine locale sera spécifiée séparément.
 
 1. Déclarer un profil Sentry avec la capacité `sécurité-infrastructure`.
 2. Confier un objectif correspondant sans agent sécurité connecté.
@@ -65,5 +70,6 @@ MVP existent ; le scénario d'activation exige la clôture de T023.
 
 ## Résultat attendu
 
-Tous les scénarios sont reproductibles par CLI et JSON. Ils ne requièrent ni
-GUI, ni TUI, ni DSH, ni T3 Code.
+Les scénarios 1 à 4 sont reproductibles par CLI et JSON. Le scénario 5 est
+reproductible par les API et tests d'intégration, jusqu'à la livraison d'une
+surface CLI dédiée. Aucun scénario ne requiert GUI, TUI, DSH ou T3 Code.
