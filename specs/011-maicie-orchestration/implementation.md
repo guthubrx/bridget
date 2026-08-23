@@ -15,3 +15,15 @@
 - Cosmétique connue : `send_idempotent` sérialise l'enveloppe deux fois
   (validation puis émission) ; coût local négligeable, à considérer seulement
   lors d'une optimisation mesurée.
+
+## T015a — issues terminales attestées
+
+Les refus, annulations et échecs locaux terminalisés par Bridget font passer
+l'objectif à `a_evaluer` dans la transaction qui fige l'issue, avec une
+décision `constater_issue` et la transition de délégation correspondante. Une
+livraison `accepted` ne vaut ni réponse ni clôture.
+
+T015b est reportée à la phase 4 : avant toute évolution du protocole Bridget,
+T017/T018 doivent établir si Subscribe 008 et `in_reply_to` corrèlent les
+réponses et les timeouts de manière suffisamment fraîche, sans inférence
+locale ni seconde source de vérité.

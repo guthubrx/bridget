@@ -226,6 +226,7 @@ fn all_type_decision() -> Vec<TypeDecision> {
     vec![
         TypeDecision::AjouterParticipant,
         TypeDecision::RetirerParticipant,
+        TypeDecision::ConstaterIssue,
         TypeDecision::Relancer,
         TypeDecision::ReveillerProfil,
         TypeDecision::Cloturer,
@@ -236,6 +237,7 @@ fn exhaustive_type_decision(value: TypeDecision) {
     match value {
         TypeDecision::AjouterParticipant
         | TypeDecision::RetirerParticipant
+        | TypeDecision::ConstaterIssue
         | TypeDecision::Relancer
         | TypeDecision::ReveillerProfil
         | TypeDecision::Cloturer => {}

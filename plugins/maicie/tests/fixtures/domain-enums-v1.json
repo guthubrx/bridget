@@ -52,6 +52,7 @@
   "type_decision": [
     "ajouter_participant",
     "retirer_participant",
+    "constater_issue",
     "relancer",
     "reveiller_profil",
     "cloturer"

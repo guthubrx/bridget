@@ -206,7 +206,7 @@ pub fn reconcile_startup_at_observed_with_limits(
                 reason,
                 ..
             } => {
-                store.record_local_failure(message_id, reason)?;
+                store.record_local_failure_at(message_id, reason, observed_at)?;
                 ReconcileAction::RejetLocal {
                     objective_id,
                     message_id,
@@ -305,7 +305,7 @@ fn uncertain_or_error(
     error: BridgetClientError,
 ) -> Result<ReconcileAction, ReconcileError> {
     if let Some(reason) = local_failure_reason(&error) {
-        store.record_local_failure(outbox.message_id, reason)?;
+        store.record_local_failure_at(outbox.message_id, reason, observed_at)?;
         return Ok(ReconcileAction::RejetLocal {
             objective_id: outbox.objective_id,
             message_id: outbox.message_id,

@@ -9,7 +9,7 @@ use crate::bridget_client::{IdempotencyIssue, SpawnOutcome};
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, DecisionCoordination, DomainError,
     EtatActivationOutbox, EtatDecision, EtatDelegation, EtatObjectif, EtatOutboxDelegation,
-    ObjectifCoordonne, TypeDecision,
+    Delegation, ObjectifCoordonne, TypeDecision,
 };
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
@@ -49,6 +49,7 @@ type StoredActivationApproval = (
     String,
     String,
 );
+type StoredDelegationAggregates = (String, String, String, Vec<u8>, String, Vec<u8>);
 
 /// Autorité d'écriture unique de l'état Maicie.
 pub struct MaicieStore {
@@ -647,6 +648,7 @@ impl MaicieStore {
         };
         if current_terminal == 1 {
             if current_issue.as_deref() == Some(issue_bytes.as_slice()) {
+                coordinate_terminal_issue(&tx, message_id, issue, observed_at)?;
                 tx.commit().map_err(StoreError::Sql)?;
                 return Ok(());
             }
@@ -679,6 +681,7 @@ impl MaicieStore {
                 "outbox modifiée concurremment pendant la transition",
             ));
         }
+        coordinate_terminal_issue(&tx, message_id, issue, observed_at)?;
         tx.commit().map_err(StoreError::Sql)
     }
 
@@ -688,6 +691,29 @@ impl MaicieStore {
         &mut self,
         message_id: Uuid,
         reason: LocalFailureReason,
+    ) -> Result<(), StoreError> {
+        self.record_local_failure_inner(message_id, reason, None)
+    }
+
+    /// Variante de réconciliation : l'heure d'observation rend possible la
+    /// transition coordonnée sans jamais inventer une horloge locale.
+    pub fn record_local_failure_at(
+        &mut self,
+        message_id: Uuid,
+        reason: LocalFailureReason,
+        observed_at: i64,
+    ) -> Result<(), StoreError> {
+        if observed_at <= 0 {
+            return Err(StoreError::Invalid("observed_at invalide"));
+        }
+        self.record_local_failure_inner(message_id, reason, Some(observed_at))
+    }
+
+    fn record_local_failure_inner(
+        &mut self,
+        message_id: Uuid,
+        reason: LocalFailureReason,
+        observed_at: Option<i64>,
     ) -> Result<(), StoreError> {
         let issue_bytes =
             serde_json::to_vec(&json!({"local": reason.as_str()})).map_err(StoreError::Json)?;
@@ -706,6 +732,9 @@ impl MaicieStore {
         };
         if current_terminal == 1 {
             if current_issue.as_deref() == Some(issue_bytes.as_slice()) {
+                if let Some(observed_at) = observed_at {
+                    coordinate_local_failure(&tx, message_id, reason, observed_at)?;
+                }
                 tx.commit().map_err(StoreError::Sql)?;
                 return Ok(());
             }
@@ -729,6 +758,9 @@ impl MaicieStore {
             return Err(StoreError::Conflict(
                 "outbox modifiée concurremment pendant le rejet local",
             ));
+        }
+        if let Some(observed_at) = observed_at {
+            coordinate_local_failure(&tx, message_id, reason, observed_at)?;
         }
         tx.commit().map_err(StoreError::Sql)
     }
@@ -1610,6 +1642,235 @@ fn upsert_objective(tx: &Transaction<'_>, objective: &ObjectifCoordonne) -> Resu
     } else {
         Err(StoreError::Conflict(
             "objectif modifié concurremment pendant la transition",
+        ))
+    }
+}
+
+/// Applique l'effet de coordination d'une issue terminale dans la transaction
+/// qui la fige dans l'outbox. Une livraison `accepted` ne vaut pas réponse et
+/// n'entraîne donc aucun jugement métier.
+fn coordinate_terminal_issue(
+    tx: &Transaction<'_>,
+    message_id: Uuid,
+    issue: &IdempotencyIssue,
+    observed_at: i64,
+) -> Result<(), StoreError> {
+    let Some(outcome) = terminal_issue_outcome(issue) else {
+        return Ok(());
+    };
+    coordinate_delegation_outcome(tx, message_id, observed_at, outcome)
+}
+
+/// Un rejet local terminal doit être visible au même titre qu'un refus Bridget
+/// afin que la coordination ne reste pas silencieusement en cours.
+fn coordinate_local_failure(
+    tx: &Transaction<'_>,
+    message_id: Uuid,
+    reason: LocalFailureReason,
+    observed_at: i64,
+) -> Result<(), StoreError> {
+    let outcome = match reason {
+        LocalFailureReason::FrameTooLarge => TerminalDelegationOutcome::LocalFrameTooLarge,
+        LocalFailureReason::InvalidEnvelope => TerminalDelegationOutcome::LocalInvalidEnvelope,
+    };
+    coordinate_delegation_outcome(tx, message_id, observed_at, outcome)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalDelegationOutcome {
+    Rejected,
+    Cancelled,
+    LocalFrameTooLarge,
+    LocalInvalidEnvelope,
+}
+
+impl TerminalDelegationOutcome {
+    fn motif(self) -> &'static str {
+        match self {
+            Self::Rejected => "issue terminale Bridget : rejet de livraison",
+            Self::Cancelled => "issue terminale Bridget : annulation de livraison",
+            Self::LocalFrameTooLarge => "échec local : trame de livraison trop grande",
+            Self::LocalInvalidEnvelope => "échec local : enveloppe de livraison invalide",
+        }
+    }
+
+    fn cancels_delegation(self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
+}
+
+fn terminal_issue_outcome(issue: &IdempotencyIssue) -> Option<TerminalDelegationOutcome> {
+    match issue {
+        IdempotencyIssue::Rejected { category, .. } if category == "cancelled" => {
+            Some(TerminalDelegationOutcome::Cancelled)
+        }
+        IdempotencyIssue::Rejected { .. }
+        | IdempotencyIssue::EnvelopeMismatch
+        | IdempotencyIssue::IdempotencyExpired
+        | IdempotencyIssue::InvalidIssuedAt => Some(TerminalDelegationOutcome::Rejected),
+        IdempotencyIssue::Accepted { .. } | IdempotencyIssue::OutcomeUnknown { .. } => None,
+    }
+}
+
+/// Fige l'audit et les deux agrégats de coordination en une unique
+/// transaction. L'identifiant de décision est le `message_id` durable : le
+/// traitement reste idempotent après un crash sans créer une seconde décision.
+fn coordinate_delegation_outcome(
+    tx: &Transaction<'_>,
+    message_id: Uuid,
+    observed_at: i64,
+    outcome: TerminalDelegationOutcome,
+) -> Result<(), StoreError> {
+    let row: Option<StoredDelegationAggregates> = tx
+        .query_row(
+            "SELECT o.objective_id, o.delegation_id, obj.state, obj.payload_json,\n\
+                    d.state, d.payload_json\n\
+             FROM delegation_outbox o\n\
+             JOIN objectives obj ON obj.id = o.objective_id\n\
+             JOIN delegations d ON d.id = o.delegation_id\n\
+             WHERE o.message_id = ?1",
+            [message_id.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    let Some((objective_id, delegation_id, objective_state, objective_json, delegation_state, delegation_json)) = row else {
+        return Err(StoreError::Corrupt("outbox terminale sans agrégats corrélés"));
+    };
+
+    let mut objective: ObjectifCoordonne =
+        serde_json::from_slice(&objective_json).map_err(StoreError::Json)?;
+    let mut delegation: Delegation =
+        serde_json::from_slice(&delegation_json).map_err(StoreError::Json)?;
+    if objective.id.to_string() != objective_id
+        || objective.etat != parse_objective_state(&objective_state)?
+        || delegation.id.to_string() != delegation_id
+        || delegation.objectif_id != objective.id
+        || delegation.etat != parse_delegation_state(&delegation_state)?
+    {
+        return Err(StoreError::Corrupt("agrégats de délégation divergents"));
+    }
+
+    if objective.etat == EtatObjectif::EnCoordination {
+        if observed_at <= 0 {
+            return Err(StoreError::Invalid("observed_at invalide"));
+        }
+        objective
+            .transition(EtatObjectif::AEvaluer, observed_at)
+            .map_err(StoreError::Domain)?;
+    }
+    match (delegation.etat, outcome.cancels_delegation()) {
+        (EtatDelegation::Creee, true) | (EtatDelegation::AEvaluer, true) => {
+            delegation.annuler().map_err(StoreError::Domain)?;
+        }
+        (EtatDelegation::Creee, false) => delegation
+            .transition(EtatDelegation::AEvaluer)
+            .map_err(StoreError::Domain)?,
+        _ => {}
+    }
+
+    let decision = DecisionCoordination {
+        id: message_id,
+        objectif_id: objective.id,
+        kind: TypeDecision::ConstaterIssue,
+        proposee_par: "maicie".to_string(),
+        etat: EtatDecision::Appliquee,
+        motif: outcome.motif().to_string(),
+    };
+    let decision_json = serde_json::to_vec(&decision).map_err(StoreError::Json)?;
+    let existing: Option<Vec<u8>> = tx
+        .query_row(
+            "SELECT payload_json FROM coordination_decisions WHERE id = ?1",
+            [message_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    if let Some(existing) = existing {
+        if existing == decision_json {
+            return Ok(());
+        }
+        return Err(StoreError::Conflict("décision d'issue terminale divergente"));
+    }
+
+    upsert_objective(tx, &objective)?;
+    upsert_delegation(tx, &delegation)?;
+    let inserted = tx
+        .execute(
+            "INSERT INTO coordination_decisions(id, objective_id, state, payload_json)\n\
+             VALUES (?1, ?2, 'applied', ?3)",
+            params![message_id.to_string(), objective.id.to_string(), decision_json],
+        )
+        .map_err(StoreError::Sql)?;
+    if inserted != 1 {
+        return Err(StoreError::Conflict("décision d'issue terminale non enregistrée"));
+    }
+    Ok(())
+}
+
+fn upsert_delegation(tx: &Transaction<'_>, delegation: &Delegation) -> Result<(), StoreError> {
+    let id = delegation.id.to_string();
+    let incoming_json = serde_json::to_vec(delegation).map_err(StoreError::Json)?;
+    let current: Option<(String, Vec<u8>)> = tx
+        .query_row(
+            "SELECT state, payload_json FROM delegations WHERE id = ?1",
+            [&id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    let Some((current_state, current_json)) = current else {
+        return Err(StoreError::NotFound("délégation absente"));
+    };
+    let mut current_delegation: Delegation =
+        serde_json::from_slice(&current_json).map_err(StoreError::Json)?;
+    if current_delegation.etat != parse_delegation_state(&current_state)? {
+        return Err(StoreError::Corrupt(
+            "état délégation divergent de son payload",
+        ));
+    }
+    if current_delegation == *delegation {
+        return Ok(());
+    }
+    if delegation.etat == EtatDelegation::Annulee {
+        current_delegation.annuler().map_err(StoreError::Domain)?;
+    } else {
+        current_delegation
+            .transition(delegation.etat)
+            .map_err(StoreError::Domain)?;
+    }
+    if current_delegation != *delegation {
+        return Err(StoreError::Conflict(
+            "payload délégation incohérent avec la transition",
+        ));
+    }
+    let changed = tx
+        .execute(
+            "UPDATE delegations SET state = ?1, payload_json = ?2\n\
+             WHERE id = ?3 AND state = ?4 AND payload_json = ?5",
+            params![
+                delegation_state_name(delegation.etat),
+                incoming_json,
+                id,
+                current_state,
+                current_json
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(StoreError::Conflict(
+            "délégation modifiée concurremment pendant la transition",
         ))
     }
 }

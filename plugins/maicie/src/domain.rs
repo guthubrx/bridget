@@ -52,6 +52,8 @@ pub struct ObjectifCoordonne {
 pub enum TypeDecision {
     AjouterParticipant,
     RetirerParticipant,
+    /// Constate une issue terminale Bridget sans la transformer en clôture.
+    ConstaterIssue,
     Relancer,
     ReveillerProfil,
     Cloturer,
