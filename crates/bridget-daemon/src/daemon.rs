@@ -4802,6 +4802,12 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
     }
 }
 
+const BUILD_ID_PROBE_IDENTITY: &str = "bridget-status-build-id";
+
+fn build_id_probe_issuer_scope() -> String {
+    crate::mcp::issuer_scope(BUILD_ID_PROBE_IDENTITY)
+}
+
 fn daemon_build_id(socket_path: &std::path::Path) -> Option<String> {
     use std::io::{BufRead, BufReader, BufWriter, Write};
     use std::os::unix::net::UnixStream;
@@ -4823,10 +4829,9 @@ fn daemon_build_id(socket_path: &std::path::Path) -> Option<String> {
     }
     writeln!(writer, "{}", encode(&WrapperToDaemon::ClientHello {
         contract_version: CLIENT_CONTRACT_VERSION,
-        // La portée doit respecter les mêmes 22 octets minimaux que tout
-        // client public ; sinon le daemon refuse ClientHello et le statut
-        // masque cet échec sous "inconnu".
-        issuer_scope: "status_build_id_probe_0".to_string(),
+        // Même dérivation que les clients normaux : la sonde reste compatible
+        // avec toute évolution de la validation de portée.
+        issuer_scope: build_id_probe_issuer_scope(),
         capabilities: Vec::new(),
     }).ok()?).ok()?;
     writer.flush().ok()?;
@@ -5008,6 +5013,13 @@ mod presence_tests {
                 e
             );
         }
+    }
+
+    #[test]
+    fn sonde_build_id_partage_la_derivation_de_portee_client() {
+        let expected = crate::mcp::issuer_scope(BUILD_ID_PROBE_IDENTITY);
+        assert_eq!(build_id_probe_issuer_scope(), expected);
+        assert!(crate::idempotency::validate_issuer_scope(&expected).is_ok());
     }
 
     /// Construit un état minimal avec un agent enregistré et sa présence.
