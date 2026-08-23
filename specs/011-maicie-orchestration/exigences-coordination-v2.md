@@ -173,12 +173,12 @@ Trous réels retenus :
 Gadgets rejetés : résumé LLM (par quiconque), résumé continu par tour,
 approbation en lot, graphe d'ordre de relance, snapshot d'équipe séparé de
 fleet.json, replay de contexte automatique au-delà de la carte de réveil.
-- **Toolchain non épinglée** (constaté 2026-08-23) : aucun rust-toolchain.toml
+- ✅ LIVRÉ (bloc C : Rust 1.92.0 épinglé + rustfmt assumé) — **Toolchain non épinglée** (constaté 2026-08-23) : aucun rust-toolchain.toml
   au repo ; la stable locale (plus récente que le style committé) fait de tout
   `cargo fmt` un générateur de bruit (réordonnancement d'imports style 2024).
   Un WIP fantôme main.rs/store.rs en est né et a été jeté. Épingler la
   toolchain, puis un commit rustfmt unique et assumé.
-- **Préambule d'identité sauté sur `codex resume`** (constaté 2026-08-23 soir) :
+- ✅ LIVRÉ (014, amorçage causal testé) — **Préambule d'identité sauté sur `codex resume`** (constaté 2026-08-23 soir) :
   l'heuristique has_prompt du wrapper (wrapper.rs:807) traite tout argument
   sans tirets comme un prompt utilisateur ; la sous-commande codex `resume`
   déclenche donc le silence — `bridget claude --resume` reçoit son préambule,
@@ -196,19 +196,19 @@ fleet.json, replay de contexte automatique au-delà de la carte de réveil.
   (tâche 6 — décision utilisateur du 2026-08-23 soir, après la chasse au
   fantôme MCP) ; la carte de réveil complète (génération, demandes
   rerattachées, handoff) reste v2.
-- **`who` n'affiche pas le mode d'attelage** (confusion utilisateur constatée
+- ✅ LIVRÉ (014) — **`who` n'affiche pas le mode d'attelage** (confusion utilisateur constatée
   2×, 2026-08-23) : la colonne transport ne décrit que le tronçon
   daemon↔wrapper (unix/ssh) ; rien n'indique si l'équipier est géré ACP ou
   interactif tmux, et les claude ne remontent ni modèle ni effort (sonde
   runtime codex-only). Ajouter une colonne mode (acp/tmux/cli) et étendre la
   sonde aux claude.
-- **Aucun équipier persistant en pratique** (constaté 2026-08-23 soir) :
+- ✅ TRAITÉ (fleet.json né le soir même ; doctrine --persistent adoptée ; première résurrection automatique constatée) — **Aucun équipier persistant en pratique** (constaté 2026-08-23 soir) :
   avant le 2026-08-23 21h, aucun spawn n'avait jamais utilisé --persistent
   (fleet.json créé ce soir-là par le premier spawn persistant — fable-reviewer) ;
   auparavant, après un reboot machine, zéro équipier géré ne revenait : la condition (b) de la
   revue reprise-crash est fausse aujourd'hui, empiriquement. Doctrine à
   adopter : --persistent par défaut pour les équipiers d'équipe.
-- **Binaire périmé : détection ET rituel** (incident ×2 le 2026-08-23 — 8h40
+- ⏳ OUVERT (doctrine gravée, rituel appliqué 1×  ; détection build-id À CONSTRUIRE — D23) — **Binaire périmé : détection ET rituel** (incident ×2 le 2026-08-23 — 8h40
   de retard l'après-midi, puis le daemon pré-014 servant encore le refus
   menteur le soir même, DEUX HEURES après le merge du correctif). Deux
   volets : (1) DÉTECTION — build-id (hash git) embarqué à la compilation,
@@ -220,7 +220,7 @@ fleet.json, replay de contexte automatique au-delà de la carte de réveil.
   que le rebuild ; consigné comme étape, pas comme souvenir. La résurrection
   automatique des persistants (validée en production ce soir : fable-reviewer
   gen-11) rend ce redémarrage indolore.
-- **Vue attach : générations mélangées et titres d'adaptateur nus** (séance
+- ⏳ PARTIEL (corrélation toolCallId livrée en 014 ; séparateur de génération et titres enrichis restent ouverts) — **Vue attach : générations mélangées et titres d'adaptateur nus** (séance
   d'observation utilisateur, 2026-08-23 soir) : le journal par nom+jour rejoue
   l'archéologie du prédécesseur sans délimiteur (« inconnu »/UTC = vieux
   binaire, normal mais illisible) — ajouter un séparateur de génération au
@@ -263,6 +263,8 @@ Delta backend, par taille :
    versionné, dégradation annoncée), latence fichier de quelques secondes.
 
 ## Périmètre gelé de la session 014 — Observabilité & reprise (2026-08-23)
+
+**✅ LIVRÉ INTÉGRALEMENT — session 014 mergée le 2026-08-23 soir (7/7, gate MERGEABLE).**
 
 Six tâches validées sur le principe par l'utilisateur (spec à créer au « go ») :
 1. Dissocier mode d'attelage et transport (champ surchargé, daemon.rs:1710).
