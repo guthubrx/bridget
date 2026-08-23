@@ -2383,37 +2383,43 @@ fn handle_connection(
 
     let mut my_writer = BufWriter::new(stream);
 
-    for line_result in reader.lines() {
-        let line = match line_result {
-            Ok(l) => l,
-            Err(_) => break,
-        };
-        if line.is_empty() {
-            continue;
-        }
-
-        let msg: WrapperToDaemon = match decode(&line) {
-            Ok(m) => m,
-            Err(e) => {
-                warn!("message illisible de {}: {}", conn_id, e);
+    // Toute sortie, y compris un échec d'écriture de réponse, traverse le
+    // nettoyage commun ci-dessous. Une capacité de service est strictement
+    // attachée à la connexion : elle ne doit jamais survivre à son socket.
+    let connection_result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        for line_result in reader.lines() {
+            let line = match line_result {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            if line.is_empty() {
                 continue;
             }
-        };
 
-        let response = handle_wrapper_message(&conn_id, msg, &state);
-        if let Some(dtw) = response {
-            let json = encode(&dtw)?;
-            writeln!(my_writer, "{}", json)?;
-            my_writer.flush()?;
+            let msg: WrapperToDaemon = match decode(&line) {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!("message illisible de {}: {}", conn_id, e);
+                    continue;
+                }
+            };
+
+            let response = handle_wrapper_message(&conn_id, msg, &state);
+            if let Some(dtw) = response {
+                let json = encode(&dtw)?;
+                writeln!(my_writer, "{}", json)?;
+                my_writer.flush()?;
+            }
+            let post_response_controls = state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .pending_post_response_controls
+                .remove(&conn_id)
+                .unwrap_or_default();
+            let _ = execute_controls(post_response_controls);
         }
-        let post_response_controls = state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pending_post_response_controls
-            .remove(&conn_id)
-            .unwrap_or_default();
-        let _ = execute_controls(post_response_controls);
-    }
+        Ok(())
+    })();
 
     // Connexion fermée : désenregistrer avec nettoyage explicite pour éviter fuites
     let (writer_opt, removed, controls, views) = {
@@ -2454,7 +2460,7 @@ fn handle_connection(
     }
     log::debug!("handle_connection {} terminée", conn_id);
 
-    Ok(())
+    connection_result
 }
 
 /// Traite l'enregistrement d'un wrapper
@@ -4968,12 +4974,16 @@ mod presence_tests {
     use std::collections::BTreeMap;
     use std::ffi::{CString, OsString};
     use std::io::Read;
+    use std::net::Shutdown;
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::PermissionsExt;
     use std::process::{Child, Command};
 
     const T908_DAEMON_CHILD_ENV: &str = "BRIDGET_T908_DAEMON_CHILD";
     const T908_ROOT_ENV: &str = "BRIDGET_T908_ROOT";
+    const SERVICE_NEGOTIATION_FIXTURE: &str = include_str!(
+        "../../../specs/015-guichet-maicie/contracts/fixtures/service-negotiation-v1.jsonl"
+    );
 
     fn control_socket(label: &str) -> (Arc<Mutex<BufWriter<UnixStream>>>, BufReader<UnixStream>) {
         let path = std::env::temp_dir().join(format!(
@@ -6028,48 +6038,95 @@ mod presence_tests {
             })
         ));
 
-        // Une nouvelle connexion ne récupère aucune capacité de l'ancienne.
-        {
-            let mut state = shared.lock().unwrap();
-            state.connection_roles.remove("service-without-capability");
-            state.service_negotiations.remove("service-without-capability");
-        }
-        assert!(matches!(
-            handle_wrapper_message(
-                "service-reconnected",
-                WrapperToDaemon::RoleHandshake {
-                    role: ConnectionRole::Service,
-                },
-                &shared,
-            ),
-            Some(DaemonToWrapper::RoleAccepted {
-                role: ConnectionRole::Service
-            })
-        ));
-        assert!(matches!(
-            handle_wrapper_message(
-                "service-reconnected",
-                WrapperToDaemon::ServiceHello {
-                    version: SERVICE_CONTRACT_VERSION,
-                    service: "maicie".to_string(),
-                    issuer_scope: scope.to_string(),
-                    capabilities: Vec::new(),
-                },
-                &shared,
-            ),
-            Some(DaemonToWrapper::ServiceWelcome { capabilities, .. }) if capabilities.is_empty()
-        ));
-        assert!(matches!(
-            handle_wrapper_message(
-                "service-reconnected",
-                WrapperToDaemon::GuichetClaimNext,
-                &shared,
-            ),
-            Some(DaemonToWrapper::ServiceRejected {
-                reason: ServiceRefusal::CapabilityRequired
-            })
-        ));
         assert_eq!(shared.lock().unwrap().service_negotiations.len(), 2);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn service_capability_is_cleaned_after_a_broken_response_socket() {
+        let (state, config) = state_with_registered_agent("service-cleanup-real-socket");
+        let shared = Arc::new(Mutex::new(state));
+        let listener = UnixListener::bind(&config.socket_path).unwrap();
+        let (first_closed_tx, first_closed_rx) = mpsc::channel();
+        let state_for_server = Arc::clone(&shared);
+        let server = thread::spawn(move || {
+            let (first, _) = listener.accept().unwrap();
+            let first_failed = handle_connection(first, Arc::clone(&state_for_server)).is_err();
+            first_closed_tx.send(first_failed).unwrap();
+
+            let (second, _) = listener.accept().unwrap();
+            handle_connection(second, state_for_server).is_ok()
+        });
+        let fixture = SERVICE_NEGOTIATION_FIXTURE.lines().collect::<Vec<_>>();
+
+        let first = UnixStream::connect(&config.socket_path).unwrap();
+        first
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut first_writer = BufWriter::new(first.try_clone().unwrap());
+        let mut first_reader = BufReader::new(first);
+        writeln!(first_writer, "{}", fixture[0]).unwrap();
+        first_writer.flush().unwrap();
+        let mut accepted = String::new();
+        first_reader.read_line(&mut accepted).unwrap();
+        assert_eq!(accepted.trim_end(), fixture[1]);
+
+        // Mutation discriminante : sans la sortie commune de
+        // `handle_connection`, le BrokenPipe ci-dessous laisserait la capacité
+        // dans `service_negotiations` et la connexion suivante l'hériterait.
+        writeln!(first_writer, "{}", fixture[2]).unwrap();
+        first_writer.flush().unwrap();
+        first_writer.get_ref().shutdown(Shutdown::Both).unwrap();
+        drop(first_reader);
+        drop(first_writer);
+        assert!(
+            first_closed_rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+            "la réponse ServiceWelcome doit échouer sur le socket fermé"
+        );
+        assert!(shared.lock().unwrap().service_negotiations.is_empty());
+
+        let second = UnixStream::connect(&config.socket_path).unwrap();
+        second
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut second_writer = BufWriter::new(second.try_clone().unwrap());
+        let mut second_reader = BufReader::new(second);
+        writeln!(second_writer, "{}", fixture[0]).unwrap();
+        second_writer.flush().unwrap();
+        let mut second_accepted = String::new();
+        second_reader.read_line(&mut second_accepted).unwrap();
+        assert_eq!(second_accepted.trim_end(), fixture[1]);
+
+        let no_capability = WrapperToDaemon::ServiceHello {
+            version: SERVICE_CONTRACT_VERSION,
+            service: "maicie".to_string(),
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+            capabilities: Vec::new(),
+        };
+        writeln!(second_writer, "{}", encode(&no_capability).unwrap()).unwrap();
+        second_writer.flush().unwrap();
+        let mut welcome = String::new();
+        second_reader.read_line(&mut welcome).unwrap();
+        assert!(matches!(
+            decode::<DaemonToWrapper>(welcome.trim_end()).unwrap(),
+            DaemonToWrapper::ServiceWelcome { capabilities, .. } if capabilities.is_empty()
+        ));
+        writeln!(
+            second_writer,
+            "{}",
+            encode(&WrapperToDaemon::GuichetClaimNext).unwrap()
+        )
+        .unwrap();
+        second_writer.flush().unwrap();
+        let mut refusal = String::new();
+        second_reader.read_line(&mut refusal).unwrap();
+        assert_eq!(refusal.trim_end(), fixture[4]);
+
+        drop(second_reader);
+        drop(second_writer);
+        assert!(server.join().unwrap(), "seconde connexion nettoyée");
+        assert!(shared.lock().unwrap().service_negotiations.is_empty());
+        let _ = std::fs::remove_file(config.socket_path);
         let _ = std::fs::remove_file(config.db_path);
     }
 

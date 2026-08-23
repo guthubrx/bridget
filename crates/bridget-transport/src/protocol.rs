@@ -261,7 +261,6 @@ pub enum WrapperToDaemon {
         capabilities: Vec<ClientCapability>,
     },
     /// Négocie le contrat du service Maicie, uniquement après RoleAccepted(Service).
-    #[serde(rename = "service_hello")]
     ServiceHello {
         version: u16,
         service: String,
@@ -542,7 +541,6 @@ pub enum DaemonToWrapper {
     /// Refus motivé de la négociation ou de la matrice client.
     ClientRejected { reason: ClientRefusal },
     /// Contrat et capacité réellement négociés avec un service Maicie.
-    #[serde(rename = "service_welcome")]
     ServiceWelcome {
         version: u16,
         horizon_secs: i64,
@@ -550,7 +548,6 @@ pub enum DaemonToWrapper {
         capabilities: Vec<ServiceCapability>,
     },
     /// Refus motivé de la négociation ou de la matrice de service.
-    #[serde(rename = "service_rejected")]
     ServiceRejected { reason: ServiceRefusal },
     /// Issue durable ou calculée d'un `SendIdempotent`.
     IdempotencyResult {
@@ -794,6 +791,44 @@ pub struct RequestInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SERVICE_NEGOTIATION_FIXTURE: &str = include_str!(
+        "../../../specs/015-guichet-maicie/contracts/fixtures/service-negotiation-v1.jsonl"
+    );
+
+    #[test]
+    fn service_negotiation_v1_emploie_la_fixture_canonique_partagee() {
+        let lines = SERVICE_NEGOTIATION_FIXTURE.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 5, "la fixture couvre hello, welcome et refus");
+
+        let role: WrapperToDaemon = decode(lines[0]).unwrap();
+        assert_eq!(encode(&role).unwrap(), lines[0]);
+        assert!(matches!(
+            role,
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Service
+            }
+        ));
+
+        let accepted: DaemonToWrapper = decode(lines[1]).unwrap();
+        assert_eq!(encode(&accepted).unwrap(), lines[1]);
+        let hello: WrapperToDaemon = decode(lines[2]).unwrap();
+        assert_eq!(encode(&hello).unwrap(), lines[2]);
+        assert!(matches!(hello, WrapperToDaemon::ServiceHello { .. }));
+
+        let welcome: DaemonToWrapper = decode(lines[3]).unwrap();
+        assert_eq!(encode(&welcome).unwrap(), lines[3]);
+        assert!(matches!(welcome, DaemonToWrapper::ServiceWelcome { .. }));
+
+        let rejected: DaemonToWrapper = decode(lines[4]).unwrap();
+        assert_eq!(encode(&rejected).unwrap(), lines[4]);
+        assert!(matches!(
+            rejected,
+            DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::CapabilityRequired
+            }
+        ));
+    }
 
     #[test]
     fn test_encode_decode_register() {
@@ -1057,7 +1092,7 @@ mod tests {
         };
         assert_eq!(
             encode(&hello).unwrap(),
-            "{\"type\":\"service_hello\",\"version\":1,\"service\":\"maicie\",\"issuer_scope\":\"015_scope_0123456789abcdef0123456789abcdef\",\"capabilities\":[\"maicie_guichet\"]}"
+            SERVICE_NEGOTIATION_FIXTURE.lines().nth(2).unwrap()
         );
         assert!(matches!(
             decode(&encode(&hello).unwrap()).unwrap(),
