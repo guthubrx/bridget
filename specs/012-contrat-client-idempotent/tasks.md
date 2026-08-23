@@ -14,13 +14,13 @@ auteur ≠ relecteur.
 
 ## Phase 0 — Fondations (fichiers nouveaux seulement)
 
-- [ ] **T1201** Setup + ADR : worktree `.worktrees/012-contrat-client-idempotent`
+- [x] **T1201** Setup + ADR : worktree `.worktrees/012-contrat-client-idempotent`
   (branche `session-12-contrat-client-idempotent` depuis `session-08-attach`),
   copie des artefacts 012, `docs/decisions/007-socle-idempotence.md` (socle
   unique, consommateurs 009/010, portée exactly-once honnête).
   **Observable** : ADR auto-portant, commit docs(012).
 
-- [ ] **T1202** Socle `idempotency.rs` + table `idempotency_records`
+- [x] **T1202** Socle `idempotency.rs` + table `idempotency_records`
   (data-model : clé composite, `canonical_bytes` autorité, machine
   `Prepared→Dispatching→Terminal` monotone, `issued_at`/`expires_at` figés,
   validation scope 128 bits/longueur/charset).
@@ -30,7 +30,7 @@ auteur ≠ relecteur.
   monotones refusant la régression, purge par `expires_at` propre (baisse de
   config testée).
 
-- [ ] **T1203** `receipt_store.rs` (wrapper) : `~/.local/state/bridget/receipts/
+- [x] **T1203** `receipt_store.rs` (wrapper) : `~/.local/state/bridget/receipts/
   <instance_id>/`, marques `Seen`/`Acked` par `delivery_id`, écriture
   atomique+fsync, quotas octets/entrées, purge/compaction par `expires_at`,
   `max_expires_at` atomique séparé, **quarantaine fail-closed** (corruption,
@@ -44,7 +44,7 @@ auteur ≠ relecteur.
 
 ## Phase 1 — Protocole et négociation *(gate référent : après T804b close)*
 
-- [ ] **T1204** Rôle `client` + négociation : variante `Client` dans
+- [x] **T1204** Rôle `client` + négociation : variante `Client` dans
   `ConnectionRole`, `ClientHello`/`ClientWelcome` (capacités négociées
   retournées), état `Negotiated(version, issuer_scope)`, matrice fermée
   (client-only / daemon→wrapper / wrapper→daemon, rien sur attach), règle
