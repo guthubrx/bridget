@@ -5,7 +5,7 @@
 //! les octets préparés avant I/O sont l'autorité.
 
 use crate::bridget_client::IdempotencyIssue;
-use crate::domain::{EtatDelegation, EtatObjectif, EtatOutboxDelegation};
+use crate::domain::{EtatDelegation, EtatObjectif, EtatOutboxDelegation, ObjectifCoordonne};
 use crate::outbox::{
     OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot, StoreCommitPhase,
 };
@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 
@@ -134,26 +134,31 @@ impl MaicieStore {
         if observed_at <= 0 {
             return Err(StoreError::Invalid("observed_at invalide"));
         }
-        let (state, terminal) = match issue {
-            IdempotencyIssue::Accepted { .. } => ("accepted", true),
-            IdempotencyIssue::OutcomeUnknown { .. } => ("outcome_unknown", false),
+        let next_state = match issue {
+            IdempotencyIssue::Accepted { .. } => EtatOutboxDelegation::Accepted,
+            IdempotencyIssue::OutcomeUnknown { .. } => EtatOutboxDelegation::OutcomeUnknown,
             IdempotencyIssue::Rejected { .. }
             | IdempotencyIssue::EnvelopeMismatch
             | IdempotencyIssue::IdempotencyExpired
-            | IdempotencyIssue::InvalidIssuedAt => ("outcome_unknown", true),
+            | IdempotencyIssue::InvalidIssuedAt => EtatOutboxDelegation::Rejected,
         };
+        let terminal = matches!(
+            next_state,
+            EtatOutboxDelegation::Accepted | EtatOutboxDelegation::Rejected
+        );
         let issue_json = encode_issue(issue);
         let issue_bytes = serde_json::to_vec(&issue_json).map_err(StoreError::Json)?;
         let tx = self.connection.transaction().map_err(StoreError::Sql)?;
-        let current: Option<(i64, Option<Vec<u8>>)> = tx
+        let current: Option<(String, i64, Option<Vec<u8>>)> = tx
             .query_row(
-                "SELECT terminal, last_issue_json FROM delegation_outbox WHERE message_id = ?1",
+                "SELECT state, terminal, last_issue_json\n\
+                 FROM delegation_outbox WHERE message_id = ?1",
                 [message_id.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
             .map_err(StoreError::Sql)?;
-        let Some((current_terminal, current_issue)) = current else {
+        let Some((current_state_name, current_terminal, current_issue)) = current else {
             return Err(StoreError::NotFound("message_id inconnu"));
         };
         if current_terminal == 1 {
@@ -163,22 +168,33 @@ impl MaicieStore {
             }
             return Err(StoreError::Conflict("issue terminale déjà figée"));
         }
+        let current_state = parse_outbox_state(&current_state_name)?;
+        if current_state != next_state {
+            current_state
+                .transition_vers(next_state)
+                .map_err(|_| StoreError::Conflict("transition outbox interdite"))?;
+        }
         let changed = tx
             .execute(
                 "UPDATE delegation_outbox\n\
                  SET state = ?1, terminal = ?2, last_issue_json = ?3,\n\
                      issue_observed_at = ?4, attempted_at = COALESCE(attempted_at, ?4)\n\
-                 WHERE message_id = ?5",
+                 WHERE message_id = ?5 AND state = ?6 AND terminal = 0",
                 params![
-                    state,
+                    outbox_state_name(next_state),
                     i64::from(terminal),
                     issue_bytes,
                     observed_at,
-                    message_id.to_string()
+                    message_id.to_string(),
+                    current_state_name
                 ],
             )
             .map_err(StoreError::Sql)?;
-        require_one(changed, "message_id inconnu")?;
+        if changed != 1 {
+            return Err(StoreError::Conflict(
+                "outbox modifiée concurremment pendant la transition",
+            ));
+        }
         tx.commit().map_err(StoreError::Sql)
     }
 
@@ -192,16 +208,39 @@ impl MaicieStore {
         if attempted_at <= 0 {
             return Err(StoreError::Invalid("attempted_at invalide"));
         }
-        let changed = self
-            .connection
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        let current_state_name: Option<String> = tx
+            .query_row(
+                "SELECT state FROM delegation_outbox\n\
+                 WHERE message_id = ?1 AND terminal = 0",
+                [message_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let Some(current_state_name) = current_state_name else {
+            return Err(StoreError::NotFound("outbox absente ou terminale"));
+        };
+        let current_state = parse_outbox_state(&current_state_name)?;
+        if current_state != EtatOutboxDelegation::OutcomeUnknown {
+            current_state
+                .transition_vers(EtatOutboxDelegation::OutcomeUnknown)
+                .map_err(|_| StoreError::Conflict("transition outbox interdite"))?;
+        }
+        let changed = tx
             .execute(
                 "UPDATE delegation_outbox\n\
                  SET state = 'outcome_unknown', attempted_at = ?1\n\
-                 WHERE message_id = ?2 AND terminal = 0",
-                params![attempted_at, message_id.to_string()],
+                 WHERE message_id = ?2 AND state = ?3 AND terminal = 0",
+                params![attempted_at, message_id.to_string(), current_state_name],
             )
             .map_err(StoreError::Sql)?;
-        require_one(changed, "outbox absente ou terminale")
+        if changed != 1 {
+            return Err(StoreError::Conflict(
+                "outbox modifiée concurremment pendant la transition",
+            ));
+        }
+        tx.commit().map_err(StoreError::Sql)
     }
 
     /// Snapshot corrélé à la délégation, utilisable par T008 sans second
@@ -333,7 +372,7 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
              deadline_contractuelle INTEGER NOT NULL,\n\
              body_hash BLOB NOT NULL,\n\
              message_bytes BLOB NOT NULL,\n\
-             state TEXT NOT NULL CHECK(state IN ('prepared','outcome_unknown','accepted')),\n\
+             state TEXT NOT NULL CHECK(state IN ('prepared','outcome_unknown','accepted','rejected')),\n\
              attempted_at INTEGER,\n\
              retry_until INTEGER NOT NULL,\n\
              dedup_retained_until INTEGER NOT NULL,\n\
@@ -347,15 +386,68 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
              ON delegation_outbox(terminal, state, retry_until, message_id);",
     )
     .map_err(StoreError::Sql)?;
-    tx.execute(
-        "INSERT OR IGNORE INTO schema_migrations(version, applied_at)\n\
-         VALUES (?1, CAST(strftime('%s','now') AS INTEGER))",
-        [SCHEMA_VERSION],
-    )
-    .map_err(StoreError::Sql)?;
+    if current_version == 1 {
+        migrate_outbox_to_rejected_state(&tx)?;
+    }
+    for version in (current_version + 1)..=SCHEMA_VERSION {
+        tx.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version, applied_at)\n\
+             VALUES (?1, CAST(strftime('%s','now') AS INTEGER))",
+            [version],
+        )
+        .map_err(StoreError::Sql)?;
+    }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(StoreError::Sql)?;
     tx.commit().map_err(StoreError::Sql)
+}
+
+fn migrate_outbox_to_rejected_state(tx: &Transaction<'_>) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "DROP INDEX IF EXISTS delegation_outbox_pending_idx;
+         ALTER TABLE delegation_outbox RENAME TO delegation_outbox_v1;
+         CREATE TABLE delegation_outbox (
+             message_id TEXT PRIMARY KEY,
+             delegation_id TEXT NOT NULL UNIQUE REFERENCES delegations(id),
+             objective_id TEXT NOT NULL REFERENCES objectives(id),
+             issuer_scope TEXT NOT NULL,
+             issued_at INTEGER NOT NULL,
+             target TEXT NOT NULL,
+             body_bytes BLOB NOT NULL,
+             reply INTEGER NOT NULL CHECK(reply IN (0, 1)),
+             timeout_secs INTEGER NOT NULL,
+             deadline_contractuelle INTEGER NOT NULL,
+             body_hash BLOB NOT NULL,
+             message_bytes BLOB NOT NULL,
+             state TEXT NOT NULL CHECK(state IN ('prepared','outcome_unknown','accepted','rejected')),
+             attempted_at INTEGER,
+             retry_until INTEGER NOT NULL,
+             dedup_retained_until INTEGER NOT NULL,
+             last_issue_json BLOB,
+             issue_observed_at INTEGER,
+             terminal INTEGER NOT NULL DEFAULT 0 CHECK(terminal IN (0, 1))
+         );
+         INSERT INTO delegation_outbox(
+             message_id, delegation_id, objective_id, issuer_scope, issued_at, target,
+             body_bytes, reply, timeout_secs, deadline_contractuelle, body_hash,
+             message_bytes, state, attempted_at, retry_until, dedup_retained_until,
+             last_issue_json, issue_observed_at, terminal
+         )
+         SELECT message_id, delegation_id, objective_id, issuer_scope, issued_at, target,
+                body_bytes, reply, timeout_secs, deadline_contractuelle, body_hash,
+                message_bytes,
+                CASE
+                    WHEN terminal = 1 AND state = 'outcome_unknown' THEN 'rejected'
+                    ELSE state
+                END,
+                attempted_at, retry_until, dedup_retained_until,
+                last_issue_json, issue_observed_at, terminal
+         FROM delegation_outbox_v1;
+         DROP TABLE delegation_outbox_v1;
+         CREATE INDEX delegation_outbox_pending_idx
+             ON delegation_outbox(terminal, state, retry_until, message_id);",
+    )
+    .map_err(StoreError::Sql)
 }
 
 fn load_or_create_issuer_scope(connection: &mut Connection) -> Result<String, StoreError> {
@@ -386,18 +478,8 @@ fn load_or_create_issuer_scope(connection: &mut Connection) -> Result<String, St
 }
 
 fn insert_prepared(tx: &Transaction<'_>, prepared: &PreparedDelegation) -> Result<(), StoreError> {
-    let objective_json = serde_json::to_vec(&prepared.objective).map_err(StoreError::Json)?;
+    upsert_objective(tx, &prepared.objective)?;
     let delegation_json = serde_json::to_vec(&prepared.delegation).map_err(StoreError::Json)?;
-    tx.execute(
-        "INSERT INTO objectives(id, state, payload_json) VALUES (?1, ?2, ?3)\n\
-         ON CONFLICT(id) DO UPDATE SET state = excluded.state, payload_json = excluded.payload_json",
-        params![
-            prepared.objective.id.to_string(),
-            objective_state_name(prepared.objective.etat),
-            objective_json
-        ],
-    )
-    .map_err(StoreError::Sql)?;
     tx.execute(
         "INSERT INTO delegations(id, objective_id, state, payload_json) VALUES (?1, ?2, ?3, ?4)",
         params![
@@ -436,11 +518,64 @@ fn insert_prepared(tx: &Transaction<'_>, prepared: &PreparedDelegation) -> Resul
     Ok(())
 }
 
-fn require_one(changed: usize, reason: &'static str) -> Result<(), StoreError> {
+fn upsert_objective(tx: &Transaction<'_>, objective: &ObjectifCoordonne) -> Result<(), StoreError> {
+    let id = objective.id.to_string();
+    let incoming_json = serde_json::to_vec(objective).map_err(StoreError::Json)?;
+    let current: Option<(String, Vec<u8>)> = tx
+        .query_row(
+            "SELECT state, payload_json FROM objectives WHERE id = ?1",
+            [&id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+
+    let Some((current_state, current_json)) = current else {
+        tx.execute(
+            "INSERT INTO objectives(id, state, payload_json) VALUES (?1, ?2, ?3)",
+            params![id, objective_state_name(objective.etat), incoming_json],
+        )
+        .map_err(StoreError::Sql)?;
+        return Ok(());
+    };
+
+    let mut current_objective: ObjectifCoordonne =
+        serde_json::from_slice(&current_json).map_err(StoreError::Json)?;
+    if parse_objective_state(&current_state)? != current_objective.etat {
+        return Err(StoreError::Corrupt(
+            "état objectif divergent de son payload",
+        ));
+    }
+    if current_objective == *objective {
+        return Ok(());
+    }
+    current_objective
+        .transition(objective.etat, objective.mis_a_jour_at)
+        .map_err(|_| StoreError::Conflict("transition objectif interdite"))?;
+    if current_objective != *objective {
+        return Err(StoreError::Conflict(
+            "payload objectif incohérent avec la transition",
+        ));
+    }
+    let changed = tx
+        .execute(
+            "UPDATE objectives SET state = ?1, payload_json = ?2\n\
+             WHERE id = ?3 AND state = ?4 AND payload_json = ?5",
+            params![
+                objective_state_name(objective.etat),
+                incoming_json,
+                id,
+                current_state,
+                current_json
+            ],
+        )
+        .map_err(StoreError::Sql)?;
     if changed == 1 {
         Ok(())
     } else {
-        Err(StoreError::NotFound(reason))
+        Err(StoreError::Conflict(
+            "objectif modifié concurremment pendant la transition",
+        ))
     }
 }
 
@@ -489,7 +624,17 @@ fn parse_outbox_state(value: &str) -> Result<EtatOutboxDelegation, StoreError> {
         "prepared" => Ok(EtatOutboxDelegation::Prepared),
         "outcome_unknown" => Ok(EtatOutboxDelegation::OutcomeUnknown),
         "accepted" => Ok(EtatOutboxDelegation::Accepted),
+        "rejected" => Ok(EtatOutboxDelegation::Rejected),
         _ => Err(StoreError::Corrupt("état outbox inconnu")),
+    }
+}
+
+fn outbox_state_name(state: EtatOutboxDelegation) -> &'static str {
+    match state {
+        EtatOutboxDelegation::Prepared => "prepared",
+        EtatOutboxDelegation::OutcomeUnknown => "outcome_unknown",
+        EtatOutboxDelegation::Accepted => "accepted",
+        EtatOutboxDelegation::Rejected => "rejected",
     }
 }
 

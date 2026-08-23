@@ -4,7 +4,9 @@
 //! demeure l'unique autorite de transition ; le futur reconciliateur T008 ne
 //! recevra que des snapshots complets, sans resolution implicite de cible.
 
-use crate::bridget_client::PublicMessage;
+use crate::bridget_client::{
+    BridgetClientError, BridgetClientLimits, PublicMessage, validate_send_idempotent_frame,
+};
 use crate::domain::{
     Delegation, EtatDelegation, EtatObjectif, EtatOutboxDelegation, ObjectifCoordonne,
     OutboxDelegation,
@@ -50,6 +52,13 @@ impl PreparedDelegation {
             in_reply_to: None,
         };
         let message_bytes = serde_json::to_vec(&message).map_err(OutboxError::Encode)?;
+        validate_send_idempotent_frame(
+            &message,
+            &outbox.message_id.to_string(),
+            issued_at,
+            BridgetClientLimits::default().max_frame_bytes,
+        )
+        .map_err(OutboxError::Frame)?;
         let prepared = Self {
             objective,
             delegation,
@@ -66,8 +75,13 @@ impl PreparedDelegation {
         self.outbox
             .verifier()
             .map_err(|_| OutboxError::Invalid("outbox domaine invalide"))?;
-        if self.objective.etat == EtatObjectif::Clos {
-            return Err(OutboxError::Invalid("objectif deja clos"));
+        if !matches!(
+            self.objective.etat,
+            EtatObjectif::Ouvert | EtatObjectif::EnCoordination
+        ) {
+            return Err(OutboxError::Invalid(
+                "délégation autorisée seulement pour un objectif ouvert ou en coordination",
+            ));
         }
         if self.delegation.etat != EtatDelegation::Creee
             || self.outbox.etat != EtatOutboxDelegation::Prepared
@@ -89,6 +103,7 @@ impl PreparedDelegation {
         }
         if self.issued_at <= 0
             || self.outbox.timeout_secs == 0
+            || self.outbox.timeout_secs > crate::config::MAX_TIMEOUT_SECS
             || self.outbox.deadline_contractuelle <= self.issued_at
             || self.outbox.retry_until < self.issued_at
         {
@@ -113,6 +128,7 @@ impl PreparedDelegation {
             || message.to != self.outbox.target
             || message.body != body
             || message.reply != self.outbox.reply
+            || message.hops != 4
             || message.reply_timeout != self.outbox.reply.then_some(self.outbox.timeout_secs)
             || message.deadline_at != u64::try_from(self.outbox.deadline_contractuelle).ok()
             || message.in_reply_to.is_some()
@@ -156,6 +172,7 @@ impl PendingDelegationOutbox {
             || self.issuer_scope.len() > 256
             || self.issued_at <= 0
             || self.timeout_secs == 0
+            || self.timeout_secs > crate::config::MAX_TIMEOUT_SECS
             || self.deadline_contractuelle <= self.issued_at
             || self.retry_until < self.issued_at
             || self.retry_until > self.dedup_retained_until
@@ -177,6 +194,7 @@ impl PendingDelegationOutbox {
             || message.to != self.target
             || message.body != body
             || message.reply != self.reply
+            || message.hops != 4
             || message.reply_timeout != self.reply.then_some(self.timeout_secs)
             || message.deadline_at != u64::try_from(self.deadline_contractuelle).ok()
             || message.in_reply_to.is_some()
@@ -220,6 +238,7 @@ pub enum OutboxError {
     Invalid(&'static str),
     Encode(serde_json::Error),
     Decode(serde_json::Error),
+    Frame(BridgetClientError),
 }
 
 impl fmt::Display for OutboxError {
@@ -228,6 +247,7 @@ impl fmt::Display for OutboxError {
             Self::Invalid(reason) => write!(formatter, "outbox invalide : {reason}"),
             Self::Encode(source) => write!(formatter, "encodage outbox impossible : {source}"),
             Self::Decode(source) => write!(formatter, "decodage outbox impossible : {source}"),
+            Self::Frame(source) => write!(formatter, "trame outbox impossible : {source}"),
         }
     }
 }
@@ -236,6 +256,7 @@ impl std::error::Error for OutboxError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Encode(source) | Self::Decode(source) => Some(source),
+            Self::Frame(source) => Some(source),
             Self::Invalid(_) => None,
         }
     }

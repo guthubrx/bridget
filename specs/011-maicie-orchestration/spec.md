@@ -228,8 +228,10 @@ lancement avant validation humaine.
   opaque est interdite.
 - **FR-020**: Avant tout envoi suivi, Maicie MUST persister une outbox avec un
   identifiant métier généré localement. L'envoi Bridget MUST accepter cet
-  identifiant de façon idempotente ; les états `prepared`, `outcome_unknown` et
-  `accepted` MUST permettre de reprendre après crash sans doublon. L'outbox
+  identifiant de façon idempotente ; les états `prepared`, `outcome_unknown`,
+  `accepted` et `rejected` MUST permettre de reprendre après crash sans doublon.
+  `InvalidIssuedAt` est un refus terminal `rejected`, jamais une incertitude
+  rejouable. L'outbox
   MUST contenir l'enveloppe immuable exacte (cible, bytes du corps, reply,
   timeout/échéance et métadonnées), et tout état non terminal MUST effectuer
   lookup puis replay exact du même id.

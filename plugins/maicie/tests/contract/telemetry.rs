@@ -3,7 +3,11 @@ use maicie::{
     telemetry::{TelemetryEvent, TelemetryJournal, TelemetryKind},
 };
 use serde_json::json;
-use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+use std::{
+    fs,
+    os::unix::fs::{PermissionsExt, symlink},
+    path::PathBuf,
+};
 use uuid::Uuid;
 
 fn event() -> TelemetryEvent {
@@ -90,6 +94,28 @@ fn reouvre_le_journal_durable_prive_apres_un_append() {
         fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o600
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn refuse_les_liens_symboliques_vers_repertoire_ou_fichier_prive() {
+    let root = temporary_root("symlinks");
+    fs::create_dir_all(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let real_directory = root.join("real");
+    fs::create_dir(&real_directory).unwrap();
+    fs::set_permissions(&real_directory, fs::Permissions::from_mode(0o700)).unwrap();
+    let linked_directory = root.join("linked");
+    symlink(&real_directory, &linked_directory).unwrap();
+    assert!(TelemetryJournal::open(linked_directory.join("events.jsonl")).is_err());
+
+    let real_file = real_directory.join("real.jsonl");
+    fs::write(&real_file, b"").unwrap();
+    fs::set_permissions(&real_file, fs::Permissions::from_mode(0o600)).unwrap();
+    let linked_file = real_directory.join("linked.jsonl");
+    symlink(&real_file, &linked_file).unwrap();
+    assert!(TelemetryJournal::open(&linked_file).is_err());
     fs::remove_dir_all(root).unwrap();
 }
 

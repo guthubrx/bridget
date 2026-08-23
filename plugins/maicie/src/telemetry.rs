@@ -85,7 +85,7 @@ fn ensure_private_directory(path: &Path) -> io::Result<()> {
     builder.recursive(true).mode(0o700);
     builder.create(path)?;
 
-    let metadata = fs::metadata(path)?;
+    let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_dir() || metadata.permissions().mode() & 0o777 != 0o700 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -96,7 +96,7 @@ fn ensure_private_directory(path: &Path) -> io::Result<()> {
 }
 
 fn ensure_private_file(path: &Path) -> io::Result<()> {
-    let metadata = fs::metadata(path)?;
+    let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_file() || metadata.permissions().mode() & 0o777 != 0o600 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,

@@ -1,9 +1,9 @@
-use maicie::bridget_client::IdempotencyIssue;
+use maicie::bridget_client::{IdempotencyIssue, PublicMessage};
 use maicie::domain::{
     ClasseDuree, Delegation, EtatDelegation, EtatObjectif, EtatOutboxDelegation, ModeObjectif,
     ObjectifCoordonne, OutboxDelegation,
 };
-use maicie::outbox::{PreparedDelegation, StoreCommitPhase, stable_body_hash};
+use maicie::outbox::{MAX_MESSAGE_BYTES, PreparedDelegation, StoreCommitPhase, stable_body_hash};
 use maicie::store::MaicieStore;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -31,11 +31,17 @@ fn migrations_idempotentes_et_base_privee() {
     let database = root.join("maicie.sqlite3");
     let first_scope = {
         let store = MaicieStore::open(&database).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 1);
+        assert_eq!(store.schema_version().unwrap(), 2);
         store.issuer_scope().to_string()
     };
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection.pragma_update(None, "user_version", 1).unwrap();
+    connection
+        .execute("DELETE FROM schema_migrations WHERE version = 2", [])
+        .unwrap();
+    drop(connection);
     let reopened = MaicieStore::open(&database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 1);
+    assert_eq!(reopened.schema_version().unwrap(), 2);
     assert_eq!(reopened.issuer_scope(), first_scope);
     assert_eq!(mode(&root), 0o700);
     assert_eq!(mode(&database), 0o600);
@@ -48,7 +54,7 @@ fn schema_futur_et_enveloppe_corrompue_sont_refuses_fail_closed() {
     let future_database = future_root.join("maicie.sqlite3");
     drop(MaicieStore::open(&future_database).unwrap());
     let connection = rusqlite::Connection::open(&future_database).unwrap();
-    connection.pragma_update(None, "user_version", 2).unwrap();
+    connection.pragma_update(None, "user_version", 3).unwrap();
     drop(connection);
     assert!(MaicieStore::open(&future_database).is_err());
     fs::remove_dir_all(future_root).unwrap();
@@ -74,6 +80,95 @@ fn schema_futur_et_enveloppe_corrompue_sont_refuses_fail_closed() {
 }
 
 #[test]
+fn migration_v1_convertit_un_refus_terminal_historique_en_rejected() {
+    let root = unique_root("migration-rejected");
+    let database = root.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let prepared = fixture(store.issuer_scope());
+    store.create_prepared_delegation(&prepared).unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute(
+            "UPDATE delegation_outbox\n\
+             SET state = 'outcome_unknown', terminal = 1,\n\
+                 last_issue_json = ?1, issue_observed_at = 1010\n\
+             WHERE message_id = ?2",
+            rusqlite::params![br#"{"kind":"invalid_issued_at"}"#.as_slice(), MESSAGE_ID],
+        )
+        .unwrap();
+    connection.pragma_update(None, "user_version", 1).unwrap();
+    connection
+        .execute("DELETE FROM schema_migrations WHERE version = 2", [])
+        .unwrap();
+    drop(connection);
+
+    let store = MaicieStore::open(&database).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 2);
+    let snapshot = store.recovery_snapshot(uuid(MESSAGE_ID)).unwrap().unwrap();
+    assert_eq!(snapshot.outbox.state, EtatOutboxDelegation::Rejected);
+    assert_eq!(snapshot.last_issue.unwrap()["kind"], "invalid_issued_at");
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn prepare_refuse_une_trame_finale_poison_et_des_champs_hors_contrat() {
+    let root = unique_root("wire-bound");
+    let database = root.join("maicie.sqlite3");
+    let store = MaicieStore::open(&database).unwrap();
+    let base = fixture(store.issuer_scope());
+
+    let empty_message = PublicMessage {
+        id: base.outbox.message_id.to_string(),
+        from: maicie::MAICIE_IDENTITY.to_string(),
+        to: base.outbox.target.clone(),
+        body: String::new(),
+        reply: base.outbox.reply,
+        hops: 4,
+        reply_timeout: Some(base.outbox.timeout_secs),
+        deadline_at: u64::try_from(base.outbox.deadline_contractuelle).ok(),
+        in_reply_to: None,
+    };
+    let public_overhead = serde_json::to_vec(&empty_message).unwrap().len();
+    let body = vec![b'x'; MAX_MESSAGE_BYTES - public_overhead];
+    let mut oversized = base.outbox.clone();
+    oversized.body_bytes = body.clone();
+    oversized.body_hash = stable_body_hash(&body);
+    assert!(
+        PreparedDelegation::new(
+            base.objective.clone(),
+            base.delegation.clone(),
+            oversized,
+            store.issuer_scope(),
+            base.issued_at,
+        )
+        .is_err()
+    );
+
+    let mut timeout = base.outbox.clone();
+    timeout.timeout_secs = 7 * 24 * 60 * 60 + 1;
+    assert!(
+        PreparedDelegation::new(
+            base.objective.clone(),
+            base.delegation.clone(),
+            timeout,
+            store.issuer_scope(),
+            base.issued_at,
+        )
+        .is_err()
+    );
+
+    let mut wrong_hops = base.clone();
+    let mut message: PublicMessage = serde_json::from_slice(&wrong_hops.message_bytes).unwrap();
+    message.hops = 3;
+    wrong_hops.message_bytes = serde_json::to_vec(&message).unwrap();
+    assert!(wrong_hops.validate().is_err());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn transaction_unique_expose_l_enveloppe_exacte_et_le_snapshot() {
     let root = unique_root("exact");
     let database = root.join("maicie.sqlite3");
@@ -88,7 +183,10 @@ fn transaction_unique_expose_l_enveloppe_exacte_et_le_snapshot() {
     assert_eq!(pending[0].issued_at, 1_000);
     assert_eq!(pending[0].body_bytes, BODY);
     assert_eq!(pending[0].message_bytes, prepared.message_bytes);
-    assert_eq!(pending[0].public_message().unwrap().body.as_bytes(), BODY);
+    let public_message = pending[0].public_message().unwrap();
+    assert_eq!(public_message.body.as_bytes(), BODY);
+    assert_eq!(public_message.from, maicie::MAICIE_IDENTITY);
+    assert_ne!(pending[0].issuer_scope, public_message.from);
 
     let snapshot = store.recovery_snapshot(uuid(MESSAGE_ID)).unwrap().unwrap();
     assert_eq!(snapshot.objective_state, EtatObjectif::EnCoordination);
@@ -115,6 +213,69 @@ fn transaction_unique_expose_l_enveloppe_exacte_et_le_snapshot() {
     .unwrap();
     store.create_prepared_delegation(&second).unwrap();
     assert_eq!(store.pending_delegation_outboxes().unwrap().len(), 2);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn un_objectif_clos_ne_peut_pas_etre_rouvert_par_un_nouvel_upsert() {
+    let root = unique_root("closed-objective");
+    let database = root.join("maicie.sqlite3");
+    let (prepared, scope) = {
+        let mut store = MaicieStore::open(&database).unwrap();
+        let prepared = fixture(store.issuer_scope());
+        store.create_prepared_delegation(&prepared).unwrap();
+        (prepared, store.issuer_scope().to_string())
+    };
+
+    let mut closed = prepared.objective.clone();
+    closed.clore(1_001).unwrap();
+    let closed_json = serde_json::to_vec(&closed).unwrap();
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute(
+            "UPDATE objectives SET state = 'clos', payload_json = ?1 WHERE id = ?2",
+            rusqlite::params![closed_json, closed.id.to_string()],
+        )
+        .unwrap();
+    drop(connection);
+
+    let mut second_delegation = prepared.delegation.clone();
+    second_delegation.id = uuid("40000000-0000-4000-8000-000000000004");
+    let mut second_outbox = prepared.outbox.clone();
+    second_outbox.message_id = uuid("50000000-0000-4000-8000-000000000005");
+    second_outbox.delegation_id = second_delegation.id;
+    let second = PreparedDelegation::new(
+        prepared.objective,
+        second_delegation,
+        second_outbox,
+        &scope,
+        1_000,
+    )
+    .unwrap();
+    let mut store = MaicieStore::open(&database).unwrap();
+    assert!(store.create_prepared_delegation(&second).is_err());
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let stored: (String, Vec<u8>) = connection
+        .query_row(
+            "SELECT state, payload_json FROM objectives WHERE id = ?1",
+            [closed.id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(stored.0, "clos");
+    assert_eq!(
+        serde_json::from_slice::<ObjectifCoordonne>(&stored.1).unwrap(),
+        closed
+    );
+    let outbox_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM delegation_outbox", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(outbox_count, 1);
+    drop(connection);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -162,6 +323,49 @@ fn issue_et_incertitude_sont_des_transitions_transactionnelles() {
     assert_eq!(terminal.last_issue.unwrap()["kind"], "accepted");
     assert_eq!(terminal.issue_observed_at, Some(1_011));
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn tous_les_refus_durables_convergent_vers_rejected_terminal() {
+    let cases = [
+        (
+            IdempotencyIssue::Rejected {
+                category: "policy".to_string(),
+                reason: "refus explicite".to_string(),
+                expires_at: 1_100,
+            },
+            "rejected",
+        ),
+        (IdempotencyIssue::EnvelopeMismatch, "envelope_mismatch"),
+        (IdempotencyIssue::IdempotencyExpired, "idempotency_expired"),
+        (IdempotencyIssue::InvalidIssuedAt, "invalid_issued_at"),
+    ];
+    for (index, (issue, expected_kind)) in cases.into_iter().enumerate() {
+        let root = unique_root(&format!("rejected-{index}"));
+        let database = root.join("maicie.sqlite3");
+        let mut store = MaicieStore::open(&database).unwrap();
+        let prepared = fixture(store.issuer_scope());
+        store.create_prepared_delegation(&prepared).unwrap();
+        store
+            .record_lookup_issue(uuid(MESSAGE_ID), &issue, 1_010)
+            .unwrap();
+        store
+            .record_lookup_issue(uuid(MESSAGE_ID), &issue, 1_011)
+            .unwrap();
+
+        assert!(store.pending_delegation_outboxes().unwrap().is_empty());
+        let snapshot = store.recovery_snapshot(uuid(MESSAGE_ID)).unwrap().unwrap();
+        assert_eq!(snapshot.outbox.state, EtatOutboxDelegation::Rejected);
+        assert_eq!(snapshot.last_issue.unwrap()["kind"], expected_kind);
+        assert_eq!(snapshot.issue_observed_at, Some(1_010));
+        assert!(
+            store
+                .record_transport_uncertainty(uuid(MESSAGE_ID), 1_012)
+                .is_err()
+        );
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[test]

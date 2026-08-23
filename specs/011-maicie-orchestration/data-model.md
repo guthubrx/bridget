@@ -55,7 +55,11 @@ Une réponse ou issue Bridget fait passer à `à_évaluer`, jamais directement �
 | `reply` | booléen | enveloppe immuable complète |
 | `timeout_secs`, `deadline_contractuelle` | valeurs envoyées | enveloppe immuable complète |
 | `body_hash` | hash | détecte toute corruption de l'enveloppe |
-| `state` | `prepared` \| `outcome_unknown` \| `accepted` | transitions transactionnelles |
+| `state` | `prepared` \| `outcome_unknown` \| `accepted` \| `rejected` | transitions transactionnelles ; `accepted` et `rejected` sont terminaux |
+
+Les issues `Rejected`, `EnvelopeMismatch`, `IdempotencyExpired` et
+`InvalidIssuedAt` convergent toutes vers `rejected`. En particulier,
+`InvalidIssuedAt` ne doit jamais être réécrit en `outcome_unknown` ni rejoué.
 | `attempted_at` | timestamp optionnel | audit de reprise |
 | `retry_until`, `dedup_retained_until` | timestamps | horizon de retry ≤ tombstone Bridget |
 

@@ -82,7 +82,8 @@ SC-001 par une réémission non corrélée.
    timeout/échéance et hash de l'enveloppe.
 2. Appeler Bridget avec ce même `message_id`.
 3. Sur Ack : transaction vers `accepted`. Sur coupure/ack perdu : transaction
-   vers `outcome_unknown`.
+   vers `outcome_unknown`. Tout refus durable, notamment `InvalidIssuedAt`,
+   converge vers l'état terminal `rejected` et n'est jamais rejoué.
 4. Au redémarrage, toute ligne non terminale — y compris `prepared` — consulte
    Bridget par `message_id`. Si aucune issue n'est connue, réémettre les bytes
    exacts persistés ; Bridget déduplique. Une rétention de tombstone au moins
