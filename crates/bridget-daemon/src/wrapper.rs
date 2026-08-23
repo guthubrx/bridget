@@ -761,11 +761,11 @@ pub fn launch(
     let mcp_enabled = match definition.mcp.interactive.as_str() {
         "codex" => {
             final_args.push("-c".to_string());
-            final_args.push(codex_mcp_override(&mcp_server_entry()?)?);
+            final_args.push(codex_mcp_override(&interactive_mcp_server_entry()?)?);
             true
         }
         "claude" => {
-            let config = claude_mcp_config(&mcp_server_entry()?, &instance_id)?;
+            let config = claude_mcp_config(&interactive_mcp_server_entry()?, &instance_id)?;
             final_args.extend([
                 "--strict-mcp-config".to_string(),
                 "--mcp-config".to_string(),
@@ -2362,8 +2362,17 @@ fn mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
         "type": "stdio",
         "command": command,
         "args": ["mcp"],
-        "env": mcp_server_environment()?
+        "env": []
     }))
+}
+
+/// La négociation ACP validée par le spike attend `env: []`. Les clients
+/// interactifs, eux, démarrent le serveur MCP dans un environnement parfois
+/// filtré : ils reçoivent donc explicitement le seul `HOME` requis.
+fn interactive_mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let mut server = mcp_server_entry()?;
+    server["env"] = mcp_server_environment()?;
+    Ok(server)
 }
 
 /// Codex peut filtrer l'environnement du serveur MCP qu'il lance. `HOME` est
@@ -2392,7 +2401,7 @@ fn smoke_mcp_server_entry() -> Result<Option<serde_json::Value>, Box<dyn std::er
         "type": "stdio",
         "command": command,
         "args": args,
-        "env": mcp_server_environment()?
+        "env": []
     })))
 }
 
@@ -2732,7 +2741,7 @@ mod reconnect_tests {
         let root = mcp_test_root("config-vide");
         write_user_config_sentinels(&root);
         let before = user_config_snapshot(&root);
-        let server = mcp_server_entry().unwrap();
+        let server = interactive_mcp_server_entry().unwrap();
 
         let override_ = codex_mcp_override(&server).unwrap();
         assert!(override_.contains("mcp_servers.bridget"));
@@ -2759,11 +2768,17 @@ mod reconnect_tests {
     }
 
     #[test]
+    fn projection_acp_conserve_l_environnement_vide_valide() {
+        let server = mcp_server_entry().unwrap();
+        assert_eq!(server["env"], serde_json::json!([]));
+    }
+
+    #[test]
     fn fichier_mcp_ephemere_est_nettoye_avant_un_refus_de_spawn() {
         let root = mcp_test_root("refus-avant-spawn");
         write_user_config_sentinels(&root);
         let before = user_config_snapshot(&root);
-        let server = mcp_server_entry().unwrap();
+        let server = interactive_mcp_server_entry().unwrap();
         let config =
             claude_mcp_config_in(&root.join(".cache/bridget"), &server, "refused").unwrap();
         let path = config.path().to_path_buf();
