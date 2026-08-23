@@ -192,7 +192,10 @@ fleet.json, replay de contexte automatique au-delà de la carte de réveil.
   parser les sous-commandes codex (resume, SESSION_ID et options ≠ prompt),
   et injecter en reprise un bootstrap court expliquant la découverte
   différée ; tests d'argv et de régression du texte. Recoupe la « carte de
-  réveil » : même besoin, même endroit d'injection.
+  réveil » : même besoin, même endroit d'injection. PROMU EN SESSION 014
+  (tâche 6 — décision utilisateur du 2026-08-23 soir, après la chasse au
+  fantôme MCP) ; la carte de réveil complète (génération, demandes
+  rerattachées, handoff) reste v2.
 - **`who` n'affiche pas le mode d'attelage** (confusion utilisateur constatée
   2×, 2026-08-23) : la colonne transport ne décrit que le tronçon
   daemon↔wrapper (unix/ssh) ; rien n'indique si l'équipier est géré ACP ou
