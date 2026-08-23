@@ -365,4 +365,9 @@ plus vite ; le coût net est un report, pas une perte.
   remède bascule l'entrée liée en LIVRÉ à sa clôture, commit compris —
   machine à états pure, zéro LLM). S'appuie sur le guichet 015 (l'événement
   de livraison est le déclencheur). Bonus : catalogue interrogeable (GUI) et
-  métrologie incident→remède gratuite.
+  métrologie incident→remède gratuite. AMENDÉE par revue adverse du
+  2026-08-24 (revue-adverse-boucle-amelioration-2026-08-24.md) : tri sur
+  champs DÉCLARÉS seulement, jamais d'écriture dans les plans de l'hôte,
+  format d'entrée fermé À LIVRER D'ABORD (le catalogue actuel est de la
+  prose non machine-appendable — migration requise), volet « entrée au
+  plan » reporté aux routines.
