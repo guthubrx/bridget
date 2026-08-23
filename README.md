@@ -85,6 +85,47 @@ bridget send --to codex-1 "Analyse ce fichier" --reply
 bridget who
 ```
 
+## Coordonner avec Maicie
+
+Maicie est le compagnon CLI optionnel de Bridget pour les objectifs et
+délégations durables. Elle reste déterministe : aucun LLM, scheduler ou
+interprétation de texte libre ne choisit à la place de l'utilisateur.
+
+```bash
+cargo build --release -p maicie
+./target/release/maicie delegate \
+  --config /chemin/absolu/maicie.json \
+  --goal "Relire le plan de reprise" \
+  --to reviewer \
+  --duration normale \
+  --idempotency-key revue-plan-1 \
+  --json
+
+./target/release/maicie status --config /chemin/absolu/maicie.json --json
+```
+
+Chaque commande ouvre la SQLite privée de Maicie puis rend la main. Les voies
+qui contactent Bridget réconcilient d'abord les remises non terminales ; les
+actions d'objectif restent locales. Il n'existe donc aucun daemon Maicie à
+arrêter. Une interruption laisse les transactions déjà commitées récupérables
+au prochain appel. Maicie ne lance et n'arrête jamais un agent : les
+activations approuvées passent exclusivement par le `SpawnOrder` public de
+Bridget, et `approve` reste une frappe humaine locale non exposée à Bridget ou
+MCP.
+
+Les deux couches gardent des vérités différentes. Maicie possède objectifs,
+décisions et outboxes transactionnelles ; Bridget possède présence, livraison
+et snapshot du transport. Un `Gap`, un `End` ou une observation périmée ne
+devient jamais une conclusion métier. Après une coupure, Maicie consulte puis
+rejoue le même identifiant et les mêmes octets. Pour une activation, le replay
+exact du `SpawnOrder` est lui-même le lookup idempotent : il n'existe pas de
+surface `SpawnLookup`. `IdempotencyExpired` est terminal et interdit un nouvel
+envoi implicite. Le digest reçu dans `SpawnAccepted` est comparé au hash
+épinglé lors de l'approbation, sans relire le registre.
+
+Le démarrage, la configuration et les limites détaillées sont documentés dans
+`plugins/maicie/README.md`.
+
 ## Envois idempotents
 
 Pour une délégation que votre programme pourra rejouer après une coupure,
