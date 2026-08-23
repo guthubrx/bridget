@@ -11,7 +11,8 @@ use crate::domain::{
     ObjectifCoordonne, TypeDecision,
 };
 use crate::outbox::{
-    OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot, StoreCommitPhase,
+    MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
+    StoreCommitPhase,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::{json, Value};
@@ -31,6 +32,37 @@ pub struct MaicieStore {
     path: PathBuf,
     connection: Connection,
     issuer_scope: String,
+}
+
+/// Motif local fermé quand les octets durables ne peuvent jamais produire une
+/// remise valide. Il ne crée aucun nouvel état de domaine : l'outbox converge
+/// vers `Rejected`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalFailureReason {
+    FrameTooLarge,
+    InvalidEnvelope,
+}
+
+impl LocalFailureReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::FrameTooLarge => "frame_too_large",
+            Self::InvalidEnvelope => "invalid_envelope",
+        }
+    }
+}
+
+/// Lecture de reprise par entrée : une corruption corrélable ne rend jamais
+/// les autres outboxes indisponibles et peut être terminalisée sans rejeu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DelegationRecoveryEntry {
+    Pending(PendingDelegationOutbox),
+    LocalFailure {
+        objective_id: Uuid,
+        delegation_id: Uuid,
+        message_id: Uuid,
+        reason: LocalFailureReason,
+    },
 }
 
 /// Ligne de reprise d'un SpawnOrder. Les octets sont ceux validés lors de
@@ -128,6 +160,43 @@ impl MaicieStore {
     /// Retourne uniquement les outboxes non terminales, avec l'enveloppe
     /// exacte nécessaire au lookup puis au replay de T008.
     pub fn pending_delegation_outboxes(&self) -> Result<Vec<PendingDelegationOutbox>, StoreError> {
+        self.raw_pending_delegations()?
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect()
+    }
+
+    /// Retourne chaque outbox indépendamment. Une enveloppe durable invalide
+    /// garde ses identifiants de corrélation et devient un refus local que le
+    /// reconciliateur persiste avant de poursuivre les autres entrées.
+    pub fn delegation_recovery_entries(&self) -> Result<Vec<DelegationRecoveryEntry>, StoreError> {
+        self.raw_pending_delegations()?
+            .into_iter()
+            .map(|raw| {
+                let objective_id = parse_uuid(&raw.objective_id)?;
+                let delegation_id = parse_uuid(&raw.delegation_id)?;
+                let message_id = parse_uuid(&raw.message_id)?;
+                let reason = if raw.body_bytes.len() > MAX_MESSAGE_BYTES
+                    || raw.message_bytes.len() > MAX_MESSAGE_BYTES
+                {
+                    LocalFailureReason::FrameTooLarge
+                } else {
+                    LocalFailureReason::InvalidEnvelope
+                };
+                Ok(match raw.try_into() {
+                    Ok(pending) => DelegationRecoveryEntry::Pending(pending),
+                    Err(_) => DelegationRecoveryEntry::LocalFailure {
+                        objective_id,
+                        delegation_id,
+                        message_id,
+                        reason,
+                    },
+                })
+            })
+            .collect()
+    }
+
+    fn raw_pending_delegations(&self) -> Result<Vec<RawPending>, StoreError> {
         let mut statement = self
             .connection
             .prepare(
@@ -143,8 +212,7 @@ impl MaicieStore {
         let rows = statement
             .query_map([], raw_pending_from_row)
             .map_err(StoreError::Sql)?;
-        rows.map(|row| row.map_err(StoreError::Sql)?.try_into())
-            .collect()
+        rows.map(|row| row.map_err(StoreError::Sql)).collect()
     }
 
     /// Persiste l'issue observée par lookup. Une issue terminale retire
@@ -217,6 +285,57 @@ impl MaicieStore {
         if changed != 1 {
             return Err(StoreError::Conflict(
                 "outbox modifiée concurremment pendant la transition",
+            ));
+        }
+        tx.commit().map_err(StoreError::Sql)
+    }
+
+    /// Persiste un refus local déterministe. Le payload fermé permet au
+    /// reconciliateur de prouver pourquoi aucun octet n'a été remis à Bridget.
+    pub fn record_local_failure(
+        &mut self,
+        message_id: Uuid,
+        reason: LocalFailureReason,
+    ) -> Result<(), StoreError> {
+        let issue_bytes =
+            serde_json::to_vec(&json!({"local": reason.as_str()})).map_err(StoreError::Json)?;
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        let current: Option<(String, i64, Option<Vec<u8>>)> = tx
+            .query_row(
+                "SELECT state, terminal, last_issue_json\n\
+                 FROM delegation_outbox WHERE message_id = ?1",
+                [message_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let Some((current_state_name, current_terminal, current_issue)) = current else {
+            return Err(StoreError::NotFound("message_id inconnu"));
+        };
+        if current_terminal == 1 {
+            if current_issue.as_deref() == Some(issue_bytes.as_slice()) {
+                tx.commit().map_err(StoreError::Sql)?;
+                return Ok(());
+            }
+            return Err(StoreError::Conflict("issue terminale déjà figée"));
+        }
+        let current_state = parse_outbox_state(&current_state_name)?;
+        if current_state != EtatOutboxDelegation::Rejected {
+            current_state
+                .transition_vers(EtatOutboxDelegation::Rejected)
+                .map_err(|_| StoreError::Conflict("transition outbox interdite"))?;
+        }
+        let changed = tx
+            .execute(
+                "UPDATE delegation_outbox\n\
+                 SET state = 'rejected', terminal = 1, last_issue_json = ?1\n\
+                 WHERE message_id = ?2 AND state = ?3 AND terminal = 0",
+                params![issue_bytes, message_id.to_string(), current_state_name],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict(
+                "outbox modifiée concurremment pendant le rejet local",
             ));
         }
         tx.commit().map_err(StoreError::Sql)

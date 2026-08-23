@@ -4,7 +4,7 @@ use maicie::domain::{
     ObjectifCoordonne, OutboxDelegation,
 };
 use maicie::outbox::{stable_body_hash, PreparedDelegation, StoreCommitPhase, MAX_MESSAGE_BYTES};
-use maicie::store::MaicieStore;
+use maicie::store::{DelegationRecoveryEntry, LocalFailureReason, MaicieStore};
 use serde_json::json;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -79,6 +79,75 @@ fn schema_futur_et_enveloppe_corrompue_sont_refuses_fail_closed() {
     assert!(store.pending_delegation_outboxes().is_err());
     assert!(store.recovery_snapshot(uuid(MESSAGE_ID)).is_err());
     fs::remove_dir_all(corrupt_root).unwrap();
+}
+
+#[test]
+fn enveloppe_locale_corrompue_devient_un_rejet_terminal_et_n_est_jamais_reprise() {
+    let root = unique_root("local-failure");
+    let database = root.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let prepared = fixture(store.issuer_scope());
+    let objective_id = prepared.objective.id;
+    let delegation_id = prepared.delegation.id;
+    store.create_prepared_delegation(&prepared).unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute(
+            "UPDATE delegation_outbox SET body_bytes = ?1 WHERE message_id = ?2",
+            rusqlite::params![b"corrompu".as_slice(), MESSAGE_ID],
+        )
+        .unwrap();
+    drop(connection);
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    let entries = store.delegation_recovery_entries().unwrap();
+    assert_eq!(
+        entries,
+        vec![DelegationRecoveryEntry::LocalFailure {
+            objective_id,
+            delegation_id,
+            message_id: uuid(MESSAGE_ID),
+            reason: LocalFailureReason::InvalidEnvelope,
+        }]
+    );
+    store
+        .record_local_failure(uuid(MESSAGE_ID), LocalFailureReason::InvalidEnvelope)
+        .unwrap();
+    store
+        .record_local_failure(uuid(MESSAGE_ID), LocalFailureReason::InvalidEnvelope)
+        .unwrap();
+    assert!(store.delegation_recovery_entries().unwrap().is_empty());
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let stored: (String, i64, Vec<u8>, String, String) = connection
+        .query_row(
+            "SELECT state, terminal, last_issue_json, objective_id, delegation_id\n\
+             FROM delegation_outbox WHERE message_id = ?1",
+            [MESSAGE_ID],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(stored.0, "rejected");
+    assert_eq!(stored.1, 1);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&stored.2).unwrap(),
+        json!({"local":"invalid_envelope"})
+    );
+    assert_eq!(stored.3, objective_id.to_string());
+    assert_eq!(stored.4, delegation_id.to_string());
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
