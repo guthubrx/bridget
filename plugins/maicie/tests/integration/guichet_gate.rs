@@ -2,13 +2,17 @@ use maicie::app::{DelegateRequest, DelegateResult, DelegationCandidate, delegate
 use maicie::bridget_client::BridgetClientLimits;
 use maicie::config::DurationClasses;
 use maicie::domain::ClasseDuree;
-use maicie::reconcile::{GuichetReconcileAction, reconcile_guichet_startup_with_limits};
+use maicie::reconcile::{
+    GuichetReconcileAction, GuichetReconcilePhase, reconcile_guichet_startup_observed_with_limits,
+    reconcile_guichet_startup_with_limits,
+};
 use maicie::store::MaicieStore;
 use serde_json::{Value, json};
 use std::fs;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -296,6 +300,191 @@ fn budget_epuise_conserve_la_demande_sans_decision_locale() {
     drop(store);
     server.join().unwrap();
     fs::remove_dir_all(root).unwrap();
+}
+
+/// SC-1502 : les trois coupures frappent un vrai sous-processus Maicie. La
+/// mutation qui déplacerait un jalon avant/après sa frontière ferait échouer
+/// soit la barrière, soit l'assertion de décision/réponse unique au redémarrage.
+#[test]
+fn crash_reel_aux_trois_frontieres_releve_une_unique_decision() {
+    for phase in [
+        "before_claim",
+        "after_claim_before_store_commit",
+        "after_store_commit_before_reply",
+    ] {
+        let root = root(phase);
+        let database = root.join("maicie.sqlite3");
+        let marker = root.join("crash-barrier");
+        let created = seed(&database);
+        let issuer_scope = MaicieStore::open(&database).unwrap().issuer_scope().to_string();
+        let fixture = SocketFixture::new(phase);
+        let listener = fixture.bind();
+        let request_id = format!("request-crash-{phase}");
+        let canonical_request = format!(
+            "{{\"type\":\"service_request\",\"v\":1,\"issuer_scope\":\"{issuer_scope}\",\"request_id\":\"{request_id}\",\"issued_at\":1000,\"from\":\"prospective\",\"to\":\"maicie\",\"operation\":\"delivery_report\",\"payload\":{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\",\"delivery_hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"in_reply_to\":\"{}\"}}}}",
+            created.objective_id, created.delegation_id, created.message_id
+        )
+        .into_bytes();
+        let server = thread::spawn({
+            let phase = phase.to_string();
+            let server_request_id = request_id.clone();
+            move || {
+                let (stream, _) = listener.accept().unwrap();
+                let (mut reader, mut writer) = split(stream);
+                assert_service_handshake(&mut reader, &mut writer, &issuer_scope);
+                write_json(&mut writer, welcome());
+                if phase != "before_claim" {
+                    assert_eq!(
+                        read_json(&mut reader),
+                        json!({"type":"guichet_claim_next","v":1})
+                    );
+                    write_json(
+                        &mut writer,
+                        claimed(&issuer_scope, &server_request_id, &canonical_request, 1),
+                    );
+                }
+                drop(writer);
+                drop(reader);
+
+                let (stream, _) = listener.accept().unwrap();
+                let (mut reader, mut writer) = split(stream);
+                assert_service_handshake(&mut reader, &mut writer, &issuer_scope);
+                write_json(&mut writer, welcome());
+                assert_eq!(
+                    read_json(&mut reader),
+                    json!({"type":"guichet_claim_next","v":1})
+                );
+                let generation = u64::from(phase != "before_claim") + 1;
+                write_json(
+                    &mut writer,
+                    claimed(
+                        &issuer_scope,
+                        &server_request_id,
+                        &canonical_request,
+                        generation,
+                    ),
+                );
+                let reply = read_json(&mut reader);
+                assert_eq!(reply["type"], "guichet_reply");
+                assert_eq!(reply["request_id"], server_request_id);
+                assert_eq!(reply["claim_generation"], generation);
+                let response_message_id = reply["response_message_id"].as_str().unwrap();
+                write_json(
+                    &mut writer,
+                    json!({
+                        "type":"guichet_result",
+                        "v":1,
+                        "issuer_scope":issuer_scope,
+                        "request_id":server_request_id,
+                        "issue":"accepted",
+                        "expires_at":1200
+                    }),
+                );
+                write_json(
+                    &mut writer,
+                    json!({
+                        "type":"request_lifecycle_event",
+                        "v":1,
+                        "issuer_scope":issuer_scope,
+                        "event_id":format!("event-{phase}"),
+                        "request_id":server_request_id,
+                        "state":"answered",
+                        "observed_at":1010,
+                        "in_reply_to":created.message_id.to_string(),
+                        "response_message_id":response_message_id
+                    }),
+                );
+                assert_eq!(
+                    read_json(&mut reader),
+                    json!({"type":"guichet_claim_next","v":1})
+                );
+                write_json(&mut writer, json!({"type":"guichet_empty","v":1}));
+            }
+        });
+
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("guichet_gate::crash_worker")
+            .arg("--nocapture")
+            .env("MAICIE_GUICHET_CRASH_DB", &database)
+            .env("MAICIE_GUICHET_CRASH_SOCKET", fixture.path())
+            .env("MAICIE_GUICHET_CRASH_PHASE", phase)
+            .env("MAICIE_GUICHET_CRASH_MARKER", &marker)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(marker.exists(), "barrière {phase} non atteinte");
+        let process = Command::new("ps")
+            .args(["-p", &child.id().to_string(), "-o", "command="])
+            .output()
+            .unwrap();
+        let command = String::from_utf8_lossy(&process.stdout);
+        assert!(command.contains("guichet_gate_integration"));
+        assert!(!command.contains("Firefox"));
+        unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
+        child.wait().unwrap();
+
+        let mut store = MaicieStore::open(&database).unwrap();
+        let report = reconcile_guichet_startup_with_limits(&mut store, fixture.path(), 1_011, limits())
+            .unwrap();
+        assert!(report.actions.iter().any(|action| matches!(
+            action,
+            GuichetReconcileAction::ReponseAttestee { request_id: actual, issue }
+                if actual == &request_id && issue == "accepted"
+        )));
+        assert!(report.actions.iter().any(|action| matches!(
+            action,
+            GuichetReconcileAction::EvenementAtteste { request_id: actual, state }
+                if actual == &request_id && state == "answered"
+        )));
+        assert_eq!(store.objective_snapshots(Some(created.objective_id)).unwrap()[0].decisions.len(), 1);
+        drop(store);
+        server.join().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn crash_worker() {
+    let Some(database) = std::env::var_os("MAICIE_GUICHET_CRASH_DB") else {
+        return;
+    };
+    let socket = std::env::var_os("MAICIE_GUICHET_CRASH_SOCKET").unwrap();
+    let requested = std::env::var("MAICIE_GUICHET_CRASH_PHASE").unwrap();
+    let marker = PathBuf::from(std::env::var_os("MAICIE_GUICHET_CRASH_MARKER").unwrap());
+    let mut store = MaicieStore::open(database).unwrap();
+    let _ = reconcile_guichet_startup_observed_with_limits(
+        &mut store,
+        PathBuf::from(socket),
+        1_010,
+        limits(),
+        |observed| {
+            let selected = matches!(
+                (requested.as_str(), observed),
+                ("before_claim", GuichetReconcilePhase::BeforeClaim)
+                    | (
+                        "after_claim_before_store_commit",
+                        GuichetReconcilePhase::AfterClaimBeforeStoreCommit
+                    )
+                    | (
+                        "after_store_commit_before_reply",
+                        GuichetReconcilePhase::AfterStoreCommitBeforeReply
+                    )
+            );
+            if selected {
+                fs::write(&marker, b"ready").unwrap();
+                let mut byte = [0_u8; 1];
+                std::io::stdin().read_exact(&mut byte).unwrap();
+            }
+            Ok(())
+        },
+    );
 }
 
 fn limits() -> BridgetClientLimits {

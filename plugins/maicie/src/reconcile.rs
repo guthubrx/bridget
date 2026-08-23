@@ -110,6 +110,16 @@ pub struct GuichetReconcileReport {
     pub actions: Vec<GuichetReconcileAction>,
 }
 
+/// Jalons réservés aux crash-tests de la relève guichet. Ils encadrent la
+/// frontière entre le claim Bridget, la greffe SQLite Maicie et la réponse
+/// liée ; aucune commande de production ne les observe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuichetReconcilePhase {
+    BeforeClaim,
+    AfterClaimBeforeStoreCommit,
+    AfterStoreCommitBeforeReply,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivationReconcilePhase {
     BeforeSocket,
@@ -303,6 +313,24 @@ pub fn reconcile_guichet_startup_with_limits(
     observed_at: i64,
     limits: BridgetClientLimits,
 ) -> Result<GuichetReconcileReport, ReconcileError> {
+    reconcile_guichet_startup_observed_with_limits(
+        store,
+        bridget_socket,
+        observed_at,
+        limits,
+        |_| Ok(()),
+    )
+}
+
+/// Variante des crash-tests : les jalons ne modifient aucun état et servent
+/// uniquement à interrompre un vrai processus aux trois frontières durables.
+pub fn reconcile_guichet_startup_observed_with_limits(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    observed_at: i64,
+    limits: BridgetClientLimits,
+    mut observer: impl FnMut(GuichetReconcilePhase) -> Result<(), ReconcileError>,
+) -> Result<GuichetReconcileReport, ReconcileError> {
     if observed_at <= 0 {
         return Err(ReconcileError::InvalidSnapshot("observed_at invalide"));
     }
@@ -329,6 +357,7 @@ pub fn reconcile_guichet_startup_with_limits(
             report.actions.push(GuichetReconcileAction::BudgetEpuise);
             return Ok(report);
         }
+        observer(GuichetReconcilePhase::BeforeClaim)?;
         let Some(claim) = (match client.claim_next() {
             Ok(claim) => claim,
             Err(error) => {
@@ -340,6 +369,8 @@ pub fn reconcile_guichet_startup_with_limits(
             return Ok(report);
         };
 
+        observer(GuichetReconcilePhase::AfterClaimBeforeStoreCommit)?;
+
         // Le résultat applicatif est greffé avant toute réponse socket. Au
         // rejeu, l'app réutilise ou régénère le seul `reply_bytes` durable
         // pour le claim courant : ce réconciliateur ne reconstruit jamais de
@@ -347,6 +378,7 @@ pub fn reconcile_guichet_startup_with_limits(
         let response_message_id = Uuid::new_v4().to_string();
         let processed = process_guichet_claim(store, &claim, &response_message_id, observed_at)
             .map_err(ReconcileError::Guichet)?;
+        observer(GuichetReconcilePhase::AfterStoreCommitBeforeReply)?;
         let response = match client.reply_exact_bytes(&processed.reply_bytes) {
             Ok(response) => response,
             Err(error) => {
