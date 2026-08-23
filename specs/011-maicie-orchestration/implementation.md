@@ -36,6 +36,11 @@ est attestée dans le registre local Maicie (`accepted` + issue durable), tandis
 que le snapshot transport reste honnêtement `unknown`. Mesure : 1 527 ms de la
 délégation au statut accepté, 1 532 ms jusqu'à la clôture explicite.
 
+Le premier `status` peut honnêtement constater `outcome_unknown` avec un
+`delivery_id`, avant que l'ACK aval ne rende la même remise `accepted` ; le
+gate attend cette convergence bornée. L'arrêt géré conserve ensuite la fiche
+en `stopped` (historique de présence) et prouve l'extinction du PGID ACP.
+
 Le premier passage a refusé `reply=true` avec `reply_sender_unavailable` :
 Maicie est un client public durable, non un wrapper Bridget joignable. Le MVP
 émet donc sans demande de réponse ; T015b devra fournir une identité Maicie

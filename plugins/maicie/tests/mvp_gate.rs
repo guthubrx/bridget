@@ -41,6 +41,7 @@ fn delegation_reelle_est_accusee_et_visible_sans_fausse_correlation_de_reponse()
     assert!(delegated.status.success(), "{:?}", delegated.stderr);
     let delegated: Value = serde_json::from_slice(&delegated.stdout).unwrap();
     let objective_id = delegated["objective_id"].as_str().unwrap();
+    fixture.wait_for_injection();
 
     let status_deadline = Instant::now() + Duration::from_secs(5);
     let status = loop {
@@ -97,6 +98,8 @@ struct Fixture {
     bridget: PathBuf,
     socket: PathBuf,
     config: PathBuf,
+    injection_sentinel: PathBuf,
+    adapter_pgid: PathBuf,
 }
 
 impl Fixture {
@@ -106,9 +109,14 @@ impl Fixture {
         fs::create_dir_all(root.join(".config/bridget")).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let adapter = root.join("mvp-acp.sh");
+        let injection_sentinel = root.join("prompt-injected");
+        let adapter_pgid = root.join("adapter-pgid");
         fs::write(
             &adapter,
-            "#!/bin/sh\nread initialize\necho '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1}}'\nread session\necho '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"mvp\"}}'\nread prompt\necho '{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"stopReason\":\"end_turn\"}}'\n",
+            format!(
+                "#!/bin/sh\nps -o pgid= -p $$ | tr -d ' ' > '{}'\nread initialize\necho '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1}}}}'\nread session\necho '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"sessionId\":\"mvp\"}}}}'\nread prompt\nprintf '%s' \"$prompt\" | grep -q '\"method\":\"session/prompt\"' || exit 23\n: > '{}'\necho '{{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{{\"stopReason\":\"end_turn\"}}}}'\nwhile read ignored; do :; done\n",
+                adapter_pgid.display(), injection_sentinel.display()
+            ),
         )
         .unwrap();
         fs::set_permissions(&adapter, fs::Permissions::from_mode(0o700)).unwrap();
@@ -139,7 +147,7 @@ impl Fixture {
             .unwrap(),
         )
         .unwrap();
-        Self { root, bridget: bridget.to_path_buf(), socket, config }
+        Self { root, bridget: bridget.to_path_buf(), socket, config, injection_sentinel, adapter_pgid }
     }
 
     fn start_daemon(&self) -> Child {
@@ -186,11 +194,43 @@ impl Fixture {
         Command::new(env!("CARGO_BIN_EXE_maicie")).args(args).output().unwrap()
     }
 
+    fn wait_for_injection(&self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if self.injection_sentinel.exists() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!("le faux ACP n'a jamais validé ni reçu session/prompt");
+    }
+
     fn stop_agent(&self) {
-        let _ = Command::new(&self.bridget)
+        let stopped = Command::new(&self.bridget)
             .args(["stop", "mvp-agent"])
             .env("HOME", &self.root)
-            .output();
+            .output()
+            .unwrap();
+        assert!(stopped.status.success(), "{:?}", stopped.stderr);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if BridgetClient::list_agents_at(&self.socket)
+                .unwrap_or_default()
+                .iter()
+                .any(|agent| agent.name == "mvp-agent" && agent.state == "stopped")
+            {
+                let pgid: i32 = fs::read_to_string(&self.adapter_pgid)
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
+                let alive = unsafe { libc::kill(-pgid, 0) } == 0;
+                assert!(!alive, "groupe géré {pgid} encore vivant après stop");
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!("équipier MVP n'est pas stopped après bridget stop");
     }
 }
 
