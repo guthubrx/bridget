@@ -1,5 +1,5 @@
 use maicie::app::{DelegateRequest, DelegateResult, DelegationCandidate, delegate};
-use maicie::bridget_client::BridgetClientLimits;
+use maicie::bridget_client::{BridgetClient, BridgetClientLimits};
 use maicie::config::DurationClasses;
 use maicie::domain::ClasseDuree;
 use maicie::reconcile::{
@@ -10,12 +10,13 @@ use maicie::store::MaicieStore;
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
@@ -33,9 +34,13 @@ fn durations() -> DurationClasses {
 }
 
 fn seed(database: &std::path::Path) -> maicie::app::DelegationCreated {
+    seed_for(database, "prospective")
+}
+
+fn seed_for(database: &std::path::Path, participant: &str) -> maicie::app::DelegationCreated {
     let mut store = MaicieStore::open(database).unwrap();
     let candidates = vec![DelegationCandidate {
-        name: "prospective".to_string(),
+        name: participant.to_string(),
         tags: vec!["rust".to_string()],
         available: true,
         dnd: false,
@@ -47,7 +52,7 @@ fn seed(database: &std::path::Path) -> maicie::app::DelegationCreated {
         &candidates,
         &DelegateRequest {
             goal: "produire le rapport",
-            explicit_target: Some("prospective"),
+            explicit_target: Some(participant),
             required_tags: &[],
             duration: ClasseDuree::Normale,
             reply: true,
@@ -598,4 +603,432 @@ impl Drop for SocketFixture {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
+}
+
+/// G1504 : le dépôt provient du vrai binaire Bridget au nom d'un wrapper ACP
+/// réellement lancé. Maicie n'existe entre le dépôt et la commande `status`
+/// que comme SQLite privée : aucune boucle résidente ne peut absorber la lettre.
+///
+/// Exécution explicite :
+/// `BRIDGET_MVP_GATE_BIN=/chemin/absolu/bridget cargo test -p maicie --test guichet_gate_integration -- --ignored --nocapture`.
+#[test]
+#[ignore = "gate G1504 réel : requiert BRIDGET_MVP_GATE_BIN vers le binaire Bridget du worktree"]
+fn parcours_reel_g1504_releve_une_lettre_et_ne_la_duplique_pas() {
+    let bridget = PathBuf::from(
+        std::env::var_os("BRIDGET_MVP_GATE_BIN")
+            .expect("BRIDGET_MVP_GATE_BIN doit désigner le binaire Bridget réel"),
+    );
+    let fixture = RealGateFixture::new(&bridget);
+    let created = seed_for(&fixture.database, "g1504-agent");
+    fixture.configure_agent(&created);
+    let started = Instant::now();
+    let mut daemon = fixture.start_daemon();
+    fixture.wait_for_agent();
+    fixture.start_ephemeral_maicie();
+    fixture.wait_for_deposit();
+    let tracked_id = created.message_id.to_string();
+
+    let deposit = fixture.deposit_args(&tracked_id);
+
+    // La commande Maicie est le premier consommateur de la boîte aux lettres.
+    // Son ouverture relève, greffe et répond exclusivement depuis les bytes
+    // persistés, puis relève l'événement terminal Bridget sur la même session.
+    let status = fixture.maicie(&[
+        "status".to_string(),
+        created.objective_id.to_string(),
+        "--config".to_string(),
+        fixture.config.display().to_string(),
+        "--json".to_string(),
+    ]);
+    assert!(status.status.success(), "status G1504: {:?}", status.stderr);
+    let status_json: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["coordination"].as_array().unwrap().len(), 1);
+
+    fixture.assert_request_answered(&tracked_id);
+    let connection = rusqlite::Connection::open(&fixture.database).unwrap();
+    let decisions: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM coordination_decisions
+             WHERE id IN (SELECT decision_id FROM guichet_receptions)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let lifecycle: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM guichet_lifecycle_events\n             WHERE issuer_scope = ?1 AND request_id = ?2 AND state = 'answered'",
+            [
+                "015_scope_0123456789abcdef0123456789abcdef",
+                "g1504-depot-01",
+            ],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(decisions, 1, "la greffe réelle ne crée qu'une décision");
+    assert_eq!(lifecycle, 1, "l'événement answered est relevé une seule fois");
+
+    // Mutation discriminante : sans clé tripartite durable ou sans rejet du
+    // rejeu terminal, le second dépôt recréerait un claim, une décision ou un
+    // événement. Le daemon rejoue l'issue terminale `accepted` (la CLI la
+    // présente comme issue non-queued et sort donc volontairement en erreur),
+    // puis les compteurs durables prouvent l'absence de second effet.
+    let replay = fixture.bridget(&deposit);
+    assert!(
+        !replay.status.success(),
+        "un dépôt terminal ne doit pas redevenir queued: {:?}",
+        replay.stdout
+    );
+    assert!(
+        String::from_utf8_lossy(&replay.stdout).contains("DÉPÔT: accepted"),
+        "rejeu dépôt: {:?}",
+        replay.stdout
+    );
+    let repeated_status = fixture.maicie(&[
+        "status".to_string(),
+        created.objective_id.to_string(),
+        "--config".to_string(),
+        fixture.config.display().to_string(),
+        "--json".to_string(),
+    ]);
+    assert!(repeated_status.status.success(), "status rejeu: {:?}", repeated_status.stderr);
+    let repeated_decisions: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM coordination_decisions
+             WHERE id IN (SELECT decision_id FROM guichet_receptions)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let repeated_lifecycle: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM guichet_lifecycle_events\n             WHERE issuer_scope = ?1 AND request_id = ?2",
+            [
+                "015_scope_0123456789abcdef0123456789abcdef",
+                "g1504-depot-01",
+            ],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(repeated_decisions, 1, "rejeu sans seconde décision");
+    assert_eq!(repeated_lifecycle, 1, "rejeu sans second événement");
+    fixture.assert_request_answered(&tracked_id);
+
+    eprintln!(
+        "G1504: dépôt absent→relève→greffe→answered={} ms",
+        started.elapsed().as_millis()
+    );
+    fixture.stop_agent();
+    stop_real_daemon(&mut daemon);
+}
+
+struct RealGateFixture {
+    root: PathBuf,
+    bridget: PathBuf,
+    socket: PathBuf,
+    config: PathBuf,
+    database: PathBuf,
+    release_deposit: PathBuf,
+    deposit_sentinel: PathBuf,
+    deposit_output: PathBuf,
+    adapter_error: PathBuf,
+    adapter_pgid: PathBuf,
+}
+
+impl RealGateFixture {
+    fn new(bridget: &Path) -> Self {
+        let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let root = PathBuf::from("/tmp").join(format!("mg1504-{}-{sequence}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".config/bridget")).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let release_deposit = root.join("release-deposit");
+        let deposit_sentinel = root.join("guichet-deposited");
+        let deposit_output = root.join("guichet-deposit.out");
+        let adapter_error = root.join("g1504-adapter.err");
+        let adapter_pgid = root.join("adapter-pgid");
+        let socket = root.join(".cache/bridget/bridget.sock");
+        assert!(socket.as_os_str().len() < 104, "socket G1504 trop longue");
+        let database = root.join("maicie.sqlite3");
+        let config = root.join("maicie.json");
+        fs::write(
+            &config,
+            serde_json::to_vec(&json!({
+                "version":1,
+                "bridget_socket":socket,
+                "database_path":database,
+                "durations":{"short_secs":30,"normal_secs":60,"long_secs":90},
+                "profiles":[]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        Self {
+            root,
+            bridget: bridget.to_path_buf(),
+            socket,
+            config,
+            database,
+            release_deposit,
+            deposit_sentinel,
+            deposit_output,
+            adapter_error,
+            adapter_pgid,
+        }
+    }
+
+    fn configure_agent(&self, created: &maicie::app::DelegationCreated) {
+        let adapter = self.root.join("g1504-acp.sh");
+        let emitter = self.root.join("maicie-emitter-acp.sh");
+        let issued_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let scope = "015_scope_0123456789abcdef0123456789abcdef";
+        let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        fs::write(self.root.join("objective-id"), created.objective_id.to_string()).unwrap();
+        fs::write(self.root.join("delegation-id"), created.delegation_id.to_string()).unwrap();
+        fs::write(self.root.join("deposit-issued-at"), issued_at.to_string()).unwrap();
+        fs::write(
+            &adapter,
+            format!(
+                "#!/bin/sh\nps -o pgid= -p $$ | tr -d ' ' > '{pgid}'\nread initialize\necho '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1}}}}'\nread session\necho '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"sessionId\":\"g1504\"}}}}'\n(\n  while [ ! -e '{release_deposit}' ]; do sleep 0.01; done\n  '{bridget}' guichet deposer delivery-report --from g1504-agent --objective '{objective}' --delegation '{delegation}' --hash '{hash}' --in-reply-to '{tracked_id}' --id g1504-depot-01 --issued-at {issued_at} --issuer-scope '{scope}' > '{deposit}' 2>> '{errors}' || exit 33\n  grep -q 'DÉPÔT: queued' '{deposit}' || exit 34\n  : > '{deposited}'\n) &\nread prompt\nprintf '%s' \"$prompt\" | grep -q '\"method\":\"session/prompt\"' || exit 23\necho '{{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{{\"stopReason\":\"end_turn\"}}}}'\nwhile read ignored; do :; done\n",
+                pgid = self.adapter_pgid.display(),
+                bridget = self.bridget.display(),
+                errors = self.adapter_error.display(),
+                objective = created.objective_id,
+                delegation = created.delegation_id,
+                tracked_id = created.message_id,
+                hash = hash,
+                issued_at = issued_at,
+                scope = scope,
+                deposit = self.deposit_output.display(),
+                deposited = self.deposit_sentinel.display(),
+                release_deposit = self.release_deposit.display(),
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&adapter, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(
+            &emitter,
+            format!(
+                "#!/bin/sh\nread initialize\necho '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1}}}}'\nread session\necho '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"sessionId\":\"g1504-maicie-emitter\"}}}}'\n'{bridget}' send --from maicie --to g1504-agent --reply --timeout 60 --id '{tracked_id}' --issued-at {issued_at} --issuer-scope '{scope}' 'attestation de livraison attendue' > '{errors}.emitter' 2>&1\nsend_status=$?\n[ $send_status -eq 0 ] || grep -q 'ISSUE INCONNUE' '{errors}.emitter' || exit 41\n: > '{release_deposit}'\n",
+                bridget = self.bridget.display(),
+                tracked_id = created.message_id,
+                issued_at = issued_at,
+                scope = scope,
+                errors = self.adapter_error.display(),
+                release_deposit = self.release_deposit.display(),
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&emitter, fs::Permissions::from_mode(0o700)).unwrap();
+        let registry = self.root.join(".config/bridget/agents.json");
+        fs::write(
+            &registry,
+            serde_json::to_vec(&json!({"agents":{"g1504_fixture":{
+                "command":adapter,
+                "protocol":"acp",
+                "permissions":"allow",
+                "queue_capacity":1,
+                "notify_timeout_secs":5,
+                "mcp":{"interactive":"none","acp_session":false}
+            },"maicie_emitter":{
+                "command":emitter,
+                "protocol":"acp",
+                "permissions":"allow",
+                "queue_capacity":1,
+                "notify_timeout_secs":5,
+                "mcp":{"interactive":"none","acp_session":false}
+            }}}))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::set_permissions(&registry, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    fn start_daemon(&self) -> Child {
+        let mut child = Command::new(&self.bridget)
+            .arg("daemon")
+            .env("HOME", &self.root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("daemon G1504 arrêté pendant l'amorçage: {status}");
+            }
+            let probe = self.bridget(&["requests".to_string(), "--json".to_string()]);
+            let ready = self.socket.exists() && probe.status.success();
+            if ready {
+                let spawn = self.bridget(&[
+                    "spawn".to_string(),
+                    "g1504_fixture".to_string(),
+                    "--name".to_string(),
+                    "g1504-agent".to_string(),
+                    "--cwd".to_string(),
+                    self.root.display().to_string(),
+                ]);
+                assert!(spawn.status.success(), "spawn G1504: {:?}", spawn.stderr);
+                return child;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        stop_real_daemon(&mut child);
+        panic!("daemon G1504 non prêt");
+    }
+
+    fn bridget(&self, args: &[String]) -> std::process::Output {
+        Command::new(&self.bridget)
+            .args(args)
+            .env("HOME", &self.root)
+            .output()
+            .unwrap()
+    }
+
+    fn maicie(&self, args: &[String]) -> std::process::Output {
+        Command::new(env!("CARGO_BIN_EXE_maicie"))
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    fn start_ephemeral_maicie(&self) {
+        let spawn = self.bridget(&[
+            "spawn".to_string(),
+            "maicie_emitter".to_string(),
+            "--name".to_string(),
+            "maicie".to_string(),
+            "--cwd".to_string(),
+            self.root.display().to_string(),
+        ]);
+        assert!(
+            spawn.status.success(),
+            "spawn émetteur Maicie éphémère: {:?}",
+            spawn.stderr
+        );
+    }
+
+    fn wait_for_agent(&self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if BridgetClient::list_agents_at(&self.socket)
+                .unwrap_or_default()
+                .iter()
+                .any(|agent| agent.name == "g1504-agent" && agent.state == "connected")
+            {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "wrapper G1504 non connecté: {}",
+            fs::read_to_string(&self.adapter_error).unwrap_or_default(),
+        );
+    }
+
+    fn wait_for_deposit(&self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if self.deposit_sentinel.exists() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "le wrapper réel n'a pas déposé sa lettre: dépôt={} émetteur={}",
+            fs::read_to_string(&self.adapter_error).unwrap_or_default(),
+            fs::read_to_string(format!("{}.emitter", self.adapter_error.display()))
+                .unwrap_or_default(),
+        );
+    }
+
+    fn deposit_args(&self, tracked_id: &str) -> Vec<String> {
+        vec![
+            "guichet".to_string(),
+            "deposer".to_string(),
+            "delivery-report".to_string(),
+            "--from".to_string(),
+            "g1504-agent".to_string(),
+            "--objective".to_string(),
+            self.created_objective_id(),
+            "--delegation".to_string(),
+            self.created_delegation_id(),
+            "--hash".to_string(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+            "--in-reply-to".to_string(),
+            tracked_id.to_string(),
+            "--id".to_string(),
+            "g1504-depot-01".to_string(),
+            "--issued-at".to_string(),
+            self.deposit_issued_at(),
+            "--issuer-scope".to_string(),
+            "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+        ]
+    }
+
+    fn created_objective_id(&self) -> String {
+        fs::read_to_string(self.root.join("objective-id")).unwrap().trim().to_string()
+    }
+
+    fn created_delegation_id(&self) -> String {
+        fs::read_to_string(self.root.join("delegation-id")).unwrap().trim().to_string()
+    }
+
+    fn deposit_issued_at(&self) -> String {
+        fs::read_to_string(self.root.join("deposit-issued-at")).unwrap().trim().to_string()
+    }
+
+    fn assert_request_answered(&self, request_id: &str) {
+        let requests = Command::new(&self.bridget)
+            .args(["requests", "--json"])
+            .env("HOME", &self.root)
+            .env("BRIDGET_AGENT_NAME", "maicie")
+            .output()
+            .unwrap();
+        assert!(requests.status.success(), "requests: {:?}", requests.stderr);
+        let requests: Value = serde_json::from_slice(&requests.stdout).unwrap();
+        assert!(requests.as_array().unwrap().iter().any(|request| {
+            request["id"] == request_id && request["state"] == "answered"
+        }));
+    }
+
+    fn stop_agent(&self) {
+        let stopped = self.bridget(&["stop".to_string(), "g1504-agent".to_string()]);
+        assert!(stopped.status.success(), "stop G1504: {:?}", stopped.stderr);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if BridgetClient::list_agents_at(&self.socket)
+                .unwrap_or_default()
+                .iter()
+                .any(|agent| agent.name == "g1504-agent" && agent.state == "stopped")
+            {
+                let pgid: i32 = fs::read_to_string(&self.adapter_pgid).unwrap().trim().parse().unwrap();
+                assert_ne!(unsafe { libc::kill(-pgid, 0) }, 0, "groupe ACP G1504 encore vivant");
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!("wrapper G1504 non arrêté");
+    }
+}
+
+impl Drop for RealGateFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn stop_real_daemon(daemon: &mut Child) {
+    if daemon.try_wait().unwrap().is_some() {
+        return;
+    }
+    assert_eq!(unsafe { libc::kill(daemon.id() as i32, libc::SIGTERM) }, 0);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if daemon.try_wait().unwrap().is_some() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("daemon G1504 ne s'arrête pas dans la borne");
 }
