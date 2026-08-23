@@ -101,3 +101,17 @@ contexte réel. Re-test du pin modèle = tâche NOMMÉE avec propriétaire à
 chaque montée de version d'adaptateur. Compteur de spawns par classe/profil
 (visibilité du sur-calibrage). Backlog v2 : plafond de spawns actifs par
 objectif ; champ classe dans le modèle de données.
+
+## Conclusion T015b (2026-08-23, prospective — instruite après T017)
+
+**NON : Subscribe seul ne suffit pas à la boucle de réponse.** Le journal
+public expose le message_id du prompt mais pas l'in_reply_to de la réponse ;
+le timeout est une issue de demande Bridget, pas un fait ACP observable.
+**Évolution Bridget nommée, désormais prouvée nécessaire** (conforme au
+principe « pas de surface avant preuve ») :
+1. une identité Maicie JOIGNABLE (livraisons entrantes) ;
+2. une surface publique de statut/événements de demande CORRÉLÉS
+   (réponse liée, timeout typé).
+C'est le prérequis de la boucle réponse→décision complète (Maicie v2 /
+future session Bridget). D'ici là : issues de LIVRAISON seules (T015a),
+consultation passive des échéances (T019), observations ACP datées (T017).
