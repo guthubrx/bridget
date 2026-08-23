@@ -67,3 +67,37 @@ codage = 5.6 effort haut, mécanique/smoke = modèle léger effort bas — jamai
 de haut calibre pour du travail de greffe. L'agent coordinateur propose le
 profil par nature de tâche ; l'humain approuve la palette ; Maicie n'accepte
 que l'approuvé.
+
+## Amendement post-revue adverse de la palette (2026-08-23, fable-reviewer)
+
+Verdict : cohérente avec conditions, UN amendement structurant — la
+revendication « zéro code Bridget » est abandonnée : l'intégrité exige une
+surface publique Bridget minimale.
+
+**Prérequis Bridget AVANT la Phase 5 (T021)** :
+1. Écho de la DÉFINITION RÉSOLUE (command/args/forbidden_env + digest) dans
+   SpawnAccepted (ou digest dans l'annuaire) — Maicie l'épingle dans son
+   context_hash d'approbation et revalide au TOCTOU. Ferme les deux vecteurs
+   de dérive : édition d'agents.json ET montée de version du binaire
+   (défauts compilés).
+2. Warning au chargement d'une entrée utilisateur SANS forbidden_env quand le
+   défaut du même type en a un (la fusion extend() remplace tout — preuve :
+   test user_entry_replaces_its_default) ; T021 exige forbidden_env NON VIDE
+   sur toute variante de fixture. C'est LA garde de facturation.
+3. Durcissement lecture agents.json (permissions, refus symlink) — il entre
+   dans la TCB d'approbation.
+
+**Conditions d'écran d'approbation** : args VERBATIM de l'entrée résolue
+(jamais les seuls champs déclaratifs) ; effort = étiquette OPAQUE par
+fournisseur, AUCUNE échelle comparative normalisée ; mention honnête de la
+limite du pin (« épinglé jusqu'à l'alias fournisseur, pas au-delà »).
+
+**Gouvernance** : palette approuvée = approbation de CONFIGURATION
+(mapping classe→profil) ; chaque activation reste mono-usage FR-014,
+journalisée séparément. La classe de tâche est portée dans le motif de la
+DécisionCoordination (auditable) ; reclassification = nouvelle décision
+journalisée. Sonde de fumée post-spawn (tâche mécanique triviale) avant tout
+contexte réel. Re-test du pin modèle = tâche NOMMÉE avec propriétaire à
+chaque montée de version d'adaptateur. Compteur de spawns par classe/profil
+(visibilité du sur-calibrage). Backlog v2 : plafond de spawns actifs par
+objectif ; champ classe dans le modèle de données.
