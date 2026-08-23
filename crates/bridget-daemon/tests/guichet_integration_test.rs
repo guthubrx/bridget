@@ -11,6 +11,7 @@ use std::process::{Child, Command};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SCOPE: &str = "015_scope_0123456789abcdef0123456789abcdef";
+const SERVICE_SCOPE: &str = "015_service_abcdef0123456789abcdef0123456789";
 
 fn unique_home() -> PathBuf {
     let nonce = SystemTime::now()
@@ -59,9 +60,7 @@ fn request(
     decode(line.trim_end()).unwrap()
 }
 
-fn service(
-    home: &Path,
-) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
+fn service(home: &Path, issuer_scope: &str) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
     let (mut reader, mut writer) = connect(home);
     assert!(matches!(
         request(
@@ -78,7 +77,7 @@ fn service(
             WrapperToDaemon::ServiceHello {
                 version: SERVICE_CONTRACT_VERSION,
                 service: "maicie".to_string(),
-                issuer_scope: SCOPE.to_string(),
+                issuer_scope: issuer_scope.to_string(),
                 capabilities: vec![ServiceCapability::MaicieGuichet],
             },
         ),
@@ -136,7 +135,7 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
     drop(wrapper_reader);
     drop(wrapper_writer);
 
-    let (mut reader_a, mut writer_a) = service(&home);
+    let (mut reader_a, mut writer_a) = service(&home, SERVICE_SCOPE);
     let claim_a = request(
         &mut reader_a,
         &mut writer_a,
@@ -164,8 +163,8 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
     let mut restarted = start_daemon(&home);
     // A survit côté client au crash du daemon, puis se reconnecte : son ancien
     // token doit rester sans droit quand B obtient une génération neuve.
-    let (mut reader_a_after_crash, mut writer_a_after_crash) = service(&home);
-    let (mut reader_b, mut writer_b) = service(&home);
+    let (mut reader_a_after_crash, mut writer_a_after_crash) = service(&home, SERVICE_SCOPE);
+    let (mut reader_b, mut writer_b) = service(&home, SERVICE_SCOPE);
     let claim_b = request(
         &mut reader_b,
         &mut writer_b,
@@ -316,7 +315,22 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
     assert!(retry.status.success());
     assert!(String::from_utf8_lossy(&retry.stdout).contains("DÉPÔT: outcome_unknown"));
 
-    let (mut service_reader, mut service_writer) = service(&home);
+    let (mut service_reader, mut service_writer) = service(&home, SERVICE_SCOPE);
+    assert_ne!(SCOPE, SERVICE_SCOPE, "le scope de dépôt n'est pas la session Maicie");
+    // Mutation discriminante : rétablir la comparaison avec le scope négocié
+    // du service refuse ce lookup, puis le claim et la réponse du dépôt tiers.
+    assert!(matches!(
+        request(
+            &mut service_reader,
+            &mut service_writer,
+            WrapperToDaemon::GuichetLookup {
+                version: SERVICE_CONTRACT_VERSION,
+                issuer_scope: SCOPE.to_string(),
+                request_id: "gate-cli-deposit".to_string(),
+            },
+        ),
+        DaemonToWrapper::GuichetResult { ref issue, .. } if issue == "outcome_unknown"
+    ));
     let (generation, token) = match request(
         &mut service_reader,
         &mut service_writer,
@@ -333,6 +347,19 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
         }
         other => panic!("claim du dépôt CLI attendu, reçu {other:?}"),
     };
+    assert!(matches!(
+        request(
+            &mut service_reader,
+            &mut service_writer,
+            WrapperToDaemon::GuichetClaim {
+                version: SERVICE_CONTRACT_VERSION,
+                issuer_scope: SCOPE.to_string(),
+                request_id: "gate-cli-deposit".to_string(),
+                claim_token: token.clone(),
+            },
+        ),
+        DaemonToWrapper::GuichetClaimed { request_id, .. } if request_id == "gate-cli-deposit"
+    ));
     let accepted = WrapperToDaemon::GuichetReply {
         version: SERVICE_CONTRACT_VERSION,
         issuer_scope: SCOPE.to_string(),

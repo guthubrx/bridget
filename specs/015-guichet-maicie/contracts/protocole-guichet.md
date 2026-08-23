@@ -34,6 +34,11 @@ lecture ou écriture de guichet.
 `issuer_scope` est opaque, stable et validé comme au contrat 012 (au moins 128
 bits et son alphabet publié). Il isole deux émetteurs qui choisiraient le même
 `request_id`; un nom d'agent, même renommé, n'est jamais un substitut de scope.
+Le scope négocié par `ServiceHello` identifie seulement la session de service.
+Dans `GuichetClaim`, `GuichetLookup` et `GuichetReply`, `issuer_scope` désigne
+la clé du dépôt producteur : il peut donc, et doit normalement, être distinct
+du scope de Maicie. L'autorisation du service repose sur `maicie_guichet` puis,
+pour toute écriture, sur `claim_owner`, génération, token et lease durables.
 `horizon_secs` et `issued_at_tolerance_secs` sont négociés : le daemon valide
 les dates contre son horloge, puis calcule et fige `expires_at = issued_at +
 horizon_secs` au premier dépôt.

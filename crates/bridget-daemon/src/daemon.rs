@@ -418,7 +418,6 @@ struct NegotiatedClient {
 #[derive(Clone)]
 struct NegotiatedService {
     version: u16,
-    issuer_scope: String,
     capabilities: Vec<ServiceCapability>,
 }
 
@@ -2534,15 +2533,6 @@ fn raw_guichet_frame(line: &str) -> bool {
         })
 }
 
-fn service_scope_matches(state: &Arc<Mutex<DaemonState>>, conn_id: &str, scope: &str) -> bool {
-    state
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .service_negotiations
-        .get(conn_id)
-        .is_some_and(|negotiated| negotiated.issuer_scope == scope)
-}
-
 fn guichet_request_is_valid(
     request_id: &str,
     operation: bridget_transport::protocol::ServiceRequestOperation,
@@ -3905,7 +3895,6 @@ fn handle_wrapper_message(
                 conn_id.to_string(),
                 NegotiatedService {
                     version: SERVICE_CONTRACT_VERSION,
-                    issuer_scope,
                     capabilities: capabilities.clone(),
                 },
             );
@@ -4045,7 +4034,7 @@ fn handle_wrapper_message(
             request_id,
             claim_token,
         } => {
-            if version != SERVICE_CONTRACT_VERSION || !service_scope_matches(state, conn_id, &issuer_scope) {
+            if version != SERVICE_CONTRACT_VERSION {
                 return Some(DaemonToWrapper::ServiceRejected {
                     reason: ServiceRefusal::InvalidEnvelope,
                 });
@@ -4061,7 +4050,7 @@ fn handle_wrapper_message(
             }
         }
         WrapperToDaemon::GuichetLookup { version, issuer_scope, request_id } => {
-            if version != SERVICE_CONTRACT_VERSION || !service_scope_matches(state, conn_id, &issuer_scope) {
+            if version != SERVICE_CONTRACT_VERSION {
                 return Some(DaemonToWrapper::ServiceRejected { reason: ServiceRefusal::InvalidEnvelope });
             }
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -4085,7 +4074,6 @@ fn handle_wrapper_message(
             payload,
         } => {
             if version != SERVICE_CONTRACT_VERSION
-                || !service_scope_matches(state, conn_id, &issuer_scope)
                 || !guichet_reply_is_valid(&request_id, &response_message_id, &in_reply_to, &payload)
             {
                 return Some(DaemonToWrapper::ServiceRejected { reason: ServiceRefusal::InvalidEnvelope });
