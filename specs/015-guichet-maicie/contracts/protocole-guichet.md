@@ -21,14 +21,22 @@ doit jamais être présentée comme une identité opposable.
 Une connexion Maicie suit exactement cet ordre :
 
 1. `RoleHandshake { role: service }` ;
-2. `ServiceHello { version: 1, service: "maicie", capabilities:
-   ["maicie_guichet"] }` ;
-3. `ServiceWelcome { version: 1, capabilities: ["maicie_guichet"] }`.
+2. `ServiceHello { version: 1, service: "maicie", issuer_scope,
+   capabilities: ["maicie_guichet"] }` ;
+3. `ServiceWelcome { version: 1, horizon_secs, issued_at_tolerance_secs,
+   capabilities: ["maicie_guichet"] }`.
 
 `service` est un rôle distinct de `wrapper`, `attach` et `client`. Le daemon
 ne sélectionne jamais ce rôle implicitement. Une capacité demandée mais non
 reconnue, un rôle déjà fixé ou une version différente échoue avant toute
 lecture ou écriture de guichet.
+
+`issuer_scope` est opaque, stable et validé comme au contrat 012 (au moins 128
+bits et son alphabet publié). Il isole deux émetteurs qui choisiraient le même
+`request_id`; un nom d'agent, même renommé, n'est jamais un substitut de scope.
+`horizon_secs` et `issued_at_tolerance_secs` sont négociés : le daemon valide
+les dates contre son horloge, puis calcule et fige `expires_at = issued_at +
+horizon_secs` au premier dépôt.
 
 | Opération | Wrapper historique | Service sans capacité | Service + `maicie_guichet` |
 |---|---:|---:|---:|
@@ -62,7 +70,7 @@ refus filaire avant persistance.
 ### 2.1 Dépôt : `ServiceRequest`
 
 ```json
-{"type":"service_request","v":1,"request_id":"req-01","from":"codex-1","to":"maicie","operation":"delivery_report","payload":{"objective_id":"obj-01","delegation_id":"del-01","delivery_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","in_reply_to":"msg-01"}}
+{"type":"service_request","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01","issued_at":1787500000,"from":"codex-1","to":"maicie","operation":"delivery_report","payload":{"objective_id":"obj-01","delegation_id":"del-01","delivery_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","in_reply_to":"msg-01"}}
 ```
 
 Les seules valeurs de `operation` sont :
@@ -76,27 +84,51 @@ Les seules valeurs de `operation` sont :
 `to` est exactement `maicie`. Le daemon lie le dépôt à une connexion wrapper
 enregistrée et refuse si son nom courant ne correspond pas à `from`. Cette
 vérification ne transforme pas le champ déclaré en authentification forte.
+`issuer_scope`, `request_id`, `issued_at`, `from`, `to`, l'opération et toute
+la charge font partie des octets canoniques. `issued_at` est immuable : une
+valeur future au-delà de la tolérance est `invalid_issued_at`; un premier dépôt
+déjà hors horizon est `idempotency_expired`, jamais la création silencieuse
+d'une nouvelle demande.
+
+Après un dépôt accepté, le daemon retourne :
+
+```json
+{"type":"guichet_result","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01","issue":"queued","expires_at":1787500300}
+```
 
 ### 2.2 Relève : claim
 
 ```json
-{"type":"guichet_claim","v":1,"request_id":"req-01"}
+{"type":"guichet_claim","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01"}
 ```
 
 Le daemon répond soit par :
 
 ```json
-{"type":"guichet_claimed","v":1,"request_id":"req-01","canonical_request":"<base64 des octets ServiceRequest>","claimed_at":1787500000}
+{"type":"guichet_claimed","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01","canonical_request":"<base64 des octets ServiceRequest>","claimed_at":1787500000,"expires_at":1787500300}
 ```
 
 soit par `guichet_empty`, soit par un refus typé. Le claim ne prend jamais une
 décision Maicie. Une demande `claimed` non finalisée redevient relevable après
 un redémarrage : elle garde le même `request_id` et les mêmes octets.
 
-### 2.3 Réponse : `GuichetReply`
+### 2.3 Consultation et retry : `GuichetLookup`
 
 ```json
-{"type":"guichet_reply","v":1,"request_id":"req-01","response_message_id":"msg-02","in_reply_to":"msg-01","outcome":"accepted","payload":{"kind":"delivery_report","objective_id":"obj-01","delegation_id":"del-01","delivery_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
+{"type":"guichet_lookup","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01"}
+```
+
+La clé de lookup est exactement `(issuer_scope, "service_request",
+request_id)`. Une issue terminale rejoue son `guichet_result` durable avec le
+même `expires_at`; `queued` ou `claimed` retourne `outcome_unknown` avec ce
+même `expires_at`; une clé absente ou purgée retourne `idempotency_expired`.
+Le retry re-soumet exactement les mêmes octets, y compris `issuer_scope` et
+`issued_at`, et ne recrée jamais une demande après la rétention.
+
+### 2.4 Réponse : `GuichetReply`
+
+```json
+{"type":"guichet_reply","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01","response_message_id":"msg-02","in_reply_to":"msg-01","outcome":"accepted","payload":{"kind":"delivery_report","objective_id":"obj-01","delegation_id":"del-01","delivery_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
 ```
 
 `GuichetReply` est réservé à la connexion de service ayant négocié
@@ -113,11 +145,14 @@ un redémarrage : elle garde le même `request_id` et les mêmes octets.
 Une réponse déjà durable est reconstruite octet pour octet au retry. Un retry
 avec le même `request_id` mais des octets différents retourne
 `canonical_bytes_mismatch` sans modifier la demande, sa réponse ou son claim.
+L'accusé de `GuichetReply` est un `guichet_result` avec le `expires_at` figé
+de la demande : le client ne recalcule jamais cette échéance depuis sa
+configuration courante.
 
-### 2.4 Événement terminal : `RequestLifecycleEvent`
+### 2.5 Événement terminal : `RequestLifecycleEvent`
 
 ```json
-{"type":"request_lifecycle_event","v":1,"event_id":"evt-01","request_id":"req-01","state":"answered","observed_at":1787500001,"in_reply_to":"msg-01","response_message_id":"msg-02"}
+{"type":"request_lifecycle_event","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","event_id":"evt-01","request_id":"req-01","state":"answered","observed_at":1787500001,"in_reply_to":"msg-01","response_message_id":"msg-02"}
 ```
 
 Les états fermés sont `answered`, `cancelled` et `timed_out`. Seul Bridget
@@ -137,18 +172,19 @@ queued ──claim──> claimed ──GuichetReply durable──> replied
   └──refus──> rejected└──crash/reprise──> queued          └──retry──> même réponse
 ```
 
-`rejected` et `replied` sont terminaux. Le couple `(request_id,
-canonical_request_bytes)` est la clé de dépôt. Les tombstones conservent les
-octets, l'issue et les identifiants jusqu'à la rétention annoncée par le daemon.
-Après expiration, `idempotency_expired` est terminal : Maicie ne crée jamais un
-nouvel identifiant à la place du demandeur.
+`rejected` et `replied` sont terminaux. La clé de dépôt est
+`(issuer_scope, "service_request", request_id)` ;
+`canonical_request_bytes` et `issued_at` y sont immuables. Les tombstones
+conservent les octets, l'issue, `issued_at` et `expires_at` jusqu'à la rétention
+annoncée par le daemon. Après expiration, `idempotency_expired` est terminal :
+Maicie ne crée jamais un nouvel identifiant à la place du demandeur.
 
 | Frontière | État durable requis au redémarrage | Réponse au retry |
 |---|---|---|
 | avant insertion | aucune demande ou refus explicite | dépôt unique possible |
-| après dépôt, avant claim | `queued` + octets canoniques | même demande relevable |
+| après dépôt, avant claim | `queued` + scope + octets canoniques + `expires_at` | même demande relevable |
 | après claim, avant résultat | `claimed` relivable | même octets, sans seconde demande |
-| après résultat, avant retour client | réponse + issue durables | même `GuichetReply` reconstruite |
+| après résultat, avant retour client | réponse + issue + `expires_at` durables | même `GuichetReply` reconstruite |
 | après terminal Bridget | événement unique durable | même `event_id`, jamais de seconde transition |
 
 Pour un `delivery_report`, le rapport tardif après `cancelled` ou `timed_out`
@@ -185,21 +221,92 @@ Les lignes suivantes sont le corpus figé que T1502 matérialise ensuite en
 fixtures producteur↔consommateur. Les valeurs d'exemple font partie de
 l'ordre canonique, pas d'un format de rendu humain.
 
-| Cas | Ligne canonique ou issue attendue |
-|---|---|
-| dépôt `delivery_report` | `{"type":"service_request","v":1,"request_id":"req-delivery","from":"codex-1","to":"maicie","operation":"delivery_report","payload":{"objective_id":"obj-01","delegation_id":"del-01","delivery_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","in_reply_to":"msg-01"}}` |
-| dépôt `mission_status` | `{"type":"service_request","v":1,"request_id":"req-status","from":"codex-1","to":"maicie","operation":"mission_status","payload":{"delegation_id":"del-01"}}` |
-| dépôt `deadline_question` | `{"type":"service_request","v":1,"request_id":"req-deadline","from":"codex-1","to":"maicie","operation":"deadline_question","payload":{"delegation_id":"del-01"}}` |
-| événement `answered` | `{"type":"request_lifecycle_event","v":1,"event_id":"evt-answered","request_id":"req-delivery","state":"answered","observed_at":1787500001,"in_reply_to":"msg-01","response_message_id":"msg-02"}` |
-| événement `cancelled` | `{"type":"request_lifecycle_event","v":1,"event_id":"evt-cancelled","request_id":"req-delivery","state":"cancelled","observed_at":1787500002}` |
-| événement `timed_out` | `{"type":"request_lifecycle_event","v":1,"event_id":"evt-timeout","request_id":"req-delivery","state":"timed_out","observed_at":1787500003}` |
-| relève sans capacité | `capability_required`, sans claim ni lecture de demande |
-| retry divergent | même `request_id` que `req-status` avec une charge d'octets différente → `canonical_bytes_mismatch`, record inchangé |
+### 5.1 Trames valides
 
-Les fixtures associent chaque ligne à l'issue fermée indiquée et à une mutation
-discriminante : retrait de la négociation, changement d'un octet canonique,
-ou suppression de l'écriture atomique de l'événement terminal doivent faire
-échouer leur oracle respectif.
+```json
+{"type":"service_request","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-delivery","issued_at":1787500000,"from":"codex-1","to":"maicie","operation":"delivery_report","payload":{"objective_id":"obj-01","delegation_id":"del-01","delivery_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","in_reply_to":"msg-01"}}
+{"type":"service_request","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-status","issued_at":1787500000,"from":"codex-1","to":"maicie","operation":"mission_status","payload":{"delegation_id":"del-01"}}
+{"type":"service_request","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-deadline","issued_at":1787500000,"from":"codex-1","to":"maicie","operation":"deadline_question","payload":{"delegation_id":"del-01"}}
+{"type":"request_lifecycle_event","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","event_id":"evt-answered","request_id":"req-delivery","state":"answered","observed_at":1787500001,"in_reply_to":"msg-01","response_message_id":"msg-02"}
+{"type":"request_lifecycle_event","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","event_id":"evt-cancelled","request_id":"req-delivery","state":"cancelled","observed_at":1787500002}
+{"type":"request_lifecycle_event","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","event_id":"evt-timeout","request_id":"req-delivery","state":"timed_out","observed_at":1787500003}
+```
+
+Ces six lignes donnent respectivement `queued` avec `expires_at`, puis les
+trois événements durables. Retirer l'écriture atomique de l'événement terminal
+fait échouer l'oracle de redémarrage ; retirer `issuer_scope` fait échouer la
+validation de la clé composite.
+
+### 5.2 Refus complets
+
+Chaque trame suivante porte l'issue exacte et la mutation que sa fixture doit
+détecter. Elle est envoyée à une connexion de dépôt déjà enregistrée, sauf le
+cas de capacité qui utilise un service sans `maicie_guichet`.
+
+1. Texte libre — issue `invalid_envelope`, aucune ligne guichet :
+
+   ```text
+   Maicie, ferme cette mission maintenant.
+   ```
+
+   Mutation discriminante : accepter une chaîne au lieu d'un objet JSON crée
+   une demande et casse l'assertion de compteur nul.
+
+2. Type inconnu — issue `invalid_envelope`, aucune ligne guichet :
+
+   ```json
+   {"type":"service_request","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-type","issued_at":1787500000,"from":"codex-1","to":"maicie","operation":"invented_operation","payload":{}}
+   ```
+
+   Mutation discriminante : ouvrir l'énumération d'opérations fait passer la
+   fixture au lieu du refus fermé.
+
+3. Champ inconnu — issue `invalid_envelope`, aucune ligne guichet :
+
+   ```json
+   {"type":"service_request","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-field","issued_at":1787500000,"from":"codex-1","to":"maicie","operation":"mission_status","payload":{"delegation_id":"del-01","extra":"non"}}
+   ```
+
+   Mutation discriminante : désactiver `deny_unknown_fields` conserve ce champ
+   et fait échouer l'assertion de refus.
+
+4. Référence absente — issue `invalid_envelope`, aucune ligne guichet :
+
+   ```json
+   {"type":"service_request","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-reference","issued_at":1787500000,"from":"codex-1","to":"maicie","operation":"delivery_report","payload":{"objective_id":"obj-01","delegation_id":"del-01","delivery_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
+   ```
+
+   Mutation discriminante : rendre `in_reply_to` optionnel transforme ce refus
+   en dépôt et casse le compteur nul.
+
+5. Approbation interdite — issue `invalid_envelope`, aucune ligne guichet :
+
+   ```json
+   {"type":"service_request","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-approve","issued_at":1787500000,"from":"codex-1","to":"maicie","operation":"approve_profile_activation","payload":{"command_id":"cmd-01"}}
+   ```
+
+   Mutation discriminante : admettre cette opération créerait un chemin
+   d'approbation distant et fait échouer l'oracle sans activation.
+
+6. Enveloppe divergente — issue `canonical_bytes_mismatch`, record existant
+   inchangé :
+
+   ```json
+   {"type":"service_request","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-status","issued_at":1787500000,"from":"codex-1","to":"maicie","operation":"mission_status","payload":{"delegation_id":"del-02"}}
+   ```
+
+   Cette trame suit la trame valide `req-status` de §5.1. Mutation
+   discriminante : comparer une valeur reparsée ou remplacer le canon du record
+   fait disparaître le refus et casse l'assertion d'octets inchangés.
+
+7. Capacité absente — issue `capability_required`, aucune lecture ou claim :
+
+   ```json
+   {"type":"guichet_claim","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-delivery"}
+   ```
+
+   Mutation discriminante : déverrouiller le claim sur le seul rôle `service`
+   rend une demande lisible et casse l'oracle de zéro relève.
 
 ## 6. Frontière Bridget / Maicie
 
