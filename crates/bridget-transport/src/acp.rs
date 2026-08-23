@@ -866,11 +866,13 @@ fn spawn_reader(
                         Some("tool_call") | Some("tool_call_update")
                     ) {
                         let message_id = active_message_id(&queue);
-                        record_or_terminal(&journal, &events, "update", message_id.as_deref(), json!({
-                            "kind": "tool_call",
-                            "tool": value.pointer("/params/update/content/name").and_then(Value::as_str).unwrap_or("inconnu"),
-                            "summary": value.pointer("/params/update/content/text").and_then(Value::as_str).unwrap_or(""),
-                        }));
+                        record_or_terminal(
+                            &journal,
+                            &events,
+                            "update",
+                            message_id.as_deref(),
+                            tool_call_journal_payload(&value),
+                        );
                     }
                 }
                 Some("session/request_permission") => {
@@ -1204,6 +1206,42 @@ fn update_text<'a>(value: &'a Value, session_id: Option<&str>) -> Option<&'a str
         .and_then(Value::as_str)
 }
 
+fn tool_call_journal_payload(value: &Value) -> Value {
+    let update = value.pointer("/params/update").unwrap_or(&Value::Null);
+    let content = update.get("content").unwrap_or(&Value::Null);
+    let field = |name: &str| {
+        update
+            .get(name)
+            .or_else(|| content.get(name))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+    };
+    let title = field("title");
+    let name = field("name");
+    let tool_kind = field("kind");
+    let tool = title.or(name).or(tool_kind).unwrap_or("inconnu");
+    let summary = update
+        .get("text")
+        .or_else(|| content.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let mut payload = serde_json::Map::from_iter([
+        ("kind".to_string(), Value::String("tool_call".to_string())),
+        ("tool".to_string(), Value::String(tool.to_string())),
+        ("summary".to_string(), Value::String(summary.to_string())),
+    ]);
+    for (key, value) in [
+        ("title", title),
+        ("name", name),
+        ("tool_kind", tool_kind),
+    ] {
+        if let Some(value) = value {
+            payload.insert(key.to_string(), Value::String(value.to_string()));
+        }
+    }
+    Value::Object(payload)
+}
+
 fn fail_waiters(waiters: &Waiters, reason: &str) {
     let pending = std::mem::take(&mut *waiters.lock().unwrap_or_else(|err| err.into_inner()));
     for (_, waiter) in pending {
@@ -1395,6 +1433,31 @@ mod tests {
             -32601
         );
         assert!(serde_json::from_str::<Value>(lines[7]).is_err());
+    }
+
+    #[test]
+    fn tool_call_journal_prefers_title_then_name_then_kind() {
+        let update = |fields: Value| json!({"params":{"update":fields}});
+        let titled = tool_call_journal_payload(&update(json!({
+            "title":"Read src/main.rs", "name":"read_file", "kind":"read",
+            "content":{"text":"lecture"}
+        })));
+        assert_eq!(titled["tool"], "Read src/main.rs");
+        assert_eq!(titled["title"], "Read src/main.rs");
+        assert_eq!(titled["name"], "read_file");
+        assert_eq!(titled["tool_kind"], "read");
+        assert_eq!(titled["summary"], "lecture");
+
+        let named = tool_call_journal_payload(
+            &update(json!({"name":"Bash cargo test", "kind":"execute"})),
+        );
+        assert_eq!(named["tool"], "Bash cargo test");
+        assert!(named.get("title").is_none());
+
+        let unknown_kind =
+            tool_call_journal_payload(&update(json!({"kind":"quantum_wrench"})));
+        assert_eq!(unknown_kind["tool"], "quantum_wrench");
+        assert_eq!(unknown_kind["tool_kind"], "quantum_wrench");
     }
 
     #[test]
@@ -1828,6 +1891,7 @@ echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
 read request
 echo '{"jsonrpc":"2.0","id":"permission-1","method":"session/request_permission","params":{"sessionId":"fixture-session","options":[{"optionId":"allow-1","kind":"allow_once"},{"optionId":"reject-1","kind":"reject_once"}]}}'
 read permission
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"tool_call","toolCallId":"tool-1","title":"Read src/main.rs","name":"read_file","kind":"read","content":{"type":"text","text":"lecture"}}}}'
 echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"réponse"}}}}'
 echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
 "#;
@@ -1857,6 +1921,15 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
                     "v": 1, "session_id": "fixture-session", "event": "update",
                     "message_id": "journal-message",
                     "payload": {"kind":"text", "content":"réponse"}
+                })));
+                assert!(events.contains(&json!({
+                    "v": 1, "session_id": "fixture-session", "event": "update",
+                    "message_id": "journal-message",
+                    "payload": {
+                        "kind":"tool_call", "tool":"Read src/main.rs",
+                        "title":"Read src/main.rs", "name":"read_file",
+                        "tool_kind":"read", "summary":"lecture"
+                    }
                 })));
                 assert!(events.contains(&json!({
                     "v": 1, "session_id": "fixture-session", "event": "permission",

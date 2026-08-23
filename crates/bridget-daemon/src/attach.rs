@@ -1586,14 +1586,15 @@ fn render_journal_event(bytes: &[u8], agent: &str) -> String {
         "update"
             if payload.get("kind").and_then(serde_json::Value::as_str) == Some("tool_call") =>
         {
+            let tool = payload
+                .get("title")
+                .or_else(|| payload.get("name"))
+                .or_else(|| payload.get("tool_kind"))
+                .or_else(|| payload.get("tool"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("inconnu");
             (
-                format!(
-                    "[outil] {}",
-                    payload
-                        .get("tool")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("inconnu")
-                ),
+                format!("[outil] {tool}"),
                 payload
                     .get("summary")
                     .and_then(serde_json::Value::as_str)
@@ -3153,6 +3154,27 @@ mod tests {
                 .chars()
                 .all(|character| character == '\n' || character == '\t' || !character.is_control())
         );
+    }
+
+    #[test]
+    fn golden_delta_transport_etiquette_title_name_kind_et_assainit_le_titre() {
+        let fixture = include_str!("../tests/fixtures/attach-tools-hostile.jsonl");
+        let rendered = fixture
+            .lines()
+            .map(|line| render_journal_event(line.as_bytes(), "codex-1"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rendered.iter().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "10:00 [outil] Read src/main.rs lecture",
+                "10:00 [outil] Bash cargo test --workspace tests",
+                "10:00 [outil] quantum_wrench kind inconnu",
+                "10:00 [outil] ␛[2J␛]0;pwned␇ ·gnahc titre hostile",
+            ]
+        );
+        assert!(rendered.iter().all(|line| !line.contains('\u{001b}')));
+        assert!(rendered.iter().all(|line| !line.contains('\u{202e}')));
     }
 
     #[test]
