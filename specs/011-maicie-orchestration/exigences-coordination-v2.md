@@ -273,11 +273,10 @@ Six tâches validées sur le principe par l'utilisateur (spec à créer au « go
 - **Skill maicie à créer** (évoquée en finition 011, jamais livrée) : pendant
   de la skill bridget — quand utiliser delegate/status/objective, doctrine
   approve humain, deux vérités.
-- **Arbitrage en attente (utilisateur)** : les revues adverses versionnées
-  s'auto-identifient comme rédigées par des agents IA (fournisseur/modèle).
-  La règle « zéro trace IA dans Git » s'applique-t-elle aux seules
-  métadonnées de commit (position recommandée par le référent — le projet
-  EST un orchestrateur d'agents) ou aussi au contenu ? Décision non rendue.
+- **Décision utilisateur 1b (2026-08-23)** : la règle « zéro trace IA dans
+  Git » s'applique aussi au contenu versionné. Les revues conservent la preuve
+  d'un croisement par un moteur distinct, sans identifier le fournisseur ni le
+  modèle du rédacteur ou du relecteur.
 - **Routines planifiées** (vision grokbot, capture utilisateur 2026-08-23) :
   délégations RÉCURRENTES portées par Maicie (routine = delegate + calendrier,
   journalisée, idempotente, visible au greffe et dans le futur panneau GUI).

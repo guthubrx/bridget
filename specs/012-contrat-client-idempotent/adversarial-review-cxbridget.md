@@ -1,4 +1,6 @@
-# Contre-revue adverse — cxbridget (codex) — session 012
+# Contre-revue adverse — cxbridget — session 012
+
+**Croisement** : relecture par un moteur distinct de celui de l'auteur
 
 ## Round 1 (spec.md)
 

@@ -2,8 +2,7 @@
 
 **Date** : 2026-08-17
 **Agent interrogé** : `agent-1`
-**Fournisseur** : Codex (`gpt-5.3-codex`, effort `xhigh`) — fournisseur différent
-du mien (`agent-2`, Claude Opus 5)
+**Croisement** : relecture par un moteur distinct de celui de l'auteur
 **Question posée** : ce plan a-t-il un défaut de conception qui le rendra faux ou
 fragile en production, sur la sonde Codex, le hook Claude, l'invariant `null` et
 l'absence de disjoncteur sur le message `Runtime` ?

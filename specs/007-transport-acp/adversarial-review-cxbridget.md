@@ -1,6 +1,7 @@
-# Contre-revue adverse — cxbridget (codex / gpt-5.6-sol)
+# Contre-revue adverse — cxbridget — session 007
 
 **Date** : 2026-08-22 · **Round 1**
+**Croisement** : relecture par un moteur distinct de celui de l'auteur
 **Question posée** : défauts logiques, risques sous-estimés, trous de
 couverture du plan 007 (transport ACP, client JSON-RPC maison, registre,
 capture de réponse) — points sensibles annoncés : D-201, D-206, FR-007, stdio
