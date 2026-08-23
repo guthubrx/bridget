@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 const CONFIG_VERSION: u32 = 1;
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_SOCKET_PATH_BYTES: usize = 103;
+const MAX_DATABASE_PATH_BYTES: usize = 1024;
 const MAX_TIMEOUT_SECS: u64 = 7 * 24 * 60 * 60;
 const MAX_PROFILES: usize = 128;
 const MAX_TAGS_PER_PROFILE: usize = 64;
@@ -127,6 +128,15 @@ impl MaicieConfig {
             return Err(ConfigError::validation(
                 "bridget_socket",
                 format!("le chemin Unix fait {socket_len} octets, maximum {MAX_SOCKET_PATH_BYTES}"),
+            ));
+        }
+        let database_len = self.database_path.as_os_str().as_encoded_bytes().len();
+        if database_len > MAX_DATABASE_PATH_BYTES {
+            return Err(ConfigError::validation(
+                "database_path",
+                format!(
+                    "le chemin SQLite fait {database_len} octets, maximum {MAX_DATABASE_PATH_BYTES}"
+                ),
             ));
         }
         if self

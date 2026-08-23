@@ -39,17 +39,19 @@ fn charge_une_configuration_entierement_declarative() {
 
 #[test]
 fn refuse_une_cle_secrete_ou_inconnue_sans_l_ignorer() {
-    let with_secret = VALID_CONFIG.replace(
-        "\"version\": 1,",
-        "\"version\": 1, \"api_key\": \"secret-interdit\",",
-    );
-    let fixture = Fixture::new("secret", &with_secret);
+    for field in ["api_key", "OPENAI_API_KEY", "TOKEN"] {
+        let with_secret = VALID_CONFIG.replace(
+            "\"version\": 1,",
+            &format!("\"version\": 1, \"{field}\": \"secret-interdit\","),
+        );
+        let fixture = Fixture::new(field, &with_secret);
 
-    let error = MaicieConfig::load(&fixture.path).unwrap_err();
+        let error = MaicieConfig::load(&fixture.path).unwrap_err();
 
-    assert!(matches!(error, ConfigError::Parse { .. }));
-    assert!(error.to_string().contains("api_key"));
-    assert!(error.to_string().contains(fixture.path.to_str().unwrap()));
+        assert!(matches!(error, ConfigError::Parse { .. }));
+        assert!(error.to_string().contains(field));
+        assert!(error.to_string().contains(fixture.path.to_str().unwrap()));
+    }
 }
 
 #[test]
@@ -64,6 +66,19 @@ fn refuse_les_chemins_relatifs_et_la_base_bridget() {
 
     assert!(relative_error.to_string().contains("chemin absolu"));
     assert!(shared_error.to_string().contains("distincte de bridget.db"));
+}
+
+#[test]
+fn refuse_un_chemin_sqlite_hors_borne_avant_toute_ouverture() {
+    let long_path = format!("/tmp/{}.db", "x".repeat(1024));
+    let invalid = VALID_CONFIG.replace("/tmp/maicie-state.db", &long_path);
+    let fixture = Fixture::new("long-database-path", &invalid);
+
+    let error = MaicieConfig::load(&fixture.path).unwrap_err();
+
+    assert!(error.to_string().contains("chemin SQLite"));
+    assert!(error.to_string().contains("maximum 1024"));
+    assert!(!std::path::Path::new(&long_path).exists());
 }
 
 #[test]
