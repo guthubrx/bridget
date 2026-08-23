@@ -99,24 +99,20 @@ pub fn delegate(
     {
         return Ok(DelegateResult::Created(created_from_stored(stored, true)));
     }
+    let eligible = candidates
+        .iter()
+        .filter(|candidate| candidate.name != pilot_name && candidate.available && !candidate.dnd)
+        .collect::<Vec<_>>();
     let selected = match request.explicit_target {
-        Some(target) => candidates
+        Some(target) => eligible
             .iter()
             .find(|candidate| candidate.name == target)
-            .filter(|candidate| {
-                candidate.name != pilot_name && candidate.available && !candidate.dnd
-            })
             .map(|candidate| candidate.name.clone())
             .ok_or_else(|| DelegateError::TargetUnavailable(target.to_string()))?,
         None => {
-            let mut matching = candidates
+            let mut matching = eligible
                 .iter()
-                .filter(|candidate| {
-                    candidate.name != pilot_name
-                        && candidate.available
-                        && !candidate.dnd
-                        && tags_equal(&candidate.tags, request.required_tags)
-                })
+                .filter(|candidate| tags_equal(&candidate.tags, request.required_tags))
                 .map(|candidate| candidate.name.clone())
                 .collect::<Vec<_>>();
             matching.sort();

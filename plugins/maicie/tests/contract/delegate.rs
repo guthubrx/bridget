@@ -4,6 +4,8 @@ use maicie::domain::ClasseDuree;
 use maicie::store::MaicieStore;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Barrier};
+use std::thread;
 use uuid::Uuid;
 
 fn root(label: &str) -> PathBuf {
@@ -154,6 +156,32 @@ fn dnd_et_absence_refusent_une_cible_explicite_sans_ecriture() {
 }
 
 #[test]
+fn cible_explicite_pilote_est_refusee_avant_toute_ecriture() {
+    let root = root("pilot-explicit");
+    let database = root.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let candidates = vec![DelegationCandidate {
+        name: "maicie".to_string(),
+        tags: vec!["coordination".to_string()],
+        available: true,
+        dnd: false,
+    }];
+    assert_eq!(
+        delegate(
+            &mut store,
+            durations(),
+            "maicie",
+            &candidates,
+            &request(Some("maicie"), &[], ClasseDuree::Normale),
+        ),
+        Err(DelegateError::TargetUnavailable("maicie".to_string()))
+    );
+    assert!(store.pending_delegation_outboxes().unwrap().is_empty());
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn meme_cle_opaque_rejoue_exactement_les_ids_sans_doublon() {
     let root = root("idempotency-replay");
     let database = root.join("maicie.sqlite3");
@@ -264,4 +292,100 @@ fn cles_distinctes_creent_des_delegations_distinctes() {
     assert_eq!(store.pending_delegation_outboxes().unwrap().len(), 2);
     drop(store);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reservations_concurrentes_rejouent_ou_refusent_sans_doublon() {
+    let root = root("idempotency-concurrent");
+    let database = root.join("maicie.sqlite3");
+    drop(MaicieStore::open(&database).unwrap());
+
+    let barrier = Arc::new(Barrier::new(2));
+    let first = concurrent_delegate(
+        database.clone(),
+        barrier.clone(),
+        "même commande",
+        "shared-key",
+    );
+    let second = concurrent_delegate(database.clone(), barrier, "même commande", "shared-key");
+    let first = first.join().unwrap().unwrap();
+    let second = second.join().unwrap().unwrap();
+    let (created, replayed) = match (first, second) {
+        (DelegateResult::Created(created), DelegateResult::Created(replayed))
+            if !created.replayed =>
+        {
+            (created, replayed)
+        }
+        (DelegateResult::Created(replayed), DelegateResult::Created(created))
+            if !created.replayed =>
+        {
+            (created, replayed)
+        }
+        results => panic!("réservation concurrente invalide : {results:?}"),
+    };
+    assert!(replayed.replayed);
+    assert_eq!(created.objective_id, replayed.objective_id);
+    assert_eq!(created.delegation_id, replayed.delegation_id);
+    assert_eq!(created.message_id, replayed.message_id);
+
+    let barrier = Arc::new(Barrier::new(2));
+    let matching = concurrent_delegate(
+        database.clone(),
+        barrier.clone(),
+        "commande différente",
+        "conflicting-key",
+    );
+    let divergent = concurrent_delegate(
+        database.clone(),
+        barrier,
+        "commande divergente",
+        "conflicting-key",
+    );
+    let matching = matching.join().unwrap();
+    let divergent = divergent.join().unwrap();
+    assert!(matches!(
+        (matching, divergent),
+        (
+            Ok(DelegateResult::Created(_)),
+            Err(DelegateError::EnvelopeMismatch)
+        ) | (
+            Err(DelegateError::EnvelopeMismatch),
+            Ok(DelegateResult::Created(_))
+        )
+    ));
+    let store = MaicieStore::open(&database).unwrap();
+    assert_eq!(store.pending_delegation_outboxes().unwrap().len(), 2);
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn concurrent_delegate(
+    database: PathBuf,
+    barrier: Arc<Barrier>,
+    goal: &'static str,
+    key: &'static str,
+) -> thread::JoinHandle<Result<DelegateResult, DelegateError>> {
+    thread::spawn(move || {
+        let mut store = MaicieStore::open(database).unwrap();
+        let candidates = vec![DelegationCandidate {
+            name: "prospective".to_string(),
+            tags: vec![],
+            available: true,
+            dnd: false,
+        }];
+        let request = DelegateRequest {
+            goal,
+            explicit_target: Some("prospective"),
+            required_tags: &[],
+            duration: ClasseDuree::Normale,
+            reply: true,
+            idempotency_key: key,
+            now: 100,
+            retry_until: 150,
+            dedup_retained_until: 200,
+            max_frame_bytes: 256 * 1024,
+        };
+        barrier.wait();
+        delegate(&mut store, durations(), "maicie", &candidates, &request)
+    })
 }

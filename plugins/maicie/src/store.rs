@@ -14,7 +14,7 @@ use crate::outbox::{
     OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot, StoreCommitPhase,
     MAX_MESSAGE_BYTES,
 };
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fmt;
@@ -276,7 +276,10 @@ impl MaicieStore {
             ));
         }
 
-        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
         let stored = tx
             .query_row(
                 "SELECT canonical_request_bytes, objective_id, delegation_id, message_id, participant, timeout_secs\n\
