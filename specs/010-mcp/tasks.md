@@ -79,6 +79,6 @@ commit en review immuable, auteur ≠ relecteur, zéro trace IA, jamais de push)
 
 ## Phase 3 — Finition
 
-- [ ] **T1008** Non-régression totale (007/008/009/012), README (« outils
+- [x] **T1008** Non-régression totale (007/008/009/012), README (« outils
   MCP »), `implementation.md` complet, checklist SC-001..SC-006 pointée.
   **Observable** : checklist avec preuves ; suite complète au vert.
