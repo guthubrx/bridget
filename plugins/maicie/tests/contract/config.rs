@@ -143,6 +143,23 @@ fn refuse_les_identifiants_et_tags_dupliques() {
     assert!(profile_error.to_string().contains("profil duplique"));
 }
 
+#[test]
+fn refuse_deux_profils_distincts_pour_le_meme_agent_runtime() {
+    let first = VALID_CONFIG.replace(
+        "\"id\": \"prospective\",",
+        "\"id\": \"coder-profile\",\n    \"agent_name\": \"coderBridget\",",
+    );
+    let duplicated_agent = first.replace(
+        "]\n}",
+        ", {\n    \"id\": \"cx-profile\",\n    \"agent_name\": \"coderBridget\",\n    \"display_name\": \"CX\",\n    \"tags\": [],\n    \"personality_ref\": \"profiles/cx.md\",\n    \"tools\": [],\n    \"spawn_order_ref\": \"agents/cx\"\n  }]\n}",
+    );
+    let fixture = Fixture::new("duplicate-agent-name", &duplicated_agent);
+
+    let error = MaicieConfig::load(&fixture.path).unwrap_err();
+
+    assert!(error.to_string().contains("nom d'agent duplique"));
+}
+
 struct Fixture {
     path: PathBuf,
 }
