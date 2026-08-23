@@ -20,10 +20,8 @@ pub const MAX_REASSEMBLED_EVENT_BYTES: usize = 4 * 1024 * 1024;
 /// Vocabulaire fermé des faits runtime affichables par le MVP Maicie.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeNature {
-    Disponibilite,
     Tour,
     Outil,
-    Idle,
     PermissionAutoDecidee,
 }
 

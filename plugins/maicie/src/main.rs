@@ -1283,10 +1283,8 @@ impl From<RuntimeObservation> for RuntimeObservationOutput {
 
 fn runtime_nature_name(nature: RuntimeNature) -> &'static str {
     match nature {
-        RuntimeNature::Disponibilite => "disponibilite",
         RuntimeNature::Tour => "tour",
         RuntimeNature::Outil => "outil",
-        RuntimeNature::Idle => "idle",
         RuntimeNature::PermissionAutoDecidee => "permission_auto_decidee",
     }
 }
