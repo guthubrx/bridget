@@ -653,8 +653,13 @@ fn execute_send(
         issuer_scope,
         capabilities: vec![ClientCapability::SendIdempotent],
     })? {
-        DaemonToWrapper::ClientWelcome { capabilities, .. }
-            if capabilities.contains(&ClientCapability::SendIdempotent) => {}
+        DaemonToWrapper::ClientWelcome {
+            capabilities, build_id, ..
+        } if capabilities.contains(&ClientCapability::SendIdempotent) => {
+            if let Some(warning) = crate::build_info::stale_daemon_warning(&build_id) {
+                eprintln!("{warning}");
+            }
+        }
         DaemonToWrapper::ClientRejected { reason } => {
             return Err(ToolError::Technical {
                 code: "daemon_protocol",
@@ -1236,6 +1241,7 @@ mod tests {
                     &mut writer,
                     DaemonToWrapper::ClientWelcome {
                         version: CLIENT_CONTRACT_VERSION,
+                        build_id: "test-build".to_string(),
                         horizon_secs: 60,
                         issued_at_tolerance_secs: 5,
                         capabilities: vec![ClientCapability::SendIdempotent],
@@ -1309,6 +1315,7 @@ mod tests {
                 &mut writer,
                 DaemonToWrapper::ClientWelcome {
                     version: CLIENT_CONTRACT_VERSION,
+                    build_id: "test-build".to_string(),
                     horizon_secs: 60,
                     issued_at_tolerance_secs: 5,
                     capabilities: vec![ClientCapability::SendIdempotent],
@@ -1434,6 +1441,7 @@ mod tests {
                     &mut writer,
                     DaemonToWrapper::ClientWelcome {
                         version: CLIENT_CONTRACT_VERSION,
+                        build_id: "test-build".to_string(),
                         horizon_secs: 60,
                         issued_at_tolerance_secs: 5,
                         capabilities: vec![ClientCapability::SendIdempotent],
@@ -1518,6 +1526,7 @@ mod tests {
                 &mut writer,
                 DaemonToWrapper::ClientWelcome {
                     version: CLIENT_CONTRACT_VERSION,
+                    build_id: "test-build".to_string(),
                     horizon_secs: 60,
                     issued_at_tolerance_secs: 5,
                     capabilities: vec![ClientCapability::SendIdempotent],
@@ -1551,6 +1560,7 @@ mod tests {
                 &mut writer,
                 DaemonToWrapper::ClientWelcome {
                     version: CLIENT_CONTRACT_VERSION,
+                    build_id: "test-build".to_string(),
                     horizon_secs: 60,
                     issued_at_tolerance_secs: 5,
                     capabilities: vec![ClientCapability::SendIdempotent],
