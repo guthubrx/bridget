@@ -38,12 +38,13 @@ fn replay_exact_accepted_consomme_l_approbation_apres_l_issue_durable() {
     server.join().unwrap();
     assert_eq!(approval_state(&fixture.database), "consumed");
 
-    // Mutation discriminante : si `record_activation_outcome` ne rendait pas
-    // l'outbox terminale dans la même transaction, ce second démarrage
-    // ouvrirait le listener et le test échouerait sur `accept`.
+    // Frontière post-commit réelle : seule la réouverture depuis le fichier
+    // SQLite peut prouver la durabilité, pas l'état encore présent en mémoire.
+    drop(store);
     fs::remove_file(&fixture.socket).unwrap();
     let listener = UnixListener::bind(&fixture.socket).unwrap();
     listener.set_nonblocking(true).unwrap();
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
     assert!(
         reconcile_activation_startup_at(&mut store, &fixture.socket, 21)
             .unwrap()
@@ -136,6 +137,57 @@ fn crash_avant_socket_conserve_l_outbox_sans_aucune_io() {
     assert_eq!(store.pending_activation_outboxes().unwrap().len(), 1);
     // Mutation discriminante : déplacer le jalon après replay ouvrirait le
     // listener et convertirait ce crash local en I/O réseau observable.
+    assert_no_connection(&listener);
+}
+
+#[test]
+fn toctou_refuse_avant_outbox_et_ne_declenche_aucune_io_ulterieure() {
+    let fixture = Fixture::new();
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let proposal = propose_profile_activation(
+        &mut store,
+        &ProfileActivationProposalRequest {
+            objective_id: Uuid::new_v4(),
+            profile_id: "claude-review",
+            agent_type: "claude",
+            profile_hash: &[7; 32],
+            resolved_definition_digest: DIGEST,
+            context_scope: "objective:test",
+            cwd: "/tmp",
+            persistent: true,
+            now: 10,
+            spawn_deadline_at: 60,
+            approval_expires_at: 100,
+            retry_until: 80,
+            dedup_retained_until: 100,
+            reason: "test",
+        },
+    )
+    .unwrap();
+    let listener = UnixListener::bind(&fixture.socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    assert!(
+        approve_profile_activation(
+            &mut store,
+            &proposal,
+            &LocalProfileApproval {
+                approval_id: proposal.approval.id,
+                now: 11,
+                profile_hash: &[8; 32],
+                resolved_definition_digest: DIGEST,
+            },
+        )
+        .is_err()
+    );
+    assert!(store.pending_activation_outboxes().unwrap().is_empty());
+    assert!(
+        reconcile_activation_startup_at(&mut store, &fixture.socket, 12)
+            .unwrap()
+            .actions
+            .is_empty()
+    );
+    // Mutation discriminante : créer l'outbox avant la revalidation de hash
+    // laisserait une ligne à reprendre et ouvrirait ce listener.
     assert_no_connection(&listener);
 }
 
