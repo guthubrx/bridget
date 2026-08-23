@@ -335,3 +335,10 @@ plus vite ; le coût net est un report, pas une perte.
   pause/reprise journalisée, échéance gelée. Cousin du mode planifié —
   même famille « états intermédiaires du travail », à traiter ENSEMBLE quand
   les routines l'exigeront.
+- **outcome_unknown quasi systématique sur premier envoi MCP** (observé sur
+  ~40 envois du référent, nuit du 23-24/08) : le contrat idempotent absorbe
+  parfaitement (rejeu → accepted, zéro doublon), mais la latence d'accusé
+  sous-jacente n'est ni expliquée ni mesurée — le filet fonctionne si bien
+  qu'il masque la chute. Diagnostiquer (fenêtre d'accusé ? contention ?
+  timeout client trop court ?) avant que le volume d'agents ne double le
+  trafic de rejeu.
