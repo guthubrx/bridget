@@ -336,6 +336,9 @@ pub struct BridgetClient {
     limits: BridgetClientLimits,
     connection: WireConnection,
     negotiated: NegotiatedContract,
+    /// Échéance de passe optionnelle, réservée à la reprise bornée. Une
+    /// connexion ordinaire conserve ses délais propres par opération.
+    deadline: Option<Instant>,
 }
 
 impl BridgetClient {
@@ -354,20 +357,50 @@ impl BridgetClient {
         issuer_scope: impl Into<String>,
         limits: BridgetClientLimits,
     ) -> Result<Self, BridgetClientError> {
+        Self::connect_with_optional_deadline(socket_path, issuer_scope, limits, None)
+    }
+
+    /// Variante interne de reprise : toutes les opérations de la connexion
+    /// consomment la même échéance absolue, sans la réinitialiser à chaque
+    /// phase du protocole.
+    pub(crate) fn connect_with_limits_until(
+        socket_path: impl AsRef<Path>,
+        issuer_scope: impl Into<String>,
+        limits: BridgetClientLimits,
+        deadline: Instant,
+    ) -> Result<Self, BridgetClientError> {
+        Self::connect_with_optional_deadline(socket_path, issuer_scope, limits, Some(deadline))
+    }
+
+    fn connect_with_optional_deadline(
+        socket_path: impl AsRef<Path>,
+        issuer_scope: impl Into<String>,
+        limits: BridgetClientLimits,
+        deadline: Option<Instant>,
+    ) -> Result<Self, BridgetClientError> {
         validate_limits(limits)?;
         let socket_path = socket_path.as_ref().to_path_buf();
         let issuer_scope = issuer_scope.into();
-        let mut connection = WireConnection::connect(&socket_path, limits)?;
+        let connect_deadline = deadline.unwrap_or_else(|| Instant::now() + limits.connect_timeout);
+        let mut connection = WireConnection::connect(&socket_path, limits, connect_deadline)?;
 
-        let role = connection.request(json!({"type": "RoleHandshake", "role": "client"}))?;
+        let role = request_with_deadline(
+            &mut connection,
+            json!({"type": "RoleHandshake", "role": "client"}),
+            deadline,
+        )?;
         expect_role_accepted(&role, "client")?;
 
-        let welcome = connection.request(json!({
-            "type": "ClientHello",
-            "contract_version": CLIENT_CONTRACT_VERSION,
-            "issuer_scope": issuer_scope,
-            "capabilities": REQUIRED_CLIENT_CAPABILITIES,
-        }))?;
+        let welcome = request_with_deadline(
+            &mut connection,
+            json!({
+                "type": "ClientHello",
+                "contract_version": CLIENT_CONTRACT_VERSION,
+                "issuer_scope": issuer_scope,
+                "capabilities": REQUIRED_CLIENT_CAPABILITIES,
+            }),
+            deadline,
+        )?;
         let negotiated = parse_client_welcome(welcome)?;
         if negotiated.version != CLIENT_CONTRACT_VERSION {
             return Err(BridgetClientError::VersionUnsupported {
@@ -389,6 +422,7 @@ impl BridgetClient {
             limits,
             connection,
             negotiated,
+            deadline,
         })
     }
 
@@ -422,7 +456,7 @@ impl BridgetClient {
             issued_at,
             self.limits.max_frame_bytes,
         )?;
-        let response = self.connection.request(json!({
+        let response = self.request(json!({
             "type": "SendIdempotent",
             "message": message,
             "message_id": message_id,
@@ -460,7 +494,7 @@ impl BridgetClient {
             ));
         }
         let request = replay_idempotent_request(message_bytes, message_id, issued_at)?;
-        let response = self.connection.request_raw_json(&request)?;
+        let response = self.request_raw_json(&request)?;
         let issue = parse_idempotency_issue(response, message_id);
         self.connection.poison_after(&issue);
         issue
@@ -473,7 +507,7 @@ impl BridgetClient {
                 "message_id ne peut pas etre vide".to_string(),
             ));
         }
-        let response = self.connection.request(json!({
+        let response = self.request(json!({
             "type": "Lookup",
             "operation_kind": "send",
             "idempotency_key": message_id,
@@ -481,6 +515,17 @@ impl BridgetClient {
         let issue = parse_idempotency_issue(response, message_id);
         self.connection.poison_after(&issue);
         issue
+    }
+
+    fn request(&mut self, value: Value) -> Result<Value, BridgetClientError> {
+        request_with_deadline(&mut self.connection, value, self.deadline)
+    }
+
+    fn request_raw_json(&mut self, json_bytes: &[u8]) -> Result<Value, BridgetClientError> {
+        match self.deadline {
+            Some(deadline) => self.connection.request_raw_json_until(json_bytes, deadline),
+            None => self.connection.request_raw_json(json_bytes),
+        }
     }
 
     /// Lit l'annuaire public Bridget sur une connexion ponctuelle non mutante.
@@ -501,7 +546,11 @@ impl BridgetClient {
         socket_path: impl AsRef<Path>,
         limits: BridgetClientLimits,
     ) -> Result<Vec<AgentInfo>, BridgetClientError> {
-        let mut connection = WireConnection::connect(socket_path.as_ref(), limits)?;
+        let mut connection = WireConnection::connect(
+            socket_path.as_ref(),
+            limits,
+            Instant::now() + limits.connect_timeout,
+        )?;
         let response = connection.request(json!({"type": "ListAgents"}))?;
         match response_type(&response)? {
             "AgentList" => {
@@ -526,7 +575,11 @@ impl BridgetClient {
         sender: &str,
         reason: Option<&str>,
     ) -> Result<Cancellation, BridgetClientError> {
-        let mut connection = WireConnection::connect(&self.socket_path, self.limits)?;
+        let mut connection = WireConnection::connect(
+            &self.socket_path,
+            self.limits,
+            Instant::now() + self.limits.connect_timeout,
+        )?;
         let role = connection.request(json!({"type": "RoleHandshake", "role": "wrapper"}))?;
         expect_role_accepted(&role, "wrapper")?;
         let response = connection.request(json!({
@@ -554,7 +607,11 @@ impl BridgetClient {
         agent: &str,
         window: AttachWindow,
     ) -> Result<Subscription, BridgetClientError> {
-        let mut connection = WireConnection::connect(&self.socket_path, self.limits)?;
+        let mut connection = WireConnection::connect(
+            &self.socket_path,
+            self.limits,
+            Instant::now() + self.limits.connect_timeout,
+        )?;
         let role = connection.request(json!({"type": "RoleHandshake", "role": "attach"}))?;
         expect_role_accepted(&role, "attach")?;
         connection.send(json!({
@@ -568,7 +625,11 @@ impl BridgetClient {
     /// Emet un SpawnOrder deja approuve. Cette methode ne construit aucun
     /// processus et ne relance pas d'elle-meme l'ordre en cas d'incertitude.
     pub fn spawn_order(&self, order: &SpawnOrder) -> Result<SpawnOutcome, BridgetClientError> {
-        let mut connection = WireConnection::connect(&self.socket_path, self.limits)?;
+        let mut connection = WireConnection::connect(
+            &self.socket_path,
+            self.limits,
+            Instant::now() + self.limits.connect_timeout,
+        )?;
         let role = connection.request(json!({"type": "RoleHandshake", "role": "wrapper"}))?;
         expect_role_accepted(&role, "wrapper")?;
         let response = connection.request(json!({
@@ -599,6 +660,17 @@ impl BridgetClient {
             "Nack" => Err(parse_nack(response)?),
             other => Err(unexpected("SpawnAccepted/SpawnRejected", other)),
         }
+    }
+}
+
+fn request_with_deadline(
+    connection: &mut WireConnection,
+    value: Value,
+    deadline: Option<Instant>,
+) -> Result<Value, BridgetClientError> {
+    match deadline {
+        Some(deadline) => connection.request_until(value, deadline),
+        None => connection.request(value),
     }
 }
 
@@ -681,9 +753,12 @@ struct WireConnection {
 }
 
 impl WireConnection {
-    fn connect(path: &Path, limits: BridgetClientLimits) -> Result<Self, BridgetClientError> {
+    fn connect(
+        path: &Path,
+        limits: BridgetClientLimits,
+        deadline: Instant,
+    ) -> Result<Self, BridgetClientError> {
         validate_limits(limits)?;
-        let deadline = Instant::now() + limits.connect_timeout;
         let stream = connect_nonblocking(path, deadline)?;
         let reader = BufReader::new(stream.try_clone().map_err(BridgetClientError::Read)?);
         Ok(Self {
@@ -695,8 +770,16 @@ impl WireConnection {
     }
 
     fn request(&mut self, value: Value) -> Result<Value, BridgetClientError> {
-        self.ensure_usable()?;
         let deadline = Instant::now() + self.limits.io_timeout;
+        self.request_until(value, deadline)
+    }
+
+    fn request_until(
+        &mut self,
+        value: Value,
+        deadline: Instant,
+    ) -> Result<Value, BridgetClientError> {
+        self.ensure_usable()?;
         let result = (|| {
             self.send_until(value, deadline)?;
             self.receive_until(deadline)
@@ -707,8 +790,16 @@ impl WireConnection {
 
     #[allow(dead_code)] // Appelé par la reprise T008, actuellement gelée.
     fn request_raw_json(&mut self, json_bytes: &[u8]) -> Result<Value, BridgetClientError> {
-        self.ensure_usable()?;
         let deadline = Instant::now() + self.limits.io_timeout;
+        self.request_raw_json_until(json_bytes, deadline)
+    }
+
+    fn request_raw_json_until(
+        &mut self,
+        json_bytes: &[u8],
+        deadline: Instant,
+    ) -> Result<Value, BridgetClientError> {
+        self.ensure_usable()?;
         let result = (|| {
             self.send_bytes_until(json_bytes, deadline)?;
             self.receive_until(deadline)

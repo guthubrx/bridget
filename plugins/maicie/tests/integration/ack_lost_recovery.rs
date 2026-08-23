@@ -419,9 +419,10 @@ fn reprise_lente_sur_toutes_les_phases_reste_dans_le_budget_global() {
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         let (mut reader, mut writer) = split(stream);
-        // Chaque phase consomme une part mesurable de sa tranche de 20 ms,
-        // avec une marge pour l'ordonnanceur du harnais de test.
-        let phase_delay = Duration::from_millis(8);
+        // Les trois premières réponses consomment 84 ms. Le replay ne peut
+        // donc attendre que le reliquat de l'échéance globale (16 ms) : sans
+        // propagation de l'échéance, il attendrait à nouveau 100 ms.
+        let phase_delay = Duration::from_millis(28);
 
         assert_eq!(
             read_json(&mut reader),
@@ -462,7 +463,7 @@ fn reprise_lente_sur_toutes_les_phases_reste_dans_le_budget_global() {
     let started = Instant::now();
     let report = reconcile_startup_at_with_limits(&mut store, &socket, 1_010, limits).unwrap();
     assert!(
-        started.elapsed() < Duration::from_millis(100),
+        started.elapsed() < Duration::from_millis(150),
         "la reprise complète ne doit pas dépasser son budget global"
     );
     assert!(matches!(
@@ -478,6 +479,40 @@ fn reprise_lente_sur_toutes_les_phases_reste_dans_le_budget_global() {
             .state,
         EtatOutboxDelegation::OutcomeUnknown
     );
+    server.join().unwrap();
+
+    fs::remove_file(&socket).unwrap();
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let (mut reader, mut writer) = split(stream);
+        negotiate_client(&mut reader, &mut writer);
+        assert_eq!(read_json(&mut reader)["type"], "Lookup");
+        write_issue(
+            &mut writer,
+            json!({"kind":"accepted","expires_at":1_100_i64}),
+        );
+        let mut unexpected = String::new();
+        assert_eq!(reader.read_line(&mut unexpected).unwrap(), 0);
+    });
+    let report = reconcile_startup_at(&mut store, &socket, 1_011).unwrap();
+    assert!(matches!(
+        &report.actions[..],
+        [ReconcileAction::IssueTerminale {
+            issue: maicie::bridget_client::IdempotencyIssue::Accepted { .. },
+            ..
+        }]
+    ));
+    assert_eq!(
+        store
+            .recovery_snapshot(uuid(MESSAGE_ID))
+            .unwrap()
+            .unwrap()
+            .outbox
+            .state,
+        EtatOutboxDelegation::Accepted
+    );
+    assert!(store.pending_delegation_outboxes().unwrap().is_empty());
     server.join().unwrap();
     drop(store);
     fs::remove_dir_all(root).unwrap();

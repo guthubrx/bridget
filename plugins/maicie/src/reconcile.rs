@@ -196,10 +196,9 @@ pub fn reconcile_startup_at_observed_with_limits(
     let mut report = ReconcileReport::default();
     let deadline = Instant::now() + reconciliation_budget(limits);
     for entry in store.delegation_recovery_entries()? {
-        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+        let Some(_) = deadline.checked_duration_since(Instant::now()) else {
             break;
         };
-        let entry_limits = limits_for_remaining_budget(limits, remaining);
         let action = match entry {
             DelegationRecoveryEntry::Pending(outbox) => {
                 observer(ReconcilePhase::BeforeSocket)?;
@@ -208,7 +207,8 @@ pub fn reconcile_startup_at_observed_with_limits(
                     socket,
                     &outbox,
                     observed_at,
-                    entry_limits,
+                    limits,
+                    deadline,
                     &mut observer,
                 )?
             }
@@ -249,27 +249,13 @@ fn reconciliation_budget(limits: BridgetClientLimits) -> Duration {
     limits.connect_timeout.max(limits.io_timeout)
 }
 
-/// Une ligne peut au pire connecter, négocier (deux requêtes), lookup puis
-/// rejouer. En divisant le temps restant entre ces cinq opérations, les délais
-/// de `BridgetClient` ne peuvent pas repousser la borne globale de la passe.
-fn limits_for_remaining_budget(
-    limits: BridgetClientLimits,
-    remaining: Duration,
-) -> BridgetClientLimits {
-    let per_operation = (remaining / 5).max(Duration::from_millis(1));
-    BridgetClientLimits {
-        connect_timeout: limits.connect_timeout.min(per_operation),
-        io_timeout: limits.io_timeout.min(per_operation),
-        max_frame_bytes: limits.max_frame_bytes,
-    }
-}
-
 fn reconcile_one(
     store: &mut MaicieStore,
     socket: &Path,
     outbox: &PendingDelegationOutbox,
     observed_at: i64,
     limits: BridgetClientLimits,
+    deadline: Instant,
     observer: &mut impl FnMut(ReconcilePhase) -> Result<(), ReconcileError>,
 ) -> Result<ReconcileAction, ReconcileError> {
     outbox.validate()?;
@@ -279,8 +265,12 @@ fn reconcile_one(
         ));
     }
     let message_id = outbox.message_id.to_string();
-    let mut client = match BridgetClient::connect_with_limits(socket, &outbox.issuer_scope, limits)
-    {
+    let mut client = match BridgetClient::connect_with_limits_until(
+        socket,
+        &outbox.issuer_scope,
+        limits,
+        deadline,
+    ) {
         Ok(client) => client,
         Err(error) => return unavailable_or_error(outbox, error),
     };
