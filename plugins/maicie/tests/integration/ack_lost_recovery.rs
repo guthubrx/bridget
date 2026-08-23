@@ -462,7 +462,7 @@ fn reprise_lente_sur_toutes_les_phases_reste_dans_le_budget_global() {
     let started = Instant::now();
     let report = reconcile_startup_at_with_limits(&mut store, &socket, 1_010, limits).unwrap();
     assert!(
-        started.elapsed() < Duration::from_millis(140),
+        started.elapsed() < Duration::from_millis(100),
         "la reprise complète ne doit pas dépasser son budget global"
     );
     assert!(matches!(
