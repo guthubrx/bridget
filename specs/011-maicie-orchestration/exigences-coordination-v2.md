@@ -329,3 +329,11 @@ l'accélération (F27-29 automatisent le référent, condition du passage à une
 L'ÉQUIPE → B (journal enrichi, traducteur, GUI) mené par l'équipe élargie,
 F-reste et D-reste en fil d'eau. La GUI arrive plus tard mais se construit
 plus vite ; le coût net est un report, pas une perte.
+- **État « en pause » manquant chez Maicie** (constat utilisateur 2026-08-24
+  nuit) : une mission suspendue par arbitrage de priorité (bouche-trou D23
+  interrompu par le lot A 015) garde son échéance qui court — le greffe la
+  dira « en retard » quand la réalité dit « suspendue sur ordre ». Palliatif
+  actuel : clôture administrative + re-délégation. Besoin : transition
+  pause/reprise journalisée, échéance gelée. Cousin du mode planifié —
+  même famille « états intermédiaires du travail », à traiter ENSEMBLE quand
+  les routines l'exigeront.
