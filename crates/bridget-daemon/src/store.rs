@@ -23,6 +23,7 @@ pub struct GuichetDeposit {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuichetClaim {
+    pub deposited_sequence: i64,
     pub issuer_scope: String,
     pub request_id: String,
     pub canonical_request: Vec<u8>,
@@ -380,6 +381,7 @@ impl Store {
             return Err(StoreError::Invariant("claim FIFO concurrent perdu"));
         }
         let claim = GuichetClaim {
+            deposited_sequence: row.deposited_sequence,
             issuer_scope: row.issuer_scope,
             request_id: row.request_id,
             canonical_request: row.canonical_request,
@@ -413,6 +415,7 @@ impl Store {
             return Ok(Err(GuichetResult::ClaimStale));
         }
         Ok(Ok(GuichetClaim {
+            deposited_sequence: row.deposited_sequence,
             issuer_scope: row.issuer_scope,
             request_id: row.request_id,
             canonical_request: row.canonical_request,
@@ -911,6 +914,63 @@ mod tests {
             Ok(GuichetResult::CanonicalBytesMismatch)
         ));
         drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn second_handle_ne_revoque_un_claim_qu_au_bootstrap_explicite() {
+        let path = std::env::temp_dir().join(format!("bridget-guichet-handles-{}.db", Uuid::new_v4()));
+        let mut first = Store::open(&path).unwrap();
+        let now = 1_787_500_000;
+        let finalized = guichet_deposit("request-finalized", br#"{\"request\":1}"#);
+        let recovered = guichet_deposit("request-recovered", br#"{\"request\":2}"#);
+        first.deposit_guichet(&finalized, 600, 60, now).unwrap();
+        first.deposit_guichet(&recovered, 600, 60, now).unwrap();
+        let claim_finalized = match first.claim_next_guichet("service-a", now).unwrap() {
+            GuichetNext::Claimed(claim) => claim,
+            GuichetNext::Empty => panic!("claim A finalisable absent"),
+        };
+
+        // Ouvrir SQLite une seconde fois n'est pas un redémarrage : la lease
+        // d'A reste active et A peut encore finaliser son premier dépôt.
+        let mut second = Store::open(&path).unwrap();
+        assert!(matches!(
+            first.reply_guichet(
+                "service-a",
+                GuichetReplyInput {
+                    issuer_scope: &claim_finalized.issuer_scope,
+                    request_id: &claim_finalized.request_id,
+                    generation: claim_finalized.claim_generation,
+                    token: &claim_finalized.claim_token,
+                    reply_bytes: br#"{\"reply\":\"a\"}"#,
+                    in_reply_to: "",
+                    outcome: GuichetOutcome::Accepted,
+                },
+                now,
+            ),
+            Ok(GuichetResult::Terminal { ref issue, .. }) if issue == "accepted"
+        ));
+
+        let claim_recovered = match first.claim_next_guichet("service-a", now).unwrap() {
+            GuichetNext::Claimed(claim) => claim,
+            GuichetNext::Empty => panic!("claim A à reprendre absent"),
+        };
+        assert_eq!(claim_recovered.request_id, "request-recovered");
+
+        // Mutation discriminante : si Store::open libérait encore les leases,
+        // le claim suivant d'A ou la relève de B ne prouverait plus que seul le
+        // bootstrap remet les claims vivants en FIFO.
+        second.recover_guichet_claims_after_restart().unwrap();
+        let claimed_by_b = match second.claim_next_guichet("service-b", now + 1).unwrap() {
+            GuichetNext::Claimed(claim) => claim,
+            GuichetNext::Empty => panic!("claim B repris absent"),
+        };
+        assert_eq!(claimed_by_b.deposited_sequence, claim_recovered.deposited_sequence);
+        assert_eq!(claimed_by_b.request_id, claim_recovered.request_id);
+        assert_eq!(claimed_by_b.claim_generation, claim_recovered.claim_generation + 1);
+        assert_ne!(claimed_by_b.claim_token, claim_recovered.claim_token);
+        drop(first);
+        drop(second);
         let _ = std::fs::remove_file(path);
     }
 

@@ -2396,10 +2396,7 @@ fn handle_connection(
             if line.is_empty() {
                 continue;
             }
-            if line.len() > 64 * 1024
-                && (line.contains("\"type\":\"service_request\"")
-                    || line.contains("\"type\":\"guichet_"))
-            {
+            if guichet_frame_exceeds_wire_limit(&line) {
                 let json = encode(&DaemonToWrapper::ServiceRejected {
                     reason: ServiceRefusal::FrameTooLarge,
                 })?;
@@ -2412,9 +2409,7 @@ fn handle_connection(
                 Ok(m) => m,
                 Err(e) => {
                     warn!("message illisible de {}: {}", conn_id, e);
-                    if line.contains("\"type\":\"service_request\"")
-                        || line.contains("\"type\":\"guichet_")
-                    {
+                    if raw_guichet_frame(&line) {
                         let json = encode(&DaemonToWrapper::ServiceRejected {
                             reason: ServiceRefusal::InvalidEnvelope,
                         })?;
@@ -2508,6 +2503,33 @@ fn is_guichet_frame(message: &WrapperToDaemon) -> bool {
             | WrapperToDaemon::GuichetLookup { .. }
             | WrapperToDaemon::GuichetReply { .. }
     )
+}
+
+const MAX_GUICHET_FRAME_BYTES: usize = 64 * 1024;
+
+/// `BufRead::lines` enlève le séparateur : la borne du contrat porte bien sur
+/// la trame JSONL entière, donc sur la ligne plus son LF filaire.
+fn guichet_frame_exceeds_wire_limit(line: &str) -> bool {
+    line.len().saturating_add(1) > MAX_GUICHET_FRAME_BYTES && raw_guichet_frame(line)
+}
+
+/// Classe la famille du message à partir du JSON, jamais d'une sous-chaîne :
+/// les espaces et l'ordre des clés ne doivent pas contourner la garde avant
+/// toute consommation de capacité ou écriture durable.
+fn raw_guichet_frame(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|value| value.get("type").and_then(serde_json::Value::as_str).map(str::to_owned))
+        .is_some_and(|kind| {
+            matches!(
+                kind.as_str(),
+                "service_request"
+                    | "guichet_claim_next"
+                    | "guichet_claim"
+                    | "guichet_lookup"
+                    | "guichet_reply"
+            )
+        })
 }
 
 fn service_scope_matches(state: &Arc<Mutex<DaemonState>>, conn_id: &str, scope: &str) -> bool {
@@ -5406,6 +5428,24 @@ mod presence_tests {
             },
         );
         state.attach_views.insert(subscription_id.to_string(), view);
+    }
+
+    #[test]
+    fn guichet_frame_limit_counts_the_wire_newline_and_parses_whitespace() {
+        let base = r#"{ "type" : "guichet_claim_next", "version" : 1 }"#;
+        assert!(raw_guichet_frame(base));
+        let exact = format!(
+            "{base}{}",
+            " ".repeat(MAX_GUICHET_FRAME_BYTES - 1 - base.len())
+        );
+        let oversized = format!("{exact} ");
+        assert_eq!(exact.len() + 1, MAX_GUICHET_FRAME_BYTES);
+        assert_eq!(oversized.len() + 1, MAX_GUICHET_FRAME_BYTES + 1);
+        // Mutation discriminante : passer de `>` à `>=`, ou retomber sur une
+        // sous-chaîne compacte, rejetterait la première trame à tort ou
+        // laisserait passer la seconde malgré ses espaces JSON valides.
+        assert!(!guichet_frame_exceeds_wire_limit(&exact));
+        assert!(guichet_frame_exceeds_wire_limit(&oversized));
     }
 
     #[test]
