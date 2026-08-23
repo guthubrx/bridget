@@ -7,7 +7,8 @@
 use crate::app::ConversationRecord;
 use crate::bridget_client::{GuichetClaim, IdempotencyIssue, SpawnOutcome};
 use crate::domain::guichet::{
-    delivery_reply_bytes, EvenementCycleGuichet, RapportLivraison, RequeteCanonique,
+    delivery_reply_bytes, projection_reply_bytes, reclaim_projection_reply_bytes,
+    EvenementCycleGuichet, ProjectionReply, RapportLivraison, RequeteCanonique,
 };
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
@@ -107,6 +108,16 @@ pub struct RemiseLocale {
     pub state: EtatOutboxDelegation,
     pub issue: Option<Value>,
     pub observed_at: Option<i64>,
+}
+
+/// Faits locaux nécessaires aux projections du guichet. Ils sont lus depuis
+/// une seule jointure SQLite ; aucune observation Bridget n'est reconstruite.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuichetProjectionFacts {
+    pub objective: ObjectifCoordonne,
+    pub delegation: Delegation,
+    pub local_delivery: RemiseLocale,
+    pub deadline_at: i64,
 }
 
 /// Motif local fermé quand les octets durables ne peuvent jamais produire une
@@ -667,6 +678,166 @@ impl MaicieStore {
             })
         })
         .collect()
+    }
+
+    /// Persiste les octets exacts d'une projection consultative. Une relève
+    /// répétée rejoue le reçu ; une nouvelle génération ne change que
+    /// l'enveloppe de claim, jamais les faits déjà répondus.
+    pub fn persist_guichet_projection(
+        &mut self,
+        claim: &GuichetClaim,
+        canonical: &RequeteCanonique,
+        response_message_id: &str,
+        now: i64,
+        build: impl FnOnce(&GuichetProjectionFacts) -> Result<ProjectionReply, StoreError>,
+    ) -> Result<StoredGuichetReply, StoreError> {
+        if now <= 0 || response_message_id.trim().is_empty() {
+            return Err(StoreError::Invalid("réponse guichet incomplète"));
+        }
+        if canonical.issuer_scope != claim.issuer_scope
+            || canonical.request_id != claim.request_id
+            || canonical.request.operation() == OperationGuichet::DeliveryReport
+        {
+            return Err(StoreError::Invalid("claim et projection divergents"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+
+        if let Some(mut reception) =
+            load_guichet_reception(&tx, &canonical.issuer_scope, &canonical.request_id)?
+        {
+            if reception.canonical_request_bytes != claim.canonical_request
+                || reception.operation != canonical.request.operation()
+            {
+                return Err(StoreError::EnvelopeMismatch);
+            }
+            if claim.claim_generation == reception.claim_generation
+                && claim.claim_token == reception.claim_token
+            {
+                tx.commit().map_err(StoreError::Sql)?;
+                return Ok(StoredGuichetReply {
+                    reception,
+                    correlation: None,
+                    replayed: true,
+                });
+            }
+            if claim.claim_generation <= reception.claim_generation {
+                return Err(StoreError::EnvelopeMismatch);
+            }
+            let (reply_bytes, stored_projection, stored_response_message_id) =
+                reclaim_projection_reply_bytes(claim, &reception.reply_bytes)
+                    .map_err(|_| StoreError::Corrupt("projection durable invalide"))?;
+            if stored_projection.operation() != reception.operation
+                || stored_projection
+                    .delegation_id()
+                    .map_err(|_| StoreError::Corrupt("référence de projection invalide"))?
+                    != reception
+                        .delegation_id
+                        .ok_or(StoreError::Corrupt("projection sans délégation"))?
+                || stored_response_message_id != reception.response_message_id
+            {
+                return Err(StoreError::Corrupt("projection et reçu divergents"));
+            }
+            let updated = tx
+                .execute(
+                    "UPDATE guichet_receptions\n\
+                     SET claim_generation = ?1, claim_token = ?2, reply_bytes = ?3\n\
+                     WHERE issuer_scope = ?4 AND request_id = ?5\n\
+                       AND claim_generation = ?6 AND claim_token = ?7",
+                    params![
+                        i64::try_from(claim.claim_generation)
+                            .map_err(|_| StoreError::Invalid("génération de claim hors borne"))?,
+                        claim.claim_token,
+                        reply_bytes,
+                        canonical.issuer_scope,
+                        canonical.request_id,
+                        i64::try_from(reception.claim_generation).map_err(|_| {
+                            StoreError::Corrupt("génération de reçu hors borne")
+                        })?,
+                        reception.claim_token,
+                    ],
+                )
+                .map_err(StoreError::Sql)?;
+            if updated != 1 {
+                return Err(StoreError::Conflict(
+                    "reçu de projection modifié concurremment",
+                ));
+            }
+            reception =
+                load_guichet_reception(&tx, &canonical.issuer_scope, &canonical.request_id)?
+                    .ok_or(StoreError::Corrupt("projection absente après mise à jour"))?;
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(StoredGuichetReply {
+                reception,
+                correlation: None,
+                replayed: true,
+            });
+        }
+
+        let delegation_id = match &canonical.request {
+            crate::domain::guichet::RequeteGuichet::MissionStatus { delegation_id }
+            | crate::domain::guichet::RequeteGuichet::DeadlineQuestion { delegation_id } => {
+                *delegation_id
+            }
+            crate::domain::guichet::RequeteGuichet::DeliveryReport(_) => {
+                return Err(StoreError::Invalid("projection de livraison interdite"));
+            }
+        };
+        let facts = load_guichet_projection_facts(&tx, delegation_id)?;
+        if facts.delegation.participant != canonical.from {
+            return Err(StoreError::Invalid("relations de projection invalides"));
+        }
+        let projection = build(&facts)?;
+        if projection.operation() != canonical.request.operation()
+            || projection
+                .delegation_id()
+                .map_err(|_| StoreError::Invalid("référence de projection invalide"))?
+                != delegation_id
+        {
+            return Err(StoreError::Invalid("projection et requête divergentes"));
+        }
+        let reply_bytes = projection_reply_bytes(claim, response_message_id, &projection)
+            .map_err(|_| StoreError::Invalid("projection guichet non sérialisable"))?;
+        let inserted = tx
+            .execute(
+                "INSERT INTO guichet_receptions(\n\
+                     issuer_scope, request_id, operation, canonical_request_bytes,\n\
+                     objective_id, delegation_id, delivery_hash, in_reply_to,\n\
+                     response_message_id, outcome, reply_bytes, decision_id, processed_at,\n\
+                     claim_generation, claim_token\n\
+                 ) VALUES (?1,?2,?3,?4,?5,?6,NULL,?7,?8,'accepted',?9,NULL,?10,?11,?12)",
+                params![
+                    canonical.issuer_scope,
+                    canonical.request_id,
+                    operation_name(projection.operation()),
+                    claim.canonical_request,
+                    facts.objective.id.to_string(),
+                    delegation_id.to_string(),
+                    canonical.request_id,
+                    response_message_id,
+                    reply_bytes,
+                    now,
+                    i64::try_from(claim.claim_generation)
+                        .map_err(|_| StoreError::Invalid("génération de claim hors borne"))?,
+                    claim.claim_token,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("projection guichet non enregistrée"));
+        }
+        let reception =
+            load_guichet_reception(&tx, &canonical.issuer_scope, &canonical.request_id)?.ok_or(
+                StoreError::Corrupt("projection introuvable après insertion"),
+            )?;
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(StoredGuichetReply {
+            reception,
+            correlation: None,
+            replayed: false,
+        })
     }
 
     fn remises_locales_for(&self, objective_id: Uuid) -> Result<Vec<RemiseLocale>, StoreError> {
@@ -1883,6 +2054,90 @@ fn prepare_private_database(path: &Path) -> Result<(), StoreError> {
 }
 
 type StoredGuichetAggregates = (String, Vec<u8>, String, Vec<u8>, String);
+
+type RawGuichetProjectionFacts = (
+    String,
+    Vec<u8>,
+    String,
+    Vec<u8>,
+    String,
+    String,
+    Option<Vec<u8>>,
+    Option<i64>,
+    i64,
+);
+
+fn load_guichet_projection_facts(
+    connection: &Connection,
+    delegation_id: Uuid,
+) -> Result<GuichetProjectionFacts, StoreError> {
+    let raw: Option<RawGuichetProjectionFacts> = connection
+        .query_row(
+            "SELECT obj.state, obj.payload_json, d.state, d.payload_json,\n\
+                    o.message_id, o.state, o.last_issue_json, o.issue_observed_at,\n\
+                    o.deadline_contractuelle\n\
+             FROM delegations d\n\
+             JOIN objectives obj ON obj.id = d.objective_id\n\
+             JOIN delegation_outbox o ON o.delegation_id = d.id\n\
+             WHERE d.id = ?1",
+            [delegation_id.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    let Some((
+        objective_state,
+        objective_json,
+        delegation_state,
+        delegation_json,
+        message_id,
+        local_state,
+        local_issue,
+        local_observed_at,
+        deadline_at,
+    )) = raw
+    else {
+        return Err(StoreError::NotFound("délégation de projection absente"));
+    };
+    let objective: ObjectifCoordonne =
+        serde_json::from_slice(&objective_json).map_err(StoreError::Json)?;
+    let delegation: Delegation =
+        serde_json::from_slice(&delegation_json).map_err(StoreError::Json)?;
+    if objective.id != delegation.objectif_id
+        || delegation.id != delegation_id
+        || objective.etat != parse_objective_state(&objective_state)?
+        || delegation.etat != parse_delegation_state(&delegation_state)?
+        || deadline_at <= 0
+    {
+        return Err(StoreError::Corrupt("faits de projection divergents"));
+    }
+    Ok(GuichetProjectionFacts {
+        objective,
+        delegation,
+        local_delivery: RemiseLocale {
+            delegation_id,
+            message_id: parse_uuid(&message_id)?,
+            state: parse_outbox_state(&local_state)?,
+            issue: local_issue
+                .map(|bytes| serde_json::from_slice(&bytes).map_err(StoreError::Json))
+                .transpose()?,
+            observed_at: local_observed_at,
+        },
+        deadline_at,
+    })
+}
 
 type RawGuichetReception = (
     String,

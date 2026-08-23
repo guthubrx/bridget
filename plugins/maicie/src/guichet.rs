@@ -247,8 +247,112 @@ pub fn parse_lifecycle_event(
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionCoordinationState {
+    Open,
+    EnCoordination,
+    AEvaluer,
+    Synthetise,
+    Clos,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionLocalDeliveryState {
+    Pending,
+    Accepted,
+    OutcomeUnknown,
+    Rejected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectionLocalDelivery {
+    pub state: ProjectionLocalDeliveryState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionTransportState {
+    Connected,
+    Unavailable,
+    Gap,
+    Ended,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectionTransportObservation {
+    pub state: ProjectionTransportState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_state: Option<String>,
+    pub observed_at: i64,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionFreshness {
+    Fresh,
+    Gap,
+    Ended,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionDurationClass {
+    Courte,
+    Normale,
+    Longue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProjectionReply {
+    MissionStatus {
+        delegation_id: String,
+        objective_id: String,
+        coordination_state: ProjectionCoordinationState,
+        local_delivery: ProjectionLocalDelivery,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        transport_observation: Option<ProjectionTransportObservation>,
+        freshness: ProjectionFreshness,
+    },
+    DeadlineQuestion {
+        delegation_id: String,
+        duration_class: ProjectionDurationClass,
+        deadline_at: i64,
+    },
+}
+
+impl ProjectionReply {
+    pub fn operation(&self) -> OperationGuichet {
+        match self {
+            Self::MissionStatus { .. } => OperationGuichet::MissionStatus,
+            Self::DeadlineQuestion { .. } => OperationGuichet::DeadlineQuestion,
+        }
+    }
+
+    pub fn delegation_id(&self) -> Result<Uuid, GuichetDomainError> {
+        let value = match self {
+            Self::MissionStatus { delegation_id, .. }
+            | Self::DeadlineQuestion { delegation_id, .. } => delegation_id,
+        };
+        parse_uuid(value)
+    }
+}
+
 #[derive(Serialize)]
-struct GuichetReplyWire<'a> {
+struct GuichetReplyWire<'a, T: Serialize> {
     #[serde(rename = "type")]
     kind: &'static str,
     v: u8,
@@ -259,7 +363,7 @@ struct GuichetReplyWire<'a> {
     response_message_id: &'a str,
     in_reply_to: &'a str,
     outcome: &'static str,
-    payload: DeliveryReplyPayload<'a>,
+    payload: &'a T,
 }
 
 #[derive(Serialize)]
@@ -282,6 +386,12 @@ pub fn delivery_reply_bytes(
         IssueGreffe::Accepted => "accepted",
         IssueGreffe::DemandeDejaTerminale => "request_already_terminal",
     };
+    let payload = DeliveryReplyPayload {
+        kind: "delivery_report",
+        objective_id: report.objective_id.to_string(),
+        delegation_id: report.delegation_id.to_string(),
+        delivery_hash: &report.delivery_hash,
+    };
     serde_json::to_vec(&GuichetReplyWire {
         kind: "guichet_reply",
         v: 1,
@@ -292,14 +402,123 @@ pub fn delivery_reply_bytes(
         response_message_id,
         in_reply_to: &report.in_reply_to,
         outcome,
-        payload: DeliveryReplyPayload {
-            kind: "delivery_report",
-            objective_id: report.objective_id.to_string(),
-            delegation_id: report.delegation_id.to_string(),
-            delivery_hash: &report.delivery_hash,
-        },
+        payload: &payload,
     })
     .map_err(|_| GuichetDomainError::InvalidEnvelope("réponse non sérialisable"))
+}
+
+pub fn projection_reply_bytes(
+    claim: &GuichetClaim,
+    response_message_id: &str,
+    projection: &ProjectionReply,
+) -> Result<Vec<u8>, GuichetDomainError> {
+    validate_identifier(response_message_id)?;
+    validate_identifier(&claim.claim_token)?;
+    validate_projection(projection)?;
+    serde_json::to_vec(&GuichetReplyWire {
+        kind: "guichet_reply",
+        v: 1,
+        issuer_scope: &claim.issuer_scope,
+        request_id: &claim.request_id,
+        claim_generation: claim.claim_generation,
+        claim_token: &claim.claim_token,
+        response_message_id,
+        in_reply_to: &claim.request_id,
+        outcome: "accepted",
+        payload: projection,
+    })
+    .map_err(|_| GuichetDomainError::InvalidEnvelope("projection non sérialisable"))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredProjectionReplyWire {
+    #[serde(rename = "type")]
+    kind: String,
+    v: u8,
+    issuer_scope: String,
+    request_id: String,
+    claim_generation: u64,
+    claim_token: String,
+    response_message_id: String,
+    in_reply_to: String,
+    outcome: String,
+    payload: ProjectionReply,
+}
+
+/// Régénère uniquement l'enveloppe de claim d'une projection déjà durable.
+/// Le payload métier et le response_message_id restent ceux du premier reçu.
+pub fn reclaim_projection_reply_bytes(
+    claim: &GuichetClaim,
+    stored_reply: &[u8],
+) -> Result<(Vec<u8>, ProjectionReply, String), GuichetDomainError> {
+    let stored: StoredProjectionReplyWire = serde_json::from_slice(stored_reply)
+        .map_err(|_| GuichetDomainError::InvalidEnvelope("projection durable illisible"))?;
+    if stored.kind != "guichet_reply"
+        || stored.v != 1
+        || stored.issuer_scope != claim.issuer_scope
+        || stored.request_id != claim.request_id
+        || stored.in_reply_to != claim.request_id
+        || stored.outcome != "accepted"
+        || stored.claim_generation >= claim.claim_generation
+        || stored.claim_token.is_empty()
+    {
+        return Err(GuichetDomainError::InvalidEnvelope(
+            "projection durable divergente",
+        ));
+    }
+    let bytes = projection_reply_bytes(claim, &stored.response_message_id, &stored.payload)?;
+    Ok((bytes, stored.payload, stored.response_message_id))
+}
+
+fn validate_projection(projection: &ProjectionReply) -> Result<(), GuichetDomainError> {
+    match projection {
+        ProjectionReply::MissionStatus {
+            delegation_id,
+            objective_id,
+            local_delivery,
+            transport_observation,
+            ..
+        } => {
+            parse_uuid(delegation_id)?;
+            parse_uuid(objective_id)?;
+            if let Some(issue) = &local_delivery.issue {
+                validate_identifier(issue)?;
+            }
+            if local_delivery.observed_at.is_some_and(|value| value <= 0) {
+                return Err(GuichetDomainError::InvalidEnvelope(
+                    "horodatage de remise invalide",
+                ));
+            }
+            if let Some(observation) = transport_observation {
+                if observation.observed_at <= 0 || observation.source.is_empty() {
+                    return Err(GuichetDomainError::InvalidEnvelope(
+                        "observation transport invalide",
+                    ));
+                }
+                validate_identifier(&observation.source)?;
+                if let Some(request_state) = &observation.request_state {
+                    validate_identifier(request_state)?;
+                }
+                if let Some(subscription_id) = &observation.subscription_id {
+                    validate_identifier(subscription_id)?;
+                }
+            }
+        }
+        ProjectionReply::DeadlineQuestion {
+            delegation_id,
+            deadline_at,
+            ..
+        } => {
+            parse_uuid(delegation_id)?;
+            if *deadline_at <= 0 {
+                return Err(GuichetDomainError::InvalidEnvelope(
+                    "échéance contractuelle invalide",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn ensure_canonical<T: Serialize>(
