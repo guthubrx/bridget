@@ -259,9 +259,9 @@ fn print_usage() {
            --reply                Réponse attendue\n  \
            --timeout <S>          Délai avant échec (défaut: 60)\n  \
            --hops <N>             Sauts restants (défaut: 4)\n\n\
-           --id <clé>             Clé idempotente (avec --issued-at et --issuer-scope)\n  \
-           --issued-at <unix>     Instant d'émission idempotent\n  \
-           --issuer-scope <portée> Portée idempotente de l'émetteur\n\n\
+           --id <clé>             Clé de rejeu (avec --issued-at)\n  \
+           --issued-at <unix>     Instant d'émission du rejeu\n  \
+           --issuer-scope <portée> Portée requise pour un envoi ordinaire idempotent\n\n\
          Usage interne :\n  \
            hook claude-runtime    Appelé par le hook Claude Code, lit stdin"
     );
@@ -800,33 +800,18 @@ fn cmd_send(args: &[String]) {
         msg.reply_timeout = Some(60);
     }
 
-    let idempotent = match idempotent_options(id, issued_at, issuer_scope) {
+    let idempotent = match resolved_idempotent_options(
+        id,
+        issued_at,
+        issuer_scope,
+        msg.in_reply_to.is_some(),
+        &msg.id,
+    ) {
         Ok(options) => options,
         Err(error) => send_usage_error(&error),
     };
 
-    if let Some(options) = idempotent {
-        msg.id = options.id.clone();
-        match send_idempotent_to_daemon(&msg, &options) {
-            Ok(DaemonToWrapper::IdempotencyResult { issue, .. }) => {
-                print_idempotency_issue(&issue);
-                if !matches!(issue, IdempotencyIssue::Accepted { .. }) {
-                    std::process::exit(1);
-                }
-            }
-            Ok(DaemonToWrapper::ClientRejected { reason }) => {
-                eprintln!("REJET: {reason:?}");
-                std::process::exit(1);
-            }
-            Ok(_) => {
-                eprintln!("réponse inattendue du daemon");
-                std::process::exit(1);
-            }
-            Err(error) => {
-                eprintln!("daemon inaccessible: {error}");
-                std::process::exit(1);
-            }
-        }
+    if send_idempotent_if_requested(&mut msg, idempotent) {
         return;
     }
 
@@ -894,32 +879,123 @@ fn idempotent_options(
     }))
 }
 
+fn resolved_idempotent_options(
+    id: Option<String>,
+    issued_at: Option<String>,
+    issuer_scope: Option<String>,
+    linked_reply: bool,
+    generated_id: &str,
+) -> Result<Option<IdempotentSendOptions>, String> {
+    if !linked_reply || issuer_scope.is_some() {
+        return idempotent_options(id, issued_at, issuer_scope);
+    }
+    if id.is_some() != issued_at.is_some() {
+        return Err(
+            "--id et --issued-at sont obligatoires ensemble pour rejouer une réponse liée"
+                .to_string(),
+        );
+    }
+    let instance_id = std::env::var("BRIDGET_AGENT_INSTANCE_ID").map_err(|_| {
+        "BRIDGET_AGENT_INSTANCE_ID absent : impossible de garantir un rejeu idempotent lié"
+            .to_string()
+    })?;
+    if instance_id.is_empty() {
+        return Err(
+            "BRIDGET_AGENT_INSTANCE_ID vide : impossible de garantir un rejeu idempotent lié"
+                .to_string(),
+        );
+    }
+    let issued_at = match issued_at {
+        Some(value) => value
+            .parse::<i64>()
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| "--issued-at doit être un instant Unix positif".to_string())?,
+        None => unix_timestamp(),
+    };
+    Ok(Some(IdempotentSendOptions {
+        id: id.unwrap_or_else(|| generated_id.to_string()),
+        issued_at,
+        issuer_scope: crate::mcp::issuer_scope(&instance_id),
+    }))
+}
+
 fn send_usage_error(error: &str) -> ! {
     eprintln!("erreur: {error}");
     eprintln!(
-        "usage: bridget send --to <nom> [--in-reply-to ID] [--id <clé> --issued-at <unix> --issuer-scope <portée>] <message>"
+        "usage: bridget send --to <nom> [--in-reply-to ID] [--id <clé> --issued-at <unix> [--issuer-scope <portée>]] <message>"
     );
     std::process::exit(2);
 }
 
-fn print_idempotency_issue(issue: &IdempotencyIssue) {
+fn print_idempotency_issue(issue: &IdempotencyIssue, options: &IdempotentSendOptions) {
     match issue {
         IdempotencyIssue::Accepted { expires_at } => {
-            println!("OK: envoi idempotent accepté (expire à {expires_at})");
+            println!(
+                "OK: accepted id={} issued_at={} expires_at={expires_at}",
+                options.id, options.issued_at
+            );
         }
         IdempotencyIssue::Rejected {
             category, reason, ..
-        } => eprintln!("REJET: {category}: {reason}"),
+        } => eprintln!(
+            "REJET: {} id={} issued_at={}: {reason}",
+            crate::mcp::public_refusal_category(category),
+            options.id,
+            options.issued_at
+        ),
         IdempotencyIssue::OutcomeUnknown { delivery_id, .. } => {
             eprintln!(
-                "ISSUE INCONNUE: livraison={}",
+                "ISSUE: outcome_unknown id={} issued_at={} delivery_id={}",
+                options.id,
+                options.issued_at,
                 delivery_id.as_deref().unwrap_or("—")
             );
         }
-        IdempotencyIssue::EnvelopeMismatch => eprintln!("REJET: EnvelopeMismatch"),
-        IdempotencyIssue::IdempotencyExpired => eprintln!("REJET: IdempotencyExpired"),
-        IdempotencyIssue::InvalidIssuedAt => eprintln!("REJET: InvalidIssuedAt"),
+        IdempotencyIssue::EnvelopeMismatch => eprintln!(
+            "REJET: envelope_mismatch id={} issued_at={}",
+            options.id, options.issued_at
+        ),
+        IdempotencyIssue::IdempotencyExpired => eprintln!(
+            "REJET: idempotency_expired id={} issued_at={}",
+            options.id, options.issued_at
+        ),
+        IdempotencyIssue::InvalidIssuedAt => eprintln!(
+            "REJET: invalid_issued_at id={} issued_at={}",
+            options.id, options.issued_at
+        ),
     }
+}
+
+fn send_idempotent_if_requested(
+    message: &mut BridgetMessage,
+    options: Option<IdempotentSendOptions>,
+) -> bool {
+    let Some(options) = options else {
+        return false;
+    };
+    message.id = options.id.clone();
+    match send_idempotent_to_daemon(message, &options) {
+        Ok(DaemonToWrapper::IdempotencyResult { issue, .. }) => {
+            print_idempotency_issue(&issue, &options);
+            if !matches!(issue, IdempotencyIssue::Accepted { .. }) {
+                std::process::exit(1);
+            }
+        }
+        Ok(DaemonToWrapper::ClientRejected { reason }) => {
+            eprintln!("REJET: {reason:?}");
+            std::process::exit(1);
+        }
+        Ok(_) => {
+            eprintln!("réponse inattendue du daemon");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("daemon inaccessible: {error}");
+            std::process::exit(1);
+        }
+    }
+    true
 }
 
 fn send_to_daemon(msg: &BridgetMessage) -> Result<DaemonToWrapper, String> {
@@ -1746,6 +1822,9 @@ fn cmd_reply(args: &[String]) {
     let mut hops: i32 = 4;
     let mut timeout_secs: Option<u64> = None;
     let mut explicit_in_reply_to: Option<String> = None;
+    let mut id: Option<String> = None;
+    let mut issued_at: Option<String> = None;
+    let mut issuer_scope: Option<String> = None;
     let mut body_parts: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -1774,6 +1853,18 @@ fn cmd_reply(args: &[String]) {
                     );
                     std::process::exit(2);
                 }
+            },
+            "--id" => match option_value(args, &mut i, "--id") {
+                Ok(value) => id = Some(value),
+                Err(error) => send_usage_error(&error),
+            },
+            "--issued-at" => match option_value(args, &mut i, "--issued-at") {
+                Ok(value) => issued_at = Some(value),
+                Err(error) => send_usage_error(&error),
+            },
+            "--issuer-scope" => match option_value(args, &mut i, "--issuer-scope") {
+                Ok(value) => issuer_scope = Some(value),
+                Err(error) => send_usage_error(&error),
             },
             _ => {
                 body_parts.push(args[i].clone());
@@ -1805,6 +1896,20 @@ fn cmd_reply(args: &[String]) {
         msg.reply_timeout = Some(t);
     } else if effective_reply {
         msg.reply_timeout = Some(60);
+    }
+
+    let idempotent = match resolved_idempotent_options(
+        id,
+        issued_at,
+        issuer_scope,
+        msg.in_reply_to.is_some(),
+        &msg.id,
+    ) {
+        Ok(options) => options,
+        Err(error) => send_usage_error(&error),
+    };
+    if send_idempotent_if_requested(&mut msg, idempotent) {
+        return;
     }
 
     match send_to_daemon(&msg) {

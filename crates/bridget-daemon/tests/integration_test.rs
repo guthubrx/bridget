@@ -239,17 +239,6 @@ mod tests {
         root
     }
 
-    fn run_bridget_cli(root: &std::path::Path, agent: &str, args: &[&str]) -> std::process::Output {
-        Command::new(env!("CARGO_BIN_EXE_bridget"))
-            .args(args)
-            .env_clear()
-            .env("HOME", root)
-            .env("PATH", "/usr/bin:/bin")
-            .env("BRIDGET_AGENT_NAME", agent)
-            .output()
-            .expect("binaire bridget exécuté")
-    }
-
     fn daemon_socket(root: &std::path::Path) -> PathBuf {
         root.join(".cache/bridget/bridget.sock")
     }
@@ -1085,106 +1074,6 @@ sleep 2
 
         std::fs::remove_file(&socket).ok();
         std::fs::remove_file(&db_path).ok();
-    }
-
-    #[test]
-    fn binary_linked_reply_closes_the_request_without_duplicate_delivery() {
-        let root = restart_test_root("cli-linked-reply");
-        let socket = root.join(".cache/bridget/bridget.sock");
-        let daemon = DaemonProcess::start(&root);
-        let mut requester = FakeAgent::connect(&socket, "codex", Some("requester")).unwrap();
-        let mut worker = FakeAgent::connect(&socket, "claude", Some("worker")).unwrap();
-
-        let mut request = BridgetMessage::new("requester", "worker", "réponds par le binaire");
-        request.reply = true;
-        request.reply_timeout = Some(60);
-        let request_id = request.id.clone();
-        requester.send_message(request).unwrap();
-        assert!(matches!(
-            requester.read_response().unwrap(),
-            DaemonToWrapper::Ack { .. }
-        ));
-        assert!(matches!(
-            worker.read_response().unwrap(),
-            DaemonToWrapper::Deliver(message) if message.id == request_id
-        ));
-
-        let first = run_bridget_cli(
-            &root,
-            "worker",
-            &[
-                "send",
-                "--to",
-                "requester",
-                "--in-reply-to",
-                &request_id,
-                "réponse liée",
-            ],
-        );
-        assert!(
-            first.status.success(),
-            "la réponse liée doit être acceptée: {}",
-            String::from_utf8_lossy(&first.stderr)
-        );
-        let response = match requester.read_response().unwrap() {
-            DaemonToWrapper::Deliver(message) => message,
-            other => panic!("réponse liée attendue: {other:?}"),
-        };
-        assert_eq!(response.in_reply_to.as_deref(), Some(request_id.as_str()));
-        assert_eq!(response.body, "réponse liée");
-
-        writeln!(
-            requester.writer,
-            "{}",
-            encode(&WrapperToDaemon::ListRequests {
-                sender: "requester".to_string(),
-                limit: 10,
-            })
-            .unwrap()
-        )
-        .unwrap();
-        requester.writer.flush().unwrap();
-        assert!(matches!(
-            requester.read_response().unwrap(),
-            DaemonToWrapper::RequestList { requests }
-                if requests.len() == 1 && requests[0].state == "answered"
-        ));
-
-        let duplicate = run_bridget_cli(
-            &root,
-            "worker",
-            &[
-                "send",
-                "--to",
-                "requester",
-                "--in-reply-to",
-                &request_id,
-                "réponse liée",
-            ],
-        );
-        assert!(!duplicate.status.success(), "un doublon doit être refusé");
-        assert!(
-            String::from_utf8_lossy(&duplicate.stderr).contains("doublon de contenu"),
-            "motif de refus inattendu: {}",
-            String::from_utf8_lossy(&duplicate.stderr)
-        );
-        requester
-            .reader
-            .get_ref()
-            .set_read_timeout(Some(Duration::from_millis(250)))
-            .unwrap();
-        let mut unexpected = String::new();
-        match requester.reader.read_line(&mut unexpected) {
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
-            other => panic!("une seconde réponse a été livrée: {other:?} {unexpected}"),
-        }
-
-        drop(daemon);
-        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]

@@ -146,7 +146,11 @@ rejoue alors l'issue durable (`Accepted`, refus motivé ou `OutcomeUnknown`) ;
 une enveloppe différente avec la même clé est refusée par
 `EnvelopeMismatch`. Après l'échéance annoncée par le daemon,
 `IdempotencyExpired` interdit toute réémission aveugle. Les trois options sont
-obligatoires ensemble ; un envoi historique sans elles reste inchangé.
+obligatoires ensemble ; un envoi historique sans elles reste inchangé. Une
+réponse portant `--in-reply-to` négocie toutefois ce contrat automatiquement :
+le binaire affiche son `id` et son `issued_at`, à réutiliser ensemble si le
+premier résultat vaut `outcome_unknown`. Sa portée stable vient de l'instance
+Bridget courante, comme pour l'outil MCP.
 
 Cette garantie est disponible sur le protocole local et la CLI.
 
@@ -431,7 +435,13 @@ bridget send --to agent-1 --in-reply-to fa09fa7800694 "Relecture terminée"
 La demande est marquée `answered` dans la même transition transactionnelle que
 les autres réponses liées ; ses rappels cessent. `bridget reply` reprend
 automatiquement l'identifiant de la dernière demande reçue, ou accepte le même
-flag pour lever une ambiguïté.
+flag pour lever une ambiguïté. Si le binaire annonce `outcome_unknown`, rejouez
+exactement le même corps avec les valeurs affichées :
+
+```bash
+bridget send --to agent-1 --in-reply-to fa09fa7800694 \
+  --id <id-affiché> --issued-at <instant-affiché> "Relecture terminée"
+```
 
 L'annulation est **coopérative** : elle n'interrompt ni un outil ni un modèle
 déjà au travail. Elle met fin à la demande, à ses relances, et à l'obligation de
