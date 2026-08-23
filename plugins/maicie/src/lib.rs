@@ -6,6 +6,7 @@
 pub mod bridget_client;
 pub mod config;
 pub mod domain;
+pub mod telemetry;
 
 /// Identité stable réservée au compagnon d'orchestration.
 pub const MAICIE_IDENTITY: &str = "maicie";
