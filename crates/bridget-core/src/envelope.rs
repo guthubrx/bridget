@@ -9,8 +9,6 @@ use std::time::{Duration, Instant};
 /// Génère le texte de l'enveloppe à injecter dans le pane de l'agent destinataire.
 /// Format compact avec instruction de réponse explicite.
 pub fn wrap_envelope(msg: &BridgetMessage) -> String {
-    let id_short = &msg.id[..msg.id.len().min(8)];
-
     if msg.reply {
         // reply=yes : l'expéditeur attend une réponse.
         // On rend l'instruction impossible à ignorer.
@@ -19,7 +17,7 @@ pub fn wrap_envelope(msg: &BridgetMessage) -> String {
             from = msg.from,
             to = msg.to,
             body = msg.body,
-            id = id_short,
+            id = msg.id,
         )
     } else {
         // reply=no : notification simple, pas de réponse attendue.
@@ -28,7 +26,7 @@ pub fn wrap_envelope(msg: &BridgetMessage) -> String {
             from = msg.from,
             to = msg.to,
             body = msg.body,
-            id = id_short,
+            id = msg.id,
         )
     }
 }
@@ -87,13 +85,27 @@ mod tests {
 
     #[test]
     fn test_envelope_format() {
-        let msg = BridgetMessage::new("claude-1", "codex-1", "Analyse ce fichier");
+        let mut msg = BridgetMessage::new("claude-1", "codex-1", "Analyse ce fichier");
+        msg.id = "mcp-38210-6a8a7fc7-1".to_string();
         let env = wrap_envelope(&msg);
         assert!(env.contains("claude-1"));
         assert!(env.contains("codex-1"));
         assert!(env.contains("Analyse ce fichier"));
         assert!(env.contains("reply=no"));
+        assert!(env.contains("id=mcp-38210-6a8a7fc7-1"));
         assert!(env.contains("💬"));
+    }
+
+    #[test]
+    fn demande_suivie_affiche_l_identifiant_integral() {
+        let mut msg = BridgetMessage::new("bridget", "codex-1", "Réponds précisément");
+        msg.id = "mcp-38210-6a8a7fc7-1".to_string();
+        msg.reply = true;
+
+        let env = wrap_envelope(&msg);
+
+        assert!(env.contains("(reply=yes, id=mcp-38210-6a8a7fc7-1)"));
+        assert!(!env.contains("id=mcp-3821)"));
     }
 
     #[test]

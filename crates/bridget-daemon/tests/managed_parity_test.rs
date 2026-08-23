@@ -203,22 +203,38 @@ while len(processed) < 4:
         envelope = item["envelope"]
         if "(reply=yes" not in envelope:
             continue
+        header = envelope.split("\n", 1)[0]
+        request_match = re.search(r"\(reply=yes, id=([^)]+)\)$", header)
+        sender_match = re.match(r"💬 (.+?) →", header)
+        if request_match is None or sender_match is None:
+            raise RuntimeError(f"en-tête Bridget invalide: {header}")
+        request_id = request_match.group(1)
+        if len(request_id) <= 8:
+            raise RuntimeError(f"identifiant Bridget tronqué: {request_id}")
         body = envelope.split("\n", 1)[1].split("\n\n⚠", 1)[0]
         if body == "QUEUE-SLOW":
             with open(os.environ["BRIDGET_PROMPT_SLOW"], "w") as signal:
                 signal.write("started")
             time.sleep(2.2)
-        with open(os.environ["BRIDGET_FAKE_LAST_SENDER"], "w") as reply_ref:
-            reply_ref.write(item["reply_ref"])
         response = {
             "TRACKED": "fixture-response-1",
             "QUEUE-SLOW": "fixture-response-slow",
             "QUEUE-NEXT": "fixture-response-next",
         }.get(body, body)
-        subprocess.run(
-            [bridget, "reply", response], check=True,
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-        )
+        sent = rpc({
+            "jsonrpc":"2.0", "id":10 + len(processed), "method":"tools/call",
+            "params":{
+                "name":"bridget_send",
+                "arguments":{
+                    "to":sender_match.group(1),
+                    "body":response,
+                    "in_reply_to":request_id,
+                },
+            },
+        })
+        status = sent["result"]["structuredContent"]["status"]
+        if status not in ("outcome_unknown", "accepted"):
+            raise RuntimeError(f"réponse MCP refusée: {sent}")
         processed.append(body)
 with open(os.environ["BRIDGET_PROMPT_DONE"] + ".tmp", "w", encoding="utf-8") as output:
     json.dump(processed, output, ensure_ascii=False)
@@ -755,10 +771,27 @@ fn receive_replies(peer: &mut Peer, expected_ids: &[String]) -> Vec<String> {
     let mut replies = Vec::new();
     while replies.len() < expected_ids.len() {
         assert!(Instant::now() < deadline, "réponses ACP incomplètes");
-        if let DaemonToWrapper::Deliver(message) = peer.recv() {
-            let in_reply_to = message.in_reply_to.as_deref().unwrap_or_default();
-            assert_eq!(in_reply_to, expected_ids[replies.len()]);
-            replies.push(message.body);
+        match peer.recv() {
+            DaemonToWrapper::Deliver(message) => {
+                let in_reply_to = message.in_reply_to.as_deref().unwrap_or_default();
+                assert_eq!(in_reply_to, expected_ids[replies.len()]);
+                replies.push(message.body);
+            }
+            DaemonToWrapper::DeliverIdempotent {
+                delivery_id,
+                delivery_generation,
+                message,
+                ..
+            } => {
+                let in_reply_to = message.in_reply_to.as_deref().unwrap_or_default();
+                assert_eq!(in_reply_to, expected_ids[replies.len()]);
+                replies.push(message.body);
+                peer.send(&WrapperToDaemon::DeliverAcked {
+                    delivery_id,
+                    delivery_generation,
+                });
+            }
+            _ => {}
         }
     }
     replies

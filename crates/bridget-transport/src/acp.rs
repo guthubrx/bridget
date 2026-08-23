@@ -1317,7 +1317,8 @@ mod tests {
 
     #[test]
     fn prompt_preserves_the_body_byte_for_byte() {
-        let message = BridgetMessage::new("alice", "bob", "'\"$x\nligne");
+        let mut message = BridgetMessage::new("alice", "bob", "'\"$x\nligne");
+        message.id = "mcp-38210-6a8a7fc7-1".to_string();
         assert_eq!(
             prompt_for(&message),
             "[message Bridget de alice — réponse attendue : non]\n\n'\"$x\nligne"
