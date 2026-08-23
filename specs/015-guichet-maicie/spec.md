@@ -253,7 +253,7 @@ ou `SpawnOrder`.
   négocier la capacité reste documentée comme limite coopérative v1.
 - **FR-1504 — Matrice fermée** : seules `delivery_report`, `mission_status` et
   `deadline_question` sont acceptées. Chaque enveloppe porte version,
-  `request_id`, émetteur attesté, cible `maicie`, type et charge utile fermée.
+  `request_id`, émetteur déclaré, cible `maicie`, type et charge utile fermée.
   Un `delivery_report` porte en plus l'`in_reply_to` de la délégation suivie.
   Les tailles, références et caractères sont validés avant toute mutation.
 - **FR-1505 — Rejeu sûr** : une demande porte une clé d'idempotence durable.
@@ -309,7 +309,7 @@ ou `SpawnOrder`.
   atomiques ; Maicie ne reconstitue jamais un timeout depuis une échéance ou
   une absence de message.
 - **FR-1515 — Limite C5 explicite** : le statut de sortie et le journal de
-  guichet DOIVENT qualifier l'identité v1 comme déclarative/cooperative. Ils
+  guichet DOIVENT qualifier l'identité v1 comme déclarative et coopérative. Ils
   ne DOIVENT jamais présenter la capacité `maicie_guichet` comme une preuve
   d'identité opposable entre processus du même compte.
 
