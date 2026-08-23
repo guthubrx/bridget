@@ -379,3 +379,12 @@ plus vite ; le coût net est un report, pas une perte.
   avis — le rappel d'inbox de l'Article XIV, version greffe) ; (3) le rituel
   de clôture commence sa proposition de bloc suivant par la consultation de
   la vue triée.
+- **État occupé/inactif invisible** (question utilisateur, 23/08 soir : « tu
+  n'es pas censé voir quand ils ont fini ? ») : les FINS arrivent par la
+  règle 8 (livraison = message), mais l'ENTRE-DEUX est aveugle — un agent
+  entre deux tranches ou en attente silencieuse n'émet rien. Ironie
+  documentée : RuntimeNature::Disponibilite/Idle existaient et furent purgés
+  la même nuit comme code mort (C11) car AUCUN producteur ne les
+  construisait. Les réintroduire uniquement ADOSSÉS à un producteur réel
+  (sonde runtime : activité du transcript/rollout) — jamais en vocabulaire
+  spéculatif. Sert who, l'agrégateur GUI et le F28.
