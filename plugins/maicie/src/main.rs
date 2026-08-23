@@ -5,11 +5,14 @@
 //! décision durable à `app`. Elle n'envoie jamais elle-même une délégation.
 
 use maicie::MAICIE_IDENTITY;
-use maicie::app::{DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, delegate};
+use maicie::app::{
+    DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, ObjectiveError,
+    add_participant, close, delegate, remove_participant, status, summarize,
+};
 use maicie::bridget_client::{AgentInfo, BridgetClient, BridgetClientError, BridgetClientLimits};
 use maicie::config::{ConfigError, MaicieConfig};
-use maicie::domain::ClasseDuree;
-use maicie::store::{MaicieStore, StoreError};
+use maicie::domain::{ClasseDuree, DecisionCoordination, Delegation, ObjectifCoordonne};
+use maicie::store::{MaicieStore, ObjectiveSnapshot, StoreError};
 use serde::Serialize;
 use std::env;
 use std::fmt;
@@ -41,7 +44,62 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
     let command = parse_command(&arguments)?;
     match command {
         Command::Delegate(delegate_args) => run_delegate(delegate_args),
+        Command::Status(status_args) => run_status(status_args),
+        Command::Objective(objective_args) => run_objective(objective_args),
     }
+}
+
+fn run_status(arguments: StatusArgs) -> Result<String, CliError> {
+    let store = open_store(&arguments.config)?;
+    let snapshots = status(&store, arguments.objective_id).map_err(CliError::Objective)?;
+    render_objective_output(
+        ObjectiveOutput::Status {
+            coordination: snapshots.into_iter().map(SnapshotOutput::from).collect(),
+            transport_snapshot: "unknown",
+            runtime: "unknown",
+            freshness: "unknown",
+            stream_state: "unavailable",
+        },
+        arguments.json,
+    )
+}
+
+fn run_objective(arguments: ObjectiveArgs) -> Result<String, CliError> {
+    let mut store = open_store(&arguments.config)?;
+    let output = match arguments.action {
+        ObjectiveAction::AddParticipant { participant } => {
+            let decision = add_participant(&mut store, arguments.objective_id, &participant)
+                .map_err(CliError::Objective)?;
+            ObjectiveOutput::Decision { decision }
+        }
+        ObjectiveAction::RemoveParticipant {
+            participant,
+            reason,
+        } => {
+            let decision =
+                remove_participant(&mut store, arguments.objective_id, &participant, &reason)
+                    .map_err(CliError::Objective)?;
+            ObjectiveOutput::Decision { decision }
+        }
+        ObjectiveAction::Summarize => {
+            let snapshot =
+                summarize(&store, arguments.objective_id).map_err(CliError::Objective)?;
+            ObjectiveOutput::Summary {
+                coordination: SnapshotOutput::from(snapshot),
+            }
+        }
+        ObjectiveAction::Close { reason } => {
+            let decision = close(&mut store, arguments.objective_id, &reason, unix_now()?)
+                .map_err(CliError::Objective)?;
+            ObjectiveOutput::Decision { decision }
+        }
+    };
+    render_objective_output(output, arguments.json)
+}
+
+fn open_store(config_path: &PathBuf) -> Result<MaicieStore, CliError> {
+    let config = MaicieConfig::load(config_path).map_err(CliError::Configuration)?;
+    MaicieStore::open(config.database_path).map_err(CliError::Store)
 }
 
 fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
@@ -133,6 +191,8 @@ fn unix_now() -> Result<i64, CliError> {
 #[derive(Debug)]
 enum Command {
     Delegate(DelegateArgs),
+    Status(StatusArgs),
+    Objective(ObjectiveArgs),
 }
 
 #[derive(Debug)]
@@ -146,14 +206,171 @@ struct DelegateArgs {
     json: bool,
 }
 
+#[derive(Debug)]
+struct StatusArgs {
+    config: PathBuf,
+    objective_id: Option<Uuid>,
+    json: bool,
+}
+
+#[derive(Debug)]
+struct ObjectiveArgs {
+    config: PathBuf,
+    objective_id: Uuid,
+    action: ObjectiveAction,
+    json: bool,
+}
+
+#[derive(Debug)]
+enum ObjectiveAction {
+    AddParticipant { participant: String },
+    RemoveParticipant { participant: String, reason: String },
+    Summarize,
+    Close { reason: String },
+}
+
 fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
     let Some((verb, tail)) = arguments.split_first() else {
         return Err(CliError::Usage("commande attendue : delegate"));
     };
     match verb.as_str() {
         "delegate" => parse_delegate(tail).map(Command::Delegate),
+        "status" => parse_status(tail).map(Command::Status),
+        "objective" => parse_objective(tail).map(Command::Objective),
         _ => Err(CliError::Usage("commande inconnue : delegate attendu")),
     }
+}
+
+fn parse_status(arguments: &[String]) -> Result<StatusArgs, CliError> {
+    let mut config = None;
+    let mut objective_id = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        match argument.as_str() {
+            "--config" => {
+                set_once_path(&mut config, next_value(arguments, &mut index, "--config")?)?
+            }
+            "--json" => {
+                if json {
+                    return Err(CliError::Usage("option --json dupliquée"));
+                }
+                json = true;
+            }
+            value if !value.starts_with("--") && objective_id.is_none() => {
+                objective_id = Some(parse_objective_id(value)?);
+            }
+            _ => return Err(CliError::Usage("option status inconnue")),
+        }
+        index += 1;
+    }
+    Ok(StatusArgs {
+        config: config.ok_or(CliError::Usage("--config est obligatoire"))?,
+        objective_id,
+        json,
+    })
+}
+
+fn parse_objective(arguments: &[String]) -> Result<ObjectiveArgs, CliError> {
+    let Some((id, tail)) = arguments.split_first() else {
+        return Err(CliError::Usage("identifiant objectif obligatoire"));
+    };
+    let objective_id = parse_objective_id(id)?;
+    let Some((verb, tail)) = tail.split_first() else {
+        return Err(CliError::Usage("action objectif obligatoire"));
+    };
+    let (action, config, json) = match verb.as_str() {
+        "add-participant" => {
+            let Some((participant, flags)) = tail.split_first() else {
+                return Err(CliError::Usage("participant obligatoire"));
+            };
+            let (config, json, reason) = parse_objective_flags(flags, false)?;
+            if reason.is_some() {
+                return Err(CliError::Usage("--reason interdit pour add-participant"));
+            }
+            (
+                ObjectiveAction::AddParticipant {
+                    participant: participant.to_string(),
+                },
+                config,
+                json,
+            )
+        }
+        "remove-participant" => {
+            let Some((participant, flags)) = tail.split_first() else {
+                return Err(CliError::Usage("participant obligatoire"));
+            };
+            let (config, json, reason) = parse_objective_flags(flags, true)?;
+            (
+                ObjectiveAction::RemoveParticipant {
+                    participant: participant.to_string(),
+                    reason: reason.ok_or(CliError::Usage("--reason est obligatoire"))?,
+                },
+                config,
+                json,
+            )
+        }
+        "summarize" => {
+            let (config, json, reason) = parse_objective_flags(tail, false)?;
+            if reason.is_some() {
+                return Err(CliError::Usage("--reason interdit pour summarize"));
+            }
+            (ObjectiveAction::Summarize, config, json)
+        }
+        "close" => {
+            let (config, json, reason) = parse_objective_flags(tail, true)?;
+            (
+                ObjectiveAction::Close {
+                    reason: reason.ok_or(CliError::Usage("--reason est obligatoire"))?,
+                },
+                config,
+                json,
+            )
+        }
+        _ => return Err(CliError::Usage("action objectif inconnue")),
+    };
+    Ok(ObjectiveArgs {
+        config: config.ok_or(CliError::Usage("--config est obligatoire"))?,
+        objective_id,
+        action,
+        json,
+    })
+}
+
+fn parse_objective_flags(
+    arguments: &[String],
+    allow_reason: bool,
+) -> Result<(Option<PathBuf>, bool, Option<String>), CliError> {
+    let mut config = None;
+    let mut reason = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--config" => {
+                set_once_path(&mut config, next_value(arguments, &mut index, "--config")?)?
+            }
+            "--reason" if allow_reason => set_once_string(
+                &mut reason,
+                next_value(arguments, &mut index, "--reason")?,
+                "reason",
+            )?,
+            "--json" => {
+                if json {
+                    return Err(CliError::Usage("option --json dupliquée"));
+                }
+                json = true;
+            }
+            _ => return Err(CliError::Usage("option objectif inconnue")),
+        }
+        index += 1;
+    }
+    Ok((config, json, reason))
+}
+
+fn parse_objective_id(value: &str) -> Result<Uuid, CliError> {
+    Uuid::parse_str(value).map_err(|_| CliError::Usage("identifiant objectif UUID invalide"))
 }
 
 fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
@@ -296,12 +513,70 @@ impl From<DelegateResult> for DelegateOutput {
     }
 }
 
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ObjectiveOutput {
+    Status {
+        coordination: Vec<SnapshotOutput>,
+        transport_snapshot: &'static str,
+        runtime: &'static str,
+        freshness: &'static str,
+        stream_state: &'static str,
+    },
+    Decision {
+        decision: DecisionCoordination,
+    },
+    Summary {
+        coordination: SnapshotOutput,
+    },
+}
+
+#[derive(Serialize)]
+struct SnapshotOutput {
+    objective: ObjectifCoordonne,
+    delegations: Vec<Delegation>,
+    decisions: Vec<DecisionCoordination>,
+}
+
+impl From<ObjectiveSnapshot> for SnapshotOutput {
+    fn from(snapshot: ObjectiveSnapshot) -> Self {
+        Self {
+            objective: snapshot.objective,
+            delegations: snapshot.delegations,
+            decisions: snapshot.decisions,
+        }
+    }
+}
+
+fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String, CliError> {
+    if json {
+        return serde_json::to_string(&output)
+            .map_err(|_| CliError::Objective(ObjectiveError::Invalid("sortie JSON indisponible")));
+    }
+    Ok(match output {
+        ObjectiveOutput::Status { coordination, .. } => {
+            format!("objectifs={}", coordination.len())
+        }
+        ObjectiveOutput::Decision { decision } => format!(
+            "décision={} objectif={} état=applied",
+            decision.id, decision.objectif_id
+        ),
+        ObjectiveOutput::Summary { coordination } => format!(
+            "objectif={} délégations={} décisions={}",
+            coordination.objective.id,
+            coordination.delegations.len(),
+            coordination.decisions.len()
+        ),
+    })
+}
+
 #[derive(Debug)]
 enum CliError {
     Usage(&'static str),
     Configuration(ConfigError),
     Bridget(BridgetClientError),
     Delegate(DelegateError),
+    Objective(ObjectiveError),
     Store(StoreError),
 }
 
@@ -312,7 +587,9 @@ impl CliError {
             Self::Configuration(_) => EXIT_CONFIGURATION,
             Self::Bridget(_) => EXIT_BRIDGET,
             Self::Delegate(DelegateError::Store(_)) | Self::Store(_) => EXIT_STORE,
+            Self::Objective(ObjectiveError::Store(_)) => EXIT_STORE,
             Self::Delegate(_) => EXIT_DELEGATE,
+            Self::Objective(_) => EXIT_DELEGATE,
         }
     }
 
@@ -325,6 +602,9 @@ impl CliError {
             Self::Delegate(DelegateError::TargetUnavailable(_)) => "target_unavailable",
             Self::Delegate(DelegateError::Store(_)) | Self::Store(_) => "store",
             Self::Delegate(DelegateError::Invalid(_)) => "delegate_invalid",
+            Self::Objective(ObjectiveError::NotFound(_)) => "objective_not_found",
+            Self::Objective(ObjectiveError::Store(_)) => "store",
+            Self::Objective(ObjectiveError::Invalid(_)) => "objective_invalid",
         }
     }
 
@@ -340,6 +620,7 @@ impl fmt::Display for CliError {
             Self::Configuration(error) => error.fmt(formatter),
             Self::Bridget(error) => error.fmt(formatter),
             Self::Delegate(error) => error.fmt(formatter),
+            Self::Objective(error) => error.fmt(formatter),
             Self::Store(error) => error.fmt(formatter),
         }
     }

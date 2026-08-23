@@ -6,11 +6,13 @@
 
 use crate::config::DurationClasses;
 use crate::domain::{
-    ClasseDuree, Delegation, EtatObjectif, EtatOutboxDelegation, ModeObjectif, ObjectifCoordonne,
-    OutboxDelegation,
+    ClasseDuree, DecisionCoordination, Delegation, EtatDecision, EtatObjectif,
+    EtatOutboxDelegation, ModeObjectif, ObjectifCoordonne, OutboxDelegation, TypeDecision,
 };
-use crate::outbox::{stable_body_hash, PreparedDelegation};
-use crate::store::{DelegateReservation, MaicieStore, StoreError, StoredDelegateResult};
+use crate::outbox::{PreparedDelegation, stable_body_hash};
+use crate::store::{
+    DelegateReservation, MaicieStore, ObjectiveSnapshot, StoreError, StoredDelegateResult,
+};
 use serde::Serialize;
 use std::fmt;
 use uuid::Uuid;
@@ -110,6 +112,161 @@ impl fmt::Display for DelegateError {
 }
 
 impl std::error::Error for DelegateError {}
+
+/// Erreurs des commandes explicites sur les objectifs. Le CLI les rend sans
+/// les réinterpréter, afin que la décision reste portée par le cas d'usage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObjectiveError {
+    Invalid(&'static str),
+    NotFound(Uuid),
+    Store(String),
+}
+
+impl fmt::Display for ObjectiveError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invalid(reason) => write!(formatter, "objectif invalide : {reason}"),
+            Self::NotFound(id) => write!(formatter, "objectif introuvable : {id}"),
+            Self::Store(reason) => write!(formatter, "stockage impossible : {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for ObjectiveError {}
+
+/// Lit les données de coordination disponibles localement. Les sources
+/// Bridget et ACP restent explicitement inconnues jusqu'à T018.
+pub fn status(
+    store: &MaicieStore,
+    objective_id: Option<Uuid>,
+) -> Result<Vec<ObjectiveSnapshot>, ObjectiveError> {
+    let snapshots = store
+        .objective_snapshots(objective_id)
+        .map_err(objective_store_error)?;
+    if let Some(id) = objective_id
+        && snapshots.is_empty()
+    {
+        return Err(ObjectiveError::NotFound(id));
+    }
+    Ok(snapshots)
+}
+
+/// Enregistre l'ajout explicite d'un participant comme décision appliquée.
+/// La création d'une nouvelle délégation et de son outbox reste exclusivement
+/// le cas d'usage `delegate` : aucune I/O Bridget implicite n'est possible ici.
+pub fn add_participant(
+    store: &mut MaicieStore,
+    objective_id: Uuid,
+    participant: &str,
+) -> Result<DecisionCoordination, ObjectiveError> {
+    apply_participant_decision(
+        store,
+        objective_id,
+        participant,
+        TypeDecision::AjouterParticipant,
+        "ajout explicite de participant",
+    )
+}
+
+/// Enregistre le retrait explicite et motivé d'un participant. Cette décision
+/// ne prétend pas annuler une remise Bridget : ce contrat reste explicite et
+/// sera raccordé par le cas d'usage d'annulation dédié.
+pub fn remove_participant(
+    store: &mut MaicieStore,
+    objective_id: Uuid,
+    participant: &str,
+    reason: &str,
+) -> Result<DecisionCoordination, ObjectiveError> {
+    if reason.trim().is_empty() {
+        return Err(ObjectiveError::Invalid("motif de retrait obligatoire"));
+    }
+    apply_participant_decision(
+        store,
+        objective_id,
+        participant,
+        TypeDecision::RetirerParticipant,
+        reason,
+    )
+}
+
+/// Retourne une agrégation purement factuelle de l'état corrélé disponible.
+/// Aucune sortie d'agent n'est interprétée et aucun état objectif ne change.
+pub fn summarize(
+    store: &MaicieStore,
+    objective_id: Uuid,
+) -> Result<ObjectiveSnapshot, ObjectiveError> {
+    one_objective(store, objective_id)
+}
+
+/// Clôture explicitement l'objectif et écrit son audit dans la même
+/// transaction SQLite ; aucune issue Bridget ne peut provoquer cette action.
+pub fn close(
+    store: &mut MaicieStore,
+    objective_id: Uuid,
+    reason: &str,
+    now: i64,
+) -> Result<DecisionCoordination, ObjectiveError> {
+    if reason.trim().is_empty() || now <= 0 {
+        return Err(ObjectiveError::Invalid("motif ou horodatage absent"));
+    }
+    let mut objective = one_objective(store, objective_id)?.objective;
+    objective
+        .clore(now)
+        .map_err(|_| ObjectiveError::Invalid("objectif déjà clos"))?;
+    let decision = DecisionCoordination {
+        id: Uuid::new_v4(),
+        objectif_id: objective_id,
+        kind: TypeDecision::Cloturer,
+        proposee_par: MAICIE_PILOT.to_string(),
+        etat: EtatDecision::Appliquee,
+        motif: reason.to_string(),
+    };
+    store
+        .apply_objective_decision(&decision, Some(&objective))
+        .map_err(objective_store_error)?;
+    Ok(decision)
+}
+
+const MAICIE_PILOT: &str = "maicie";
+
+fn apply_participant_decision(
+    store: &mut MaicieStore,
+    objective_id: Uuid,
+    participant: &str,
+    kind: TypeDecision,
+    reason: &str,
+) -> Result<DecisionCoordination, ObjectiveError> {
+    if participant.trim().is_empty() {
+        return Err(ObjectiveError::Invalid("participant obligatoire"));
+    }
+    let _ = one_objective(store, objective_id)?;
+    let decision = DecisionCoordination {
+        id: Uuid::new_v4(),
+        objectif_id: objective_id,
+        kind,
+        proposee_par: MAICIE_PILOT.to_string(),
+        etat: EtatDecision::Appliquee,
+        motif: format!("{reason}: {participant}"),
+    };
+    store
+        .apply_objective_decision(&decision, None)
+        .map_err(objective_store_error)?;
+    Ok(decision)
+}
+
+fn one_objective(
+    store: &MaicieStore,
+    objective_id: Uuid,
+) -> Result<ObjectiveSnapshot, ObjectiveError> {
+    status(store, Some(objective_id)).map(|mut snapshots| snapshots.remove(0))
+}
+
+fn objective_store_error(error: StoreError) -> ObjectiveError {
+    match error {
+        StoreError::NotFound(_) => ObjectiveError::NotFound(Uuid::nil()),
+        other => ObjectiveError::Store(other.to_string()),
+    }
+}
 
 /// Sélectionne puis persiste une délégation, sans effectuer d'I/O Bridget.
 ///

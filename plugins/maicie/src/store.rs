@@ -11,14 +11,14 @@ use crate::domain::{
     ObjectifCoordonne, TypeDecision,
 };
 use crate::outbox::{
-    OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot, StoreCommitPhase,
-    MAX_MESSAGE_BYTES,
+    MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
+    StoreCommitPhase,
 };
 use rusqlite::{
-    params, Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior,
+    Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fmt;
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -73,6 +73,16 @@ pub struct StoredDelegateResult {
 pub enum DelegateReservation {
     Created,
     Replay(StoredDelegateResult),
+}
+
+/// Vue corrélée d'un objectif privée de toute interprétation du transport.
+/// Les décisions y figurent afin que les commandes explicites restent
+/// auditables même lorsqu'elles ne créent aucune nouvelle délégation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectiveSnapshot {
+    pub objective: ObjectifCoordonne,
+    pub delegations: Vec<crate::domain::Delegation>,
+    pub decisions: Vec<DecisionCoordination>,
 }
 
 /// Motif local fermé quand les octets durables ne peuvent jamais produire une
@@ -181,6 +191,178 @@ impl MaicieStore {
         self.connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(StoreError::Sql)
+    }
+
+    /// Lit les objectifs Maicie avec leurs délégations et décisions locales.
+    /// Cette vue ne joint volontairement aucune donnée Bridget : T018 ajoutera
+    /// les sources de transport publiques sans en faire une autorité métier.
+    pub fn objective_snapshots(
+        &self,
+        objective_id: Option<Uuid>,
+    ) -> Result<Vec<ObjectiveSnapshot>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT id, state, payload_json FROM objectives\n\
+                 WHERE (?1 IS NULL OR id = ?1) ORDER BY id",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([objective_id.map(|id| id.to_string())], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            })
+            .map_err(StoreError::Sql)?;
+        rows.map(|row| {
+            let (id, state, payload) = row.map_err(StoreError::Sql)?;
+            let objective: ObjectifCoordonne =
+                serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+            if objective.id.to_string() != id || objective.etat != parse_objective_state(&state)? {
+                return Err(StoreError::Corrupt("objectif et index SQLite divergents"));
+            }
+            let delegations = self.delegations_for(objective.id)?;
+            let decisions = self.decisions_for(objective.id)?;
+            Ok(ObjectiveSnapshot {
+                objective,
+                delegations,
+                decisions,
+            })
+        })
+        .collect()
+    }
+
+    /// Applique une décision locale explicite et son éventuelle mise à jour
+    /// d'objectif dans une unique transaction. La décision est l'audit de
+    /// l'effet : aucun des deux n'est durable seul.
+    pub fn apply_objective_decision(
+        &mut self,
+        decision: &DecisionCoordination,
+        updated_objective: Option<&ObjectifCoordonne>,
+    ) -> Result<(), StoreError> {
+        decision.verifier().map_err(StoreError::Domain)?;
+        if decision.etat != EtatDecision::Appliquee {
+            return Err(StoreError::Invalid("décision non appliquée"));
+        }
+        if let Some(objective) = updated_objective
+            && objective.id != decision.objectif_id
+        {
+            return Err(StoreError::Invalid("décision et objectif divergents"));
+        }
+        let decision_json = serde_json::to_vec(decision).map_err(StoreError::Json)?;
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        let exists: Option<i64> = tx
+            .query_row(
+                "SELECT 1 FROM objectives WHERE id = ?1",
+                [decision.objectif_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        if exists.is_none() {
+            return Err(StoreError::NotFound("objectif absent"));
+        }
+        if let Some(objective) = updated_objective {
+            let payload = serde_json::to_vec(objective).map_err(StoreError::Json)?;
+            let changed = tx
+                .execute(
+                    "UPDATE objectives SET state = ?1, payload_json = ?2 WHERE id = ?3",
+                    params![
+                        objective_state_name(objective.etat),
+                        payload,
+                        objective.id.to_string()
+                    ],
+                )
+                .map_err(StoreError::Sql)?;
+            if changed != 1 {
+                return Err(StoreError::Conflict("objectif modifié concurremment"));
+            }
+        }
+        let inserted = tx
+            .execute(
+                "INSERT INTO coordination_decisions(id, objective_id, state, payload_json)\n\
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    decision.id.to_string(),
+                    decision.objectif_id.to_string(),
+                    decision_state_name(decision.etat),
+                    decision_json,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("décision non enregistrée"));
+        }
+        tx.commit().map_err(StoreError::Sql)
+    }
+
+    fn delegations_for(
+        &self,
+        objective_id: Uuid,
+    ) -> Result<Vec<crate::domain::Delegation>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT id, state, payload_json FROM delegations\n\
+                 WHERE objective_id = ?1 ORDER BY id",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([objective_id.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            })
+            .map_err(StoreError::Sql)?;
+        rows.map(|row| {
+            let (id, state, payload) = row.map_err(StoreError::Sql)?;
+            let delegation = serde_json::from_slice::<crate::domain::Delegation>(&payload)
+                .map_err(StoreError::Json)?;
+            if delegation.id.to_string() != id
+                || delegation.objectif_id != objective_id
+                || delegation.etat != parse_delegation_state(&state)?
+            {
+                return Err(StoreError::Corrupt("délégation et index SQLite divergents"));
+            }
+            Ok(delegation)
+        })
+        .collect()
+    }
+
+    fn decisions_for(&self, objective_id: Uuid) -> Result<Vec<DecisionCoordination>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT id, state, payload_json FROM coordination_decisions\n\
+                 WHERE objective_id = ?1 ORDER BY id",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([objective_id.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            })
+            .map_err(StoreError::Sql)?;
+        rows.map(|row| {
+            let (id, state, payload) = row.map_err(StoreError::Sql)?;
+            let decision: DecisionCoordination =
+                serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+            if decision.id.to_string() != id
+                || decision.objectif_id != objective_id
+                || decision.etat != parse_decision_state(&state)?
+            {
+                return Err(StoreError::Corrupt("décision et index SQLite divergents"));
+            }
+            Ok(decision)
+        })
+        .collect()
     }
 
     /// Écrit l'agrégat complet dans une seule transaction SQLite.
@@ -1517,6 +1699,16 @@ fn decision_state_name(state: EtatDecision) -> &'static str {
         EtatDecision::Approuvee => "approved",
         EtatDecision::Refusee => "rejected",
         EtatDecision::Appliquee => "applied",
+    }
+}
+
+fn parse_decision_state(value: &str) -> Result<EtatDecision, StoreError> {
+    match value {
+        "proposed" => Ok(EtatDecision::Proposee),
+        "approved" => Ok(EtatDecision::Approuvee),
+        "rejected" => Ok(EtatDecision::Refusee),
+        "applied" => Ok(EtatDecision::Appliquee),
+        _ => Err(StoreError::Corrupt("état décision inconnu")),
     }
 }
 
