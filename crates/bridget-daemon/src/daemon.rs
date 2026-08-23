@@ -855,10 +855,17 @@ fn attach_refusal_for_subscription(
     state: &DaemonState,
     agent: &str,
 ) -> Result<String, AttachRefusal> {
-    let registered = state
-        .router
-        .get_agent(agent)
-        .ok_or(AttachRefusal::AgentUnknown)?;
+    let registered = match state.router.get_agent(agent) {
+        Some(registered) => registered,
+        None if state
+            .presences
+            .values()
+            .any(|presence| presence.name == agent && presence.state == "stopped") =>
+        {
+            return Err(AttachRefusal::AgentStopped);
+        }
+        None => return Err(AttachRefusal::AgentUnknown),
+    };
     if !agent_uses_acp(state, registered) {
         return Err(AttachRefusal::AgentNotAcp);
     }
@@ -6500,6 +6507,41 @@ mod presence_tests {
             ),
             Some(DaemonToWrapper::AttachRejected {
                 reason: AttachRefusal::AgentNotAcp,
+                ..
+            })
+        ));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn abonnement_attach_distingue_un_equipier_arrete_d_un_nom_inconnu() {
+        let (mut state, config) = state_with_registered_agent("attach-stopped");
+        state.router.unregister_by_conn("conn-1");
+        state.mark_stopped("conn-1");
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_wrapper_message(
+                "attach-1",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "attach-1",
+                WrapperToDaemon::Subscribe {
+                    agent: "agent-2".to_string(),
+                    window: bridget_transport::AttachWindow::Today,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::AttachRejected {
+                reason: AttachRefusal::AgentStopped,
                 ..
             })
         ));

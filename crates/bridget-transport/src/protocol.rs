@@ -113,6 +113,7 @@ pub enum AttachWindow {
 #[serde(rename_all = "snake_case")]
 pub enum AttachRefusal {
     AgentUnknown,
+    AgentStopped,
     AgentNotAcp,
     WrapperUnavailable,
     CommandQueueSaturated,
@@ -1068,6 +1069,10 @@ mod tests {
             DaemonToWrapper::End {
                 subscription_id: "sub-1".to_string(),
                 reason: "désabonné".to_string(),
+            },
+            DaemonToWrapper::AttachRejected {
+                subscription_id: None,
+                reason: AttachRefusal::AgentStopped,
             },
             DaemonToWrapper::AttachRejected {
                 subscription_id: None,

@@ -2,7 +2,7 @@
 
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
-    AttachRefusal, AttachWindow, ConnectionRole, DaemonToWrapper,
+    AgentInfo, AttachRefusal, AttachWindow, ConnectionRole, DaemonToWrapper,
     MAX_ATTACH_SERIALIZED_FRAME_BYTES, WrapperToDaemon, decode, encode,
 };
 use std::collections::{HashMap, VecDeque};
@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::UnicodeWidthChar;
 
 const MAX_REASSEMBLY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RENDERED_EVENT_CHARS: usize = 16 * 1024;
@@ -29,7 +29,9 @@ const INPUT_POLL_TIMEOUT_MILLIS: i32 = 100;
 const RENDER_COMMAND_CAPACITY: usize = 64;
 const MAX_TURN_BLOCK_BYTES: usize = 64 * 1024;
 const MAX_TURN_BLOCK_LINES: usize = 400;
+const MAX_TURN_RENDERED_CHARS: usize = 2 * MAX_TURN_BLOCK_BYTES;
 const DEFAULT_TERMINAL_COLUMNS: usize = 80;
+const DEFAULT_TERMINAL_ROWS: usize = 24;
 
 /// Garde minimale du terminal d'entrée. Le mode désactive le traitement des
 /// signaux afin que Ctrl-C arrive comme l'octet `0x03` à la boucle de saisie.
@@ -747,37 +749,65 @@ impl TurnBlock {
     }
 
     fn append_bounded(&mut self, value: &str, response: bool) {
-        let additional_lines = value.bytes().filter(|byte| *byte == b'\n').count()
-            + usize::from(response && self.response.is_empty() && !value.is_empty())
-            + usize::from(!response && !value.is_empty());
-        if self.stored_bytes.saturating_add(value.len()) <= MAX_TURN_BLOCK_BYTES
-            && self.stored_lines.saturating_add(additional_lines) <= MAX_TURN_BLOCK_LINES
-        {
-            if response {
-                self.response.push_str(value);
-            } else {
-                self.details.extend(value.lines().map(str::to_owned));
-            }
-            self.stored_bytes += value.len();
-            self.stored_lines += additional_lines;
+        if value.is_empty() {
             return;
         }
-        self.omitted_lines = self
-            .omitted_lines
-            .saturating_add(value.lines().count().max(1));
+        let remaining_bytes = MAX_TURN_BLOCK_BYTES.saturating_sub(self.stored_bytes);
+        let remaining_lines = MAX_TURN_BLOCK_LINES.saturating_sub(self.stored_lines);
+        let first_line_cost = usize::from(!response || self.response.is_empty());
+        if remaining_bytes == 0 || remaining_lines < first_line_cost {
+            self.omitted_lines = self
+                .omitted_lines
+                .saturating_add(value.lines().count().max(1));
+            return;
+        }
+
+        let mut accepted_end = 0usize;
+        let mut accepted_lines = first_line_cost;
+        for (index, character) in value.char_indices() {
+            let end = index + character.len_utf8();
+            let next_lines = accepted_lines + usize::from(character == '\n');
+            if end > remaining_bytes || next_lines > remaining_lines {
+                break;
+            }
+            accepted_end = end;
+            accepted_lines = next_lines;
+        }
+        if accepted_end == 0 {
+            self.omitted_lines = self
+                .omitted_lines
+                .saturating_add(value.lines().count().max(1));
+            return;
+        }
+        let accepted = &value[..accepted_end];
+        if response {
+            self.response.push_str(accepted);
+        } else {
+            self.details.extend(accepted.lines().map(str::to_owned));
+        }
+        self.stored_bytes += accepted.len();
+        self.stored_lines += accepted_lines;
+        if accepted_end < value.len() {
+            self.omitted_lines = self
+                .omitted_lines
+                .saturating_add(value[accepted_end..].lines().count().max(1));
+        }
     }
 
     fn lines(&self, agent: &str) -> Vec<String> {
         let mut lines = self.header.clone();
+        let mut response_truncated = false;
         if !self.response.is_empty() {
-            lines.extend(
-                render_prefixed(&format!("{agent} →"), &self.response)
-                    .lines()
-                    .map(str::to_owned),
+            let rendered = render_prefixed_with_limit(
+                &format!("{agent} →"),
+                &self.response,
+                MAX_TURN_RENDERED_CHARS,
             );
+            response_truncated = rendered.contains("… [affichage tronqué]");
+            lines.extend(rendered.lines().map(str::to_owned));
         }
         lines.extend(self.details.iter().cloned());
-        if self.omitted_lines > 0 {
+        if self.omitted_lines > 0 && !response_truncated {
             lines.push(format!("… tronqué, {} ligne(s)", self.omitted_lines));
         }
         lines
@@ -787,7 +817,9 @@ impl TurnBlock {
 struct JournalRenderRecord {
     key: Option<TurnKey>,
     event: String,
+    timestamp: String,
     text: Option<String>,
+    permission_status: Option<&'static str>,
     terminal: bool,
     rendered: String,
 }
@@ -799,6 +831,7 @@ fn journal_render_record(bytes: &[u8], agent: &str) -> Option<JournalRenderRecor
     }
     let event = value.get("event")?.as_str()?.to_string();
     let payload = value.get("payload").unwrap_or(&serde_json::Value::Null);
+    let timestamp = short_timestamp(value.get("ts").and_then(serde_json::Value::as_str));
     let key = value
         .get("session_id")
         .and_then(serde_json::Value::as_str)
@@ -819,7 +852,9 @@ fn journal_render_record(bytes: &[u8], agent: &str) -> Option<JournalRenderRecor
     Some(JournalRenderRecord {
         key,
         event,
+        timestamp,
         text,
+        permission_status: permission_status(payload),
         terminal: payload
             .get("terminal")
             .and_then(serde_json::Value::as_bool)
@@ -841,6 +876,7 @@ enum RendererControl {
 struct RendererSender {
     commands: mpsc::SyncSender<RendererCommand>,
     input_dirty: Arc<AtomicBool>,
+    raw_terminal: bool,
     tty_output: bool,
 }
 
@@ -850,6 +886,9 @@ impl RendererSender {
     }
 
     fn input_changed(&self, legacy_bytes: &[u8]) {
+        if !self.raw_terminal {
+            return;
+        }
         if self.tty_output {
             self.input_dirty.store(true, Ordering::Release);
             let _ = self
@@ -882,6 +921,7 @@ impl RendererThread {
         let sender = RendererSender {
             commands,
             input_dirty: input_dirty.clone(),
+            raw_terminal,
             tty_output,
         };
         let handle = thread::spawn(move || {
@@ -929,7 +969,11 @@ fn renderer_loop(
             break;
         }
         match commands.recv_timeout(Duration::from_millis(10)) {
-            Ok(command) => renderer.apply(command, &input, output),
+            Ok(command) => {
+                let mut batch = vec![command];
+                batch.extend(commands.try_iter());
+                renderer.apply_batch(batch, &input, output);
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
@@ -954,23 +998,55 @@ struct BlockRenderer {
     tty_output: bool,
     terminal_fd: Option<RawFd>,
     terminal_columns: usize,
+    terminal_rows: usize,
     current: Option<TurnBlock>,
+    committed_rows: usize,
     rendered_rows: usize,
+    rendered_lines: Vec<String>,
+    defer_redraw: bool,
+    redraw_pending: bool,
+    #[cfg(test)]
+    redraw_count: usize,
 }
 
 impl BlockRenderer {
     fn new(agent: String, raw_terminal: bool, tty_output: bool) -> Self {
         let terminal_fd = tty_output.then_some(libc::STDOUT_FILENO);
+        let (terminal_columns, terminal_rows) = terminal_fd
+            .and_then(terminal_geometry)
+            .unwrap_or((DEFAULT_TERMINAL_COLUMNS, DEFAULT_TERMINAL_ROWS));
         Self {
             agent,
             raw_terminal,
             tty_output,
-            terminal_columns: terminal_fd
-                .and_then(terminal_columns)
-                .unwrap_or(DEFAULT_TERMINAL_COLUMNS),
+            terminal_columns,
+            terminal_rows,
             terminal_fd,
             current: None,
+            committed_rows: 0,
             rendered_rows: 0,
+            rendered_lines: Vec::new(),
+            defer_redraw: false,
+            redraw_pending: false,
+            #[cfg(test)]
+            redraw_count: 0,
+        }
+    }
+
+    fn apply_batch(
+        &mut self,
+        commands: Vec<RendererCommand>,
+        input: &Arc<Mutex<InputBuffer>>,
+        output: &mut impl Write,
+    ) {
+        self.defer_redraw = true;
+        for command in commands {
+            self.apply(command, input, output);
+        }
+        self.defer_redraw = false;
+        if self.redraw_pending {
+            self.redraw_pending = false;
+            self.redraw(&input_snapshot(input), output);
         }
     }
 
@@ -1042,7 +1118,7 @@ impl BlockRenderer {
             let header = if record.event == "turn_start" {
                 record.rendered.clone()
             } else {
-                format!("??:?? {} →", self.agent)
+                format!("{} [tour repris en cours]", record.timestamp)
             };
             self.current = Some(TurnBlock::new(key.clone(), header));
         }
@@ -1055,6 +1131,18 @@ impl BlockRenderer {
         if let Some(block) = self.current.as_mut() {
             if let Some(text) = record.text {
                 block.append_response(&text);
+            } else if let Some(status) = record.permission_status {
+                if let Some(tool_line) = block
+                    .details
+                    .iter_mut()
+                    .rev()
+                    .find(|line| line.contains("[outil]"))
+                {
+                    tool_line.push_str(" — ");
+                    tool_line.push_str(status);
+                } else {
+                    block.append_detail(&record.rendered);
+                }
             } else {
                 block.append_detail(&record.rendered);
             }
@@ -1078,10 +1166,16 @@ impl BlockRenderer {
             return;
         };
         self.clear(output);
-        write_terminal_lines(output, &block.lines(&self.agent));
+        let rows = wrap_visual_rows(&block.lines(&self.agent), self.terminal_columns);
+        let remaining = &rows[self.committed_rows.min(rows.len())..];
+        write_terminal_lines(output, remaining);
+        self.committed_rows = 0;
         if self.raw_terminal {
             let _ = write!(output, "> {input}");
             self.rendered_rows = visual_rows(&[format!("> {input}")], self.terminal_columns);
+            self.rendered_lines = wrap_visual_rows(&[format!("> {input}")], self.terminal_columns);
+        } else {
+            self.rendered_lines.clear();
         }
         let _ = output.flush();
     }
@@ -1097,35 +1191,61 @@ impl BlockRenderer {
     }
 
     fn redraw(&mut self, input: &str, output: &mut impl Write) {
+        if self.defer_redraw {
+            self.redraw_pending = true;
+            return;
+        }
+        #[cfg(test)]
+        {
+            self.redraw_count += 1;
+        }
         self.clear(output);
         self.draw_active(input, output);
         let _ = output.flush();
     }
 
     fn draw_active(&mut self, input: &str, output: &mut impl Write) {
-        let mut rows = 0;
+        let mut visible_rows = Vec::new();
         if let Some(block) = self.current.as_ref() {
             let lines = block.lines(&self.agent);
-            rows += visual_rows(&lines, self.terminal_columns);
-            write_visual_lines(output, &lines);
-            if self.raw_terminal {
+            let rows = wrap_visual_rows(&lines, self.terminal_columns);
+            let viewport_rows = self.terminal_rows.saturating_sub(2).max(1);
+            let overflow_end = rows.len().saturating_sub(viewport_rows);
+            if overflow_end > self.committed_rows {
+                write_terminal_lines(output, &rows[self.committed_rows..overflow_end]);
+                self.committed_rows = overflow_end;
+            }
+            visible_rows.extend_from_slice(&rows[self.committed_rows.min(rows.len())..]);
+            write_visual_lines(output, &visible_rows);
+        }
+        let mut rendered_lines = visible_rows;
+        if self.raw_terminal {
+            if !rendered_lines.is_empty() {
                 let _ = output.write_all(b"\r\n");
             }
-        }
-        if self.raw_terminal {
             let _ = write!(output, "> {input}");
-            rows += visual_rows(&[format!("> {input}")], self.terminal_columns);
+            rendered_lines.extend(wrap_visual_rows(
+                &[format!("> {input}")],
+                self.terminal_columns,
+            ));
         }
-        self.rendered_rows = rows;
+        self.rendered_rows = rendered_lines.len();
+        self.rendered_lines = rendered_lines;
     }
 
     fn refresh_geometry(&mut self, output: &mut impl Write) {
-        let Some(columns) = self.terminal_fd.and_then(terminal_columns) else {
+        let Some((columns, rows)) = self.terminal_fd.and_then(terminal_geometry) else {
             return;
         };
-        if columns != self.terminal_columns {
+        if columns != self.terminal_columns || rows != self.terminal_rows {
+            if columns != self.terminal_columns {
+                self.rendered_rows = self
+                    .rendered_rows
+                    .max(visual_rows(&self.rendered_lines, columns));
+            }
             self.clear(output);
             self.terminal_columns = columns;
+            self.terminal_rows = rows;
         }
     }
 
@@ -1137,6 +1257,7 @@ impl BlockRenderer {
             }
         }
         self.rendered_rows = 0;
+        self.rendered_lines.clear();
     }
 
     fn finish(&mut self, input: &str, output: &mut impl Write) {
@@ -1144,6 +1265,7 @@ impl BlockRenderer {
         if self.rendered_rows > 0 {
             let _ = output.write_all(b"\r\n");
             self.rendered_rows = 0;
+            self.rendered_lines.clear();
         }
         let _ = output.flush();
     }
@@ -1158,25 +1280,39 @@ fn write_visual_lines(output: &mut impl Write, lines: &[String]) {
     }
 }
 
-fn terminal_columns(fd: RawFd) -> Option<usize> {
+fn terminal_geometry(fd: RawFd) -> Option<(usize, usize)> {
     let mut size = MaybeUninit::<libc::winsize>::zeroed();
     if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, size.as_mut_ptr()) } != 0 {
         return None;
     }
-    let columns = usize::from(unsafe { size.assume_init() }.ws_col);
-    (columns > 0).then_some(columns)
+    let size = unsafe { size.assume_init() };
+    let columns = usize::from(size.ws_col);
+    let rows = usize::from(size.ws_row);
+    (columns > 0 && rows > 0).then_some((columns, rows))
 }
 
 fn visual_rows(lines: &[String], columns: usize) -> usize {
+    wrap_visual_rows(lines, columns).len()
+}
+
+fn wrap_visual_rows(lines: &[String], columns: usize) -> Vec<String> {
     let columns = columns.max(1);
-    lines
-        .iter()
-        .map(|line| {
-            UnicodeWidthStr::width(line.as_str())
-                .max(1)
-                .div_ceil(columns)
-        })
-        .sum()
+    let mut rows = Vec::new();
+    for line in lines {
+        let mut row = String::new();
+        let mut width = 0usize;
+        for character in line.chars() {
+            let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+            if width > 0 && width.saturating_add(character_width) > columns {
+                rows.push(std::mem::take(&mut row));
+                width = 0;
+            }
+            row.push(character);
+            width = width.saturating_add(character_width);
+        }
+        rows.push(row);
+    }
+    rows
 }
 
 fn write_terminal_lines(output: &mut impl Write, lines: &[String]) {
@@ -1695,6 +1831,36 @@ fn permission_summary(payload: &serde_json::Value) -> String {
     }
 }
 
+fn permission_status(payload: &serde_json::Value) -> Option<&'static str> {
+    match payload
+        .pointer("/decision/outcome")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("cancelled") => Some("refusé"),
+        Some("selected") => {
+            let selected = payload
+                .pointer("/decision/option_id")
+                .and_then(serde_json::Value::as_str);
+            let kind = payload
+                .get("options")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|options| {
+                    options.iter().find(|option| {
+                        option.get("optionId").and_then(serde_json::Value::as_str) == selected
+                    })
+                })
+                .and_then(|option| option.get("kind"))
+                .and_then(serde_json::Value::as_str);
+            match kind {
+                Some(kind) if kind.starts_with("allow_") => Some("accordé"),
+                Some(kind) if kind.starts_with("reject_") => Some("refusé"),
+                _ => Some("décidé"),
+            }
+        }
+        _ => None,
+    }
+}
+
 fn turn_end_summary(payload: &serde_json::Value) -> String {
     let stop_reason = payload
         .get("stop_reason")
@@ -1706,7 +1872,7 @@ fn turn_end_summary(payload: &serde_json::Value) -> String {
     }
 }
 
-fn short_timestamp(timestamp: Option<&str>) -> &str {
+fn short_timestamp(timestamp: Option<&str>) -> String {
     timestamp
         .and_then(|value| value.get(11..16))
         .filter(|value| {
@@ -1716,7 +1882,8 @@ fn short_timestamp(timestamp: Option<&str>) -> &str {
                     .enumerate()
                     .all(|(index, byte)| index == 2 || byte.is_ascii_digit())
         })
-        .unwrap_or("??:??")
+        .map(|clock| format!("{clock} UTC"))
+        .unwrap_or_else(|| "??:??".to_string())
 }
 
 #[derive(Debug)]
@@ -1830,12 +1997,16 @@ fn sanitize_inline(value: &str) -> String {
 }
 
 fn render_prefixed(prefix: &str, content: &str) -> String {
+    render_prefixed_with_limit(prefix, content, MAX_RENDERED_EVENT_CHARS)
+}
+
+fn render_prefixed_with_limit(prefix: &str, content: &str, limit: usize) -> String {
     let prefix = sanitize_inline(prefix);
     let indent = " ".repeat(prefix.chars().count().saturating_add(1));
-    let sanitized = sanitize_data(content, MAX_RENDERED_EVENT_CHARS);
+    let sanitized = sanitize_data(content, limit);
     let truncation_marker = "… [affichage tronqué]";
     let reserved = truncation_marker.chars().count();
-    let content_limit = MAX_RENDERED_EVENT_CHARS.saturating_sub(reserved);
+    let content_limit = limit.saturating_sub(reserved);
     let mut rendered = format!("{prefix} ");
     let mut rendered_chars = rendered.chars().count();
     let mut truncated = sanitized.truncated;
@@ -1884,6 +2055,10 @@ fn attach_refusal_message(
                 )
             }
         }
+        AttachRefusal::AgentStopped => format!(
+            "équipier « {} » arrêté ; son historique reste consultable dans le journal de session, mais le suivi direct exige de le relancer",
+            sanitize_inline(agent)
+        ),
         AttachRefusal::AgentNotAcp => format!(
             "« {} » est un agent interactif tmux ; ouvrez son pane dans la session tmux au lieu d’utiliser attach",
             sanitize_inline(agent)
@@ -1958,17 +2133,23 @@ fn list_attachable_agents(socket_path: &Path) -> Vec<String> {
         return Vec::new();
     }
     let mut agents = match decode::<DaemonToWrapper>(line.trim_end()) {
-        Ok(DaemonToWrapper::AgentList { agents }) => agents
-            .into_iter()
-            .filter(|agent| agent.transport == "acp" && agent.state != "unreachable")
-            .map(|agent| agent.name)
-            .collect::<Vec<_>>(),
+        Ok(DaemonToWrapper::AgentList { agents }) => attachable_agent_names(agents),
         _ => Vec::new(),
     };
     let _ = write_plain_message(&mut writer, &WrapperToDaemon::Unregister);
     agents.sort();
     agents.dedup();
     agents
+}
+
+fn attachable_agent_names(agents: Vec<AgentInfo>) -> Vec<String> {
+    agents
+        .into_iter()
+        .filter(|agent| {
+            agent.transport == "acp" && matches!(agent.state.as_str(), "connected" | "busy" | "dnd")
+        })
+        .map(|agent| agent.name)
+        .collect()
 }
 
 fn write_plain_message(
@@ -1992,11 +2173,12 @@ mod tests {
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;
 
-    fn test_renderer_sender(tty_output: bool) -> RendererSender {
+    fn test_renderer_sender(raw_terminal: bool, tty_output: bool) -> RendererSender {
         let (commands, _command_rx) = mpsc::sync_channel(RENDER_COMMAND_CAPACITY);
         RendererSender {
             commands,
             input_dirty: Arc::new(AtomicBool::new(false)),
+            raw_terminal,
             tty_output,
         }
     }
@@ -2142,12 +2324,22 @@ mod tests {
     }
 
     fn journal_record(seq: u64, event: &str, payload: serde_json::Value) -> Vec<u8> {
+        journal_record_for_turn(seq, "session-1", "message-1", event, payload)
+    }
+
+    fn journal_record_for_turn(
+        seq: u64,
+        session_id: &str,
+        message_id: &str,
+        event: &str,
+        payload: serde_json::Value,
+    ) -> Vec<u8> {
         serde_json::to_vec(&json!({
             "v": 1,
             "seq": seq,
             "ts": "2026-08-23T09:07:00Z",
-            "session_id": "session-1",
-            "message_id": "message-1",
+            "session_id": session_id,
+            "message_id": message_id,
             "event": event,
             "payload": payload,
         }))
@@ -2162,6 +2354,116 @@ mod tests {
             assert_eq!(renderer.tty_output, stdout_tty);
             assert_eq!(renderer.raw_terminal, stdin_tty);
         }
+    }
+
+    #[test]
+    fn stdin_et_stdout_pipes_conservent_le_golden_sans_echo_de_saisie() {
+        let (commands, command_rx) = mpsc::sync_channel(RENDER_COMMAND_CAPACITY);
+        let renderer_sender = RendererSender {
+            commands,
+            input_dirty: Arc::new(AtomicBool::new(false)),
+            raw_terminal: false,
+            tty_output: false,
+        };
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let (socket, _peer) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(socket)));
+        for byte in b"commande pipe\n" {
+            assert!(
+                handle_input_byte(*byte, &state, &input, &renderer_sender, &writer, "codex-1",)
+                    .unwrap()
+            );
+        }
+        assert!(
+            command_rx.try_recv().is_err(),
+            "stdin non-TTY ne doit jamais produire d'écho sur stdout non-TTY"
+        );
+
+        let event = AttachEvent::Subscribed {
+            subscription_id: "sub-pipe".to_string(),
+        };
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), false, false);
+        let mut output = Vec::new();
+        renderer.apply(RendererCommand::Event(event.clone()), &input, &mut output);
+        assert_eq!(
+            output,
+            format!("{}\n", render_attach_event(&event, "codex-1")).into_bytes()
+        );
+    }
+
+    #[test]
+    fn bloc_live_nefface_que_la_fenetre_visible_du_terminal() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), true, true);
+        renderer.terminal_fd = None;
+        renderer.terminal_columns = 40;
+        renderer.terminal_rows = 8;
+        let mut output = Vec::new();
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 1,
+                bytes: journal_record(1, "turn_start", json!({"from":"humain","body":"Question"})),
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+        for seq in 2..=20 {
+            renderer.apply(
+                RendererCommand::Event(AttachEvent::Journal {
+                    seq,
+                    bytes: journal_record(
+                        seq,
+                        "update",
+                        json!({"kind":"tool_call","title":format!("outil-{seq}"),"summary":"exécuté"}),
+                    ),
+                    live: true,
+                }),
+                &input,
+                &mut output,
+            );
+            assert!(
+                renderer.rendered_rows < renderer.terminal_rows,
+                "le rendu effaçable dépasse la fenêtre visible"
+            );
+        }
+        assert!(
+            renderer.committed_rows > 0,
+            "les lignes sorties doivent être figées dans le scrollback"
+        );
+    }
+
+    #[test]
+    fn lot_de_chunks_live_ne_declenche_qu_un_redessin() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), false, true);
+        renderer.terminal_fd = None;
+        let mut commands = vec![RendererCommand::Event(AttachEvent::Journal {
+            seq: 1,
+            bytes: journal_record(1, "turn_start", json!({"from":"humain","body":"Question"})),
+            live: true,
+        })];
+        commands.extend((2..=32).map(|seq| {
+            RendererCommand::Event(AttachEvent::Journal {
+                seq,
+                bytes: journal_record(seq, "update", json!({"kind":"text","content":"mot "})),
+                live: true,
+            })
+        }));
+        let mut output = Vec::new();
+        renderer.apply_batch(commands, &input, &mut output);
+        assert_eq!(renderer.redraw_count, 1);
+        assert_eq!(
+            renderer
+                .current
+                .as_ref()
+                .unwrap()
+                .response
+                .matches("mot ")
+                .count(),
+            31
+        );
     }
 
     #[test]
@@ -2297,6 +2599,112 @@ mod tests {
     }
 
     #[test]
+    fn sc001_trois_tours_deterministes_tiennent_dans_un_ecran_80_par_24() {
+        let started_at = Instant::now();
+        let mut events = Vec::new();
+        let mut seq = 1_u64;
+        for turn in 1..=3 {
+            let session_id = format!("session-sc001-{turn}");
+            let message_id = format!("message-sc001-{turn}");
+            events.push(AttachEvent::Journal {
+                seq,
+                bytes: journal_record_for_turn(
+                    seq,
+                    &session_id,
+                    &message_id,
+                    "turn_start",
+                    json!({"from":"humain","body":format!("Question déterministe {turn}")}),
+                ),
+                live: true,
+            });
+            seq += 1;
+            for chunk in 0..20 {
+                if turn == 2 && chunk == 10 {
+                    events.push(AttachEvent::Journal {
+                        seq,
+                        bytes: journal_record_for_turn(
+                            seq,
+                            &session_id,
+                            &message_id,
+                            "update",
+                            json!({
+                                "kind":"tool_call",
+                                "title":"Read src/main.rs",
+                                "name":"read_file",
+                                "tool_kind":"read",
+                                "summary":"lecture"
+                            }),
+                        ),
+                        live: true,
+                    });
+                    seq += 1;
+                }
+                events.push(AttachEvent::Journal {
+                    seq,
+                    bytes: journal_record_for_turn(
+                        seq,
+                        &session_id,
+                        &message_id,
+                        "update",
+                        json!({"kind":"text","content":"mot "}),
+                    ),
+                    live: true,
+                });
+                seq += 1;
+            }
+            events.push(AttachEvent::Journal {
+                seq,
+                bytes: journal_record_for_turn(
+                    seq,
+                    &session_id,
+                    &message_id,
+                    "turn_end",
+                    json!({"stop_reason":"end_turn"}),
+                ),
+                live: true,
+            });
+            seq += 1;
+        }
+
+        let legacy_lines = events
+            .iter()
+            .map(|event| render_attach_event(event, "codex-bench").lines().count())
+            .sum::<usize>();
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("codex-bench".to_string(), false, true);
+        renderer.terminal_fd = None;
+        renderer.terminal_columns = 80;
+        let mut output = Vec::new();
+        let mut compact_rows = 0;
+        for event in events {
+            if let AttachEvent::Journal { bytes, .. } = &event
+                && let Some(record) = journal_render_record(bytes, "codex-bench")
+                && record.event == "turn_end"
+            {
+                let mut final_lines = renderer
+                    .current
+                    .as_ref()
+                    .expect("bloc courant avant turn_end")
+                    .lines("codex-bench");
+                final_lines.push(record.rendered);
+                compact_rows += visual_rows(&final_lines, 80);
+            }
+            renderer.apply(RendererCommand::Event(event), &input, &mut output);
+        }
+
+        eprintln!(
+            "SC-001 80x24, 3 tours dont un outil : ancien={legacy_lines} lignes, blocs={compact_rows} lignes visuelles"
+        );
+        assert!(legacy_lines > 60, "baseline historique={legacy_lines}");
+        assert!(compact_rows <= 24, "rendu compact={compact_rows}");
+        assert!(String::from_utf8_lossy(&output).contains("[outil] Read src/main.rs"));
+        assert!(
+            started_at.elapsed() < Duration::from_secs(2),
+            "le banc visuel a dépassé son budget global de 2 s"
+        );
+    }
+
+    #[test]
     fn perte_de_correlation_apres_snapshot_evacuant_le_tour_incomplet() {
         let input = Arc::new(Mutex::new(InputBuffer::default()));
         let mut renderer = BlockRenderer::new("codex-1".to_string(), false, true);
@@ -2369,6 +2777,73 @@ mod tests {
                 .details
                 .iter()
                 .any(|line| line.contains("diagnostic transitoire"))
+        );
+    }
+
+    #[test]
+    fn permission_complete_la_ligne_de_loutil_dans_le_meme_bloc() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), false, true);
+        renderer.terminal_fd = None;
+        let mut output = Vec::new();
+        for (seq, event, payload) in [
+            (1, "turn_start", json!({"from":"humain","body":"Question"})),
+            (
+                2,
+                "update",
+                json!({"kind":"tool_call","title":"Read src/main.rs","summary":"lecture"}),
+            ),
+            (
+                3,
+                "permission",
+                json!({
+                    "tool":"Read src/main.rs",
+                    "options":[{"optionId":"allow-1","kind":"allow_once"}],
+                    "decision":{"outcome":"selected","option_id":"allow-1"}
+                }),
+            ),
+        ] {
+            renderer.apply(
+                RendererCommand::Event(AttachEvent::Journal {
+                    seq,
+                    bytes: journal_record(seq, event, payload),
+                    live: true,
+                }),
+                &input,
+                &mut output,
+            );
+        }
+        let details = &renderer.current.as_ref().unwrap().details;
+        assert!(details.iter().any(|line| {
+            line.contains("[outil] Read src/main.rs") && line.ends_with("— accordé")
+        }));
+        assert_eq!(
+            details
+                .iter()
+                .filter(|line| line.contains("[permission]"))
+                .count(),
+            0,
+            "la décision corrélée ne doit pas créer un mur de statut séparé"
+        );
+    }
+
+    #[test]
+    fn reprise_en_cours_de_tour_conserve_lheure_du_premier_evenement() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), false, true);
+        let mut output = Vec::new();
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 2,
+                bytes: journal_record(2, "update", json!({"kind":"text","content":"suite"})),
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+        assert_eq!(
+            renderer.current.as_ref().unwrap().header,
+            ["09:07 UTC [tour repris en cours]"]
         );
     }
 
@@ -2471,12 +2946,15 @@ mod tests {
         assert!(block.stored_bytes <= MAX_TURN_BLOCK_BYTES);
         assert!(block.stored_lines <= MAX_TURN_BLOCK_LINES);
         assert!(block.omitted_lines > 0);
+        let lines = block.lines("codex-1");
+        assert!(lines.last().unwrap().starts_with("… tronqué,"));
         assert!(
-            block
-                .lines("codex-1")
-                .last()
-                .unwrap()
-                .starts_with("… tronqué,")
+            lines.iter().all(|line| !line.contains("affichage tronqué")),
+            "le bloc ne doit porter qu'un seul marqueur de troncature"
+        );
+        assert!(
+            block.response.len() > 60 * 1024,
+            "la capacité utile de 64 Kio doit être consommée avant la troncature"
         );
     }
 
@@ -2489,6 +2967,7 @@ mod tests {
         let sender = RendererSender {
             commands,
             input_dirty: dirty.clone(),
+            raw_terminal: true,
             tty_output: true,
         };
         sender
@@ -2750,7 +3229,7 @@ mod tests {
         let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
         let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
         let input = Arc::new(Mutex::new(InputBuffer::default()));
-        let renderer = test_renderer_sender(false);
+        let renderer = test_renderer_sender(true, false);
 
         for byte in b"bonjour\n" {
             assert!(
@@ -2843,11 +3322,13 @@ mod tests {
         let sender = RendererSender {
             commands,
             input_dirty: Arc::new(AtomicBool::new(false)),
+            raw_terminal: true,
             tty_output: true,
         };
         let mut renderer = BlockRenderer::new("codex-1".to_string(), true, true);
         renderer.terminal_fd = Some(pseudo_tty.slave);
-        renderer.terminal_columns = terminal_columns(pseudo_tty.slave).unwrap();
+        (renderer.terminal_columns, renderer.terminal_rows) =
+            terminal_geometry(pseudo_tty.slave).unwrap();
         let mut rendered = Vec::new();
 
         renderer.apply(
@@ -2940,10 +3421,13 @@ mod tests {
         rendered.extend(cleared_wide_render);
 
         assert!(rendered.windows(4).any(|window| window == b"\x1b[2K"));
-        assert!(
-            String::from_utf8_lossy(&rendered)
-                .contains("réponse live après resize界界界界界界界界界🙂 fin")
-        );
+        let rendered_text = String::from_utf8_lossy(&rendered);
+        for fragment in ["réponse live", "après resize", "界界界界", "🙂", " fin"] {
+            assert!(
+                rendered_text.contains(fragment),
+                "fragment absent après wrapping/resize : {fragment}"
+            );
+        }
         assert!(rendered.ends_with(b"> commande partielle"));
     }
 
@@ -2971,7 +3455,7 @@ mod tests {
         let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
         let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
         let input = Arc::new(Mutex::new(InputBuffer::default()));
-        let renderer = test_renderer_sender(false);
+        let renderer = test_renderer_sender(true, false);
         assert!(!handle_input_byte(0x03, &state, &input, &renderer, &writer, "codex-1",).unwrap());
         assert!(!handle_input_byte(0x04, &state, &input, &renderer, &writer, "codex-1",).unwrap());
     }
@@ -3369,22 +3853,22 @@ mod tests {
             .lines()
             .map(|line| render_journal_event(line.as_bytes(), "codex-1"))
             .collect::<Vec<_>>();
-        assert_eq!(rendered[0], "00:00 alice → bonjour intégral");
-        assert_eq!(rendered[1], "00:00 codex-1 → réponse");
+        assert_eq!(rendered[0], "00:00 UTC alice → bonjour intégral");
+        assert_eq!(rendered[1], "00:00 UTC codex-1 → réponse");
         assert_eq!(
             rendered[2],
-            "00:00 [fin] tour terminé : end_turn — réponse vers alice"
+            "00:00 UTC [fin] tour terminé : end_turn — réponse vers alice"
         );
 
         let permission = std::fs::read_to_string(fixture_root.join("permission.jsonl")).unwrap();
         assert_eq!(
             render_journal_event(permission.trim_end().as_bytes(), "codex-1"),
-            "00:00 [permission] écrire autorisation décidée : allow-1"
+            "00:00 UTC [permission] écrire autorisation décidée : allow-1"
         );
         let error = std::fs::read_to_string(fixture_root.join("error.jsonl")).unwrap();
         assert_eq!(
             render_journal_event(error.trim_end().as_bytes(), "codex-1"),
-            "00:00 [erreur] équipier arrêté"
+            "00:00 UTC [erreur] équipier arrêté"
         );
     }
 
@@ -3406,7 +3890,7 @@ mod tests {
         assert!(!rendered.contains('\u{200b}'));
         assert!(!rendered.contains('\r'));
         assert!(!rendered.contains('\u{0008}'));
-        let continuation_indent = " ".repeat("10:42 codex-1 →".chars().count() + 1);
+        let continuation_indent = " ".repeat("10:42 UTC codex-1 →".chars().count() + 1);
         assert!(rendered.lines().nth(1).is_some_and(|line| {
             line.starts_with(&continuation_indent) && line.contains("10:42 [erreur] forgée")
         }));
@@ -3429,10 +3913,10 @@ mod tests {
         assert_eq!(
             rendered.iter().map(String::as_str).collect::<Vec<_>>(),
             [
-                "10:00 [outil] Read src/main.rs lecture",
-                "10:00 [outil] Bash cargo test --workspace tests",
-                "10:00 [outil] quantum_wrench kind inconnu",
-                "10:00 [outil] ␛[2J␛]0;pwned␇ ·gnahc titre hostile",
+                "10:00 UTC [outil] Read src/main.rs lecture",
+                "10:00 UTC [outil] Bash cargo test --workspace tests",
+                "10:00 UTC [outil] quantum_wrench kind inconnu",
+                "10:00 UTC [outil] ␛[2J␛]0;pwned␇ ·gnahc titre hostile",
             ]
         );
         assert!(rendered.iter().all(|line| !line.contains('\u{001b}')));
@@ -3467,6 +3951,35 @@ mod tests {
         );
         assert!(unknown.contains("équipier « absent » inconnu"));
         assert!(unknown.contains("claude-acp, codex-acp"));
+
+        let stopped = attach_refusal_message(&AttachRefusal::AgentStopped, "codex-1", &[]);
+        assert!(stopped.contains("équipier « codex-1 » arrêté"));
+        assert!(stopped.contains("historique"));
+
+        let agent = |name: &str, transport: &str, state: &str| AgentInfo {
+            name: name.to_string(),
+            agent_type: "fixture".to_string(),
+            connection_id: format!("conn-{name}"),
+            host: "local".to_string(),
+            transport: transport.to_string(),
+            os: "test".to_string(),
+            state: state.to_string(),
+            last_seen_secs: 0,
+            reconnect_count: 0,
+            domain: None,
+            model: None,
+            effort: None,
+        };
+        let attachable = attachable_agent_names(vec![
+            agent("connected", "acp", "connected"),
+            agent("busy", "acp", "busy"),
+            agent("dnd", "acp", "dnd"),
+            agent("stopped", "acp", "stopped"),
+            agent("unreachable", "acp", "unreachable"),
+            agent("recovering", "acp", "recovering"),
+            agent("tmux", "unix", "connected"),
+        ]);
+        assert_eq!(attachable, ["connected", "busy", "dnd"]);
     }
 
     #[test]
