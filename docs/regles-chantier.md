@@ -65,3 +65,11 @@ l'incident.
     et mis en quarantaine jusqu'à confirmation d'identité. *(Incident : un
     APPROVE anonyme sur un lot à deux co-auteurs, désavoué par le relecteur
     désigné, 2026-08-23.)*
+18. **En couloirs ouverts, chacun valide sur SES cibles.** Le workspace
+    complet vert n'est exigé qu'au gate de clôture de la session (tâche de
+    non-régression), quand tous les lots sont commités. Un rouge hors
+    couloir ne se signale que s'il PERSISTE (~10 min) : sur un chantier à
+    plusieurs couloirs actifs, le WIP voisin rend tout constat vrai à T et
+    périmé à T+2 min. *(Incident : ping-pong de signalements
+    vrais-mais-périmés entre deux couloirs de la session 014, 2026-08-23 —
+    deux vérifications du référent elles-mêmes périmées à l'arrivée.)*
