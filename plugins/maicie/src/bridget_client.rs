@@ -6,7 +6,7 @@
 //! module Maicie ne doit ouvrir le socket Bridget directement.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io::{BufRead, BufReader, Write};
@@ -731,7 +731,6 @@ impl BridgetClient {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct PersistedSpawnOrder {
     #[serde(rename = "type")]
     kind: String,
@@ -1456,8 +1455,8 @@ fn unexpected(expected: &str, received: &str) -> BridgetClientError {
 #[cfg(test)]
 mod tests {
     use super::{
-        replay_idempotent_request, validate_send_idempotent_frame, BridgetClientError,
-        PublicMessage, ReplayPublicMessage,
+        BridgetClientError, PublicMessage, ReplayPublicMessage, replay_idempotent_request,
+        validate_send_idempotent_frame,
     };
     use serde_json::json;
 

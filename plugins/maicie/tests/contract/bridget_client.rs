@@ -2,7 +2,7 @@ use maicie::bridget_client::{
     AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits, IdempotencyIssue,
     PublicMessage, SpawnOrder, SpawnOutcome, SubscriptionEvent,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -300,7 +300,7 @@ fn spawn_order_negocie_le_role_wrapper_sur_sa_connexion_ephemere() {
 fn replay_spawn_order_reemet_les_octets_approuves_sans_reserialisation() {
     let fixture = SocketFixture::new("spawn-replay-exact");
     let listener = fixture.bind();
-    let bytes = br#"{"type":"SpawnOrder","agent_type":"claude","name":null,"cwd":"/tmp","persistent":true,"command_id":"command-exact","issued_at":100,"deadline_at":160}"#.to_vec();
+    let bytes = br#"{"type":"SpawnOrder","agent_type":"claude","name":null,"cwd":"/tmp","persistent":true,"command_id":"command-exact","issued_at":100,"deadline_at":160,"future_extension":true}"#.to_vec();
     let expected = bytes.clone();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().expect("connexion spawn attendue");
