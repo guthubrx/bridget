@@ -683,6 +683,8 @@ impl Peer {
             name: Some(name.to_string()),
             host: Some("fixture-host".to_string()),
             transport: Some("unix".to_string()),
+            mode: Some(bridget_transport::protocol::PresenceMode::Acp),
+            location: None,
             os: Some("fixture-os".to_string()),
             instance_id: Some(format!("instance-{name}")),
             domain: None,

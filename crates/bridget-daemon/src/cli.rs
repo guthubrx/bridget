@@ -4,9 +4,10 @@ use crate::daemon::{self, DaemonConfig};
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole,
-    IdempotencyIssue, LedgerMessage, LedgerScope, RuntimeSource, decode, encode,
+    IdempotencyIssue, LedgerMessage, LedgerScope, PresenceMode, RuntimeSource, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
+use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
@@ -986,6 +987,8 @@ fn send_control_to_daemon_at(
         name: Some(format!("cli-send-{}", std::process::id())),
         host: None,
         transport: None,
+        mode: Some(PresenceMode::Cli),
+        location: None,
         os: None,
         instance_id: None,
         domain: None,
@@ -1117,6 +1120,8 @@ fn send_rename_to_daemon(current_name: &str, name: &str) -> Result<DaemonToWrapp
         name: Some(format!("cli-rename-{}", std::process::id())),
         host: None,
         transport: None,
+        mode: Some(PresenceMode::Cli),
+        location: None,
         os: None,
         instance_id: None,
         domain: None,
@@ -1165,6 +1170,8 @@ fn send_runtime_to_daemon(
         name: Some(format!("cli-runtime-{}", std::process::id())),
         host: None,
         transport: None,
+        mode: Some(PresenceMode::Cli),
+        location: None,
         os: None,
         instance_id: None,
         domain: None,
@@ -1832,15 +1839,19 @@ fn cmd_who(args: &[String]) {
         None => status.agents,
     };
 
+    print!("{}", render_who(&agents, filter.as_deref()));
+}
+
+/// Rend l'annuaire sans dépendre d'un terminal : les appels non-TTY reçoivent
+/// exactement la même projection que la sous-commande who.
+fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
     if agents.is_empty() {
-        match &filter {
-            Some(domain) => println!("Aucun agent dans le domaine « {} ».", domain),
-            None => println!("Aucun agent connecté."),
-        }
-        return;
+        return match filter {
+            Some(domain) => format!("Aucun agent dans le domaine « {} ».\n", domain),
+            None => "Aucun agent connecté.\n".to_string(),
+        };
     }
 
-    // Chaque colonne s'aligne sur sa valeur la plus longue, en-tête comprise.
     let column = |header: &str, values: &dyn Fn(&AgentInfo) -> String| {
         agents
             .iter()
@@ -1854,32 +1865,46 @@ fn cmd_who(args: &[String]) {
     let host_w = column("HÔTE", &|a: &AgentInfo| a.host.clone());
     let os_w = column("OS", &|a: &AgentInfo| a.os.clone());
     let transport_w = column("TRANSPORT", &|a: &AgentInfo| a.transport.clone());
+    let mode_w = column("MODE", &|a: &AgentInfo| {
+        cell(a.mode.map(PresenceMode::as_str)).to_string()
+    });
+    let location_w = column("LOCALISATION", &|a: &AgentInfo| {
+        cell(a.location.as_deref()).to_string()
+    });
     let domain_w = column("DOMAINE", &|a: &AgentInfo| cell(a.domain.as_deref()).to_string());
     let model_w = column("MODÈLE", &|a: &AgentInfo| cell(a.model.as_deref()).to_string());
     let effort_w = column("EFFORT", &|a: &AgentInfo| cell(a.effort.as_deref()).to_string());
 
-    match &filter {
-        Some(domain) => println!("Agents du domaine « {} » :", domain),
-        None => println!("Agents connectés :"),
+    let mut output = String::new();
+    match filter {
+        Some(domain) => writeln!(output, "Agents du domaine « {} » :", domain).unwrap(),
+        None => writeln!(output, "Agents connectés :").unwrap(),
     }
-    println!(
-        "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  ÉTAT",
-        "NOM", "TYPE", "HÔTE", "OS", "TRANSPORT", "DOMAINE", "MODÈLE", "EFFORT"
-    );
-    for agent in &agents {
-        println!(
-            "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {}",
+    writeln!(
+        output,
+        "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  ÉTAT",
+        "NOM", "TYPE", "HÔTE", "OS", "TRANSPORT", "MODE", "LOCALISATION", "DOMAINE", "MODÈLE", "EFFORT"
+    )
+    .unwrap();
+    for agent in agents {
+        writeln!(
+            output,
+            "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {}",
             agent.name,
             agent.agent_type,
             agent.host,
             agent.os,
             agent.transport,
+            cell(agent.mode.map(PresenceMode::as_str)),
+            cell(agent.location.as_deref()),
             cell(agent.domain.as_deref()),
             cell(agent.model.as_deref()),
             cell(agent.effort.as_deref()),
             agent.state
-        );
+        )
+        .unwrap();
     }
+    output
 }
 
 /// Rend une valeur d'annuaire affichable : un tiret cadratin marque une valeur
@@ -2634,5 +2659,45 @@ mod idempotency_projection_tests {
                 "EnvelopeMismatch ne doit jamais modifier le record initial",
             );
         }
+    }
+
+    #[test]
+    fn who_affiche_mode_et_localisation_sans_dependre_d_un_tty() {
+        let agent = |name: &str, mode: Option<PresenceMode>, location: Option<&str>| AgentInfo {
+            name: name.to_string(),
+            agent_type: "fixture".to_string(),
+            connection_id: format!("conn-{name}"),
+            host: "local".to_string(),
+            transport: "unix".to_string(),
+            mode,
+            location: location.map(str::to_string),
+            os: "macOS".to_string(),
+            state: "connected".to_string(),
+            last_seen_secs: 0,
+            reconnect_count: 0,
+            domain: None,
+            model: None,
+            effort: None,
+        };
+        let rendered = render_who(
+            &[
+                agent("acp-gere", Some(PresenceMode::Acp), None),
+                agent("tmux-interactif", Some(PresenceMode::Tmux), Some("bridget:4.2")),
+                agent("cli-ephemere", Some(PresenceMode::Cli), None),
+            ],
+            None,
+        );
+
+        assert!(rendered.starts_with("Agents connectés :\n"));
+        assert!(rendered.contains("MODE"));
+        assert!(rendered.contains("LOCALISATION"));
+        assert!(rendered.contains("acp-gere"));
+        assert!(rendered.contains("tmux-interactif"));
+        assert!(rendered.contains("cli-ephemere"));
+        assert!(rendered.contains("bridget:4.2"));
+        assert!(rendered.contains("acp"));
+        assert!(rendered.contains("tmux"));
+        assert!(rendered.contains("cli"));
+        assert!(!rendered.contains('\u{1b}'));
     }
 }
