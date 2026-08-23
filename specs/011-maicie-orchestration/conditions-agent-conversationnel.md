@@ -11,6 +11,13 @@ graine de la future skill `maicie` (public : agents conversationnels).
    approbation par saisie humaine directe uniquement (FR-014).
 2. Toute commande MUTANTE (delegate/add/remove/close) : écho de la commande
    exacte + confirmation humaine avant émission ; lecture libre.
+   **Nuance mandat (2026-08-23, validée en dialogue utilisateur)** : un mandat
+   explicite (« mène X à terme ») vaut confirmation EN BLOC pour tout son
+   périmètre — l'agent délègue librement dedans, Maicie journalise, l'audit
+   se fait après coup. La confirmation unitaire s'applique HORS mandat
+   (conversation libre) et aux bords du périmètre — c'est une protection
+   contre le blanchiment d'intention, pas contre la délégation mandatée.
+   `approve` (condition 1) reste hors mandat, toujours.
 3. Narration verbatim des états typés et de l'inconnu — citer état, source,
    fraîcheur ; interdiction de requalifier (« il travaille probablement »).
 4. `maicie status --json` relu avant toute narration d'état ; la mémoire
