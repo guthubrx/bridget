@@ -20,6 +20,14 @@ greffe après son accusé durable ; son traitement peut déclencher une décisio
 et une transition atomiques vers `à_évaluer` dans Maicie, jamais la clôture
 automatique de l'objectif.
 
+Le précédent C5 de l'ADR 003 impose une nuance de sécurité : l'identité
+annoncée par rôle est déclarative en v1. La capacité négociée
+`maicie_guichet`, et non `from: "maicie"`, devient donc la borne protocolaire
+des opérations sensibles du guichet (relève, réponse, événements). Cela évite
+l'usurpation par charge ou rôle historique, mais ne prétend pas authentifier un
+processus hostile du même compte : cette non-opposabilité coopérative résiduelle
+est explicitement conservée pour v1.
+
 ## Recherche et arbitrages déjà clos
 
 | Décision | Choix retenu | Alternatives écartées | Pourquoi |
@@ -28,6 +36,7 @@ automatique de l'objectif.
 | Traitement | relève à chaque commande, sous échéance globale | polling/ticks ; worker caché | conserve le modèle compagnon et rend l'attente explicite et bornée |
 | Langage des agents | trois requêtes JSON fermées | conversation libre ; MCP sémantique | FR-022 interdit l'interprétation ; le résultat doit être testable et auditable |
 | Effet métier | greffe Bridget corrélée + réception Maicie atomique sur `delivery_report` | ajout d'une copie d'état dans Bridget ; clôture d'objectif par livraison `accepted` | Bridget est autorité de demande ; la SQLite Maicie reste vérité de coordination et T015a a démontré que l'acceptation de transport n'est pas une réponse |
+| Autorisation du guichet | capacité négociée `maicie_guichet` | rôle ou nom déclaré seul | C5 prouve qu'une identité de rôle v1 n'est pas opposable ; la capacité ferme la surface sans masquer la limite locale coopérative |
 | Boucle temps réel | différée v2, même contrat | l'introduire à bas bruit dans `status` | SC-008 a établi que la capture éphémère est performante ; la seule justification restante est la réponse corrélée, qui mérite une session dédiée |
 
 ## Architecture cible
@@ -37,7 +46,7 @@ automatique de l'objectif.
   │ RequestEnvelope JSON, request_id idempotent
   ▼
 Bridget : identité de service « maicie »
-  ├── guichet durable (transport, reçu, réponse liée)
+  ├── guichet durable (transport, reçu, réponse liée, événements corrélés)
   └── aucun objectif ni décision Maicie
   │ relève bornée au début d'une commande locale
   ▼
@@ -58,6 +67,17 @@ Maicie compagnon
 | GUI/TUI/MCP/CLI | projections | posséder un état métier parallèle ou contourner le guichet |
 | approbation de profil | TTY humain local Maicie | toute route Bridget, MCP, guichet ou flag non interactif |
 
+### Frontière de validation normative
+
+| Moment | Bridget valide et refuse | Maicie valide et refuse |
+|---|---|---|
+| Dépôt | capacité `maicie_guichet`, rôle de service, cible réservée, version, taille, canon, clé et idempotence | rien : elle n'est pas encore lancée |
+| Relève / claim | capacité négociée et transition de transport autorisée | émetteur participant, relation délégation/objectif, hash, état métier et type d'opération |
+| Réponse / événement | capacité, corrélation filaire, unicité et état de demande Bridget | unicité du reçu local et effet de coordination atomique |
+
+Un contrôle n'est placé que dans une colonne : Bridget ne recalcule pas la
+relation métier, Maicie ne réinterprète pas la capacité ni le canon filaire.
+
 ### Séquence nominale `delivery_report`
 
 1. L'agent construit l'enveloppe canonique avec son `request_id`, les IDs de
@@ -74,6 +94,13 @@ Maicie compagnon
    seulement si les préconditions sont vraies, la transition vers
    `à_évaluer`. En cas de crash, le même `request_id` retrouve le même reçu et
    ne duplique jamais l'effet ni ne clôt l'objectif implicitement.
+
+Si un timeout ou une annulation a gagné la course, Bridget conserve ce terminal
+et dépose son événement corrélé. Maicie greffe néanmoins le rapport tardif,
+marqué `request_already_terminal`, sans tentative de réouverture. Le rapport et
+l'événement `answered` d'une même réponse utilisent le couple
+`(in_reply_to, response_message_id)` : le premier traite l'effet, le second ne
+fait que confirmer le même reçu, quel que soit leur ordre.
 
 ### États, crashs et vérité
 
@@ -102,6 +129,8 @@ préciser au minimum :
   opérations ;
 - `RequestLifecycleEvent` réservé à Bridget pour `answered`, `cancelled` et
   `timed_out`, déposé atomiquement avec la transition de la demande ;
+- table de déduplication inter-canaux `(in_reply_to, response_message_id)` et
+  issue `request_already_terminal` pour la course rapport/timed_out ;
 - règles d'autorisation relationnelle : l'émetteur doit être le participant de
   la délégation ou la demande est refusée sans divulguer l'objectif ;
 - corrélation des réponses et statut terminal d'un émetteur non joignable ;
@@ -115,7 +144,7 @@ préciser au minimum :
 | Minimalisme (XIX) | PASS | une boîte aux lettres durable répond au besoin prouvé ; aucune boucle permanente, GUI ou moteur sémantique |
 | Responsabilités futures (XX) | PASS | transport Bridget et décisions Maicie sont explicitement séparés ; le runtime v2 est différé |
 | État durable | PASS sous gate | chaque frontière de crash nécessite une table de récupération commune aux deux propriétaires, sans transaction distribuée fictive |
-| Sécurité / FR-014 | PASS sous gate | aucune approbation dans la matrice ; TTY humain reste la seule route |
+| Sécurité / FR-014 et C5 | PASS sous gate | aucune approbation dans la matrice ; capacité obligatoire pour le guichet, limite coopérative v1 explicitement affichée |
 | Observabilité | PASS sous gate | chaque effet porte request/objective/delegation IDs, sans contenu libre |
 | Complexité (XVIII) | PASS sous gate | relève bornée et indexée ; pas de scan illimité à chaque commande |
 | Compatibilité | PASS sous gate | capacité négociée ; aucune mutation des rôles/messages existants sans opt-in |
@@ -145,7 +174,10 @@ et trois frontières de crash.
 ### Lot B — Greffe et cas d'usage Maicie (codeur B)
 
 **Propriété** : domaine de requête structurée, SQLite Maicie, transaction de
-réception/décision/transition et tests unitaires de la matrice.
+réception/décision/transition et tests unitaires de la matrice. Fichiers
+exclusifs : `plugins/maicie/src/guichet.rs`, `plugins/maicie/src/store.rs`,
+`plugins/maicie/src/domain.rs`, `plugins/maicie/src/app.rs` et tests de contrat
+Maicie.
 **Dépendances** : contrat du lot A gelé, mais le store peut être préparé contre
 des fixtures contractuelles.
 **Livrables** : reçu idempotent, validation relationnelle, réponses
@@ -160,8 +192,15 @@ déterministes et interdiction structurelle de toute approbation ou texte libre.
 ### Lot C — Adaptateur Maicie, CLI et gate réel (codeur C)
 
 **Propriété** : seul adaptateur public Bridget de Maicie, relève bornée à
-l'ouverture de commande, projection JSON et tests d'intégration.
-**Dépendances** : lots A et B intégrés sur leurs interfaces gelées.
+l'ouverture de commande, projection JSON et tests d'intégration. Fichiers
+exclusifs : `plugins/maicie/src/bridget_client.rs`,
+`plugins/maicie/src/reconcile.rs`, `plugins/maicie/src/main.rs` et tests
+d'intégration du gate. `main.rs` appartient donc à C, `app.rs` à B ; aucun des
+deux ne modifie le fichier de l'autre.
+**Dépendances** : le contrat A gelé suffit pour démarrer le harnais et les
+fixtures de C en parallèle de B ; le branchement du cas d'usage attend ensuite
+l'interface B gelée. `Cargo.toml` et `lib.rs` restent hors couloir et ne sont
+modifiés qu'à une tâche d'intégration explicitement propriétaire.
 **Livrables** : budget global, rendu honnête des deux vérités, réponses liées,
 bench et gate de bout en bout avec agent réellement absent puis joignable.
 
@@ -173,6 +212,8 @@ bench et gate de bout en bout avec agent réellement absent puis joignable.
    corrélée ;
 3. toute approbation par ce chemin échoue dans le vrai binaire, pas seulement
    dans un test unitaire.
+4. le harnais démontre les deux ordres rapport/événement et la course avec
+   timeout, en mutation d'oracle.
 
 ### Intégration et revue hostile
 

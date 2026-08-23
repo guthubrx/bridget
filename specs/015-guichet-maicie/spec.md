@@ -24,6 +24,15 @@ le transport durable du guichet ; la SQLite de Maicie reste l'unique vérité su
 les objectifs, délégations, décisions et clôtures. Aucun état métier Maicie
 n'est recopié dans Bridget.
 
+Le précédent C5 de l'ADR 003 s'applique directement : une identité annoncée
+dans un `RoleHello` reste déclarative dans le modèle local coopératif v1. Le
+guichet ne doit donc jamais traiter `from: "maicie"` comme une autorisation.
+Sa surface de relève, de réponse et d'événements est protégée par une capacité
+distincte négociée avec Bridget. Cette borne empêche une usurpation par simple
+charge JSON ou rôle historique, sans prétendre qu'elle authentifie un processus
+hostile du même compte local ; cette non-opposabilité résiduelle est assumée et
+visible jusqu'à une évolution d'identité v2.
+
 Le guichet permet une boucle de réponses déterministe sans faire de Maicie un
 superviseur ni un interprète. Une boucle résidente optionnelle reste une
 évolution v2 distincte : elle pourra réduire la latence de réponse, mais ne
@@ -71,6 +80,22 @@ Le guichet reçoit aussi des **événements de cycle de vie produits par Bridget
 complètent la réponse liée et rendent enfin le timeout observable sans le
 déduire d'ACP ou de l'horloge Maicie.
 
+### D-1502a — Deux validations, une seule responsabilité chacune
+
+Bridget rejette avant persistance toute trame qui n'a pas négocié la capacité
+`maicie_guichet`, qui n'utilise pas le rôle de service prévu, qui vise une
+identité réservée invalide, dont la version, taille, canon, identifiant ou
+transition de guichet est invalide. Les primitives de relève (`claim`), de
+réponse (`GuichetReply`) et de dépôt d'`ÉvénementDemande` sont exclusivement
+autorisées par cette capacité : elles ne sont jamais déverrouillées par un nom
+déclaré dans une charge.
+
+Maicie effectue ensuite la validation **relationnelle et métier** : émetteur
+participant, lien objectif/délégation, hash attendu, état de l'objectif et
+opération admise. Elle ne refait ni la validation filaire ni l'autorisation de
+capacité Bridget. Cette séparation est normative : un même refus ne peut pas
+être implémenté deux fois avec des sens différents.
+
 ### D-1503 — Greffe automatique de la réponse liée, jamais de clôture métier implicite
 
 Un `delivery_report` lié porte l'`in_reply_to` de la demande Maicie d'origine.
@@ -86,6 +111,20 @@ transition vers `à_évaluer`. Un `delivery_report` ne clôt jamais l'objectif
 par simple affirmation de l'agent : `à_évaluer → clos` demeure une action
 Maicie ou humaine explicite. Un retry du même `request_id` rejoue exactement
 le même résultat ; une divergence d'enveloppe est refusée sans mutation.
+
+Si la demande d'origine est déjà `timed_out` ou `cancelled`, un
+`delivery_report` tardif et autrement valide est **greffé sans essayer de la
+clore à nouveau**. Maicie enregistre le fait et une décision `à_évaluer` avec
+l'état terminal déjà constaté ; la réponse indique `request_already_terminal`.
+Ainsi une livraison réelle n'est pas perdue à cause d'une course avec le
+timeout, sans rouvrir ni modifier l'état terminal Bridget.
+
+La réponse relevée et l'événement Bridget `answered` décrivent parfois le même
+fait. Ils portent alors le même couple `(in_reply_to, response_message_id)` et
+convergent vers un unique reçu de corrélation Maicie. L'événement arrivé avant
+le rapport est un fait de transport en attente ; le rapport arrivé avant lui
+porte l'effet métier. Dans les deux ordres, il n'existe qu'une décision et une
+transition Maicie.
 
 Les autres opérations sont strictement consultatives. Une remise `accepted`,
 un fait ACP ou l'absence d'activité ne sont jamais assimilés à une livraison
@@ -142,6 +181,13 @@ sans seconde transition ni rouvrir la demande Bridget déjà répondue.
 4. **Étant donné** le même `request_id` et une enveloppe divergente, **quand**
    elle est soumise, **alors** le guichet la refuse sans modifier ni Bridget ni
    le registre Maicie.
+5. **Étant donné** un timeout déjà publié pour la demande d'origine, **quand**
+   un `delivery_report` tardif mais valide arrive, **alors** son hash est porté
+   au greffe avec le motif terminal existant, sans rouvrir la demande ni perdre
+   la livraison.
+6. **Étant donné** le même rapport et l'événement `answered` corrélé, **quand**
+   ils sont relevés dans l'un ou l'autre ordre, **alors** une seule décision
+   Maicie est visible.
 
 ### US2 — Demander l'état de sa mission sans interprétation (P1)
 
@@ -198,6 +244,13 @@ ou `SpawnOrder`.
 - **FR-1503 — Contrat public versionné** : le dépôt et la relève des demandes
   DOIVENT emprunter un protocole Bridget public, versionné, négocié et borné.
   Maicie ne lit ni `bridget.db`, ni socket interne, ni crate non public.
+- **FR-1503a — Autorisation de capacité** : `maicie_guichet` DOIT être une
+  capacité explicitement négociée, distincte des rôles historiques et du nom
+  déclaré. Seules les connexions qui l'ont négociée peuvent relever une
+  demande, émettre `GuichetReply` ou recevoir/déposer un
+  `ÉvénementDemande`. Cette borne n'est pas une authentification
+  cryptographique : la possibilité d'un processus local du même compte de
+  négocier la capacité reste documentée comme limite coopérative v1.
 - **FR-1504 — Matrice fermée** : seules `delivery_report`, `mission_status` et
   `deadline_question` sont acceptées. Chaque enveloppe porte version,
   `request_id`, émetteur attesté, cible `maicie`, type et charge utile fermée.
@@ -214,6 +267,15 @@ ou `SpawnOrder`.
   correspondent au registre. Fait, décision, transition vers `à_évaluer` et
   marqueur d'idempotence DOIVENT être atomiques ; aucun retry ne peut les
   doubler ni fermer directement l'objectif.
+- **FR-1506a — Course terminale honnête** : un `delivery_report` dont
+  l'`in_reply_to` désigne déjà une demande `timed_out` ou `cancelled` DOIT être
+  greffé comme livraison tardive, avec le terminal existant, sans tentative de
+  clôture, de réouverture ou de perte de hash.
+- **FR-1506b — Déduplication inter-canaux** : pour une réponse liée,
+  `delivery_report` et `ÉvénementDemande(answered)` DOIVENT partager une clé de
+  corrélation `(in_reply_to, response_message_id)` et converger vers un seul
+  reçu, une seule décision et une seule transition Maicie quel que soit leur
+  ordre d'arrivée.
 - **FR-1507 — Statut déterministe** : `mission_status` et
   `deadline_question` sont calculés exclusivement depuis le registre Maicie et
   les observations Bridget attestées. Ils distinguent toujours absence,
@@ -246,6 +308,10 @@ ou `SpawnOrder`.
   Maicie. La transition terminale et le dépôt de l'événement DOIVENT être
   atomiques ; Maicie ne reconstitue jamais un timeout depuis une échéance ou
   une absence de message.
+- **FR-1515 — Limite C5 explicite** : le statut de sortie et le journal de
+  guichet DOIVENT qualifier l'identité v1 comme déclarative/cooperative. Ils
+  ne DOIVENT jamais présenter la capacité `maicie_guichet` comme une preuve
+  d'identité opposable entre processus du même compte.
 
 ## Entités et états attendus
 
@@ -255,6 +321,7 @@ ou `SpawnOrder`.
 | `GuichetReply` | Bridget | réponse corrélée à `request_id` | exactement une issue durable ou une indisponibilité explicite |
 | `ÉvénementDemande` | Bridget | fait terminal d'une demande émise par Maicie | `event_id` unique, écrit avec l'état `answered` / `cancelled` / `timed_out` |
 | `ReceptionGreffe` | Maicie | preuve locale d'une requête traitée | clé unique `(request_id, operation)` ; ne conserve pas de corps libre |
+| `ReçuCorrélation` | Maicie | jointure d'un rapport et de son événement `answered` | clé unique `(in_reply_to, response_message_id)` ; une seule décision quelle que soit la source première |
 | `DemandeCorrélée` | Bridget | demande suivie émise par Maicie | devient `answered` après accusé durable de la réponse liée, jamais par inférence Maicie |
 | `DecisionCoordination` | Maicie | décision auditée causée par un rapport valide | écrite avec l'effet objectif dans la même transaction ; ne clôt pas implicitement |
 | `TransportSnapshot` | Bridget/lecture Maicie | observation externe datée | jamais autorité d'une clôture d'objectif ou d'une approbation |
@@ -285,6 +352,13 @@ ou `SpawnOrder`.
 - **SC-1507** : sur les trois états terminaux d'une demande Maicie, un
   redémarrage Bridget puis Maicie livre exactement un événement corrélé au
   guichet ; retirer ce dépôt atomique du harnais fait échouer l'oracle.
+- **SC-1508** : le corpus exécute `answered → delivery_report` et
+  `delivery_report → answered`, ainsi qu'un rapport arrivé après `timed_out` ;
+  il obtient respectivement une seule décision et un greffe tardif visible,
+  jamais un refus de livraison ni une demande rouverte.
+- **SC-1509** : les primitives de relève, réponse et événement sont refusées
+  dans 100 % des cas sans capacité `maicie_guichet`, même si la trame déclare
+  le nom `maicie` ; le journal qualifie explicitement la limite coopérative v1.
 
 ## Hors périmètre explicite
 
@@ -309,3 +383,4 @@ ou `SpawnOrder`.
 | T019 | échéance affichée passivement, Bridget seule horloge | FR-1507, SC-1505 |
 | T018 / deux vérités | snapshot observé n'est pas une décision de coordination | D-1504, FR-1507, SC-1505 |
 | Conclusion T015b | réponse liée et timeout ne sont pas observables par Subscribe seul | D-1502, FR-1514, SC-1507 |
+| C5 / ADR 003 | un rôle déclaré ne rend pas l'approbation opposable côté Bridget | Contexte, D-1502a, FR-1503a, FR-1515, SC-1509 |
