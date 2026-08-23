@@ -4,6 +4,7 @@ members = [
     "crates/bridget-core",
     "crates/bridget-transport",
     "crates/bridget-daemon",
+    "plugins/maicie",
 ]
 
 [workspace.package]

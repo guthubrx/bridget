@@ -1,0 +1,9 @@
+[package]
+name = "maicie"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "maicie"
+path = "src/main.rs"
