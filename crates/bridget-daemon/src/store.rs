@@ -489,6 +489,15 @@ impl Store {
             tx.commit().map_err(StoreError::Sqlite)?;
             return Ok(GuichetResult::ClaimStale);
         }
+        if input.outcome == GuichetOutcome::Accepted
+            && let Some(linked_request_id) = row.linked_request_id.as_deref()
+        {
+            // La clôture, lorsqu'elle est encore ouverte, est indissociable
+            // du résultat guichet durable. Une demande déjà terminale relève
+            // de D-208 : le rapport reste traçable sans la rouvrir.
+            let _ = mark_answered_in_transaction(&tx, linked_request_id, &row.sender, "maicie")
+                .map_err(StoreError::Sqlite)?;
+        }
         let expires_at = row.expires_at;
         tx.commit().map_err(StoreError::Sqlite)?;
         Ok(GuichetResult::Terminal { issue, expires_at })
@@ -692,6 +701,7 @@ struct GuichetRow {
     issuer_scope: String,
     request_id: String,
     canonical_request: Vec<u8>,
+    sender: String,
     expires_at: i64,
     state: String,
     claim_owner: Option<String>,
@@ -709,15 +719,16 @@ fn guichet_row_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GuichetRow>
         issuer_scope: row.get(1)?,
         request_id: row.get(2)?,
         canonical_request: row.get(3)?,
-        expires_at: row.get(4)?,
-        state: row.get(5)?,
-        claim_owner: row.get(6)?,
-        claim_generation: row.get::<_, i64>(7)? as u64,
-        claim_token: row.get(8)?,
-        claim_lease_expires_at: row.get(9)?,
-        result_issue: row.get(10)?,
-        reply_bytes: row.get(11)?,
-        linked_request_id: row.get(12)?,
+        sender: row.get(4)?,
+        expires_at: row.get(5)?,
+        state: row.get(6)?,
+        claim_owner: row.get(7)?,
+        claim_generation: row.get::<_, i64>(8)? as u64,
+        claim_token: row.get(9)?,
+        claim_lease_expires_at: row.get(10)?,
+        result_issue: row.get(11)?,
+        reply_bytes: row.get(12)?,
+        linked_request_id: row.get(13)?,
     })
 }
 
@@ -727,7 +738,7 @@ fn guichet_row_for_key(
     request_id: &str,
 ) -> Result<Option<GuichetRow>, StoreError> {
     conn.query_row(
-        "SELECT deposited_sequence, issuer_scope, request_id, canonical_request,
+        "SELECT deposited_sequence, issuer_scope, request_id, canonical_request, sender,
                 expires_at, state, claim_owner, claim_generation, claim_token,
                 claim_lease_expires_at, result_issue, reply_bytes, linked_request_id
          FROM guichet_requests
@@ -741,7 +752,7 @@ fn guichet_row_for_key(
 
 fn guichet_next_queued(conn: &Connection, now: i64) -> Result<Option<GuichetRow>, StoreError> {
     conn.query_row(
-        "SELECT deposited_sequence, issuer_scope, request_id, canonical_request,
+        "SELECT deposited_sequence, issuer_scope, request_id, canonical_request, sender,
                 expires_at, state, claim_owner, claim_generation, claim_token,
                 claim_lease_expires_at, result_issue, reply_bytes, linked_request_id
          FROM guichet_requests
@@ -1016,6 +1027,56 @@ mod tests {
             ),
             Ok(GuichetResult::Terminal { ref issue, .. }) if issue == "accepted"
         ));
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn reponse_guichet_accepted_clot_atomiquement_la_demande_liee() {
+        let path = std::env::temp_dir().join(format!("bridget-guichet-answer-{}.db", Uuid::new_v4()));
+        let mut store = Store::open(&path).unwrap();
+        let now = 1_787_500_000;
+        store.create_request("message-lie", "maicie", "codex-1", 60).unwrap();
+        let deposit = GuichetDeposit {
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+            request_id: "request-answer".to_string(),
+            issued_at: now,
+            from: "codex-1".to_string(),
+            operation: ServiceRequestOperation::DeliveryReport,
+            payload: ServiceRequestPayload::DeliveryReport {
+                objective_id: "objective-1".to_string(),
+                delegation_id: "delegation-1".to_string(),
+                delivery_hash: "0".repeat(64),
+                in_reply_to: "message-lie".to_string(),
+            },
+            canonical_bytes: br#"{"type":"service_request"}"#.to_vec(),
+        };
+        store.deposit_guichet(&deposit, 600, 60, now).unwrap();
+        let claim = match store.claim_next_guichet("maicie-connection", now).unwrap() {
+            GuichetNext::Claimed(claim) => claim,
+            GuichetNext::Empty => panic!("dépôt lié absent"),
+        };
+        assert!(matches!(
+            store.reply_guichet(
+                "maicie-connection",
+                GuichetReplyInput {
+                    issuer_scope: &claim.issuer_scope,
+                    request_id: &claim.request_id,
+                    generation: claim.claim_generation,
+                    token: &claim.claim_token,
+                    reply_bytes: br#"{"type":"guichet_reply"}"#,
+                    in_reply_to: "message-lie",
+                    outcome: GuichetOutcome::Accepted,
+                },
+                now,
+            ),
+            Ok(GuichetResult::Terminal { ref issue, .. }) if issue == "accepted"
+        ));
+        assert_eq!(
+            store.get_request("message-lie").unwrap().unwrap().state,
+            "answered",
+            "mutation discriminante : sans mark_answered_in_transaction dans la transaction du reply, la demande resterait open"
+        );
         drop(store);
         let _ = std::fs::remove_file(path);
     }

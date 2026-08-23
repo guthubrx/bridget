@@ -962,7 +962,7 @@ fn request_dto(request: bridget_transport::protocol::RequestInfo) -> Value {
     })
 }
 
-fn issuer_scope(identity: &str) -> String {
+pub(crate) fn issuer_scope(identity: &str) -> String {
     let mut first = 0xcbf29ce484222325_u64;
     let mut second = 0x9e3779b97f4a7c15_u64;
     for byte in identity.bytes() {

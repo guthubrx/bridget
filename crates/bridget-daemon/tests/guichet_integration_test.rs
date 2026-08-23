@@ -3,6 +3,7 @@ use bridget_transport::protocol::{
     ServiceRequestOperation, ServiceRequestPayload, SERVICE_CONTRACT_VERSION, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
+use bridget_core::BridgetMessage;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -228,4 +229,142 @@ fn reply(generation: u64, token: String, response_message_id: &str) -> WrapperTo
             delivery_hash: "0".repeat(64),
         },
     }
+}
+
+#[test]
+fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois() {
+    let home = unique_home();
+    let mut daemon = start_daemon(&home);
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+
+    let (mut recipient_reader, mut recipient_writer) = connect(&home);
+    assert!(matches!(
+        request(
+            &mut recipient_reader,
+            &mut recipient_writer,
+            WrapperToDaemon::Register {
+                agent_type: "codex".to_string(),
+                name: Some("codex-1".to_string()),
+                host: None,
+                transport: Some("unix".to_string()),
+                mode: None,
+                location: None,
+                os: None,
+                instance_id: Some("codex-instance".to_string()),
+                domain: None,
+                turn_in_progress: false,
+            },
+        ),
+        DaemonToWrapper::Registered { .. }
+    ));
+    let (mut maicie_reader, mut maicie_writer) = connect(&home);
+    assert!(matches!(
+        request(
+            &mut maicie_reader,
+            &mut maicie_writer,
+            WrapperToDaemon::Register {
+                agent_type: "maicie".to_string(),
+                name: Some("maicie".to_string()),
+                host: None,
+                transport: Some("unix".to_string()),
+                mode: None,
+                location: None,
+                os: None,
+                instance_id: Some("maicie-instance".to_string()),
+                domain: None,
+                turn_in_progress: false,
+            },
+        ),
+        DaemonToWrapper::Registered { .. }
+    ));
+    let mut tracked = BridgetMessage::new("maicie", "codex-1", "rapport attendu");
+    tracked.reply = true;
+    tracked.reply_timeout = Some(60);
+    assert!(matches!(
+        request(&mut maicie_reader, &mut maicie_writer, WrapperToDaemon::Send(tracked.clone())),
+        DaemonToWrapper::Ack { .. }
+    ));
+
+    // Le vrai binaire utilise son inscription CLI temporaire, mais le daemon
+    // vérifie encore que le nom déclaré désigne le wrapper producteur actif.
+    let issued_at = now.to_string();
+    let cli_args = vec![
+        "guichet", "deposer", "delivery-report", "--objective", "objective-1",
+        "--delegation", "delegation-1", "--hash",
+        "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "--in-reply-to", &tracked.id, "--id", "gate-cli-deposit", "--issued-at",
+        &issued_at, "--issuer-scope", SCOPE,
+    ];
+    let output = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .args(&cli_args)
+        .env("HOME", &home)
+        .env("BRIDGET_AGENT_NAME", "codex-1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "dépôt CLI: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("DÉPÔT: queued"));
+    let retry = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .args(&cli_args)
+        .env("HOME", &home)
+        .env("BRIDGET_AGENT_NAME", "codex-1")
+        .output()
+        .unwrap();
+    assert!(retry.status.success());
+    assert!(String::from_utf8_lossy(&retry.stdout).contains("DÉPÔT: outcome_unknown"));
+
+    let (mut service_reader, mut service_writer) = service(&home);
+    let (generation, token) = match request(
+        &mut service_reader,
+        &mut service_writer,
+        WrapperToDaemon::GuichetClaimNext { version: SERVICE_CONTRACT_VERSION },
+    ) {
+        DaemonToWrapper::GuichetClaimed {
+            request_id,
+            claim_generation,
+            claim_token,
+            ..
+        } => {
+            assert_eq!(request_id, "gate-cli-deposit");
+            (claim_generation, claim_token)
+        }
+        other => panic!("claim du dépôt CLI attendu, reçu {other:?}"),
+    };
+    let accepted = WrapperToDaemon::GuichetReply {
+        version: SERVICE_CONTRACT_VERSION,
+        issuer_scope: SCOPE.to_string(),
+        request_id: "gate-cli-deposit".to_string(),
+        claim_generation: generation,
+        claim_token: token,
+        response_message_id: "guichet-response-1".to_string(),
+        in_reply_to: tracked.id.clone(),
+        outcome: GuichetOutcome::Accepted,
+        payload: GuichetReplyPayload::DeliveryReport {
+            objective_id: "objective-1".to_string(),
+            delegation_id: "delegation-1".to_string(),
+            delivery_hash: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".to_string(),
+        },
+    };
+    assert!(matches!(
+        request(&mut service_reader, &mut service_writer, accepted),
+        DaemonToWrapper::GuichetResult { ref issue, .. } if issue == "accepted"
+    ));
+    assert!(matches!(
+        request(
+            &mut maicie_reader,
+            &mut maicie_writer,
+            WrapperToDaemon::ListRequests { sender: "maicie".to_string(), limit: 10 },
+        ),
+        DaemonToWrapper::RequestList { requests }
+            if requests.iter().any(|request| request.id == tracked.id && request.state == "answered")
+    ));
+
+    // Mutation discriminante : retirer mark_answered_in_transaction du reply
+    // laisse la demande ouverte malgré GuichetResult accepted.
+    daemon.kill().unwrap();
+    daemon.wait().unwrap();
+    let _ = std::fs::remove_dir_all(home);
 }

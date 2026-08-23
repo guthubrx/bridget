@@ -3929,7 +3929,12 @@ fn handle_wrapper_message(
                 });
             }
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            if st.conn_names.get(conn_id) != Some(&from) {
+            let declared_sender_matches = st.conn_names.get(conn_id).is_some_and(|registered| {
+                registered == &from
+                    || (registered.starts_with("cli-send-")
+                        && st.router.get_agent(&from).is_some())
+            });
+            if !declared_sender_matches {
                 return Some(DaemonToWrapper::ServiceRejected {
                     reason: ServiceRefusal::DeclaredSenderMismatch,
                 });
