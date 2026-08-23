@@ -211,6 +211,29 @@ impl FleetSupervisor {
         })
     }
 
+    /// Retourne la définition figée d'un processus géré sans relire le
+    /// registre courant. Elle reste disponible après `Connected`, dans l'issue
+    /// terminale de la saga de spawn.
+    pub(crate) fn resolved_definition_for_command(
+        &self,
+        command_id: &str,
+    ) -> Option<ResolvedAgentDefinition> {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        inner
+            .active_by_command
+            .get(command_id)
+            .and_then(|active| active.resolved_definition.clone())
+            .or_else(|| match inner.completed.get(command_id) {
+                Some(SpawnCommandIssue::Connected { definition, .. }) => {
+                    definition.as_deref().cloned()
+                }
+                _ => None,
+            })
+    }
+
     pub fn supervisor_scope(&self) -> String {
         self.inner
             .lock()

@@ -6,7 +6,7 @@ use bridget_transport::protocol::{
     AttachRefusal, CLIENT_CONTRACT_VERSION, ClientCapability, ClientRefusal, ConnectionRole,
     IdempotencyIssue, PresenceMode, SpawnRefusal, StopOutcome, decode, encode,
 };
-use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
+use bridget_transport::{DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -1738,6 +1738,13 @@ impl DaemonState {
             self.recovery_commands.contains(&record.lease.command_id)
                 && !live_names.contains(&record.lease.name)
         }) {
+            let (model, effort) = self
+                .fleet
+                .resolved_definition_for_command(&record.lease.command_id)
+                .as_ref()
+                .and_then(definition_runtime)
+                .map(|(model, effort)| (Some(model), effort))
+                .unwrap_or((None, None));
             agents.push(bridget_transport::protocol::AgentInfo {
                 name: record.lease.name.clone(),
                 agent_type: record.agent_type.clone(),
@@ -1751,8 +1758,8 @@ impl DaemonState {
                 last_seen_secs: 0,
                 reconnect_count: 0,
                 domain: None,
-                model: None,
-                effort: None,
+                model,
+                effort,
             });
         }
         let listed_names: std::collections::HashSet<String> =
@@ -2448,6 +2455,59 @@ fn handle_connection(
 ///
 /// Les champs du message `Register` restent dépliés ici pour refléter le
 /// protocole de transport ; les regrouper imposerait un refactor hors scope.
+fn definition_runtime(
+    definition: &ResolvedAgentDefinition,
+) -> Option<(String, Option<String>)> {
+    let mut model = None;
+    let mut effort = None;
+    let mut index = 0;
+    while index < definition.args.len() {
+        let argument = &definition.args[index];
+        if matches!(argument.as_str(), "--model" | "--effort" | "--effort-level") {
+            if let Some(value) = definition.args.get(index + 1) {
+                let value = unquote_definition_value(value);
+                if argument == "--model" {
+                    model = Some(value);
+                } else {
+                    effort = Some(value);
+                }
+            }
+            index += 2;
+            continue;
+        }
+        if let Some(value) = definition_assignment(argument, "model") {
+            model = Some(unquote_definition_value(value));
+        }
+        if let Some(value) = definition_assignment(argument, "model_reasoning_effort")
+            .or_else(|| definition_assignment(argument, "effort"))
+        {
+            effort = Some(unquote_definition_value(value));
+        }
+        index += 1;
+    }
+    let model = model.filter(|value| validate_runtime_value(value).is_ok())?;
+    let effort = effort.filter(|value| validate_runtime_value(value).is_ok());
+    Some((model, effort))
+}
+
+fn definition_assignment<'a>(argument: &'a str, key: &str) -> Option<&'a str> {
+    argument
+        .strip_prefix(key)
+        .and_then(|suffix| suffix.strip_prefix('='))
+}
+
+fn unquote_definition_value(value: &str) -> String {
+    let value = value.trim();
+    if value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
+    {
+        value[1..value.len() - 1].to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_register(
     conn_id: &str,
@@ -2493,34 +2553,93 @@ fn handle_register(
             );
 
             if let Some(instance_id) = instance_id.filter(|id| !id.is_empty()) {
-                let previous = state.presences.get(&instance_id);
+                let presence_owned_by_live_connection = state.conn_instances.iter().any(
+                    |(existing_conn, existing_instance)| {
+                        existing_conn != conn_id
+                            && existing_instance == &instance_id
+                            && state.presences.get(&instance_id).is_some_and(|presence| {
+                                matches!(presence.state.as_str(), "connected" | "busy")
+                            })
+                    },
+                );
+                if presence_owned_by_live_connection {
+                    // Une connexion auxiliaire issue de la filiation MCP peut
+                    // revendiquer la même instance que le wrapper. Elle garde
+                    // son entrée de routage éphémère, mais ne devient jamais
+                    // propriétaire de la présence : sa fermeture ne doit pas
+                    // rendre le wrapper inaccessible ni effacer ses faits.
+                    info!(
+                        "présence {} conservée : connexion auxiliaire {} ignorée",
+                        instance_id, conn_id
+                    );
+                    state.restore_pending_for_agent(&final_name, conn_id);
+                    return DaemonToWrapper::Registered { name: final_name };
+                }
+
+                let previous = state.presences.get(&instance_id).cloned();
                 let reconnect_count = previous
+                    .as_ref()
                     .map(|presence| {
                         presence.reconnect_count + u32::from(presence.state != "connected")
                     })
                     .unwrap_or(0);
-                // Une reconnexion sous la même instance conserve le runtime déjà
-                // observé : l'agent n'a pas changé de modèle en perdant le socket.
-                let (model, effort) = previous
-                    .map(|presence| (presence.model.clone(), presence.effort.clone()))
-                    .unwrap_or((None, None));
-                // Le domaine annoncé par le wrapper fait foi : il porte déjà la
-                // surcharge s'il en existe une, puisqu'il relit le fichier
-                // d'état avant de se réenregistrer.
-                let derived_domain = domain
-                    .clone()
-                    .or_else(|| previous.and_then(|presence| presence.derived_domain.clone()));
-                let dnd_until = previous.and_then(|presence| presence.dnd_until);
+                let managed_runtime = state
+                    .managed_by_instance
+                    .get(&instance_id)
+                    .and_then(|command_id| {
+                        state.fleet.resolved_definition_for_command(command_id)
+                    })
+                    .as_ref()
+                    .and_then(definition_runtime)
+                    .map(|(model, effort)| (Some(model), effort));
+                // Un géré tient son runtime de la définition figée. Une
+                // reconnexion interactive conserve, elle, la dernière sonde.
+                let (model, effort) = managed_runtime.unwrap_or_else(|| {
+                    previous
+                        .as_ref()
+                        .map(|presence| (presence.model.clone(), presence.effort.clone()))
+                        .unwrap_or((None, None))
+                });
+                let derived_domain = previous
+                    .as_ref()
+                    .and_then(|presence| presence.derived_domain.clone())
+                    .or_else(|| domain.clone());
+                let dnd_until = previous.as_ref().and_then(|presence| presence.dnd_until);
                 // Une reconnexion par un binaire antérieur au champ conserve
                 // l'observation déjà attestée ; une présence historique sans
                 // valeur reste volontairement inconnue.
-                let mode = mode.or_else(|| previous.and_then(|presence| presence.mode));
+                let mode = previous.as_ref().and_then(|presence| presence.mode).or(mode);
                 let location = match mode {
-                    Some(PresenceMode::Tmux) => {
-                        location.or_else(|| previous.and_then(|presence| presence.location.clone()))
-                    }
+                    Some(PresenceMode::Tmux) => previous
+                        .as_ref()
+                        .and_then(|presence| presence.location.clone())
+                        .or(location),
                     _ => None,
                 };
+                let host = previous
+                    .as_ref()
+                    .filter(|presence| presence.host != "inconnu")
+                    .map(|presence| presence.host.clone())
+                    .or(host)
+                    .unwrap_or_else(|| "inconnu".to_string());
+                let os = previous
+                    .as_ref()
+                    .filter(|presence| presence.os != "inconnu")
+                    .map(|presence| presence.os.clone())
+                    .or(os)
+                    .unwrap_or_else(|| "inconnu".to_string());
+                let transport = previous
+                    .as_ref()
+                    .filter(|presence| presence.mode.is_some())
+                    .map(|presence| presence.transport.clone())
+                    .or(transport)
+                    .or_else(|| previous.as_ref().map(|presence| presence.transport.clone()))
+                    .unwrap_or_else(|| "unix".to_string());
+                let agent_type = previous
+                    .as_ref()
+                    .filter(|presence| !matches!(presence.agent_type.as_str(), "mcp" | "cli"))
+                    .map(|presence| presence.agent_type.clone())
+                    .unwrap_or_else(|| parsed_type.to_string());
 
                 state
                     .conn_instances
@@ -2529,12 +2648,12 @@ fn handle_register(
                     instance_id.clone(),
                     Presence {
                         name: final_name.clone(),
-                        agent_type: parsed_type.to_string(),
-                        host: host.unwrap_or_else(|| "inconnu".to_string()),
-                        transport: transport.unwrap_or_else(|| "unix".to_string()),
+                        agent_type,
+                        host,
+                        transport,
                         mode,
                         location,
-                        os: os.unwrap_or_else(|| "inconnu".to_string()),
+                        os,
                         state: if turn_in_progress {
                             "busy"
                         } else {
@@ -6907,6 +7026,112 @@ mod presence_tests {
         assert_eq!(legacy_refusal.reason, AttachRefusal::AgentNotAcp);
         assert!(legacy_refusal.mode.is_none());
         assert!(legacy_refusal.location.is_none());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn enregistrement_auxiliaire_mcp_ne_revendique_pas_la_presence_du_wrapper_vivant() {
+        let (mut state, config) = state_with_registered_agent("presence-mcp-fusion");
+        let rich = state.presences.get_mut("instance-1").unwrap();
+        rich.domain = Some("coordination".to_string());
+        rich.derived_domain = Some("coordination".to_string());
+        rich.model = Some("gpt-5.6-terra".to_string());
+        rich.effort = Some("high".to_string());
+
+        assert!(matches!(
+            handle_register(
+                "mcp-child",
+                "mcp".to_string(),
+                Some("mcp-child".to_string()),
+                None,
+                None,
+                Some(PresenceMode::Cli),
+                None,
+                None,
+                Some("instance-1".to_string()),
+                None,
+                false,
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        assert!(!state.conn_instances.contains_key("mcp-child"));
+
+        // Fermeture de la connexion utilisée par l'outil MCP : elle ne doit
+        // ni voler l'instance, ni rendre le wrapper principal inaccessible.
+        state.router.unregister_by_conn("mcp-child");
+        state.mark_unreachable("mcp-child");
+        let agents = state.agent_infos();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].name, "agent-2");
+        assert_eq!(agents[0].transport, "acp");
+        assert_eq!(agents[0].mode, Some(PresenceMode::Acp));
+        assert_eq!(agents[0].domain.as_deref(), Some("coordination"));
+        assert_eq!(agents[0].model.as_deref(), Some("gpt-5.6-terra"));
+        assert_eq!(agents[0].effort.as_deref(), Some("high"));
+        assert_eq!(agents[0].state, "connected");
+
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn gere_acp_projette_modele_et_effort_de_sa_definition_figee() {
+        let (mut state, config) = state_with_registered_agent("managed-runtime-definition");
+        state.router.unregister_by_conn("conn-1");
+        state.conn_instances.remove("conn-1");
+        state.presences.clear();
+        state.registry = AgentRegistry::from_json(
+            r#"{"agents":{"codex-terra":{"command":"npx","args":["codex-acp","-c","model=\"gpt-5.6-terra\"","-c","model_reasoning_effort=\"high\""],"protocol":"acp"}}}"#,
+            "/tmp/agents.json",
+        )
+        .unwrap();
+        let definition = state.registry.resolved_definition("codex-terra").unwrap();
+        let now = unix_timestamp();
+        let order = FleetSpawnOrder {
+            agent_type: "codex-terra".to_string(),
+            requested_name: Some("coder-terra".to_string()),
+            cwd: PathBuf::from("/tmp"),
+            persistent: false,
+            command_id: "managed-runtime-definition".to_string(),
+            issued_at: now,
+            deadline_at: now + 60,
+        };
+        let lease = match state.fleet.request_spawn(&order, now).unwrap() {
+            crate::fleet::SpawnSubmission::Start(lease) => lease,
+            other => panic!("réservation inattendue: {other:?}"),
+        };
+        state.fleet.mark_starting(&lease, now, &definition).unwrap();
+        state
+            .managed_by_instance
+            .insert(lease.instance_id.clone(), lease.command_id.clone());
+        let instance_id = lease.instance_id.clone();
+
+        assert!(matches!(
+            handle_register(
+                "managed-terra",
+                "codex-terra".to_string(),
+                Some("coder-terra".to_string()),
+                Some("local".to_string()),
+                Some("acp".to_string()),
+                Some(PresenceMode::Acp),
+                None,
+                Some("macOS".to_string()),
+                Some(instance_id.clone()),
+                None,
+                false,
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        state
+            .fleet
+            .register_connected(&lease, &instance_id, now + 1)
+            .unwrap();
+        let agent = state.agent_infos().pop().expect("géré visible");
+        assert_eq!(agent.name, "coder-terra");
+        assert_eq!(agent.model.as_deref(), Some("gpt-5.6-terra"));
+        assert_eq!(agent.effort.as_deref(), Some("high"));
+
         let _ = std::fs::remove_file(config.db_path);
     }
 
