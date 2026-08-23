@@ -198,7 +198,8 @@ fn candidates_from(config: &MaicieConfig, agents: &[AgentInfo]) -> Vec<Delegatio
         .profiles
         .iter()
         .filter_map(|profile| {
-            let agent = agents.iter().find(|agent| agent.name == profile.id)?;
+            let agent_name = profile.agent_name.as_deref().unwrap_or(&profile.id);
+            let agent = agents.iter().find(|agent| agent.name == agent_name)?;
             Some(DelegationCandidate {
                 name: agent.name.clone(),
                 tags: profile.tags.clone(),
@@ -667,7 +668,10 @@ impl fmt::Display for CliError {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_command, Command, DelegateOutput};
+    use super::{candidates_from, parse_command, Command, DelegateOutput};
+    use maicie::bridget_client::AgentInfo;
+    use maicie::config::{DurationClasses, MaicieConfig, ProfileConfig};
+    use std::path::PathBuf;
 
     #[test]
     fn delegate_exige_les_options_structurantes() {
@@ -691,5 +695,48 @@ mod tests {
         })
         .unwrap();
         assert_eq!(output, r#"{"kind":"candidates","candidates":["a","b"]}"#);
+    }
+
+    #[test]
+    fn candidat_joint_le_nom_runtime_plutot_que_le_slug_du_profil() {
+        let config = MaicieConfig {
+            version: 1,
+            bridget_socket: PathBuf::from("/tmp/bridget.sock"),
+            database_path: PathBuf::from("/tmp/maicie.sqlite3"),
+            durations: DurationClasses {
+                short_secs: 30,
+                normal_secs: 60,
+                long_secs: 90,
+            },
+            profiles: vec![ProfileConfig {
+                id: "code-review".to_string(),
+                agent_name: Some("coderBridget".to_string()),
+                display_name: "Code review".to_string(),
+                tags: vec!["review".to_string()],
+                personality_ref: "profiles/reviewer.md".to_string(),
+                tools: Vec::new(),
+                spawn_order_ref: "agents/reviewer".to_string(),
+            }],
+        };
+        let agents = vec![AgentInfo {
+            name: "coderBridget".to_string(),
+            agent_type: "codex".to_string(),
+            connection_id: "conn-1".to_string(),
+            host: "local".to_string(),
+            transport: "acp".to_string(),
+            os: "macos".to_string(),
+            state: "connected".to_string(),
+            last_seen_secs: 0,
+            reconnect_count: 0,
+            domain: None,
+            model: None,
+            effort: None,
+        }];
+
+        let candidates = candidates_from(&config, &agents);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].name, "coderBridget");
+        assert_eq!(candidates[0].tags, ["review"]);
     }
 }

@@ -70,7 +70,12 @@ impl DurationClasses {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileConfig {
+    /// Clé stable de gouvernance du profil, distincte du nom runtime Bridget.
     pub id: String,
+    /// Identité exacte publiée par l'annuaire Bridget. L'absence conserve la
+    /// compatibilité avec les profils historiques dont `id` était ce nom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
     pub display_name: String,
     pub tags: Vec<String>,
     pub personality_ref: String,
@@ -186,6 +191,7 @@ fn validate_profiles(profiles: &[ProfileConfig]) -> Result<(), ConfigError> {
     }
 
     let mut ids = HashSet::with_capacity(profiles.len());
+    let mut agent_names = HashSet::with_capacity(profiles.len());
     for profile in profiles {
         let field = format!("profiles.{}", profile.id);
         validate_slug(&format!("{field}.id"), &profile.id)?;
@@ -193,6 +199,24 @@ fn validate_profiles(profiles: &[ProfileConfig]) -> Result<(), ConfigError> {
             return Err(ConfigError::validation(
                 "profiles",
                 format!("identifiant de profil duplique : {}", profile.id),
+            ));
+        }
+        let agent_name = profile.agent_name.as_deref().unwrap_or(&profile.id);
+        validate_text(
+            &format!("{field}.agent_name"),
+            agent_name,
+            MAX_SHORT_TEXT_BYTES,
+        )?;
+        if agent_name.chars().any(char::is_control) {
+            return Err(ConfigError::validation(
+                format!("{field}.agent_name"),
+                "le nom d'agent ne peut contenir de caractere de controle",
+            ));
+        }
+        if !agent_names.insert(agent_name) {
+            return Err(ConfigError::validation(
+                "profiles",
+                format!("nom d'agent duplique : {agent_name}"),
             ));
         }
         validate_text(

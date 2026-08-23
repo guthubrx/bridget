@@ -38,6 +38,23 @@ fn charge_une_configuration_entierement_declarative() {
 }
 
 #[test]
+fn accepte_un_nom_d_agent_runtime_distinct_du_slug_de_profil() {
+    let body = VALID_CONFIG.replace(
+        "\"id\": \"prospective\",",
+        "\"id\": \"reviewer\",\n    \"agent_name\": \"coderBridget\",",
+    );
+    let fixture = Fixture::new("agent-name", &body);
+
+    let config = MaicieConfig::load(&fixture.path).unwrap();
+
+    assert_eq!(config.profiles[0].id, "reviewer");
+    assert_eq!(
+        config.profiles[0].agent_name.as_deref(),
+        Some("coderBridget")
+    );
+}
+
+#[test]
 fn refuse_une_cle_secrete_ou_inconnue_sans_l_ignorer() {
     for field in ["api_key", "OPENAI_API_KEY", "TOKEN"] {
         let with_secret = VALID_CONFIG.replace(
