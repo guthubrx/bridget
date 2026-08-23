@@ -279,3 +279,13 @@ Six tâches validées sur le principe par l'utilisateur (spec à créer au « go
   La règle « zéro trace IA dans Git » s'applique-t-elle aux seules
   métadonnées de commit (position recommandée par le référent — le projet
   EST un orchestrateur d'agents) ou aussi au contenu ? Décision non rendue.
+- **Routines planifiées** (vision grokbot, capture utilisateur 2026-08-23) :
+  délégations RÉCURRENTES portées par Maicie (routine = delegate + calendrier,
+  journalisée, idempotente, visible au greffe et dans le futur panneau GUI).
+  Doctrine : une routine délègue, jamais n'approuve (FR-014 sans exception
+  horaire). Point 35 du plan — bloc F.
+- **Répartition socle GUI actée** : prendre de T3 Code effect-acp, contracts,
+  client-runtime, coquille desktop/web + accès distant appairé (REMOTE.md) ;
+  laisser sa gestion de providers (le daemon fait autorité), l'auth cloud,
+  les checkpoints internes ; construire la couche équipe (who/ledger/fils
+  liés/missions Maicie/routines).
