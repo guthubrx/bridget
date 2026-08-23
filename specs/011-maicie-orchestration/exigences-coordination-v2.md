@@ -235,10 +235,14 @@ Delta backend, par taille :
 4. Hérite de la 014 (corrélation toolCallId, heure locale, mode, sonde
    claude). Hors périmètre assumé : changer le modèle d'une session en cours
    (appartient au CLI de l'agent).
-   Client : NE PAS réinventer le rendu — partir d'un socle de chat UI
-   existant (piste utilisateur : t3code / stack T3 ou équivalent open
-   source, licence à vérifier, exécution strictement locale) ; notre valeur
-   est le read-model et les adaptateurs, pas la coquille de chat.
+   Client : socle IDENTIFIÉ ET VÉRIFIÉ — T3 Code (clone local
+   ~/11.Repositories/t3code, MIT, pingdotgg) : GUI desktop/web pour agents
+   Codex/Claude qui parle DÉJÀ ACP nativement (packages/effect-acp — le même
+   protocole que nos wrappers gérés). Le rendu vue-intérieure est acquis ;
+   notre delta se réduit à : un adaptateur Bridget dans apps/server
+   (journal via Subscribe, ledger, who → contrats T3) + la dimension équipe
+   qu'il n'a pas (multi-agents, fils inter-agents in_reply_to, missions
+   Maicie en sidebar). Exécution strictement locale.
 5. **Vue unifiée quel que soit le canal ET le mode** (exigence utilisateur
    2026-08-23) : même vue attach/GUI pour les gérés ACP et les interactifs
    tmux. Chemin : généraliser la sonde runtime existante (parse_codex_rollout,
