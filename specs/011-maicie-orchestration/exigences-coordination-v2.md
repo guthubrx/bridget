@@ -295,3 +295,16 @@ Six tâches validées sur le principe par l'utilisateur (spec à créer au « go
   besoin porteur : les routines (une routine EST un objectif planifié
   récurrent) ou le panneau de planification GUI. À construire dans CES
   specs-là, jamais seul.
+
+## Suivis post-gate 014 (fable-reviewer, 2026-08-23 soir — non bloquants)
+
+- C1 arbitré : flakiness d'ordre de livraison sur poste QoS arrière-plan
+  (préexistant, échoue aussi sur main) — 6/6 vert sur poste sain ; harnais
+  receive_replies à durcir un jour comme C2-011.
+- C2 : wrapper ACP ancien-binaire re-enregistré sans mode → attach fail-closed
+  « mode inconnu » jusqu'à relance du wrapper (conforme FR-1401, à savoir).
+- C3 : tool_titles jamais purgée (croissance non bornée sur session longue).
+- C4 : options codex à valeur codées en dur (à surveiller aux montées codex).
+- C5 : tmux_location capturée au lancement, périmée si pane déplacé.
+- C6 : slug claude réimplémenté (dégradation honnête si convention diverge).
+- C7 : BRIDGET_MVP_GATE_BIN exige un chemin absolu.
