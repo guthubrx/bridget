@@ -143,10 +143,9 @@ pub fn status(
     let snapshots = store
         .objective_snapshots(objective_id)
         .map_err(objective_store_error)?;
-    if let Some(id) = objective_id
-        && snapshots.is_empty()
-    {
-        return Err(ObjectiveError::NotFound(id));
+    match objective_id {
+        Some(id) if snapshots.is_empty() => return Err(ObjectiveError::NotFound(id)),
+        _ => {}
     }
     Ok(snapshots)
 }

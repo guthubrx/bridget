@@ -246,9 +246,7 @@ impl MaicieStore {
         if decision.etat != EtatDecision::Appliquee {
             return Err(StoreError::Invalid("décision non appliquée"));
         }
-        if let Some(objective) = updated_objective
-            && objective.id != decision.objectif_id
-        {
+        if updated_objective.is_some_and(|objective| objective.id != decision.objectif_id) {
             return Err(StoreError::Invalid("décision et objectif divergents"));
         }
         let decision_json = serde_json::to_vec(decision).map_err(StoreError::Json)?;
