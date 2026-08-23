@@ -16,9 +16,11 @@ champ additif optionnel).
 ## D-1303 — Clé de bloc et bascule replay→live (obj. 4)
 Clé de bloc = `session_id+message_id`. Un tour ouvert en rattrapage et clos
 en live reste UN bloc (ni doublon ni trou) ; test dédié de la bascule.
-Évacuation des blocs sans `turn_end` : à `Gap`, `End`, `SnapshotCaughtUp` ou
-ligne corrompue, flush VISIBLE « tour incomplet » (borne conservée) — aucun
-bloc n'est retenu indéfiniment ; une fixture par frontière.
+Évacuation des blocs sans `turn_end` : `Gap`, `End` et ligne corrompue
+flushent TOUJOURS (« tour incomplet » visible, borne conservée) ;
+`SnapshotCaughtUp` privilégie la CONTINUITÉ — marqueur inséré dans le bloc,
+qui reste ouvert si sa clé est corrélable en live, flush incomplet seulement
+sinon. Aucun bloc retenu indéfiniment ; une fixture par frontière.
 
 ## D-1304 — Bornes mémoire (obj. 5)
 Tampon par bloc borné (64 Kio / 400 lignes) ; troncature VISIBLE
