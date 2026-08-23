@@ -9,7 +9,7 @@ use crate::bridget_client::{
     BridgetClient, BridgetClientError, BridgetClientLimits, IdempotencyIssue,
 };
 use crate::outbox::{OutboxError, PendingDelegationOutbox};
-use crate::store::{MaicieStore, StoreError};
+use crate::store::{DelegationRecoveryEntry, LocalFailureReason, MaicieStore, StoreError};
 use std::fmt;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -54,6 +54,13 @@ pub enum ReconcileAction {
     TransportIndisponible {
         objective_id: Uuid,
         message_id: Uuid,
+    },
+    /// Les octets durables sont invalides localement : le store les a figés
+    /// comme rejetés, sans les transmettre ni les assimiler à un refus Bridget.
+    RejetLocal {
+        objective_id: Uuid,
+        message_id: Uuid,
+        reason: LocalFailureReason,
     },
 }
 
@@ -187,9 +194,26 @@ pub fn reconcile_startup_at_observed_with_limits(
     }
     let socket = bridget_socket.as_ref();
     let mut report = ReconcileReport::default();
-    for outbox in store.pending_delegation_outboxes()? {
-        observer(ReconcilePhase::BeforeSocket)?;
-        let action = reconcile_one(store, socket, &outbox, observed_at, limits, &mut observer)?;
+    for entry in store.delegation_recovery_entries()? {
+        let action = match entry {
+            DelegationRecoveryEntry::Pending(outbox) => {
+                observer(ReconcilePhase::BeforeSocket)?;
+                reconcile_one(store, socket, &outbox, observed_at, limits, &mut observer)?
+            }
+            DelegationRecoveryEntry::LocalFailure {
+                objective_id,
+                message_id,
+                reason,
+                ..
+            } => {
+                store.record_local_failure(message_id, reason)?;
+                ReconcileAction::RejetLocal {
+                    objective_id,
+                    message_id,
+                    reason,
+                }
+            }
+        };
         report.actions.push(action);
     }
     Ok(report)
@@ -280,6 +304,14 @@ fn uncertain_or_error(
     observed_at: i64,
     error: BridgetClientError,
 ) -> Result<ReconcileAction, ReconcileError> {
+    if let Some(reason) = local_failure_reason(&error) {
+        store.record_local_failure(outbox.message_id, reason)?;
+        return Ok(ReconcileAction::RejetLocal {
+            objective_id: outbox.objective_id,
+            message_id: outbox.message_id,
+            reason,
+        });
+    }
     if !transport_is_ambiguous(&error) {
         return Err(ReconcileError::Client(error));
     }
@@ -288,6 +320,14 @@ fn uncertain_or_error(
         objective_id: outbox.objective_id,
         message_id: outbox.message_id,
     })
+}
+
+fn local_failure_reason(error: &BridgetClientError) -> Option<LocalFailureReason> {
+    match error {
+        BridgetClientError::FrameTooLarge { .. } => Some(LocalFailureReason::FrameTooLarge),
+        BridgetClientError::InvalidEnvelope(_) => Some(LocalFailureReason::InvalidEnvelope),
+        _ => None,
+    }
 }
 
 fn can_replay_absent(

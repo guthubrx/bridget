@@ -8,7 +8,7 @@ use maicie::reconcile::{
     reconcile_startup_at, reconcile_startup_at_observed, reconcile_startup_at_with_limits,
     ReconcileAction,
 };
-use maicie::store::MaicieStore;
+use maicie::store::{LocalFailureReason, MaicieStore};
 use serde_json::{json, Value};
 use std::fs::{self, DirBuilder};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
@@ -225,6 +225,116 @@ fn reprise_utilise_la_meme_borne_runtime_que_la_preparation() {
     ));
     assert!(store.pending_delegation_outboxes().unwrap().is_empty());
     server.join().unwrap();
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn trame_trop_grande_devient_rejet_local_durable_sans_rejeu() {
+    let root = unique_root("local-frame-too-large");
+    let database = root.join("maicie.sqlite3");
+    let socket = root.join("bridget.sock");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let default_limits = BridgetClientLimits::default();
+    let high_limits = BridgetClientLimits {
+        max_frame_bytes: default_limits.max_frame_bytes + 128,
+        ..default_limits
+    };
+    let empty_message = PublicMessage {
+        id: uuid(MESSAGE_ID).to_string(),
+        from: maicie::MAICIE_IDENTITY.to_string(),
+        to: "prospective".to_string(),
+        body: String::new(),
+        reply: true,
+        hops: 4,
+        reply_timeout: Some(60),
+        deadline_at: Some(1_060),
+        in_reply_to: None,
+    };
+    let replay_overhead = serde_json::to_vec(&json!({
+        "type":"SendIdempotent",
+        "message":empty_message,
+        "message_id":MESSAGE_ID,
+        "issued_at":ISSUED_AT,
+    }))
+    .unwrap()
+    .len();
+    let prepared = fixture_with_body(
+        store.issuer_scope(),
+        "x".repeat(default_limits.max_frame_bytes - replay_overhead),
+        high_limits.max_frame_bytes,
+    );
+    store.create_prepared_delegation(&prepared).unwrap();
+
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let (mut reader, mut writer) = split(stream);
+        negotiate_client(&mut reader, &mut writer);
+        assert_eq!(read_json(&mut reader)["type"], "Lookup");
+        write_issue(&mut writer, json!({"kind":"idempotency_expired"}));
+        let mut unexpected = String::new();
+        assert_eq!(reader.read_line(&mut unexpected).unwrap(), 0);
+    });
+
+    let report = reconcile_startup_at(&mut store, &socket, 1_010).unwrap();
+    assert!(matches!(
+        &report.actions[..],
+        [ReconcileAction::RejetLocal {
+            objective_id,
+            message_id,
+            reason: LocalFailureReason::FrameTooLarge,
+        }] if *objective_id == uuid(OBJECTIVE_ID) && *message_id == uuid(MESSAGE_ID)
+    ));
+    let snapshot = store.recovery_snapshot(uuid(MESSAGE_ID)).unwrap().unwrap();
+    assert_eq!(snapshot.outbox.state, EtatOutboxDelegation::Rejected);
+    assert_eq!(
+        snapshot.last_issue.unwrap(),
+        json!({"local":"frame_too_large"})
+    );
+    server.join().unwrap();
+
+    assert!(reconcile_startup_at(&mut store, &socket, 1_011)
+        .unwrap()
+        .actions
+        .is_empty());
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn enveloppe_corrompue_devient_rejet_local_sans_ouvrir_de_socket() {
+    let root = unique_root("local-invalid-envelope");
+    let database = root.join("maicie.sqlite3");
+    let socket = root.join("absent.sock");
+    {
+        let mut store = MaicieStore::open(&database).unwrap();
+        let prepared = fixture(store.issuer_scope());
+        store.create_prepared_delegation(&prepared).unwrap();
+    }
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute(
+            "UPDATE delegation_outbox SET body_bytes = ?1 WHERE message_id = ?2",
+            rusqlite::params![b"corrompu".as_slice(), MESSAGE_ID],
+        )
+        .unwrap();
+    drop(connection);
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    let report = reconcile_startup_at(&mut store, &socket, 1_010).unwrap();
+    assert!(matches!(
+        &report.actions[..],
+        [ReconcileAction::RejetLocal {
+            objective_id,
+            message_id,
+            reason: LocalFailureReason::InvalidEnvelope,
+        }] if *objective_id == uuid(OBJECTIVE_ID) && *message_id == uuid(MESSAGE_ID)
+    ));
+    assert!(reconcile_startup_at(&mut store, &socket, 1_011)
+        .unwrap()
+        .actions
+        .is_empty());
     drop(store);
     fs::remove_dir_all(root).unwrap();
 }
