@@ -240,6 +240,45 @@ impl IdempotentDeliveryTracker {
     }
 }
 
+/// La remise tmux est synchrone : son succès est l'observable équivalent à
+/// `PromptDispatched` pour une session interactive. L'accusé durable ne part
+/// donc qu'après l'injection effective dans le pane.
+#[allow(clippy::too_many_arguments)]
+fn deliver_idempotent_to_interactive(
+    tracker: &mut IdempotentDeliveryTracker,
+    delivery_id: String,
+    recipient_instance_id: String,
+    delivery_generation: u64,
+    expires_at: i64,
+    message: bridget_core::BridgetMessage,
+    now: i64,
+    inject: impl FnOnce(&bridget_core::BridgetMessage) -> Result<(), String>,
+) -> Vec<WrapperToDaemon> {
+    match tracker.receive(
+        delivery_id,
+        recipient_instance_id,
+        delivery_generation,
+        expires_at,
+        message,
+        now,
+    ) {
+        IdempotentDeliveryAction::Report(report) => vec![report],
+        IdempotentDeliveryAction::Inject {
+            message,
+            delivery_id,
+        } => {
+            if inject(&message).is_ok() {
+                tracker
+                    .prompt_dispatched(&message.id, now)
+                    .into_iter()
+                    .collect()
+            } else {
+                tracker.injection_failed(&delivery_id).into_iter().collect()
+            }
+        }
+    }
+}
+
 fn socket_path() -> PathBuf {
     if let Ok(home) = std::env::var("HOME") {
         PathBuf::from(home)
@@ -698,6 +737,10 @@ pub fn launch(
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&name_state_path, &my_name)?;
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or("HOME absent pour les reçus idempotents interactifs")?;
+    let idempotent_deliveries = IdempotentDeliveryTracker::open(&home, &instance_id)?;
 
     // 3. Détection du pane tmux
     let pane_id = get_current_pane_id().unwrap_or_else(|e| {
@@ -818,6 +861,7 @@ pub fn launch(
 
     let listener_handle = thread::spawn(move || {
         let mut listener = reader;
+        let mut idempotent_deliveries = idempotent_deliveries;
         let mut transport = if !pane_for_thread.is_empty() {
             Some(TmuxTransport::new(pane_for_thread.clone(), agent_pid))
         } else {
@@ -1069,6 +1113,30 @@ pub fn launch(
                         }
                     } else {
                         warn!("livraison ignorée : aucun pane tmux pour {}", bm.id);
+                    }
+                }
+                DaemonToWrapper::DeliverIdempotent {
+                    delivery_id,
+                    recipient_instance_id,
+                    delivery_generation,
+                    expires_at,
+                    message,
+                } => {
+                    let reports = deliver_idempotent_to_interactive(
+                        &mut idempotent_deliveries,
+                        delivery_id,
+                        recipient_instance_id,
+                        delivery_generation,
+                        expires_at,
+                        message,
+                        unix_now_secs(),
+                        |message| match transport.as_mut() {
+                            Some(transport) => transport.deliver(message).map_err(|error| error.to_string()),
+                            None => Err("aucun pane tmux pour la livraison idempotente".into()),
+                        },
+                    );
+                    for report in reports {
+                        send_wrapper_message(&writer_for_listener, report);
                     }
                 }
                 DaemonToWrapper::Disconnect => {
@@ -2783,6 +2851,65 @@ mod reconnect_tests {
             IdempotentDeliveryAction::Report(WrapperToDaemon::DeliverAcked { .. })
         ));
         drop(tracker);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn livraison_idempotente_interactive_injecte_une_fois_et_rejoue_l_accuse() {
+        let root = receipt_root("interactive-idempotent");
+        let instance_id = "instance_012_interactive";
+        let mut injections = 0;
+        let message = idempotent_message("interactive-prompt");
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, instance_id).unwrap();
+
+        let first = deliver_idempotent_to_interactive(
+            &mut tracker,
+            "interactive-delivery".to_string(),
+            instance_id.to_string(),
+            61,
+            500,
+            message.clone(),
+            100,
+            |_| {
+                injections += 1;
+                Ok(())
+            },
+        );
+        assert_eq!(injections, 1);
+        assert!(matches!(
+            first.as_slice(),
+            [WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation: 61,
+            }] if delivery_id == "interactive-delivery"
+        ));
+
+        // La reconnexion réouvre le même store de reçus : le daemon peut
+        // redélivrer, mais le pane ne reçoit jamais un second prompt.
+        drop(tracker);
+        let mut reconnected = IdempotentDeliveryTracker::open_at(&root, instance_id).unwrap();
+        let replay = deliver_idempotent_to_interactive(
+            &mut reconnected,
+            "interactive-delivery".to_string(),
+            instance_id.to_string(),
+            61,
+            500,
+            message,
+            101,
+            |_| {
+                injections += 1;
+                Ok(())
+            },
+        );
+        assert_eq!(injections, 1);
+        assert!(matches!(
+            replay.as_slice(),
+            [WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation: 61,
+            }] if delivery_id == "interactive-delivery"
+        ));
+        drop(reconnected);
         std::fs::remove_dir_all(root).unwrap();
     }
 
