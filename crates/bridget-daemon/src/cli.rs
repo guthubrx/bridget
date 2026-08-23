@@ -255,6 +255,7 @@ fn print_usage() {
            help                   Cette aide\n\n\
          Options de send :\n  \
            --to <nom>             Destinataire (requis)\n  \
+           --in-reply-to <id>     Lie la réponse à une demande suivie\n  \
            --reply                Réponse attendue\n  \
            --timeout <S>          Délai avant échec (défaut: 60)\n  \
            --hops <N>             Sauts restants (défaut: 4)\n\n\
@@ -698,6 +699,7 @@ fn cmd_send(args: &[String]) {
     let mut id: Option<String> = None;
     let mut issued_at: Option<String> = None;
     let mut issuer_scope: Option<String> = None;
+    let mut in_reply_to: Option<String> = None;
     let mut body_parts: Vec<String> = Vec::new();
 
     let mut i = 0;
@@ -742,6 +744,10 @@ fn cmd_send(args: &[String]) {
                 Ok(value) => issuer_scope = Some(value),
                 Err(error) => send_usage_error(&error),
             },
+            "--in-reply-to" => match option_value(args, &mut i, "--in-reply-to") {
+                Ok(value) => in_reply_to = Some(value),
+                Err(error) => send_usage_error(&error),
+            },
             _ => {
                 body_parts.push(args[i].clone());
             }
@@ -752,7 +758,9 @@ fn cmd_send(args: &[String]) {
     let to = match to {
         Some(t) => t,
         None => {
-            eprintln!("usage: bridget send --to <nom> [--reply] [--hops N] <message>");
+            eprintln!(
+                "usage: bridget send --to <nom> [--in-reply-to ID] [--reply] [--hops N] <message>"
+            );
             std::process::exit(2);
         }
     };
@@ -783,6 +791,7 @@ fn cmd_send(args: &[String]) {
         reply
     };
     let mut msg = BridgetMessage::new(&sender, &to, &body);
+    msg.in_reply_to = in_reply_to;
     msg.reply = effective_reply;
     msg.hops = hops;
     if let Some(t) = timeout_secs {
@@ -888,7 +897,7 @@ fn idempotent_options(
 fn send_usage_error(error: &str) -> ! {
     eprintln!("erreur: {error}");
     eprintln!(
-        "usage: bridget send --to <nom> [--id <clé> --issued-at <unix> --issuer-scope <portée>] <message>"
+        "usage: bridget send --to <nom> [--in-reply-to ID] [--id <clé> --issued-at <unix> --issuer-scope <portée>] <message>"
     );
     std::process::exit(2);
 }
@@ -1727,7 +1736,7 @@ fn cmd_reply(args: &[String]) {
 
     let mut previous_parts = previous.splitn(2, '\t');
     let to = previous_parts.next().unwrap_or_default().to_string();
-    let in_reply_to = previous_parts.next().map(str::to_string);
+    let implicit_in_reply_to = previous_parts.next().map(str::to_string);
     if to.is_empty() {
         eprintln!("reply: expediteur precedent vide.");
         std::process::exit(1);
@@ -1736,6 +1745,7 @@ fn cmd_reply(args: &[String]) {
     let mut reply_flag = false;
     let mut hops: i32 = 4;
     let mut timeout_secs: Option<u64> = None;
+    let mut explicit_in_reply_to: Option<String> = None;
     let mut body_parts: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -1755,6 +1765,16 @@ fn cmd_reply(args: &[String]) {
                     i += 1;
                 }
             }
+            "--in-reply-to" => match option_value(args, &mut i, "--in-reply-to") {
+                Ok(value) => explicit_in_reply_to = Some(value),
+                Err(error) => {
+                    eprintln!("reply: {error}");
+                    eprintln!(
+                        "usage: bridget reply [--in-reply-to ID] [--reply] [--hops N] <message>"
+                    );
+                    std::process::exit(2);
+                }
+            },
             _ => {
                 body_parts.push(args[i].clone());
             }
@@ -1764,7 +1784,7 @@ fn cmd_reply(args: &[String]) {
 
     let body = body_parts.join(" ");
     if body.is_empty() {
-        eprintln!("usage: bridget reply [--reply] [--hops N] <message>");
+        eprintln!("usage: bridget reply [--in-reply-to ID] [--reply] [--hops N] <message>");
         std::process::exit(2);
     }
 
@@ -1778,7 +1798,7 @@ fn cmd_reply(args: &[String]) {
     let effective_reply = if sender == "human" { false } else { reply_flag };
 
     let mut msg = BridgetMessage::new(&sender, &to, &body);
-    msg.in_reply_to = in_reply_to;
+    msg.in_reply_to = explicit_in_reply_to.or(implicit_in_reply_to);
     msg.reply = effective_reply;
     msg.hops = hops;
     if let Some(t) = timeout_secs {

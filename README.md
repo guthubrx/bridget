@@ -306,11 +306,13 @@ répondre — sauf si un prompt est déjà fourni.
 | Commande | Effet |
 |---|---|
 | `bridget send --to <nom> <msg>` | envoie un message |
+| `… --in-reply-to <id>` | lie une réponse à la demande suivie et la clôt après livraison |
 | `… --reply` | attend une réponse : la demande est suivie, avec échéance et rappels |
 | `… --timeout <s>` | échéance de la demande (défaut : 60 s) |
 | `… --hops <n>` | budget de sauts restant (défaut : 4) |
 | `… --from <nom>` | émetteur déclaré, pour un relais |
-| `bridget reply <msg>` | répond au dernier expéditeur reçu, sans retaper son nom |
+| `bridget reply <msg>` | répond au dernier expéditeur reçu et lie automatiquement sa dernière demande suivie |
+| `bridget reply --in-reply-to <id> <msg>` | répond à une demande précise lorsque plusieurs demandes sont en cours |
 | `bridget cancel <id> [--reason <texte>]` | annule une demande devenue inutile : plus de rappels, destinataire libéré |
 | `bridget requests` | liste mes demandes suivies et leur état |
 
@@ -419,6 +421,17 @@ L'émetteur garde la main :
 bridget requests                      # mes demandes et leur état
 bridget cancel <id> --reason "plus utile"
 ```
+
+Un agent privé des outils MCP natifs peut répondre sans perdre la corrélation :
+
+```bash
+bridget send --to agent-1 --in-reply-to fa09fa7800694 "Relecture terminée"
+```
+
+La demande est marquée `answered` dans la même transition transactionnelle que
+les autres réponses liées ; ses rappels cessent. `bridget reply` reprend
+automatiquement l'identifiant de la dernière demande reçue, ou accepte le même
+flag pour lever une ambiguïté.
 
 L'annulation est **coopérative** : elle n'interrompt ni un outil ni un modèle
 déjà au travail. Elle met fin à la demande, à ses relances, et à l'obligation de

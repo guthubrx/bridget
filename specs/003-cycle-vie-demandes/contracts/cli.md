@@ -29,6 +29,11 @@ Affiche uniquement les demandes de l'agent courant, avec identifiant, destinatai
 
 ```text
 bridget reply <message>
+bridget reply --in-reply-to <id> <message>
+bridget send --to <agent> --in-reply-to <id> <message>
 ```
 
-La CLI associe la réponse à la dernière demande suivie reçue par l'agent. Une réponse explicite peut porter l'identifiant de la demande lorsque nécessaire.
+La CLI associe `bridget reply` à la dernière demande suivie reçue par l'agent.
+Le flag `--in-reply-to` sélectionne explicitement une demande et prend le pas
+sur cet identifiant implicite. Après livraison, le daemon clôt la demande par
+la même transition transactionnelle que les réponses MCP ; ses rappels cessent.
