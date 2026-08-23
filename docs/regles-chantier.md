@@ -73,3 +73,10 @@ l'incident.
     périmé à T+2 min. *(Incident : ping-pong de signalements
     vrais-mais-périmés entre deux couloirs de la session 014, 2026-08-23 —
     deux vérifications du référent elles-mêmes périmées à l'arrivée.)*
+19. **Toute mission a son worktree, même micro.** On ne change JAMAIS de
+    branche dans le checkout principal : c'est l'espace de l'orchestrateur
+    et des merges. Un agent qui doit committer crée
+    `.worktrees/<branche>/` et y travaille. *(Incident : trois branches
+    empilées par bascule dans le checkout principal, un commit du référent
+    égaré sur la branche d'un équipier, mandats sans worktree — bloc C,
+    2026-08-23 soir.)*
