@@ -29,19 +29,19 @@ commit en review immuable, auteur ≠ relecteur, zéro trace IA, jamais de push.
   toléré.
   **Observable** : test pseudo-TTY réel (saisie pendant un tour entrant).
 
-- [ ] T1305 Mesure et finition : SC-001 mesuré en 80×24 sur corpus
+- [x] T1305 Mesure et finition : SC-001 mesuré en 80×24 sur corpus
   déterministe 3 tours (lignes comptées avant/après, timeout global),
   README section vue attach mise à jour, DEPRECATIONS relu.
   **Observable** : chiffres consignés dans implementation.md.
 
 ## Ajout en cours de session
 
-- [ ] T1305b Constat no 17 (observation utilisateur) : message d'erreur
+- [x] T1305b Constat no 17 (observation utilisateur) : message d'erreur
   attach incohérent pour un équipier ARRÊTÉ — dit « inconnu » en le listant
   comme attachable. Correctif : distinguer inconnu/arrêté (« équipier arrêté,
   historique consultable via … » le cas échéant) et ne lister comme
   attachables que les vivants (ou afficher leur état). À absorber avec T1305.
 
-- [ ] T1305c Constat no 19 (observation utilisateur) : les horodatages de la
+- [x] T1305c Constat no 19 (observation utilisateur) : les horodatages de la
   vue attach s'affichent en UTC (« 10:02 » pour 12:02 locale) — rendre en
   HEURE LOCALE (ou suffixer explicitement UTC). À absorber dans le lot T1305.
