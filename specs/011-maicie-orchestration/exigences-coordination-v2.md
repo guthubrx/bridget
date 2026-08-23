@@ -416,3 +416,12 @@ plus vite ; le coût net est un report, pas une perte.
   catalogue/git pour la mémoire. À instruire : perte du pane visible
   (l'humain ne « voit » plus son référent — attach y répond), et gouvernance
   (qui relance le relanceur reste sain : le daemon, sous launchd).
+- **Rappels fantômes sur demandes terminales** (constaté 2× par
+  fable-reviewer, nuit du 23) : le daemon a relancé le destinataire d'une
+  demande DÉJÀ timed_out (terminal définitif — aucune réponse possible),
+  déjà servie par d'autres canaux. Le relanceur doit vérifier l'état
+  terminal avant d'émettre ; c'est le faux-dû exact que 016 (arbitrage) et
+  017 (greffière) éliminent au niveau coordination — le transport doit
+  faire de même au sien. Sous-constat : fenêtres de 60 s utilisées comme
+  fenêtres de review par un agent (coaché par le juge directement — les
+  mœurs se corrigent entre pairs désormais).
