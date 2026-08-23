@@ -2362,8 +2362,16 @@ fn mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
         "type": "stdio",
         "command": command,
         "args": ["mcp"],
-        "env": []
+        "env": mcp_server_environment()?
     }))
+}
+
+/// Codex peut filtrer l'environnement du serveur MCP qu'il lance. `HOME` est
+/// la dépendance minimale et non sensible qui permet à cette projection de
+/// retrouver la socket publique du daemon.
+fn mcp_server_environment() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let home = std::env::var("HOME").map_err(|_| "HOME absent pour le serveur MCP Bridget")?;
+    Ok(serde_json::json!({ "HOME": home }))
 }
 
 /// Injection réservée au banc d'intégration T1006. Cette surface est absente
@@ -2384,7 +2392,7 @@ fn smoke_mcp_server_entry() -> Result<Option<serde_json::Value>, Box<dyn std::er
         "type": "stdio",
         "command": command,
         "args": args,
-        "env": []
+        "env": mcp_server_environment()?
     })))
 }
 
@@ -2434,12 +2442,18 @@ fn claude_mcp_config_in(
     std::fs::create_dir_all(directory)?;
     let path = directory.join(format!("mcp-{instance_id}.json"));
     // `mcpServers` de Claude Code n'est pas l'enveloppe ACP : il attend une
-    // définition stdio indexée par son nom, sans les champs ACP `name`/`env`.
+    // définition stdio indexée par son nom, sans le champ ACP `name`.
     let command = server["command"].as_str().ok_or("commande MCP absente")?;
     let args = server["args"].clone();
+    let environment = server["env"].as_object().ok_or("environnement MCP absent")?;
     std::fs::write(&path, serde_json::to_vec(&serde_json::json!({
         "mcpServers": {
-            "bridget": { "type": "stdio", "command": command, "args": args }
+            "bridget": {
+                "type": "stdio",
+                "command": command,
+                "args": args,
+                "env": environment
+            }
         }
     }))?)?;
     Ok(EphemeralMcpConfig { path })
@@ -2447,8 +2461,12 @@ fn claude_mcp_config_in(
 
 fn codex_mcp_override(server: &serde_json::Value) -> Result<String, Box<dyn std::error::Error>> {
     let command = server["command"].as_str().ok_or("commande MCP absente")?;
+    let home = server["env"]["HOME"]
+        .as_str()
+        .ok_or("HOME MCP absent")?;
+    let environment = format!("{{HOME={home:?}}}");
     Ok(format!(
-        "mcp_servers.bridget={{command={command:?},args=[\"mcp\"]}}"
+        "mcp_servers.bridget={{command={command:?},args=[\"mcp\"],env={environment}}}"
     ))
 }
 
@@ -2718,6 +2736,8 @@ mod reconnect_tests {
 
         let override_ = codex_mcp_override(&server).unwrap();
         assert!(override_.contains("mcp_servers.bridget"));
+        assert!(override_.contains("env={HOME="));
+        assert_eq!(server["env"]["HOME"], std::env::var("HOME").unwrap());
         let config =
             claude_mcp_config_in(&root.join(".cache/bridget"), &server, "fixture").unwrap();
         assert!(config.path().exists());
@@ -2727,7 +2747,10 @@ mod reconnect_tests {
         .unwrap();
         assert_eq!(claude["mcpServers"]["bridget"]["type"], "stdio");
         assert!(claude["mcpServers"]["bridget"].get("name").is_none());
-        assert!(claude["mcpServers"]["bridget"].get("env").is_none());
+        assert_eq!(
+            claude["mcpServers"]["bridget"]["env"]["HOME"],
+            std::env::var("HOME").unwrap()
+        );
         assert_eq!(server["name"], "bridget");
         drop(config);
 
