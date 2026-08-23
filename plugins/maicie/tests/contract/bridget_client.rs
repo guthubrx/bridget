@@ -1,6 +1,6 @@
 use maicie::bridget_client::{
     AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits, IdempotencyIssue,
-    PublicMessage, SubscriptionEvent,
+    PublicMessage, SpawnOrder, SpawnOutcome, SubscriptionEvent,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -202,6 +202,101 @@ fn lit_gap_et_end_uniquement_depuis_l_abonnement_public() {
 }
 
 #[test]
+fn cancel_request_negocie_le_role_wrapper_sur_sa_connexion_ephemere() {
+    let fixture = SocketFixture::new("cancel-wrapper");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("client idempotent attendu");
+        let (mut reader, mut writer) = split(stream);
+        assert_client_handshake(&mut reader, &mut writer);
+        let _hello = read_json(&mut reader);
+        write_welcome(&mut writer);
+
+        let (stream, _) = listener.accept().expect("connexion cancel attendue");
+        let (mut reader, mut writer) = split(stream);
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type": "RoleHandshake", "role": "wrapper"})
+        );
+        write_json(
+            &mut writer,
+            json!({"type": "RoleAccepted", "role": "wrapper"}),
+        );
+        assert_eq!(
+            read_json(&mut reader),
+            json!({
+                "type": "CancelRequest",
+                "id": "request-1",
+                "sender": "maicie",
+                "reason": "decision explicite"
+            })
+        );
+        write_json(
+            &mut writer,
+            json!({"type": "RequestCancelled", "id": "request-1", "state": "cancelled"}),
+        );
+    });
+
+    let client = BridgetClient::connect(fixture.path(), "scope-client-012").unwrap();
+    let cancellation = client
+        .cancel_request("request-1", "maicie", Some("decision explicite"))
+        .unwrap();
+    assert_eq!(cancellation.id, "request-1");
+    assert_eq!(cancellation.state, "cancelled");
+    server.join().expect("serveur termine");
+}
+
+#[test]
+fn spawn_order_negocie_le_role_wrapper_sur_sa_connexion_ephemere() {
+    let fixture = SocketFixture::new("spawn-wrapper");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("client idempotent attendu");
+        let (mut reader, mut writer) = split(stream);
+        assert_client_handshake(&mut reader, &mut writer);
+        let _hello = read_json(&mut reader);
+        write_welcome(&mut writer);
+
+        let (stream, _) = listener.accept().expect("connexion spawn attendue");
+        let (mut reader, mut writer) = split(stream);
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type": "RoleHandshake", "role": "wrapper"})
+        );
+        write_json(
+            &mut writer,
+            json!({"type": "RoleAccepted", "role": "wrapper"}),
+        );
+        let order = read_json(&mut reader);
+        assert_eq!(order["type"], "SpawnOrder");
+        assert_eq!(order["command_id"], "command-1");
+        assert_eq!(order["agent_type"], "codex");
+        write_json(
+            &mut writer,
+            json!({"type": "SpawnAccepted", "command_id": "command-1", "name": "sentry"}),
+        );
+    });
+
+    let client = BridgetClient::connect(fixture.path(), "scope-client-012").unwrap();
+    let outcome = client
+        .spawn_order(&SpawnOrder {
+            agent_type: "codex".to_string(),
+            name: Some("sentry".to_string()),
+            cwd: "/tmp".to_string(),
+            persistent: true,
+            command_id: "command-1".to_string(),
+            issued_at: 1_700_000_000,
+            deadline_at: 1_700_000_600,
+        })
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        SpawnOutcome::Accepted { command_id, name } if command_id == "command-1" && name == "sentry"
+    ));
+    server.join().expect("serveur termine");
+}
+
+#[test]
 fn annuaire_est_lisible_sans_negociation_et_une_base_bridget_ne_peut_etre_lue() {
     let fixture = SocketFixture::new("directory");
     let listener = fixture.bind();
@@ -276,6 +371,60 @@ fn daemon_muet_expire_le_handshake_dans_le_budget_configure() {
     };
 
     assert!(matches!(error, BridgetClientError::Timeout { .. }));
+    server.join().expect("serveur termine");
+}
+
+#[test]
+fn timeout_empoisonne_la_connexion_et_interdit_de_lire_une_reponse_tardive() {
+    let fixture = SocketFixture::new("poison");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("client attendu");
+        let (mut reader, mut writer) = split(stream);
+        assert_client_handshake(&mut reader, &mut writer);
+        let _hello = read_json(&mut reader);
+        write_welcome(&mut writer);
+        assert_eq!(read_json(&mut reader)["type"], "Lookup");
+        thread::sleep(Duration::from_millis(50));
+        if writeln!(
+            writer,
+            "{}",
+            serde_json::to_string(&json!({
+                "type": "IdempotencyResult",
+                "operation_kind": "send",
+                "idempotency_key": "message-client-1",
+                "issue": {"kind": "accepted", "expires_at": 1_700_003_600_i64}
+            }))
+            .expect("issue JSON")
+        )
+        .is_err()
+            || writer.flush().is_err()
+        {
+            return;
+        }
+        reader
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let mut unexpected = String::new();
+        assert_eq!(reader.read_line(&mut unexpected).unwrap(), 0);
+    });
+    let limits = BridgetClientLimits {
+        connect_timeout: Duration::from_secs(1),
+        io_timeout: Duration::from_millis(10),
+        max_frame_bytes: 1024,
+    };
+    let mut client =
+        BridgetClient::connect_with_limits(fixture.path(), "scope-client-012", limits).unwrap();
+    assert!(matches!(
+        client.lookup("message-client-1"),
+        Err(BridgetClientError::Timeout { .. })
+    ));
+    assert!(matches!(
+        client.lookup("message-client-1"),
+        Err(BridgetClientError::ConnectionUnusable)
+    ));
+    drop(client);
     server.join().expect("serveur termine");
 }
 

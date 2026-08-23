@@ -77,6 +77,7 @@ pub enum BridgetClientError {
     FrameTooLarge {
         max_frame_bytes: usize,
     },
+    ConnectionUnusable,
     InvalidLimits(String),
     InvalidEnvelope(String),
 }
@@ -110,6 +111,9 @@ impl fmt::Display for BridgetClientError {
             Self::FrameTooLarge { max_frame_bytes } => write!(
                 formatter,
                 "trame Bridget superieure a la borne de {max_frame_bytes} octets"
+            ),
+            Self::ConnectionUnusable => formatter.write_str(
+                "connexion Bridget inutilisable apres une reponse ambiguë ; reconnecter avant tout nouvel appel",
             ),
             Self::InvalidLimits(detail) => write!(formatter, "bornes Bridget invalides: {detail}"),
             Self::InvalidEnvelope(detail) => write!(formatter, "enveloppe Maicie invalide: {detail}"),
@@ -170,6 +174,45 @@ impl PublicMessage {
 
 fn default_hops() -> i32 {
     4
+}
+
+/// Projection de validation réservée à la reprise : l'absence de
+/// `deny_unknown_fields` est intentionnelle et ne s'applique pas aux nouveaux
+/// messages construits via [`PublicMessage`].
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // T008 est gelée : cette projection ne sert qu'à sa reprise durable.
+struct ReplayPublicMessage {
+    id: String,
+    from: String,
+    to: String,
+    body: String,
+    #[serde(default)]
+    reply: bool,
+    #[serde(default = "default_hops")]
+    hops: i32,
+    #[serde(default)]
+    reply_timeout: Option<u64>,
+    #[serde(default)]
+    deadline_at: Option<u64>,
+    #[serde(default)]
+    in_reply_to: Option<String>,
+}
+
+impl ReplayPublicMessage {
+    #[allow(dead_code)] // Voir ReplayPublicMessage : la reprise attend la reprise de T008.
+    fn into_public_message(self) -> PublicMessage {
+        PublicMessage {
+            id: self.id,
+            from: self.from,
+            to: self.to,
+            body: self.body,
+            reply: self.reply,
+            hops: self.hops,
+            reply_timeout: self.reply_timeout,
+            deadline_at: self.deadline_at,
+            in_reply_to: self.in_reply_to,
+        }
+    }
 }
 
 /// Issue durable du contrat client, sans inferrer d'etat Maicie.
@@ -373,19 +416,54 @@ impl BridgetClient {
         message_id: &str,
         issued_at: i64,
     ) -> Result<IdempotencyIssue, BridgetClientError> {
-        message.validate()?;
-        if message.id != message_id {
-            return Err(BridgetClientError::InvalidEnvelope(
-                "message.id et message_id doivent etre identiques".to_string(),
-            ));
-        }
+        validate_send_idempotent_frame(
+            message,
+            message_id,
+            issued_at,
+            self.limits.max_frame_bytes,
+        )?;
         let response = self.connection.request(json!({
             "type": "SendIdempotent",
             "message": message,
             "message_id": message_id,
             "issued_at": issued_at,
         }))?;
-        parse_idempotency_issue(response, message_id)
+        let issue = parse_idempotency_issue(response, message_id);
+        self.connection.poison_after(&issue);
+        issue
+    }
+
+    /// Rejoue les octets filaires déjà persistés par l'outbox Maicie.
+    ///
+    /// Cette voie est limitée au crate : contrairement à une nouvelle
+    /// délégation, elle tolère les champs ajoutés ultérieurement au message
+    /// public afin qu'une reprise ne transforme jamais une ancienne enveloppe
+    /// valide en message poison. Les octets sont insérés tels quels dans la
+    /// commande `SendIdempotent` ; seuls les champs stables sont vérifiés.
+    #[allow(dead_code)] // T008 est gelée : la reprise octet pour octet est prête.
+    pub(crate) fn replay_idempotent_bytes(
+        &mut self,
+        message_bytes: &[u8],
+        message_id: &str,
+        issued_at: i64,
+    ) -> Result<IdempotencyIssue, BridgetClientError> {
+        let replay: ReplayPublicMessage =
+            serde_json::from_slice(message_bytes).map_err(|source| BridgetClientError::Decode {
+                line: String::from_utf8_lossy(message_bytes).into_owned(),
+                source,
+            })?;
+        let message = replay.into_public_message();
+        message.validate()?;
+        if message.id != message_id {
+            return Err(BridgetClientError::InvalidEnvelope(
+                "message.id et message_id doivent etre identiques".to_string(),
+            ));
+        }
+        let request = replay_idempotent_request(message_bytes, message_id, issued_at)?;
+        let response = self.connection.request_raw_json(&request)?;
+        let issue = parse_idempotency_issue(response, message_id);
+        self.connection.poison_after(&issue);
+        issue
     }
 
     /// Lit l'issue durable deja associee a une cle d'envoi Maicie.
@@ -400,7 +478,9 @@ impl BridgetClient {
             "operation_kind": "send",
             "idempotency_key": message_id,
         }))?;
-        parse_idempotency_issue(response, message_id)
+        let issue = parse_idempotency_issue(response, message_id);
+        self.connection.poison_after(&issue);
+        issue
     }
 
     /// Lit l'annuaire public Bridget sur une connexion ponctuelle non mutante.
@@ -447,6 +527,8 @@ impl BridgetClient {
         reason: Option<&str>,
     ) -> Result<Cancellation, BridgetClientError> {
         let mut connection = WireConnection::connect(&self.socket_path, self.limits)?;
+        let role = connection.request(json!({"type": "RoleHandshake", "role": "wrapper"}))?;
+        expect_role_accepted(&role, "wrapper")?;
         let response = connection.request(json!({
             "type": "CancelRequest",
             "id": id,
@@ -487,6 +569,8 @@ impl BridgetClient {
     /// processus et ne relance pas d'elle-meme l'ordre en cas d'incertitude.
     pub fn spawn_order(&self, order: &SpawnOrder) -> Result<SpawnOutcome, BridgetClientError> {
         let mut connection = WireConnection::connect(&self.socket_path, self.limits)?;
+        let role = connection.request(json!({"type": "RoleHandshake", "role": "wrapper"}))?;
+        expect_role_accepted(&role, "wrapper")?;
         let response = connection.request(json!({
             "type": "SpawnOrder",
             "agent_type": order.agent_type,
@@ -516,6 +600,50 @@ impl BridgetClient {
             other => Err(unexpected("SpawnAccepted/SpawnRejected", other)),
         }
     }
+}
+
+/// Vérifie la trame complète `SendIdempotent` avant sa persistance par
+/// l'outbox. La borne inclut toujours le délimiteur JSONL final.
+pub(crate) fn validate_send_idempotent_frame(
+    message: &PublicMessage,
+    message_id: &str,
+    issued_at: i64,
+    max_frame_bytes: usize,
+) -> Result<(), BridgetClientError> {
+    message.validate()?;
+    if message.id != message_id {
+        return Err(BridgetClientError::InvalidEnvelope(
+            "message.id et message_id doivent etre identiques".to_string(),
+        ));
+    }
+    let request = json!({
+        "type": "SendIdempotent",
+        "message": message,
+        "message_id": message_id,
+        "issued_at": issued_at,
+    });
+    let encoded = serde_json::to_vec(&request).map_err(BridgetClientError::Encode)?;
+    if encoded.len().saturating_add(1) > max_frame_bytes {
+        return Err(BridgetClientError::FrameTooLarge { max_frame_bytes });
+    }
+    Ok(())
+}
+
+#[allow(dead_code)] // Appelé par la reprise T008, actuellement gelée.
+fn replay_idempotent_request(
+    message_bytes: &[u8],
+    message_id: &str,
+    issued_at: i64,
+) -> Result<Vec<u8>, BridgetClientError> {
+    let mut request = Vec::with_capacity(message_bytes.len() + 128);
+    request.extend_from_slice(br#"{"type":"SendIdempotent","message":"#);
+    request.extend_from_slice(message_bytes);
+    request.extend_from_slice(br#", "message_id":"#);
+    serde_json::to_writer(&mut request, message_id).map_err(BridgetClientError::Encode)?;
+    request.extend_from_slice(br#", "issued_at":"#);
+    serde_json::to_writer(&mut request, &issued_at).map_err(BridgetClientError::Encode)?;
+    request.push(b'}');
+    Ok(request)
 }
 
 /// Connexion attach dont la lecture est la seule source d'evenements runtime.
@@ -554,6 +682,7 @@ struct WireConnection {
     reader: BufReader<UnixStream>,
     writer: UnixStream,
     limits: BridgetClientLimits,
+    unusable: bool,
 }
 
 impl WireConnection {
@@ -566,26 +695,57 @@ impl WireConnection {
             reader,
             writer: stream,
             limits,
+            unusable: false,
         })
     }
 
     fn request(&mut self, value: Value) -> Result<Value, BridgetClientError> {
+        self.ensure_usable()?;
         let deadline = Instant::now() + self.limits.io_timeout;
-        self.send_until(value, deadline)?;
-        self.receive_until(deadline)
+        let result = (|| {
+            self.send_until(value, deadline)?;
+            self.receive_until(deadline)
+        })();
+        self.poison_after(&result);
+        result
+    }
+
+    #[allow(dead_code)] // Appelé par la reprise T008, actuellement gelée.
+    fn request_raw_json(&mut self, json_bytes: &[u8]) -> Result<Value, BridgetClientError> {
+        self.ensure_usable()?;
+        let deadline = Instant::now() + self.limits.io_timeout;
+        let result = (|| {
+            self.send_bytes_until(json_bytes, deadline)?;
+            self.receive_until(deadline)
+        })();
+        self.poison_after(&result);
+        result
     }
 
     fn send(&mut self, value: Value) -> Result<(), BridgetClientError> {
-        self.send_until(value, Instant::now() + self.limits.io_timeout)
+        self.ensure_usable()?;
+        let result = self.send_until(value, Instant::now() + self.limits.io_timeout);
+        self.poison_after(&result);
+        result
     }
 
     fn send_until(&mut self, value: Value, deadline: Instant) -> Result<(), BridgetClientError> {
-        let mut bytes = serde_json::to_vec(&value).map_err(BridgetClientError::Encode)?;
-        if bytes.len() + 1 > self.limits.max_frame_bytes {
+        let bytes = serde_json::to_vec(&value).map_err(BridgetClientError::Encode)?;
+        self.send_bytes_until(&bytes, deadline)
+    }
+
+    fn send_bytes_until(
+        &mut self,
+        json_bytes: &[u8],
+        deadline: Instant,
+    ) -> Result<(), BridgetClientError> {
+        if json_bytes.len() + 1 > self.limits.max_frame_bytes {
             return Err(BridgetClientError::FrameTooLarge {
                 max_frame_bytes: self.limits.max_frame_bytes,
             });
         }
+        let mut bytes = Vec::with_capacity(json_bytes.len() + 1);
+        bytes.extend_from_slice(json_bytes);
         bytes.push(b'\n');
         let mut written = 0;
         while written < bytes.len() {
@@ -606,7 +766,10 @@ impl WireConnection {
     }
 
     fn receive(&mut self) -> Result<Value, BridgetClientError> {
-        self.receive_until(Instant::now() + self.limits.io_timeout)
+        self.ensure_usable()?;
+        let result = self.receive_until(Instant::now() + self.limits.io_timeout);
+        self.poison_after(&result);
+        result
     }
 
     fn receive_until(&mut self, deadline: Instant) -> Result<Value, BridgetClientError> {
@@ -629,7 +792,7 @@ impl WireConnection {
                 return Err(BridgetClientError::Closed);
             }
             if let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
-                if frame.len() + newline > self.limits.max_frame_bytes {
+                if frame.len() + newline + 1 > self.limits.max_frame_bytes {
                     return Err(BridgetClientError::FrameTooLarge {
                         max_frame_bytes: self.limits.max_frame_bytes,
                     });
@@ -638,7 +801,7 @@ impl WireConnection {
                 self.reader.consume(newline + 1);
                 break;
             }
-            if frame.len() + buffer.len() > self.limits.max_frame_bytes {
+            if frame.len() + buffer.len() >= self.limits.max_frame_bytes {
                 return Err(BridgetClientError::FrameTooLarge {
                     max_frame_bytes: self.limits.max_frame_bytes,
                 });
@@ -651,6 +814,29 @@ impl WireConnection {
             BridgetClientError::Protocol(format!("trame Bridget non UTF-8: {error}"))
         })?;
         serde_json::from_str(&line).map_err(|source| BridgetClientError::Decode { line, source })
+    }
+
+    fn ensure_usable(&self) -> Result<(), BridgetClientError> {
+        if self.unusable {
+            Err(BridgetClientError::ConnectionUnusable)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn poison_after<T>(&mut self, result: &Result<T, BridgetClientError>) {
+        if matches!(
+            result,
+            Err(BridgetClientError::Read(_)
+                | BridgetClientError::Write(_)
+                | BridgetClientError::Decode { .. }
+                | BridgetClientError::Closed
+                | BridgetClientError::Protocol(_)
+                | BridgetClientError::Timeout { .. }
+                | BridgetClientError::FrameTooLarge { .. })
+        ) {
+            self.unusable = true;
+        }
     }
 }
 
@@ -979,4 +1165,57 @@ fn required_i64(response: &Value, field: &str) -> Result<i64, BridgetClientError
 
 fn unexpected(expected: &str, received: &str) -> BridgetClientError {
     BridgetClientError::Protocol(format!("{expected} attendu, {received} recu"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        replay_idempotent_request, validate_send_idempotent_frame, BridgetClientError,
+        PublicMessage, ReplayPublicMessage,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn reprise_conserve_les_extensions_inconnues_octet_pour_octet() {
+        let message = br#"{"id":"message-1","from":"maicie","to":"prospective","body":"preuve","future_extension":{"level":2}}"#;
+        let replay: ReplayPublicMessage = serde_json::from_slice(message).unwrap();
+        assert_eq!(replay.into_public_message().id, "message-1");
+
+        let request = replay_idempotent_request(message, "message-1", 1_700_000_000).unwrap();
+        assert!(
+            request
+                .windows(message.len())
+                .any(|candidate| candidate == message),
+            "la sous-enveloppe persistée doit être injectée sans réécriture"
+        );
+    }
+
+    #[test]
+    fn borne_de_trame_compte_le_delimiteur() {
+        let message = PublicMessage {
+            id: "message-1".to_string(),
+            from: "maicie".to_string(),
+            to: "prospective".to_string(),
+            body: "preuve".to_string(),
+            reply: false,
+            hops: 4,
+            reply_timeout: None,
+            deadline_at: None,
+            in_reply_to: None,
+        };
+        let request = json!({
+            "type": "SendIdempotent",
+            "message": &message,
+            "message_id": "message-1",
+            "issued_at": 1_700_000_000_i64,
+        });
+        let without_delimiter = serde_json::to_vec(&request).unwrap().len();
+
+        assert!(matches!(
+            validate_send_idempotent_frame(&message, "message-1", 1_700_000_000, without_delimiter,),
+            Err(BridgetClientError::FrameTooLarge { .. })
+        ));
+        validate_send_idempotent_frame(&message, "message-1", 1_700_000_000, without_delimiter + 1)
+            .unwrap();
+    }
 }
