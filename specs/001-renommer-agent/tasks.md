@@ -36,7 +36,7 @@
 **Test indépendant** : renommer, arrêter l’agent puis le reprendre avec le même identifiant de session ; vérifier son nouveau nom.
 
 - [X] T007 [US2] Mettre à jour `crates/bridget-daemon/src/wrapper.rs` pour persister le nouveau nom uniquement après `Renamed`.
-- [ ] T008 [US2] Ajouter dans `crates/bridget-daemon/tests/integration_test.rs` le test de reprise après renommage et le test de non-persistance après refus.
+- [X] T008 [US2] Ajouter dans `crates/bridget-daemon/tests/integration_test.rs` le test de reprise après renommage et le test de non-persistance après refus.
 
 **Point de contrôle** : la reprise conserve seulement une identité validée par le démon.
 

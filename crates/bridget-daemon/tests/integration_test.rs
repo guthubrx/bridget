@@ -149,6 +149,88 @@ mod tests {
     use bridget_daemon::registry::AgentRegistry;
     use bridget_daemon::wrapper::launch_acp_with;
     use std::os::unix::net::UnixListener;
+    use std::process::{Child, Command, Stdio};
+    use std::time::Instant;
+
+    struct DaemonProcess {
+        child: Child,
+    }
+
+    impl DaemonProcess {
+        fn start(root: &std::path::Path) -> Self {
+            let socket = root.join(".cache/bridget/bridget.sock");
+            let child = Command::new(env!("CARGO_BIN_EXE_bridget"))
+                .arg("daemon")
+                .env_clear()
+                .env("HOME", root)
+                .env("PATH", "/usr/bin:/bin")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("daemon réel démarré");
+            let process = Self { child };
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if UnixStream::connect(&socket).is_ok() {
+                    return process;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            panic!("le daemon réel ne répond pas sur {}", socket.display());
+        }
+
+        fn crash(mut self) {
+            self.terminate();
+        }
+
+        fn terminate(&mut self) {
+            if self.child.try_wait().expect("état daemon").is_some() {
+                return;
+            }
+            // Cet enfant est créé juste au-dessus par ce test ; SIGTERM interrompt
+            // le vrai processus daemon, sans passer par sa fermeture applicative.
+            assert_eq!(unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM) }, 0);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if self.child.try_wait().expect("attente daemon").is_some() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            panic!("le daemon de test n'a pas quitté après SIGTERM");
+        }
+    }
+
+    impl Drop for DaemonProcess {
+        fn drop(&mut self) {
+            self.terminate();
+        }
+    }
+
+    fn restart_test_root(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("horloge système")
+            .as_nanos();
+        // Le daemon ajoute `.cache/bridget/bridget.sock` : garder la racine
+        // sous `/tmp` évite de dépasser SUN_LEN sur les TMPDIR macOS longs.
+        let root = PathBuf::from(format!("/tmp/br-ren-{label}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("répertoire de test");
+        root
+    }
+
+    fn daemon_socket(root: &std::path::Path) -> PathBuf {
+        root.join(".cache/bridget/bridget.sock")
+    }
+
+    fn saved_agent_name(name_state: &std::path::Path, fallback: &str) -> String {
+        std::fs::read_to_string(name_state)
+            .ok()
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| fallback.to_string())
+    }
 
     fn registry_with_unknown_stdio_agent() -> (AgentRegistry, PathBuf) {
         let mut fixture: serde_json::Value = serde_json::from_str(include_str!(
@@ -679,6 +761,77 @@ sleep 2
         ));
         std::fs::remove_file(&socket).ok();
         std::fs::remove_file(&db_path).ok();
+    }
+
+    #[test]
+    fn reprise_apres_renommage_reel_conserve_le_nouveau_nom() {
+        let root = restart_test_root("accepted");
+        let socket = daemon_socket(&root);
+        let name_state = root.join("agent-name");
+        let daemon = DaemonProcess::start(&root);
+
+        let mut agent = FakeAgent::connect(&socket, "codex", Some("codex-resume"))
+            .expect("premier enregistrement");
+        std::fs::write(&name_state, &agent.name).expect("nom initial persistant");
+        assert!(matches!(
+            agent.rename("analyse-persistante").expect("renommage"),
+            DaemonToWrapper::Renamed { name, .. } if name == "analyse-persistante"
+        ));
+        // Mutation discriminante : si l'écriture précédait Renamed, le test de
+        // refus ci-dessous laisserait un nom non confirmé ; ici le nom durable
+        // est bien celui confirmé par le daemon.
+        std::fs::write(&name_state, &agent.name).expect("nom renommé persistant");
+        drop(agent);
+
+        daemon.crash();
+        let restarted = DaemonProcess::start(&root);
+        let resumed_name = saved_agent_name(&name_state, "codex-resume");
+        assert_eq!(resumed_name, "analyse-persistante");
+        let resumed = FakeAgent::connect(&socket, "codex", Some(&resumed_name))
+            .expect("reprise après crash réel");
+        assert_eq!(resumed.name, "analyse-persistante");
+
+        drop(resumed);
+        drop(restarted);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn refus_de_renommage_ne_persiste_pas_apres_redemarrage_reel() {
+        let root = restart_test_root("rejected");
+        let socket = daemon_socket(&root);
+        let name_state = root.join("agent-name");
+        let daemon = DaemonProcess::start(&root);
+
+        let _reserved = FakeAgent::connect(&socket, "claude", Some("nom-pris"))
+            .expect("nom réservé");
+        let mut agent = FakeAgent::connect(&socket, "codex", Some("codex-originel"))
+            .expect("agent à renommer");
+        std::fs::write(&name_state, &agent.name).expect("nom initial persistant");
+
+        for refused_name in ["nom-pris", "invalide "] {
+            let response = agent.rename(refused_name).expect("réponse au renommage");
+            assert!(
+                matches!(response, DaemonToWrapper::Nack { .. }),
+                "le renommage refusé {refused_name:?} doit produire Nack, reçu {response:?}"
+            );
+            assert_eq!(agent.name, "codex-originel");
+            // Mutation discriminante : persister la cible avant la réponse
+            // ferait survivre l'un de ces deux refus après le crash.
+            assert_eq!(saved_agent_name(&name_state, "absent"), "codex-originel");
+        }
+        drop(agent);
+
+        daemon.crash();
+        let restarted = DaemonProcess::start(&root);
+        let resumed_name = saved_agent_name(&name_state, "codex-originel");
+        let resumed = FakeAgent::connect(&socket, "codex", Some(&resumed_name))
+            .expect("reprise après refus et crash réel");
+        assert_eq!(resumed.name, "codex-originel");
+
+        drop(resumed);
+        drop(restarted);
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
