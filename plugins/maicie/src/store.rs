@@ -2018,7 +2018,7 @@ fn validate_approved_spawn_order(
     let order: ApprovedSpawnOrder = serde_json::from_slice(bytes).map_err(StoreError::Json)?;
     if order.kind != "SpawnOrder"
         || order.command_id != approval.command_id.to_string()
-        || order.agent_type != approval.profile_id
+        || order.agent_type.trim().is_empty()
         || order.issued_at <= 0
         || order.deadline_at <= order.issued_at
         || order.cwd.is_empty()

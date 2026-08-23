@@ -6,12 +6,14 @@
 
 use crate::config::DurationClasses;
 use crate::domain::{
-    ClasseDuree, DecisionCoordination, Delegation, EtatDecision, EtatObjectif,
-    EtatOutboxDelegation, ModeObjectif, ObjectifCoordonne, OutboxDelegation, TypeDecision,
+    ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
+    EtatDecision, EtatObjectif, EtatOutboxDelegation, ModeObjectif, ObjectifCoordonne,
+    OutboxDelegation, TypeDecision,
 };
-use crate::outbox::{stable_body_hash, PreparedDelegation};
+use crate::outbox::{PreparedDelegation, stable_body_hash};
 use crate::store::{
-    DelegateReservation, MaicieStore, ObjectiveSnapshot, StoreError, StoredDelegateResult,
+    ActivationApprovalRequest, DelegateReservation, MaicieStore, ObjectiveSnapshot, StoreError,
+    StoredDelegateResult,
 };
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -164,6 +166,70 @@ pub enum DelegateError {
     Store(String),
 }
 
+/// Proposition locale d'activation d'un profil absent. Le digest résolu est
+/// fourni par la surface publique Bridget : aucun registre ni fichier Bridget
+/// n'est relu par Maicie pour compléter cette approbation.
+pub struct ProfileActivationProposalRequest<'a> {
+    pub objective_id: Uuid,
+    pub profile_id: &'a str,
+    /// Type d'agent Bridget déclaré par le profil. Il est distinct du slug de
+    /// profil et devient une partie des octets exacts du SpawnOrder approuvé.
+    pub agent_type: &'a str,
+    /// SHA-256 du profil déclaré et validé par la couche profils.
+    pub profile_hash: &'a [u8],
+    /// SHA-256 hexadécimal de la définition Bridget résolue et figée.
+    pub resolved_definition_digest: &'a str,
+    pub context_scope: &'a str,
+    pub cwd: &'a str,
+    pub persistent: bool,
+    pub now: i64,
+    pub spawn_deadline_at: i64,
+    pub approval_expires_at: i64,
+    pub retry_until: i64,
+    pub dedup_retained_until: i64,
+    pub reason: &'a str,
+}
+
+/// Résultat durable de la proposition. Les octets du SpawnOrder sont produits
+/// une seule fois avec le `command_id` créé avant toute I/O, puis deviennent
+/// les paramètres approuvés et la future charge immuable de l'outbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileActivationProposal {
+    pub decision: DecisionCoordination,
+    pub approval: ApprobationActivation,
+    pub spawn_order_bytes: Vec<u8>,
+    pub retry_until: i64,
+    pub dedup_retained_until: i64,
+}
+
+/// Approbation exclusivement locale. L'acteur n'est pas paramétrable : le
+/// domaine persiste toujours `local_human`, sans voie Bridget ou MCP pour le
+/// fabriquer ou le remplacer.
+pub struct LocalProfileApproval<'a> {
+    pub approval_id: Uuid,
+    pub now: i64,
+    pub profile_hash: &'a [u8],
+    pub resolved_definition_digest: &'a str,
+}
+
+/// Erreurs fermées du cycle de proposition et d'approbation de profil.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileActivationError {
+    Invalid(&'static str),
+    Store(String),
+}
+
+impl fmt::Display for ProfileActivationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invalid(reason) => write!(formatter, "activation de profil invalide : {reason}"),
+            Self::Store(reason) => write!(formatter, "stockage d'activation impossible : {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for ProfileActivationError {}
+
 impl fmt::Display for DelegateError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -197,6 +263,80 @@ impl fmt::Display for ObjectiveError {
 }
 
 impl std::error::Error for ObjectiveError {}
+
+/// Persiste une décision de réveil et son approbation mono-usage. Cette étape
+/// ne contacte pas Bridget et ne crée donc encore aucune `ActivationOutbox`.
+pub fn propose_profile_activation(
+    store: &mut MaicieStore,
+    request: &ProfileActivationProposalRequest<'_>,
+) -> Result<ProfileActivationProposal, ProfileActivationError> {
+    validate_profile_activation_proposal(request)?;
+    let context_hash = definition_digest_bytes(request.resolved_definition_digest)?;
+    let command_id = Uuid::new_v4();
+    let spawn_order_bytes = approved_spawn_order_bytes(request, command_id)?;
+    let parameters = String::from_utf8(spawn_order_bytes.clone())
+        .map_err(|_| ProfileActivationError::Invalid("SpawnOrder non UTF-8"))?;
+    let decision = DecisionCoordination {
+        id: Uuid::new_v4(),
+        objectif_id: request.objective_id,
+        kind: TypeDecision::ReveillerProfil,
+        proposee_par: MAICIE_PILOT.to_string(),
+        etat: EtatDecision::Proposee,
+        motif: request.reason.to_string(),
+    };
+    let approval = ApprobationActivation {
+        id: Uuid::new_v4(),
+        command_id,
+        objective_id: request.objective_id,
+        profile_id: request.profile_id.to_string(),
+        profile_hash: request.profile_hash.to_vec(),
+        // Le hash de contexte est exactement le digest de définition résolue
+        // fourni par Bridget : T023 le revalidera avant toute émission.
+        context_hash,
+        context_scope: request.context_scope.to_string(),
+        parameters,
+        actor: "local_human".to_string(),
+        expires_at: request.approval_expires_at,
+        consumed_at: None,
+    };
+    store
+        .create_activation_proposal(&decision, &approval)
+        .map_err(profile_activation_store_error)?;
+    Ok(ProfileActivationProposal {
+        decision,
+        approval,
+        spawn_order_bytes,
+        retry_until: request.retry_until,
+        dedup_retained_until: request.dedup_retained_until,
+    })
+}
+
+/// Approuve localement une proposition déjà persistée. L'acteur est scellé
+/// dans [`propose_profile_activation`], et les hashes courants sont comparés
+/// dans la transaction qui écrit l'`ActivationOutbox`.
+pub fn approve_profile_activation(
+    store: &mut MaicieStore,
+    proposal: &ProfileActivationProposal,
+    approval: &LocalProfileApproval<'_>,
+) -> Result<ActivationOutbox, ProfileActivationError> {
+    if approval.approval_id != proposal.approval.id {
+        return Err(ProfileActivationError::Invalid("approbation divergente"));
+    }
+    let context_hash = definition_digest_bytes(approval.resolved_definition_digest)?;
+    store
+        .approve_activation(
+            approval.approval_id,
+            &ActivationApprovalRequest {
+                now: approval.now,
+                profile_hash: approval.profile_hash,
+                context_hash: &context_hash,
+                spawn_order_bytes: &proposal.spawn_order_bytes,
+                retry_until: proposal.retry_until,
+                dedup_retained_until: proposal.dedup_retained_until,
+            },
+        )
+        .map_err(profile_activation_store_error)
+}
 
 /// Lit les données de coordination disponibles localement. Les sources
 /// Bridget et ACP restent explicitement inconnues jusqu'à T018.
@@ -555,4 +695,87 @@ fn store_error(error: StoreError) -> DelegateError {
         StoreError::EnvelopeMismatch => DelegateError::EnvelopeMismatch,
         other => DelegateError::Store(other.to_string()),
     }
+}
+
+#[derive(Serialize)]
+struct ApprovedSpawnOrder<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    agent_type: &'a str,
+    name: Option<&'a str>,
+    cwd: &'a str,
+    persistent: bool,
+    command_id: String,
+    issued_at: i64,
+    deadline_at: i64,
+}
+
+fn validate_profile_activation_proposal(
+    request: &ProfileActivationProposalRequest<'_>,
+) -> Result<(), ProfileActivationError> {
+    if request.objective_id.is_nil()
+        || request.profile_id.trim().is_empty()
+        || request.agent_type.trim().is_empty()
+        || request.profile_hash.len() != 32
+        || request.context_scope.trim().is_empty()
+        || request.cwd.trim().is_empty()
+        || request.reason.trim().is_empty()
+        || request.now <= 0
+        || request.spawn_deadline_at <= request.now
+        || request.approval_expires_at <= request.now
+        || request.retry_until < request.now
+        || request.retry_until > request.dedup_retained_until
+    {
+        return Err(ProfileActivationError::Invalid("proposition incomplète"));
+    }
+    Ok(())
+}
+
+fn approved_spawn_order_bytes(
+    request: &ProfileActivationProposalRequest<'_>,
+    command_id: Uuid,
+) -> Result<Vec<u8>, ProfileActivationError> {
+    serde_json::to_vec(&ApprovedSpawnOrder {
+        kind: "SpawnOrder",
+        agent_type: request.agent_type,
+        name: None,
+        cwd: request.cwd,
+        persistent: request.persistent,
+        command_id: command_id.to_string(),
+        issued_at: request.now,
+        deadline_at: request.spawn_deadline_at,
+    })
+    .map_err(|_| ProfileActivationError::Invalid("SpawnOrder non sérialisable"))
+}
+
+fn definition_digest_bytes(digest: &str) -> Result<Vec<u8>, ProfileActivationError> {
+    if digest.len() != 64 {
+        return Err(ProfileActivationError::Invalid(
+            "digest de définition invalide",
+        ));
+    }
+    digest
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let high = hex_nibble(pair[0])?;
+            let low = hex_nibble(pair[1])?;
+            Ok((high << 4) | low)
+        })
+        .collect()
+}
+
+fn hex_nibble(value: u8) -> Result<u8, ProfileActivationError> {
+    match value {
+        b'0'..=b'9' => Ok(value - b'0'),
+        b'a'..=b'f' => Ok(value - b'a' + 10),
+        b'A'..=b'F' => Ok(value - b'A' + 10),
+        _ => Err(ProfileActivationError::Invalid(
+            "digest de définition invalide",
+        )),
+    }
+}
+
+fn profile_activation_store_error(error: StoreError) -> ProfileActivationError {
+    ProfileActivationError::Store(error.to_string())
 }
