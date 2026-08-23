@@ -178,3 +178,10 @@ fleet.json, replay de contexte automatique au-delà de la carte de réveil.
   `cargo fmt` un générateur de bruit (réordonnancement d'imports style 2024).
   Un WIP fantôme main.rs/store.rs en est né et a été jeté. Épingler la
   toolchain, puis un commit rustfmt unique et assumé.
+- **Préambule d'identité sauté sur `codex resume`** (constaté 2026-08-23 soir) :
+  l'heuristique has_prompt du wrapper (wrapper.rs:807) traite tout argument
+  sans tirets comme un prompt utilisateur ; la sous-commande codex `resume`
+  déclenche donc le silence — `bridget claude --resume` reçoit son préambule,
+  `bridget codex resume` non. Correctif : whitelist des sous-commandes codex
+  connues (resume, exec) comme non-prompts. Recoupe la « carte de réveil » :
+  même besoin, même endroit d'injection.

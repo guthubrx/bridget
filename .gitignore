@@ -9,7 +9,6 @@
 # spécifications, journaux de session, rapports d'audit.
 /.specify/
 /.agents/
-/specs/
 /audits/
 /AGENTS.md
 /CLAUDE.md
