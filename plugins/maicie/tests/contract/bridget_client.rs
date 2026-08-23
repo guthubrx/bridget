@@ -1,0 +1,356 @@
+use maicie::bridget_client::{
+    AttachWindow, BridgetClient, BridgetClientError, IdempotencyIssue, PublicMessage,
+    SubscriptionEvent,
+};
+use serde_json::{json, Value};
+use std::fs;
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
+
+#[test]
+fn negocie_la_version_et_rejete_une_capacite_absente() {
+    let fixture = SocketFixture::new("missing-capability");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("client attendu");
+        let (mut reader, mut writer) = split(stream);
+        assert_client_handshake(&mut reader, &mut writer);
+        let hello = read_json(&mut reader);
+        assert_eq!(hello["type"], "ClientHello");
+        assert_eq!(hello["contract_version"], 1);
+        assert_eq!(hello["capabilities"], json!(["send_idempotent", "lookup"]));
+        write_json(
+            &mut writer,
+            json!({
+                "type": "ClientWelcome",
+                "version": 1,
+                "horizon_secs": 3600,
+                "issued_at_tolerance_secs": 30,
+                "capabilities": ["send_idempotent"]
+            }),
+        );
+    });
+
+    let error = match BridgetClient::connect(fixture.path(), "scope-client-012") {
+        Ok(_) => panic!("la capability lookup doit etre exigee"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        BridgetClientError::CapabilityMissing { capability } if capability == "lookup"
+    ));
+    server.join().expect("serveur termine");
+}
+
+#[test]
+fn rejette_une_version_negociee_differente() {
+    let fixture = SocketFixture::new("bad-version");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("client attendu");
+        let (mut reader, mut writer) = split(stream);
+        assert_client_handshake(&mut reader, &mut writer);
+        let _hello = read_json(&mut reader);
+        write_json(
+            &mut writer,
+            json!({
+                "type": "ClientWelcome",
+                "version": 2,
+                "horizon_secs": 3600,
+                "issued_at_tolerance_secs": 30,
+                "capabilities": ["send_idempotent", "lookup"]
+            }),
+        );
+    });
+
+    let error = match BridgetClient::connect(fixture.path(), "scope-client-012") {
+        Ok(_) => panic!("une version negociee divergente doit etre refusee"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        BridgetClientError::VersionUnsupported {
+            requested: 1,
+            received: 2
+        }
+    ));
+    server.join().expect("serveur termine");
+}
+
+#[test]
+fn conserve_le_message_id_et_le_corps_exact_sur_retry_mais_signale_la_divergence() {
+    let fixture = SocketFixture::new("idempotency");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("client attendu");
+        let (mut reader, mut writer) = split(stream);
+        assert_client_handshake(&mut reader, &mut writer);
+        let _hello = read_json(&mut reader);
+        write_welcome(&mut writer);
+
+        let first = read_json(&mut reader);
+        assert_eq!(first["type"], "SendIdempotent");
+        assert_eq!(first["message_id"], "message-client-1");
+        assert_eq!(first["message"]["id"], "message-client-1");
+        assert_eq!(first["message"]["body"], "corps immuable");
+        write_issue(&mut writer, "outcome_unknown");
+
+        let retry = read_json(&mut reader);
+        assert_eq!(retry, first, "le retry rejoue les octets logiques exacts");
+        write_issue(&mut writer, "accepted");
+
+        let divergent = read_json(&mut reader);
+        assert_eq!(divergent["message_id"], "message-client-1");
+        assert_eq!(divergent["message"]["body"], "corps divergent");
+        write_issue(&mut writer, "envelope_mismatch");
+    });
+
+    let mut client = BridgetClient::connect(fixture.path(), "scope-client-012").unwrap();
+    let immutable_message = message("corps immuable");
+    assert!(matches!(
+        client
+            .send_idempotent(&immutable_message, "message-client-1", 1_700_000_000)
+            .unwrap(),
+        IdempotencyIssue::OutcomeUnknown { .. }
+    ));
+    assert!(matches!(
+        client
+            .send_idempotent(&immutable_message, "message-client-1", 1_700_000_000)
+            .unwrap(),
+        IdempotencyIssue::Accepted { .. }
+    ));
+    assert!(matches!(
+        client
+            .send_idempotent(
+                &message("corps divergent"),
+                "message-client-1",
+                1_700_000_000
+            )
+            .unwrap(),
+        IdempotencyIssue::EnvelopeMismatch
+    ));
+    server.join().expect("serveur termine");
+}
+
+#[test]
+fn lit_gap_et_end_uniquement_depuis_l_abonnement_public() {
+    let fixture = SocketFixture::new("subscription");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("client idempotent attendu");
+        let (mut reader, mut writer) = split(stream);
+        assert_client_handshake(&mut reader, &mut writer);
+        let _hello = read_json(&mut reader);
+        write_welcome(&mut writer);
+
+        let (stream, _) = listener.accept().expect("client attach attendu");
+        let (mut reader, mut writer) = split(stream);
+        let role = read_json(&mut reader);
+        assert_eq!(role, json!({"type": "RoleHandshake", "role": "attach"}));
+        write_json(
+            &mut writer,
+            json!({"type": "RoleAccepted", "role": "attach"}),
+        );
+        let subscribe = read_json(&mut reader);
+        assert_eq!(subscribe["type"], "Subscribe");
+        assert_eq!(subscribe["agent"], "prospective");
+        write_json(
+            &mut writer,
+            json!({
+                "type": "Gap",
+                "subscription_id": "sub-1",
+                "from_seq": 11,
+                "to_seq": 13,
+                "reason": "vue lente"
+            }),
+        );
+        write_json(
+            &mut writer,
+            json!({"type": "End", "subscription_id": "sub-1", "reason": "fermeture"}),
+        );
+    });
+
+    let adapter = BridgetClient::connect(fixture.path(), "scope-client-012").unwrap();
+    let mut subscription = adapter
+        .subscribe("prospective", AttachWindow::Today)
+        .unwrap();
+    assert!(matches!(
+        subscription.next_event().unwrap(),
+        SubscriptionEvent::Gap {
+            subscription_id,
+            from_seq: 11,
+            to_seq: 13,
+            ..
+        } if subscription_id == "sub-1"
+    ));
+    assert!(matches!(
+        subscription.next_event().unwrap(),
+        SubscriptionEvent::End {
+            subscription_id,
+            reason
+        } if subscription_id == "sub-1" && reason == "fermeture"
+    ));
+    server.join().expect("serveur termine");
+}
+
+#[test]
+fn annuaire_est_lisible_sans_negociation_et_une_base_bridget_ne_peut_etre_lue() {
+    let fixture = SocketFixture::new("directory");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("lecteur annuaire attendu");
+        let (mut reader, mut writer) = split(stream);
+        assert_eq!(read_json(&mut reader), json!({"type": "ListAgents"}));
+        write_json(
+            &mut writer,
+            json!({
+                "type": "AgentList",
+                "agents": [{
+                    "name": "prospective",
+                    "agent_type": "codex",
+                    "connection_id": "conn-1",
+                    "host": "local",
+                    "transport": "unix",
+                    "os": "macOS",
+                    "state": "idle",
+                    "last_seen_secs": 1,
+                    "reconnect_count": 0,
+                    "domain": "bridget",
+                    "model": "gpt-5",
+                    "effort": "high"
+                }]
+            }),
+        );
+    });
+
+    let agents = BridgetClient::list_agents_at(fixture.path()).unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].name, "prospective");
+    server.join().expect("serveur termine");
+
+    let database_path = fixture.path().with_file_name("bridget.db");
+    fs::write(&database_path, b"base Bridget a ne pas lire").unwrap();
+    let error = match BridgetClient::connect(&database_path, "scope-client-012") {
+        Ok(_) => panic!("un fichier SQLite n'est pas un socket Bridget"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, BridgetClientError::Connect { .. }));
+    assert_eq!(
+        fs::read(&database_path).unwrap(),
+        b"base Bridget a ne pas lire"
+    );
+    fs::remove_file(database_path).unwrap();
+}
+
+fn message(body: &str) -> PublicMessage {
+    PublicMessage {
+        id: "message-client-1".to_string(),
+        from: "maicie".to_string(),
+        to: "prospective".to_string(),
+        body: body.to_string(),
+        reply: true,
+        hops: 4,
+        reply_timeout: Some(60),
+        deadline_at: Some(1_700_000_060),
+        in_reply_to: None,
+    }
+}
+
+fn assert_client_handshake(reader: &mut BufReader<UnixStream>, writer: &mut BufWriter<UnixStream>) {
+    assert_eq!(
+        read_json(reader),
+        json!({"type": "RoleHandshake", "role": "client"})
+    );
+    write_json(writer, json!({"type": "RoleAccepted", "role": "client"}));
+}
+
+fn write_welcome(writer: &mut BufWriter<UnixStream>) {
+    write_json(
+        writer,
+        json!({
+            "type": "ClientWelcome",
+            "version": 1,
+            "horizon_secs": 3600,
+            "issued_at_tolerance_secs": 30,
+            "capabilities": ["send_idempotent", "lookup"]
+        }),
+    );
+}
+
+fn write_issue(writer: &mut BufWriter<UnixStream>, kind: &str) {
+    let issue = match kind {
+        "outcome_unknown" => json!({
+            "kind": "outcome_unknown",
+            "expires_at": 1_700_003_600,
+            "delivery_id": "delivery-1"
+        }),
+        "accepted" => json!({"kind": "accepted", "expires_at": 1_700_003_600}),
+        "envelope_mismatch" => json!({"kind": "envelope_mismatch"}),
+        _ => panic!("issue inconnue"),
+    };
+    write_json(
+        writer,
+        json!({
+            "type": "IdempotencyResult",
+            "operation_kind": "send",
+            "idempotency_key": "message-client-1",
+            "issue": issue
+        }),
+    );
+}
+
+fn split(stream: UnixStream) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
+    (
+        BufReader::new(stream.try_clone().expect("clone socket")),
+        BufWriter::new(stream),
+    )
+}
+
+fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("ligne client");
+    serde_json::from_str(&line).expect("JSON client")
+}
+
+fn write_json(writer: &mut BufWriter<UnixStream>, value: Value) {
+    writeln!(writer, "{}", serde_json::to_string(&value).unwrap()).expect("ligne serveur");
+    writer.flush().expect("flush serveur");
+}
+
+struct SocketFixture {
+    path: PathBuf,
+}
+
+impl SocketFixture {
+    fn new(label: &str) -> Self {
+        let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        Self {
+            path: std::env::temp_dir().join(format!(
+                "maicie-bridget-client-{}-{label}-{sequence}.sock",
+                std::process::id()
+            )),
+        }
+    }
+
+    fn path(&self) -> &PathBuf {
+        &self.path
+    }
+
+    fn bind(&self) -> UnixListener {
+        let _ = fs::remove_file(&self.path);
+        UnixListener::bind(&self.path).expect("socket fixture")
+    }
+}
+
+impl Drop for SocketFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
