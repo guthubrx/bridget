@@ -407,3 +407,12 @@ plus vite ; le coût net est un report, pas une perte.
   FUSIONNER (compléter, jamais écraser les champs attestés existants) — ou
   être ignoré si une présence wrapper vit sur le même nom. Recoupe la
   lacune « modèle des gérés depuis la définition ».
+- **Le référent, dernier maillon mortel** (question utilisateur, 23/08 soir :
+  « c'est assuré comment tes réveils ? ») : les messages sont durables (file
+  daemon) et la ronde de vigilance tourne — mais tout meurt avec la session
+  interactive du référent, que seul l'humain relance. Candidat : référent en
+  ÉQUIPIER GÉRÉ PERSISTANT (spawn claude --persistent) — résurrection
+  automatique prouvée 3× ce soir, carte de réveil pour le contexte, greffe/
+  catalogue/git pour la mémoire. À instruire : perte du pane visible
+  (l'humain ne « voit » plus son référent — attach y répond), et gouvernance
+  (qui relance le relanceur reste sain : le daemon, sous launchd).
