@@ -103,6 +103,7 @@ fn snapshot_acp_exige_la_correlation_complete_du_flux() {
 fn approbation_est_mono_usage_expiree_et_revalidee_contre_toctou() {
     let mut approval = ApprobationActivation {
         id: Uuid::new_v4(),
+        command_id: Uuid::new_v4(),
         objective_id: Uuid::new_v4(),
         profile_id: "security".into(),
         profile_hash: vec![1],
@@ -149,6 +150,27 @@ fn activation_outbox_ne_revient_pas_apres_une_issue_durable() {
         outbox.transition(EtatActivationOutbox::Dispatching),
         Err(DomainError::TransitionInterdite)
     );
+}
+
+#[test]
+fn outbox_rejetee_est_terminale_et_synthese_est_requise() {
+    assert!(EtatOutboxDelegation::Prepared
+        .transition_vers(EtatOutboxDelegation::Rejected)
+        .is_ok());
+    assert_eq!(
+        EtatOutboxDelegation::Rejected.transition_vers(EtatOutboxDelegation::Accepted),
+        Err(DomainError::TransitionInterdite)
+    );
+
+    let mut objective =
+        ObjectifCoordonne::nouveau("produire une synthèse", ModeObjectif::Collaboratif, 1).unwrap();
+    objective
+        .transition(EtatObjectif::EnCoordination, 2)
+        .unwrap();
+    objective.transition(EtatObjectif::AEvaluer, 3).unwrap();
+    assert!(objective.transition(EtatObjectif::Synthetise, 4).is_err());
+    objective.synthese = Some("faits observés".to_string());
+    objective.transition(EtatObjectif::Synthetise, 4).unwrap();
 }
 
 #[test]

@@ -45,6 +45,46 @@ pub struct ObjectifCoordonne {
     pub decision_en_attente_id: Option<Uuid>,
 }
 
+/// Décision locale explicitement auditée. Elle ne déclenche aucune I/O Bridget
+/// à elle seule : les effets sont portés par les outboxes dédiées.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeDecision {
+    AjouterParticipant,
+    RetirerParticipant,
+    Relancer,
+    ReveillerProfil,
+    Cloturer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EtatDecision {
+    Proposee,
+    Approuvee,
+    Refusee,
+    Appliquee,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecisionCoordination {
+    pub id: Uuid,
+    pub objectif_id: Uuid,
+    pub kind: TypeDecision,
+    pub proposee_par: String,
+    pub etat: EtatDecision,
+    pub motif: String,
+}
+
+impl DecisionCoordination {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        if self.proposee_par.trim().is_empty() || self.motif.trim().is_empty() {
+            return Err(DomainError::DonneeInvalide("décision incomplète"));
+        }
+        Ok(())
+    }
+}
+
 impl ObjectifCoordonne {
     pub fn nouveau(
         but: impl Into<String>,
@@ -76,6 +116,11 @@ impl ObjectifCoordonne {
         );
         if !allowed {
             return Err(DomainError::TransitionInterdite);
+        }
+        if next == EtatObjectif::Synthetise && self.synthese.is_none() {
+            return Err(DomainError::DonneeInvalide(
+                "synthèse requise avant l'état synthétisé",
+            ));
         }
         self.etat = next;
         self.mis_a_jour_at = now;
@@ -180,6 +225,25 @@ pub enum EtatOutboxDelegation {
     Prepared,
     OutcomeUnknown,
     Accepted,
+    Rejected,
+}
+
+impl EtatOutboxDelegation {
+    /// Autorité unique des transitions persistées de l'outbox de délégation.
+    /// Le store doit valider cette transition avant toute mise à jour SQLite.
+    pub fn transition_vers(self, next: Self) -> Result<(), DomainError> {
+        if !matches!(
+            (self, next),
+            (Self::Prepared, Self::OutcomeUnknown)
+                | (Self::Prepared, Self::Accepted)
+                | (Self::Prepared, Self::Rejected)
+                | (Self::OutcomeUnknown, Self::Accepted)
+                | (Self::OutcomeUnknown, Self::Rejected)
+        ) {
+            return Err(DomainError::TransitionInterdite);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,21 +277,7 @@ impl OutboxDelegation {
     }
 
     pub fn transition(&mut self, next: EtatOutboxDelegation, now: i64) -> Result<(), DomainError> {
-        if !matches!(
-            (self.etat, next),
-            (
-                EtatOutboxDelegation::Prepared,
-                EtatOutboxDelegation::OutcomeUnknown
-            ) | (
-                EtatOutboxDelegation::Prepared,
-                EtatOutboxDelegation::Accepted
-            ) | (
-                EtatOutboxDelegation::OutcomeUnknown,
-                EtatOutboxDelegation::Accepted
-            )
-        ) {
-            return Err(DomainError::TransitionInterdite);
-        }
+        self.etat.transition_vers(next)?;
         self.etat = next;
         self.attempted_at = Some(now);
         Ok(())
@@ -323,6 +373,8 @@ impl ProfilEquipe {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprobationActivation {
     pub id: Uuid,
+    /// Généré à la proposition : tout replay SpawnOrder conserve cette clé.
+    pub command_id: Uuid,
     pub objective_id: Uuid,
     pub profile_id: String,
     pub profile_hash: Vec<u8>,
@@ -335,8 +387,8 @@ pub struct ApprobationActivation {
 }
 
 impl ApprobationActivation {
-    pub fn consommer(
-        &mut self,
+    pub fn verifier_pour_dispatch(
+        &self,
         now: i64,
         profile_hash: &[u8],
         context_hash: &[u8],
@@ -353,6 +405,16 @@ impl ApprobationActivation {
         if self.profile_hash != profile_hash || self.context_hash != context_hash {
             return Err(DomainError::ApprobationIncoherente);
         }
+        Ok(())
+    }
+
+    pub fn consommer(
+        &mut self,
+        now: i64,
+        profile_hash: &[u8],
+        context_hash: &[u8],
+    ) -> Result<(), DomainError> {
+        self.verifier_pour_dispatch(now, profile_hash, context_hash)?;
         self.consumed_at = Some(now);
         Ok(())
     }

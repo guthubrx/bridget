@@ -24,7 +24,8 @@
   "etat_outbox_delegation": [
     "prepared",
     "outcome_unknown",
-    "accepted"
+    "accepted",
+    "rejected"
   ],
   "source_snapshot": [
     "bridget",
@@ -47,5 +48,18 @@
     "dispatching",
     "outcome_unknown",
     "applied"
+  ],
+  "type_decision": [
+    "ajouter_participant",
+    "retirer_participant",
+    "relancer",
+    "reveiller_profil",
+    "cloturer"
+  ],
+  "etat_decision": [
+    "proposee",
+    "approuvee",
+    "refusee",
+    "appliquee"
   ]
 }

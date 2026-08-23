@@ -5,3 +5,7 @@
   périmètre `managed_parity_test::matrice_fr008_compare_le_meme_corpus_et_les_frames_attach`
   (`Socket is not connected`, ligne 554). La première passe workspace et la
   relance isolée ont réussi ; aucun chemin T006 n'est présent dans ce test.
+- Dérogation correctif domaine : les rouges T006 (#1 poison) et client (#4)
+  proviennent des WIP légitimes respectifs de cxbridget et prospective ; les
+  tests de contrat du domaine et son formatage sont verts, puis chaque lot
+  revalide le workspace complet à son commit.

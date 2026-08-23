@@ -52,8 +52,17 @@
     "seq": 42,
     "stream_state": "fresh"
   },
+  "decision_coordination": {
+    "id": "77777777-7777-7777-7777-777777777777",
+    "objectif_id": "11111111-1111-1111-1111-111111111111",
+    "kind": "reveiller_profil",
+    "proposee_par": "local_human",
+    "etat": "proposee",
+    "motif": "Aucun profil actif ne porte le tag security"
+  },
   "approbation_activation": {
     "id": "55555555-5555-5555-5555-555555555555",
+    "command_id": "66666666-6666-6666-6666-666666666666",
     "objective_id": "11111111-1111-1111-1111-111111111111",
     "profile_id": "sentry",
     "profile_hash": [

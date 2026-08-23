@@ -1,8 +1,8 @@
 use maicie::domain::{
-    ActivationOutbox, ApprobationActivation, ClasseDuree, Delegation, EtatActivationOutbox,
-    EtatActivationProfil, EtatDelegation, EtatFlux, EtatObjectif, EtatOutboxDelegation,
-    ModeObjectif, ObjectifCoordonne, OutboxDelegation, ProfilEquipe, SnapshotTransport,
-    SourceSnapshot,
+    ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
+    EtatActivationOutbox, EtatActivationProfil, EtatDecision, EtatDelegation, EtatFlux,
+    EtatObjectif, EtatOutboxDelegation, ModeObjectif, ObjectifCoordonne, OutboxDelegation,
+    ProfilEquipe, SnapshotTransport, SourceSnapshot, TypeDecision,
 };
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +12,7 @@ struct CorpusDomaine {
     delegation: Delegation,
     outbox_delegation: OutboxDelegation,
     snapshot_transport: SnapshotTransport,
+    decision_coordination: DecisionCoordination,
     approbation_activation: ApprobationActivation,
     profil_equipe: ProfilEquipe,
     activation_outbox: ActivationOutbox,
@@ -37,6 +38,8 @@ struct MatriceEnumsPersistes {
     etat_flux: Vec<EtatFlux>,
     etat_activation_profil: Vec<EtatActivationProfil>,
     etat_activation_outbox: Vec<EtatActivationOutbox>,
+    type_decision: Vec<TypeDecision>,
+    etat_decision: Vec<EtatDecision>,
 }
 
 #[test]
@@ -55,6 +58,8 @@ fn matrice_json_v1_couvre_toutes_les_variantes_persistes_dans_les_deux_sens() {
         etat_flux: all_etat_flux(),
         etat_activation_profil: all_etat_activation_profil(),
         etat_activation_outbox: all_etat_activation_outbox(),
+        type_decision: all_type_decision(),
+        etat_decision: all_etat_decision(),
     };
 
     assert_eq!(corpus, expected, "lecture de la matrice v1");
@@ -138,6 +143,7 @@ fn all_etat_outbox_delegation() -> Vec<EtatOutboxDelegation> {
         EtatOutboxDelegation::Prepared,
         EtatOutboxDelegation::OutcomeUnknown,
         EtatOutboxDelegation::Accepted,
+        EtatOutboxDelegation::Rejected,
     ]
 }
 
@@ -145,7 +151,8 @@ fn exhaustive_etat_outbox_delegation(value: EtatOutboxDelegation) {
     match value {
         EtatOutboxDelegation::Prepared
         | EtatOutboxDelegation::OutcomeUnknown
-        | EtatOutboxDelegation::Accepted => {}
+        | EtatOutboxDelegation::Accepted
+        | EtatOutboxDelegation::Rejected => {}
     }
 }
 
@@ -211,5 +218,45 @@ fn exhaustive_etat_activation_outbox(value: EtatActivationOutbox) {
         EtatActivationOutbox::Dispatching
         | EtatActivationOutbox::OutcomeUnknown
         | EtatActivationOutbox::Applied => {}
+    }
+}
+
+fn all_type_decision() -> Vec<TypeDecision> {
+    exhaustive_type_decision(TypeDecision::AjouterParticipant);
+    vec![
+        TypeDecision::AjouterParticipant,
+        TypeDecision::RetirerParticipant,
+        TypeDecision::Relancer,
+        TypeDecision::ReveillerProfil,
+        TypeDecision::Cloturer,
+    ]
+}
+
+fn exhaustive_type_decision(value: TypeDecision) {
+    match value {
+        TypeDecision::AjouterParticipant
+        | TypeDecision::RetirerParticipant
+        | TypeDecision::Relancer
+        | TypeDecision::ReveillerProfil
+        | TypeDecision::Cloturer => {}
+    }
+}
+
+fn all_etat_decision() -> Vec<EtatDecision> {
+    exhaustive_etat_decision(EtatDecision::Proposee);
+    vec![
+        EtatDecision::Proposee,
+        EtatDecision::Approuvee,
+        EtatDecision::Refusee,
+        EtatDecision::Appliquee,
+    ]
+}
+
+fn exhaustive_etat_decision(value: EtatDecision) {
+    match value {
+        EtatDecision::Proposee
+        | EtatDecision::Approuvee
+        | EtatDecision::Refusee
+        | EtatDecision::Appliquee => {}
     }
 }
