@@ -153,6 +153,108 @@ fn releve_pull_only_greffe_repond_et_enregistre_l_evenement() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Mutation discriminante : si `process_guichet_claim` recréait une décision
+/// après la coupure, le second passage produirait deux décisions. Si le
+/// réconciliateur reconstruisait lui-même la réponse, son `response_message_id`
+/// ou son payload divergerait de ceux durablement reçus lors du premier claim.
+#[test]
+fn issue_perdue_puis_releve_regeneree_ne_double_ni_decision_ni_reponse() {
+    let root = root("reply-lost");
+    let database = root.join("maicie.sqlite3");
+    let created = seed(&database);
+    let issuer_scope = MaicieStore::open(&database).unwrap().issuer_scope().to_string();
+    let fixture = SocketFixture::new("reply-lost");
+    let listener = fixture.bind();
+    let canonical_request = format!(
+        "{{\"type\":\"service_request\",\"v\":1,\"issuer_scope\":\"{issuer_scope}\",\"request_id\":\"request-reply-lost\",\"issued_at\":1000,\"from\":\"prospective\",\"to\":\"maicie\",\"operation\":\"delivery_report\",\"payload\":{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\",\"delivery_hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"in_reply_to\":\"{}\"}}}}",
+        created.objective_id, created.delegation_id, created.message_id
+    )
+    .into_bytes();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let (mut reader, mut writer) = split(stream);
+        assert_service_handshake(&mut reader, &mut writer, &issuer_scope);
+        write_json(&mut writer, welcome());
+        assert_eq!(read_json(&mut reader), json!({"type":"guichet_claim_next","v":1}));
+        write_json(
+            &mut writer,
+            claimed(&issuer_scope, "request-reply-lost", &canonical_request, 1),
+        );
+        let first_reply = read_json(&mut reader);
+        let response_message_id = first_reply["response_message_id"].as_str().unwrap().to_string();
+        let first_payload = first_reply["payload"].clone();
+        drop(writer);
+        drop(reader);
+
+        let (stream, _) = listener.accept().unwrap();
+        let (mut reader, mut writer) = split(stream);
+        assert_service_handshake(&mut reader, &mut writer, &issuer_scope);
+        write_json(&mut writer, welcome());
+        assert_eq!(read_json(&mut reader), json!({"type":"guichet_claim_next","v":1}));
+        write_json(
+            &mut writer,
+            claimed(&issuer_scope, "request-reply-lost", &canonical_request, 2),
+        );
+        let replay = read_json(&mut reader);
+        assert_eq!(replay["claim_generation"], 2);
+        assert_eq!(replay["response_message_id"], response_message_id);
+        assert_eq!(replay["payload"], first_payload);
+        write_json(
+            &mut writer,
+            json!({
+                "type":"guichet_result",
+                "v":1,
+                "issuer_scope":issuer_scope,
+                "request_id":"request-reply-lost",
+                "issue":"accepted",
+                "expires_at":1200
+            }),
+        );
+        write_json(
+            &mut writer,
+            json!({
+                "type":"request_lifecycle_event",
+                "v":1,
+                "issuer_scope":issuer_scope,
+                "event_id":"event-reply-lost",
+                "request_id":"request-reply-lost",
+                "state":"answered",
+                "observed_at":1011,
+                "in_reply_to":created.message_id.to_string(),
+                "response_message_id":response_message_id
+            }),
+        );
+        assert_eq!(read_json(&mut reader), json!({"type":"guichet_claim_next","v":1}));
+        write_json(&mut writer, json!({"type":"guichet_empty","v":1}));
+    });
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    let first = reconcile_guichet_startup_with_limits(&mut store, fixture.path(), 1_010, limits())
+        .unwrap();
+    assert!(matches!(
+        first.actions.last(),
+        Some(GuichetReconcileAction::TransportIncertain)
+    ));
+    assert_eq!(store.objective_snapshots(Some(created.objective_id)).unwrap()[0].decisions.len(), 1);
+
+    let second = reconcile_guichet_startup_with_limits(&mut store, fixture.path(), 1_011, limits())
+        .unwrap();
+    assert!(second.actions.iter().any(|action| matches!(
+        action,
+        GuichetReconcileAction::ReponseAttestee { request_id, issue }
+            if request_id == "request-reply-lost" && issue == "accepted"
+    )));
+    assert!(second.actions.iter().any(|action| matches!(
+        action,
+        GuichetReconcileAction::EvenementAtteste { request_id, state }
+            if request_id == "request-reply-lost" && state == "answered"
+    )));
+    assert_eq!(store.objective_snapshots(Some(created.objective_id)).unwrap()[0].decisions.len(), 1);
+    drop(store);
+    server.join().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn limits() -> BridgetClientLimits {
     BridgetClientLimits {
         connect_timeout: Duration::from_millis(200),
@@ -168,6 +270,26 @@ fn welcome() -> Value {
         "horizon_secs":60,
         "issued_at_tolerance_secs":5,
         "capabilities":["maicie_guichet"]
+    })
+}
+
+fn claimed(
+    issuer_scope: &str,
+    request_id: &str,
+    canonical_request: &[u8],
+    generation: u64,
+) -> Value {
+    json!({
+        "type":"guichet_claimed",
+        "v":1,
+        "issuer_scope":issuer_scope,
+        "request_id":request_id,
+        "canonical_request":base64(canonical_request),
+        "claimed_at":1000,
+        "claim_generation":generation,
+        "claim_token":format!("Q2xhaW0tdG9rZW4tMTI4LWJpdHM{generation}"),
+        "claim_lease_expires_at":1100,
+        "expires_at":1200
     })
 }
 
