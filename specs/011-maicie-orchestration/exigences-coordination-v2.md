@@ -388,3 +388,12 @@ plus vite ; le coût net est un report, pas une perte.
   construisait. Les réintroduire uniquement ADOSSÉS à un producteur réel
   (sonde runtime : activité du transcript/rollout) — jamais en vocabulaire
   spéculatif. Sert who, l'agrégateur GUI et le F28.
+- **Colonne MODÈLE aveugle pour les gérés** (constat utilisateur, 23/08
+  soir, après le gréement codex-terra) : le modèle des équipiers gérés est
+  DANS leur définition figée (scellée par digest) mais who n'affiche que la
+  sonde runtime, qui ne couvre pas l'ACP → « — » alors que le daemon sait.
+  Correctif minimal : pour un géré, afficher modèle/effort depuis la
+  définition (source approuvée par l'humain) ; la sonde reste la voie des
+  interactifs. Second constat lié : après un redémarrage daemon, les
+  modèles des interactifs disparaissent jusqu'à leur prochaine activité
+  (sonde pilotée par mtime) — acceptable mais à documenter dans who.
