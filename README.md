@@ -288,8 +288,16 @@ répondre — sauf si un prompt est déjà fourni.
 
 Une vue `attach` ne s’ajoute pas à l’annuaire et ne peut pas usurper un
 équipier. Elle rejoue d’abord la fenêtre demandée, puis suit le journal en
-direct. Les séquences de contrôle présentes dans les réponses sont rendues
-visibles et la saisie est conservée pendant l’arrivée d’un événement.
+direct. Dans un terminal, chaque tour reste dans un bloc compact mis à jour
+sur place, les appels d’outils portent leur vrai nom et la saisie reste ancrée
+en bas pendant l’arrivée des événements. Les séquences de contrôle présentes
+dans les réponses sont rendues visibles et les heures du journal portent le
+suffixe `UTC` pour éviter toute ambiguïté avec l’heure locale. Une sortie
+redirigée conserve le rendu historique ligne par ligne.
+
+Un équipier arrêté est distingué d’un nom inconnu et n’est pas proposé dans
+la liste des équipiers attachables. Son journal reste disponible pour une
+consultation hors suivi direct ; relancez l’équipier avant de vous y rattacher.
 
 ### Se décrire
 

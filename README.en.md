@@ -261,8 +261,15 @@ already supplied.
 
 An `attach` view is not added to the directory and cannot impersonate a
 teammate. It first replays the selected window, then follows the live journal.
-Control sequences in responses are displayed visibly and input is preserved
-while an event arrives.
+In a terminal, each turn stays in one compact block updated in place, tool
+calls display their actual names, and input remains anchored at the bottom
+while events arrive. Control sequences in responses are displayed visibly and
+journal times carry an explicit `UTC` suffix to avoid confusion with local
+time. Redirected output keeps the historical line-by-line rendering.
+
+A stopped teammate is distinguished from an unknown name and is not offered
+in the attachable-teammate list. Its journal remains available for offline
+inspection; restart the teammate before attaching to its live stream.
 
 ### Describing yourself
 

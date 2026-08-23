@@ -17,3 +17,7 @@ référence historique.
 Relecture T911 : la gestion du cycle de vie par le daemon est additive. Le
 lancement historique par wrapper-terminal reste supporté et aucun nouveau
 chemin n'est déprécié par la session 009.
+
+Relecture T1305 : le rendu compact de `attach` est sélectionné uniquement sur
+stdout TTY. Le rendu historique non-TTY reste le chemin de compatibilité et
+n'est pas déprécié ; aucune nouvelle entrée n'est donc ajoutée au registre.

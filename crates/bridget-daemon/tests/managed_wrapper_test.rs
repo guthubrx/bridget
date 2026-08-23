@@ -25,15 +25,20 @@ fn test_root() -> PathBuf {
 }
 
 #[test]
-fn wrapper_reel_distingue_bootstrap_register_et_startup_failed_correle() {
+fn wrapper_claude_gere_annonce_un_register_acp_complet() {
     let root = test_root();
+    let expected_domain = root
+        .file_name()
+        .expect("racine de test nommée")
+        .to_string_lossy()
+        .into_owned();
     let socket = root.join(".cache/bridget/bridget.sock");
     let registry = root.join(".config/bridget/agents.json");
     fs::create_dir_all(socket.parent().unwrap()).unwrap();
     fs::create_dir_all(registry.parent().unwrap()).unwrap();
     fs::write(
         &registry,
-        r#"{"agents":{"fixture-managee":{"command":"/adaptateur/t906-absent","protocol":"acp","permissions":"allow","queue_capacity":2,"notify_timeout_secs":1}}}"#,
+        r#"{"agents":{"claude":{"command":"/adaptateur/t906-absent","protocol":"acp","permissions":"allow","queue_capacity":2,"notify_timeout_secs":1}}}"#,
     )
     .unwrap();
     let listener = UnixListener::bind(&socket).unwrap();
@@ -52,7 +57,7 @@ fn wrapper_reel_distingue_bootstrap_register_et_startup_failed_correle() {
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                name: "fixture-managee-1".to_string(),
+                name: "claude-manage-1".to_string(),
             })
             .unwrap()
         )
@@ -74,8 +79,8 @@ fn wrapper_reel_distingue_bootstrap_register_et_startup_failed_correle() {
         wrapper_executable: binary,
         wrapper_args: vec![
             "managed-wrapper".to_string(),
-            "fixture-managee".to_string(),
-            "fixture-managee-1".to_string(),
+            "claude".to_string(),
+            "claude-manage-1".to_string(),
         ],
         cwd: root.clone(),
         env: BTreeMap::from([
@@ -93,17 +98,27 @@ fn wrapper_reel_distingue_bootstrap_register_et_startup_failed_correle() {
         .unwrap();
     assert_eq!(ready.ready().instance_id, identity.instance_id);
     let mut running = ready
-        .persist_marker(&marker_store, "fixture-managee-1")
+        .persist_marker(&marker_store, "claude-manage-1")
         .unwrap()
         .release()
         .unwrap();
-    assert!(matches!(
-        register_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+    match register_rx.recv_timeout(Duration::from_secs(2)).unwrap() {
         WrapperToDaemon::Register {
-            instance_id: Some(instance_id),
+            agent_type,
+            name,
+            transport,
+            instance_id,
+            domain,
             ..
-        } if instance_id == identity.instance_id
-    ));
+        } => {
+            assert_eq!(agent_type, "claude");
+            assert_eq!(name.as_deref(), Some("claude-manage-1"));
+            assert_eq!(transport.as_deref(), Some("acp"));
+            assert_eq!(instance_id.as_deref(), Some(identity.instance_id.as_str()));
+            assert_eq!(domain.as_deref(), Some(expected_domain.as_str()));
+        }
+        other => panic!("Register Claude géré attendu, reçu : {other:?}"),
+    }
 
     running
         .status_reader()
