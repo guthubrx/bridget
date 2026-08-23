@@ -254,3 +254,28 @@ Delta backend, par taille :
    journal v1. Identité des vues garantie par construction (un read-model,
    N renderers). Assumé : parseurs couplés à des formats tiers (best effort
    versionné, dégradation annoncée), latence fichier de quelques secondes.
+
+## Périmètre gelé de la session 014 — Observabilité & reprise (2026-08-23)
+
+Six tâches validées sur le principe par l'utilisateur (spec à créer au « go ») :
+1. Dissocier mode d'attelage et transport (champ surchargé, daemon.rs:1710).
+2. Colonne mode (acp/tmux/cli) dans `who` + session:window.pane pour les tmux.
+3. Sonde modèle/effort étendue aux claude.
+4. **Corrélation toolCallId** : les mises à jour d'un appel titré héritent du
+   titre — fin des rafales « inconnu » (suivi 013 resté conversationnel
+   jusqu'ici, gravé maintenant).
+5. **Heure locale** dans la vue attach (le suffixe UTC de T1305c ne satisfait
+   pas l'utilisateur — exigence explicite).
+6. Amorçage de reprise : sous-commandes codex hors has_prompt + bootstrap
+   identité/outils MCP différés (cause racine 2026-08-23).
+
+## Divers restés conversationnels — gravés le 2026-08-23 soir
+
+- **Skill maicie à créer** (évoquée en finition 011, jamais livrée) : pendant
+  de la skill bridget — quand utiliser delegate/status/objective, doctrine
+  approve humain, deux vérités.
+- **Arbitrage en attente (utilisateur)** : les revues adverses versionnées
+  s'auto-identifient comme rédigées par des agents IA (fournisseur/modèle).
+  La règle « zéro trace IA dans Git » s'applique-t-elle aux seules
+  métadonnées de commit (position recommandée par le référent — le projet
+  EST un orchestrateur d'agents) ou aussi au contenu ? Décision non rendue.
