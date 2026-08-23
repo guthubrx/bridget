@@ -4,8 +4,7 @@
 //! daemon sera possédée par `BridgetClient`, afin que le binaire ne charge
 //! jamais de code interne du daemon.
 
-/// Identité stable réservée au compagnon d'orchestration.
-pub const MAICIE_IDENTITY: &str = "maicie";
+use maicie::MAICIE_IDENTITY;
 
 fn main() {
     println!("Maicie prêt : identité {MAICIE_IDENTITY}");
@@ -13,7 +12,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::MAICIE_IDENTITY;
+    use maicie::MAICIE_IDENTITY;
 
     #[test]
     fn identite_du_compagnon_est_stable() {
