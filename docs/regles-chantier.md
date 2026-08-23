@@ -80,3 +80,22 @@ l'incident.
     empilées par bascule dans le checkout principal, un commit du référent
     égaré sur la branche d'un équipier, mandats sans worktree — bloc C,
     2026-08-23 soir.)*
+
+## Rituel de clôture de session (référent)
+
+À chaque clôture de session ou de bloc, dans l'ordre, aucune étape omise :
+
+1. Toutes les cases de `tasks.md` cochées sur preuves — jamais de coche de
+   confort.
+2. Tous les objectifs Maicie clos au greffe, motif complet (hashs + verdicts
+   + relecteurs). *(Incident : oublié 2× le 2026-08-23 — approuvé ≠ clos.)*
+3. Merge dans main dans l'ordre des dépendances, push, branches et worktrees
+   purgés (règles XVI et 19) après contrôle lsof.
+4. Rebuild release ; si les crates daemon/wrapper ont changé sémantiquement,
+   redémarrage du daemon (résurrection automatique des persistants).
+   *(Incident : daemon périmé 2× le 2026-08-23.)*
+5. Passe d'annotation du catalogue v2 : chaque entrée touchée reçoit son
+   marqueur ✅ LIVRÉ / ⏳ OUVERT / PARTIEL / REJETÉ, daté et sourcé.
+   *(Incident : catalogue muet sur les livraisons 014, constaté par
+   l'utilisateur le soir même.)*
+6. Statuts des spec.md alignés sur la réalité (ni flatteurs ni périmés).
