@@ -130,3 +130,51 @@ principe « pas de surface avant preuve ») :
 C'est le prérequis de la boucle réponse→décision complète (Maicie v2 /
 future session Bridget). D'ici là : issues de LIVRAISON seules (T015a),
 consultation passive des échéances (T019), observations ACP datées (T017).
+
+## Suivi Bridget (constaté le 2026-08-23, session 011 Phase 5/6)
+
+- **Parité de repli du binaire** : `bridget send` n'expose pas `--in-reply-to`.
+  Un agent privé de ses outils MCP (panne d'environnement observée) ne peut
+  jamais clore une demande liée : ses verdicts arrivent non liés (règle 17)
+  et les rappels du daemon provoquent des réémissions en boucle (règle 15).
+  Ajouter `--in-reply-to <id>` au binaire pour que le repli dégradé reste
+  capable de fermer les boucles qu'on lui ouvre.
+
+## Reprise après crash total (revue adverse du 2026-08-23 — idée utilisateur)
+
+Verdicts : (a) reprise Maicie DÉJÀ-COUVERTE par construction (T023) ;
+(b) remonter la même équipe COHÉRENT-SOUS-CONDITIONS ; (c) résumé LLM de
+session REJETÉ — remplacé par une carte de réveil déterministe.
+Acquis important : FR-014 est déjà compatible — une REPRISE n'est pas une
+NAISSANCE (l'approbation a eu lieu au spawn initial, le digest épinglé en est
+la preuve durable) ; aucune « approbation en masse » à inventer.
+
+Trous réels retenus :
+1. **Composition d'équipe durable minimale** : le `domain` existe dans le
+   protocole mais n'est jamais écrit dans fleet.json (perdu au crash) ;
+   « la même équipe » = aujourd'hui « les mêmes binaires persistants dans les
+   mêmes cwd », sans rôles ni missions. Écrire le domain suffit — pas de
+   nouvel objet.
+2. **Pertes silencieuses à la reprise** : le quota de flotte ampute les
+   surnuméraires de fleet.json sans autre trace qu'un log, et les agents
+   non-persistants disparaissent du monde d'après. Exiger une trace durable
+   consultable : « ces N équipiers ne sont PAS revenus, et voici pourquoi ».
+3. **Chaînon opérationnel Maicie post-crash** : `maicie approve` est écrit au
+   contrat mais absent du CLI (main.rs n'expose que delegate/status/objective)
+   — recoupe le suivi « surface CLI profile/approve/refuse » déjà consigné ;
+   documenter aussi le déclenchement de la réconciliation après reboot
+   (pull-only : Maicie ne repart que quand on l'invoque).
+4. **Carte de réveil déterministe** (remplace l'idée de résumé) : à la
+   relance d'un wrapper, la session ACP est neuve et muette — l'agent ignore
+   qu'il est en reprise. Injecter des FAITS BRUTS, zéro LLM : génération N,
+   cwd, K demandes ouvertes rerattachées, chemin absolu du handoff, pointeur
+   bridget_ledger. Des pointeurs, pas de la prose.
+
+Gadgets rejetés : résumé LLM (par quiconque), résumé continu par tour,
+approbation en lot, graphe d'ordre de relance, snapshot d'équipe séparé de
+fleet.json, replay de contexte automatique au-delà de la carte de réveil.
+- **Toolchain non épinglée** (constaté 2026-08-23) : aucun rust-toolchain.toml
+  au repo ; la stable locale (plus récente que le style committé) fait de tout
+  `cargo fmt` un générateur de bruit (réordonnancement d'imports style 2024).
+  Un WIP fantôme main.rs/store.rs en est né et a été jeté. Épingler la
+  toolchain, puis un commit rustfmt unique et assumé.

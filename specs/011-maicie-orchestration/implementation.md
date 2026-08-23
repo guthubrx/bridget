@@ -16,6 +16,13 @@
   (validation puis émission) ; coût local négligeable, à considérer seulement
   lors d'une optimisation mesurée.
 
+## Constat recette no 11 (2026-08-23, observation utilisateur)
+La vue attach affiche « [outil] inconnu appel demandé » pour tout appel
+d'outil ACP dont le kind n'est pas mappé, au lieu d'extraire le nom/titre
+réel porté par l'événement (Read, Grep…). Sévérité mineure (observabilité) —
+correctif : renderer attach = afficher title/name du tool_call ACP même pour
+un kind inconnu. À assigner à la prochaine fenêtre libre.
+
 ## T015a — issues terminales attestées
 
 Les refus, annulations et échecs locaux terminalisés par Bridget font passer
