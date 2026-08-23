@@ -150,7 +150,7 @@ impl RuntimeSubscription {
             pending: None,
             discarding_seq: None,
             last_seq: None,
-            stream_state: EtatFlux::Fresh,
+            stream_state: EtatFlux::Unavailable,
         })
     }
 
@@ -213,10 +213,15 @@ impl RuntimeSubscription {
             SubscriptionEvent::SnapshotCaughtUp {
                 subscription_id,
                 through_seq,
-            } => Ok(Some(RuntimeSignal::SnapshotCaughtUp {
-                subscription_id,
-                through_seq,
-            })),
+            } => {
+                if self.stream_state == EtatFlux::Unavailable {
+                    self.stream_state = EtatFlux::Fresh;
+                }
+                Ok(Some(RuntimeSignal::SnapshotCaughtUp {
+                    subscription_id,
+                    through_seq,
+                }))
+            }
             SubscriptionEvent::Gap {
                 subscription_id,
                 from_seq,
@@ -338,7 +343,7 @@ impl RuntimeSubscription {
             return Ok(None);
         }
 
-        let observation =
+        let mut observation =
             observation_from_journal_line(&self.agent, &subscription_id, seq, &pending.bytes)?;
         if let Some(previous) = self.last_seq
             && seq <= previous
@@ -348,6 +353,7 @@ impl RuntimeSubscription {
             )));
         }
         self.last_seq = Some(seq);
+        observation.stream_state = self.stream_state;
         // Une ligne valide après une lacune ne répare pas rétroactivement le
         // flux : seule une nouvelle souscription, avec son propre
         // `SnapshotCaughtUp`, peut établir une vue fraîche. Cette génération

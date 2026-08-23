@@ -6,7 +6,7 @@
 //! module Maicie ne doit ouvrir le socket Bridget directement.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io::{BufRead, BufReader, Write};
@@ -376,7 +376,7 @@ impl BridgetClient {
     /// Variante interne de reprise : toutes les opérations de la connexion
     /// consomment la même échéance absolue, sans la réinitialiser à chaque
     /// phase du protocole.
-    pub(crate) fn connect_with_limits_until(
+    pub fn connect_with_limits_until(
         socket_path: impl AsRef<Path>,
         issuer_scope: impl Into<String>,
         limits: BridgetClientLimits,
@@ -546,6 +546,16 @@ impl BridgetClient {
         Self::list_agents_at_with_limits(&self.socket_path, self.limits)
     }
 
+    /// Variante bornée par une échéance absolue. Le budget appartient à
+    /// l'appelant : une consultation composée ne repart donc pas avec un
+    /// nouveau délai à chaque échange du protocole local public.
+    pub fn list_agents_until(
+        &self,
+        deadline: Instant,
+    ) -> Result<Vec<AgentInfo>, BridgetClientError> {
+        Self::list_agents_at_with_limits_until(&self.socket_path, self.limits, deadline)
+    }
+
     /// Lit l'annuaire avant toute negociation client. Cette operation reste
     /// disponible pour expliquer une incompatibilite de capacites plutot que
     /// de masquer les agents presents.
@@ -559,12 +569,20 @@ impl BridgetClient {
         socket_path: impl AsRef<Path>,
         limits: BridgetClientLimits,
     ) -> Result<Vec<AgentInfo>, BridgetClientError> {
-        let mut connection = WireConnection::connect(
-            socket_path.as_ref(),
+        Self::list_agents_at_with_limits_until(
+            socket_path,
             limits,
-            Instant::now() + limits.connect_timeout,
-        )?;
-        let response = connection.request(json!({"type": "ListAgents"}))?;
+            Instant::now() + limits.connect_timeout + limits.io_timeout,
+        )
+    }
+
+    fn list_agents_at_with_limits_until(
+        socket_path: impl AsRef<Path>,
+        limits: BridgetClientLimits,
+        deadline: Instant,
+    ) -> Result<Vec<AgentInfo>, BridgetClientError> {
+        let mut connection = WireConnection::connect(socket_path.as_ref(), limits, deadline)?;
+        let response = connection.request_until(json!({"type": "ListAgents"}), deadline)?;
         match response_type(&response)? {
             "AgentList" => {
                 serde_json::from_value(response.get("agents").cloned().ok_or_else(|| {
@@ -620,18 +638,33 @@ impl BridgetClient {
         agent: &str,
         window: AttachWindow,
     ) -> Result<Subscription, BridgetClientError> {
-        let mut connection = WireConnection::connect(
-            &self.socket_path,
-            self.limits,
-            Instant::now() + self.limits.connect_timeout,
-        )?;
-        let role = connection.request(json!({"type": "RoleHandshake", "role": "attach"}))?;
+        self.subscribe_until(
+            agent,
+            window,
+            Instant::now() + self.limits.connect_timeout + self.limits.io_timeout * 2,
+        )
+    }
+
+    /// Ouvre Subscribe en consommant la même échéance absolue pour la
+    /// connexion, le rôle Attach et l'écriture de l'abonnement.
+    pub fn subscribe_until(
+        &self,
+        agent: &str,
+        window: AttachWindow,
+        deadline: Instant,
+    ) -> Result<Subscription, BridgetClientError> {
+        let mut connection = WireConnection::connect(&self.socket_path, self.limits, deadline)?;
+        let role = connection
+            .request_until(json!({"type": "RoleHandshake", "role": "attach"}), deadline)?;
         expect_role_accepted(&role, "attach")?;
-        connection.send(json!({
-            "type": "Subscribe",
-            "agent": agent,
-            "window": window,
-        }))?;
+        connection.send_until(
+            json!({
+                "type": "Subscribe",
+                "agent": agent,
+                "window": window,
+            }),
+            deadline,
+        )?;
         Ok(Subscription { connection })
     }
 
@@ -734,40 +767,57 @@ pub struct Subscription {
 impl Subscription {
     pub fn next_event(&mut self) -> Result<SubscriptionEvent, BridgetClientError> {
         let response = self.connection.receive()?;
-        match response_type(&response)? {
-            "Subscribed" => Ok(SubscriptionEvent::Subscribed {
-                subscription_id: required_string(&response, "subscription_id")?,
-            }),
-            "JournalFragment" => Ok(SubscriptionEvent::JournalFragment {
-                subscription_id: required_string(&response, "subscription_id")?,
-                seq: required_u64(&response, "seq")?,
-                offset: required_u64(&response, "offset")?,
-                final_fragment: required_bool(&response, "final")?,
-                bytes: decode_base64_bytes(&response, "bytes")?,
-            }),
-            "SnapshotCaughtUp" => Ok(SubscriptionEvent::SnapshotCaughtUp {
-                subscription_id: required_string(&response, "subscription_id")?,
-                through_seq: optional_u64(&response, "through_seq")?,
-            }),
-            "Gap" => Ok(SubscriptionEvent::Gap {
-                subscription_id: required_string(&response, "subscription_id")?,
-                from_seq: required_u64(&response, "from_seq")?,
-                to_seq: required_u64(&response, "to_seq")?,
-                reason: optional_string(&response, "reason")?,
-            }),
-            "JournalReadError" => Ok(SubscriptionEvent::JournalReadError {
-                subscription_id: required_string(&response, "subscription_id")?,
-                line: required_u64(&response, "line")?,
-                offset: required_u64(&response, "offset")?,
-                reason: required_string(&response, "reason")?,
-            }),
-            "End" => Ok(SubscriptionEvent::End {
-                subscription_id: required_string(&response, "subscription_id")?,
-                reason: required_string(&response, "reason")?,
-            }),
-            "AttachRejected" | "Nack" => Err(BridgetClientError::Protocol(response.to_string())),
-            other => Err(unexpected("evenement d'abonnement", other)),
-        }
+        parse_subscription_event(response)
+    }
+
+    /// Lit un événement sans dépasser l'échéance absolue du consommateur.
+    pub fn next_event_until(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<SubscriptionEvent, BridgetClientError> {
+        let result = self
+            .connection
+            .receive_until(deadline)
+            .and_then(parse_subscription_event);
+        self.connection.poison_after(&result);
+        result
+    }
+}
+
+fn parse_subscription_event(response: Value) -> Result<SubscriptionEvent, BridgetClientError> {
+    match response_type(&response)? {
+        "Subscribed" => Ok(SubscriptionEvent::Subscribed {
+            subscription_id: required_string(&response, "subscription_id")?,
+        }),
+        "JournalFragment" => Ok(SubscriptionEvent::JournalFragment {
+            subscription_id: required_string(&response, "subscription_id")?,
+            seq: required_u64(&response, "seq")?,
+            offset: required_u64(&response, "offset")?,
+            final_fragment: required_bool(&response, "final")?,
+            bytes: decode_base64_bytes(&response, "bytes")?,
+        }),
+        "SnapshotCaughtUp" => Ok(SubscriptionEvent::SnapshotCaughtUp {
+            subscription_id: required_string(&response, "subscription_id")?,
+            through_seq: optional_u64(&response, "through_seq")?,
+        }),
+        "Gap" => Ok(SubscriptionEvent::Gap {
+            subscription_id: required_string(&response, "subscription_id")?,
+            from_seq: required_u64(&response, "from_seq")?,
+            to_seq: required_u64(&response, "to_seq")?,
+            reason: optional_string(&response, "reason")?,
+        }),
+        "JournalReadError" => Ok(SubscriptionEvent::JournalReadError {
+            subscription_id: required_string(&response, "subscription_id")?,
+            line: required_u64(&response, "line")?,
+            offset: required_u64(&response, "offset")?,
+            reason: required_string(&response, "reason")?,
+        }),
+        "End" => Ok(SubscriptionEvent::End {
+            subscription_id: required_string(&response, "subscription_id")?,
+            reason: required_string(&response, "reason")?,
+        }),
+        "AttachRejected" | "Nack" => Err(BridgetClientError::Protocol(response.to_string())),
+        other => Err(unexpected("evenement d'abonnement", other)),
     }
 }
 
@@ -830,13 +880,6 @@ impl WireConnection {
             self.send_bytes_until(json_bytes, deadline)?;
             self.receive_until(deadline)
         })();
-        self.poison_after(&result);
-        result
-    }
-
-    fn send(&mut self, value: Value) -> Result<(), BridgetClientError> {
-        self.ensure_usable()?;
-        let result = self.send_until(value, Instant::now() + self.limits.io_timeout);
         self.poison_after(&result);
         result
     }
@@ -1303,8 +1346,8 @@ fn unexpected(expected: &str, received: &str) -> BridgetClientError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BridgetClientError, PublicMessage, ReplayPublicMessage, replay_idempotent_request,
-        validate_send_idempotent_frame,
+        replay_idempotent_request, validate_send_idempotent_frame, BridgetClientError,
+        PublicMessage, ReplayPublicMessage,
     };
     use serde_json::json;
 

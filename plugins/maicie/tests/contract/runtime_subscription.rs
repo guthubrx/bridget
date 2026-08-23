@@ -84,6 +84,11 @@ fn consomme_fragments_gap_et_fin_uniquement_via_subscribe_public() {
     let mut runtime =
         RuntimeSubscription::open(&client, "prospective", AttachWindow::Today).unwrap();
     assert_eq!(runtime.subscription_id(), "sub-7");
+    assert_eq!(
+        runtime.stream_state(),
+        EtatFlux::Unavailable,
+        "Subscribed seul ne rend pas la vue fraîche"
+    );
 
     let RuntimeSignal::Observation(observation) = runtime.next_signal().unwrap() else {
         panic!("le premier signal doit être une observation factuelle");
@@ -97,6 +102,11 @@ fn consomme_fragments_gap_et_fin_uniquement_via_subscribe_public() {
         observation.details,
         json!({"event":"turn_start","from":"maicie","reply":false})
     );
+    assert_eq!(
+        observation.stream_state,
+        EtatFlux::Unavailable,
+        "une observation antérieure à SnapshotCaughtUp reste incomplète"
+    );
     assert!(
         !observation.details.to_string().contains("secret"),
         "le runtime ne recopie jamais le corps du journal"
@@ -109,6 +119,7 @@ fn consomme_fragments_gap_et_fin_uniquement_via_subscribe_public() {
             ..
         }
     ));
+    assert_eq!(runtime.stream_state(), EtatFlux::Fresh);
     assert!(matches!(
         runtime.next_signal().unwrap(),
         RuntimeSignal::Gap {
@@ -122,6 +133,11 @@ fn consomme_fragments_gap_et_fin_uniquement_via_subscribe_public() {
         panic!("une ligne valide après Gap reste une observation, pas une guérison implicite");
     };
     assert_eq!(after_gap.seq, 10);
+    assert_eq!(
+        after_gap.stream_state,
+        EtatFlux::Gap,
+        "chaque fait propage la lacune attestée du flux"
+    );
     assert_eq!(
         runtime.stream_state(),
         EtatFlux::Gap,
