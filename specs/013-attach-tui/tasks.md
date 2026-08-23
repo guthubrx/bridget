@@ -24,7 +24,7 @@ commit en review immuable, auteur ≠ relecteur, zéro trace IA, jamais de push.
   **Observable** : fixture de rattrapage → blocs compacts ; bancs 008
   intacts (SC-003).
 
-- [ ] T1304 Cohabitation saisie/flux : ligne de saisie ancrée en bas, le
+- [x] T1304 Cohabitation saisie/flux : ligne de saisie ancrée en bas, le
   flux se rend au-dessus sans corrompre la frappe ; redimensionnement
   toléré.
   **Observable** : test pseudo-TTY réel (saisie pendant un tour entrant).
@@ -41,3 +41,7 @@ commit en review immuable, auteur ≠ relecteur, zéro trace IA, jamais de push.
   comme attachable. Correctif : distinguer inconnu/arrêté (« équipier arrêté,
   historique consultable via … » le cas échéant) et ne lister comme
   attachables que les vivants (ou afficher leur état). À absorber avec T1305.
+
+- [ ] T1305c Constat no 19 (observation utilisateur) : les horodatages de la
+  vue attach s'affichent en UTC (« 10:02 » pour 12:02 locale) — rendre en
+  HEURE LOCALE (ou suffixer explicitement UTC). À absorber dans le lot T1305.
