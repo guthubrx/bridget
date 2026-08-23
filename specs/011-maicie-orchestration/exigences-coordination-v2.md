@@ -182,9 +182,17 @@ fleet.json, replay de contexte automatique au-delà de la carte de réveil.
   l'heuristique has_prompt du wrapper (wrapper.rs:807) traite tout argument
   sans tirets comme un prompt utilisateur ; la sous-commande codex `resume`
   déclenche donc le silence — `bridget claude --resume` reçoit son préambule,
-  `bridget codex resume` non. Correctif : whitelist des sous-commandes codex
-  connues (resume, exec) comme non-prompts. Recoupe la « carte de réveil » :
-  même besoin, même endroit d'injection.
+  `bridget codex resume` non. CAUSE RACINE COMPLÈTE (enquête cxbridget,
+  2026-08-23 soir, preuves logs SQLite + probe stdio) : l'override -c
+  mcp_servers traverse `resume` sans perte et les outils sont bien servis,
+  mais Codex 0.149 les DIFFÈRE (ToolSearchAlwaysDeferMcpTools) — ils exigent
+  une découverte via ALL_TOOLS puis un appel tools.mcp__bridget__*. Sans le
+  prompt d'amorçage (sauté par has_prompt), l'agent repris ne refait jamais
+  la découverte et conclut à tort que l'outil manque. Correctif spécifié :
+  parser les sous-commandes codex (resume, SESSION_ID et options ≠ prompt),
+  et injecter en reprise un bootstrap court expliquant la découverte
+  différée ; tests d'argv et de régression du texte. Recoupe la « carte de
+  réveil » : même besoin, même endroit d'injection.
 - **`who` n'affiche pas le mode d'attelage** (confusion utilisateur constatée
   2×, 2026-08-23) : la colonne transport ne décrit que le tronçon
   daemon↔wrapper (unix/ssh) ; rien n'indique si l'équipier est géré ACP ou
@@ -227,6 +235,10 @@ Delta backend, par taille :
 4. Hérite de la 014 (corrélation toolCallId, heure locale, mode, sonde
    claude). Hors périmètre assumé : changer le modèle d'une session en cours
    (appartient au CLI de l'agent).
+   Client : NE PAS réinventer le rendu — partir d'un socle de chat UI
+   existant (piste utilisateur : t3code / stack T3 ou équivalent open
+   source, licence à vérifier, exécution strictement locale) ; notre valeur
+   est le read-model et les adaptateurs, pas la coquille de chat.
 5. **Vue unifiée quel que soit le canal ET le mode** (exigence utilisateur
    2026-08-23) : même vue attach/GUI pour les gérés ACP et les interactifs
    tmux. Chemin : généraliser la sonde runtime existante (parse_codex_rollout,
