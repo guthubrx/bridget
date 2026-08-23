@@ -208,3 +208,22 @@ fleet.json, replay de contexte automatique au-delà de la carte de réveil.
   rattrapage (recoupe la carte de réveil) ; et enrichir les titres vagues de
   l'adaptateur claude (« Terminal ») d'un extrait de commande, comme FR-003
   le visait (« Bash cargo test… »).
+
+## GUI Bridget (vision utilisateur du 2026-08-23 — mélange grokbot/Cursor)
+
+Client graphique : barre latérale d'agents (who), fil de conversation par
+agent (ledger, réponses liées repliables), vue intérieure par tour (journal :
+narration, agrégats d'activité calculés côté client, outils dépliables),
+composer humain (send rôle local). ~80 % = présentation sur flux existants.
+
+Delta backend, par taille :
+1. Session « journal enrichi » (wrapper) : capturer la pensée si l'adaptateur
+   l'émet (best effort par fournisseur), les arguments et les RÉSULTATS
+   d'outils (troncature bornée) — aujourd'hui seuls l'appel et son statut
+   sont journalisés.
+2. Abonnement ledger/who (aujourd'hui pull ; polling acceptable jour 1).
+3. Agrégateur de lecture local fusionnant who+ledger+journaux par
+   conversation.
+4. Hérite de la 014 (corrélation toolCallId, heure locale, mode, sonde
+   claude). Hors périmètre assumé : changer le modèle d'une session en cours
+   (appartient au CLI de l'agent).
