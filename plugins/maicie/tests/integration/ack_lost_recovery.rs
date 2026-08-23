@@ -4,7 +4,7 @@ use maicie::domain::{
     ObjectifCoordonne, OutboxDelegation,
 };
 use maicie::outbox::{stable_body_hash, PreparedDelegation};
-use maicie::reconcile::{reconcile_startup_at, ReconcileAction};
+use maicie::reconcile::{reconcile_startup_at, reconcile_startup_at_observed, ReconcileAction};
 use maicie::store::MaicieStore;
 use serde_json::{json, Value};
 use std::fs::{self, DirBuilder};
