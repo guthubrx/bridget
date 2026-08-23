@@ -9,6 +9,7 @@ use crate::idempotency::{
     IdempotencyError, IdempotencyKey, IdempotencyStore, OperationKind, SpawnCommand,
     SpawnCommandIssue, SpawnCommandState, SpawnReservation,
 };
+use bridget_transport::ResolvedAgentDefinition;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
@@ -72,6 +73,9 @@ pub struct RecoveryCandidate {
     pub lease: SpawnLease,
     pub agent_type: String,
     pub cwd: PathBuf,
+    /// Définition persistée au passage Reserved→Starting. Une ancienne ligne
+    /// sans définition ne peut pas être reprise sans trahir la preuve publique.
+    pub resolved_definition: Option<ResolvedAgentDefinition>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,6 +160,7 @@ struct ActiveSpawn {
     agent_type: String,
     cwd: PathBuf,
     state: SpawnCommandState,
+    resolved_definition: Option<ResolvedAgentDefinition>,
 }
 
 struct FleetInner {
@@ -253,6 +258,7 @@ impl FleetSupervisor {
                 lease: lease_from(active),
                 agent_type: active.agent_type.clone(),
                 cwd: active.cwd.clone(),
+                resolved_definition: active.resolved_definition.clone(),
             })
             .collect::<Vec<_>>();
         candidates.sort_by(|left, right| left.lease.name.cmp(&right.lease.name));
@@ -356,6 +362,7 @@ impl FleetSupervisor {
                     agent_type: order.agent_type.clone(),
                     cwd: order.cwd.clone(),
                     state: SpawnCommandState::Reserved,
+                    resolved_definition: command.resolved_definition,
                 };
                 inner
                     .active_by_name
@@ -393,7 +400,12 @@ impl FleetSupervisor {
         }
     }
 
-    pub fn mark_starting(&self, lease: &SpawnLease, now: i64) -> Result<(), FleetError> {
+    pub fn mark_starting(
+        &self,
+        lease: &SpawnLease,
+        now: i64,
+        definition: &ResolvedAgentDefinition,
+    ) -> Result<(), FleetError> {
         let mut inner = self
             .inner
             .lock()
@@ -412,17 +424,19 @@ impl FleetSupervisor {
             });
         }
         let key = spawn_key(&inner, &active.command_id)?;
-        inner.idempotency.advance_spawn(
+        inner.idempotency.advance_spawn_with_definition(
             &key,
             active.generation,
             SpawnCommandState::Reserved,
             SpawnCommandState::Starting,
+            definition,
         )?;
-        inner
+        let active = inner
             .active_by_command
             .get_mut(&active.command_id)
-            .expect("la génération a été validée sous le verrou")
-            .state = SpawnCommandState::Starting;
+            .expect("la génération a été validée sous le verrou");
+        active.state = SpawnCommandState::Starting;
+        active.resolved_definition = Some(definition.clone());
         Ok(())
     }
 
@@ -476,6 +490,7 @@ impl FleetSupervisor {
                     command_id: active.command_id.clone(),
                     generation: active.generation,
                     created: now.to_string(),
+                    resolved_definition: active.resolved_definition.clone(),
                 },
             )?;
         }
@@ -484,6 +499,7 @@ impl FleetSupervisor {
             name: active.name.clone(),
             generation: active.generation,
             instance_id: instance_id.to_string(),
+            definition: active.resolved_definition.clone().map(Box::new),
         };
         let key = spawn_key(&inner, &active.command_id)?;
         inner
@@ -551,6 +567,7 @@ impl FleetSupervisor {
                 name,
                 generation,
                 instance_id,
+                ..
             }) if name == &lease.name
                 && generation == &lease.generation
                 && instance_id == &lease.instance_id
@@ -664,6 +681,7 @@ fn recover_commands(inner: &mut FleetInner, desired: &DesiredFleet) -> Result<()
                     agent_type: equipier.agent_type.clone(),
                     cwd: equipier.cwd.clone(),
                     state: SpawnCommandState::Starting,
+                    resolved_definition: command.resolved_definition,
                 };
             inner
                 .active_by_name
@@ -906,6 +924,24 @@ mod tests {
         }
     }
 
+    fn resolved_test_definition() -> ResolvedAgentDefinition {
+        ResolvedAgentDefinition {
+            command: "npx".to_string(),
+            args: vec!["fixture-acp".to_string()],
+            protocol: "acp".to_string(),
+            forbidden_env: vec!["API_KEY".to_string()],
+            pass_env: Vec::new(),
+            permissions: "allow".to_string(),
+            queue_capacity: 32,
+            notify_timeout_secs: 600,
+            mcp: bridget_transport::ResolvedMcpDefinition {
+                interactive: "none".to_string(),
+                acp_session: false,
+            },
+            digest: "fixture-digest".to_string(),
+        }
+    }
+
     #[test]
     fn scope_superviseur_et_issue_persistante_survivent_au_redemarrage() {
         let root = test_root("scope");
@@ -913,10 +949,15 @@ mod tests {
         let scope = supervisor.supervisor_scope();
         let spawn = order("command-scope", Some("codex-scope"), true);
         let lease = start(&supervisor, &spawn);
-        supervisor.mark_starting(&lease, NOW).unwrap();
+        supervisor.mark_starting(&lease, NOW, &resolved_test_definition()).unwrap();
         let issue = supervisor
             .register_connected(&lease, &lease.instance_id, NOW + 1)
             .unwrap();
+        assert!(matches!(
+            &issue,
+            SpawnCommandIssue::Connected { definition: Some(definition), .. }
+                if definition.as_ref() == &resolved_test_definition()
+        ));
         drop(supervisor);
 
         let reopened = open(&root);
@@ -935,7 +976,7 @@ mod tests {
         for (command_id, name) in [("command-z", "zeta"), ("command-a", "alpha")] {
             let spawn = order(command_id, Some(name), true);
             let lease = start(&supervisor, &spawn);
-            supervisor.mark_starting(&lease, NOW).unwrap();
+            supervisor.mark_starting(&lease, NOW, &resolved_test_definition()).unwrap();
             supervisor
                 .desired
                 .upsert(
@@ -946,6 +987,7 @@ mod tests {
                         command_id: command_id.to_string(),
                         generation: lease.generation,
                         created: NOW.to_string(),
+                        resolved_definition: Some(resolved_test_definition()),
                     },
                 )
                 .unwrap();
@@ -1017,7 +1059,7 @@ mod tests {
         let supervisor = Arc::new(open(&root));
         let spawn = order("command-wait", Some("codex-wait"), true);
         let lease = start(&supervisor, &spawn);
-        supervisor.mark_starting(&lease, NOW).unwrap();
+        supervisor.mark_starting(&lease, NOW, &resolved_test_definition()).unwrap();
         let waiter = match supervisor.request_spawn(&spawn, NOW + 1).unwrap() {
             SpawnSubmission::Await(waiter) => waiter,
             other => panic!("retry non rattaché: {other:?}"),
@@ -1078,7 +1120,7 @@ mod tests {
             supervisor.request_spawn(&divergent, NOW).unwrap(),
             SpawnSubmission::EnvelopeMismatch
         );
-        supervisor.mark_starting(&lease, NOW).unwrap();
+        supervisor.mark_starting(&lease, NOW, &resolved_test_definition()).unwrap();
         assert!(matches!(
             supervisor.register_connected(&lease, "instance-obsolete", NOW + 1),
             Err(FleetError::StaleGeneration)
@@ -1117,7 +1159,7 @@ mod tests {
         let supervisor = open(&root);
         let spawn = order("command-stop-starting", Some("codex-stop"), true);
         let lease = start(&supervisor, &spawn);
-        supervisor.mark_starting(&lease, NOW).unwrap();
+        supervisor.mark_starting(&lease, NOW, &resolved_test_definition()).unwrap();
 
         supervisor.invalidate_for_stop(&lease).unwrap();
 
@@ -1142,7 +1184,7 @@ mod tests {
         let supervisor = open(&root);
         let spawn = order("command-stop-connected", Some("codex-stop"), true);
         let lease = start(&supervisor, &spawn);
-        supervisor.mark_starting(&lease, NOW).unwrap();
+        supervisor.mark_starting(&lease, NOW, &resolved_test_definition()).unwrap();
         let connected = supervisor
             .register_connected(&lease, &lease.instance_id, NOW + 1)
             .unwrap();
@@ -1236,7 +1278,7 @@ mod tests {
         let supervisor = open(&root);
         let spawn = order("command-crash", Some("codex-crash"), true);
         let lease = start(&supervisor, &spawn);
-        supervisor.mark_starting(&lease, NOW).unwrap();
+        supervisor.mark_starting(&lease, NOW, &resolved_test_definition()).unwrap();
         match stage.as_str() {
             "before_fleet" => signal_and_park(),
             "after_fleet" => {

@@ -28,7 +28,7 @@ use crate::{
     fleet::{FleetConfig, FleetSupervisor, SpawnLease, SpawnOrder as FleetSpawnOrder},
     lifecycle::{
         PreparedSpawn, SourceEnvironment, SpawnDecision, prepare_recovery, source_environment,
-        submit_spawn,
+        submit_spawn, submit_spawn_from_resolved,
     },
     managed_process::{
         ManagedIdentity, ManagedLaunch, ManagedMarkerStore, ManagedStatus, ManagedStderrStore,
@@ -359,6 +359,7 @@ enum ManagedSupervisorEvent {
     Connected {
         lease: SpawnLease,
         conn_id: String,
+        definition: bridget_transport::ResolvedAgentDefinition,
     },
     Failed {
         lease: SpawnLease,
@@ -1077,6 +1078,8 @@ fn handle_managed_command(
                         "managed-wrapper".to_string(),
                         prepared.agent_type.clone(),
                         prepared.lease.name.clone(),
+                        serde_json::to_string(&prepared.resolved_definition)
+                            .map_err(std::io::Error::other)?,
                     ],
                     cwd: prepared.cwd.clone(),
                     env: prepared.env.clone(),
@@ -1308,6 +1311,7 @@ fn poll_managed_processes(
                     let _ = events.send(ManagedSupervisorEvent::Connected {
                         lease: process.prepared.lease.clone(),
                         conn_id,
+                        definition: (*process.prepared.resolved_definition).clone(),
                     });
                 }
                 Err(error) => {
@@ -1338,7 +1342,7 @@ fn drain_managed_events(
         {
             let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
             match event {
-                ManagedSupervisorEvent::Connected { lease, conn_id } => {
+                ManagedSupervisorEvent::Connected { lease, conn_id, definition } => {
                     if let Some(record) = st.managed_spawns.get_mut(&lease.command_id) {
                         record.wrapper_conn = Some(conn_id);
                         let requesters = std::mem::take(&mut record.requester_conns);
@@ -1349,6 +1353,7 @@ fn drain_managed_events(
                                 DaemonToWrapper::SpawnAccepted {
                                     command_id: lease.command_id.clone(),
                                     name: lease.name.clone(),
+                                    definition: Some(definition.clone()),
                                 },
                                 &mut controls,
                             );
@@ -1827,7 +1832,7 @@ fn reserve_managed_recoveries(
             continue;
         }
         let lease = candidate.lease.clone();
-        match prepare_recovery(&state.registry, &state.source_env, candidate) {
+        match prepare_recovery(&state.source_env, candidate) {
             Ok(recovery) => prepared.push(recovery),
             Err(reason) => {
                 let detail = serde_json::to_string(&reason)
@@ -1841,6 +1846,11 @@ fn reserve_managed_recoveries(
         if in_flight_names.contains(&name) {
             continue;
         }
+        let Some(resolved_definition) = equipier.resolved_definition else {
+            warn!("reprise de {name} refusée: définition figée absente");
+            state.fleet.remove_desired(&name)?;
+            continue;
+        };
         let order = FleetSpawnOrder {
             agent_type: equipier.agent_type,
             requested_name: Some(name.clone()),
@@ -1850,13 +1860,12 @@ fn reserve_managed_recoveries(
             issued_at: now,
             deadline_at: now.saturating_add(MANAGED_RECOVERY_DEADLINE_SECS),
         };
-        match submit_spawn(
+        match submit_spawn_from_resolved(
             &state.fleet,
-            &state.registry,
             &state.source_env,
             &order,
             now,
-            false,
+            &resolved_definition,
         )? {
             SpawnDecision::Ready(recovery) => prepared.push(recovery),
             SpawnDecision::Rejected(reason) => {
@@ -3654,8 +3663,8 @@ fn handle_wrapper_message(
                     }
                     None
                 }
-                Ok(SpawnDecision::Accepted { name }) => {
-                    Some(DaemonToWrapper::SpawnAccepted { command_id, name })
+                Ok(SpawnDecision::Accepted { name, definition }) => {
+                    Some(DaemonToWrapper::SpawnAccepted { command_id, name, definition })
                 }
                 Ok(SpawnDecision::Rejected(reason)) => {
                     Some(DaemonToWrapper::SpawnRejected { command_id, reason })
@@ -4919,6 +4928,16 @@ mod presence_tests {
         (state, config)
     }
 
+    fn recovery_fixture_definition() -> bridget_transport::ResolvedAgentDefinition {
+        AgentRegistry::from_json(
+            r#"{"agents":{"fixture":{"command":"/bin/sh","protocol":"acp","forbidden_env":[],"pass_env":[]}}}"#,
+            "/tmp/recovery-fixture-definition.json",
+        )
+        .unwrap()
+        .resolved_definition("fixture")
+        .unwrap()
+    }
+
     fn recovery_daemon_config(root: &std::path::Path) -> DaemonConfig {
         let cache = root.join(".cache/bridget");
         DaemonConfig {
@@ -5007,7 +5026,8 @@ mod presence_tests {
             crate::fleet::SpawnSubmission::Start(lease) => lease,
             other => panic!("réservation persistante attendue: {other:?}"),
         };
-        state.fleet.mark_starting(&lease, now).unwrap();
+        let definition = recovery_fixture_definition();
+        state.fleet.mark_starting(&lease, now, &definition).unwrap();
         state
             .fleet
             .register_connected(&lease, &lease.instance_id, now + 1)
@@ -5059,6 +5079,7 @@ mod presence_tests {
                     command_id: format!("ancien-{index}"),
                     generation: index + 1,
                     created: index.to_string(),
+                    resolved_definition: (index != 0).then(recovery_fixture_definition),
                 },
             );
         }
@@ -5092,6 +5113,7 @@ mod presence_tests {
                 command_id: "ancien-alpha".to_string(),
                 generation: 1,
                 created: "initial".to_string(),
+                resolved_definition: Some(recovery_fixture_definition()),
             },
         );
         desired.persist(&fleet).unwrap();
@@ -5191,6 +5213,7 @@ mod presence_tests {
                     command_id: format!("ancien-{name}"),
                     generation: 1,
                     created: "initial".to_string(),
+                    resolved_definition: Some(recovery_fixture_definition()),
                 },
             );
         }
@@ -5347,12 +5370,24 @@ mod presence_tests {
         let registry_path = root.join(".config/bridget/agents.json");
         std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         let adapter = root.join("adapter.sh");
+        let changed_adapter = root.join("adapter-changed.sh");
+        let old_runs = root.join("old-adapter-runs");
+        let changed_runs = root.join("changed-adapter-runs");
         std::fs::write(
             &adapter,
-            "#!/bin/sh\nread initialize || exit 1\necho '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1}}'\nread session || exit 1\necho '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"recovery-session\"}}'\nwhile read line; do :; done\n",
+            format!(
+                "#!/bin/sh\necho old >> {}\nread initialize || exit 1\necho '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1}}}}'\nread session || exit 1\necho '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"sessionId\":\"recovery-session\"}}}}'\nwhile read line; do :; done\n",
+                old_runs.display()
+            ),
         )
         .unwrap();
         std::fs::set_permissions(&adapter, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(
+            &changed_adapter,
+            format!("#!/bin/sh\necho changed >> {}\nexit 91\n", changed_runs.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&changed_adapter, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::write(
             &registry_path,
             serde_json::to_vec(&serde_json::json!({
@@ -5371,12 +5406,16 @@ mod presence_tests {
             .unwrap(),
         )
         .unwrap();
+        std::fs::set_permissions(
+            &registry_path,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
 
         let mut first_daemon = spawn_recovery_daemon(&root);
         wait_daemon_socket(&config.socket_path);
         let now = unix_timestamp();
-        assert!(matches!(
-            daemon_request(
+        let accepted = daemon_request(
                 &config.socket_path,
                 WrapperToDaemon::SpawnOrder {
                     agent_type: "fixture".to_string(),
@@ -5387,8 +5426,15 @@ mod presence_tests {
                     issued_at: now,
                     deadline_at: now + 20,
                 }
-            ),
-            DaemonToWrapper::SpawnAccepted { ref name, .. } if name == "persistent-one"
+            );
+        assert!(matches!(
+            accepted,
+            DaemonToWrapper::SpawnAccepted { ref name, definition: Some(ref definition), .. }
+                if name == "persistent-one"
+                    && definition.command == adapter.to_string_lossy()
+                    && definition.args.is_empty()
+                    && definition.forbidden_env.is_empty()
+                    && definition.digest.len() == 64
         ));
         let marker_store =
             ManagedMarkerStore::at_directory(config.db_path.parent().unwrap().join("managed"));
@@ -5401,6 +5447,30 @@ mod presence_tests {
             0
         );
         let _ = first_daemon.wait().unwrap();
+
+        // Le registre mutable dérive après le crash. La reprise doit pourtant
+        // exécuter l'ancien adaptateur figé et republier la même preuve.
+        std::fs::write(
+            &registry_path,
+            serde_json::to_vec(&serde_json::json!({
+                "agents": {
+                    "fixture": {
+                        "command": changed_adapter,
+                        "args": ["new-runtime-meaning"],
+                        "protocol": "acp",
+                        "permissions": "deny",
+                        "forbidden_env": ["CHANGED_KEY"],
+                        "pass_env": ["LANG"],
+                        "queue_capacity": 7,
+                        "notify_timeout_secs": 9,
+                        "mcp": {"interactive": "claude", "acp_session": true}
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&registry_path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
         let mut restarted = spawn_recovery_daemon(&root);
         wait_daemon_socket(&config.socket_path);
@@ -5425,6 +5495,37 @@ mod presence_tests {
         let second_marker = marker_store.load("persistent-one").unwrap();
         assert_ne!(second_marker.instance_id, first_marker.instance_id);
         assert_ne!(second_marker.pgid, first_marker.pgid);
+        let execution_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let executions = std::fs::read_to_string(&old_runs).unwrap().lines().count();
+            if executions == 2 {
+                break;
+            }
+            assert!(Instant::now() < execution_deadline,
+                "la commande figée doit être exécutée une fois avant et une fois après le crash");
+            thread::yield_now();
+        }
+        assert!(!changed_runs.exists(),
+            "le registre modifié ne doit jamais piloter la génération reprise");
+        assert!(matches!(
+            daemon_request(
+                &config.socket_path,
+                WrapperToDaemon::SpawnOrder {
+                    agent_type: "fixture".to_string(),
+                    name: Some("persistent-one".to_string()),
+                    cwd: "/tmp".to_string(),
+                    persistent: true,
+                    command_id: "initial-persistent".to_string(),
+                    issued_at: now,
+                    deadline_at: now + 20,
+                }
+            ),
+            DaemonToWrapper::SpawnAccepted { definition: Some(definition), .. }
+                if definition.command == adapter.to_string_lossy()
+                    && definition.permissions == "allow"
+                    && definition.queue_capacity == 2
+                    && definition.notify_timeout_secs == 1
+        ));
 
         assert!(matches!(
             daemon_request(
@@ -7681,7 +7782,8 @@ mod presence_tests {
             crate::fleet::SpawnSubmission::Start(lease) => lease,
             other => panic!("spawn de test non démarré: {other:?}"),
         };
-        state.fleet.mark_starting(&lease, now).unwrap();
+        let definition = recovery_fixture_definition();
+        state.fleet.mark_starting(&lease, now, &definition).unwrap();
         if connected {
             state
                 .fleet
@@ -7717,11 +7819,19 @@ mod presence_tests {
     }
 
     fn managed_test_prepared(lease: &SpawnLease, root: &std::path::Path) -> PreparedSpawn {
+        let frozen_registry = AgentRegistry::from_json(
+            r#"{"agents":{"fixture":{"command":"/bin/sh","protocol":"acp"}}}"#,
+            "/tmp/managed-test-definition.json",
+        )
+        .unwrap();
         PreparedSpawn {
             lease: lease.clone(),
             agent_type: "fixture".to_string(),
             command: "/bin/sh".to_string(),
             args: Vec::new(),
+            resolved_definition: Box::new(
+                frozen_registry.resolved_definition("fixture").unwrap(),
+            ),
             cwd: root.to_path_buf(),
             env: BTreeMap::from([
                 ("HOME".to_string(), root.as_os_str().to_owned()),
@@ -8153,6 +8263,11 @@ mod presence_tests {
             .unwrap(),
         )
         .unwrap();
+        std::fs::set_permissions(
+            &registry_path,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
         let config = DaemonConfig {
             socket_path: cache.join("bridget.sock"),
             db_path: cache.join("bridget.db"),
@@ -8168,6 +8283,27 @@ mod presence_tests {
         let (lease, _stop) = install_managed_test_spawn(&mut state, "spawn-e2e", false);
         let mut prepared = managed_test_prepared(&lease, &root);
         prepared.agent_type = "fixture".to_string();
+        prepared.command = adapter.to_string_lossy().into_owned();
+        prepared.resolved_definition = Box::new(
+            AgentRegistry::from_json(
+                &serde_json::json!({
+                    "agents": {
+                        "fixture": {
+                            "command": adapter,
+                            "protocol": "acp",
+                            "permissions": "allow",
+                            "queue_capacity": 2,
+                            "notify_timeout_secs": 1
+                        }
+                    }
+                })
+                .to_string(),
+                "/tmp/managed-wrapper-frozen.json",
+            )
+            .unwrap()
+            .resolved_definition("fixture")
+            .unwrap(),
+        );
         let shared = Arc::new(Mutex::new(state));
         let listener = UnixListener::bind(&config.socket_path).unwrap();
         let connection_state = Arc::clone(&shared);
@@ -8422,6 +8558,21 @@ mod presence_tests {
             agent_type: "fixture".to_string(),
             command: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), "exit 7".to_string()],
+            resolved_definition: Box::new(bridget_transport::ResolvedAgentDefinition {
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), "exit 7".to_string()],
+                protocol: "acp".to_string(),
+                forbidden_env: Vec::new(),
+                pass_env: Vec::new(),
+                permissions: "allow".to_string(),
+                queue_capacity: 32,
+                notify_timeout_secs: 600,
+                mcp: bridget_transport::ResolvedMcpDefinition {
+                    interactive: "none".to_string(),
+                    acp_session: false,
+                },
+                digest: "fixture-digest".to_string(),
+            }),
             cwd: process_root.clone(),
             env: std::collections::BTreeMap::new(),
         };

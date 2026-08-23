@@ -2017,12 +2017,16 @@ fn launch_acp(
 pub fn launch_managed_acp(
     agent_type: &str,
     explicit_name: &str,
+    resolved_definition: &bridget_transport::ResolvedAgentDefinition,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut reporter = crate::managed_process::ManagedStatusReporter::from_environment()?
         .ok_or("canal managed-status absent du wrapper supervisé")?;
     let mut managed_command = None;
     let result = (|| {
-        let registry = crate::registry::AgentRegistry::load()?;
+        let registry = crate::registry::AgentRegistry::from_resolved(
+            agent_type,
+            resolved_definition,
+        )?;
         managed_command = Some(registry.get(agent_type)?.command.clone());
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)

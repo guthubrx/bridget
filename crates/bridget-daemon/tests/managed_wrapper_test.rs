@@ -3,6 +3,7 @@ use bridget_daemon::managed_process::{
     ManagedIdentity, ManagedLaunch, ManagedMarkerStore, ManagedStatus, ManagedStopResult,
     spawn_managed_bootstrap,
 };
+use bridget_daemon::registry::AgentRegistry;
 use bridget_transport::protocol::{decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::collections::BTreeMap;
@@ -36,11 +37,9 @@ fn wrapper_claude_gere_annonce_un_register_acp_complet() {
     let registry = root.join(".config/bridget/agents.json");
     fs::create_dir_all(socket.parent().unwrap()).unwrap();
     fs::create_dir_all(registry.parent().unwrap()).unwrap();
-    fs::write(
-        &registry,
-        r#"{"agents":{"claude":{"command":"/adaptateur/t906-absent","protocol":"acp","permissions":"allow","queue_capacity":2,"notify_timeout_secs":1}}}"#,
-    )
-    .unwrap();
+    let registry_json = r#"{"agents":{"claude":{"command":"/adaptateur/t906-absent","protocol":"acp","permissions":"allow","queue_capacity":2,"notify_timeout_secs":1}}}"#;
+    fs::write(&registry, registry_json).unwrap();
+    fs::set_permissions(&registry, fs::Permissions::from_mode(0o600)).unwrap();
     let listener = UnixListener::bind(&socket).unwrap();
     let (register_tx, register_rx) = mpsc::channel();
     let (accept_tx, accept_rx) = mpsc::channel();
@@ -73,6 +72,10 @@ fn wrapper_claude_gere_annonce_un_register_acp_complet() {
         generation: 3,
     };
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_bridget"));
+    let frozen_definition = AgentRegistry::from_json(registry_json, &registry)
+        .unwrap()
+        .resolved_definition("claude")
+        .unwrap();
     let launch = ManagedLaunch {
         bootstrap_executable: binary.clone(),
         identity: identity.clone(),
@@ -81,6 +84,7 @@ fn wrapper_claude_gere_annonce_un_register_acp_complet() {
             "managed-wrapper".to_string(),
             "claude".to_string(),
             "claude-manage-1".to_string(),
+            serde_json::to_string(&frozen_definition).unwrap(),
         ],
         cwd: root.clone(),
         env: BTreeMap::from([
@@ -178,9 +182,7 @@ while :; do :; done
     )
     .unwrap();
     fs::set_permissions(&adapter, fs::Permissions::from_mode(0o700)).unwrap();
-    fs::write(
-        &registry,
-        serde_json::to_vec(&serde_json::json!({
+    let registry_json = serde_json::json!({
             "agents": {
                 "fixture-ignore-cancel": {
                     "command": adapter,
@@ -190,10 +192,10 @@ while :; do :; done
                     "notify_timeout_secs": 1
                 }
             }
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+        })
+        .to_string();
+    fs::write(&registry, &registry_json).unwrap();
+    fs::set_permissions(&registry, fs::Permissions::from_mode(0o600)).unwrap();
     let listener = UnixListener::bind(&socket).unwrap();
     let (registered_tx, registered_rx) = mpsc::channel();
     let (disconnect_tx, disconnect_rx) = mpsc::channel();
@@ -267,6 +269,10 @@ while :; do :; done
         generation: 4,
     };
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_bridget"));
+    let frozen_definition = AgentRegistry::from_json(&registry_json, &registry)
+        .unwrap()
+        .resolved_definition("fixture-ignore-cancel")
+        .unwrap();
     let launch = ManagedLaunch {
         bootstrap_executable: binary.clone(),
         identity,
@@ -275,6 +281,7 @@ while :; do :; done
             "managed-wrapper".to_string(),
             "fixture-ignore-cancel".to_string(),
             "fixture-ignore-cancel-1".to_string(),
+            serde_json::to_string(&frozen_definition).unwrap(),
         ],
         cwd: root.clone(),
         env: BTreeMap::from([

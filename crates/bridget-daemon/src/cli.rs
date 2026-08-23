@@ -159,11 +159,18 @@ fn cmd_managed_bootstrap(args: &[String]) {
 }
 
 fn cmd_managed_wrapper(args: &[String]) {
-    if args.len() != 2 {
-        eprintln!("bridget managed-wrapper: type et nom requis");
+    if args.len() != 3 {
+        eprintln!("bridget managed-wrapper: type, nom et définition figée requis");
         std::process::exit(2);
     }
-    if let Err(error) = crate::wrapper::launch_managed_acp(&args[0], &args[1]) {
+    let definition = match serde_json::from_str(&args[2]) {
+        Ok(definition) => definition,
+        Err(error) => {
+            eprintln!("bridget managed-wrapper: définition figée invalide: {error}");
+            std::process::exit(2);
+        }
+    };
+    if let Err(error) = crate::wrapper::launch_managed_acp(&args[0], &args[1], &definition) {
         eprintln!("bridget managed-wrapper: {error}");
         std::process::exit(1);
     }
@@ -2235,6 +2242,21 @@ mod hook_tests {
                     encode(&DaemonToWrapper::SpawnAccepted {
                         command_id: "command-lost".to_string(),
                         name: "codex-managed".to_string(),
+                        definition: Some(bridget_transport::ResolvedAgentDefinition {
+                            command: "npx".to_string(),
+                            args: vec!["fixture-acp".to_string()],
+                            protocol: "acp".to_string(),
+                            forbidden_env: vec!["OPENAI_API_KEY".to_string()],
+                            pass_env: Vec::new(),
+                            permissions: "allow".to_string(),
+                            queue_capacity: 32,
+                            notify_timeout_secs: 600,
+                            mcp: bridget_transport::ResolvedMcpDefinition {
+                                interactive: "none".to_string(),
+                                acp_session: false,
+                            },
+                            digest: "fixture-digest".to_string(),
+                        }),
                     })
                     .unwrap()
                 )
@@ -2255,7 +2277,7 @@ mod hook_tests {
         for _ in 0..2 {
             assert!(matches!(
                 send_control_to_daemon_at(&socket, order.clone()).unwrap(),
-                DaemonToWrapper::SpawnAccepted { ref command_id, ref name }
+                DaemonToWrapper::SpawnAccepted { ref command_id, ref name, .. }
                     if command_id == "command-lost" && name == "codex-managed"
             ));
         }

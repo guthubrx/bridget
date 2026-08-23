@@ -12,7 +12,7 @@ use crate::idempotency::SpawnCommandIssue;
 use crate::registry::{
     AgentDefinition, AgentRegistry, allow_api_key_value, forbidden_environment_variable,
 };
-use bridget_transport::SpawnRefusal;
+use bridget_transport::{ResolvedAgentDefinition, SpawnRefusal};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
@@ -29,6 +29,7 @@ pub struct PreparedSpawn {
     pub agent_type: String,
     pub command: String,
     pub args: Vec<String>,
+    pub resolved_definition: Box<ResolvedAgentDefinition>,
     pub cwd: PathBuf,
     pub env: SourceEnvironment,
 }
@@ -37,7 +38,7 @@ pub struct PreparedSpawn {
 pub enum SpawnDecision {
     Ready(PreparedSpawn),
     Await(SpawnWaiter),
-    Accepted { name: String },
+    Accepted { name: String, definition: Option<ResolvedAgentDefinition> },
     Rejected(SpawnRefusal),
     EnvelopeMismatch,
 }
@@ -72,7 +73,7 @@ pub fn submit_spawn(
                     return Ok(SpawnDecision::Rejected(reason));
                 }
             };
-            supervisor.mark_starting(&lease, now)?;
+            supervisor.mark_starting(&lease, now, &prepared.resolved_definition)?;
             Ok(SpawnDecision::Ready(prepared))
         }
         SpawnSubmission::Await(waiter) => Ok(SpawnDecision::Await(waiter)),
@@ -82,6 +83,21 @@ pub fn submit_spawn(
             Ok(SpawnDecision::Rejected(SpawnRefusal::IdempotencyExpired))
         }
     }
+}
+
+/// Variante réservée à la reprise d'une entrée persistante déjà connectée :
+/// elle crée une nouvelle saga, mais sa préparation consomme la définition
+/// durable de `fleet.json` plutôt que le registre courant.
+pub fn submit_spawn_from_resolved(
+    supervisor: &FleetSupervisor,
+    source: &SourceEnvironment,
+    order: &SpawnOrder,
+    now: i64,
+    resolved: &ResolvedAgentDefinition,
+) -> Result<SpawnDecision, FleetError> {
+    let registry = AgentRegistry::from_resolved(&order.agent_type, resolved)
+        .map_err(|_| FleetError::InvalidOrder("définition figée de reprise invalide"))?;
+    submit_spawn(supervisor, &registry, source, order, now, false)
 }
 
 fn prepare_spawn(
@@ -94,15 +110,21 @@ fn prepare_spawn(
 }
 
 /// Reprépare une génération persistante restée en vol sans repasser par la
-/// réservation idempotente. Les mêmes gardes registre, facturation,
-/// environnement et cwd que pour un spawn neuf restent autoritaires.
+/// réservation idempotente ni relire le registre mutable. La définition
+/// persistée est l'unique autorité de lancement de cette génération.
 pub fn prepare_recovery(
-    registry: &AgentRegistry,
     source: &SourceEnvironment,
     candidate: RecoveryCandidate,
 ) -> Result<PreparedSpawn, SpawnRefusal> {
+    let resolved = candidate.resolved_definition.ok_or_else(|| {
+        SpawnRefusal::NegotiationFailed {
+            detail: "définition figée absente de la génération à reprendre".to_string(),
+        }
+    })?;
+    let frozen_registry = AgentRegistry::from_resolved(&candidate.agent_type, &resolved)
+        .map_err(|detail| SpawnRefusal::NegotiationFailed { detail })?;
     prepare_spawn_parts(
-        registry,
+        &frozen_registry,
         source,
         &candidate.agent_type,
         &candidate.cwd,
@@ -151,6 +173,11 @@ fn prepare_spawn_parts(
         agent_type: agent_type.to_string(),
         command: definition.command.clone(),
         args: definition.args.clone(),
+        resolved_definition: Box::new(
+            registry
+                .resolved_definition(agent_type)
+                .map_err(|detail| SpawnRefusal::NegotiationFailed { detail })?,
+        ),
         cwd: cwd.to_path_buf(),
         env,
     })
@@ -227,7 +254,12 @@ fn refusal_record(reason: &SpawnRefusal) -> (&'static str, String) {
 
 fn decision_from_issue(issue: SpawnCommandIssue, quota: usize) -> SpawnDecision {
     match issue {
-        SpawnCommandIssue::Connected { name, .. } => SpawnDecision::Accepted { name },
+        SpawnCommandIssue::Connected { name, definition, .. } => {
+            SpawnDecision::Accepted {
+                name,
+                definition: definition.map(|value| *value),
+            }
+        }
         SpawnCommandIssue::Cancelled { reason } if reason == "spawn_timeout" => {
             SpawnDecision::Rejected(SpawnRefusal::SpawnTimeout)
         }

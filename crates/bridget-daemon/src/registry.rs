@@ -1,7 +1,11 @@
 //! Registre déclaratif des types d'agents lancés par Bridget.
 
-use serde::Deserialize;
+use bridget_transport::{ResolvedAgentDefinition, ResolvedMcpDefinition};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::fs::OpenOptions;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 const DEFAULT_QUEUE_CAPACITY: usize = 32;
@@ -78,18 +82,26 @@ fn default_interactive_mcp() -> String {
 
 impl AgentRegistry {
     pub fn load() -> Result<Self, String> {
-        let source = config_path();
+        Self::load_from_path(config_path())
+    }
+
+    fn load_from_path(source: PathBuf) -> Result<Self, String> {
         let mut agents = default_agents();
-        if source.exists() {
-            let content = std::fs::read_to_string(&source)
-                .map_err(|err| format!("impossible de lire {}: {err}", source.display()))?;
-            for warning in unknown_key_warnings(&content, &source) {
-                eprintln!("avertissement: {warning}");
+        match std::fs::symlink_metadata(&source) {
+            Ok(_) => {
+                let content = read_private_registry(&source)?;
+                for warning in registry_warnings(&content, &source, &agents) {
+                    eprintln!("avertissement: {warning}");
+                }
+                let user: AgentRegistryFile = serde_json::from_str(&content)
+                    .map_err(|err| format!("registre invalide {}: {err}", source.display()))?;
+                validate_registry(&user.agents, &source)?;
+                agents.extend(user.agents);
             }
-            let user: AgentRegistryFile = serde_json::from_str(&content)
-                .map_err(|err| format!("registre invalide {}: {err}", source.display()))?;
-            validate_registry(&user.agents, &source)?;
-            agents.extend(user.agents);
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!("impossible d'inspecter {}: {error}", source.display()));
+            }
         }
         Ok(Self { agents, source })
     }
@@ -112,6 +124,44 @@ impl AgentRegistry {
                 self.source.display()
             )
         })
+    }
+
+    pub fn resolved_definition(
+        &self,
+        agent_type: &str,
+    ) -> Result<ResolvedAgentDefinition, String> {
+        resolved_definition(self.get(agent_type)?)
+    }
+
+    /// Reconstruit un registre à une seule entrée depuis la définition figée
+    /// par la saga. Le digest est revérifié avant tout lancement : le wrapper
+    /// géré ne consulte donc jamais le registre utilisateur courant.
+    pub fn from_resolved(
+        agent_type: &str,
+        resolved: &ResolvedAgentDefinition,
+    ) -> Result<Self, String> {
+        let definition = AgentDefinition {
+            command: resolved.command.clone(),
+            args: resolved.args.clone(),
+            protocol: resolved.protocol.clone(),
+            forbidden_env: resolved.forbidden_env.clone(),
+            pass_env: resolved.pass_env.clone(),
+            permissions: resolved.permissions.clone(),
+            queue_capacity: resolved.queue_capacity,
+            notify_timeout_secs: resolved.notify_timeout_secs,
+            mcp: McpDefinition {
+                interactive: resolved.mcp.interactive.clone(),
+                acp_session: resolved.mcp.acp_session,
+            },
+        };
+        let expected = resolved_definition(&definition)?;
+        if expected.digest != resolved.digest {
+            return Err("digest de la définition figée invalide".to_string());
+        }
+        let source = PathBuf::from("<définition-figée>");
+        let agents = BTreeMap::from([(agent_type.to_string(), definition)]);
+        validate_registry(&agents, &source)?;
+        Ok(Self { agents, source })
     }
 
     pub fn source(&self) -> &Path {
@@ -176,7 +226,11 @@ fn command_basename(command: &str) -> &str {
         .unwrap_or(command)
 }
 
-fn unknown_key_warnings(content: &str, source: &Path) -> Vec<String> {
+fn registry_warnings(
+    content: &str,
+    source: &Path,
+    defaults: &BTreeMap<String, AgentDefinition>,
+) -> Vec<String> {
     const KEYS: &[&str] = &[
         "command",
         "args",
@@ -208,8 +262,108 @@ fn unknown_key_warnings(content: &str, source: &Path) -> Vec<String> {
                 source.display()
             ));
         }
+        if !definition.contains_key("forbidden_env")
+            && defaults
+                .get(agent_type)
+                .is_some_and(|default| !default.forbidden_env.is_empty())
+        {
+            warnings.push(format!(
+                "'{agent_type}' remplace un défaut protégé sans déclarer forbidden_env dans {}",
+                source.display()
+            ));
+        }
     }
     warnings
+}
+
+fn read_private_registry(source: &Path) -> Result<String, String> {
+    let link_metadata = std::fs::symlink_metadata(source)
+        .map_err(|err| format!("impossible d'inspecter {}: {err}", source.display()))?;
+    if link_metadata.file_type().is_symlink() {
+        return Err(format!(
+            "registre refusé {}: les liens symboliques sont interdits",
+            source.display()
+        ));
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(source)
+        .map_err(|err| format!("impossible d'ouvrir {} sans suivre de lien: {err}", source.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("impossible d'inspecter {}: {err}", source.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("registre refusé {}: fichier régulier requis", source.display()));
+    }
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(format!("registre refusé {}: propriétaire inattendu", source.display()));
+    }
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(format!(
+            "registre refusé {}: permissions {mode:04o}, attendu 0600 ou plus restrictif",
+            source.display()
+        ));
+    }
+    let mut content = String::new();
+    std::io::Read::read_to_string(&mut file, &mut content)
+        .map_err(|err| format!("impossible de lire {}: {err}", source.display()))?;
+    Ok(content)
+}
+
+#[derive(Serialize)]
+struct CanonicalResolvedDefinition<'a> {
+    command: &'a str,
+    args: &'a [String],
+    protocol: &'a str,
+    forbidden_env: &'a [String],
+    pass_env: &'a [String],
+    permissions: &'a str,
+    queue_capacity: usize,
+    notify_timeout_secs: u64,
+    mcp: CanonicalResolvedMcpDefinition<'a>,
+}
+
+#[derive(Serialize)]
+struct CanonicalResolvedMcpDefinition<'a> {
+    interactive: &'a str,
+    acp_session: bool,
+}
+
+fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefinition, String> {
+    let canonical = CanonicalResolvedDefinition {
+        command: &definition.command,
+        args: &definition.args,
+        protocol: &definition.protocol,
+        forbidden_env: &definition.forbidden_env,
+        pass_env: &definition.pass_env,
+        permissions: &definition.permissions,
+        queue_capacity: definition.queue_capacity,
+        notify_timeout_secs: definition.notify_timeout_secs,
+        mcp: CanonicalResolvedMcpDefinition {
+            interactive: &definition.mcp.interactive,
+            acp_session: definition.mcp.acp_session,
+        },
+    };
+    let bytes = serde_json::to_vec(&canonical)
+        .map_err(|err| format!("définition résolue impossible à sérialiser: {err}"))?;
+    let digest = format!("{:x}", Sha256::digest(bytes));
+    Ok(ResolvedAgentDefinition {
+        command: definition.command.clone(),
+        args: definition.args.clone(),
+        protocol: definition.protocol.clone(),
+        forbidden_env: definition.forbidden_env.clone(),
+        pass_env: definition.pass_env.clone(),
+        permissions: definition.permissions.clone(),
+        queue_capacity: definition.queue_capacity,
+        notify_timeout_secs: definition.notify_timeout_secs,
+        mcp: ResolvedMcpDefinition {
+            interactive: definition.mcp.interactive.clone(),
+            acp_session: definition.mcp.acp_session,
+        },
+        digest,
+    })
 }
 
 fn config_path() -> PathBuf {
@@ -401,6 +555,21 @@ fn default_agents() -> BTreeMap<String, AgentDefinition> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::symlink;
+
+    fn test_root(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-registry-{label}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn write_registry(path: &Path, mode: u32) {
+        std::fs::write(path, "{\"agents\":{}}").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
 
     #[test]
     fn defaults_cover_the_three_priorities() {
@@ -437,6 +606,112 @@ mod tests {
         .unwrap();
         assert_eq!(registry.get("codex").unwrap().command, "custom");
         assert!(registry.get("codex").unwrap().forbidden_env.is_empty());
+    }
+
+    #[test]
+    fn remplacement_sans_forbidden_env_signale_la_perte_de_garde() {
+        let warnings = registry_warnings(
+            r#"{"agents":{"codex":{"command":"custom"}}}"#,
+            Path::new("/tmp/agents.json"),
+            &default_agents(),
+        );
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("codex"));
+        assert!(warnings[0].contains("sans déclarer forbidden_env"));
+
+        let explicit = registry_warnings(
+            r#"{"agents":{"codex":{"command":"custom","forbidden_env":[]}}}"#,
+            Path::new("/tmp/agents.json"),
+            &default_agents(),
+        );
+        assert!(explicit.is_empty());
+    }
+
+    #[test]
+    fn definition_resolue_est_complete_et_son_digest_est_deterministe() {
+        let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
+        let first = registry.resolved_definition("codex").unwrap();
+        let second = registry.resolved_definition("codex").unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.command, "npx");
+        assert_eq!(first.args[0], "@zed-industries/codex-acp@0.16.0");
+        assert_eq!(first.protocol, "acp");
+        assert_eq!(first.forbidden_env, vec!["OPENAI_API_KEY", "CODEX_API_KEY"]);
+        assert!(first.pass_env.contains(&"CODEX_HOME".to_string()));
+        assert_eq!(first.permissions, "allow");
+        assert_eq!(first.queue_capacity, 32);
+        assert_eq!(first.notify_timeout_secs, 600);
+        assert_eq!(first.mcp.interactive, "codex");
+        assert!(first.mcp.acp_session);
+        assert_eq!(first.digest.len(), 64);
+
+        let baseline = default_agents().remove("codex").unwrap();
+        let mut mutations = Vec::new();
+        let mut changed = baseline.clone();
+        changed.command = "other".to_string();
+        mutations.push(("command", changed));
+        let mut changed = baseline.clone();
+        changed.args.push("other".to_string());
+        mutations.push(("args", changed));
+        let mut changed = baseline.clone();
+        changed.protocol = "tmux".to_string();
+        mutations.push(("protocol", changed));
+        let mut changed = baseline.clone();
+        changed.forbidden_env.push("OTHER_KEY".to_string());
+        mutations.push(("forbidden_env", changed));
+        let mut changed = baseline.clone();
+        changed.pass_env.push("OTHER_HOME".to_string());
+        mutations.push(("pass_env", changed));
+        let mut changed = baseline.clone();
+        changed.permissions = "deny".to_string();
+        mutations.push(("permissions", changed));
+        let mut changed = baseline.clone();
+        changed.queue_capacity += 1;
+        mutations.push(("queue_capacity", changed));
+        let mut changed = baseline.clone();
+        changed.notify_timeout_secs += 1;
+        mutations.push(("notify_timeout_secs", changed));
+        let mut changed = baseline.clone();
+        changed.mcp.interactive = "claude".to_string();
+        mutations.push(("mcp.interactive", changed));
+        let mut changed = baseline.clone();
+        changed.mcp.acp_session = !changed.mcp.acp_session;
+        mutations.push(("mcp.acp_session", changed));
+        for (field, changed) in mutations {
+            assert_ne!(
+                first.digest,
+                resolved_definition(&changed).unwrap().digest,
+                "le digest doit changer avec {field}"
+            );
+        }
+        assert!(AgentRegistry::from_resolved("codex", &first).is_ok());
+        let mut forged = first;
+        forged.queue_capacity += 1;
+        assert!(AgentRegistry::from_resolved("codex", &forged).is_err());
+    }
+
+    #[test]
+    fn lecture_privee_refuse_permissions_larges_et_accepte_0600() {
+        let root = test_root("permissions");
+        let path = root.join("agents.json");
+        write_registry(&path, 0o644);
+        let error = AgentRegistry::load_from_path(path.clone()).unwrap_err();
+        assert!(error.contains("permissions 0644"));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(AgentRegistry::load_from_path(path).is_ok());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lecture_privee_refuse_un_lien_symbolique() {
+        let root = test_root("symlink");
+        let target = root.join("target.json");
+        let link = root.join("agents.json");
+        write_registry(&target, 0o600);
+        symlink(&target, &link).unwrap();
+        let error = AgentRegistry::load_from_path(link).unwrap_err();
+        assert!(error.contains("liens symboliques sont interdits"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -492,9 +767,10 @@ mod tests {
 
     #[test]
     fn unknown_entry_key_is_reported() {
-        let warnings = unknown_key_warnings(
-            r#"{"agents":{"codex":{"command":"codex","surprise":true}}}"#,
+        let warnings = registry_warnings(
+            r#"{"agents":{"codex":{"command":"codex","forbidden_env":[],"surprise":true}}}"#,
             Path::new("/tmp/agents.json"),
+            &default_agents(),
         );
         assert_eq!(
             warnings,
@@ -504,9 +780,10 @@ mod tests {
 
     #[test]
     fn valid_entry_keys_produce_no_warning() {
-        let warnings = unknown_key_warnings(
+        let warnings = registry_warnings(
             r#"{"agents":{"codex":{"command":"codex","args":[],"protocol":"acp","forbidden_env":[],"pass_env":["CODEX_HOME"],"permissions":"allow","queue_capacity":32,"notify_timeout_secs":600}}}"#,
             Path::new("/tmp/agents.json"),
+            &default_agents(),
         );
         assert!(warnings.is_empty());
     }
