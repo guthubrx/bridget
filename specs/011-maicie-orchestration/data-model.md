@@ -161,3 +161,15 @@ contexte après connexion est une Délégation normale, donc livré par
    approbation n'est consommée qu'après issue durable du même `command_id`.
 7. La suppression d'un objectif conserve son journal d'audit selon la politique
    de rétention locale ; elle n'efface aucun enregistrement Bridget.
+
+## Décision d'arbitrage (2026-08-23, T008)
+
+`IdempotencyExpired` est **terminal** (`Rejected`, motif `idempotency_expired`)
+— jamais rejoué par la réconciliation, même si `retry_until` n'est pas
+atteint : sans distinction protocolaire entre identifiant jamais vu et
+tombstone purgé, rejouer après expiration serait deviner, et le contrat
+échoue toujours vers la non-duplication. La progression remonte au domaine :
+créer une nouvelle tentative de délégation (nouveau `message_id`) est une
+décision de coordination explicite et journalisée, pas un rejeu de transport.
+Le « replay exact » de la tâche T008 s'applique sous l'horizon uniquement
+(`Prepared`/`OutcomeUnknown` → lookup → replay).
