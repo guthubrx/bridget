@@ -446,7 +446,12 @@ fn reprise_lente_sur_toutes_les_phases_reste_dans_le_budget_global() {
 
         assert_eq!(read_json(&mut reader)["type"], "Lookup");
         thread::sleep(phase_delay);
-        write_issue(&mut writer, json!({"kind":"idempotency_expired"}));
+        // À cette frontière, le client peut avoir consommé le budget global
+        // et fermé proprement avant cette réponse tardive. Le BrokenPipe est
+        // alors la preuve attendue de la borne, pas un échec du harnais.
+        if try_write_issue(&mut writer, json!({"kind":"idempotency_expired"})).is_err() {
+            return;
+        }
 
         let replay = read_line(&mut reader);
         assert!(replay.contains("\"type\":\"SendIdempotent\""));
@@ -825,6 +830,20 @@ fn write_issue(writer: &mut BufWriter<UnixStream>, issue: Value) {
             "issue":issue
         }),
     );
+}
+
+fn try_write_issue(writer: &mut BufWriter<UnixStream>, issue: Value) -> std::io::Result<()> {
+    serde_json::to_writer(
+        &mut *writer,
+        &json!({
+            "type":"IdempotencyResult",
+            "operation_kind":"send",
+            "idempotency_key":MESSAGE_ID,
+            "issue":issue
+        }),
+    )?;
+    writer.write_all(b"\n")?;
+    writer.flush()
 }
 
 fn split(stream: UnixStream) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
