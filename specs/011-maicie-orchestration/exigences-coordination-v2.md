@@ -342,8 +342,13 @@ plus vite ; le coût net est un report, pas une perte.
   qu'il masque la chute. Diagnostiquer (fenêtre d'accusé ? contention ?
   timeout client trop court ?) avant que le volume d'agents ne double le
   trafic de rejeu.
-- **Maicie greffière du catalogue** (proposition utilisateur 2026-08-24 —
-  bloc F, après 015) : l'hygiène du journal de bord collectif repose sur la
+- **Maicie greffière du catalogue — CŒUR DE MAICIE, exigence produit**
+  (décision utilisateur 2026-08-24 : « je voudrais éviter que ce soit une
+  spécificité de notre session… je voudrais que ce soit dans le cœur de
+  Maicie ») — bloc F, après 015. Statut : ENGAGEMENT, pas candidate — la
+  discipline du journal de bord ne doit dépendre d'aucune session, d'aucun
+  référent, d'aucune convention locale ; elle sera un comportement livré,
+  testé et documenté de Maicie, utilisable tel quel par toute équipe. l'hygiène du journal de bord collectif repose sur la
   discipline du référent, qui a prouvé ses limites (fichier de métriques
   jamais commité et perdu ; annotations d'état oubliées 2×). Design : PAS de
   base parallèle — le catalogue markdown versionné RESTE la source unique ;
