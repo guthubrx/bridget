@@ -28,6 +28,7 @@ const INPUT_POLL_TIMEOUT_MILLIS: i32 = 100;
 const RENDER_COMMAND_CAPACITY: usize = 64;
 const MAX_TURN_BLOCK_BYTES: usize = 64 * 1024;
 const MAX_TURN_BLOCK_LINES: usize = 400;
+const DEFAULT_TERMINAL_COLUMNS: usize = 80;
 
 /// Garde minimale du terminal d'entrée. Le mode désactive le traitement des
 /// signaux afin que Ctrl-C arrive comme l'octet `0x03` à la boucle de saisie.
@@ -932,6 +933,7 @@ fn renderer_loop(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         if input_dirty.swap(false, Ordering::AcqRel) && renderer.tty_output {
+            renderer.refresh_geometry(output);
             renderer.redraw(&input_snapshot(&input), output);
         }
     }
@@ -949,16 +951,23 @@ struct BlockRenderer {
     agent: String,
     raw_terminal: bool,
     tty_output: bool,
+    terminal_fd: Option<RawFd>,
+    terminal_columns: usize,
     current: Option<TurnBlock>,
     rendered_rows: usize,
 }
 
 impl BlockRenderer {
     fn new(agent: String, raw_terminal: bool, tty_output: bool) -> Self {
+        let terminal_fd = tty_output.then_some(libc::STDOUT_FILENO);
         Self {
             agent,
             raw_terminal,
             tty_output,
+            terminal_columns: terminal_fd
+                .and_then(terminal_columns)
+                .unwrap_or(DEFAULT_TERMINAL_COLUMNS),
+            terminal_fd,
             current: None,
             rendered_rows: 0,
         }
@@ -971,6 +980,7 @@ impl BlockRenderer {
         output: &mut impl Write,
     ) {
         let input = input_snapshot(input);
+        self.refresh_geometry(output);
         match command {
             RendererCommand::Event(event) => self.render_event(&event, &input, output),
             RendererCommand::InputChanged(_bytes) if self.tty_output => self.redraw(&input, output),
@@ -1070,7 +1080,7 @@ impl BlockRenderer {
         write_terminal_lines(output, &block.lines(&self.agent));
         if self.raw_terminal {
             let _ = write!(output, "> {input}");
-            self.rendered_rows = 1;
+            self.rendered_rows = visual_rows(&[format!("> {input}")], self.terminal_columns);
         }
         let _ = output.flush();
     }
@@ -1095,7 +1105,7 @@ impl BlockRenderer {
         let mut rows = 0;
         if let Some(block) = self.current.as_ref() {
             let lines = block.lines(&self.agent);
-            rows += lines.len();
+            rows += visual_rows(&lines, self.terminal_columns);
             write_visual_lines(output, &lines);
             if self.raw_terminal {
                 let _ = output.write_all(b"\r\n");
@@ -1103,9 +1113,19 @@ impl BlockRenderer {
         }
         if self.raw_terminal {
             let _ = write!(output, "> {input}");
-            rows += 1;
+            rows += visual_rows(&[format!("> {input}")], self.terminal_columns);
         }
         self.rendered_rows = rows;
+    }
+
+    fn refresh_geometry(&mut self, output: &mut impl Write) {
+        let Some(columns) = self.terminal_fd.and_then(terminal_columns) else {
+            return;
+        };
+        if columns != self.terminal_columns {
+            self.clear(output);
+            self.terminal_columns = columns;
+        }
     }
 
     fn clear(&mut self, output: &mut impl Write) {
@@ -1135,6 +1155,23 @@ fn write_visual_lines(output: &mut impl Write, lines: &[String]) {
         }
         let _ = output.write_all(line.as_bytes());
     }
+}
+
+fn terminal_columns(fd: RawFd) -> Option<usize> {
+    let mut size = MaybeUninit::<libc::winsize>::zeroed();
+    if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, size.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let columns = usize::from(unsafe { size.assume_init() }.ws_col);
+    (columns > 0).then_some(columns)
+}
+
+fn visual_rows(lines: &[String], columns: usize) -> usize {
+    let columns = columns.max(1);
+    lines
+        .iter()
+        .map(|line| line.chars().count().max(1).div_ceil(columns))
+        .sum()
 }
 
 fn write_terminal_lines(output: &mut impl Write, lines: &[String]) {
@@ -1944,8 +1981,9 @@ mod tests {
     use super::*;
     use bridget_transport::protocol::MAX_ATTACH_FRAGMENT_BYTES;
     use serde_json::json;
-    use std::io::{BufRead, BufReader, Write};
-    use std::os::fd::{AsRawFd, RawFd};
+    use std::fs::File;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::os::fd::{AsRawFd, FromRawFd, RawFd};
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;
 
@@ -1993,6 +2031,50 @@ mod tests {
                 std::io::Error::last_os_error()
             );
             unsafe { attributes.assume_init() }
+        }
+
+        fn set_size(&self, rows: u16, columns: u16) {
+            let size = libc::winsize {
+                ws_row: rows,
+                ws_col: columns,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            };
+            assert_eq!(
+                unsafe { libc::ioctl(self.slave, libc::TIOCSWINSZ, &size) },
+                0,
+                "TIOCSWINSZ: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+
+        fn slave_writer(&self) -> File {
+            let fd = unsafe { libc::dup(self.slave) };
+            assert!(fd >= 0, "dup slave: {}", std::io::Error::last_os_error());
+            unsafe { File::from_raw_fd(fd) }
+        }
+
+        fn read_available(&self) -> Vec<u8> {
+            let fd = unsafe { libc::dup(self.master) };
+            assert!(fd >= 0, "dup master: {}", std::io::Error::last_os_error());
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            assert!(flags >= 0);
+            assert_eq!(
+                unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+                0
+            );
+            let mut file = unsafe { File::from_raw_fd(fd) };
+            let mut output = Vec::new();
+            loop {
+                let mut chunk = [0_u8; 4096];
+                match file.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(count) => output.extend_from_slice(&chunk[..count]),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) => panic!("lecture pseudo-TTY: {error}"),
+                }
+            }
+            output
         }
 
         fn close_master(&mut self) {
@@ -2741,6 +2823,83 @@ mod tests {
         let mut output = Vec::new();
         renderer.apply(RendererCommand::Event(event), &input, &mut output);
         assert_eq!(input.lock().unwrap().bytes, expected);
+    }
+
+    #[test]
+    fn pseudo_tty_garde_la_saisie_en_bas_pendant_le_flux_et_un_resize() {
+        let pseudo_tty = PseudoTerminal::open();
+        pseudo_tty.set_size(12, 40);
+        let mut output = pseudo_tty.slave_writer();
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let (socket, _) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(socket)));
+        let (commands, command_rx) = mpsc::sync_channel(RENDER_COMMAND_CAPACITY);
+        let sender = RendererSender {
+            commands,
+            input_dirty: Arc::new(AtomicBool::new(false)),
+            tty_output: true,
+        };
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), true, true);
+        renderer.terminal_fd = Some(pseudo_tty.slave);
+        renderer.terminal_columns = terminal_columns(pseudo_tty.slave).unwrap();
+        let mut rendered = Vec::new();
+
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 1,
+                bytes: journal_record(
+                    1,
+                    "turn_start",
+                    json!({"from":"humain","body":"Question entrante"}),
+                ),
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+        rendered.extend(pseudo_tty.read_available());
+        for byte in b"commande partielle" {
+            assert!(handle_input_byte(*byte, &state, &input, &sender, &writer, "codex-1").unwrap());
+        }
+        while let Ok(command) = command_rx.try_recv() {
+            renderer.apply(command, &input, &mut output);
+            rendered.extend(pseudo_tty.read_available());
+        }
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 2,
+                bytes: journal_record(2, "update", json!({"kind":"text","content":"réponse live"})),
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+        rendered.extend(pseudo_tty.read_available());
+        assert_eq!(input.lock().unwrap().display(), "commande partielle");
+
+        pseudo_tty.set_size(12, 18);
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 3,
+                bytes: journal_record(
+                    3,
+                    "update",
+                    json!({"kind":"text","content":" après resize"}),
+                ),
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+        rendered.extend(pseudo_tty.read_available());
+        assert_eq!(renderer.terminal_columns, 18);
+        assert!(renderer.current.is_some(), "le resize ne clôt pas le tour");
+        assert_eq!(input.lock().unwrap().display(), "commande partielle");
+
+        assert!(rendered.windows(4).any(|window| window == b"\x1b[2K"));
+        assert!(String::from_utf8_lossy(&rendered).contains("réponse live après resize"));
+        assert!(rendered.ends_with(b"> commande partielle"));
     }
 
     #[test]
