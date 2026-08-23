@@ -206,7 +206,7 @@ fleet.json, replay de contexte automatique au-delà de la carte de réveil.
   auparavant, après un reboot machine, zéro équipier géré ne revenait : la condition (b) de la
   revue reprise-crash est fausse aujourd'hui, empiriquement. Doctrine à
   adopter : --persistent par défaut pour les équipiers d'équipe.
-- ⏳ EN PAUSE (WIP commité sur fix/build-id le 2026-08-24 ; RE-DÉLÉGATION DUE à coderBridget dès G1502 franchi — engagement référent, motif au greffe) — **Binaire périmé : détection ET rituel** (incident ×2 le 2026-08-23 — 8h40
+- ⏳ RELANCÉE (2026-08-24, G1502 franchi — engagement honoré, mission-d23-coder-2 au greffe) — **Binaire périmé : détection ET rituel** (incident ×2 le 2026-08-23 — 8h40
   de retard l'après-midi, puis le daemon pré-014 servant encore le refus
   menteur le soir même, DEUX HEURES après le merge du correctif). Deux
   volets : (1) DÉTECTION — build-id (hash git) embarqué à la compilation,
