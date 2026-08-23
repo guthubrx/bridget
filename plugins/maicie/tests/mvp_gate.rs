@@ -4,7 +4,7 @@
 //! --test mvp_gate -- --ignored --nocapture`.
 
 use maicie::bridget_client::BridgetClient;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -63,8 +63,7 @@ fn delegation_reelle_est_accusee_et_visible_sans_fausse_correlation_de_reponse()
     let delivered_at = started.elapsed();
     assert_eq!(status["transport_snapshot"], "unknown");
     assert_eq!(
-        status["coordination"][0]["remises_locales"][0]["state"],
-        "accepted",
+        status["coordination"][0]["remises_locales"][0]["state"], "accepted",
         "status MVP: {status}"
     );
     assert_eq!(
@@ -147,11 +146,18 @@ impl Fixture {
             .unwrap(),
         )
         .unwrap();
-        Self { root, bridget: bridget.to_path_buf(), socket, config, injection_sentinel, adapter_pgid }
+        Self {
+            root,
+            bridget: bridget.to_path_buf(),
+            socket,
+            config,
+            injection_sentinel,
+            adapter_pgid,
+        }
     }
 
     fn start_daemon(&self) -> Child {
-        let child = Command::new(&self.bridget)
+        let mut child = Command::new(&self.bridget)
             .arg("daemon")
             .env("HOME", &self.root)
             .stdout(Stdio::null())
@@ -172,6 +178,8 @@ impl Fixture {
             }
             thread::sleep(Duration::from_millis(20));
         }
+        let _ = child.kill();
+        let _ = child.wait();
         panic!("daemon MVP non prêt");
     }
 
@@ -191,7 +199,10 @@ impl Fixture {
     }
 
     fn maicie(&self, args: &[&str]) -> std::process::Output {
-        Command::new(env!("CARGO_BIN_EXE_maicie")).args(args).output().unwrap()
+        Command::new(env!("CARGO_BIN_EXE_maicie"))
+            .args(args)
+            .output()
+            .unwrap()
     }
 
     fn wait_for_injection(&self) {
@@ -235,14 +246,20 @@ impl Fixture {
 }
 
 impl Drop for Fixture {
-    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.root); }
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
 }
 
 fn stop_daemon(daemon: &mut Child) {
-    unsafe { libc::kill(daemon.id() as i32, libc::SIGTERM); }
+    unsafe {
+        libc::kill(daemon.id() as i32, libc::SIGTERM);
+    }
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if daemon.try_wait().unwrap().is_some() { return; }
+        if daemon.try_wait().unwrap().is_some() {
+            return;
+        }
         thread::sleep(Duration::from_millis(20));
     }
     panic!("daemon MVP ne s'arrête pas dans la borne");

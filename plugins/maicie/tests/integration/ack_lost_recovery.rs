@@ -406,6 +406,84 @@ fn reprise_bornee_court_circuite_apres_la_premiere_indisponibilite() {
 }
 
 #[test]
+fn reprise_lente_sur_toutes_les_phases_reste_dans_le_budget_global() {
+    let root = unique_root("global-budget-full-replay");
+    let database = root.join("maicie.sqlite3");
+    let socket = root.join("bridget.sock");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let prepared = fixture(store.issuer_scope());
+    let expected_message = prepared.message_bytes.clone();
+    store.create_prepared_delegation(&prepared).unwrap();
+
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let (mut reader, mut writer) = split(stream);
+        // Chaque phase consomme une part mesurable de sa tranche de 20 ms,
+        // avec une marge pour l'ordonnanceur du harnais de test.
+        let phase_delay = Duration::from_millis(8);
+
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"RoleHandshake","role":"client"})
+        );
+        thread::sleep(phase_delay);
+        write_json(&mut writer, json!({"type":"RoleAccepted","role":"client"}));
+
+        assert_eq!(read_json(&mut reader)["type"], "ClientHello");
+        thread::sleep(phase_delay);
+        write_json(
+            &mut writer,
+            json!({
+                "type":"ClientWelcome",
+                "version":1,
+                "horizon_secs":3_600_i64,
+                "issued_at_tolerance_secs":30_i64,
+                "capabilities":["send_idempotent","lookup"]
+            }),
+        );
+
+        assert_eq!(read_json(&mut reader)["type"], "Lookup");
+        thread::sleep(phase_delay);
+        write_issue(&mut writer, json!({"kind":"idempotency_expired"}));
+
+        let replay = read_line(&mut reader);
+        assert!(replay.contains("\"type\":\"SendIdempotent\""));
+        assert!(replay.contains(std::str::from_utf8(&expected_message).unwrap()));
+        // La cinquième opération atteint sa borne : aucune issue n'est écrite.
+        thread::sleep(Duration::from_millis(30));
+    });
+    let limits = BridgetClientLimits {
+        connect_timeout: Duration::from_millis(100),
+        io_timeout: Duration::from_millis(100),
+        max_frame_bytes: BridgetClientLimits::default().max_frame_bytes,
+    };
+
+    let started = Instant::now();
+    let report = reconcile_startup_at_with_limits(&mut store, &socket, 1_010, limits).unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(140),
+        "la reprise complète ne doit pas dépasser son budget global"
+    );
+    assert!(matches!(
+        &report.actions[..],
+        [ReconcileAction::TransportIncertain { .. }]
+    ));
+    assert_eq!(
+        store
+            .recovery_snapshot(uuid(MESSAGE_ID))
+            .unwrap()
+            .unwrap()
+            .outbox
+            .state,
+        EtatOutboxDelegation::OutcomeUnknown
+    );
+    server.join().unwrap();
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn crash_reel_aux_frontieres_de_reprise_ne_cree_ni_double_envoi_ni_perte() {
     crash_avant_socket_rejoue_une_seule_fois();
     crash_apres_ecriture_avant_ack_reste_en_cours_sans_rejeu();
