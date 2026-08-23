@@ -16,13 +16,13 @@ commitée — leçon : toute métrique se grave le jour même, rituel de clôtur
 | Métrique | Avant (22/08) | Après (23/08) |
 |---|---|---|
 | Relances manuelles du référent | ~526 / jour | ~0 (rappels automatiques du daemon ; les envois du référent sont du contenu, plus du harcèlement) |
-| Messages de coordination | ~495 / jour | ~120 sur 36 h, tous porteurs (mandats, verdicts, arbitrages) |
+| Messages de coordination | ~495 / jour | ~120 sur la journée, tous porteurs (mandats, verdicts, arbitrages) |
 | Sweeps / polling | ~50 / jour | 0 (réveil par événements exclusivement) |
 | Sleeps bloquants | fréquents (`sleep 180 && send`) | 0 |
 | Missions journalisées | 0 (mémoire de conversation) | 30 objectifs au greffe (26 clos, 4 actifs), motifs complets |
 | Cycle médian d'une mission | non mesurable | **20 min** (min 3, max 46) |
 
-## Production (36 h après vs journée type avant)
+## Production (journée du 23/08, ~13 h, vs journée type avant)
 
 | Livré 23/08 | Volume |
 |---|---|
