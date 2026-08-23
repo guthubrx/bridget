@@ -41,7 +41,7 @@ horizon_secs` au premier dépôt.
 | Opération | Wrapper historique | Service sans capacité | Service + `maicie_guichet` |
 |---|---:|---:|---:|
 | dépôt `ServiceRequest` vers `maicie` | admis si l'émetteur enregistré correspond au champ `from` | refus | refus |
-| `GuichetClaim` / `GuichetClaimed` | refus | `capability_required` | admis |
+| `GuichetClaimNext`, `GuichetClaim` / `GuichetClaimed` | refus | `capability_required` | admis |
 | `GuichetReply` | refus | `capability_required` | admis |
 | réception `RequestLifecycleEvent` | refus | `capability_required` | admis |
 | messages 007–014 non-guichet | comportement historique | refus hors matrice | refus hors matrice |
@@ -96,7 +96,29 @@ Après un dépôt accepté, le daemon retourne :
 {"type":"guichet_result","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01","issue":"queued","expires_at":1787500300}
 ```
 
-### 2.2 Relève : claim
+### 2.2 Relève : amorçage et claim
+
+Une relève commence obligatoirement par `GuichetClaimNext`, qui ne porte pas
+de clé inconnue du compagnon :
+
+```json
+{"type":"guichet_claim_next","v":1}
+```
+
+Le daemon sélectionne **une seule** demande relivable dans l'ordre FIFO
+durable `(deposited_sequence ASC)`. Une demande `claimed` dont la connexion de
+service a disparu ou dont le claim n'a pas de résultat durable redevient
+relivable avec sa séquence de dépôt d'origine : un crash ne change donc pas
+l'ordre. La réponse est `guichet_claimed` (et révèle alors `issuer_scope` et
+`request_id`) ou `guichet_empty`.
+
+La pagination est implicitement bornée à un élément par appel. Le client répète
+`GuichetClaimNext` seulement jusqu'à son échéance globale négociée ; le daemon
+ne boucle jamais, ne scanne jamais au-delà du prochain index FIFO et ne retient
+aucun curseur de session. Ainsi un dépôt fait pendant l'absence de Maicie est
+amorcé à sa prochaine commande sans connaître de clé préalable.
+
+Après cette première réponse, un retry précis peut employer `GuichetClaim` :
 
 ```json
 {"type":"guichet_claim","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01"}
@@ -108,9 +130,9 @@ Le daemon répond soit par :
 {"type":"guichet_claimed","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-01","canonical_request":"<base64 des octets ServiceRequest>","claimed_at":1787500000,"expires_at":1787500300}
 ```
 
-soit par `guichet_empty`, soit par un refus typé. Le claim ne prend jamais une
-décision Maicie. Une demande `claimed` non finalisée redevient relevable après
-un redémarrage : elle garde le même `request_id` et les mêmes octets.
+Le claim ne prend jamais une décision Maicie. Une demande `claimed` non
+finalisée redevient relevable après un redémarrage : elle garde le même
+`request_id` et les mêmes octets.
 
 ### 2.3 Consultation et retry : `GuichetLookup`
 
@@ -183,7 +205,7 @@ Maicie ne crée jamais un nouvel identifiant à la place du demandeur.
 |---|---|---|
 | avant insertion | aucune demande ou refus explicite | dépôt unique possible |
 | après dépôt, avant claim | `queued` + scope + octets canoniques + `expires_at` | même demande relevable |
-| après claim, avant résultat | `claimed` relivable | même octets, sans seconde demande |
+| après `ClaimNext`, avant résultat | `claimed` + `deposited_sequence` immuable | même élément FIFO relivable, sans seconde demande |
 | après résultat, avant retour client | réponse + issue + `expires_at` durables | même `GuichetReply` reconstruite |
 | après terminal Bridget | événement unique durable | même `event_id`, jamais de seconde transition |
 
@@ -227,15 +249,21 @@ l'ordre canonique, pas d'un format de rendu humain.
 {"type":"service_request","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-delivery","issued_at":1787500000,"from":"codex-1","to":"maicie","operation":"delivery_report","payload":{"objective_id":"obj-01","delegation_id":"del-01","delivery_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","in_reply_to":"msg-01"}}
 {"type":"service_request","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-status","issued_at":1787500000,"from":"codex-1","to":"maicie","operation":"mission_status","payload":{"delegation_id":"del-01"}}
 {"type":"service_request","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-deadline","issued_at":1787500000,"from":"codex-1","to":"maicie","operation":"deadline_question","payload":{"delegation_id":"del-01"}}
+{"type":"guichet_claim_next","v":1}
 {"type":"request_lifecycle_event","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","event_id":"evt-answered","request_id":"req-delivery","state":"answered","observed_at":1787500001,"in_reply_to":"msg-01","response_message_id":"msg-02"}
 {"type":"request_lifecycle_event","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","event_id":"evt-cancelled","request_id":"req-delivery","state":"cancelled","observed_at":1787500002}
 {"type":"request_lifecycle_event","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","event_id":"evt-timeout","request_id":"req-delivery","state":"timed_out","observed_at":1787500003}
 ```
 
-Ces six lignes donnent respectivement `queued` avec `expires_at`, puis les
-trois événements durables. Retirer l'écriture atomique de l'événement terminal
-fait échouer l'oracle de redémarrage ; retirer `issuer_scope` fait échouer la
-validation de la clé composite.
+Ces sept lignes donnent respectivement `queued` avec `expires_at`, puis les
+trois événements durables. La `guichet_claim_next` qui les suit rend
+`req-delivery`, premier dépôt FIFO, sous forme de `guichet_claimed`. Le test
+normatif dépose pendant l'absence de Maicie, ouvre une connexion de service
+fraîche, appelle cette unique trame puis constate que la première demande est
+relevée. Retirer l'écriture atomique de l'événement terminal fait échouer
+l'oracle de redémarrage ; retirer `issuer_scope` fait échouer la validation de
+la clé composite ; remplacer la sélection FIFO par une clé exigée fait échouer
+l'amorçage.
 
 ### 5.2 Refus complets
 
