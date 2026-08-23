@@ -119,8 +119,9 @@ impl Fixture {
         )
         .unwrap();
         fs::set_permissions(&adapter, fs::Permissions::from_mode(0o700)).unwrap();
+        let registry = root.join(".config/bridget/agents.json");
         fs::write(
-            root.join(".config/bridget/agents.json"),
+            &registry,
             serde_json::to_vec(&json!({"agents":{"mvp_fixture":{
                 "command": adapter,
                 "protocol":"acp",
@@ -132,6 +133,7 @@ impl Fixture {
             .unwrap(),
         )
         .unwrap();
+        fs::set_permissions(&registry, fs::Permissions::from_mode(0o600)).unwrap();
         let socket = root.join(".cache/bridget/bridget.sock");
         let config = root.join("maicie.json");
         fs::write(

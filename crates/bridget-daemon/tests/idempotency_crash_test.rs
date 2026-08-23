@@ -19,6 +19,7 @@ use std::ffi::CString;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -474,6 +475,8 @@ done
     let path = directory.join("agents.json");
     fs::write(&path, serde_json::to_string_pretty(&definition).expect("registre sérialisable"))
         .expect("registre ACP écrit");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+        .expect("permissions privées du registre ACP");
     let registry = AgentRegistry::from_json(
         &fs::read_to_string(&path).expect("registre ACP lisible"),
         &path,

@@ -7,6 +7,7 @@ use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -196,6 +197,8 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             serde_json::to_string_pretty(&fixture).expect("registre sérialisable"),
         )
         .expect("registre dynamique écrit");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("permissions privées du registre dynamique");
         let registry = AgentRegistry::from_json(
             &std::fs::read_to_string(&path).expect("registre dynamique lisible"),
             &path,

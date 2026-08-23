@@ -71,6 +71,10 @@ commitées restent dans sa SQLite et seront réconciliées à l'invocation suiva
 Le daemon et les équipiers restent sous la responsabilité de Bridget
 (`bridget stop <nom>` pour un équipier géré).
 
+Si Bridget utilise un registre utilisateur `agents.json`, ce fichier doit être
+régulier, non symbolique et avoir le mode `0600` ou plus restrictif ; le daemon
+refuse de démarrer avec un registre plus permissif.
+
 ## Deux autorités, jamais une vérité fusionnée
 
 | Autorité | Ce qu'elle possède |
