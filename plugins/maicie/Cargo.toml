@@ -9,6 +9,7 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 rusqlite.workspace = true
+base64 = "0.22"
 # Budget I/O réel du client public Bridget : connect non bloquant sur macOS.
 libc.workspace = true
 

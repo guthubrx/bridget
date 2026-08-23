@@ -6,7 +6,7 @@
 //! module Maicie ne doit ouvrir le socket Bridget directement.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io::{BufRead, BufReader, Write};
@@ -293,6 +293,13 @@ pub enum SubscriptionEvent {
     Subscribed {
         subscription_id: String,
     },
+    JournalFragment {
+        subscription_id: String,
+        seq: u64,
+        offset: u64,
+        final_fragment: bool,
+        bytes: Vec<u8>,
+    },
     SnapshotCaughtUp {
         subscription_id: String,
         through_seq: Option<u64>,
@@ -302,6 +309,12 @@ pub enum SubscriptionEvent {
         from_seq: u64,
         to_seq: u64,
         reason: Option<String>,
+    },
+    JournalReadError {
+        subscription_id: String,
+        line: u64,
+        offset: u64,
+        reason: String,
     },
     End {
         subscription_id: String,
@@ -725,6 +738,13 @@ impl Subscription {
             "Subscribed" => Ok(SubscriptionEvent::Subscribed {
                 subscription_id: required_string(&response, "subscription_id")?,
             }),
+            "JournalFragment" => Ok(SubscriptionEvent::JournalFragment {
+                subscription_id: required_string(&response, "subscription_id")?,
+                seq: required_u64(&response, "seq")?,
+                offset: required_u64(&response, "offset")?,
+                final_fragment: required_bool(&response, "final")?,
+                bytes: decode_base64_bytes(&response, "bytes")?,
+            }),
             "SnapshotCaughtUp" => Ok(SubscriptionEvent::SnapshotCaughtUp {
                 subscription_id: required_string(&response, "subscription_id")?,
                 through_seq: optional_u64(&response, "through_seq")?,
@@ -734,6 +754,12 @@ impl Subscription {
                 from_seq: required_u64(&response, "from_seq")?,
                 to_seq: required_u64(&response, "to_seq")?,
                 reason: optional_string(&response, "reason")?,
+            }),
+            "JournalReadError" => Ok(SubscriptionEvent::JournalReadError {
+                subscription_id: required_string(&response, "subscription_id")?,
+                line: required_u64(&response, "line")?,
+                offset: required_u64(&response, "offset")?,
+                reason: required_string(&response, "reason")?,
             }),
             "End" => Ok(SubscriptionEvent::End {
                 subscription_id: required_string(&response, "subscription_id")?,
@@ -1224,6 +1250,27 @@ fn optional_string(response: &Value, field: &str) -> Result<Option<String>, Brid
         .transpose()
 }
 
+fn required_bool(response: &Value, field: &str) -> Result<bool, BridgetClientError> {
+    response
+        .get(field)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| BridgetClientError::Protocol(format!("champ {field} absent ou invalide")))
+}
+
+fn decode_base64_bytes(response: &Value, field: &str) -> Result<Vec<u8>, BridgetClientError> {
+    use base64::Engine;
+
+    let encoded = response
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| BridgetClientError::Protocol(format!("champ {field} absent ou invalide")))?;
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| {
+            BridgetClientError::Protocol(format!("champ {field} base64 invalide: {error}"))
+        })
+}
+
 fn required_u64(response: &Value, field: &str) -> Result<u64, BridgetClientError> {
     response
         .get(field)
@@ -1256,8 +1303,8 @@ fn unexpected(expected: &str, received: &str) -> BridgetClientError {
 #[cfg(test)]
 mod tests {
     use super::{
-        replay_idempotent_request, validate_send_idempotent_frame, BridgetClientError,
-        PublicMessage, ReplayPublicMessage,
+        BridgetClientError, PublicMessage, ReplayPublicMessage, replay_idempotent_request,
+        validate_send_idempotent_frame,
     };
     use serde_json::json;
 

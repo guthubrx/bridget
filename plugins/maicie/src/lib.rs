@@ -9,6 +9,7 @@ pub mod config;
 pub mod domain;
 pub mod outbox;
 pub mod reconcile;
+pub mod runtime;
 pub mod store;
 pub mod telemetry;
 
