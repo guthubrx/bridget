@@ -6,6 +6,9 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[path = "guichet.rs"]
+pub mod guichet;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DomainError {
@@ -156,6 +159,64 @@ pub enum EtatDelegation {
     AEvaluer,
     Terminee,
     Annulee,
+}
+
+/// Opérations métier fermées acceptées par le guichet Maicie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationGuichet {
+    DeliveryReport,
+    MissionStatus,
+    DeadlineQuestion,
+}
+
+/// État terminal attesté par Bridget. Il reste un fait de transport et ne
+/// constitue jamais, à lui seul, une décision de coordination Maicie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EtatRequeteGuichet {
+    Answered,
+    Cancelled,
+    TimedOut,
+}
+
+/// Issue métier locale d'une greffe. Le nom français évite de confondre
+/// `DemandeDejaTerminale` avec le refus de transport homonyme de Bridget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueGreffe {
+    Accepted,
+    DemandeDejaTerminale,
+}
+
+/// Preuve locale durable qu'une requête structurée a été traitée.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceptionGreffe {
+    pub issuer_scope: String,
+    pub request_id: String,
+    pub operation: OperationGuichet,
+    pub canonical_request_bytes: Vec<u8>,
+    pub objective_id: Option<Uuid>,
+    pub delegation_id: Option<Uuid>,
+    pub delivery_hash: Option<String>,
+    pub response_message_id: String,
+    pub claim_generation: u64,
+    pub claim_token: String,
+    pub reply_bytes: Vec<u8>,
+    pub issue: IssueGreffe,
+    pub decision_id: Option<Uuid>,
+    pub processed_at: i64,
+}
+
+/// Jointure durable des deux canaux décrivant une même livraison.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecuCorrelation {
+    pub issuer_scope: String,
+    pub request_id: String,
+    pub in_reply_to: String,
+    pub response_message_id: String,
+    pub lifecycle_event_id: Option<String>,
+    pub lifecycle_state: Option<EtatRequeteGuichet>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

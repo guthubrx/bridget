@@ -4,13 +4,18 @@
 //! annuaire factuel, puis l'application choisit de façon déterministe avant
 //! d'écrire l'agrégat objectif/délégation/outbox dans le store privé.
 
+use crate::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use crate::config::DurationClasses;
+use crate::domain::guichet::{
+    GuichetDomainError, RequeteGuichet, parse_claim, parse_lifecycle_event,
+};
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
     EtatDecision, EtatObjectif, EtatOutboxDelegation, ModeObjectif, ObjectifCoordonne,
     OutboxDelegation, TypeDecision,
 };
 use crate::outbox::{PreparedDelegation, stable_body_hash};
+pub use crate::store::GuichetLifecycleResult;
 use crate::store::{
     ActivationApprovalRequest, DelegateReservation, MaicieStore, ObjectiveSnapshot, StoreError,
     StoredDelegateResult,
@@ -75,6 +80,97 @@ pub enum DirectMessageHandling {
         record: ConversationRecord,
         help: ConversationHelp,
     },
+}
+
+/// Résultat applicatif d'une relève. Les octets de réponse sont exactement
+/// ceux du reçu durable ; ils ne doivent jamais être reconstruits par le CLI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuichetProcessResult {
+    pub request_id: String,
+    pub objective_id: Option<Uuid>,
+    pub delegation_id: Option<Uuid>,
+    pub reply_bytes: Vec<u8>,
+    pub replayed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuichetError {
+    InvalidEnvelope(String),
+    UnsupportedOperation,
+    EnvelopeMismatch,
+    Store(String),
+}
+
+impl fmt::Display for GuichetError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidEnvelope(reason) => {
+                write!(formatter, "requête guichet invalide : {reason}")
+            }
+            Self::UnsupportedOperation => {
+                formatter.write_str("opération guichet non prise en charge")
+            }
+            Self::EnvelopeMismatch => formatter.write_str("enveloppe guichet divergente"),
+            Self::Store(reason) => write!(formatter, "greffe guichet impossible : {reason}"),
+        }
+    }
+}
+
+/// Traite une relève sans I/O réseau. Pour `delivery_report`, la validation
+/// relationnelle et la transaction greffe+décision+transition sont indivisibles.
+/// Les deux projections consultatives sont prises en charge par T1510.
+pub fn process_guichet_claim(
+    store: &mut MaicieStore,
+    claim: &GuichetClaim,
+    response_message_id: &str,
+    now: i64,
+) -> Result<GuichetProcessResult, GuichetError> {
+    let canonical = parse_claim(claim).map_err(guichet_domain_error)?;
+    let RequeteGuichet::DeliveryReport(report) = &canonical.request else {
+        return Err(GuichetError::UnsupportedOperation);
+    };
+    let stored = store
+        .graft_delivery_report(claim, &canonical, report, response_message_id, now)
+        .map_err(guichet_store_error)?;
+    Ok(GuichetProcessResult {
+        request_id: stored.reception.request_id,
+        objective_id: stored.reception.objective_id,
+        delegation_id: stored.reception.delegation_id,
+        reply_bytes: stored.reception.reply_bytes,
+        replayed: stored.replayed,
+    })
+}
+
+/// Enregistre le fait terminal poussé par Bridget. Cette voie ne crée aucune
+/// décision : le rapport structuré reste l'unique source de l'effet métier.
+pub fn record_guichet_lifecycle_event(
+    store: &mut MaicieStore,
+    event: &GuichetLifecycleEvent,
+) -> Result<GuichetLifecycleResult, GuichetError> {
+    let event = parse_lifecycle_event(event).map_err(guichet_domain_error)?;
+    store
+        .record_guichet_lifecycle_event(&event)
+        .map_err(guichet_store_error)
+}
+
+fn guichet_domain_error(error: GuichetDomainError) -> GuichetError {
+    match error {
+        GuichetDomainError::UnsupportedOperation => GuichetError::UnsupportedOperation,
+        GuichetDomainError::CanonicalBytesMismatch => GuichetError::EnvelopeMismatch,
+        GuichetDomainError::InvalidEnvelope(reason) => {
+            GuichetError::InvalidEnvelope(reason.to_string())
+        }
+    }
+}
+
+fn guichet_store_error(error: StoreError) -> GuichetError {
+    match error {
+        StoreError::EnvelopeMismatch => GuichetError::EnvelopeMismatch,
+        StoreError::Invalid(reason) | StoreError::NotFound(reason) => {
+            GuichetError::InvalidEnvelope(reason.to_string())
+        }
+        other => GuichetError::Store(other.to_string()),
+    }
 }
 
 /// Garde structurel de la frontière conversationnelle : cette fonction est
