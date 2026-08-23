@@ -59,3 +59,9 @@ l'incident.
     commit, jamais avant : l'index est commun, un commit voisin emporte tout
     ce qui y traîne. *(Incident : le commit socle-client a emporté le T017-2
     stagé d'un autre agent, 2026-08-23.)*
+17. **Un verdict n'existe que signé et lié.** Tout APPROVE/STOP doit venir de
+    l'identité STABLE du relecteur désigné, en réponse liée à la demande de
+    review — un verdict d'émetteur éphémère (cli-send-*) ou non lié est NUL
+    et mis en quarantaine jusqu'à confirmation d'identité. *(Incident : un
+    APPROVE anonyme sur un lot à deux co-auteurs, désavoué par le relecteur
+    désigné, 2026-08-23.)*
