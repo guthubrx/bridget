@@ -1,6 +1,6 @@
 # Tasks 015 — Guichet Maicie : identité joignable et demandes corrélées
 
-**Input** : `spec.md` et `plan.md` gelés par revue hostile.  
+**Input** : `spec.md` et `plan.md` gelés par revue hostile.
 **Statut** : plan d'exécution uniquement. Aucune tâche ci-dessous n'est
 commencée par la présente livraison documentaire.
 
@@ -15,7 +15,7 @@ substantielle revient à la revue hostile avant le code.
 | A — Bridget | codeur A | `crates/bridget-transport/src/protocol.rs`, `crates/bridget-daemon/src/daemon.rs`, `crates/bridget-daemon/src/store.rs`, `crates/bridget-daemon/tests/guichet_integration_test.rs`, `specs/015-guichet-maicie/contracts/protocole-guichet.md` |
 | B — Greffe Maicie | codeur B | `plugins/maicie/src/guichet.rs`, `plugins/maicie/src/store.rs`, `plugins/maicie/src/domain.rs`, `plugins/maicie/src/app.rs`, `plugins/maicie/tests/contract/guichet_domain.rs`, `plugins/maicie/tests/integration/guichet_greffe.rs` |
 | C — Adaptateur et CLI Maicie | prospective | `plugins/maicie/src/bridget_client.rs`, `plugins/maicie/src/reconcile.rs`, `plugins/maicie/src/main.rs`, `plugins/maicie/tests/contract/guichet_client.rs`, `plugins/maicie/tests/integration/guichet_gate.rs` |
-| Intégration | prospective | `plugins/maicie/Cargo.toml`, `plugins/maicie/src/lib.rs` — modification uniquement par la tâche T1508 |
+| Intégration | prospective | `plugins/maicie/Cargo.toml`, `plugins/maicie/src/lib.rs` — modification uniquement par la tâche T1511 |
 
 Tous les lots conservent les règles Maicie : protocole Bridget public seulement,
 jamais `bridget.db`, aucune boucle résidente, aucun LLM, aucun processus enfant
