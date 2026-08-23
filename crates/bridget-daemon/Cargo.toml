@@ -26,6 +26,8 @@ log = { workspace = true }
 env_logger = { workspace = true }
 signal-hook = "0.3"
 libc = "0.2"
+# Le renderer doit compter les cellules du terminal (CJK/emoji), pas les scalaires Unicode.
+unicode-width = "0.2"
 
 [dev-dependencies]
 bridget-core = { path = "../bridget-core" }

@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
+use unicode_width::UnicodeWidthStr;
 
 const MAX_REASSEMBLY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RENDERED_EVENT_CHARS: usize = 16 * 1024;
@@ -1170,7 +1171,11 @@ fn visual_rows(lines: &[String], columns: usize) -> usize {
     let columns = columns.max(1);
     lines
         .iter()
-        .map(|line| line.chars().count().max(1).div_ceil(columns))
+        .map(|line| {
+            UnicodeWidthStr::width(line.as_str())
+                .max(1)
+                .div_ceil(columns)
+        })
         .sum()
 }
 
@@ -2897,8 +2902,48 @@ mod tests {
         assert!(renderer.current.is_some(), "le resize ne clôt pas le tour");
         assert_eq!(input.lock().unwrap().display(), "commande partielle");
 
+        let wide_text = "界界界界界界界界界🙂";
+        assert_eq!(
+            visual_rows(&[wide_text.to_string()], 18),
+            2,
+            "dix scalaires larges occupent vingt cellules"
+        );
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 4,
+                bytes: journal_record(4, "update", json!({"kind":"text","content":wide_text})),
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+        rendered.extend(pseudo_tty.read_available());
+        let wide_rows = renderer.rendered_rows;
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 5,
+                bytes: journal_record(5, "update", json!({"kind":"text","content":" fin"})),
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+        let cleared_wide_render = pseudo_tty.read_available();
+        assert_eq!(
+            cleared_wide_render
+                .windows(4)
+                .filter(|window| *window == b"\x1b[2K")
+                .count(),
+            wide_rows,
+            "chaque ligne visuelle CJK/emoji doit être effacée avant le redessin"
+        );
+        rendered.extend(cleared_wide_render);
+
         assert!(rendered.windows(4).any(|window| window == b"\x1b[2K"));
-        assert!(String::from_utf8_lossy(&rendered).contains("réponse live après resize"));
+        assert!(
+            String::from_utf8_lossy(&rendered)
+                .contains("réponse live après resize界界界界界界界界界🙂 fin")
+        );
         assert!(rendered.ends_with(b"> commande partielle"));
     }
 
