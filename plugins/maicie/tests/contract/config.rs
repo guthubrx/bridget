@@ -38,6 +38,42 @@ fn charge_une_configuration_entierement_declarative() {
 }
 
 #[test]
+fn accepte_un_budget_explicit_de_capture_status_sans_en_inventer_un() {
+    let enabled = VALID_CONFIG.replace(
+        "\"profiles\": [{",
+        "\"status_capture_budget_ms\": 250,\n  \"profiles\": [{",
+    );
+    let enabled_fixture = Fixture::new("capture-enabled", &enabled);
+    let disabled_fixture = Fixture::new("capture-disabled", VALID_CONFIG);
+
+    assert_eq!(
+        MaicieConfig::load(&enabled_fixture.path)
+            .unwrap()
+            .status_capture_budget_ms,
+        Some(250)
+    );
+    assert_eq!(
+        MaicieConfig::load(&disabled_fixture.path)
+            .unwrap()
+            .status_capture_budget_ms,
+        None
+    );
+}
+
+#[test]
+fn refuse_un_budget_status_nul_ou_hors_borne() {
+    for (label, budget) in [("zero", "0"), ("large", "30001")] {
+        let invalid = VALID_CONFIG.replace(
+            "\"profiles\": [{",
+            &format!("\"status_capture_budget_ms\": {budget},\n  \"profiles\": [{{"),
+        );
+        let fixture = Fixture::new(label, &invalid);
+        let error = MaicieConfig::load(&fixture.path).unwrap_err();
+        assert!(error.to_string().contains("budget de capture"));
+    }
+}
+
+#[test]
 fn accepte_un_nom_d_agent_runtime_distinct_du_slug_de_profil() {
     let body = VALID_CONFIG.replace(
         "\"id\": \"prospective\",",

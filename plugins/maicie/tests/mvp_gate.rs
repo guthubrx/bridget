@@ -61,7 +61,7 @@ fn delegation_reelle_est_accusee_et_visible_sans_fausse_correlation_de_reponse()
         thread::sleep(Duration::from_millis(25));
     };
     let delivered_at = started.elapsed();
-    assert_eq!(status["transport_snapshot"], "unknown");
+    assert_eq!(status["transport_snapshot"]["state"], "unknown");
     assert_eq!(
         status["coordination"][0]["remises_locales"][0]["state"], "accepted",
         "status MVP: {status}"

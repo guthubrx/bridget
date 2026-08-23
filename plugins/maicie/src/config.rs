@@ -22,6 +22,10 @@ const MAX_TAGS_PER_PROFILE: usize = 64;
 const MAX_TOOLS_PER_PROFILE: usize = 64;
 const MAX_SHORT_TEXT_BYTES: usize = 128;
 const MAX_REFERENCE_BYTES: usize = 1024;
+/// Une consultation ne doit pas devenir un pseudo-runtime résident ni retenir
+/// indéfiniment le CLI. Au-delà, le statut rend explicitement l'observation
+/// inconnue plutôt que de conserver un fait périmé.
+pub const MAX_STATUS_CAPTURE_BUDGET_MS: u64 = 30_000;
 
 /// Configuration complete de Maicie, chargee avant toute I/O Bridget/SQLite.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +35,11 @@ pub struct MaicieConfig {
     pub bridget_socket: PathBuf,
     pub database_path: PathBuf,
     pub durations: DurationClasses,
+    /// Budget global optionnel de capture Attach effectué par `maicie status`.
+    /// Son absence désactive la capture : le statut le dit explicitement et ne
+    /// remplace jamais cette absence par une valeur implicite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_capture_budget_ms: Option<u64>,
     pub profiles: Vec<ProfileConfig>,
 }
 
@@ -162,6 +171,17 @@ impl MaicieConfig {
             ));
         }
         self.durations.validate()?;
+        match self.status_capture_budget_ms {
+            Some(budget_ms) if budget_ms == 0 || budget_ms > MAX_STATUS_CAPTURE_BUDGET_MS => {
+                return Err(ConfigError::validation(
+                    "status_capture_budget_ms",
+                    format!(
+                        "le budget de capture doit etre compris entre 1 et {MAX_STATUS_CAPTURE_BUDGET_MS} millisecondes"
+                    ),
+                ));
+            }
+            _ => {}
+        }
         validate_profiles(&self.profiles)
     }
 }

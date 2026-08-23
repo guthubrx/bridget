@@ -14,6 +14,7 @@ use crate::store::{
     DelegateReservation, MaicieStore, ObjectiveSnapshot, StoreError, StoredDelegateResult,
 };
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::fmt;
 use uuid::Uuid;
 
@@ -211,6 +212,24 @@ pub fn status(
         _ => {}
     }
     Ok(snapshots)
+}
+
+/// Extrait les seuls agents auxquels la coordination locale a effectivement
+/// délégué. Cette projection pure borne la capture Attach du CLI : un
+/// `status` n'abonne jamais Maicie à l'activité d'agents hors de ses objectifs.
+pub fn delegated_participants(snapshots: &[ObjectiveSnapshot]) -> Vec<String> {
+    snapshots
+        .iter()
+        .flat_map(|snapshot| {
+            snapshot
+                .delegations
+                .iter()
+                .map(|delegation| &delegation.participant)
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .cloned()
+        .collect()
 }
 
 /// Enregistre l'ajout explicite d'un participant comme décision appliquée.

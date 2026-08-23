@@ -26,7 +26,7 @@ fn commandes_objectif_rendent_et_persistent_les_decisions_explicites() {
         status_json["coordination"][0]["objective"]["id"],
         objective_id
     );
-    assert_eq!(status_json["transport_snapshot"], "unknown");
+    assert_eq!(status_json["transport_snapshot"]["state"], "unknown");
     assert_eq!(status_json["stream_state"], "unavailable");
 
     let add = run(

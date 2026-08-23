@@ -77,7 +77,7 @@ fn deux_delegations_cli_avec_la_meme_cle_rejouent_les_memes_ids_sans_seconde_out
         .unwrap();
     assert!(status.status.success());
     let status_json: Value = serde_json::from_slice(&status.stdout).unwrap();
-    assert_eq!(status_json["transport_snapshot"], "unknown");
+    assert_eq!(status_json["transport_snapshot"]["state"], "unknown");
     assert_eq!(
         status_json["coordination"][0]["remises_locales"][0]["state"],
         "accepted"

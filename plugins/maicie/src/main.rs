@@ -6,13 +6,18 @@
 //! réconciliateur d'outbox commun : aucun second chemin d'envoi n'existe.
 
 use maicie::app::{
-    add_participant, close, delegate, remove_participant, status, summarize, DelegateError,
-    DelegateRequest, DelegateResult, DelegationCandidate, ObjectiveError,
+    add_participant, close, delegate, delegated_participants, remove_participant, status,
+    summarize, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, ObjectiveError,
 };
-use maicie::bridget_client::{AgentInfo, BridgetClient, BridgetClientError, BridgetClientLimits};
+use maicie::bridget_client::{
+    AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits,
+};
 use maicie::config::{ConfigError, MaicieConfig};
-use maicie::domain::{ClasseDuree, DecisionCoordination, Delegation, ObjectifCoordonne};
+use maicie::domain::{
+    ClasseDuree, DecisionCoordination, Delegation, EtatFlux, ObjectifCoordonne, SourceSnapshot,
+};
 use maicie::reconcile::{reconcile_startup_with_limits, ReconcileError};
+use maicie::runtime::{RuntimeNature, RuntimeObservation, RuntimeSignal, RuntimeSubscription};
 use maicie::store::{MaicieStore, ObjectiveSnapshot, StoreError};
 use maicie::MAICIE_IDENTITY;
 use serde::Serialize;
@@ -20,7 +25,7 @@ use std::env;
 use std::fmt;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 const EXIT_USAGE: u8 = 2;
@@ -28,6 +33,7 @@ const EXIT_CONFIGURATION: u8 = 3;
 const EXIT_BRIDGET: u8 = 4;
 const EXIT_DELEGATE: u8 = 5;
 const EXIT_STORE: u8 = 6;
+const MAX_STATUS_RUNTIME_OBSERVATIONS: usize = 256;
 
 fn main() -> ExitCode {
     match run(env::args().skip(1).collect()) {
@@ -52,18 +58,192 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
 }
 
 fn run_status(arguments: StatusArgs) -> Result<String, CliError> {
-    let store = open_store(&arguments.config)?;
+    let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let store = open_store_with_reconciliation(&config, BridgetClientLimits::default())?;
     let snapshots = status(&store, arguments.objective_id).map_err(CliError::Objective)?;
+    let sources = capture_status_sources(&config, &delegated_participants(&snapshots));
     render_objective_output(
         ObjectiveOutput::Status {
             coordination: snapshots.into_iter().map(SnapshotOutput::from).collect(),
-            transport_snapshot: "unknown",
-            runtime: "unknown",
-            freshness: "unknown",
-            stream_state: "unavailable",
+            availability: sources.availability,
+            availability_state: sources.availability_state,
+            availability_reason: sources.availability_reason,
+            transport_snapshot: TransportSnapshotOutput::unknown(),
+            runtime: sources.runtime,
+            freshness: sources.freshness,
+            stream_state: sources.stream_state,
         },
         arguments.json,
     )
+}
+
+/// Réalise une capture Attach entièrement éphémère. Elle est limitée par une
+/// seule échéance absolue et ne touche jamais SQLite : la sortie décrit donc
+/// une observation de cette consultation, pas un cache déguisé en runtime.
+fn capture_status_sources(config: &MaicieConfig, participants: &[String]) -> StatusSourcesOutput {
+    let Some(budget_ms) = config.status_capture_budget_ms else {
+        return StatusSourcesOutput::unknown("budget_capture_non_configure");
+    };
+    let started_at = match unix_now() {
+        Ok(value) => value,
+        Err(_) => return StatusSourcesOutput::unknown("horloge_indisponible"),
+    };
+    let deadline = Instant::now() + Duration::from_millis(budget_ms);
+    let client = match BridgetClient::connect_with_limits_until(
+        &config.bridget_socket,
+        "maicie-status",
+        status_limits(deadline),
+        deadline,
+    ) {
+        Ok(client) => client,
+        Err(error) => return StatusSourcesOutput::unknown(&capture_reason(&error)),
+    };
+    let agents = match client.list_agents_until(deadline) {
+        Ok(agents) => agents,
+        Err(error) => return StatusSourcesOutput::unknown(&capture_reason(&error)),
+    };
+
+    let availability = agents
+        .iter()
+        .filter(|agent| {
+            participants
+                .iter()
+                .any(|participant| participant == &agent.name)
+        })
+        .map(|agent| AvailabilityOutput::from_agent(agent, started_at))
+        .collect::<Vec<_>>();
+    let mut runtime = Vec::with_capacity(participants.len());
+    for participant in participants {
+        if Instant::now() >= deadline {
+            runtime.push(RuntimeAgentOutput::unknown(
+                participant,
+                "budget_capture_epuise",
+            ));
+            continue;
+        }
+        let Some(agent) = agents.iter().find(|agent| agent.name == *participant) else {
+            runtime.push(RuntimeAgentOutput::unknown(
+                participant,
+                "agent_absent_annuaire",
+            ));
+            continue;
+        };
+        if agent.transport != "acp" {
+            runtime.push(RuntimeAgentOutput::unknown(
+                participant,
+                "transport_non_acp",
+            ));
+            continue;
+        }
+        if agent.state != "connected" && agent.state != "dnd" {
+            runtime.push(RuntimeAgentOutput::unknown(
+                participant,
+                "agent_non_connecte",
+            ));
+            continue;
+        }
+        runtime.push(capture_runtime_agent(&client, participant, deadline));
+    }
+
+    StatusSourcesOutput::from_capture(availability, runtime, started_at)
+}
+
+/// Réduit chaque délai filaire à l'échéance globale de la consultation. Le
+/// client applique ensuite la durée restante à chaque lecture/écriture.
+fn status_limits(deadline: Instant) -> BridgetClientLimits {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    BridgetClientLimits {
+        connect_timeout: remaining,
+        io_timeout: remaining,
+        ..BridgetClientLimits::default()
+    }
+}
+
+fn capture_runtime_agent(
+    client: &BridgetClient,
+    participant: &str,
+    deadline: Instant,
+) -> RuntimeAgentOutput {
+    let mut subscription =
+        match RuntimeSubscription::open_until(client, participant, AttachWindow::Today, deadline) {
+            Ok(subscription) => subscription,
+            Err(error) => {
+                return RuntimeAgentOutput::unknown(participant, &capture_runtime_reason(&error))
+            }
+        };
+    let subscription_id = subscription.subscription_id().to_string();
+    let mut observations = Vec::new();
+    loop {
+        if observations.len() >= MAX_STATUS_RUNTIME_OBSERVATIONS {
+            return RuntimeAgentOutput {
+                agent: participant.to_string(),
+                source: "acp_subscription",
+                subscription_id: Some(subscription_id),
+                stream_state: EtatFlux::Unavailable,
+                captured_at: None,
+                reason: Some("limite_evenements_capture".to_string()),
+                observations,
+            };
+        }
+        match subscription.next_signal_until(deadline) {
+            Ok(RuntimeSignal::Observation(observation)) => {
+                observations.push(RuntimeObservationOutput::from(observation));
+            }
+            Ok(RuntimeSignal::SnapshotCaughtUp { .. }) => {
+                return RuntimeAgentOutput {
+                    agent: participant.to_string(),
+                    source: "acp_subscription",
+                    subscription_id: Some(subscription_id),
+                    stream_state: subscription.stream_state(),
+                    captured_at: unix_now().ok(),
+                    reason: None,
+                    observations,
+                };
+            }
+            Ok(RuntimeSignal::Gap { .. } | RuntimeSignal::JournalReadError { .. }) => {
+                return RuntimeAgentOutput {
+                    agent: participant.to_string(),
+                    source: "acp_subscription",
+                    subscription_id: Some(subscription_id),
+                    stream_state: EtatFlux::Gap,
+                    captured_at: unix_now().ok(),
+                    reason: Some("flux_incomplet".to_string()),
+                    observations,
+                };
+            }
+            Ok(RuntimeSignal::End { .. }) => {
+                return RuntimeAgentOutput {
+                    agent: participant.to_string(),
+                    source: "acp_subscription",
+                    subscription_id: Some(subscription_id),
+                    stream_state: EtatFlux::Ended,
+                    captured_at: unix_now().ok(),
+                    reason: Some("abonnement_termine".to_string()),
+                    observations,
+                };
+            }
+            Err(error) => {
+                return RuntimeAgentOutput::unknown(participant, &capture_runtime_reason(&error))
+            }
+        }
+    }
+}
+
+fn capture_reason(error: &BridgetClientError) -> String {
+    match error {
+        BridgetClientError::Timeout { .. } => "budget_capture_epuise".to_string(),
+        _ => "annuaire_bridget_indisponible".to_string(),
+    }
+}
+
+fn capture_runtime_reason(error: &maicie::runtime::RuntimeError) -> String {
+    match error {
+        maicie::runtime::RuntimeError::Transport(BridgetClientError::Timeout { .. }) => {
+            "budget_capture_epuise".to_string()
+        }
+        maicie::runtime::RuntimeError::Ended => "abonnement_termine".to_string(),
+        _ => "abonnement_indisponible".to_string(),
+    }
 }
 
 fn run_objective(arguments: ObjectiveArgs) -> Result<String, CliError> {
@@ -553,10 +733,13 @@ impl From<DelegateResult> for DelegateOutput {
 enum ObjectiveOutput {
     Status {
         coordination: Vec<SnapshotOutput>,
-        transport_snapshot: &'static str,
-        runtime: &'static str,
-        freshness: &'static str,
-        stream_state: &'static str,
+        availability: Vec<AvailabilityOutput>,
+        availability_state: EtatFlux,
+        availability_reason: Option<String>,
+        transport_snapshot: TransportSnapshotOutput,
+        runtime: Vec<RuntimeAgentOutput>,
+        freshness: FreshnessOutput,
+        stream_state: EtatFlux,
     },
     Decision {
         decision: DecisionCoordination,
@@ -564,6 +747,196 @@ enum ObjectiveOutput {
     Summary {
         coordination: SnapshotOutput,
     },
+}
+
+/// Fait d'annuaire Bridget, séparé de l'activité ACP. Il est daté de la
+/// consultation et ne prétend pas décrire une activité de l'agent.
+#[derive(Serialize)]
+struct AvailabilityOutput {
+    agent: String,
+    state: String,
+    transport: String,
+    observed_at: i64,
+    source: &'static str,
+}
+
+impl AvailabilityOutput {
+    fn from_agent(agent: &AgentInfo, observed_at: i64) -> Self {
+        Self {
+            agent: agent.name.clone(),
+            state: agent.state.clone(),
+            transport: agent.transport.clone(),
+            observed_at,
+            source: "bridget",
+        }
+    }
+}
+
+/// Le contrat public disponible ne publie pas le statut de demande corrélé.
+/// Ce champ est donc un inconnu explicite et non une absence silencieuse.
+#[derive(Serialize)]
+struct TransportSnapshotOutput {
+    state: &'static str,
+    reason: &'static str,
+}
+
+impl TransportSnapshotOutput {
+    fn unknown() -> Self {
+        Self {
+            state: "unknown",
+            reason: "request_status_public_unavailable",
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct FreshnessOutput {
+    state: EtatFlux,
+    observed_at: Option<i64>,
+    reason: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RuntimeAgentOutput {
+    agent: String,
+    source: &'static str,
+    subscription_id: Option<String>,
+    stream_state: EtatFlux,
+    captured_at: Option<i64>,
+    reason: Option<String>,
+    observations: Vec<RuntimeObservationOutput>,
+}
+
+impl RuntimeAgentOutput {
+    fn unknown(agent: &str, reason: &str) -> Self {
+        Self {
+            agent: agent.to_string(),
+            source: "acp_subscription",
+            subscription_id: None,
+            stream_state: EtatFlux::Unavailable,
+            captured_at: None,
+            reason: Some(reason.to_string()),
+            observations: Vec::new(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct RuntimeObservationOutput {
+    agent: String,
+    source: SourceSnapshot,
+    nature: &'static str,
+    observed_at: String,
+    session_id: String,
+    message_id: Option<String>,
+    subscription_id: String,
+    seq: u64,
+    proof_ref: String,
+    stream_state: EtatFlux,
+    details: serde_json::Value,
+}
+
+impl From<RuntimeObservation> for RuntimeObservationOutput {
+    fn from(observation: RuntimeObservation) -> Self {
+        Self {
+            agent: observation.agent,
+            source: observation.source,
+            nature: runtime_nature_name(observation.nature),
+            observed_at: observation.observed_at,
+            session_id: observation.session_id,
+            message_id: observation.message_id,
+            subscription_id: observation.subscription_id,
+            seq: observation.seq,
+            proof_ref: observation.proof_ref,
+            stream_state: observation.stream_state,
+            details: observation.details,
+        }
+    }
+}
+
+fn runtime_nature_name(nature: RuntimeNature) -> &'static str {
+    match nature {
+        RuntimeNature::Disponibilite => "disponibilite",
+        RuntimeNature::Tour => "tour",
+        RuntimeNature::Outil => "outil",
+        RuntimeNature::Idle => "idle",
+        RuntimeNature::PermissionAutoDecidee => "permission_auto_decidee",
+    }
+}
+
+struct StatusSourcesOutput {
+    availability: Vec<AvailabilityOutput>,
+    availability_state: EtatFlux,
+    availability_reason: Option<String>,
+    runtime: Vec<RuntimeAgentOutput>,
+    freshness: FreshnessOutput,
+    stream_state: EtatFlux,
+}
+
+impl StatusSourcesOutput {
+    fn unknown(reason: &str) -> Self {
+        Self {
+            availability: Vec::new(),
+            availability_state: EtatFlux::Unavailable,
+            availability_reason: Some(reason.to_string()),
+            runtime: Vec::new(),
+            freshness: FreshnessOutput {
+                state: EtatFlux::Unavailable,
+                observed_at: None,
+                reason: Some(reason.to_string()),
+            },
+            stream_state: EtatFlux::Unavailable,
+        }
+    }
+
+    fn from_capture(
+        availability: Vec<AvailabilityOutput>,
+        runtime: Vec<RuntimeAgentOutput>,
+        observed_at: i64,
+    ) -> Self {
+        let stream_state = aggregate_stream_state(&runtime);
+        let reason = match stream_state {
+            EtatFlux::Fresh => None,
+            EtatFlux::Gap => Some("flux_incomplet".to_string()),
+            EtatFlux::Ended => Some("abonnement_termine".to_string()),
+            EtatFlux::Unavailable => Some("observation_incomplete".to_string()),
+        };
+        Self {
+            availability,
+            availability_state: EtatFlux::Fresh,
+            availability_reason: None,
+            runtime,
+            freshness: FreshnessOutput {
+                state: stream_state,
+                observed_at: Some(observed_at),
+                reason,
+            },
+            stream_state,
+        }
+    }
+}
+
+fn aggregate_stream_state(runtime: &[RuntimeAgentOutput]) -> EtatFlux {
+    if runtime.is_empty()
+        || runtime
+            .iter()
+            .any(|agent| agent.stream_state == EtatFlux::Unavailable)
+    {
+        return EtatFlux::Unavailable;
+    }
+    if runtime
+        .iter()
+        .any(|agent| agent.stream_state == EtatFlux::Gap)
+    {
+        return EtatFlux::Gap;
+    }
+    if runtime
+        .iter()
+        .any(|agent| agent.stream_state == EtatFlux::Ended)
+    {
+        return EtatFlux::Ended;
+    }
+    EtatFlux::Fresh
 }
 
 #[derive(Serialize)]
@@ -592,8 +965,33 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
             .map_err(|_| CliError::Objective(ObjectiveError::Invalid("sortie JSON indisponible")));
     }
     Ok(match output {
-        ObjectiveOutput::Status { coordination, .. } => {
-            format!("objectifs={}", coordination.len())
+        ObjectiveOutput::Status {
+            coordination,
+            availability,
+            availability_state,
+            availability_reason,
+            transport_snapshot,
+            runtime,
+            freshness,
+            stream_state,
+        } => {
+            let auto_permissions = runtime
+                .iter()
+                .flat_map(|agent| agent.observations.iter())
+                .filter(|observation| observation.nature == "permission_auto_decidee")
+                .count();
+            format!(
+                "objectifs={} disponibilité={} état_disponibilité={} motif_disponibilité={} snapshot_transport={} runtime={} permissions_auto_décidées={} fraîcheur={} flux={}",
+                coordination.len(),
+                availability.len(),
+                flux_name(availability_state),
+                availability_reason.as_deref().unwrap_or("aucun"),
+                transport_snapshot.state,
+                runtime.len(),
+                auto_permissions,
+                flux_name(freshness.state),
+                flux_name(stream_state),
+            )
         }
         ObjectiveOutput::Decision { decision } => format!(
             "décision={} objectif={} état=applied",
@@ -606,6 +1004,15 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
             coordination.decisions.len()
         ),
     })
+}
+
+fn flux_name(state: EtatFlux) -> &'static str {
+    match state {
+        EtatFlux::Fresh => "fresh",
+        EtatFlux::Gap => "gap",
+        EtatFlux::Ended => "ended",
+        EtatFlux::Unavailable => "unavailable",
+    }
 }
 
 #[derive(Debug)]
@@ -712,6 +1119,7 @@ mod tests {
                 normal_secs: 60,
                 long_secs: 90,
             },
+            status_capture_budget_ms: None,
             profiles: vec![ProfileConfig {
                 id: "code-review".to_string(),
                 agent_name: Some("coderBridget".to_string()),
