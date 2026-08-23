@@ -76,6 +76,9 @@ livraison corrélée a été greffée, pas qu'un humain l'a évaluée. Il consti
 donc un écart explicite à la règle stricte de vérification avant relais. Le
 déclarant qui sait que son arête exige cette preuve choisit
 `clôture_évaluée_exigée` ; Maicie ne l'infère jamais du corps du rapport.
+Le mode strict est satisfait uniquement par un `ActeClôtureÉvaluée` durable du
+registre, liant la génération et le hash livré à une issue qualifiante. Cet
+acte existe en amont du réducteur 016, qui ne peut ni le créer ni l'inférer.
 
 Une règle `any`, des conditions booléennes ou des dépendances inter-objectifs
 seraient un langage de workflow nouveau sans incident fondateur. Elles sont
@@ -142,10 +145,16 @@ remis à zéro. Une relance distincte postérieure le réarme à un. Cette règl
 protège une réponse réelle sans transformer son contenu en preuve de livraison.
 
 La relève normalise chaque lot avant réduction : tous les `delivery_report`
-corrélés d'une génération sont appliqués avant ses `reminder_sent`, même si le
-fil les présente dans l'ordre inverse. Une livraison présente dans le même lot
-gagne donc la course. La normalisation ne réordonne jamais des lots déjà
-committés.
+corrélés d'une génération sont appliqués avant ses `reminder_sent` et
+`timed_out`, même si le fil les présente dans l'ordre inverse. Une livraison
+présente dans le même lot gagne donc la course. La normalisation ne réordonne
+jamais des lots déjà committés.
+
+Le `timed_out` de la demande suivie active, déjà attesté au guichet par
+FR-1514, déclenche le même arbitrage que le seuil de relances même si le compte
+est inférieur à `N`. Il ferme ainsi l'état zombie où plus aucune relance ne
+peut arriver. Un `timed_out` tardif d'une génération inactive est dédupliqué et
+conservé sans effet d'autorité.
 
 Si 015 ne publie pas encore cet événement, le lot contrat l'ajoute de manière
 versionnée. Une lecture directe du ledger, une déduction depuis l'âge ou un
@@ -213,13 +222,14 @@ délégation. Cette couverture partielle de F27 est mesurée telle quelle.
 
 ### Flux F29 — réassignation
 
-1. Bridget dépose `reminder_sent`, `answered` et `delivery_report` corrélés au
-   guichet.
+1. Bridget dépose `reminder_sent`, `answered`, `timed_out` et
+   `delivery_report` corrélés au guichet.
 2. Maicie priorise les rapports du lot, déduplique les événements et compte les
    relances consécutives de la génération active ; `answered` remet ce compte à
    zéro.
-3. Avant le seuil : aucun effet. Au seuil : la transaction arbitre entre une
-   livraison déjà durable, un successeur admissible ou l'intervention humaine.
+3. Avant le seuil : aucun effet, sauf `timed_out` de la demande active. Au seuil
+   ou à cette expiration : la transaction arbitre entre une livraison déjà
+   durable, un successeur admissible ou l'intervention humaine.
 4. Le commit prépare l'annulation source, la demande suivie successeur et les
    notifications au sortant et au successeur ; le dispatcher les fait
    converger après commit.
@@ -261,7 +271,7 @@ provisoire avant cette gate.
 | C1, C5b | La transaction F29 crée l'annulation source, la demande suivie successeur et les notifications au sortant et au successeur. |
 | C2 | Chaque arête épingle `hash_greffé` par défaut ou `clôture_évaluée_exigée` ; l'écart du mode par défaut avec la vérification humaine est écrit. |
 | C3 | La v1 choisit uniquement dans le snapshot des faits du registre Maicie épinglé, jamais depuis une disponibilité Bridget volatile. |
-| C4 | Un `answered` corrélé remet le compteur consécutif à zéro ; une relance ultérieure le réarme. |
+| C4 | Un `answered` corrélé remet le compteur consécutif à zéro ; une relance ultérieure le réarme, et le `timed_out` de la demande active arbitre même sous `N`. |
 | C5a | Une annulation ou clôture administrative inhibe le compteur et ne peut produire de successeur. |
 | C6 | Un `delivery_report` du même lot est réduit avant les relances de sa génération, indépendamment de l'ordre filaire. |
 | C7 | G-1600 interdit le lot A avant merge et gel du contrat 015. |
@@ -379,7 +389,7 @@ si une voie de politique atteint profil/approve/spawn.
 | FR-1601, FR-1602 | D-1602, D-1608 | B puis C | couture de toutes les clôtures + outboxes atomiques, crashs et zéro doublon |
 | FR-1603 à FR-1605 | D-1602, D-1603 | B | corpus DAG, concurrence du dernier prérequis, notification unique |
 | FR-1606 | D-1601, D-1606 | A puis C | relance/answered attestés, reset du compteur, texte libre refusé |
-| FR-1607 à FR-1609, FR-1608a | D-1604 à D-1606 | B puis C | candidats registre épinglés, priorité du lot, cycle complet des demandes, aucun accès profil/spawn |
+| FR-1607 à FR-1609, FR-1608a, FR-1608b | D-1604 à D-1606 | B puis C | candidats registre épinglés, priorité du lot, expiration sans zombie, cycle complet des demandes, aucun accès profil/spawn |
 | FR-1610 | D-1607 | A et C | Gap/Unavailable/non frais bloquent tout effet automatique |
 | FR-1611 | D-1601 | B | replay déterministe et mutations d'oracle sans réseau/horloge |
 | FR-1612 | D-1605 | B et C | routes d'approbation structurellement inaccessibles |
@@ -399,10 +409,14 @@ si une voie de politique atteint profil/approve/spawn.
 
 - deux connexions concurrentes terminent deux prérequis du même dépendant ;
 - livraison et `N`e relance courent sur la même génération ;
-- `delivery_report` et `reminder_sent` apparaissent dans le même lot dans les
-  deux ordres filaires et la livraison gagne dans les deux cas ;
+- `delivery_report` et chacun des déclencheurs `reminder_sent`/`timed_out`
+  apparaissent dans le même lot dans les deux ordres filaires et la livraison
+  gagne dans tous les cas ;
 - `answered` remet le compteur à zéro, une relance postérieure le réarme et une
   annulation administrative interdit toute réassignation ;
+- `timed_out` sur une demande active sous le seuil produit un arbitrage unique,
+  tandis que le même événement tardif sur une génération inactive reste sans
+  effet ;
 - une réassignation crée atomiquement annulation source, demande successeur et
   notifications aux deux participants ;
 - deux relèves consomment le même événement ;

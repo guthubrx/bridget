@@ -112,7 +112,7 @@ indépendant de l'ordre des événements.
 5. **Étant donné** une arête utilisant le mode par défaut `hash_greffé`,
    **quand** le rapport de livraison et son hash sont greffés durablement,
    **alors** le prérequis qualifie sans prétendre que son contenu a été évalué.
-6. **Étant donné** une arête déclarée `exiger_clôture_évaluée`, **quand** seul
+6. **Étant donné** une arête déclarée `clôture_évaluée_exigée`, **quand** seul
    le hash de livraison est greffé, **alors** le dépendant reste bloqué jusqu'à
    la clôture évaluée durable correspondante.
 
@@ -160,6 +160,11 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
    **quand** elle gagne la transaction, **alors** le compteur est inhibé, la
    demande source reçoit une intention d'annulation et le participant sortant
    une notification durable ; aucune réassignation ultérieure n'est créée.
+7. **Étant donné** une demande suivie de la génération active qui atteint
+   `timed_out`, **quand** cet événement attesté est relevé, **alors** le même
+   arbitrage transactionnel qu'au seuil choisit entre livraison déjà terminale,
+   successeur admissible ou `intervention_humaine_requise`, même si moins de
+   `N` relances avaient été émises.
 
 ### Cas limites communs
 
@@ -225,9 +230,14 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
   source, de créer la demande suivie du successeur et de notifier les deux
   participants. Deux processus concurrents ne peuvent créer deux successeurs.
 - **FR-1608a — Arbitrage de relève** : dans un même lot relevé, Maicie DOIT
-  appliquer les `delivery_report` corrélés avant les `reminder_sent` de la même
-  génération, quel que soit leur ordre filaire. Les effets déjà committés dans
-  des lots antérieurs ne sont pas réordonnés.
+  appliquer les `delivery_report` corrélés avant les `reminder_sent` et
+  `timed_out` de la même génération, quel que soit leur ordre filaire. Les
+  effets déjà committés dans des lots antérieurs ne sont pas réordonnés.
+- **FR-1608b — Expiration de la demande active** : un événement `timed_out`
+  attesté par le guichet FR-1514 pour la demande suivie de la génération active
+  DOIT déclencher le même arbitrage transactionnel que la `N`e relance, sans
+  exiger que le compteur ait atteint `N`. Une expiration d'une génération déjà
+  inactive est conservée comme fait tardif et ne produit aucun successeur.
 - **FR-1609 — Candidats préautorisés** : une chaîne de repli ne contient que
   des participants existants du même objectif au snapshot épinglé. Une
   réassignation ne peut appeler aucun chemin de profil, d'approbation ou de
@@ -257,6 +267,10 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
   identifiant, instant attesté et fraîcheur éventuelle.
 - **DépendanceDélégation** : arête orientée `prérequis → dépendant` au sein d'un
   objectif, créée avant l'ouverture du dépendant.
+- **ActeClôtureÉvaluée** : fait durable du registre, immuable et extérieur au
+  réducteur 016, qui lie `delegation_id`, génération et hash livré à une issue
+  évaluée qualifiante. Lui seul satisfait une arête
+  `clôture_évaluée_exigée` ; la session 016 ne le fabrique pas.
 - **AttenteNotification** : destinataire déclaré pour un type d'événement et
   clé d'idempotence déterministe.
 - **NotificationOutbox** : enveloppe immuable, état `prepared`,
@@ -282,13 +296,15 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
   réassignation et la `N`e produit exactement 1 successeur sur 100 répétitions,
   y compris avec deux processus concurrents et redémarrage ; chaque successeur
   possède une nouvelle demande suivie et l'ancienne demande une annulation
-  durable, avec une notification unique au sortant et au successeur.
+  durable, avec une notification unique au sortant et au successeur. Pour une
+  demande active expirée après moins de `N` relances, 100 événements
+  `timed_out` produisent aussi 100 arbitrages terminaux et 0 délégation zombie.
 - **SC-1604** : les deux ordres de la course livraison/relance et les quatre
   frontières de crash convergent vers le même terminal, sans double génération
   ni perte de livraison tardive. Un corpus par lots inverse l'ordre filaire
-  `delivery_report`/`reminder_sent` et conserve la priorité à la livraison ; un
-  `answered` intercalé remet le compteur à zéro et une annulation
-  administrative interdit tout successeur.
+  `delivery_report`/`reminder_sent|timed_out` et conserve la priorité à la
+  livraison ; un `answered` intercalé remet le compteur à zéro et une
+  annulation administrative interdit tout successeur.
 - **SC-1605** : 100 % des tentatives de réassignation vers un participant non
   déclaré dans le snapshot épinglé, avec événement source non frais ou après
   épuisement de chaîne aboutissent à `intervention_humaine_requise`, avec 0
@@ -338,7 +354,7 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
 |---|---|---|---|
 | F27 / politique 1 | commits, verdicts et fins de banc muets ; le référent devait annoncer chaque hash | FR-1601, FR-1602, FR-1613 | SC-1601, SC-1607 |
 | F28 / politique 2 | prospective est restée en attente d'interfaces et de gates déjà livrés jusqu'au réveil manuel | FR-1603 à FR-1605 | SC-1602, SC-1607 |
-| F29 / politique 3 | creux d'agents constatés par l'utilisateur ; deux relances factuelles sans commit avant réassignation manuelle | FR-1606 à FR-1609, FR-1608a | SC-1603 à SC-1605, SC-1607 |
+| F29 / politique 3 | creux d'agents constatés par l'utilisateur ; deux relances factuelles sans commit avant réassignation manuelle | FR-1606 à FR-1609, FR-1608a, FR-1608b | SC-1603 à SC-1605, SC-1607 |
 | Relais manuels et corrélation perdue | des réponses non liées ont provoqué des rappels et doubles réponses ; les crashs imposaient de retrouver le terminal réel | FR-1613, FR-1614 | SC-1601, SC-1604 |
 | Politiques manuelles purement factuelles | aucune des trois politiques exécutées ce jour-là ne nécessitait de lire le contenu livré | FR-1611 | SC-1606 |
 | Tentatives répétées de préserver la porte humaine | une réassignation opérationnelle ne valait ni approbation ni naissance d'agent | FR-1609, FR-1612 | SC-1605 |
