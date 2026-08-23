@@ -200,3 +200,10 @@ fleet.json, replay de contexte automatique au-delà de la carte de réveil.
   binaire chargé avant le correctif sécurité mergé 36 min plus tard ; rien ne
   signale l'écart binaire-sur-disque vs binaire-en-mémoire. Candidat : build-id
   dans `who`/status + avertissement de décalage au premier contact.
+- **Vue attach : générations mélangées et titres d'adaptateur nus** (séance
+  d'observation utilisateur, 2026-08-23 soir) : le journal par nom+jour rejoue
+  l'archéologie du prédécesseur sans délimiteur (« inconnu »/UTC = vieux
+  binaire, normal mais illisible) — ajouter un séparateur de génération au
+  rattrapage (recoupe la carte de réveil) ; et enrichir les titres vagues de
+  l'adaptateur claude (« Terminal ») d'un extrait de commande, comme FR-003
+  le visait (« Bash cargo test… »).
