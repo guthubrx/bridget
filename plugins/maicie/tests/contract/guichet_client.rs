@@ -167,11 +167,11 @@ fn client_public_et_daemon_reel_partagent_la_negociation_canonique() {
 
     let mut client = GuichetClient::connect(fixture.socket(), SCOPE)
         .expect("RoleHandshake, ServiceHello et ServiceWelcome canoniques");
-    assert!(matches!(
-        client.claim_next(),
-        Err(BridgetClientError::ClientRejected { reason })
-            if reason["kind"] == "transition_invalid"
-    ));
+    assert_eq!(
+        client.claim_next().expect("claim autorise apres negociation"),
+        None,
+        "un guichet négocié mais vide ne doit pas être confondu avec un refus de capacité"
+    );
 
     let stream = UnixStream::connect(fixture.socket()).expect("seconde connexion service");
     let (mut reader, mut writer) = split(stream);
