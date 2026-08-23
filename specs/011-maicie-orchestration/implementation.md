@@ -9,3 +9,9 @@
   proviennent des WIP légitimes respectifs de cxbridget et prospective ; les
   tests de contrat du domaine et son formatage sont verts, puis chaque lot
   revalide le workspace complet à son commit.
+- T008 constate et corrèle les issues Bridget à l'objectif sans changer son
+  état ; T015 portera la décision explicite et, si nécessaire, son écriture
+  atomique dans le store.
+- Cosmétique connue : `send_idempotent` sérialise l'enveloppe deux fois
+  (validation puis émission) ; coût local négligeable, à considérer seulement
+  lors d'une optimisation mesurée.
