@@ -4,8 +4,9 @@ use maicie::domain::ClasseDuree;
 use maicie::store::MaicieStore;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Barrier};
+use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 use uuid::Uuid;
 
 fn root(label: &str) -> PathBuf {
@@ -296,53 +297,50 @@ fn cles_distinctes_creent_des_delegations_distinctes() {
 
 #[test]
 fn reservations_concurrentes_rejouent_ou_refusent_sans_doublon() {
-    let root = root("idempotency-concurrent");
+    for attempt in 0..20 {
+        let root = root(&format!("idempotency-concurrent-{attempt}"));
+        let database = root.join("maicie.sqlite3");
+        let (first, second) = concurrent_pair(
+            database.clone(),
+            "même commande",
+            "shared-key",
+            "même commande",
+            "shared-key",
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        let (created, replayed) = match (first, second) {
+            (DelegateResult::Created(created), DelegateResult::Created(replayed))
+                if !created.replayed =>
+            {
+                (created, replayed)
+            }
+            (DelegateResult::Created(replayed), DelegateResult::Created(created))
+                if !created.replayed =>
+            {
+                (created, replayed)
+            }
+            results => panic!("réservation concurrente invalide : {results:?}"),
+        };
+        assert!(replayed.replayed);
+        assert_eq!(created.objective_id, replayed.objective_id);
+        assert_eq!(created.delegation_id, replayed.delegation_id);
+        assert_eq!(created.message_id, replayed.message_id);
+        let store = MaicieStore::open(&database).unwrap();
+        assert_eq!(store.pending_delegation_outboxes().unwrap().len(), 1);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    let root = root("idempotency-concurrent-divergent");
     let database = root.join("maicie.sqlite3");
-    drop(MaicieStore::open(&database).unwrap());
-
-    let barrier = Arc::new(Barrier::new(2));
-    let first = concurrent_delegate(
+    let (matching, divergent) = concurrent_pair(
         database.clone(),
-        barrier.clone(),
-        "même commande",
-        "shared-key",
-    );
-    let second = concurrent_delegate(database.clone(), barrier, "même commande", "shared-key");
-    let first = first.join().unwrap().unwrap();
-    let second = second.join().unwrap().unwrap();
-    let (created, replayed) = match (first, second) {
-        (DelegateResult::Created(created), DelegateResult::Created(replayed))
-            if !created.replayed =>
-        {
-            (created, replayed)
-        }
-        (DelegateResult::Created(replayed), DelegateResult::Created(created))
-            if !created.replayed =>
-        {
-            (created, replayed)
-        }
-        results => panic!("réservation concurrente invalide : {results:?}"),
-    };
-    assert!(replayed.replayed);
-    assert_eq!(created.objective_id, replayed.objective_id);
-    assert_eq!(created.delegation_id, replayed.delegation_id);
-    assert_eq!(created.message_id, replayed.message_id);
-
-    let barrier = Arc::new(Barrier::new(2));
-    let matching = concurrent_delegate(
-        database.clone(),
-        barrier.clone(),
-        "commande différente",
+        "commande identique",
         "conflicting-key",
-    );
-    let divergent = concurrent_delegate(
-        database.clone(),
-        barrier,
         "commande divergente",
         "conflicting-key",
     );
-    let matching = matching.join().unwrap();
-    let divergent = divergent.join().unwrap();
     assert!(matches!(
         (matching, divergent),
         (
@@ -354,19 +352,61 @@ fn reservations_concurrentes_rejouent_ou_refusent_sans_doublon() {
         )
     ));
     let store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.pending_delegation_outboxes().unwrap().len(), 2);
+    assert_eq!(store.pending_delegation_outboxes().unwrap().len(), 1);
     drop(store);
     fs::remove_dir_all(root).unwrap();
 }
 
+fn concurrent_pair(
+    database: PathBuf,
+    first_goal: &'static str,
+    first_key: &'static str,
+    second_goal: &'static str,
+    second_key: &'static str,
+) -> (
+    Result<DelegateResult, DelegateError>,
+    Result<DelegateResult, DelegateError>,
+) {
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (first_start_tx, first_start_rx) = mpsc::channel();
+    let (second_start_tx, second_start_rx) = mpsc::channel();
+    let first = concurrent_delegate(
+        database.clone(),
+        ready_tx.clone(),
+        first_start_rx,
+        first_goal,
+        first_key,
+    );
+    let second = concurrent_delegate(database, ready_tx, second_start_rx, second_goal, second_key);
+    for _ in 0..2 {
+        ready_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("ouverture concurrente bloquée")
+            .expect("ouverture concurrente échouée");
+    }
+    first_start_tx.send(()).unwrap();
+    second_start_tx.send(()).unwrap();
+    (first.join().unwrap(), second.join().unwrap())
+}
+
 fn concurrent_delegate(
     database: PathBuf,
-    barrier: Arc<Barrier>,
+    ready: mpsc::Sender<Result<(), String>>,
+    start: mpsc::Receiver<()>,
     goal: &'static str,
     key: &'static str,
 ) -> thread::JoinHandle<Result<DelegateResult, DelegateError>> {
     thread::spawn(move || {
-        let mut store = MaicieStore::open(database).unwrap();
+        let mut store = match MaicieStore::open(database) {
+            Ok(store) => {
+                ready.send(Ok(())).unwrap();
+                store
+            }
+            Err(error) => {
+                let _ = ready.send(Err(format!("{error:?}")));
+                return Err(DelegateError::Store(error.to_string()));
+            }
+        };
         let candidates = vec![DelegationCandidate {
             name: "prospective".to_string(),
             tags: vec![],
@@ -385,7 +425,9 @@ fn concurrent_delegate(
             dedup_retained_until: 200,
             max_frame_bytes: 256 * 1024,
         };
-        barrier.wait();
+        start
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|_| DelegateError::Store("départ concurrent non reçu".to_string()))?;
         delegate(&mut store, durations(), "maicie", &candidates, &request)
     })
 }

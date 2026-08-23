@@ -14,14 +14,16 @@ use crate::outbox::{
     OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot, StoreCommitPhase,
     MAX_MESSAGE_BYTES,
 };
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{
+    params, Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fmt;
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const SCHEMA_VERSION: i64 = 5;
@@ -153,11 +155,11 @@ impl MaicieStore {
         connection
             .execute_batch(
                 "PRAGMA foreign_keys = ON;\n\
-                 PRAGMA journal_mode = WAL;\n\
                  PRAGMA synchronous = FULL;",
             )
             .map_err(StoreError::Sql)?;
         migrate(&mut connection)?;
+        set_wal_mode(&connection)?;
         let issuer_scope = load_or_create_issuer_scope(&mut connection)?;
 
         Ok(Self {
@@ -959,6 +961,21 @@ impl MaicieStore {
     }
 }
 
+fn set_wal_mode(connection: &Connection) -> Result<(), StoreError> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match connection.execute_batch("PRAGMA journal_mode = WAL;") {
+            Ok(()) => return Ok(()),
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if error.code == ErrorCode::DatabaseBusy && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(StoreError::Sql(error)),
+        }
+    }
+}
+
 fn validate_database_path(path: &Path) -> Result<(), StoreError> {
     if !path.is_absolute() {
         return Err(StoreError::Invalid("chemin SQLite non absolu"));
@@ -979,7 +996,11 @@ fn prepare_private_database(path: &Path) -> Result<(), StoreError> {
     if !parent.exists() {
         let mut builder = DirBuilder::new();
         builder.recursive(true).mode(DIRECTORY_MODE);
-        builder.create(parent).map_err(StoreError::Io)?;
+        match builder.create(parent) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(StoreError::Io(error)),
+        }
     }
     let parent_metadata = fs::symlink_metadata(parent).map_err(StoreError::Io)?;
     if !parent_metadata.file_type().is_dir()
@@ -990,27 +1011,36 @@ fn prepare_private_database(path: &Path) -> Result<(), StoreError> {
         ));
     }
 
-    if path.exists() {
-        let metadata = fs::symlink_metadata(path).map_err(StoreError::Io)?;
-        if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o777 != DATABASE_MODE
-        {
-            return Err(StoreError::Invalid(
-                "fichier SQLite non privé (0600 requis)",
-            ));
-        }
-    } else {
-        OpenOptions::new()
+    if !path.exists() {
+        match OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(DATABASE_MODE)
             .open(path)
-            .map_err(StoreError::Io)?;
+        {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(StoreError::Io(error)),
+        }
+    }
+    let metadata = fs::symlink_metadata(path).map_err(StoreError::Io)?;
+    if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o777 != DATABASE_MODE {
+        return Err(StoreError::Invalid(
+            "fichier SQLite non privé (0600 requis)",
+        ));
     }
     Ok(())
 }
 
 fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
-    let current_version: i64 = connection
+    // L'ouverture est un chemin concurrent normal : plusieurs processus
+    // Maicie peuvent démarrer avant qu'un seul ait fini de poser le schéma.
+    // Le verrou IMMEDIATE couvre donc la lecture de version et toutes les
+    // migrations, pour que le second ouvre ensuite un schéma déjà cohérent.
+    let tx = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(StoreError::Sql)?;
+    let current_version: i64 = tx
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(StoreError::Sql)?;
     if current_version > SCHEMA_VERSION {
@@ -1019,7 +1049,6 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
             supported: SCHEMA_VERSION,
         });
     }
-    let tx = connection.transaction().map_err(StoreError::Sql)?;
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (\n\
              version INTEGER PRIMARY KEY,\n\
@@ -1180,7 +1209,9 @@ fn migrate_outbox_to_rejected_state(tx: &Transaction<'_>) -> Result<(), StoreErr
 }
 
 fn load_or_create_issuer_scope(connection: &mut Connection) -> Result<String, StoreError> {
-    let tx = connection.transaction().map_err(StoreError::Sql)?;
+    let tx = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(StoreError::Sql)?;
     let existing: Option<String> = tx
         .query_row(
             "SELECT issuer_scope FROM maicie_identity WHERE singleton = 1",
