@@ -227,3 +227,11 @@ Delta backend, par taille :
 4. Hérite de la 014 (corrélation toolCallId, heure locale, mode, sonde
    claude). Hors périmètre assumé : changer le modèle d'une session en cours
    (appartient au CLI de l'agent).
+5. **Vue unifiée quel que soit le canal ET le mode** (exigence utilisateur
+   2026-08-23) : même vue attach/GUI pour les gérés ACP et les interactifs
+   tmux. Chemin : généraliser la sonde runtime existante (parse_codex_rollout,
+   déjà en prod pour modèle/effort) en traducteur complet — suivre le fichier
+   de session du CLI (rollout codex, JSONL claude) et normaliser vers le
+   journal v1. Identité des vues garantie par construction (un read-model,
+   N renderers). Assumé : parseurs couplés à des formats tiers (best effort
+   versionné, dégradation annoncée), latence fichier de quelques secondes.
