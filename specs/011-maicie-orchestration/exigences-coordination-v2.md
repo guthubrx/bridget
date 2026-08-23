@@ -159,11 +159,11 @@ Trous réels retenus :
    surnuméraires de fleet.json sans autre trace qu'un log, et les agents
    non-persistants disparaissent du monde d'après. Exiger une trace durable
    consultable : « ces N équipiers ne sont PAS revenus, et voici pourquoi ».
-3. **Chaînon opérationnel Maicie post-crash** : `maicie approve` est écrit au
-   contrat mais absent du CLI (main.rs n'expose que delegate/status/objective)
-   — recoupe le suivi « surface CLI profile/approve/refuse » déjà consigné ;
-   documenter aussi le déclenchement de la réconciliation après reboot
-   (pull-only : Maicie ne repart que quand on l'invoque).
+3. **Chaînon opérationnel Maicie post-crash — mise à jour 2026-08-23** :
+   `maicie profile propose` et `maicie profile approve` sont maintenant exposés
+   par le CLI, mais `maicie profile refuse` reste absent ; ne pas simuler ce
+   refus et conserver son ajout comme écart explicite. La réconciliation après
+   reboot reste pull-only : Maicie ne repart que lorsqu'on l'invoque.
 4. **Carte de réveil déterministe** (remplace l'idée de résumé) : à la
    relance d'un wrapper, la session ACP est neuve et muette — l'agent ignore
    qu'il est en reprise. Injecter des FAITS BRUTS, zéro LLM : génération N,
@@ -278,9 +278,10 @@ Six tâches validées sur le principe par l'utilisateur (spec à créer au « go
 
 ## Divers restés conversationnels — gravés le 2026-08-23 soir
 
-- **Skill maicie à créer** (évoquée en finition 011, jamais livrée) : pendant
-  de la skill bridget — quand utiliser delegate/status/objective, doctrine
-  approve humain, deux vérités.
+- **Skill maicie — livrée le 2026-08-23** : pendant de la skill Bridget,
+  installée dans `~/.claude/skills/maicie/` et `~/.codex/skills/maicie/` ; elle
+  fixe quand utiliser delegate/status/objective, la doctrine des deux vérités,
+  le replay exact comme lookup et l'approbation exclusivement humaine.
 - **Décision utilisateur 1b (2026-08-23)** : la règle « zéro trace IA dans
   Git » s'applique aussi au contenu versionné. Les revues conservent la preuve
   d'un croisement par un moteur distinct, sans identifier le fournisseur ni le
