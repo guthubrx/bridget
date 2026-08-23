@@ -11,11 +11,11 @@ aucun processus OS et ne possède aucun timer actif.
 
 ## Phase 1 : Fondation et contrat Bridget
 
-- [ ] T001 Ajouter le membre `plugins/maicie/` au workspace avec `plugins/maicie/Cargo.toml` et `plugins/maicie/src/main.rs` ; le binaire compagnon s'enregistre sous `maicie`, démarre et s'arrête sans charger de code dans le démon Bridget.
-- [ ] T002 Définir les types, invariants et transitions d'`ObjectifCoordonné`, `Délégation`, `OutboxDélégation`, `SnapshotTransport`, `ProfilÉquipe`, `ApprobationActivation` et `ActivationOutbox` dans `plugins/maicie/src/domain.rs` ; tests unitaires de transitions interdites dans `plugins/maicie/tests/contract/domain.rs`.
-- [ ] T003 [P] Définir la configuration validée dans `plugins/maicie/src/config.rs` : socket Bridget, SQLite privée, classes de durée, profils par tags et références SpawnOrder ; tests `plugins/maicie/tests/contract/config.rs` sans secret ni politique sémantique implicite.
-- [ ] T004 Définir `BridgetClient` dans `plugins/maicie/src/bridget_client.rs` : négociation version/capacités, annuaire, envoi suivi idempotent par `message_id` client, lecture d'issue par id, annulation, Subscribe session 008 et SpawnOrder session 009 ; aucune I/O directe hors cet adaptateur.
-- [ ] T005 Ajouter les fixtures producteur↔client dans `plugins/maicie/tests/contract/bridget_client.rs` : compatibilité de version, capability absente, `message_id` dédupliqué, corps divergent refusé sous même id, `Gap`/`End` et refus de toute tentative de chemin `bridget.db`.
+- [x] T001 Ajouter le membre `plugins/maicie/` au workspace avec `plugins/maicie/Cargo.toml` et `plugins/maicie/src/main.rs` ; le binaire compagnon s'enregistre sous `maicie`, démarre et s'arrête sans charger de code dans le démon Bridget.
+- [x] T002 Définir les types, invariants et transitions d'`ObjectifCoordonné`, `Délégation`, `OutboxDélégation`, `SnapshotTransport`, `ProfilÉquipe`, `ApprobationActivation` et `ActivationOutbox` dans `plugins/maicie/src/domain.rs` ; tests unitaires de transitions interdites dans `plugins/maicie/tests/contract/domain.rs`.
+- [x] T003 [P] Définir la configuration validée dans `plugins/maicie/src/config.rs` : socket Bridget, SQLite privée, classes de durée, profils par tags et références SpawnOrder ; tests `plugins/maicie/tests/contract/config.rs` sans secret ni politique sémantique implicite.
+- [x] T004 Définir `BridgetClient` dans `plugins/maicie/src/bridget_client.rs` : négociation version/capacités, annuaire, envoi suivi idempotent par `message_id` client, lecture d'issue par id, annulation, Subscribe session 008 et SpawnOrder session 009 ; aucune I/O directe hors cet adaptateur.
+- [x] T005 Ajouter les fixtures producteur↔client dans `plugins/maicie/tests/contract/bridget_client.rs` : compatibilité de version, capability absente, `message_id` dédupliqué, corps divergent refusé sous même id, `Gap`/`End` et refus de toute tentative de chemin `bridget.db`.
 
 **Checkpoint** : contrat public vérifiable avant toute persistance ou logique de
 coordination.
@@ -27,10 +27,10 @@ une session Bridget distincte ; ne jamais remplacer ce gate par un retry neuf.
 
 ## Phase 2 : Durabilité et reprise après crash
 
-- [ ] T006 Implémenter migrations idempotentes et l'outbox transactionnelle dans `plugins/maicie/src/store.rs` et `plugins/maicie/src/outbox.rs` : prepared contient message_id, target, body bytes, reply, timeout/deadline, hash et horizon ; index sur objectif ouvert/message_id ; tests `plugins/maicie/tests/integration/store_outbox.rs`.
+- [x] T006 Implémenter migrations idempotentes et l'outbox transactionnelle dans `plugins/maicie/src/store.rs` et `plugins/maicie/src/outbox.rs` : prepared contient message_id, target, body bytes, reply, timeout/deadline, hash et horizon ; index sur objectif ouvert/message_id ; tests `plugins/maicie/tests/integration/store_outbox.rs`.
 - [ ] T007 Implémenter décisions, approbations et `ActivationOutbox(command_id, spawn_order_bytes)` atomiques dans `plugins/maicie/src/store.rs` et `plugins/maicie/src/outbox.rs` ; test `plugins/maicie/tests/integration/approval_atomicity.rs` couvrant expiration, consommation après issue, mismatch hash et TOCTOU.
 - [ ] T008 Implémenter la réconciliation dans `plugins/maicie/src/reconcile.rs` : toute ligne non terminale, prepared comprise, fait lookup puis replay des bytes exacts ; tests à barrières dans `plugins/maicie/tests/integration/ack_lost_recovery.rs` avant socket, après write/avant Ack et après Ack/avant commit, sans double message ni demande.
-- [ ] T009 Ajouter la journalisation corrélée dans `plugins/maicie/src/telemetry.rs` ; test `plugins/maicie/tests/contract/telemetry.rs` imposant objective_id/message_id/source/fraîcheur et excluant les corps de messages par défaut.
+- [x] T009 Ajouter la journalisation corrélée dans `plugins/maicie/src/telemetry.rs` ; test `plugins/maicie/tests/contract/telemetry.rs` imposant objective_id/message_id/source/fraîcheur et excluant les corps de messages par défaut.
 
 **Checkpoint** : le crash entre acceptation et retour Bridget ne peut pas créer
 de délégation doublon.
@@ -41,7 +41,7 @@ de délégation doublon.
 et garder tout message direct hors de l'état Maicie.
 
 - [ ] T010 [US1] Implémenter le cas d'usage dans `plugins/maicie/src/app.rs` : cible explicite, ou unique agent dont les tags sont égaux ; sinon liste de candidats sans choix ; contrat `plugins/maicie/tests/contract/delegate.rs` avec DND, absence et ambiguïté.
-- [ ] T011 [US1] Exposer `maicie delegate` et son JSON dans `plugins/maicie/src/main.rs`, conforme à `specs/011-maicie-orchestration/contracts/maicie-cli-et-frontiere-bridget.md` ; test `plugins/maicie/tests/integration/cli_delegate.rs` avec message_id présent avant I/O.
+- [ ] T011 [US1] Exposer `maicie delegate` et son JSON dans `plugins/maicie/src/main.rs`, conforme à `specs/011-maicie-orchestration/contracts/maicie-cli-et-frontiere-bridget.md` ; test `plugins/maicie/tests/integration/cli_delegate.rs` avec message_id présent avant I/O. **[Amendement R7 : option --idempotency-key K — même K = même objectif/délégation rejoués, jamais de doublon ; cf. conditions-agent-conversationnel.md]**
 - [ ] T012 [US1] Exposer `status`, `add-participant`, `remove-participant`, `summarize` et `close` dans `plugins/maicie/src/main.rs` et `plugins/maicie/src/app.rs` ; `summarize` agrège les réponses corrélées sans modèle ; tests `plugins/maicie/tests/integration/cli_objective.rs`.
 - [ ] T013 [US1] Ajouter le garde-fou dans `plugins/maicie/src/app.rs` : aucun message direct Bridget non adressé à Maicie ne crée ou modifie un objectif ; test négatif `plugins/maicie/tests/integration/direct_message_isolation.rs`.
 - [ ] T014 [US1] Traiter tout message libre adressé à Maicie dans `plugins/maicie/src/app.rs` comme enregistrement/affichage immuable et réponse d'aide CLI structurée ; test `plugins/maicie/tests/integration/maicie_confirmation.rs` : aucune détection d'intention ni mutation, seul `maicie delegate`/confirmation CLI crée un objectif.
