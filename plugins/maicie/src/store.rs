@@ -685,18 +685,9 @@ impl MaicieStore {
         tx.commit().map_err(StoreError::Sql)
     }
 
-    /// Persiste un refus local déterministe. Le payload fermé permet au
-    /// reconciliateur de prouver pourquoi aucun octet n'a été remis à Bridget.
-    pub fn record_local_failure(
-        &mut self,
-        message_id: Uuid,
-        reason: LocalFailureReason,
-    ) -> Result<(), StoreError> {
-        self.record_local_failure_inner(message_id, reason, None)
-    }
-
-    /// Variante de réconciliation : l'heure d'observation rend possible la
-    /// transition coordonnée sans jamais inventer une horloge locale.
+    /// Persiste un refus local déterministe observé. Le payload fermé permet
+    /// au réconciliateur de prouver pourquoi aucun octet n'a été remis à
+    /// Bridget, puis de coordonner l'objectif dans la même transaction.
     pub fn record_local_failure_at(
         &mut self,
         message_id: Uuid,
@@ -706,15 +697,6 @@ impl MaicieStore {
         if observed_at <= 0 {
             return Err(StoreError::Invalid("observed_at invalide"));
         }
-        self.record_local_failure_inner(message_id, reason, Some(observed_at))
-    }
-
-    fn record_local_failure_inner(
-        &mut self,
-        message_id: Uuid,
-        reason: LocalFailureReason,
-        observed_at: Option<i64>,
-    ) -> Result<(), StoreError> {
         let issue_bytes =
             serde_json::to_vec(&json!({"local": reason.as_str()})).map_err(StoreError::Json)?;
         let tx = self.connection.transaction().map_err(StoreError::Sql)?;
@@ -732,9 +714,7 @@ impl MaicieStore {
         };
         if current_terminal == 1 {
             if current_issue.as_deref() == Some(issue_bytes.as_slice()) {
-                if let Some(observed_at) = observed_at {
-                    coordinate_local_failure(&tx, message_id, reason, observed_at)?;
-                }
+                coordinate_local_failure(&tx, message_id, reason, observed_at)?;
                 tx.commit().map_err(StoreError::Sql)?;
                 return Ok(());
             }
@@ -759,9 +739,7 @@ impl MaicieStore {
                 "outbox modifiée concurremment pendant le rejet local",
             ));
         }
-        if let Some(observed_at) = observed_at {
-            coordinate_local_failure(&tx, message_id, reason, observed_at)?;
-        }
+        coordinate_local_failure(&tx, message_id, reason, observed_at)?;
         tx.commit().map_err(StoreError::Sql)
     }
 

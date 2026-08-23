@@ -113,12 +113,33 @@ fn enveloppe_locale_corrompue_devient_un_rejet_terminal_et_n_est_jamais_reprise(
         }]
     );
     store
-        .record_local_failure(uuid(MESSAGE_ID), LocalFailureReason::InvalidEnvelope)
+        .record_local_failure_at(
+            uuid(MESSAGE_ID),
+            LocalFailureReason::InvalidEnvelope,
+            1_010,
+        )
         .unwrap();
     store
-        .record_local_failure(uuid(MESSAGE_ID), LocalFailureReason::InvalidEnvelope)
+        .record_local_failure_at(
+            uuid(MESSAGE_ID),
+            LocalFailureReason::InvalidEnvelope,
+            1_010,
+        )
         .unwrap();
     assert!(store.delegation_recovery_entries().unwrap().is_empty());
+    let snapshots = store.objective_snapshots(Some(objective_id)).unwrap();
+    assert_eq!(snapshots[0].objective.etat, EtatObjectif::AEvaluer);
+    assert_eq!(snapshots[0].delegations[0].etat, EtatDelegation::AEvaluer);
+    assert_eq!(snapshots[0].decisions.len(), 1);
+    assert_eq!(snapshots[0].decisions[0].id, uuid(MESSAGE_ID));
+    assert_eq!(
+        snapshots[0].decisions[0].kind,
+        maicie::domain::TypeDecision::ConstaterIssue
+    );
+    assert_eq!(
+        snapshots[0].decisions[0].etat,
+        maicie::domain::EtatDecision::Appliquee
+    );
     drop(store);
 
     let connection = rusqlite::Connection::open(&database).unwrap();
