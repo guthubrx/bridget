@@ -100,3 +100,31 @@ résident v2 ; toute hausse future du nombre d'équipiers ou de la charge devra
 La performance ne justifie pas de runtime résident : le runtime v2 ne pourra
 être justifié que par la boucle de réponse et une identité Maicie joignable,
 conclusion de T015b, jamais par SC-008.
+
+## T025 — recette et non-régression totale (2026-08-23)
+
+Validation exécutée depuis un worktree isolé à la tête `0fa7f0c` :
+`/tmp/bridget-t025-0fa7`. Le gate réel a utilisé
+`/tmp/bridget-t025-0fa7/target/debug/bridget` et a réussi en 1,77 s ; la
+remise attestée, le statut puis la clôture CLI ont été obtenus en 1 538 ms et
+1 543 ms respectivement.
+
+- Scénario 1 : `cargo test -p maicie --test mvp_gate -- --ignored --nocapture`
+  avec `BRIDGET_MVP_GATE_BIN` a exercé le daemon, l'équipier ACP et les
+  commandes `maicie delegate`, `status` et `objective close`. Les contrôles
+  complémentaires `direct_message_isolation` (1/1),
+  `delegation_outcomes_integration` (5/5), `cli_delegate_integration` (3/3)
+  et `cli_objective_integration` (1/1) ont confirmé l'isolation du message
+  direct, l'état `à_évaluer` sur issue terminale et les projections CLI.
+- Scénario 2 : `ack_lost_recovery_integration` 11/11 vert en 0,21 s, dont les
+  trois crashs réels, le lookup/replay exact et l'absence de double envoi.
+- Scénario 3 : `status_sources_integration` 3/3 vert en 0,43 s : source,
+  séquence, permission constatée et `Gap` restent factuels.
+- Scénario 4 : `duration_timeout_contract` 1/1 vert en 0,01 s : les trois
+  timeouts sont persistés sans timer ou relance locale.
+- Le scénario 5 reste API/test-only comme l'indique le quickstart ; il n'a pas
+  été présenté comme une recette CLI.
+
+La non-régression complète a passé : `cargo test --workspace -q` (code de
+sortie 0, environ 159 s ; les gates manuels documentés restent ignorés) puis
+`cargo clippy --all-targets -- -D warnings` (code de sortie 0, 6,71 s).
