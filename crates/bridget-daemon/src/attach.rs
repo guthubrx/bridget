@@ -994,7 +994,9 @@ impl BlockRenderer {
             return;
         }
         match event {
-            AttachEvent::Journal { bytes, .. } => self.render_journal(bytes, input, output),
+            AttachEvent::Journal { bytes, live, .. } => {
+                self.render_journal(bytes, *live, input, output)
+            }
             AttachEvent::SnapshotCaughtUp { .. } if self.current.is_some() => {
                 let marker = render_attach_event(event, &self.agent);
                 if let Some(block) = self.current.as_mut() {
@@ -1012,7 +1014,7 @@ impl BlockRenderer {
         }
     }
 
-    fn render_journal(&mut self, bytes: &[u8], input: &str, output: &mut impl Write) {
+    fn render_journal(&mut self, bytes: &[u8], live: bool, input: &str, output: &mut impl Write) {
         let Some(record) = journal_render_record(bytes, &self.agent) else {
             self.flush_incomplete(input, output);
             self.emit_standalone(&render_journal_event(bytes, &self.agent), input, output);
@@ -1034,7 +1036,9 @@ impl BlockRenderer {
             self.current = Some(TurnBlock::new(key.clone(), header));
         }
         if record.event == "turn_start" {
-            self.redraw(input, output);
+            if live {
+                self.redraw(input, output);
+            }
             return;
         }
         if let Some(block) = self.current.as_mut() {
@@ -1046,7 +1050,7 @@ impl BlockRenderer {
         }
         if record.event == "turn_end" || record.terminal {
             self.flush_complete(input, output);
-        } else {
+        } else if live {
             self.redraw(input, output);
         }
     }
@@ -2149,6 +2153,60 @@ mod tests {
         assert!(output.contains("Réponse live"));
         assert!(output.contains("historique rattrapé jusqu’à 1"));
         assert!(output.contains("tour terminé : end_turn"));
+    }
+
+    #[test]
+    fn rattrapage_tty_n_ecrit_chaque_bloc_qu_a_sa_cloture() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), false, true);
+        let mut output = Vec::new();
+        let fixture = include_str!("../tests/fixtures/attach-replay-compact.jsonl");
+
+        for line in fixture.lines() {
+            let value: serde_json::Value = serde_json::from_str(line).unwrap();
+            let before = output.len();
+            renderer.apply(
+                RendererCommand::Event(AttachEvent::Journal {
+                    seq: value["seq"].as_u64().unwrap(),
+                    bytes: line.as_bytes().to_vec(),
+                    live: false,
+                }),
+                &input,
+                &mut output,
+            );
+            if value["event"] == "turn_end" {
+                assert!(output.len() > before, "le bloc clos doit être rendu");
+                assert!(renderer.current.is_none());
+            } else {
+                assert_eq!(
+                    output.len(),
+                    before,
+                    "le rejeu ne doit pas redessiner un tour encore ouvert"
+                );
+            }
+        }
+
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::SnapshotCaughtUp {
+                through_seq: Some(7),
+            }),
+            &input,
+            &mut output,
+        );
+        let output = String::from_utf8(output).unwrap();
+        for expected in [
+            "Premier tour",
+            "réponse compacte",
+            "Second tour",
+            "déjà clos",
+            "historique rattrapé jusqu’à 7",
+        ] {
+            assert_eq!(
+                output.matches(expected).count(),
+                1,
+                "sortie compacte manquante ou dupliquée : {expected}"
+            );
+        }
     }
 
     #[test]
