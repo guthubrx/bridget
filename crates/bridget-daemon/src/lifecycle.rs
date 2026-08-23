@@ -12,7 +12,7 @@ use crate::idempotency::SpawnCommandIssue;
 use crate::registry::{
     AgentDefinition, AgentRegistry, allow_api_key_value, forbidden_environment_variable,
 };
-use bridget_transport::SpawnRefusal;
+use bridget_transport::{ResolvedAgentDefinition, SpawnRefusal};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
@@ -29,6 +29,7 @@ pub struct PreparedSpawn {
     pub agent_type: String,
     pub command: String,
     pub args: Vec<String>,
+    pub resolved_definition: Box<ResolvedAgentDefinition>,
     pub cwd: PathBuf,
     pub env: SourceEnvironment,
 }
@@ -37,7 +38,7 @@ pub struct PreparedSpawn {
 pub enum SpawnDecision {
     Ready(PreparedSpawn),
     Await(SpawnWaiter),
-    Accepted { name: String },
+    Accepted { name: String, definition: Option<ResolvedAgentDefinition> },
     Rejected(SpawnRefusal),
     EnvelopeMismatch,
 }
@@ -72,7 +73,7 @@ pub fn submit_spawn(
                     return Ok(SpawnDecision::Rejected(reason));
                 }
             };
-            supervisor.mark_starting(&lease, now)?;
+            supervisor.mark_starting(&lease, now, &prepared.resolved_definition)?;
             Ok(SpawnDecision::Ready(prepared))
         }
         SpawnSubmission::Await(waiter) => Ok(SpawnDecision::Await(waiter)),
@@ -151,6 +152,11 @@ fn prepare_spawn_parts(
         agent_type: agent_type.to_string(),
         command: definition.command.clone(),
         args: definition.args.clone(),
+        resolved_definition: Box::new(
+            registry
+                .resolved_definition(agent_type)
+                .map_err(|detail| SpawnRefusal::NegotiationFailed { detail })?,
+        ),
         cwd: cwd.to_path_buf(),
         env,
     })
@@ -227,7 +233,9 @@ fn refusal_record(reason: &SpawnRefusal) -> (&'static str, String) {
 
 fn decision_from_issue(issue: SpawnCommandIssue, quota: usize) -> SpawnDecision {
     match issue {
-        SpawnCommandIssue::Connected { name, .. } => SpawnDecision::Accepted { name },
+        SpawnCommandIssue::Connected { name, definition, .. } => {
+            SpawnDecision::Accepted { name, definition }
+        }
         SpawnCommandIssue::Cancelled { reason } if reason == "spawn_timeout" => {
             SpawnDecision::Rejected(SpawnRefusal::SpawnTimeout)
         }

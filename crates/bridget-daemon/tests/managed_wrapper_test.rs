@@ -41,6 +41,7 @@ fn wrapper_claude_gere_annonce_un_register_acp_complet() {
         r#"{"agents":{"claude":{"command":"/adaptateur/t906-absent","protocol":"acp","permissions":"allow","queue_capacity":2,"notify_timeout_secs":1}}}"#,
     )
     .unwrap();
+    fs::set_permissions(&registry, fs::Permissions::from_mode(0o600)).unwrap();
     let listener = UnixListener::bind(&socket).unwrap();
     let (register_tx, register_rx) = mpsc::channel();
     let (accept_tx, accept_rx) = mpsc::channel();
@@ -194,6 +195,7 @@ while :; do :; done
         .unwrap(),
     )
     .unwrap();
+    fs::set_permissions(&registry, fs::Permissions::from_mode(0o600)).unwrap();
     let listener = UnixListener::bind(&socket).unwrap();
     let (registered_tx, registered_rx) = mpsc::channel();
     let (disconnect_tx, disconnect_rx) = mpsc::channel();

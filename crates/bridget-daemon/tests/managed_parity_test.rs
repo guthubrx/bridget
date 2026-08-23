@@ -103,6 +103,11 @@ for line in sys.stdin:
         serde_json::to_vec_pretty(&registry).unwrap(),
     )
     .unwrap();
+    fs::set_permissions(
+        root.join(".config/bridget/agents.json"),
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
     adapter
 }
 
@@ -396,7 +401,8 @@ fn write_cached_npx_fixture(root: &Path) {
     registry["agents"]["parity"]["command"] = serde_json::json!("npx");
     registry["agents"]["parity"]["args"] =
         serde_json::json!(["--offline", "--no-install", "parity-acp"]);
-    fs::write(registry_path, serde_json::to_vec_pretty(&registry).unwrap()).unwrap();
+    fs::write(&registry_path, serde_json::to_vec_pretty(&registry).unwrap()).unwrap();
+    fs::set_permissions(&registry_path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
 struct DaemonProcess {

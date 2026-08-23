@@ -414,6 +414,15 @@ impl std::fmt::Display for RuntimeSource {
 }
 
 /// Messages envoyés par le daemon vers le wrapper.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolvedAgentDefinition {
+    pub command: String,
+    pub args: Vec<String>,
+    pub forbidden_env: Vec<String>,
+    /// SHA-256 hexadécimal des trois champs précédents sérialisés en JSON.
+    pub digest: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
@@ -435,7 +444,13 @@ pub enum DaemonToWrapper {
         issue: IdempotencyIssue,
     },
     /// Succès d'un spawn, émis seulement après le `Register` réel.
-    SpawnAccepted { command_id: String, name: String },
+    SpawnAccepted {
+        command_id: String,
+        name: String,
+        /// `None` n'est toléré que pour le rejeu d'une issue créée avant la
+        /// migration du registre résolu ; tout nouveau spawn fournit `Some`.
+        definition: Option<ResolvedAgentDefinition>,
+    },
     /// Refus terminal et rejouable d'un spawn.
     SpawnRejected {
         command_id: String,
@@ -1099,6 +1114,37 @@ mod tests {
             assert_eq!(json, encode(&decoded).unwrap());
             assert_eq!(decoded.allowed_for_attach(), reaches_attach);
         }
+    }
+
+    #[test]
+    fn spawn_accepted_transporte_la_definition_resolue_complete() {
+        let message = DaemonToWrapper::SpawnAccepted {
+            command_id: "command-1".to_string(),
+            name: "reviewer".to_string(),
+            definition: Some(ResolvedAgentDefinition {
+                command: "npx".to_string(),
+                args: vec!["adapter@1.2.3".to_string()],
+                forbidden_env: vec!["API_KEY".to_string()],
+                digest: "a".repeat(64),
+            }),
+        };
+        let json = encode(&message).unwrap();
+        let decoded = decode::<DaemonToWrapper>(&json).unwrap();
+        assert!(matches!(
+            decoded,
+            DaemonToWrapper::SpawnAccepted { definition: Some(definition), .. }
+                if definition.command == "npx"
+                    && definition.args == ["adapter@1.2.3"]
+                    && definition.forbidden_env == ["API_KEY"]
+                    && definition.digest == "a".repeat(64)
+        ));
+        assert!(matches!(
+            decode::<DaemonToWrapper>(
+                r#"{"type":"SpawnAccepted","command_id":"legacy","name":"ancien"}"#
+            )
+            .unwrap(),
+            DaemonToWrapper::SpawnAccepted { definition: None, .. }
+        ));
     }
 
     #[test]

@@ -2235,6 +2235,12 @@ mod hook_tests {
                     encode(&DaemonToWrapper::SpawnAccepted {
                         command_id: "command-lost".to_string(),
                         name: "codex-managed".to_string(),
+                        definition: Some(bridget_transport::ResolvedAgentDefinition {
+                            command: "npx".to_string(),
+                            args: vec!["fixture-acp".to_string()],
+                            forbidden_env: vec!["OPENAI_API_KEY".to_string()],
+                            digest: "fixture-digest".to_string(),
+                        }),
                     })
                     .unwrap()
                 )
@@ -2255,7 +2261,7 @@ mod hook_tests {
         for _ in 0..2 {
             assert!(matches!(
                 send_control_to_daemon_at(&socket, order.clone()).unwrap(),
-                DaemonToWrapper::SpawnAccepted { ref command_id, ref name }
+                DaemonToWrapper::SpawnAccepted { ref command_id, ref name, .. }
                     if command_id == "command-lost" && name == "codex-managed"
             ));
         }

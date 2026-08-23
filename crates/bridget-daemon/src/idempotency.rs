@@ -4,6 +4,7 @@
 //! propriétaire de la clé, des octets canoniques, de l'échéance et du résultat
 //! public d'une opération idempotente.
 
+use bridget_transport::ResolvedAgentDefinition;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::path::Path;
 
@@ -179,6 +180,7 @@ pub enum SpawnCommandIssue {
         name: String,
         generation: u64,
         instance_id: String,
+        definition: Option<ResolvedAgentDefinition>,
     },
     Failed {
         category: String,
@@ -201,6 +203,7 @@ pub struct SpawnCommand {
     pub deadline_at: i64,
     pub expires_at: i64,
     pub issue: Option<SpawnCommandIssue>,
+    pub resolved_definition: Option<ResolvedAgentDefinition>,
 }
 
 /// Résultat atomique de la réservation socle + saga.
@@ -355,6 +358,7 @@ impl IdempotencyStore {
                 issue_kind TEXT CHECK (issue_kind IN ('connected', 'failed', 'cancelled')),
                 issue_category TEXT,
                 issue_reason TEXT,
+                resolved_definition_json TEXT,
                 PRIMARY KEY (issuer_scope, operation_kind, command_id),
                 FOREIGN KEY (issuer_scope, operation_kind, command_id)
                     REFERENCES idempotency_records(issuer_scope, operation_kind, idempotency_key)
@@ -403,6 +407,29 @@ impl IdempotencyStore {
             )?;
             tx.execute(
                 "INSERT INTO idempotency_schema_migrations(version) VALUES (2)",
+                [],
+            )?;
+        }
+        let definition_migration_applied = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 3)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !definition_migration_applied {
+            let has_definition = tx
+                .prepare("PRAGMA table_info(spawn_commands)")?
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?
+                .iter()
+                .any(|column| column == "resolved_definition_json");
+            if !has_definition {
+                tx.execute(
+                    "ALTER TABLE spawn_commands ADD COLUMN resolved_definition_json TEXT",
+                    [],
+                )?;
+            }
+            tx.execute(
+                "INSERT INTO idempotency_schema_migrations(version) VALUES (3)",
                 [],
             )?;
         }
@@ -576,6 +603,7 @@ impl IdempotencyStore {
             deadline_at,
             expires_at,
             issue: None,
+            resolved_definition: None,
         }))
     }
 
@@ -630,6 +658,38 @@ impl IdempotencyStore {
         Ok(())
     }
 
+    pub fn advance_spawn_with_definition(
+        &mut self,
+        key: &IdempotencyKey,
+        generation: u64,
+        from: SpawnCommandState,
+        to: SpawnCommandState,
+        definition: &ResolvedAgentDefinition,
+    ) -> Result<(), IdempotencyError> {
+        if key.operation_kind != OperationKind::Spawn
+            || (from, to) != (SpawnCommandState::Reserved, SpawnCommandState::Starting)
+        {
+            return Err(IdempotencyError::InvalidSpawnCommand);
+        }
+        let definition_json = serde_json::to_string(definition)
+            .map_err(|_| IdempotencyError::InvalidSpawnCommand)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let updated = tx.execute(
+            "UPDATE spawn_commands
+             SET state = 'starting', resolved_definition_json = ?1
+             WHERE issuer_scope = ?2 AND operation_kind = 'spawn'
+               AND command_id = ?3 AND generation = ?4 AND state = 'reserved'",
+            params![definition_json, key.issuer_scope, key.idempotency_key, generation],
+        )?;
+        if updated != 1 {
+            return Err(IdempotencyError::DispatchUnavailable);
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Finalise ensemble la saga et le résultat public du socle.
     pub fn finish_spawn(
         &mut self,
@@ -645,6 +705,7 @@ impl IdempotencyStore {
                 name: _,
                 generation: issue_generation,
                 instance_id,
+                definition: _,
             } if *issue_generation == generation && !instance_id.is_empty() => (
                 SpawnCommandState::Connected,
                 "connected",
@@ -730,7 +791,7 @@ impl IdempotencyStore {
         let mut statement = self.conn.prepare(
             "SELECT command_id, name, generation, persistent, state,
                     instance_id, deadline_at, expires_at,
-                    issue_kind, issue_category, issue_reason
+                    issue_kind, issue_category, issue_reason, resolved_definition_json
              FROM spawn_commands WHERE issuer_scope = ?1 AND operation_kind = 'spawn'
              ORDER BY generation, command_id",
         )?;
@@ -1167,7 +1228,7 @@ fn load_spawn_command_from(
     conn.query_row(
         "SELECT command_id, name, generation, persistent, state,
                 instance_id, deadline_at, expires_at,
-                issue_kind, issue_category, issue_reason
+                issue_kind, issue_category, issue_reason, resolved_definition_json
          FROM spawn_commands
          WHERE issuer_scope = ?1 AND operation_kind = 'spawn' AND command_id = ?2",
         params![key.issuer_scope, key.idempotency_key],
@@ -1189,6 +1250,16 @@ fn spawn_command_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SpawnComm
     let issue_kind: Option<String> = row.get(8)?;
     let issue_category: Option<String> = row.get(9)?;
     let issue_reason: Option<String> = row.get(10)?;
+    let resolved_definition = row
+        .get::<_, Option<String>>(11)?
+        .map(|json| {
+            serde_json::from_str::<ResolvedAgentDefinition>(&json).map_err(|_| {
+                to_sql_error(IdempotencyError::CorruptRecord(
+                    "définition résolue du spawn invalide",
+                ))
+            })
+        })
+        .transpose()?;
     let issue = match issue_kind.as_deref() {
         None if !state.is_terminal() => None,
         Some("connected") if state == SpawnCommandState::Connected => {
@@ -1200,6 +1271,7 @@ fn spawn_command_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SpawnComm
                         "instance spawn connectée absente",
                     ))
                 })?,
+                definition: resolved_definition.clone(),
             })
         }
         Some("failed") if state == SpawnCommandState::Failed => Some(SpawnCommandIssue::Failed {
@@ -1235,6 +1307,7 @@ fn spawn_command_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SpawnComm
         deadline_at,
         expires_at,
         issue,
+        resolved_definition,
     })
 }
 
@@ -1346,6 +1419,51 @@ mod tests {
 
     fn reserve(store: &IdempotencyStore, bytes: &[u8]) -> Reservation {
         store.reserve(&key(), bytes, NOW, HORIZON, NOW, 30).unwrap()
+    }
+
+    #[test]
+    fn migration_v3_ajoute_la_definition_resolue_aux_sagas_existantes() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-idempotency-definition-migration-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        {
+            let legacy = Connection::open(&path).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE idempotency_schema_migrations (version INTEGER PRIMARY KEY);
+                     INSERT INTO idempotency_schema_migrations(version) VALUES (2);
+                     CREATE TABLE spawn_commands (
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL,
+                        command_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        generation INTEGER NOT NULL,
+                        persistent INTEGER NOT NULL,
+                        state TEXT NOT NULL,
+                        instance_id TEXT,
+                        deadline_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        issue_kind TEXT,
+                        issue_category TEXT,
+                        issue_reason TEXT,
+                        PRIMARY KEY (issuer_scope, operation_kind, command_id)
+                     );",
+                )
+                .unwrap();
+        }
+        let store = IdempotencyStore::open(&path).unwrap();
+        let columns = store
+            .conn
+            .prepare("PRAGMA table_info(spawn_commands)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(columns.iter().any(|column| column == "resolved_definition_json"));
+        drop(store);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

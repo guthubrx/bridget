@@ -359,6 +359,7 @@ enum ManagedSupervisorEvent {
     Connected {
         lease: SpawnLease,
         conn_id: String,
+        definition: bridget_transport::ResolvedAgentDefinition,
     },
     Failed {
         lease: SpawnLease,
@@ -1308,6 +1309,7 @@ fn poll_managed_processes(
                     let _ = events.send(ManagedSupervisorEvent::Connected {
                         lease: process.prepared.lease.clone(),
                         conn_id,
+                        definition: (*process.prepared.resolved_definition).clone(),
                     });
                 }
                 Err(error) => {
@@ -1338,7 +1340,7 @@ fn drain_managed_events(
         {
             let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
             match event {
-                ManagedSupervisorEvent::Connected { lease, conn_id } => {
+                ManagedSupervisorEvent::Connected { lease, conn_id, definition } => {
                     if let Some(record) = st.managed_spawns.get_mut(&lease.command_id) {
                         record.wrapper_conn = Some(conn_id);
                         let requesters = std::mem::take(&mut record.requester_conns);
@@ -1349,6 +1351,7 @@ fn drain_managed_events(
                                 DaemonToWrapper::SpawnAccepted {
                                     command_id: lease.command_id.clone(),
                                     name: lease.name.clone(),
+                                    definition: Some(definition.clone()),
                                 },
                                 &mut controls,
                             );
@@ -3654,8 +3657,8 @@ fn handle_wrapper_message(
                     }
                     None
                 }
-                Ok(SpawnDecision::Accepted { name }) => {
-                    Some(DaemonToWrapper::SpawnAccepted { command_id, name })
+                Ok(SpawnDecision::Accepted { name, definition }) => {
+                    Some(DaemonToWrapper::SpawnAccepted { command_id, name, definition })
                 }
                 Ok(SpawnDecision::Rejected(reason)) => {
                     Some(DaemonToWrapper::SpawnRejected { command_id, reason })
@@ -5007,7 +5010,13 @@ mod presence_tests {
             crate::fleet::SpawnSubmission::Start(lease) => lease,
             other => panic!("réservation persistante attendue: {other:?}"),
         };
-        state.fleet.mark_starting(&lease, now).unwrap();
+        let definition = bridget_transport::ResolvedAgentDefinition {
+            command: "/bin/sh".to_string(),
+            args: Vec::new(),
+            forbidden_env: Vec::new(),
+            digest: "fixture-digest".to_string(),
+        };
+        state.fleet.mark_starting(&lease, now, &definition).unwrap();
         state
             .fleet
             .register_connected(&lease, &lease.instance_id, now + 1)
@@ -5371,12 +5380,16 @@ mod presence_tests {
             .unwrap(),
         )
         .unwrap();
+        std::fs::set_permissions(
+            &registry_path,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
 
         let mut first_daemon = spawn_recovery_daemon(&root);
         wait_daemon_socket(&config.socket_path);
         let now = unix_timestamp();
-        assert!(matches!(
-            daemon_request(
+        let accepted = daemon_request(
                 &config.socket_path,
                 WrapperToDaemon::SpawnOrder {
                     agent_type: "fixture".to_string(),
@@ -5387,8 +5400,15 @@ mod presence_tests {
                     issued_at: now,
                     deadline_at: now + 20,
                 }
-            ),
-            DaemonToWrapper::SpawnAccepted { ref name, .. } if name == "persistent-one"
+            );
+        assert!(matches!(
+            accepted,
+            DaemonToWrapper::SpawnAccepted { ref name, definition: Some(ref definition), .. }
+                if name == "persistent-one"
+                    && definition.command == adapter.to_string_lossy()
+                    && definition.args.is_empty()
+                    && definition.forbidden_env.is_empty()
+                    && definition.digest.len() == 64
         ));
         let marker_store =
             ManagedMarkerStore::at_directory(config.db_path.parent().unwrap().join("managed"));
@@ -7681,7 +7701,13 @@ mod presence_tests {
             crate::fleet::SpawnSubmission::Start(lease) => lease,
             other => panic!("spawn de test non démarré: {other:?}"),
         };
-        state.fleet.mark_starting(&lease, now).unwrap();
+        let definition = bridget_transport::ResolvedAgentDefinition {
+            command: "/bin/sh".to_string(),
+            args: Vec::new(),
+            forbidden_env: Vec::new(),
+            digest: "fixture-digest".to_string(),
+        };
+        state.fleet.mark_starting(&lease, now, &definition).unwrap();
         if connected {
             state
                 .fleet
@@ -7722,6 +7748,12 @@ mod presence_tests {
             agent_type: "fixture".to_string(),
             command: "/bin/sh".to_string(),
             args: Vec::new(),
+            resolved_definition: Box::new(bridget_transport::ResolvedAgentDefinition {
+                command: "/bin/sh".to_string(),
+                args: Vec::new(),
+                forbidden_env: Vec::new(),
+                digest: "fixture-digest".to_string(),
+            }),
             cwd: root.to_path_buf(),
             env: BTreeMap::from([
                 ("HOME".to_string(), root.as_os_str().to_owned()),
@@ -8153,6 +8185,11 @@ mod presence_tests {
             .unwrap(),
         )
         .unwrap();
+        std::fs::set_permissions(
+            &registry_path,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
         let config = DaemonConfig {
             socket_path: cache.join("bridget.sock"),
             db_path: cache.join("bridget.db"),
@@ -8422,6 +8459,12 @@ mod presence_tests {
             agent_type: "fixture".to_string(),
             command: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), "exit 7".to_string()],
+            resolved_definition: Box::new(bridget_transport::ResolvedAgentDefinition {
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), "exit 7".to_string()],
+                forbidden_env: Vec::new(),
+                digest: "fixture-digest".to_string(),
+            }),
             cwd: process_root.clone(),
             env: std::collections::BTreeMap::new(),
         };
