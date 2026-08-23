@@ -2,7 +2,7 @@
 
 **Feature Branch**: `session-10-mcp` (ordre d'implémentation inchangé : après 008 et 009 ; cette spec est anticipée pendant le développement 007)
 **Created**: 2026-08-22
-**Status**: Draft — en attente de contre-revue adverse
+**Status**: Clôturée — implémentée, revue et mergée (8/8)
 **Input**: User description: « pendant que l'ACP se développe, spécifier la voie MCP : que les agents disposent de bridget_send / bridget_who / bridget_ledger comme outils natifs, à la place des commandes shell et des règles de prompt. »
 
 ## Contexte et problème

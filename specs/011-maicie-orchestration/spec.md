@@ -2,7 +2,7 @@
 
 **Feature Branch**: `session-11-maicie-orchestration` (à créer avant toute implémentation)  
 **Created**: 2026-08-22  
-**Status**: Planifiée — implémentation explicitement exclue de cette session  
+**Status**: Clôturée — 26/26, revue hostile finale MERGEABLE, mergée le 2026-08-23
 **Input**: Construire, au-dessus de Bridget et sans reprendre Maicie historique,
 une couche d'orchestration légère. Maicie doit pouvoir coordonner une délégation
 complète tout en laissant l'utilisateur converser directement avec les agents.

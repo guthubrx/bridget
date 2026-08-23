@@ -2,7 +2,7 @@
 
 **Feature Branch**: `session-08-attach` (à créer depuis `session-07-transport-acp` — pas de merge dans `main` sans validation utilisateur)
 **Created**: 2026-08-22
-**Status**: Draft — en attente de contre-revue adverse
+**Status**: Clôturée — implémentée, revue et mergée
 **Input**: User description: « un équipier headless doit rester observable et pilotable : je veux voir ce que racontent les agents et leur parler individuellement, comme dans un pane tmux, sans réintroduire le terminal simulé. »
 
 ## Contexte et problème

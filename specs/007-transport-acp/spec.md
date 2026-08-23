@@ -2,7 +2,7 @@
 
 **Feature Branch**: `session-07-transport-acp` (à créer au démarrage de l'implémentation)
 **Created**: 2026-08-22
-**Status**: Draft
+**Status**: Clôturée — transport ACP livré, revu et mergé ; socle des sessions 008-013
 **Input**: User description: "Remplacer l'artifice d'injection terminal (💬 + règles de prompt) par une livraison structurée des messages via l'Agent Client Protocol, pour les agents équipiers headless. Priorité Codex, puis Claude, puis Gemini. Ouvert à l'ajout d'autres agents a posteriori sans modification de code."
 
 ## Contexte et problème

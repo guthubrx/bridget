@@ -1,5 +1,7 @@
 # Spec 013 — Vue attach lisible (TUI léger)
 
+**Status**: Clôturée — implémentée, revue (11 constats fermés) et mergée le 2026-08-23
+
 **Origine** : retour utilisateur du 2026-08-23 — le streaming ligne-par-token
 est illisible ; attendu : la grammaire visuelle des assistants CLI (bloc qui
 se construit en place, tours séparés, outils étiquetés), sans devenir une

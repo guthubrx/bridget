@@ -123,19 +123,19 @@ push ; tests de crash RÉELS (processus tués), jamais simulés.
   la même fixture dans les deux modes.
   **Observable** : matrice versionnée au vert, chiffres consignés.
 
-- [ ] **T909b** Banc SC-001 réel : 20 spawns en environnement gelé et
+- [x] **T909b** Banc SC-001 réel : 20 spawns en environnement gelé et
   consigné, p95 < 10 s avec timeout global, **fermeture réelle du terminal
   donneur d'ordre**, puis 20/20 échanges suivis complets.
   **Observable** : chiffres consignés, banc reproductible.
 
-- [ ] **T910** Persistance bout-en-bout : `--persistent`, cycles SC-005 (3×
+- [x] **T910** Persistance bout-en-bout : `--persistent`, cycles SC-005 (3×
   redémarrage coopératif : persistants 3/3, éphémères 0/3, stop exclut 3/3),
   arrêt coopératif SC-006 avec **N=3 groupes dont descendants `npx`**, liste
   des pgid comparée avant/après (falsifiable), et le cas **SIGKILL réel**
   (T908) rejoué dans la matrice finale SC-006.
   **Observable** : quickstart §4 automatisé, listes de pgid consignées.
 
-- [ ] **T911** Finition : README (« équipiers persistants »), DEPRECATIONS
+- [x] **T911** Finition : README (« équipiers persistants »), DEPRECATIONS
   relu, `implementation.md` avec SC-001..SC-006 pointés (SC-001 : N=20,
   p95<10 s), gate d'intégration des branches amont (008 finale + 012 socle)
   avant clôture.

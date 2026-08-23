@@ -3,7 +3,7 @@
 **Feature Branch**: `session-09-daemon-spawn` (après la 008 ; spec anticipée
 pendant son implémentation)
 **Created**: 2026-08-22
-**Status**: Draft — en attente de contre-revue adverse
+**Status**: Clôturée — implémentée, revue et mergée (12/12)
 **Input**: User description: « le daemon lance les équipiers lui-même : plus
 besoin d'un wrapper-processus ouvert dans un terminal ; les équipiers
 persistent, façon équipiers cloud, mais en local et sur mes abonnements. »

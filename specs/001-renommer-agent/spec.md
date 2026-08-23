@@ -2,7 +2,7 @@
 
 **Branche de fonctionnalité** : `session-01-renommage-agent-bridget`  
 **Créée le** : 2026-08-14  
-**Statut** : Brouillon  
+**Statut** : Implémentée (9/10) — reste T008 : tests de reprise après renommage et de non-persistance après refus
 **Entrée** : « Je voudrais que le protocole permette de renommer un agent »
 
 ## Scénarios utilisateur et tests *(obligatoire)*

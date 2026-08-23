@@ -4,7 +4,7 @@
 feuille de route **soumise à validation utilisateur** — spec préparée sur
 mandat de l'agent `prospective`, session 011 Maicie)
 **Created**: 2026-08-22
-**Status**: Draft — en attente de contre-revue adverse
+**Status**: Clôturée — contrat idempotent livré et en production (13/13)
 **Input**: exigences amont de `prospective` (011) consignées dans
 `exigences-amont.md` : un client externe doit pouvoir déléguer puis survivre à
 un crash ou à la perte d'un accusé **sans jamais émettre deux fois la même
