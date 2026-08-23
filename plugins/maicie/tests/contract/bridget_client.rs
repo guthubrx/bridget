@@ -429,6 +429,79 @@ fn timeout_empoisonne_la_connexion_et_interdit_de_lire_une_reponse_tardive() {
 }
 
 #[test]
+fn trame_tamponnee_apres_echeance_empoisonne_l_abonnement() {
+    let fixture = SocketFixture::new("buffered-deadline");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("connexion client attendue");
+        let (mut reader, mut writer) = split(stream);
+        assert_client_handshake(&mut reader, &mut writer);
+        let _hello = read_json(&mut reader);
+        write_welcome(&mut writer);
+
+        let (stream, _) = listener.accept().expect("connexion attach attendue");
+        let (mut reader, mut writer) = split(stream);
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type": "RoleHandshake", "role": "attach"})
+        );
+        write_json(
+            &mut writer,
+            json!({"type": "RoleAccepted", "role": "attach"}),
+        );
+        assert_eq!(read_json(&mut reader)["type"], "Subscribe");
+
+        let frames = [
+            serde_json::to_string(&json!({
+                "type": "SnapshotCaughtUp",
+                "subscription_id": "sub-buffered",
+                "through_seq": 7,
+            }))
+            .unwrap(),
+            serde_json::to_string(&json!({
+                "type": "End",
+                "subscription_id": "sub-buffered",
+                "reason": "fin",
+            }))
+            .unwrap(),
+        ]
+        .join("\n");
+        writer.write_all(frames.as_bytes()).unwrap();
+        writer.write_all(b"\n").unwrap();
+        writer.flush().unwrap();
+    });
+    let limits = BridgetClientLimits {
+        connect_timeout: Duration::from_secs(1),
+        io_timeout: Duration::from_secs(1),
+        max_frame_bytes: 1024,
+    };
+    let client =
+        BridgetClient::connect_with_limits(fixture.path(), "scope-client-012", limits).unwrap();
+    let mut subscription = client
+        .subscribe("prospective", AttachWindow::Today)
+        .unwrap();
+
+    assert!(matches!(
+        subscription
+            .next_event_until(std::time::Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        SubscriptionEvent::SnapshotCaughtUp { .. }
+    ));
+    assert!(matches!(
+        subscription.next_event_until(std::time::Instant::now() - Duration::from_millis(1)),
+        Err(BridgetClientError::Timeout {
+            operation: "lecture socket"
+        })
+    ));
+    assert!(matches!(
+        subscription.next_event_until(std::time::Instant::now() + Duration::from_secs(1)),
+        Err(BridgetClientError::ConnectionUnusable)
+    ));
+    drop(subscription);
+    server.join().expect("serveur termine");
+}
+
+#[test]
 fn daemon_goutte_a_goutte_ne_renouvelle_pas_le_budget_global_de_lecture() {
     let fixture = SocketFixture::new("drip-timeout");
     let listener = fixture.bind();

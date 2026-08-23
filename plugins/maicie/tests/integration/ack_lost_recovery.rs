@@ -419,10 +419,13 @@ fn reprise_lente_sur_toutes_les_phases_reste_dans_le_budget_global() {
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         let (mut reader, mut writer) = split(stream);
-        // Les trois premières réponses consomment 84 ms. Le replay ne peut
-        // donc attendre que le reliquat de l'échéance globale (16 ms) : sans
-        // propagation de l'échéance, il attendrait à nouveau 100 ms.
-        let phase_delay = Duration::from_millis(28);
+        // Les trois premières réponses consomment 60 ms. Le replay ne peut
+        // donc attendre que le reliquat de l'échéance globale (40 ms). Après
+        // le replay, le serveur garde explicitement la socket ouverte 100 ms :
+        // le client correct expire avant, tandis que la mutation
+        // `connect_with_limits_until` -> `connect_with_limits` réinitialise
+        // l'échéance et dépasse nécessairement la borne de 150 ms.
+        let phase_delay = Duration::from_millis(20);
 
         assert_eq!(
             read_json(&mut reader),
@@ -446,18 +449,15 @@ fn reprise_lente_sur_toutes_les_phases_reste_dans_le_budget_global() {
 
         assert_eq!(read_json(&mut reader)["type"], "Lookup");
         thread::sleep(phase_delay);
-        // À cette frontière, le client peut avoir consommé le budget global
-        // et fermé proprement avant cette réponse tardive. Le BrokenPipe est
-        // alors la preuve attendue de la borne, pas un échec du harnais.
-        if try_write_issue(&mut writer, json!({"kind":"idempotency_expired"})).is_err() {
-            return;
-        }
+        write_issue(&mut writer, json!({"kind":"idempotency_expired"}));
 
         let replay = read_line(&mut reader);
         assert!(replay.contains("\"type\":\"SendIdempotent\""));
         assert!(replay.contains(std::str::from_utf8(&expected_message).unwrap()));
-        // La cinquième opération atteint sa borne : aucune issue n'est écrite.
-        thread::sleep(Duration::from_millis(30));
+        // La cinquième opération atteint sa borne : aucune issue n'est écrite
+        // avant 150 ms. Cette attente rend le harnais discriminant contre
+        // l'absence de propagation de l'échéance absolue.
+        thread::sleep(Duration::from_millis(100));
     });
     let limits = BridgetClientLimits {
         connect_timeout: Duration::from_millis(100),
@@ -830,20 +830,6 @@ fn write_issue(writer: &mut BufWriter<UnixStream>, issue: Value) {
             "issue":issue
         }),
     );
-}
-
-fn try_write_issue(writer: &mut BufWriter<UnixStream>, issue: Value) -> std::io::Result<()> {
-    serde_json::to_writer(
-        &mut *writer,
-        &json!({
-            "type":"IdempotencyResult",
-            "operation_kind":"send",
-            "idempotency_key":MESSAGE_ID,
-            "issue":issue
-        }),
-    )?;
-    writer.write_all(b"\n")?;
-    writer.flush()
 }
 
 fn split(stream: UnixStream) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {

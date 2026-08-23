@@ -23,10 +23,13 @@ l'objectif à `a_evaluer` dans la transaction qui fige l'issue, avec une
 décision `constater_issue` et la transition de délégation correspondante. Une
 livraison `accepted` ne vaut ni réponse ni clôture.
 
-T015b est reportée à la phase 4 : avant toute évolution du protocole Bridget,
-T017/T018 doivent établir si Subscribe 008 et `in_reply_to` corrèlent les
-réponses et les timeouts de manière suffisamment fraîche, sans inférence
-locale ni seconde source de vérité.
+T015b a été instruite par T017 : **Subscribe 008 seul ne permet pas de
+corréler une réponse ni un timeout sans inférence locale**. Le journal public
+atteste le `message_id` du prompt traité, mais pas l'`in_reply_to` de la
+réponse émise ; le timeout est une issue de demande Bridget, non un fait ACP.
+La boucle complète exige donc une identité Maicie joignable et une surface
+publique Bridget de statut ou d'événements de demande corrélés. T018 affiche
+les faits disponibles sans combler ces deux absences.
 
 ## T019 — délais passifs
 
@@ -34,9 +37,21 @@ La classe configurée est projetée vers le timeout Bridget et l'échéance
 contractuelle immuable est affichée dans la sortie de délégation, y compris
 pour un rejeu idempotent. Cette échéance ne produit ni minuterie ni transition
 locale : seule une issue Bridget ou une consultation peut faire évoluer la
-vue. T017/Subscribe n'étant pas encore consommé, il n'apporte à ce stade aucun
-fait supplémentaire pour trancher T015b sur la corrélation de réponse ou de
-timeout.
+vue. T017/Subscribe confirme qu'elle ne peut pas être interprétée comme un
+timeout : elle reste une valeur de contrat passivement affichée.
+
+## T018 — sources affichées sans runtime caché
+
+Chaque `maicie status` peut ouvrir, si `status_capture_budget_ms` est configuré,
+une capture Attach strictement éphémère et bornée. La même échéance absolue
+couvre négociation client, annuaire, souscription, fragments et
+`SnapshotCaughtUp`; aucun fait runtime n'est écrit dans SQLite. Sans budget ou
+à son épuisement, disponibilité, runtime et fraîcheur sont explicitement
+`unavailable` avec un motif. Le statut sépare l'annuaire Bridget, les faits
+ACP corrélés (`subscription_id`/`seq`), le flux `gap`/`ended`, les permissions
+déjà auto-décidées, la remise locale durable, et le snapshot de demande qui
+reste `unknown` faute de surface publique de statut corrélé. Cette séparation
+met en œuvre la conclusion T015b sans simuler une réponse ou un timeout.
 
 ## T016 — gate MVP réel (2026-08-23)
 
@@ -56,8 +71,13 @@ Maicie est un client public durable, non un wrapper Bridget joignable. Le MVP
 émet donc sans demande de réponse ; T015b devra fournir une identité Maicie
 connectée avant d'activer une corrélation de réponse.
 
-## Dérogation T017-2
+## Dérogation T017-2 levée
 
-La validation complète est bloquée par
-`reprise_lente_sur_toutes_les_phases_reste_dans_le_budget_global`, rouge
-reproductible hors runtime (assertion `SendIdempotent` suivie d'un
+Le harnais `reprise_lente_sur_toutes_les_phases_reste_dans_le_budget_global`
+frôlait volontairement l'échéance et le serveur pouvait observer un
+`BrokenPipe` lorsque Maicie fermait légitimement la socket à l'expiration. Le
+correctif de suivi maintient désormais la socket ouverte après le replay : la
+mutation `connect_with_limits_until` vers `connect_with_limits` dépasse alors
+la borne du test, tandis que l'échéance absolue correcte expire avant le
+replay. Le protocole de mutation est consigné dans le test, qui redevient une
+preuve discriminante.

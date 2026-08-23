@@ -775,6 +775,7 @@ impl Subscription {
         &mut self,
         deadline: Instant,
     ) -> Result<SubscriptionEvent, BridgetClientError> {
+        self.connection.ensure_usable()?;
         let result = self
             .connection
             .receive_until(deadline)
@@ -928,8 +929,14 @@ impl WireConnection {
     }
 
     fn receive_until(&mut self, deadline: Instant) -> Result<Value, BridgetClientError> {
+        self.ensure_usable()?;
         let mut frame = Vec::new();
         loop {
+            // L'échéance est globale : une trame déjà dans BufReader ne doit
+            // jamais contourner le budget en étant consommée après coup.
+            remaining(deadline).map_err(|_| BridgetClientError::Timeout {
+                operation: "lecture socket",
+            })?;
             if self.reader.buffer().is_empty() {
                 wait_for_socket(
                     self.reader.get_ref().as_raw_fd(),
