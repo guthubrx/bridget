@@ -342,3 +342,14 @@ plus vite ; le coût net est un report, pas une perte.
   qu'il masque la chute. Diagnostiquer (fenêtre d'accusé ? contention ?
   timeout client trop court ?) avant que le volume d'agents ne double le
   trafic de rejeu.
+- **Maicie greffière du catalogue** (proposition utilisateur 2026-08-24 —
+  bloc F, après 015) : l'hygiène du journal de bord collectif repose sur la
+  discipline du référent, qui a prouvé ses limites (fichier de métriques
+  jamais commité et perdu ; annotations d'état oubliées 2×). Design : PAS de
+  base parallèle — le catalogue markdown versionné RESTE la source unique ;
+  Maicie en devient la main : capture datée liée à la mission source
+  (constat add), et transitions d'état AUTOMATIQUES (l'objectif qui livre un
+  remède bascule l'entrée liée en LIVRÉ à sa clôture, commit compris —
+  machine à états pure, zéro LLM). S'appuie sur le guichet 015 (l'événement
+  de livraison est le déclencheur). Bonus : catalogue interrogeable (GUI) et
+  métrologie incident→remède gratuite.
