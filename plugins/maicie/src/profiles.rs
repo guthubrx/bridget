@@ -158,6 +158,26 @@ pub fn approval_view(
     })
 }
 
+/// Compare la définition effectivement renvoyée par Bridget au digest figé
+/// dans l'approbation. Cette comparaison reste binaire : aucun registre local
+/// ni aucune politique de fournisseur ne peut modifier l'autorisation déjà
+/// donnée par l'humain.
+pub fn definition_digest_matches(pinned: &[u8], returned: &str) -> bool {
+    if pinned.len() * 2 != SHA256_HEX_BYTES || returned.len() != SHA256_HEX_BYTES {
+        return false;
+    }
+    returned
+        .as_bytes()
+        .chunks_exact(2)
+        .zip(pinned)
+        .all(
+            |(hex, expected)| match hex_nibble(hex[0]).zip(hex_nibble(hex[1])) {
+                Some((high, low)) => high << 4 | low == *expected,
+                None => false,
+            },
+        )
+}
+
 fn required(
     config: &ProfileConfig,
     field: &'static str,
@@ -180,6 +200,15 @@ fn validate_text(field: &'static str, value: &str) -> Result<(), ProfileError> {
         });
     }
     Ok(())
+}
+
+fn hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn validate_resolved_definition(definition: &ResolvedAgentDefinition) -> Result<(), ProfileError> {

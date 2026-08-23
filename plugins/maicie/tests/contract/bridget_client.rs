@@ -297,6 +297,55 @@ fn spawn_order_negocie_le_role_wrapper_sur_sa_connexion_ephemere() {
 }
 
 #[test]
+fn replay_spawn_order_reemet_les_octets_approuves_sans_reserialisation() {
+    let fixture = SocketFixture::new("spawn-replay-exact");
+    let listener = fixture.bind();
+    let bytes = br#"{"type":"SpawnOrder","agent_type":"claude","name":null,"cwd":"/tmp","persistent":true,"command_id":"command-exact","issued_at":100,"deadline_at":160}"#.to_vec();
+    let expected = bytes.clone();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("connexion spawn attendue");
+        let (mut reader, mut writer) = split(stream);
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type": "RoleHandshake", "role": "wrapper"})
+        );
+        write_json(
+            &mut writer,
+            json!({"type": "RoleAccepted", "role": "wrapper"}),
+        );
+        let mut raw = Vec::new();
+        reader.read_until(b'\n', &mut raw).expect("SpawnOrder lu");
+        assert_eq!(&raw[..raw.len() - 1], expected.as_slice());
+        write_json(
+            &mut writer,
+            json!({
+                "type": "SpawnAccepted",
+                "command_id": "command-exact",
+                "name": "claude-review",
+                "definition": {"digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+            }),
+        );
+    });
+
+    let replay = BridgetClient::replay_spawn_order_bytes_at(
+        fixture.path(),
+        BridgetClientLimits::default(),
+        &bytes,
+    )
+    .unwrap();
+    assert!(matches!(
+        replay.outcome,
+        SpawnOutcome::Accepted { command_id, name }
+            if command_id == "command-exact" && name == "claude-review"
+    ));
+    assert_eq!(
+        replay.definition_digest.as_deref(),
+        Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+    );
+    server.join().expect("serveur termine");
+}
+
+#[test]
 fn annuaire_est_lisible_sans_negociation_et_une_base_bridget_ne_peut_etre_lue() {
     let fixture = SocketFixture::new("directory");
     let listener = fixture.bind();

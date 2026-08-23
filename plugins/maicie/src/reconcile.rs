@@ -6,10 +6,12 @@
 //! avant la première I/O.
 
 use crate::bridget_client::{
-    BridgetClient, BridgetClientError, BridgetClientLimits, IdempotencyIssue,
+    BridgetClient, BridgetClientError, BridgetClientLimits, IdempotencyIssue, SpawnOutcome,
 };
 use crate::outbox::{OutboxError, PendingDelegationOutbox};
+use crate::profiles::definition_digest_matches;
 use crate::store::{DelegationRecoveryEntry, LocalFailureReason, MaicieStore, StoreError};
+use serde_json::json;
 use std::fmt;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -68,6 +70,30 @@ pub enum ReconcileAction {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ReconcileReport {
     pub actions: Vec<ReconcileAction>,
+}
+
+/// Conséquence d'une passe de reprise des activations approuvées. Le rejet de
+/// digest est terminal et visible : Maicie ne refait jamais approuver ni ne
+/// génère un nouveau command_id de sa propre initiative.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActivationReconcileAction {
+    Rejouee { command_id: Uuid },
+    IssueEnCours { command_id: Uuid },
+    IssueTerminale { command_id: Uuid },
+    TransportIncertain { command_id: Uuid },
+    TransportIndisponible { command_id: Uuid },
+    DefinitionDivergente { command_id: Uuid },
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ActivationReconcileReport {
+    pub actions: Vec<ActivationReconcileAction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivationReconcilePhase {
+    BeforeSocket,
+    AfterIssueBeforeStoreCommit,
 }
 
 /// Erreur non ambiguë : elle ne doit pas être transformée en nouvel envoi.
@@ -240,6 +266,128 @@ pub fn reconcile_startup_at_observed_with_limits(
         }
     }
     Ok(report)
+}
+
+/// Reprend les SpawnOrder non terminaux. Pour cette frontière, le replay des
+/// octets approuvés est volontairement le lookup : 009 ne publie aucun lookup
+/// séparé dans la portée interne du superviseur. Une issue durable est alors
+/// rejouée par Bridget sans nouveau lancement.
+pub fn reconcile_activation_startup_at(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    observed_at: i64,
+) -> Result<ActivationReconcileReport, ReconcileError> {
+    reconcile_activation_startup_at_observed(store, bridget_socket, observed_at, |_| Ok(()))
+}
+
+/// Variante réservée aux crash-tests : les jalons encadrent les bytes
+/// durablement préparés et l'issue Bridget avant sa transaction locale.
+pub fn reconcile_activation_startup_at_observed(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    observed_at: i64,
+    mut observer: impl FnMut(ActivationReconcilePhase) -> Result<(), ReconcileError>,
+) -> Result<ActivationReconcileReport, ReconcileError> {
+    if observed_at <= 0 {
+        return Err(ReconcileError::InvalidSnapshot("observed_at invalide"));
+    }
+    let socket = bridget_socket.as_ref();
+    let mut report = ActivationReconcileReport::default();
+    for pending in store.pending_activation_outboxes()? {
+        let activation = &pending.activation;
+        let command_id = activation.command_id;
+        let action = if observed_at >= activation.retry_until {
+            record_activation_terminal(
+                store,
+                command_id,
+                SpawnOutcome::Rejected {
+                    command_id: command_id.to_string(),
+                    reason: json!({"kind":"idempotency_expired"}),
+                },
+                observed_at,
+            )?;
+            ActivationReconcileAction::IssueTerminale { command_id }
+        } else {
+            observer(ActivationReconcilePhase::BeforeSocket)?;
+            match BridgetClient::replay_spawn_order_bytes_at(
+                socket,
+                BridgetClientLimits::default(),
+                &activation.spawn_order_bytes,
+            ) {
+                Ok(replay) => match replay.outcome {
+                    SpawnOutcome::Accepted { .. }
+                        if definition_digest_matches(
+                            &pending.approval.context_hash,
+                            replay.definition_digest.as_deref().unwrap_or_default(),
+                        ) =>
+                    {
+                        observer(ActivationReconcilePhase::AfterIssueBeforeStoreCommit)?;
+                        record_activation_terminal(store, command_id, replay.outcome, observed_at)?;
+                        ActivationReconcileAction::IssueTerminale { command_id }
+                    }
+                    SpawnOutcome::Accepted { .. } => {
+                        observer(ActivationReconcilePhase::AfterIssueBeforeStoreCommit)?;
+                        record_activation_terminal(
+                            store,
+                            command_id,
+                            SpawnOutcome::Rejected {
+                                command_id: command_id.to_string(),
+                                reason: json!({"kind":"definition_digest_mismatch"}),
+                            },
+                            observed_at,
+                        )?;
+                        ActivationReconcileAction::DefinitionDivergente { command_id }
+                    }
+                    SpawnOutcome::Idempotency(IdempotencyIssue::OutcomeUnknown { .. }) => {
+                        observer(ActivationReconcilePhase::AfterIssueBeforeStoreCommit)?;
+                        store.record_activation_outcome(
+                            command_id,
+                            &replay.outcome,
+                            observed_at,
+                        )?;
+                        ActivationReconcileAction::IssueEnCours { command_id }
+                    }
+                    outcome => {
+                        observer(ActivationReconcilePhase::AfterIssueBeforeStoreCommit)?;
+                        record_activation_terminal(store, command_id, outcome, observed_at)?;
+                        ActivationReconcileAction::IssueTerminale { command_id }
+                    }
+                },
+                Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {
+                    ActivationReconcileAction::TransportIndisponible { command_id }
+                }
+                Err(error) if transport_is_ambiguous(&error) => {
+                    let unknown = SpawnOutcome::Idempotency(IdempotencyIssue::OutcomeUnknown {
+                        expires_at: activation.dedup_retained_until,
+                        delivery_id: None,
+                    });
+                    store.record_activation_outcome(command_id, &unknown, observed_at)?;
+                    ActivationReconcileAction::TransportIncertain { command_id }
+                }
+                Err(error) => return Err(ReconcileError::Client(error)),
+            }
+        };
+        let unavailable = matches!(
+            action,
+            ActivationReconcileAction::TransportIndisponible { .. }
+                | ActivationReconcileAction::TransportIncertain { .. }
+        );
+        report.actions.push(action);
+        if unavailable {
+            break;
+        }
+    }
+    Ok(report)
+}
+
+fn record_activation_terminal(
+    store: &mut MaicieStore,
+    command_id: Uuid,
+    outcome: SpawnOutcome,
+    observed_at: i64,
+) -> Result<(), ReconcileError> {
+    store.record_activation_outcome(command_id, &outcome, observed_at)?;
+    Ok(())
 }
 
 /// Borne une passe d'ouverture entière, pas chaque outbox séparément.

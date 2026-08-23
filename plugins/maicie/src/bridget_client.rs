@@ -342,6 +342,14 @@ pub enum SpawnOutcome {
     Idempotency(IdempotencyIssue),
 }
 
+/// Résultat d'un rejeu SpawnOrder : l'issue est séparée du digest résolu afin
+/// que le store continue à ne persister que ses états de coordination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnReplay {
+    pub outcome: SpawnOutcome,
+    pub definition_digest: Option<String>,
+}
+
 /// Connexion client negociee, reservee au SendIdempotent et Lookup publics.
 pub struct BridgetClient {
     socket_path: PathBuf,
@@ -688,24 +696,119 @@ impl BridgetClient {
             "issued_at": order.issued_at,
             "deadline_at": order.deadline_at,
         }))?;
-        match response_type(&response)? {
-            "SpawnAccepted" => Ok(SpawnOutcome::Accepted {
-                command_id: required_string(&response, "command_id")?,
-                name: required_string(&response, "name")?,
-            }),
-            "SpawnRejected" => Ok(SpawnOutcome::Rejected {
+        Ok(parse_spawn_replay(response, &order.command_id)?.outcome)
+    }
+
+    /// Le rejeu exact tient lieu de lookup SpawnOrder : le protocole 009 ne
+    /// publie volontairement pas de lecture séparée dans la portée interne du
+    /// superviseur. Les octets approuvés traversent donc cette frontière sans
+    /// désérialisation/résérialisation qui pourrait altérer leur canon.
+    pub fn replay_spawn_order_bytes(
+        &self,
+        spawn_order_bytes: &[u8],
+    ) -> Result<SpawnReplay, BridgetClientError> {
+        Self::replay_spawn_order_bytes_at(&self.socket_path, self.limits, spawn_order_bytes)
+    }
+
+    /// Variante de reprise qui n'ouvre aucune négociation client 012 : un
+    /// SpawnOrder appartient au rôle public `wrapper` de la session 009.
+    pub fn replay_spawn_order_bytes_at(
+        socket_path: impl AsRef<Path>,
+        limits: BridgetClientLimits,
+        spawn_order_bytes: &[u8],
+    ) -> Result<SpawnReplay, BridgetClientError> {
+        let command_id = spawn_command_id(spawn_order_bytes)?;
+        let mut connection = WireConnection::connect(
+            socket_path.as_ref(),
+            limits,
+            Instant::now() + limits.connect_timeout,
+        )?;
+        let role = connection.request(json!({"type": "RoleHandshake", "role": "wrapper"}))?;
+        expect_role_accepted(&role, "wrapper")?;
+        let response = connection.request_raw_json(spawn_order_bytes)?;
+        parse_spawn_replay(response, &command_id)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedSpawnOrder {
+    #[serde(rename = "type")]
+    kind: String,
+    command_id: String,
+    agent_type: String,
+    name: Option<String>,
+    cwd: String,
+    persistent: bool,
+    issued_at: i64,
+    deadline_at: i64,
+}
+
+fn spawn_command_id(bytes: &[u8]) -> Result<String, BridgetClientError> {
+    let order: PersistedSpawnOrder =
+        serde_json::from_slice(bytes).map_err(|source| BridgetClientError::Decode {
+            line: String::from_utf8_lossy(bytes).into_owned(),
+            source,
+        })?;
+    if order.kind != "SpawnOrder"
+        || order.command_id.trim().is_empty()
+        || order.agent_type.trim().is_empty()
+        || order.cwd.is_empty()
+        || order.issued_at <= 0
+        || order.deadline_at <= order.issued_at
+    {
+        return Err(BridgetClientError::InvalidEnvelope(
+            "SpawnOrder persiste invalide".to_string(),
+        ));
+    }
+    let _ = (order.name, order.persistent);
+    Ok(order.command_id)
+}
+
+fn parse_spawn_replay(
+    response: Value,
+    expected_command_id: &str,
+) -> Result<SpawnReplay, BridgetClientError> {
+    match response_type(&response)? {
+        "SpawnAccepted" => {
+            let command_id = required_string(&response, "command_id")?;
+            if command_id != expected_command_id {
+                return Err(BridgetClientError::Protocol(
+                    "SpawnAccepted avec command_id divergent".to_string(),
+                ));
+            }
+            let definition_digest = response
+                .get("definition")
+                .and_then(Value::as_object)
+                .and_then(|definition| definition.get("digest"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            Ok(SpawnReplay {
+                outcome: SpawnOutcome::Accepted {
+                    command_id,
+                    name: required_string(&response, "name")?,
+                },
+                definition_digest,
+            })
+        }
+        "SpawnRejected" => Ok(SpawnReplay {
+            outcome: SpawnOutcome::Rejected {
                 command_id: required_string(&response, "command_id")?,
                 reason: response.get("reason").cloned().ok_or_else(|| {
                     BridgetClientError::Protocol("SpawnRejected sans reason".to_string())
                 })?,
-            }),
-            "IdempotencyResult" => Ok(SpawnOutcome::Idempotency(parse_idempotency_issue(
+            },
+            definition_digest: None,
+        }),
+        "IdempotencyResult" => Ok(SpawnReplay {
+            outcome: SpawnOutcome::Idempotency(parse_idempotency_issue(
                 response,
-                &order.command_id,
-            )?)),
-            "Nack" => Err(parse_nack(response)?),
-            other => Err(unexpected("SpawnAccepted/SpawnRejected", other)),
-        }
+                expected_command_id,
+            )?),
+            definition_digest: None,
+        }),
+        "Nack" => Err(parse_nack(response)?),
+        other => Err(unexpected("SpawnAccepted/SpawnRejected", other)),
     }
 }
 

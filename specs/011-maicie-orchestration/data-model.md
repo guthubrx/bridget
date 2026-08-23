@@ -142,10 +142,19 @@ vie de processus.
 | `retry_until`, `dedup_retained_until` | timestamps | même règle de reprise/tombstone |
 
 La transaction qui fait passer une approbation vers `dispatching` écrit
-simultanément `ActivationOutbox`. Tout état non terminal fait lookup/replay du
-même `command_id`. L'approbation n'est `consumed` qu'après issue durable. Le
+simultanément `ActivationOutbox`. Pour `SpawnOrder`, **le replay exact est le
+lookup** : le contrat 009 ne publie volontairement aucune lecture distincte
+dans la portée interne du superviseur. Maicie réémet donc uniquement les
+`spawn_order_bytes` immuables avec le même `command_id`; Bridget rejoue l'issue
+réelle sans créer de nouveau lancement. L'approbation n'est `consumed` qu'après issue durable. Le
 contexte après connexion est une Délégation normale, donc livré par
 `OutboxDélégation` avec les bytes dont le hash a été approuvé.
+
+Un `SpawnAccepted` doit porter le digest de définition résolue épinglé à
+l'approbation. Son absence ou sa divergence produit un refus terminal
+journalisé ; Maicie ne recrée jamais une approbation ni un `command_id` de sa
+propre initiative. Après l'horizon, `IdempotencyExpired` est tout aussi
+terminal : une nouvelle activation exige une décision humaine explicite.
 
 ## Invariants
 
