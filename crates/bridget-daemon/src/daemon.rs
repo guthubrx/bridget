@@ -4823,7 +4823,10 @@ fn daemon_build_id(socket_path: &std::path::Path) -> Option<String> {
     }
     writeln!(writer, "{}", encode(&WrapperToDaemon::ClientHello {
         contract_version: CLIENT_CONTRACT_VERSION,
-        issuer_scope: "status_build_id_probe".to_string(),
+        // La portée doit respecter les mêmes 22 octets minimaux que tout
+        // client public ; sinon le daemon refuse ClientHello et le statut
+        // masque cet échec sous "inconnu".
+        issuer_scope: "status_build_id_probe_0".to_string(),
         capabilities: Vec::new(),
     }).ok()?).ok()?;
     writer.flush().ok()?;
