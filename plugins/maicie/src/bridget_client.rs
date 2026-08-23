@@ -616,13 +616,8 @@ pub(crate) fn validate_send_idempotent_frame(
             "message.id et message_id doivent etre identiques".to_string(),
         ));
     }
-    let request = json!({
-        "type": "SendIdempotent",
-        "message": message,
-        "message_id": message_id,
-        "issued_at": issued_at,
-    });
-    let encoded = serde_json::to_vec(&request).map_err(BridgetClientError::Encode)?;
+    let message_bytes = serde_json::to_vec(message).map_err(BridgetClientError::Encode)?;
+    let encoded = replay_idempotent_request(&message_bytes, message_id, issued_at)?;
     if encoded.len().saturating_add(1) > max_frame_bytes {
         return Err(BridgetClientError::FrameTooLarge { max_frame_bytes });
     }
@@ -638,9 +633,9 @@ fn replay_idempotent_request(
     let mut request = Vec::with_capacity(message_bytes.len() + 128);
     request.extend_from_slice(br#"{"type":"SendIdempotent","message":"#);
     request.extend_from_slice(message_bytes);
-    request.extend_from_slice(br#", "message_id":"#);
+    request.extend_from_slice(br#","message_id":"#);
     serde_json::to_writer(&mut request, message_id).map_err(BridgetClientError::Encode)?;
-    request.extend_from_slice(br#", "issued_at":"#);
+    request.extend_from_slice(br#","issued_at":"#);
     serde_json::to_writer(&mut request, &issued_at).map_err(BridgetClientError::Encode)?;
     request.push(b'}');
     Ok(request)
