@@ -55,3 +55,12 @@ donc attendre le renderer afin de préserver une sortie exacte. Rendre stdout
 annulable exigerait un protocole d'écriture non bloquant et une politique de
 perte dédiée ; ce changement dépasse le TUI léger et doit être spécifié avant
 de modifier la sémantique de livraison.
+
+## Suivis non bloquants
+
+- une décision de permission reçue après qu'une ligne d'outil a quitté la
+  fenêtre effaçable reste dans le scrollback sans statut rétroactif ; une
+  évolution devra corréler outil et permission par `toolCallId`, notamment
+  quand plusieurs outils sont parallèles ;
+- le test de matrice constructeur C9 duplique partiellement le golden réel et
+  pourra être supprimé lors d'un nettoyage dédié, sans modifier le produit.

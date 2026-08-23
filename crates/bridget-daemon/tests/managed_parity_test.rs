@@ -19,6 +19,11 @@ const REDUCED_PROMPT: &str = include_str!("fixtures/prompts/v1-after.txt");
 const MATRIX_RUNS_PER_MODE: usize = 3;
 const MATRIX_EXPECTED_TURNS: usize = 4;
 const MATRIX_TIMEOUT: Duration = Duration::from_secs(10);
+// Seul QUEUE-SLOW doit franchir T/3 et prouver la relance différée. Sous
+// contention, appliquer le même délai court aux tours nominaux injectait un
+// rappel légitime dans le compteur du faux adaptateur et créait un 5e tour.
+const MATRIX_FAST_REPLY_TIMEOUT_SECS: u64 = 30;
+const MATRIX_SLOW_REPLY_TIMEOUT_SECS: u64 = 5;
 const FROZEN_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
 static MANAGED_BENCH_LOCK: Mutex<()> = Mutex::new(());
 
@@ -994,17 +999,28 @@ fn run_corpus(socket: &Path, agent: &str, run: usize, proxy: &CutProxy) -> ModeO
     assert_eq!(initial_agent.state, "connected");
 
     // Quickstart 007 §2 : une demande suivie reçoit sa réponse et se clôt.
-    let first = send_tracked(&mut peer, agent, "TRACKED");
+    let first =
+        send_tracked_with_timeout(&mut peer, agent, "TRACKED", MATRIX_FAST_REPLY_TIMEOUT_SECS);
     let mut replies = receive_replies(&mut peer, &[first]);
     // Quickstart 007 §3 : le corps riche traverse le transport octet pour octet.
     let exact = "l'apostrophe d'usage, \"guillemets\", $VAR, `backticks`,\net ce saut de ligne.";
-    let second = send_tracked(&mut peer, agent, exact);
+    let second = send_tracked_with_timeout(&mut peer, agent, exact, MATRIX_FAST_REPLY_TIMEOUT_SECS);
     replies.extend(receive_replies(&mut peer, &[second]));
 
     // Quickstart 007 §4 : FIFO pendant un tour, relance différée et
     // reconnexion conservant l'état busy.
-    let slow = send_tracked(&mut peer, agent, "QUEUE-SLOW");
-    let next = send_tracked(&mut peer, agent, "QUEUE-NEXT");
+    let slow = send_tracked_with_timeout(
+        &mut peer,
+        agent,
+        "QUEUE-SLOW",
+        MATRIX_SLOW_REPLY_TIMEOUT_SECS,
+    );
+    let next = send_tracked_with_timeout(
+        &mut peer,
+        agent,
+        "QUEUE-NEXT",
+        MATRIX_FAST_REPLY_TIMEOUT_SECS,
+    );
     let busy = wait_agent(&mut peer, agent);
     assert_eq!(busy.state, "busy", "le tour lent doit être observable");
     proxy.cut_wrapper_and_wait_for_reconnect();
