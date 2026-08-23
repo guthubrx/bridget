@@ -42,3 +42,17 @@ v1 (spec 011) — intrants pour les itérations suivantes.
   corrélation perdue — d'où l'exigence d'identifiants intégraux de bout en
   bout, réglée côté transport le 2026-08-23).
 - Double réponse à une même demande après rappel.
+
+## Exigence amont Phase 5 (question utilisateur, 2026-08-23)
+
+**Un profil approuvé DOIT rendre visibles la nature et l'intensité de l'agent
+qu'il fait naître** : type (codex/claude/...), modèle, niveau d'effort — car
+c'est une décision de gouvernance et de coût d'abonnement, qui appartient à
+l'écran d'approbation, pas à une config enfouie. Voie d'implémentation
+minimale (zéro code Bridget) : les profils référencent des TYPES du registre
+agents.json, et les variantes modèle/effort sont des entrées de registre
+dédiées (ex. codex-effort-haut = args -c model_reasoning_effort="high") —
+le profil Maicie affiche le type et ses paramètres épinglés à l'approbation.
+Évolution Bridget possible plus tard : paramètres modèle/effort par spawn.
+À intégrer à T021 (validation des profils : champs type/modèle/effort
+obligatoires dans la fixture).
