@@ -415,11 +415,25 @@ impl std::fmt::Display for RuntimeSource {
 
 /// Messages envoyés par le daemon vers le wrapper.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolvedMcpDefinition {
+    pub interactive: String,
+    pub acp_session: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResolvedAgentDefinition {
     pub command: String,
     pub args: Vec<String>,
+    pub protocol: String,
     pub forbidden_env: Vec<String>,
-    /// SHA-256 hexadécimal des trois champs précédents sérialisés en JSON.
+    /// Noms des variables héritées ; leurs valeurs secrètes ne sont jamais
+    /// persistées ni exposées dans la preuve publique.
+    pub pass_env: Vec<String>,
+    pub permissions: String,
+    pub queue_capacity: usize,
+    pub notify_timeout_secs: u64,
+    pub mcp: ResolvedMcpDefinition,
+    /// SHA-256 hexadécimal de tous les paramètres runtime précédents.
     pub digest: String,
 }
 
@@ -1124,7 +1138,16 @@ mod tests {
             definition: Some(ResolvedAgentDefinition {
                 command: "npx".to_string(),
                 args: vec!["adapter@1.2.3".to_string()],
+                protocol: "acp".to_string(),
                 forbidden_env: vec!["API_KEY".to_string()],
+                pass_env: vec!["HOME".to_string()],
+                permissions: "allow".to_string(),
+                queue_capacity: 32,
+                notify_timeout_secs: 600,
+                mcp: ResolvedMcpDefinition {
+                    interactive: "codex".to_string(),
+                    acp_session: true,
+                },
                 digest: "a".repeat(64),
             }),
         };

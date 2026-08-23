@@ -1,6 +1,6 @@
 //! Registre déclaratif des types d'agents lancés par Bridget.
 
-use bridget_transport::ResolvedAgentDefinition;
+use bridget_transport::{ResolvedAgentDefinition, ResolvedMcpDefinition};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -131,6 +131,37 @@ impl AgentRegistry {
         agent_type: &str,
     ) -> Result<ResolvedAgentDefinition, String> {
         resolved_definition(self.get(agent_type)?)
+    }
+
+    /// Reconstruit un registre à une seule entrée depuis la définition figée
+    /// par la saga. Le digest est revérifié avant tout lancement : le wrapper
+    /// géré ne consulte donc jamais le registre utilisateur courant.
+    pub fn from_resolved(
+        agent_type: &str,
+        resolved: &ResolvedAgentDefinition,
+    ) -> Result<Self, String> {
+        let definition = AgentDefinition {
+            command: resolved.command.clone(),
+            args: resolved.args.clone(),
+            protocol: resolved.protocol.clone(),
+            forbidden_env: resolved.forbidden_env.clone(),
+            pass_env: resolved.pass_env.clone(),
+            permissions: resolved.permissions.clone(),
+            queue_capacity: resolved.queue_capacity,
+            notify_timeout_secs: resolved.notify_timeout_secs,
+            mcp: McpDefinition {
+                interactive: resolved.mcp.interactive.clone(),
+                acp_session: resolved.mcp.acp_session,
+            },
+        };
+        let expected = resolved_definition(&definition)?;
+        if expected.digest != resolved.digest {
+            return Err("digest de la définition figée invalide".to_string());
+        }
+        let source = PathBuf::from("<définition-figée>");
+        let agents = BTreeMap::from([(agent_type.to_string(), definition)]);
+        validate_registry(&agents, &source)?;
+        Ok(Self { agents, source })
     }
 
     pub fn source(&self) -> &Path {
@@ -285,14 +316,35 @@ fn read_private_registry(source: &Path) -> Result<String, String> {
 struct CanonicalResolvedDefinition<'a> {
     command: &'a str,
     args: &'a [String],
+    protocol: &'a str,
     forbidden_env: &'a [String],
+    pass_env: &'a [String],
+    permissions: &'a str,
+    queue_capacity: usize,
+    notify_timeout_secs: u64,
+    mcp: CanonicalResolvedMcpDefinition<'a>,
+}
+
+#[derive(Serialize)]
+struct CanonicalResolvedMcpDefinition<'a> {
+    interactive: &'a str,
+    acp_session: bool,
 }
 
 fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefinition, String> {
     let canonical = CanonicalResolvedDefinition {
         command: &definition.command,
         args: &definition.args,
+        protocol: &definition.protocol,
         forbidden_env: &definition.forbidden_env,
+        pass_env: &definition.pass_env,
+        permissions: &definition.permissions,
+        queue_capacity: definition.queue_capacity,
+        notify_timeout_secs: definition.notify_timeout_secs,
+        mcp: CanonicalResolvedMcpDefinition {
+            interactive: &definition.mcp.interactive,
+            acp_session: definition.mcp.acp_session,
+        },
     };
     let bytes = serde_json::to_vec(&canonical)
         .map_err(|err| format!("définition résolue impossible à sérialiser: {err}"))?;
@@ -300,7 +352,16 @@ fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefi
     Ok(ResolvedAgentDefinition {
         command: definition.command.clone(),
         args: definition.args.clone(),
+        protocol: definition.protocol.clone(),
         forbidden_env: definition.forbidden_env.clone(),
+        pass_env: definition.pass_env.clone(),
+        permissions: definition.permissions.clone(),
+        queue_capacity: definition.queue_capacity,
+        notify_timeout_secs: definition.notify_timeout_secs,
+        mcp: ResolvedMcpDefinition {
+            interactive: definition.mcp.interactive.clone(),
+            acp_session: definition.mcp.acp_session,
+        },
         digest,
     })
 }
@@ -574,17 +635,59 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.command, "npx");
         assert_eq!(first.args[0], "@zed-industries/codex-acp@0.16.0");
+        assert_eq!(first.protocol, "acp");
         assert_eq!(first.forbidden_env, vec!["OPENAI_API_KEY", "CODEX_API_KEY"]);
+        assert!(first.pass_env.contains(&"CODEX_HOME".to_string()));
+        assert_eq!(first.permissions, "allow");
+        assert_eq!(first.queue_capacity, 32);
+        assert_eq!(first.notify_timeout_secs, 600);
+        assert_eq!(first.mcp.interactive, "codex");
+        assert!(first.mcp.acp_session);
         assert_eq!(first.digest.len(), 64);
 
-        let changed = AgentRegistry::from_json(
-            r#"{"agents":{"codex":{"command":"npx","args":["other"],"forbidden_env":["OPENAI_API_KEY"]}}}"#,
-            "/tmp/agents.json",
-        )
-        .unwrap()
-        .resolved_definition("codex")
-        .unwrap();
-        assert_ne!(first.digest, changed.digest);
+        let baseline = default_agents().remove("codex").unwrap();
+        let mut mutations = Vec::new();
+        let mut changed = baseline.clone();
+        changed.command = "other".to_string();
+        mutations.push(("command", changed));
+        let mut changed = baseline.clone();
+        changed.args.push("other".to_string());
+        mutations.push(("args", changed));
+        let mut changed = baseline.clone();
+        changed.protocol = "tmux".to_string();
+        mutations.push(("protocol", changed));
+        let mut changed = baseline.clone();
+        changed.forbidden_env.push("OTHER_KEY".to_string());
+        mutations.push(("forbidden_env", changed));
+        let mut changed = baseline.clone();
+        changed.pass_env.push("OTHER_HOME".to_string());
+        mutations.push(("pass_env", changed));
+        let mut changed = baseline.clone();
+        changed.permissions = "deny".to_string();
+        mutations.push(("permissions", changed));
+        let mut changed = baseline.clone();
+        changed.queue_capacity += 1;
+        mutations.push(("queue_capacity", changed));
+        let mut changed = baseline.clone();
+        changed.notify_timeout_secs += 1;
+        mutations.push(("notify_timeout_secs", changed));
+        let mut changed = baseline.clone();
+        changed.mcp.interactive = "claude".to_string();
+        mutations.push(("mcp.interactive", changed));
+        let mut changed = baseline.clone();
+        changed.mcp.acp_session = !changed.mcp.acp_session;
+        mutations.push(("mcp.acp_session", changed));
+        for (field, changed) in mutations {
+            assert_ne!(
+                first.digest,
+                resolved_definition(&changed).unwrap().digest,
+                "le digest doit changer avec {field}"
+            );
+        }
+        assert!(AgentRegistry::from_resolved("codex", &first).is_ok());
+        let mut forged = first;
+        forged.queue_capacity += 1;
+        assert!(AgentRegistry::from_resolved("codex", &forged).is_err());
     }
 
     #[test]

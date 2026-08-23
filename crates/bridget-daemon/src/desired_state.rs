@@ -1,6 +1,7 @@
 //! État désiré durable des équipiers gérés par le daemon.
 
 use bridget_transport::fsutil::{AtomicWritePhase, write_private_file_atomic_observed};
+use bridget_transport::ResolvedAgentDefinition;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -21,6 +22,10 @@ pub struct DesiredEquipier {
     pub command_id: String,
     pub generation: u64,
     pub created: String,
+    /// Définition runtime figée lors de la connexion initiale. `None` ne sert
+    /// qu'à lire les anciens fichiers : leur reprise est refusée fail-closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_definition: Option<ResolvedAgentDefinition>,
 }
 
 /// Contenu versionné de `fleet.json`.
@@ -328,6 +333,7 @@ mod tests {
             command_id: command_id.to_string(),
             generation,
             created: "2026-08-22T20:14:00Z".to_string(),
+            resolved_definition: None,
         }
     }
 

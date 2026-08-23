@@ -180,7 +180,7 @@ pub enum SpawnCommandIssue {
         name: String,
         generation: u64,
         instance_id: String,
-        definition: Option<ResolvedAgentDefinition>,
+        definition: Option<Box<ResolvedAgentDefinition>>,
     },
     Failed {
         category: String,
@@ -1271,7 +1271,7 @@ fn spawn_command_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SpawnComm
                         "instance spawn connectée absente",
                     ))
                 })?,
-                definition: resolved_definition.clone(),
+                definition: resolved_definition.clone().map(Box::new),
             })
         }
         Some("failed") if state == SpawnCommandState::Failed => Some(SpawnCommandIssue::Failed {

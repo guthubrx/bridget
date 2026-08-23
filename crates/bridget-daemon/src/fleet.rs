@@ -73,6 +73,9 @@ pub struct RecoveryCandidate {
     pub lease: SpawnLease,
     pub agent_type: String,
     pub cwd: PathBuf,
+    /// Définition persistée au passage Reserved→Starting. Une ancienne ligne
+    /// sans définition ne peut pas être reprise sans trahir la preuve publique.
+    pub resolved_definition: Option<ResolvedAgentDefinition>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,6 +258,7 @@ impl FleetSupervisor {
                 lease: lease_from(active),
                 agent_type: active.agent_type.clone(),
                 cwd: active.cwd.clone(),
+                resolved_definition: active.resolved_definition.clone(),
             })
             .collect::<Vec<_>>();
         candidates.sort_by(|left, right| left.lease.name.cmp(&right.lease.name));
@@ -486,6 +490,7 @@ impl FleetSupervisor {
                     command_id: active.command_id.clone(),
                     generation: active.generation,
                     created: now.to_string(),
+                    resolved_definition: active.resolved_definition.clone(),
                 },
             )?;
         }
@@ -494,7 +499,7 @@ impl FleetSupervisor {
             name: active.name.clone(),
             generation: active.generation,
             instance_id: instance_id.to_string(),
-            definition: active.resolved_definition.clone(),
+            definition: active.resolved_definition.clone().map(Box::new),
         };
         let key = spawn_key(&inner, &active.command_id)?;
         inner
@@ -923,7 +928,16 @@ mod tests {
         ResolvedAgentDefinition {
             command: "npx".to_string(),
             args: vec!["fixture-acp".to_string()],
+            protocol: "acp".to_string(),
             forbidden_env: vec!["API_KEY".to_string()],
+            pass_env: Vec::new(),
+            permissions: "allow".to_string(),
+            queue_capacity: 32,
+            notify_timeout_secs: 600,
+            mcp: bridget_transport::ResolvedMcpDefinition {
+                interactive: "none".to_string(),
+                acp_session: false,
+            },
             digest: "fixture-digest".to_string(),
         }
     }
@@ -942,7 +956,7 @@ mod tests {
         assert!(matches!(
             &issue,
             SpawnCommandIssue::Connected { definition: Some(definition), .. }
-                if definition == &resolved_test_definition()
+                if definition.as_ref() == &resolved_test_definition()
         ));
         drop(supervisor);
 
@@ -973,6 +987,7 @@ mod tests {
                         command_id: command_id.to_string(),
                         generation: lease.generation,
                         created: NOW.to_string(),
+                        resolved_definition: Some(resolved_test_definition()),
                     },
                 )
                 .unwrap();
