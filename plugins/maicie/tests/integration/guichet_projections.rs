@@ -4,12 +4,16 @@ use maicie::app::{
 };
 use maicie::bridget_client::{GuichetClaim, IdempotencyIssue};
 use maicie::config::DurationClasses;
+use maicie::domain::guichet::{parse_claim, ProjectionReply};
 use maicie::domain::{ClasseDuree, EtatFlux, SnapshotTransport, SourceSnapshot};
-use maicie::store::MaicieStore;
-use rusqlite::Connection;
+use maicie::store::{MaicieStore, StoreError};
+use rusqlite::{Connection, ErrorCode};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 use uuid::Uuid;
 
 fn root(label: &str) -> PathBuf {
@@ -288,5 +292,90 @@ fn deadline_question_est_passive_factuelle_et_durable() {
     assert!(replay.replayed);
     assert_eq!(replay.reply_bytes, first.reply_bytes);
     assert_eq!(replay.response_message_id, "response-deadline");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn projection_verrouille_lecture_et_recu_puis_reprend_une_faute_sans_doublon() {
+    let root = root("atomic");
+    let database = root.join("maicie.sqlite3");
+    let created = seed(&database);
+    let claim = query_claim(
+        "deadline_question",
+        "request-deadline-atomic",
+        created.delegation_id,
+        1,
+    );
+    let canonical = parse_claim(&claim).unwrap();
+    let mut store = MaicieStore::open(&database).unwrap();
+    let (facts_read_tx, facts_read_rx) = mpsc::channel();
+    let (mutation_tx, mutation_rx) = mpsc::channel();
+    let mutation_database = database.clone();
+    let objective_id = created.objective_id;
+    let mutator = thread::spawn(move || {
+        let connection = Connection::open(mutation_database).unwrap();
+        connection.busy_timeout(Duration::ZERO).unwrap();
+        facts_read_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let result = connection.execute(
+            "UPDATE objectives SET payload_json = payload_json WHERE id = ?1",
+            [objective_id.to_string()],
+        );
+        mutation_tx.send(result).unwrap();
+    });
+
+    let injected = store.persist_guichet_projection(
+        &claim,
+        &canonical,
+        "response-deadline-atomic",
+        5_000,
+        |_facts| {
+            facts_read_tx.send(()).unwrap();
+            let mutation = mutation_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(matches!(
+                mutation,
+                Err(rusqlite::Error::SqliteFailure(error, _))
+                    if error.code == ErrorCode::DatabaseBusy
+            ));
+            Err::<ProjectionReply, StoreError>(StoreError::Invalid("faute injectée avant reçu"))
+        },
+    );
+    assert!(matches!(
+        injected,
+        Err(StoreError::Invalid("faute injectée avant reçu"))
+    ));
+    mutator.join().unwrap();
+
+    let connection = Connection::open(&database).unwrap();
+    let receipts_after_failure: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM guichet_receptions WHERE request_id = ?1",
+            [&claim.request_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(receipts_after_failure, 0);
+    drop(connection);
+
+    let first =
+        process_deadline_question_claim(&mut store, &claim, "response-deadline-atomic", 5_001)
+            .unwrap();
+    let replay = process_deadline_question_claim(&mut store, &claim, "ignored", 5_002).unwrap();
+    assert!(!first.replayed);
+    assert!(replay.replayed);
+    assert_eq!(replay.reply_bytes, first.reply_bytes);
+
+    drop(store);
+    let connection = Connection::open(&database).unwrap();
+    let unique_receipt: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM guichet_receptions WHERE request_id = ?1",
+            [&claim.request_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(unique_receipt, 1);
+    let value: Value = serde_json::from_slice(&first.reply_bytes).unwrap();
+    assert_eq!(value["payload"]["duration_class"], "normale");
+    assert_eq!(value["payload"]["deadline_at"], 960);
     fs::remove_dir_all(root).unwrap();
 }
