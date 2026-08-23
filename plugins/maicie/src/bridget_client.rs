@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::fmt;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, Write};
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -550,33 +552,19 @@ impl Subscription {
 
 struct WireConnection {
     reader: BufReader<UnixStream>,
-    writer: BufWriter<UnixStream>,
+    writer: UnixStream,
     limits: BridgetClientLimits,
 }
 
 impl WireConnection {
     fn connect(path: &Path, limits: BridgetClientLimits) -> Result<Self, BridgetClientError> {
         validate_limits(limits)?;
-        let started = Instant::now();
-        let stream = UnixStream::connect(path).map_err(|source| BridgetClientError::Connect {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        if started.elapsed() > limits.connect_timeout {
-            return Err(BridgetClientError::Timeout {
-                operation: "connexion",
-            });
-        }
-        stream
-            .set_read_timeout(Some(limits.io_timeout))
-            .map_err(BridgetClientError::Read)?;
-        stream
-            .set_write_timeout(Some(limits.io_timeout))
-            .map_err(BridgetClientError::Write)?;
+        let deadline = Instant::now() + limits.connect_timeout;
+        let stream = connect_nonblocking(path, deadline)?;
         let reader = BufReader::new(stream.try_clone().map_err(BridgetClientError::Read)?);
         Ok(Self {
             reader,
-            writer: BufWriter::new(stream),
+            writer: stream,
             limits,
         })
     }
@@ -599,25 +587,44 @@ impl WireConnection {
             });
         }
         bytes.push(b'\n');
-        self.writer
-            .get_ref()
-            .set_write_timeout(Some(remaining(deadline)?))
-            .map_err(BridgetClientError::Write)?;
-        self.writer.write_all(&bytes).map_err(write_error)?;
-        self.writer.flush().map_err(write_error)
+        let mut written = 0;
+        while written < bytes.len() {
+            wait_for_socket(
+                self.writer.as_raw_fd(),
+                libc::POLLOUT,
+                deadline,
+                "ecriture socket",
+            )?;
+            match self.writer.write(&bytes[written..]) {
+                Ok(0) => return Err(BridgetClientError::Closed),
+                Ok(count) => written += count,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(error) => return Err(write_error(error)),
+            }
+        }
+        Ok(())
     }
 
     fn receive(&mut self) -> Result<Value, BridgetClientError> {
         self.receive_until(Instant::now() + self.limits.io_timeout)
     }
 
-    fn receive_until(&mut self, _deadline: Instant) -> Result<Value, BridgetClientError> {
+    fn receive_until(&mut self, deadline: Instant) -> Result<Value, BridgetClientError> {
         let mut frame = Vec::new();
         loop {
-            // Le timeout configure a l'ouverture de la socket borne chaque
-            // lecture. Le conserver evite de reconfigurer une socket dont le
-            // pair a deja ferme son cote entre deux frames tamponnees.
-            let buffer = self.reader.fill_buf().map_err(read_error)?;
+            if self.reader.buffer().is_empty() {
+                wait_for_socket(
+                    self.reader.get_ref().as_raw_fd(),
+                    libc::POLLIN,
+                    deadline,
+                    "lecture socket",
+                )?;
+            }
+            let buffer = match self.reader.fill_buf() {
+                Ok(buffer) => buffer,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(error) => return Err(read_error(error)),
+            };
             if buffer.is_empty() {
                 return Err(BridgetClientError::Closed);
             }
@@ -644,6 +651,137 @@ impl WireConnection {
             BridgetClientError::Protocol(format!("trame Bridget non UTF-8: {error}"))
         })?;
         serde_json::from_str(&line).map_err(|source| BridgetClientError::Decode { line, source })
+    }
+}
+
+fn connect_nonblocking(path: &Path, deadline: Instant) -> Result<UnixStream, BridgetClientError> {
+    if Instant::now() >= deadline {
+        return Err(BridgetClientError::Timeout {
+            operation: "connexion",
+        });
+    }
+
+    let path_bytes = path.as_os_str().as_bytes();
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    if path_bytes.len() >= address.sun_path.len() || path_bytes.contains(&0) {
+        return Err(BridgetClientError::Connect {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidInput, "socket Unix invalide"),
+        });
+    }
+    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        address.sun_len = (std::mem::size_of::<libc::sa_family_t>() + path_bytes.len() + 1) as u8;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            path_bytes.as_ptr().cast(),
+            address.sun_path.as_mut_ptr(),
+            path_bytes.len(),
+        );
+    }
+
+    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(connect_error(path, std::io::Error::last_os_error()));
+    }
+    let close = || unsafe { libc::close(fd) };
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        let error = std::io::Error::last_os_error();
+        close();
+        return Err(connect_error(path, error));
+    }
+
+    let result = unsafe {
+        libc::connect(
+            fd,
+            (&address as *const libc::sockaddr_un).cast(),
+            std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t,
+        )
+    };
+    if result < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EINPROGRESS) {
+            close();
+            return Err(connect_error(path, error));
+        }
+        if let Err(error) = wait_for_socket(fd, libc::POLLOUT, deadline, "connexion") {
+            close();
+            return Err(error);
+        }
+        let mut socket_error: libc::c_int = 0;
+        let mut length = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        let status = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_ERROR,
+                (&mut socket_error as *mut libc::c_int).cast(),
+                &mut length,
+            )
+        };
+        if status < 0 {
+            let error = std::io::Error::last_os_error();
+            close();
+            return Err(connect_error(path, error));
+        }
+        if socket_error != 0 {
+            close();
+            return Err(connect_error(
+                path,
+                std::io::Error::from_raw_os_error(socket_error),
+            ));
+        }
+    }
+
+    Ok(unsafe { UnixStream::from_raw_fd(fd) })
+}
+
+fn wait_for_socket(
+    fd: libc::c_int,
+    events: libc::c_short,
+    deadline: Instant,
+    operation: &'static str,
+) -> Result<(), BridgetClientError> {
+    loop {
+        let timeout_ms = remaining(deadline)
+            .map_err(|_| BridgetClientError::Timeout { operation })?
+            .as_millis()
+            .min(libc::c_int::MAX as u128) as libc::c_int;
+        let mut pollfd = libc::pollfd {
+            fd,
+            events,
+            revents: 0,
+        };
+        let result = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+        if result == 0 {
+            return Err(BridgetClientError::Timeout { operation });
+        }
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(BridgetClientError::Read(error));
+        }
+        if pollfd.revents & libc::POLLNVAL != 0 {
+            return Err(BridgetClientError::Read(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "descripteur socket invalide",
+            )));
+        }
+        if pollfd.revents & (events | libc::POLLERR | libc::POLLHUP) != 0 {
+            return Ok(());
+        }
+    }
+}
+
+fn connect_error(path: &Path, source: std::io::Error) -> BridgetClientError {
+    BridgetClientError::Connect {
+        path: path.to_path_buf(),
+        source,
     }
 }
 

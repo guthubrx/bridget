@@ -280,6 +280,54 @@ fn daemon_muet_expire_le_handshake_dans_le_budget_configure() {
 }
 
 #[test]
+fn daemon_goutte_a_goutte_ne_renouvelle_pas_le_budget_global_de_lecture() {
+    let fixture = SocketFixture::new("drip-timeout");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("client attendu");
+        let (mut reader, mut writer) = split(stream);
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type": "RoleHandshake", "role": "client"})
+        );
+        let frame = format!(
+            "{}\n",
+            serde_json::to_string(&json!({"type": "RoleAccepted", "role": "client"}))
+                .expect("frame JSON")
+        );
+        for byte in frame.bytes() {
+            if writer.write_all(&[byte]).is_err() || writer.flush().is_err() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+    let limits = BridgetClientLimits {
+        connect_timeout: Duration::from_secs(1),
+        io_timeout: Duration::from_millis(25),
+        max_frame_bytes: 1024,
+    };
+
+    let started = std::time::Instant::now();
+    let error = match BridgetClient::connect_with_limits(fixture.path(), "scope-client-012", limits)
+    {
+        Ok(_) => panic!("une frame goutte-a-goutte doit expirer globalement"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        BridgetClientError::Timeout {
+            operation: "lecture socket"
+        }
+    ));
+    assert!(
+        started.elapsed() < Duration::from_millis(100),
+        "le budget ne doit pas etre renouvelle pour chaque octet"
+    );
+    server.join().expect("serveur termine");
+}
+
+#[test]
 fn trame_sans_fin_de_ligne_depasse_la_borne_sans_croitre_sans_limite() {
     let fixture = SocketFixture::new("frame-limit");
     let listener = fixture.bind();
