@@ -12,6 +12,7 @@ use std::net::Shutdown;
 use std::os::fd::RawFd;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -24,6 +25,9 @@ const RECONNECT_DELAY: Duration = Duration::from_millis(250);
 const RETIRED_SUBSCRIPTIONS_LIMIT: usize = 64;
 const SEND_ISSUE_TIMEOUT: Duration = Duration::from_secs(60);
 const INPUT_POLL_TIMEOUT_MILLIS: i32 = 100;
+const RENDER_COMMAND_CAPACITY: usize = 64;
+const MAX_TURN_BLOCK_BYTES: usize = 64 * 1024;
+const MAX_TURN_BLOCK_LINES: usize = 400;
 
 /// Garde minimale du terminal d'entrée. Le mode désactive le traitement des
 /// signaux afin que Ctrl-C arrive comme l'octet `0x03` à la boucle de saisie.
@@ -604,8 +608,18 @@ fn discard_until_newline(reader: &mut BufReader<UnixStream>) -> Result<(), Strin
 /// événement réassemblé (4 Mio) plus la petite table des envois de l'invocation.
 pub fn run(agent: &str, initial_window: AttachWindow, socket_path: &Path) -> Result<(), String> {
     with_raw_terminal(libc::STDIN_FILENO, |raw_terminal| {
-        run_with_input(agent, initial_window, socket_path, raw_terminal)
+        run_with_input(
+            agent,
+            initial_window,
+            socket_path,
+            raw_terminal,
+            is_terminal(libc::STDOUT_FILENO),
+        )
     })
+}
+
+fn is_terminal(fd: RawFd) -> bool {
+    unsafe { libc::isatty(fd) == 1 }
 }
 
 fn run_with_input(
@@ -613,6 +627,7 @@ fn run_with_input(
     initial_window: AttachWindow,
     socket_path: &Path,
     raw_terminal: bool,
+    tty_output: bool,
 ) -> Result<(), String> {
     let mut state = AttachClientState::new(initial_window);
     let mut connected_once = false;
@@ -640,6 +655,7 @@ fn run_with_input(
             socket_path,
             libc::STDIN_FILENO,
             raw_terminal,
+            tty_output,
         )? {
             return Ok(());
         }
@@ -689,6 +705,440 @@ impl InputBuffer {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TurnKey {
+    session_id: String,
+    message_id: String,
+}
+
+#[derive(Debug)]
+struct TurnBlock {
+    key: TurnKey,
+    header: Vec<String>,
+    response: String,
+    details: Vec<String>,
+    stored_bytes: usize,
+    stored_lines: usize,
+    omitted_lines: usize,
+}
+
+impl TurnBlock {
+    fn new(key: TurnKey, header: String) -> Self {
+        let header = header.lines().map(str::to_owned).collect::<Vec<_>>();
+        Self {
+            key,
+            stored_bytes: header.iter().map(String::len).sum(),
+            stored_lines: header.len(),
+            header,
+            response: String::new(),
+            details: Vec::new(),
+            omitted_lines: 0,
+        }
+    }
+
+    fn append_response(&mut self, content: &str) {
+        self.append_bounded(content, true);
+    }
+
+    fn append_detail(&mut self, detail: &str) {
+        self.append_bounded(detail, false);
+    }
+
+    fn append_bounded(&mut self, value: &str, response: bool) {
+        let additional_lines = value.bytes().filter(|byte| *byte == b'\n').count()
+            + usize::from(response && self.response.is_empty() && !value.is_empty())
+            + usize::from(!response && !value.is_empty());
+        if self.stored_bytes.saturating_add(value.len()) <= MAX_TURN_BLOCK_BYTES
+            && self.stored_lines.saturating_add(additional_lines) <= MAX_TURN_BLOCK_LINES
+        {
+            if response {
+                self.response.push_str(value);
+            } else {
+                self.details.extend(value.lines().map(str::to_owned));
+            }
+            self.stored_bytes += value.len();
+            self.stored_lines += additional_lines;
+            return;
+        }
+        self.omitted_lines = self
+            .omitted_lines
+            .saturating_add(value.lines().count().max(1));
+    }
+
+    fn lines(&self, agent: &str) -> Vec<String> {
+        let mut lines = self.header.clone();
+        if !self.response.is_empty() {
+            lines.extend(
+                render_prefixed(&format!("{agent} →"), &self.response)
+                    .lines()
+                    .map(str::to_owned),
+            );
+        }
+        lines.extend(self.details.iter().cloned());
+        if self.omitted_lines > 0 {
+            lines.push(format!("… tronqué, {} ligne(s)", self.omitted_lines));
+        }
+        lines
+    }
+}
+
+struct JournalRenderRecord {
+    key: Option<TurnKey>,
+    event: String,
+    text: Option<String>,
+    terminal: bool,
+    rendered: String,
+}
+
+fn journal_render_record(bytes: &[u8], agent: &str) -> Option<JournalRenderRecord> {
+    let value = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
+    if value.get("v").and_then(serde_json::Value::as_u64) != Some(1) {
+        return None;
+    }
+    let event = value.get("event")?.as_str()?.to_string();
+    let payload = value.get("payload").unwrap_or(&serde_json::Value::Null);
+    let key = value
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .zip(value.get("message_id").and_then(serde_json::Value::as_str))
+        .map(|(session_id, message_id)| TurnKey {
+            session_id: session_id.to_string(),
+            message_id: message_id.to_string(),
+        });
+    let text = (event == "update"
+        && payload.get("kind").and_then(serde_json::Value::as_str) == Some("text"))
+    .then(|| {
+        payload
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    });
+    Some(JournalRenderRecord {
+        key,
+        event,
+        text,
+        terminal: payload
+            .get("terminal")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        rendered: render_journal_event(bytes, agent),
+    })
+}
+
+enum RendererCommand {
+    Event(AttachEvent),
+    InputChanged(Vec<u8>),
+}
+
+enum RendererControl {
+    Stop,
+}
+
+#[derive(Clone)]
+struct RendererSender {
+    commands: mpsc::SyncSender<RendererCommand>,
+    input_dirty: Arc<AtomicBool>,
+    tty_output: bool,
+}
+
+impl RendererSender {
+    fn event(&self, event: AttachEvent) {
+        let _ = self.commands.send(RendererCommand::Event(event));
+    }
+
+    fn input_changed(&self, legacy_bytes: &[u8]) {
+        if self.tty_output {
+            self.input_dirty.store(true, Ordering::Release);
+            let _ = self
+                .commands
+                .try_send(RendererCommand::InputChanged(Vec::new()));
+        } else {
+            let _ = self
+                .commands
+                .send(RendererCommand::InputChanged(legacy_bytes.to_vec()));
+        }
+    }
+}
+
+struct RendererThread {
+    sender: RendererSender,
+    control: mpsc::Sender<RendererControl>,
+    handle: thread::JoinHandle<()>,
+}
+
+impl RendererThread {
+    fn spawn(
+        input: Arc<Mutex<InputBuffer>>,
+        agent: String,
+        raw_terminal: bool,
+        tty_output: bool,
+    ) -> Self {
+        let (commands, command_rx) = mpsc::sync_channel(RENDER_COMMAND_CAPACITY);
+        let (control, control_rx) = mpsc::channel();
+        let input_dirty = Arc::new(AtomicBool::new(false));
+        let sender = RendererSender {
+            commands,
+            input_dirty: input_dirty.clone(),
+            tty_output,
+        };
+        let handle = thread::spawn(move || {
+            let stdout = std::io::stdout();
+            let mut output = stdout.lock();
+            renderer_loop(
+                &mut output,
+                BlockRenderer::new(agent, raw_terminal, tty_output),
+                input,
+                input_dirty,
+                command_rx,
+                control_rx,
+            );
+        });
+        Self {
+            sender,
+            control,
+            handle,
+        }
+    }
+
+    fn sender(&self) -> RendererSender {
+        self.sender.clone()
+    }
+
+    fn stop(self) {
+        let _ = self.control.send(RendererControl::Stop);
+        let _ = self.handle.join();
+    }
+}
+
+fn renderer_loop(
+    output: &mut impl Write,
+    mut renderer: BlockRenderer,
+    input: Arc<Mutex<InputBuffer>>,
+    input_dirty: Arc<AtomicBool>,
+    commands: mpsc::Receiver<RendererCommand>,
+    control: mpsc::Receiver<RendererControl>,
+) {
+    loop {
+        if matches!(control.try_recv(), Ok(RendererControl::Stop)) {
+            while let Ok(command) = commands.try_recv() {
+                renderer.apply(command, &input, output);
+            }
+            break;
+        }
+        match commands.recv_timeout(Duration::from_millis(10)) {
+            Ok(command) => renderer.apply(command, &input, output),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if input_dirty.swap(false, Ordering::AcqRel) && renderer.tty_output {
+            renderer.redraw(&input_snapshot(&input), output);
+        }
+    }
+    renderer.finish(&input_snapshot(&input), output);
+}
+
+fn input_snapshot(input: &Arc<Mutex<InputBuffer>>) -> String {
+    input
+        .lock()
+        .map(|input| input.display())
+        .unwrap_or_default()
+}
+
+struct BlockRenderer {
+    agent: String,
+    raw_terminal: bool,
+    tty_output: bool,
+    current: Option<TurnBlock>,
+    rendered_rows: usize,
+}
+
+impl BlockRenderer {
+    fn new(agent: String, raw_terminal: bool, tty_output: bool) -> Self {
+        Self {
+            agent,
+            raw_terminal,
+            tty_output,
+            current: None,
+            rendered_rows: 0,
+        }
+    }
+
+    fn apply(
+        &mut self,
+        command: RendererCommand,
+        input: &Arc<Mutex<InputBuffer>>,
+        output: &mut impl Write,
+    ) {
+        let input = input_snapshot(input);
+        match command {
+            RendererCommand::Event(event) => self.render_event(&event, &input, output),
+            RendererCommand::InputChanged(_bytes) if self.tty_output => self.redraw(&input, output),
+            RendererCommand::InputChanged(bytes) => {
+                let _ = output.write_all(&bytes);
+                let _ = output.flush();
+            }
+        }
+    }
+
+    fn render_event(&mut self, event: &AttachEvent, input: &str, output: &mut impl Write) {
+        if !self.tty_output {
+            if self.raw_terminal {
+                let _ = output.write_all(b"\r\n");
+            }
+            let _ = writeln!(output, "{}", render_attach_event(event, &self.agent));
+            if self.raw_terminal {
+                let _ = write!(output, "> {input}");
+            }
+            let _ = output.flush();
+            return;
+        }
+        match event {
+            AttachEvent::Journal { bytes, .. } => self.render_journal(bytes, input, output),
+            AttachEvent::SnapshotCaughtUp { .. } if self.current.is_some() => {
+                let marker = render_attach_event(event, &self.agent);
+                if let Some(block) = self.current.as_mut() {
+                    block.append_detail(&marker);
+                }
+                self.redraw(input, output);
+            }
+            AttachEvent::Gap { .. }
+            | AttachEvent::JournalReadError { .. }
+            | AttachEvent::End { .. } => {
+                self.flush_incomplete(input, output);
+                self.emit_standalone(&render_attach_event(event, &self.agent), input, output);
+            }
+            _ => self.emit_standalone(&render_attach_event(event, &self.agent), input, output),
+        }
+    }
+
+    fn render_journal(&mut self, bytes: &[u8], input: &str, output: &mut impl Write) {
+        let Some(record) = journal_render_record(bytes, &self.agent) else {
+            self.flush_incomplete(input, output);
+            self.emit_standalone(&render_journal_event(bytes, &self.agent), input, output);
+            return;
+        };
+        let Some(key) = record.key else {
+            self.emit_standalone(&record.rendered, input, output);
+            return;
+        };
+        let starts_block = self.current.as_ref().map(|block| &block.key) != Some(&key);
+        if starts_block {
+            self.flush_incomplete(input, output);
+            let header = if record.event == "turn_start" {
+                record.rendered.clone()
+            } else {
+                format!("??:?? {} →", self.agent)
+            };
+            self.current = Some(TurnBlock::new(key.clone(), header));
+        }
+        if record.event == "turn_start" {
+            self.redraw(input, output);
+            return;
+        }
+        if let Some(block) = self.current.as_mut() {
+            if let Some(text) = record.text {
+                block.append_response(&text);
+            } else {
+                block.append_detail(&record.rendered);
+            }
+        }
+        if record.event == "turn_end" || record.terminal {
+            self.flush_complete(input, output);
+        } else {
+            self.redraw(input, output);
+        }
+    }
+
+    fn flush_incomplete(&mut self, input: &str, output: &mut impl Write) {
+        if let Some(block) = self.current.as_mut() {
+            block.append_detail("[tour incomplet]");
+        }
+        self.flush_complete(input, output);
+    }
+
+    fn flush_complete(&mut self, input: &str, output: &mut impl Write) {
+        let Some(block) = self.current.take() else {
+            return;
+        };
+        self.clear(output);
+        write_terminal_lines(output, &block.lines(&self.agent));
+        if self.raw_terminal {
+            let _ = write!(output, "> {input}");
+            self.rendered_rows = 1;
+        }
+        let _ = output.flush();
+    }
+
+    fn emit_standalone(&mut self, rendered: &str, input: &str, output: &mut impl Write) {
+        self.clear(output);
+        write_terminal_lines(
+            output,
+            &rendered.lines().map(str::to_owned).collect::<Vec<_>>(),
+        );
+        self.draw_active(input, output);
+        let _ = output.flush();
+    }
+
+    fn redraw(&mut self, input: &str, output: &mut impl Write) {
+        self.clear(output);
+        self.draw_active(input, output);
+        let _ = output.flush();
+    }
+
+    fn draw_active(&mut self, input: &str, output: &mut impl Write) {
+        let mut rows = 0;
+        if let Some(block) = self.current.as_ref() {
+            let lines = block.lines(&self.agent);
+            rows += lines.len();
+            write_visual_lines(output, &lines);
+            if self.raw_terminal {
+                let _ = output.write_all(b"\r\n");
+            }
+        }
+        if self.raw_terminal {
+            let _ = write!(output, "> {input}");
+            rows += 1;
+        }
+        self.rendered_rows = rows;
+    }
+
+    fn clear(&mut self, output: &mut impl Write) {
+        for index in 0..self.rendered_rows {
+            let _ = output.write_all(b"\r\x1b[2K");
+            if index + 1 < self.rendered_rows {
+                let _ = output.write_all(b"\x1b[1A");
+            }
+        }
+        self.rendered_rows = 0;
+    }
+
+    fn finish(&mut self, input: &str, output: &mut impl Write) {
+        self.flush_incomplete(input, output);
+        if self.rendered_rows > 0 {
+            let _ = output.write_all(b"\r\n");
+            self.rendered_rows = 0;
+        }
+        let _ = output.flush();
+    }
+}
+
+fn write_visual_lines(output: &mut impl Write, lines: &[String]) {
+    for (index, line) in lines.iter().enumerate() {
+        if index > 0 {
+            let _ = output.write_all(b"\r\n");
+        }
+        let _ = output.write_all(line.as_bytes());
+    }
+}
+
+fn write_terminal_lines(output: &mut impl Write, lines: &[String]) {
+    write_visual_lines(output, lines);
+    if !lines.is_empty() {
+        let _ = output.write_all(b"\r\n");
+    }
+}
+
 /// Maintient la saisie locale pendant qu'un seul lecteur socket traite le flux
 /// attach. Le writer reste partagé et sérialisé avec les resouscriptions du
 /// lecteur ; ainsi `Send` et les issues différées passent par la même connexion.
@@ -699,6 +1149,7 @@ fn drive_interactive(
     socket_path: &Path,
     input_fd: RawFd,
     raw_terminal: bool,
+    tty_output: bool,
 ) -> Result<bool, String> {
     let AttachConnection { reader, writer } = connection;
     let shared_state = Arc::new(Mutex::new(std::mem::replace(
@@ -706,18 +1157,18 @@ fn drive_interactive(
         AttachClientState::new(AttachWindow::Today),
     )));
     let input = Arc::new(Mutex::new(InputBuffer::default()));
-    let screen = Arc::new(Mutex::new(()));
+    let renderer =
+        RendererThread::spawn(input.clone(), agent.to_string(), raw_terminal, tty_output);
+    let renderer_sender = renderer.sender();
     let (status_tx, status_rx) = mpsc::channel();
     let reader_handle = spawn_attach_reader(
         reader,
         writer.clone(),
         shared_state.clone(),
-        input.clone(),
-        screen.clone(),
+        renderer_sender.clone(),
         agent.to_string(),
         socket_path.to_path_buf(),
         status_tx,
-        raw_terminal,
     );
 
     let mut reconnect = true;
@@ -749,7 +1200,7 @@ fn drive_interactive(
             continue;
         }
         if poll_result == 0 {
-            render_expired_sends(&shared_state, &input, &screen, agent, raw_terminal);
+            render_expired_sends(&shared_state, &renderer_sender);
             continue;
         }
         if pollfd.revents & libc::POLLIN != 0 {
@@ -776,10 +1227,9 @@ fn drive_interactive(
                     byte,
                     &shared_state,
                     &input,
-                    &screen,
+                    &renderer_sender,
                     &writer,
                     agent,
-                    raw_terminal,
                 )? {
                     reconnect = false;
                     break;
@@ -805,14 +1255,15 @@ fn drive_interactive(
                 reconnect = false;
                 break;
             }
-            render_expired_sends(&shared_state, &input, &screen, agent, raw_terminal);
+            render_expired_sends(&shared_state, &renderer_sender);
             continue;
         }
-        render_expired_sends(&shared_state, &input, &screen, agent, raw_terminal);
+        render_expired_sends(&shared_state, &renderer_sender);
     }
 
     close_attach_socket(&writer);
     let _ = reader_handle.join();
+    renderer.stop();
     let mut recovered = Arc::try_unwrap(shared_state)
         .map_err(|_| "état attach encore partagé à la fermeture".to_string())?
         .into_inner()
@@ -825,17 +1276,14 @@ fn drive_interactive(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn spawn_attach_reader(
     mut reader: BufReader<UnixStream>,
     writer: Arc<Mutex<BufWriter<UnixStream>>>,
     state: Arc<Mutex<AttachClientState>>,
-    input: Arc<Mutex<InputBuffer>>,
-    screen: Arc<Mutex<()>>,
+    renderer: RendererSender,
     agent: String,
     socket_path: std::path::PathBuf,
     status_tx: mpsc::Sender<ReaderStatus>,
-    raw_terminal: bool,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         loop {
@@ -864,7 +1312,7 @@ fn spawn_attach_reader(
                 }
             };
             for event in outcome.events {
-                print_interactive_event(&event, &input, &screen, &agent, raw_terminal);
+                renderer.event(event);
             }
             #[cfg(test)]
             if journal_rendered
@@ -930,10 +1378,9 @@ fn handle_input_byte(
     byte: u8,
     state: &Arc<Mutex<AttachClientState>>,
     input: &Arc<Mutex<InputBuffer>>,
-    screen: &Arc<Mutex<()>>,
+    renderer: &RendererSender,
     writer: &Arc<Mutex<BufWriter<UnixStream>>>,
     agent: &str,
-    raw_terminal: bool,
 ) -> Result<bool, String> {
     match byte {
         0x03 => return Ok(false),
@@ -951,9 +1398,7 @@ fn handle_input_byte(
                 .lock()
                 .map_err(|_| "saisie attach empoisonnée".to_string())?
                 .take();
-            if raw_terminal {
-                write_input_bytes(screen, b"\r\n");
-            }
+            renderer.input_changed(b"\r\n");
             if bytes.is_empty() {
                 return Ok(true);
             }
@@ -980,8 +1425,8 @@ fn handle_input_byte(
                 .lock()
                 .map_err(|_| "saisie attach empoisonnée".to_string())?
                 .erase_last();
-            if erased && raw_terminal {
-                write_input_bytes(screen, b"\x08 \x08");
+            if erased {
+                renderer.input_changed(b"\x08 \x08");
             }
         }
         byte if byte >= 0x20 => {
@@ -989,61 +1434,20 @@ fn handle_input_byte(
                 .lock()
                 .map_err(|_| "saisie attach empoisonnée".to_string())?
                 .push(byte);
-            if raw_terminal {
-                write_input_bytes(screen, &[byte]);
-            }
+            renderer.input_changed(&[byte]);
         }
         _ => {}
     }
     Ok(true)
 }
 
-fn render_expired_sends(
-    state: &Arc<Mutex<AttachClientState>>,
-    input: &Arc<Mutex<InputBuffer>>,
-    screen: &Arc<Mutex<()>>,
-    agent: &str,
-    raw_terminal: bool,
-) {
+fn render_expired_sends(state: &Arc<Mutex<AttachClientState>>, renderer: &RendererSender) {
     let events = state
         .lock()
         .map(|mut state| state.expire_pending_sends(Instant::now()))
         .unwrap_or_default();
     for event in events {
-        print_interactive_event(&event, input, screen, agent, raw_terminal);
-    }
-}
-
-fn print_interactive_event(
-    event: &AttachEvent,
-    input: &Arc<Mutex<InputBuffer>>,
-    screen: &Arc<Mutex<()>>,
-    agent: &str,
-    raw_terminal: bool,
-) {
-    let rendered = render_attach_event(event, agent);
-    let input = input
-        .lock()
-        .map(|input| input.display())
-        .unwrap_or_default();
-    if let Ok(_screen) = screen.lock() {
-        let mut output = std::io::stdout().lock();
-        if raw_terminal {
-            let _ = output.write_all(b"\r\n");
-        }
-        let _ = writeln!(output, "{rendered}");
-        if raw_terminal {
-            let _ = write!(output, "> {input}");
-        }
-        let _ = output.flush();
-    }
-}
-
-fn write_input_bytes(screen: &Arc<Mutex<()>>, bytes: &[u8]) {
-    if let Ok(_screen) = screen.lock() {
-        let mut output = std::io::stdout().lock();
-        let _ = output.write_all(bytes);
-        let _ = output.flush();
+        renderer.event(event);
     }
 }
 
@@ -1533,10 +1937,20 @@ fn write_plain_message(
 mod tests {
     use super::*;
     use bridget_transport::protocol::MAX_ATTACH_FRAGMENT_BYTES;
+    use serde_json::json;
     use std::io::{BufRead, BufReader, Write};
     use std::os::fd::{AsRawFd, RawFd};
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;
+
+    fn test_renderer_sender(tty_output: bool) -> RendererSender {
+        let (commands, _command_rx) = mpsc::sync_channel(RENDER_COMMAND_CAPACITY);
+        RendererSender {
+            commands,
+            input_dirty: Arc::new(AtomicBool::new(false)),
+            tty_output,
+        }
+    }
 
     struct PseudoTerminal {
         master: RawFd,
@@ -1632,6 +2046,291 @@ mod tests {
                 subscription_id: id.to_string()
             }]
         );
+    }
+
+    fn journal_record(seq: u64, event: &str, payload: serde_json::Value) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "v": 1,
+            "seq": seq,
+            "ts": "2026-08-23T09:07:00Z",
+            "session_id": "session-1",
+            "message_id": "message-1",
+            "event": event,
+            "payload": payload,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn matrice_stdin_stdout_selectionne_le_renderer_par_stdout_seul() {
+        for (stdin_tty, stdout_tty) in [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let renderer = BlockRenderer::new("codex-1".to_string(), stdin_tty, stdout_tty);
+            assert_eq!(renderer.tty_output, stdout_tty);
+            assert_eq!(renderer.raw_terminal, stdin_tty);
+        }
+    }
+
+    #[test]
+    fn stdout_non_tty_reste_identique_octet_pour_octet_quel_que_soit_stdin() {
+        let event = AttachEvent::Gap {
+            from_seq: 4,
+            to_seq: 5,
+            reason: Some("vue lente".to_string()),
+        };
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"frappe".to_vec(),
+        }));
+        let rendered = render_attach_event(&event, "codex-1");
+
+        let mut piped_stdin = BlockRenderer::new("codex-1".to_string(), false, false);
+        let mut piped_output = Vec::new();
+        piped_stdin.apply(
+            RendererCommand::Event(event.clone()),
+            &input,
+            &mut piped_output,
+        );
+        assert_eq!(piped_output, format!("{rendered}\n").as_bytes());
+
+        let mut tty_stdin = BlockRenderer::new("codex-1".to_string(), true, false);
+        let mut tty_output = Vec::new();
+        tty_stdin.apply(RendererCommand::Event(event), &input, &mut tty_output);
+        assert_eq!(tty_output, format!("\r\n{rendered}\n> frappe").as_bytes());
+    }
+
+    #[test]
+    fn tour_tty_reste_un_bloc_de_la_bascule_replay_jusqu_a_la_fin_live() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), true, true);
+        let mut output = Vec::new();
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 1,
+                bytes: journal_record(1, "turn_start", json!({"from":"humain","body":"Question"})),
+                live: false,
+            }),
+            &input,
+            &mut output,
+        );
+        let key = renderer.current.as_ref().unwrap().key.clone();
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::SnapshotCaughtUp {
+                through_seq: Some(1),
+            }),
+            &input,
+            &mut output,
+        );
+        assert_eq!(renderer.current.as_ref().unwrap().key, key);
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 2,
+                bytes: journal_record(2, "update", json!({"kind":"text","content":"Réponse live"})),
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+        assert_eq!(renderer.current.as_ref().unwrap().response, "Réponse live");
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 3,
+                bytes: journal_record(3, "turn_end", json!({"stop_reason":"end_turn"})),
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+
+        assert!(renderer.current.is_none());
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Question"));
+        assert!(output.contains("Réponse live"));
+        assert!(output.contains("historique rattrapé jusqu’à 1"));
+        assert!(output.contains("tour terminé : end_turn"));
+    }
+
+    #[test]
+    fn diagnostic_non_terminal_ne_ferme_pas_le_bloc() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), false, true);
+        let mut output = Vec::new();
+        for (seq, event, payload) in [
+            (1, "turn_start", json!({"from":"humain","body":"Question"})),
+            (2, "error", json!({"reason":"diagnostic transitoire"})),
+            (3, "update", json!({"kind":"text","content":"suite"})),
+        ] {
+            renderer.apply(
+                RendererCommand::Event(AttachEvent::Journal {
+                    seq,
+                    bytes: journal_record(seq, event, payload),
+                    live: true,
+                }),
+                &input,
+                &mut output,
+            );
+        }
+        let current = renderer.current.as_ref().unwrap();
+        assert_eq!(current.response, "suite");
+        assert!(
+            current
+                .details
+                .iter()
+                .any(|line| line.contains("diagnostic transitoire"))
+        );
+    }
+
+    #[test]
+    fn gap_end_et_ligne_corrompue_evacuant_un_tour_le_signalent_incomplet() {
+        let boundaries = [
+            (
+                AttachEvent::Gap {
+                    from_seq: 2,
+                    to_seq: 3,
+                    reason: Some("vue lente".to_string()),
+                },
+                "non affiché",
+            ),
+            (
+                AttachEvent::End {
+                    reason: "source_replaced".to_string(),
+                },
+                "abonnement terminé",
+            ),
+            (
+                AttachEvent::Journal {
+                    seq: 2,
+                    bytes: b"{invalide".to_vec(),
+                    live: true,
+                },
+                "événement journal illisible",
+            ),
+        ];
+        for (boundary, expected) in boundaries {
+            let input = Arc::new(Mutex::new(InputBuffer::default()));
+            let mut renderer = BlockRenderer::new("codex-1".to_string(), false, true);
+            let mut output = Vec::new();
+            renderer.apply(
+                RendererCommand::Event(AttachEvent::Journal {
+                    seq: 1,
+                    bytes: journal_record(
+                        1,
+                        "turn_start",
+                        json!({"from":"humain","body":"Question"}),
+                    ),
+                    live: false,
+                }),
+                &input,
+                &mut output,
+            );
+            renderer.apply(RendererCommand::Event(boundary), &input, &mut output);
+
+            assert!(renderer.current.is_none());
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains("[tour incomplet]"));
+            assert!(output.contains(expected));
+        }
+    }
+
+    #[test]
+    fn champ_terminal_explicite_ferme_le_bloc_meme_sur_un_diagnostic() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), false, true);
+        let mut output = Vec::new();
+        for (seq, event, payload) in [
+            (1, "turn_start", json!({"from":"humain","body":"Question"})),
+            (
+                2,
+                "error",
+                json!({"reason":"transport arrêté","terminal":true}),
+            ),
+        ] {
+            renderer.apply(
+                RendererCommand::Event(AttachEvent::Journal {
+                    seq,
+                    bytes: journal_record(seq, event, payload),
+                    live: true,
+                }),
+                &input,
+                &mut output,
+            );
+        }
+        assert!(renderer.current.is_none());
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("transport arrêté")
+        );
+    }
+
+    #[test]
+    fn bloc_borne_affiche_sa_troncature() {
+        let mut block = TurnBlock::new(
+            TurnKey {
+                session_id: "session".to_string(),
+                message_id: "message".to_string(),
+            },
+            "09:07 humain → Question".to_string(),
+        );
+        for _ in 0..500 {
+            block.append_response(&format!("{}\n", "x".repeat(200)));
+        }
+
+        assert!(block.stored_bytes <= MAX_TURN_BLOCK_BYTES);
+        assert!(block.stored_lines <= MAX_TURN_BLOCK_LINES);
+        assert!(block.omitted_lines > 0);
+        assert!(
+            block
+                .lines("codex-1")
+                .last()
+                .unwrap()
+                .starts_with("… tronqué,")
+        );
+    }
+
+    #[test]
+    fn saturation_coalesce_la_saisie_sans_perdre_ctrl_c_ni_la_restauration() {
+        let pseudo_terminal = PseudoTerminal::open();
+        let before = pseudo_terminal.attrs();
+        let (commands, command_rx) = mpsc::sync_channel(1);
+        let dirty = Arc::new(AtomicBool::new(false));
+        let sender = RendererSender {
+            commands,
+            input_dirty: dirty.clone(),
+            tty_output: true,
+        };
+        sender
+            .commands
+            .send(RendererCommand::Event(AttachEvent::Subscribed {
+                subscription_id: "sub".to_string(),
+            }))
+            .unwrap();
+        sender.input_changed(b"x");
+        assert!(dirty.load(Ordering::Acquire));
+
+        with_raw_terminal(pseudo_terminal.slave, |raw_terminal| {
+            assert!(raw_terminal);
+            let (write_stream, _) = UnixStream::pair().unwrap();
+            let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+            let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+            let input = Arc::new(Mutex::new(InputBuffer::default()));
+            assert!(!handle_input_byte(
+                0x03, &state, &input, &sender, &writer, "codex-1",
+            )?);
+            let (control_tx, control_rx) = mpsc::channel();
+            control_tx.send(RendererControl::Stop).unwrap();
+            assert!(matches!(control_rx.try_recv(), Ok(RendererControl::Stop)));
+            Ok(())
+        })
+        .unwrap();
+        assert_terminal_restored(&before, &pseudo_terminal.attrs());
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(RendererCommand::Event(_))
+        ));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
     }
 
     #[test]
@@ -1858,12 +2557,11 @@ mod tests {
         let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
         let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
         let input = Arc::new(Mutex::new(InputBuffer::default()));
-        let screen = Arc::new(Mutex::new(()));
+        let renderer = test_renderer_sender(false);
 
         for byte in b"bonjour\n" {
             assert!(
-                handle_input_byte(*byte, &state, &input, &screen, &writer, "codex-1", false,)
-                    .unwrap()
+                handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1",).unwrap()
             );
         }
 
@@ -1926,7 +2624,6 @@ mod tests {
         let input = Arc::new(Mutex::new(InputBuffer {
             bytes: b"r\xc3\xa9ponse en cours".to_vec(),
         }));
-        let screen = Arc::new(Mutex::new(()));
         let hostile = include_bytes!("../tests/fixtures/attach-hostile.jsonl");
         let event = AttachEvent::Journal {
             seq: 9,
@@ -1934,12 +2631,9 @@ mod tests {
             live: true,
         };
         let expected = input.lock().unwrap().bytes.clone();
-        let event_input = input.clone();
-        let event_screen = screen.clone();
-        let worker = thread::spawn(move || {
-            print_interactive_event(&event, &event_input, &event_screen, "codex-1", true);
-        });
-        worker.join().unwrap();
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), true, true);
+        let mut output = Vec::new();
+        renderer.apply(RendererCommand::Event(event), &input, &mut output);
         assert_eq!(input.lock().unwrap().bytes, expected);
     }
 
@@ -1967,13 +2661,9 @@ mod tests {
         let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
         let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
         let input = Arc::new(Mutex::new(InputBuffer::default()));
-        let screen = Arc::new(Mutex::new(()));
-        assert!(
-            !handle_input_byte(0x03, &state, &input, &screen, &writer, "codex-1", false,).unwrap()
-        );
-        assert!(
-            !handle_input_byte(0x04, &state, &input, &screen, &writer, "codex-1", false,).unwrap()
-        );
+        let renderer = test_renderer_sender(false);
+        assert!(!handle_input_byte(0x03, &state, &input, &renderer, &writer, "codex-1",).unwrap());
+        assert!(!handle_input_byte(0x04, &state, &input, &renderer, &writer, "codex-1",).unwrap());
     }
 
     #[test]
@@ -2016,7 +2706,9 @@ mod tests {
         let (event_rendered_tx, event_rendered_rx) = mpsc::channel();
         let input_writer = thread::spawn(move || {
             input_start_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-            event_rendered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            event_rendered_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap();
             assert_eq!(input_writer.write(b"dernier envoi\n").unwrap(), 14);
             input_writer.shutdown(Shutdown::Write).unwrap();
         });
@@ -2038,6 +2730,7 @@ mod tests {
                 Path::new("/tmp/bridget-attach-pty-unused.sock"),
                 input_reader.as_raw_fd(),
                 raw_terminal,
+                true,
             )
         });
         assert!(result.is_ok());
