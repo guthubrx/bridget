@@ -1375,16 +1375,16 @@ mod tests {
             .any(|argument| argument == "managed_process::tests::fd_probe_child");
         let mut command = helper_command("managed_process::tests::bootstrap_child");
         command.env(BOOTSTRAP_CHILD_ENV, "1").env(
-                BOOTSTRAP_REQUEST_ENV,
-                serde_json::to_string(&json!({
-                    "instance_id": request.identity.instance_id,
-                    "command_id": request.identity.command_id,
-                    "generation": request.identity.generation,
-                    "wrapper_executable": request.wrapper_executable,
-                    "wrapper_args": request.wrapper_args,
-                }))
-                .unwrap(),
-            );
+            BOOTSTRAP_REQUEST_ENV,
+            serde_json::to_string(&json!({
+                "instance_id": request.identity.instance_id,
+                "command_id": request.identity.command_id,
+                "generation": request.identity.generation,
+                "wrapper_executable": request.wrapper_executable,
+                "wrapper_args": request.wrapper_args,
+            }))
+            .unwrap(),
+        );
         if needs_fd_probe {
             command.env(FD_PROBE_ENV, "1");
         }

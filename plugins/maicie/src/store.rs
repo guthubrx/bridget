@@ -12,14 +12,14 @@ use crate::domain::{
     EtatOutboxDelegation, ObjectifCoordonne, TypeDecision,
 };
 use crate::outbox::{
-    OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot, StoreCommitPhase,
-    MAX_MESSAGE_BYTES,
+    MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
+    StoreCommitPhase,
 };
 use rusqlite::{
-    params, Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior,
+    Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fmt;
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -1258,7 +1258,11 @@ impl MaicieStore {
         received_digest: &str,
         observed_at: i64,
     ) -> Result<(), StoreError> {
-        let SpawnOutcome::Accepted { command_id: accepted_id, name } = outcome else {
+        let SpawnOutcome::Accepted {
+            command_id: accepted_id,
+            name,
+        } = outcome
+        else {
             return Err(StoreError::Invalid("une divergence exige SpawnAccepted"));
         };
         if accepted_id != &command_id.to_string() {
@@ -1977,8 +1981,18 @@ fn coordinate_delegation_outcome(
         )
         .optional()
         .map_err(StoreError::Sql)?;
-    let Some((objective_id, delegation_id, objective_state, objective_json, delegation_state, delegation_json)) = row else {
-        return Err(StoreError::Corrupt("outbox terminale sans agrégats corrélés"));
+    let Some((
+        objective_id,
+        delegation_id,
+        objective_state,
+        objective_json,
+        delegation_state,
+        delegation_json,
+    )) = row
+    else {
+        return Err(StoreError::Corrupt(
+            "outbox terminale sans agrégats corrélés",
+        ));
     };
 
     let mut objective: ObjectifCoordonne =
@@ -2033,7 +2047,9 @@ fn coordinate_delegation_outcome(
         if existing == decision_json {
             return Ok(());
         }
-        return Err(StoreError::Conflict("décision d'issue terminale divergente"));
+        return Err(StoreError::Conflict(
+            "décision d'issue terminale divergente",
+        ));
     }
 
     upsert_objective(tx, &objective)?;
@@ -2042,11 +2058,17 @@ fn coordinate_delegation_outcome(
         .execute(
             "INSERT INTO coordination_decisions(id, objective_id, state, payload_json)\n\
              VALUES (?1, ?2, 'applied', ?3)",
-            params![message_id.to_string(), objective.id.to_string(), decision_json],
+            params![
+                message_id.to_string(),
+                objective.id.to_string(),
+                decision_json
+            ],
         )
         .map_err(StoreError::Sql)?;
     if inserted != 1 {
-        return Err(StoreError::Conflict("décision d'issue terminale non enregistrée"));
+        return Err(StoreError::Conflict(
+            "décision d'issue terminale non enregistrée",
+        ));
     }
     Ok(())
 }

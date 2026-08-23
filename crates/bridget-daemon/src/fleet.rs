@@ -949,7 +949,9 @@ mod tests {
         let scope = supervisor.supervisor_scope();
         let spawn = order("command-scope", Some("codex-scope"), true);
         let lease = start(&supervisor, &spawn);
-        supervisor.mark_starting(&lease, NOW, &resolved_test_definition()).unwrap();
+        supervisor
+            .mark_starting(&lease, NOW, &resolved_test_definition())
+            .unwrap();
         let issue = supervisor
             .register_connected(&lease, &lease.instance_id, NOW + 1)
             .unwrap();
@@ -976,7 +978,9 @@ mod tests {
         for (command_id, name) in [("command-z", "zeta"), ("command-a", "alpha")] {
             let spawn = order(command_id, Some(name), true);
             let lease = start(&supervisor, &spawn);
-            supervisor.mark_starting(&lease, NOW, &resolved_test_definition()).unwrap();
+            supervisor
+                .mark_starting(&lease, NOW, &resolved_test_definition())
+                .unwrap();
             supervisor
                 .desired
                 .upsert(
@@ -1059,7 +1063,9 @@ mod tests {
         let supervisor = Arc::new(open(&root));
         let spawn = order("command-wait", Some("codex-wait"), true);
         let lease = start(&supervisor, &spawn);
-        supervisor.mark_starting(&lease, NOW, &resolved_test_definition()).unwrap();
+        supervisor
+            .mark_starting(&lease, NOW, &resolved_test_definition())
+            .unwrap();
         let waiter = match supervisor.request_spawn(&spawn, NOW + 1).unwrap() {
             SpawnSubmission::Await(waiter) => waiter,
             other => panic!("retry non rattaché: {other:?}"),
@@ -1120,7 +1126,9 @@ mod tests {
             supervisor.request_spawn(&divergent, NOW).unwrap(),
             SpawnSubmission::EnvelopeMismatch
         );
-        supervisor.mark_starting(&lease, NOW, &resolved_test_definition()).unwrap();
+        supervisor
+            .mark_starting(&lease, NOW, &resolved_test_definition())
+            .unwrap();
         assert!(matches!(
             supervisor.register_connected(&lease, "instance-obsolete", NOW + 1),
             Err(FleetError::StaleGeneration)
@@ -1159,7 +1167,9 @@ mod tests {
         let supervisor = open(&root);
         let spawn = order("command-stop-starting", Some("codex-stop"), true);
         let lease = start(&supervisor, &spawn);
-        supervisor.mark_starting(&lease, NOW, &resolved_test_definition()).unwrap();
+        supervisor
+            .mark_starting(&lease, NOW, &resolved_test_definition())
+            .unwrap();
 
         supervisor.invalidate_for_stop(&lease).unwrap();
 
@@ -1184,7 +1194,9 @@ mod tests {
         let supervisor = open(&root);
         let spawn = order("command-stop-connected", Some("codex-stop"), true);
         let lease = start(&supervisor, &spawn);
-        supervisor.mark_starting(&lease, NOW, &resolved_test_definition()).unwrap();
+        supervisor
+            .mark_starting(&lease, NOW, &resolved_test_definition())
+            .unwrap();
         let connected = supervisor
             .register_connected(&lease, &lease.instance_id, NOW + 1)
             .unwrap();
@@ -1278,7 +1290,9 @@ mod tests {
         let supervisor = open(&root);
         let spawn = order("command-crash", Some("codex-crash"), true);
         let lease = start(&supervisor, &spawn);
-        supervisor.mark_starting(&lease, NOW, &resolved_test_definition()).unwrap();
+        supervisor
+            .mark_starting(&lease, NOW, &resolved_test_definition())
+            .unwrap();
         match stage.as_str() {
             "before_fleet" => signal_and_park(),
             "after_fleet" => {

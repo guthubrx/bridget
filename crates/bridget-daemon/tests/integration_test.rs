@@ -123,21 +123,24 @@ impl FakeAgent {
 
     /// Thread qui écoute les messages entrants en push.
     fn start_receiver(agent_arc: Arc<Mutex<FakeAgent>>) {
-        thread::spawn(move || loop {
-            let mut line = String::new();
-            {
-                let mut agent = agent_arc.lock().unwrap();
-                match agent.reader.read_line(&mut line) {
-                    Ok(0) => break,
-                    Ok(_) => {}
-                    Err(_) => break,
+        thread::spawn(move || {
+            loop {
+                let mut line = String::new();
+                {
+                    let mut agent = agent_arc.lock().unwrap();
+                    match agent.reader.read_line(&mut line) {
+                        Ok(0) => break,
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
                 }
-            }
-            if let Ok(msg) = decode::<DaemonToWrapper>(line.trim())
-                && let DaemonToWrapper::Deliver(bm) = msg {
+                if let Ok(msg) = decode::<DaemonToWrapper>(line.trim())
+                    && let DaemonToWrapper::Deliver(bm) = msg
+                {
                     let agent = agent_arc.lock().unwrap();
                     agent.received.lock().unwrap().push(bm);
                 }
+            }
         });
     }
 }
@@ -186,7 +189,10 @@ mod tests {
                 // Ce processus est l'enfant direct du test. SIGKILL court-circuite
                 // explicitement la branche SHUTDOWN_REQUESTED du daemon : c'est
                 // donc une vraie reprise après crash, pas un arrêt coopératif.
-                assert_eq!(unsafe { libc::kill(self.child.id() as i32, libc::SIGKILL) }, 0);
+                assert_eq!(
+                    unsafe { libc::kill(self.child.id() as i32, libc::SIGKILL) },
+                    0
+                );
                 self.child.wait().expect("daemon tué");
             }
         }
@@ -197,7 +203,10 @@ mod tests {
             }
             // Cet enfant est créé juste au-dessus par ce test ; SIGTERM interrompt
             // le vrai processus daemon, sans passer par sa fermeture applicative.
-            assert_eq!(unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM) }, 0);
+            assert_eq!(
+                unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM) },
+                0
+            );
             let deadline = Instant::now() + Duration::from_secs(5);
             while Instant::now() < deadline {
                 if self.child.try_wait().expect("attente daemon").is_some() {
@@ -222,7 +231,10 @@ mod tests {
             .as_nanos();
         // Le daemon ajoute `.cache/bridget/bridget.sock` : garder la racine
         // sous `/tmp` évite de dépasser SUN_LEN sur les TMPDIR macOS longs.
-        let root = PathBuf::from(format!("/tmp/br-ren-{label}-{}-{nanos}", std::process::id()));
+        let root = PathBuf::from(format!(
+            "/tmp/br-ren-{label}-{}-{nanos}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).expect("répertoire de test");
         root
     }
@@ -237,7 +249,11 @@ mod tests {
     }
 
     impl InteractiveWrapperProcess {
-        fn start(root: &std::path::Path, agent: &std::path::Path, session: &str) -> (Self, PathBuf) {
+        fn start(
+            root: &std::path::Path,
+            agent: &std::path::Path,
+            session: &str,
+        ) -> (Self, PathBuf) {
             let marker = root.join("agent-name-file-path");
             let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
             command
@@ -358,7 +374,11 @@ mod tests {
         agent
     }
 
-    fn rename_via_cli(root: &std::path::Path, name_state: &std::path::Path, target: &str) -> std::process::Output {
+    fn rename_via_cli(
+        root: &std::path::Path,
+        name_state: &std::path::Path,
+        target: &str,
+    ) -> std::process::Output {
         Command::new(env!("CARGO_BIN_EXE_bridget"))
             .args(["rename", target])
             .env_clear()
@@ -370,10 +390,9 @@ mod tests {
     }
 
     fn registry_with_unknown_stdio_agent() -> (AgentRegistry, PathBuf) {
-        let mut fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "fixtures/registry/codex-claude.json"
-        ))
-        .expect("fixture de registre valide");
+        let mut fixture: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/registry/codex-claude.json"))
+                .expect("fixture de registre valide");
         assert_eq!(
             fixture["agents"]
                 .as_object()
@@ -450,8 +469,8 @@ sleep 2
         );
         fixture["agents"]["stdio-ouvert"]["args"] = serde_json::json!(["-c", script]);
         std::fs::write(&path, serde_json::to_string_pretty(&fixture).unwrap()).unwrap();
-        let registry = AgentRegistry::from_json(&std::fs::read_to_string(&path).unwrap(), &path)
-            .unwrap();
+        let registry =
+            AgentRegistry::from_json(&std::fs::read_to_string(&path).unwrap(), &path).unwrap();
         (registry, directory, counter)
     }
 
@@ -949,8 +968,8 @@ sleep 2
         let agent_binary = prepare_interactive_wrapper(&root);
         let daemon = DaemonProcess::start(&root);
 
-        let _reserved = FakeAgent::connect(&socket, "claude", Some("nom-pris"))
-            .expect("nom réservé");
+        let _reserved =
+            FakeAgent::connect(&socket, "claude", Some("nom-pris")).expect("nom réservé");
         let session = "22222222-2222-4222-8222-222222222222";
         let (mut wrapper, name_state) =
             InteractiveWrapperProcess::start(&root, &agent_binary, session);
@@ -969,7 +988,10 @@ sleep 2
             );
             // Mutation discriminante : écrire malgré Nack modifierait ces
             // octets production et ferait échouer l'assertion immédiatement.
-            assert_eq!(std::fs::read(&name_state).expect("état relu"), initial_state);
+            assert_eq!(
+                std::fs::read(&name_state).expect("état relu"),
+                initial_state
+            );
         }
 
         daemon.crash();

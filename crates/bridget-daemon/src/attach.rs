@@ -1672,7 +1672,11 @@ fn drive_connection(
             } else {
                 Vec::new()
             };
-            return Err(attach_refusal_message(&rejection, agent, &attachable_agents));
+            return Err(attach_refusal_message(
+                &rejection,
+                agent,
+                &attachable_agents,
+            ));
         }
         if let Some(window) = outcome.resubscribe
             && connection.subscribe(agent, window).is_err()
@@ -4119,7 +4123,10 @@ mod tests {
             mode: None,
             location: None,
         };
-        assert!(attach_refusal_message(&unknown_mode, "legacy-1", &[]).contains("mode de présence inconnu"));
+        assert!(
+            attach_refusal_message(&unknown_mode, "legacy-1", &[])
+                .contains("mode de présence inconnu")
+        );
 
         let unknown = attach_refusal_message(
             &AttachRejection {
@@ -4145,22 +4152,23 @@ mod tests {
         assert!(stopped.contains("équipier « codex-1 » arrêté"));
         assert!(stopped.contains("historique"));
 
-        let agent = |name: &str, transport: &str, mode: Option<PresenceMode>, state: &str| AgentInfo {
-            name: name.to_string(),
-            agent_type: "fixture".to_string(),
-            connection_id: format!("conn-{name}"),
-            host: "local".to_string(),
-            transport: transport.to_string(),
-            mode,
-            location: None,
-            os: "test".to_string(),
-            state: state.to_string(),
-            last_seen_secs: 0,
-            reconnect_count: 0,
-            domain: None,
-            model: None,
-            effort: None,
-        };
+        let agent =
+            |name: &str, transport: &str, mode: Option<PresenceMode>, state: &str| AgentInfo {
+                name: name.to_string(),
+                agent_type: "fixture".to_string(),
+                connection_id: format!("conn-{name}"),
+                host: "local".to_string(),
+                transport: transport.to_string(),
+                mode,
+                location: None,
+                os: "test".to_string(),
+                state: state.to_string(),
+                last_seen_secs: 0,
+                reconnect_count: 0,
+                domain: None,
+                model: None,
+                effort: None,
+            };
         let attachable = attachable_agent_names(vec![
             agent("connected", "acp", Some(PresenceMode::Acp), "connected"),
             agent("busy", "acp", Some(PresenceMode::Acp), "busy"),

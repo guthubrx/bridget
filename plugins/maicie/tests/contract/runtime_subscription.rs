@@ -83,13 +83,9 @@ fn consomme_fragments_gap_et_fin_uniquement_via_subscribe_public() {
 
     let client = BridgetClient::connect(fixture.path(), "maicie-instance-runtime").unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
-    let mut runtime = RuntimeSubscription::open_until(
-        &client,
-        "prospective",
-        AttachWindow::Today,
-        deadline,
-    )
-    .unwrap();
+    let mut runtime =
+        RuntimeSubscription::open_until(&client, "prospective", AttachWindow::Today, deadline)
+            .unwrap();
     assert_eq!(runtime.subscription_id(), "sub-7");
     assert_eq!(
         runtime.stream_state(),
@@ -97,7 +93,8 @@ fn consomme_fragments_gap_et_fin_uniquement_via_subscribe_public() {
         "Subscribed seul ne rend pas la vue fraîche"
     );
 
-    let RuntimeSignal::Observation(observation) = runtime.next_signal_until(deadline).unwrap() else {
+    let RuntimeSignal::Observation(observation) = runtime.next_signal_until(deadline).unwrap()
+    else {
         panic!("le premier signal doit être une observation factuelle");
     };
     assert_eq!(observation.agent, "prospective");

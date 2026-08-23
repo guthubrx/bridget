@@ -32,8 +32,10 @@ impl Deduplicator {
 
     /// Enregistre un contenu comme envoyé.
     pub fn mark_sent(&mut self, content_key: &str, target: &str) {
-        self.entries
-            .insert(content_key.to_string(), (Instant::now(), target.to_string()));
+        self.entries.insert(
+            content_key.to_string(),
+            (Instant::now(), target.to_string()),
+        );
     }
 
     fn prune(&mut self) {

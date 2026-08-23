@@ -183,17 +183,17 @@ while :; do :; done
     .unwrap();
     fs::set_permissions(&adapter, fs::Permissions::from_mode(0o700)).unwrap();
     let registry_json = serde_json::json!({
-            "agents": {
-                "fixture-ignore-cancel": {
-                    "command": adapter,
-                    "protocol": "acp",
-                    "permissions": "allow",
-                    "queue_capacity": 2,
-                    "notify_timeout_secs": 1
-                }
+        "agents": {
+            "fixture-ignore-cancel": {
+                "command": adapter,
+                "protocol": "acp",
+                "permissions": "allow",
+                "queue_capacity": 2,
+                "notify_timeout_secs": 1
             }
-        })
-        .to_string();
+        }
+    })
+    .to_string();
     fs::write(&registry, &registry_json).unwrap();
     fs::set_permissions(&registry, fs::Permissions::from_mode(0o600)).unwrap();
     let listener = UnixListener::bind(&socket).unwrap();

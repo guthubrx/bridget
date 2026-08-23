@@ -154,9 +154,11 @@ fn activation_outbox_ne_revient_pas_apres_une_issue_durable() {
 
 #[test]
 fn outbox_rejetee_est_terminale_et_synthese_est_requise() {
-    assert!(EtatOutboxDelegation::Prepared
-        .transition_vers(EtatOutboxDelegation::Rejected)
-        .is_ok());
+    assert!(
+        EtatOutboxDelegation::Prepared
+            .transition_vers(EtatOutboxDelegation::Rejected)
+            .is_ok()
+    );
     assert_eq!(
         EtatOutboxDelegation::Rejected.transition_vers(EtatOutboxDelegation::Accepted),
         Err(DomainError::TransitionInterdite)

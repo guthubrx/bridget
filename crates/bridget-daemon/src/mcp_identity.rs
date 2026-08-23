@@ -260,12 +260,24 @@ mod tests {
             (12, (120, 1)),
         ]));
         assert_eq!(
-            resolve_with(Some(&name), &root.join("agent-pids"), Some("instance-1"), 42, &tree),
+            resolve_with(
+                Some(&name),
+                &root.join("agent-pids"),
+                Some("instance-1"),
+                42,
+                &tree
+            ),
             Ok("avant".into())
         );
         fs::write(&name, "apres").unwrap();
         assert_eq!(
-            resolve_with(None, &root.join("agent-pids"), Some("instance-1"), 42, &tree),
+            resolve_with(
+                None,
+                &root.join("agent-pids"),
+                Some("instance-1"),
+                42,
+                &tree
+            ),
             Ok("apres".into())
         );
         fs::remove_dir_all(root).unwrap();
@@ -346,7 +358,13 @@ mod tests {
         );
         let matching_birth = Fixture(BTreeMap::from([(20, (200, 1))]));
         assert_eq!(
-            resolve_with(None, &markers, Some("instance-divergente"), 20, &matching_birth),
+            resolve_with(
+                None,
+                &markers,
+                Some("instance-divergente"),
+                20,
+                &matching_birth
+            ),
             Err(IdentityError::IdentityNotFound)
         );
         fs::write(markers.join("77"), "ancien-nom").unwrap();
@@ -372,7 +390,13 @@ mod tests {
         fs::write(&dynamic_name, "agent invalide").unwrap();
         let tree = Fixture(BTreeMap::from([(42, (420, 12)), (12, (120, 1))]));
         assert_eq!(
-            resolve_with(Some(&dynamic_name), &root.join("agent-pids"), Some("instance-1"), 42, &tree),
+            resolve_with(
+                Some(&dynamic_name),
+                &root.join("agent-pids"),
+                Some("instance-1"),
+                42,
+                &tree
+            ),
             Ok("agent-valide".into())
         );
         fs::remove_dir_all(root).unwrap();

@@ -1,10 +1,10 @@
 use base64::Engine;
-use maicie::app::{delegate, DelegateRequest, DelegateResult, DelegationCandidate};
+use maicie::app::{DelegateRequest, DelegateResult, DelegationCandidate, delegate};
 use maicie::bridget_client::IdempotencyIssue;
 use maicie::config::DurationClasses;
 use maicie::domain::ClasseDuree;
 use maicie::store::MaicieStore;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;

@@ -31,15 +31,19 @@ fn un_message_libre_adresse_a_maicie_reste_une_conversation_avec_aide_explicitem
     drop(reopened);
 
     let connection = rusqlite::Connection::open(&fixture.database).unwrap();
-    assert!(connection
-        .execute(
-            "UPDATE conversation_records SET body_bytes = ?1 WHERE sequence = 1",
-            ["altéré".as_bytes()],
-        )
-        .is_err());
-    assert!(connection
-        .execute("DELETE FROM conversation_records WHERE sequence = 1", [])
-        .is_err());
+    assert!(
+        connection
+            .execute(
+                "UPDATE conversation_records SET body_bytes = ?1 WHERE sequence = 1",
+                ["altéré".as_bytes()],
+            )
+            .is_err()
+    );
+    assert!(
+        connection
+            .execute("DELETE FROM conversation_records WHERE sequence = 1", [])
+            .is_err()
+    );
 }
 
 #[test]

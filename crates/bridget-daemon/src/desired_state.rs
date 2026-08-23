@@ -1,7 +1,7 @@
 //! État désiré durable des équipiers gérés par le daemon.
 
-use bridget_transport::fsutil::{AtomicWritePhase, write_private_file_atomic_observed};
 use bridget_transport::ResolvedAgentDefinition;
+use bridget_transport::fsutil::{AtomicWritePhase, write_private_file_atomic_observed};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;

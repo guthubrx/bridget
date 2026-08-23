@@ -316,3 +316,13 @@ Six tâches validées sur le principe par l'utilisateur (spec à créer au « go
 - C5 : tmux_location capturée au lancement, périmée si pane déplacé.
 - C6 : slug claude réimplémenté (dégradation honnête si convention diverge).
 - C7 : BRIDGET_MVP_GATE_BIN exige un chemin absolu.
+
+## Ordre de déroulé — amendé le 2026-08-23 soir (décision utilisateur)
+
+Le bloc F est REMONTÉ avant la piste GUI : l'objectif prioritaire est
+l'accélération (F27-29 automatisent le référent, condition du passage à une
+équipe plus nombreuse). Ordre validé : C (fait) → D18 identité joignable
+(prérequis technique de F) → F27-29 + gate mécanique → ÉLARGISSEMENT DE
+L'ÉQUIPE → B (journal enrichi, traducteur, GUI) mené par l'équipe élargie,
+F-reste et D-reste en fil d'eau. La GUI arrive plus tard mais se construit
+plus vite ; le coût net est un report, pas une perte.

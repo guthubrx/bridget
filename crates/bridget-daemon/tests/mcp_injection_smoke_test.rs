@@ -71,8 +71,7 @@ fn write_user_config_sentinels(home: &Path) {
 }
 
 fn fake_server() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../specs/010-mcp/spike/fake-mcp-server.py")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../specs/010-mcp/spike/fake-mcp-server.py")
 }
 
 fn run_harness(home: &Path, agent: &str, arguments: &[&str], expects_tools_list: bool) {
@@ -99,7 +98,10 @@ fn run_harness(home: &Path, agent: &str, arguments: &[&str], expects_tools_list:
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.status.success(), "{agent} a échoué : {combined}");
-    assert!(combined.contains("PROBE_OK"), "{agent} n'a pas retourné PROBE_OK : {combined}");
+    assert!(
+        combined.contains("PROBE_OK"),
+        "{agent} n'a pas retourné PROBE_OK : {combined}"
+    );
 
     let log_contents = fs::read_to_string(&log)
         .unwrap_or_else(|error| panic!("journal MCP {agent} absent: {error}"));
@@ -215,18 +217,37 @@ fn voie_acp_lance_la_session_wrapper_avec_probe_ephemere() {
         let mut writer = BufWriter::new(stream);
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
-        assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(), WrapperToDaemon::Register { .. }));
-        writeln!(writer, "{}", encode(&DaemonToWrapper::Registered { name: "probe-acp".to_string() }).unwrap()).unwrap();
+        assert!(matches!(
+            decode::<WrapperToDaemon>(line.trim()).unwrap(),
+            WrapperToDaemon::Register { .. }
+        ));
+        writeln!(
+            writer,
+            "{}",
+            encode(&DaemonToWrapper::Registered {
+                name: "probe-acp".to_string()
+            })
+            .unwrap()
+        )
+        .unwrap();
         writer.flush().unwrap();
         let message = BridgetMessage::new("human", "probe-acp", PROBE_PROMPT);
-        writeln!(writer, "{}", encode(&DaemonToWrapper::Deliver(message)).unwrap()).unwrap();
+        writeln!(
+            writer,
+            "{}",
+            encode(&DaemonToWrapper::Deliver(message)).unwrap()
+        )
+        .unwrap();
         writer.flush().unwrap();
         loop {
             line.clear();
             if reader.read_line(&mut line).unwrap() == 0 {
                 break;
             }
-            if matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(), WrapperToDaemon::Unregister) {
+            if matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::Unregister
+            ) {
                 break;
             }
         }

@@ -37,13 +37,18 @@ fn profile_propose_puis_approve_expose_le_consentement_local_et_l_outbox() {
     let proposed: Value = serde_json::from_slice(&proposed.stdout).unwrap();
     assert_eq!(proposed["kind"], "proposed");
     assert_eq!(proposed["screen"]["command"], "claude-code-acp");
-    assert_eq!(proposed["screen"]["args"], json!(["--model", "claude-fable-5"]));
+    assert_eq!(
+        proposed["screen"]["args"],
+        json!(["--model", "claude-fable-5"])
+    );
     let approval_id = proposed["approval_id"].as_str().unwrap().to_string();
-    assert!(MaicieStore::open(&fixture.database)
-        .unwrap()
-        .pending_activation_outboxes()
-        .unwrap()
-        .is_empty());
+    assert!(
+        MaicieStore::open(&fixture.database)
+            .unwrap()
+            .pending_activation_outboxes()
+            .unwrap()
+            .is_empty()
+    );
 
     let refused = fixture.run(&[
         "profile",
@@ -53,8 +58,10 @@ fn profile_propose_puis_approve_expose_le_consentement_local_et_l_outbox() {
         fixture.definition.to_str().unwrap(),
     ]);
     assert!(!refused.status.success());
-    assert!(String::from_utf8_lossy(&refused.stderr)
-        .contains("approbation = terminal interactif uniquement"));
+    assert!(
+        String::from_utf8_lossy(&refused.stderr)
+            .contains("approbation = terminal interactif uniquement")
+    );
 
     let scripted = fixture.run(&[
         "profile",
@@ -65,14 +72,10 @@ fn profile_propose_puis_approve_expose_le_consentement_local_et_l_outbox() {
         "--confirm",
     ]);
     assert!(!scripted.status.success());
-    assert!(String::from_utf8_lossy(&scripted.stderr)
-        .contains("option profile approve inconnue"));
+    assert!(String::from_utf8_lossy(&scripted.stderr).contains("option profile approve inconnue"));
 
     let (status, rendered) = fixture.approve_in_pseudo_tty(&approval_id, "oui\n");
-    assert!(
-        status.success(),
-        "{rendered}"
-    );
+    assert!(status.success(), "{rendered}");
     assert!(rendered.contains("Approbation locale du profil"));
     assert!(rendered.contains("args=[\"--model\",\"claude-fable-5\"]"));
     assert!(rendered.contains("Tapez oui pour approuver"));
@@ -175,7 +178,10 @@ impl Fixture {
         let mut child = command.spawn().unwrap();
         pseudo_tty.write_all(confirmation.as_bytes());
         let status = child.wait().unwrap();
-        (status, String::from_utf8_lossy(&pseudo_tty.read_available()).into_owned())
+        (
+            status,
+            String::from_utf8_lossy(&pseudo_tty.read_available()).into_owned(),
+        )
     }
 }
 
@@ -226,7 +232,11 @@ impl PseudoTerminal {
         let fd = unsafe { libc::dup(self.master) };
         assert!(fd >= 0, "dup master: {}", std::io::Error::last_os_error());
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-        assert!(flags >= 0, "fcntl F_GETFL: {}", std::io::Error::last_os_error());
+        assert!(
+            flags >= 0,
+            "fcntl F_GETFL: {}",
+            std::io::Error::last_os_error()
+        );
         assert_eq!(
             unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
             0,

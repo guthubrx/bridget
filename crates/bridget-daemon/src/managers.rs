@@ -1,8 +1,8 @@
 //! Managers spécialisés pour séparer les responsabilités du daemon
 
 use std::collections::HashMap;
-use std::os::unix::net::UnixStream;
 use std::io::BufWriter;
+use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -36,12 +36,20 @@ impl ConnectionManager {
 
     pub fn register_connection(&mut self, conn_id: String, writer: BufWriter<UnixStream>) -> u64 {
         let conn_id = conn_id.clone();
-        self.connections.insert(conn_id.clone(), Arc::new(Mutex::new(writer)));
+        self.connections
+            .insert(conn_id.clone(), Arc::new(Mutex::new(writer)));
         self.conn_counter += 1;
         self.conn_counter
     }
 
-    pub fn set_connection_info(&mut self, conn_id: &str, name: String, host: String, os: String, instance_id: Option<String>) {
+    pub fn set_connection_info(
+        &mut self,
+        conn_id: &str,
+        name: String,
+        host: String,
+        os: String,
+        instance_id: Option<String>,
+    ) {
         self.conn_names.insert(conn_id.to_string(), name);
         self.conn_hosts.insert(conn_id.to_string(), host);
         self.conn_operating_systems.insert(conn_id.to_string(), os);
@@ -50,7 +58,10 @@ impl ConnectionManager {
         }
     }
 
-    pub fn remove_connection(&mut self, conn_id: &str) -> Option<Arc<Mutex<BufWriter<UnixStream>>>> {
+    pub fn remove_connection(
+        &mut self,
+        conn_id: &str,
+    ) -> Option<Arc<Mutex<BufWriter<UnixStream>>>> {
         let writer_opt = self.connections.remove(conn_id);
         self.conn_names.remove(conn_id);
         self.conn_hosts.remove(conn_id);
@@ -127,9 +138,10 @@ impl PresenceManager {
 
     pub fn mark_unreachable(&mut self, conn_id: &str, conn_instances: &HashMap<String, String>) {
         if let Some(instance_id) = conn_instances.get(conn_id)
-            && let Some(presence) = self.presences.get_mut(instance_id) {
-                presence.state = "unreachable".to_string();
-            }
+            && let Some(presence) = self.presences.get_mut(instance_id)
+        {
+            presence.state = "unreachable".to_string();
+        }
     }
 
     pub fn get_presence(&self, instance_id: &str) -> Option<&Presence> {

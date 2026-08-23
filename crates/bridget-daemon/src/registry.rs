@@ -23,7 +23,10 @@ pub struct McpDefinition {
 
 impl Default for McpDefinition {
     fn default() -> Self {
-        Self { interactive: default_interactive_mcp(), acp_session: false }
+        Self {
+            interactive: default_interactive_mcp(),
+            acp_session: false,
+        }
     }
 }
 
@@ -100,7 +103,10 @@ impl AgentRegistry {
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(format!("impossible d'inspecter {}: {error}", source.display()));
+                return Err(format!(
+                    "impossible d'inspecter {}: {error}",
+                    source.display()
+                ));
             }
         }
         Ok(Self { agents, source })
@@ -126,10 +132,7 @@ impl AgentRegistry {
         })
     }
 
-    pub fn resolved_definition(
-        &self,
-        agent_type: &str,
-    ) -> Result<ResolvedAgentDefinition, String> {
+    pub fn resolved_definition(&self, agent_type: &str) -> Result<ResolvedAgentDefinition, String> {
         resolved_definition(self.get(agent_type)?)
     }
 
@@ -289,15 +292,26 @@ fn read_private_registry(source: &Path) -> Result<String, String> {
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(source)
-        .map_err(|err| format!("impossible d'ouvrir {} sans suivre de lien: {err}", source.display()))?;
+        .map_err(|err| {
+            format!(
+                "impossible d'ouvrir {} sans suivre de lien: {err}",
+                source.display()
+            )
+        })?;
     let metadata = file
         .metadata()
         .map_err(|err| format!("impossible d'inspecter {}: {err}", source.display()))?;
     if !metadata.is_file() {
-        return Err(format!("registre refusé {}: fichier régulier requis", source.display()));
+        return Err(format!(
+            "registre refusé {}: fichier régulier requis",
+            source.display()
+        ));
     }
     if metadata.uid() != unsafe { libc::geteuid() } {
-        return Err(format!("registre refusé {}: propriétaire inattendu", source.display()));
+        return Err(format!(
+            "registre refusé {}: propriétaire inattendu",
+            source.display()
+        ));
     }
     let mode = metadata.permissions().mode() & 0o777;
     if mode & 0o077 != 0 {
@@ -402,7 +416,10 @@ fn validate_registry(
                 source.display()
             ));
         }
-        if !matches!(definition.mcp.interactive.as_str(), "none" | "claude" | "codex" | "unsupported") {
+        if !matches!(
+            definition.mcp.interactive.as_str(),
+            "none" | "claude" | "codex" | "unsupported"
+        ) {
             return Err(format!(
                 "registre invalide {}: mcp.interactive invalide pour '{name}'",
                 source.display()
@@ -485,7 +502,10 @@ fn definition(
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
-        mcp: McpDefinition { interactive: mcp_interactive.to_string(), acp_session: true },
+        mcp: McpDefinition {
+            interactive: mcp_interactive.to_string(),
+            acp_session: true,
+        },
     }
 }
 
@@ -545,7 +565,13 @@ fn default_agents() -> BTreeMap<String, AgentDefinition> {
                 "gemini",
                 &["--acp"],
                 &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-                &["XDG_CONFIG_HOME", "XDG_CACHE_HOME", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"],
+                &[
+                    "XDG_CONFIG_HOME",
+                    "XDG_CACHE_HOME",
+                    "HTTPS_PROXY",
+                    "HTTP_PROXY",
+                    "NO_PROXY",
+                ],
                 "unsupported",
             ),
         ),
@@ -558,10 +584,8 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     fn test_root(label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "bridget-registry-{label}-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("bridget-registry-{label}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         root
     }
@@ -594,7 +618,10 @@ mod tests {
         assert_eq!(registry.get("gemini").unwrap().args, vec!["--acp"]);
         assert_eq!(codex.mcp.interactive, "codex");
         assert!(codex.mcp.acp_session);
-        assert_eq!(registry.get("gemini").unwrap().mcp.interactive, "unsupported");
+        assert_eq!(
+            registry.get("gemini").unwrap().mcp.interactive,
+            "unsupported"
+        );
     }
 
     #[test]

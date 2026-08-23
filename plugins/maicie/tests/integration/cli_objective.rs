@@ -1,8 +1,6 @@
 use maicie::app::{DelegateRequest, DelegateResult, DelegationCandidate, delegate};
 use maicie::config::DurationClasses;
-use maicie::domain::{
-    ClasseDuree, DecisionCoordination, EtatDecision, EtatObjectif, TypeDecision,
-};
+use maicie::domain::{ClasseDuree, DecisionCoordination, EtatDecision, EtatObjectif, TypeDecision};
 use maicie::store::{MaicieStore, StoreError};
 use serde_json::{Value, json};
 use std::fs;
@@ -103,7 +101,13 @@ fn commandes_objectif_rendent_et_persistent_les_decisions_explicites() {
     );
 
     for command in [
-        vec!["objective", &objective_id, "add-participant", "sentry", "--json"],
+        vec![
+            "objective",
+            &objective_id,
+            "add-participant",
+            "sentry",
+            "--json",
+        ],
         vec![
             "objective",
             &objective_id,
@@ -128,9 +132,14 @@ fn commandes_objectif_rendent_et_persistent_les_decisions_explicites() {
     }
     // La synthèse est une lecture factuelle : elle reste disponible après la
     // clôture, sans créer de décision supplémentaire.
-    assert!(run(&fixture, &["objective", &objective_id, "summarize", "--json"])
+    assert!(
+        run(
+            &fixture,
+            &["objective", &objective_id, "summarize", "--json"]
+        )
         .status
-        .success());
+        .success()
+    );
 }
 
 #[test]
@@ -151,7 +160,9 @@ fn decision_obsolete_nefface_pas_l_issue_terminale_reinjectee() {
     let mut stale_close = snapshot.clone();
     stale_close.clore(200).unwrap();
     let mut terminal_objective = snapshot;
-    terminal_objective.transition(EtatObjectif::AEvaluer, 150).unwrap();
+    terminal_objective
+        .transition(EtatObjectif::AEvaluer, 150)
+        .unwrap();
     let connection = rusqlite::Connection::open(&fixture.database).unwrap();
     connection
         .execute(

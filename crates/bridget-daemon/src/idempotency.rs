@@ -87,13 +87,17 @@ pub enum PublicResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LookupResult {
-    Accepted { expires_at: i64 },
+    Accepted {
+        expires_at: i64,
+    },
     Rejected {
         category: String,
         reason: String,
         expires_at: i64,
     },
-    OutcomeUnknown { expires_at: i64 },
+    OutcomeUnknown {
+        expires_at: i64,
+    },
     IdempotencyExpired,
 }
 
@@ -395,7 +399,10 @@ impl IdempotencyStore {
                 .iter()
                 .any(|column| column == "message_bytes");
             if !has_message_bytes {
-                tx.execute("ALTER TABLE send_deliveries ADD COLUMN message_bytes BLOB", [])?;
+                tx.execute(
+                    "ALTER TABLE send_deliveries ADD COLUMN message_bytes BLOB",
+                    [],
+                )?;
             }
             // Une remise v1 sans enveloppe est irréparable sans reroutage :
             // elle devient indéterminée dans la même migration avant v2.
@@ -671,8 +678,8 @@ impl IdempotencyStore {
         {
             return Err(IdempotencyError::InvalidSpawnCommand);
         }
-        let definition_json = serde_json::to_string(definition)
-            .map_err(|_| IdempotencyError::InvalidSpawnCommand)?;
+        let definition_json =
+            serde_json::to_string(definition).map_err(|_| IdempotencyError::InvalidSpawnCommand)?;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -681,7 +688,12 @@ impl IdempotencyStore {
              SET state = 'starting', resolved_definition_json = ?1
              WHERE issuer_scope = ?2 AND operation_kind = 'spawn'
                AND command_id = ?3 AND generation = ?4 AND state = 'reserved'",
-            params![definition_json, key.issuer_scope, key.idempotency_key, generation],
+            params![
+                definition_json,
+                key.issuer_scope,
+                key.idempotency_key,
+                generation
+            ],
         )?;
         if updated != 1 {
             return Err(IdempotencyError::DispatchUnavailable);
@@ -1058,7 +1070,9 @@ impl IdempotencyStore {
         recipient_instance_id: &str,
         delivery_generation: u64,
     ) -> Result<Option<String>, IdempotencyError> {
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let row = tx.query_row(
             "SELECT issuer_scope, idempotency_key, recipient_instance_id, delivery_generation, phase, message_bytes
              FROM send_deliveries WHERE delivery_id = ?1",
@@ -1072,9 +1086,16 @@ impl IdempotencyStore {
                 row.get::<_, Vec<u8>>(5)?,
             )),
         ).optional()?.ok_or(IdempotencyError::InvalidDelivery)?;
-        if row.2 != recipient_instance_id || row.3 != delivery_generation { return Err(IdempotencyError::InvalidDelivery); }
-        if row.4 == "acked" { tx.commit()?; return Ok(None); }
-        if row.4 != "dispatching" { return Err(IdempotencyError::InvalidDelivery); }
+        if row.2 != recipient_instance_id || row.3 != delivery_generation {
+            return Err(IdempotencyError::InvalidDelivery);
+        }
+        if row.4 == "acked" {
+            tx.commit()?;
+            return Ok(None);
+        }
+        if row.4 != "dispatching" {
+            return Err(IdempotencyError::InvalidDelivery);
+        }
         let message = serde_json::from_slice::<bridget_core::BridgetMessage>(&row.5).ok();
         let delivery = tx.execute("UPDATE send_deliveries SET phase = 'acked' WHERE delivery_id = ?1 AND phase = 'dispatching'", params![delivery_id])?;
         let record = tx.execute(
@@ -1082,7 +1103,9 @@ impl IdempotencyStore {
              WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2 AND state = 'dispatching'",
             params![row.0, row.1],
         )?;
-        if delivery != 1 || record != 1 { return Err(IdempotencyError::DispatchUnavailable); }
+        if delivery != 1 || record != 1 {
+            return Err(IdempotencyError::DispatchUnavailable);
+        }
         let answered_request = if let Some(message) = message {
             let conversation_key = format!("{}|{}", message.from, message.to);
             crate::store::record_message_in_transaction(&tx, &message, &conversation_key)?;
@@ -1461,7 +1484,11 @@ mod tests {
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert!(columns.iter().any(|column| column == "resolved_definition_json"));
+        assert!(
+            columns
+                .iter()
+                .any(|column| column == "resolved_definition_json")
+        );
         drop(store);
         std::fs::remove_file(path).unwrap();
     }
@@ -1730,7 +1757,10 @@ mod tests {
     fn retry_en_vol_rejoue_unknown_puis_accepted_apres_accuse() {
         let mut store = IdempotencyStore::open_in_memory().unwrap();
         let key = key();
-        assert!(matches!(reserve(&store, b"canon"), Reservation::Prepared { .. }));
+        assert!(matches!(
+            reserve(&store, b"canon"),
+            Reservation::Prepared { .. }
+        ));
         let delivery = SendDelivery {
             delivery_id: "delivery-retry".to_string(),
             recipient_instance_id: "instance-1".to_string(),
@@ -1741,12 +1771,18 @@ mod tests {
         store.begin_send_delivery(&key, &delivery).unwrap();
         assert_eq!(
             reserve(&store, b"canon"),
-            Reservation::Replayed(LookupResult::OutcomeUnknown { expires_at: NOW + HORIZON })
+            Reservation::Replayed(LookupResult::OutcomeUnknown {
+                expires_at: NOW + HORIZON
+            })
         );
-        store.acknowledge_send_delivery("delivery-retry", "instance-1", 9).unwrap();
+        store
+            .acknowledge_send_delivery("delivery-retry", "instance-1", 9)
+            .unwrap();
         assert_eq!(
             reserve(&store, b"canon"),
-            Reservation::Replayed(LookupResult::Accepted { expires_at: NOW + HORIZON })
+            Reservation::Replayed(LookupResult::Accepted {
+                expires_at: NOW + HORIZON
+            })
         );
     }
 
@@ -1803,18 +1839,20 @@ mod tests {
                 .unwrap(),
             Reservation::Prepared { .. }
         ));
-        assert!(store
-            .begin_send_delivery(
-                &second,
-                &SendDelivery {
-                    delivery_id: "same-delivery".to_string(),
-                    recipient_instance_id: "instance-1".to_string(),
-                    delivery_generation: 4,
-                    expires_at: NOW + HORIZON,
-                    message_bytes: b"message-second".to_vec(),
-                },
-            )
-            .is_err());
+        assert!(
+            store
+                .begin_send_delivery(
+                    &second,
+                    &SendDelivery {
+                        delivery_id: "same-delivery".to_string(),
+                        recipient_instance_id: "instance-1".to_string(),
+                        delivery_generation: 4,
+                        expires_at: NOW + HORIZON,
+                        message_bytes: b"message-second".to_vec(),
+                    },
+                )
+                .is_err()
+        );
         assert_eq!(
             store.lookup(&second, NOW).unwrap(),
             LookupResult::OutcomeUnknown {

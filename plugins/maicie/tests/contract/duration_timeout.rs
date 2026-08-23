@@ -1,5 +1,5 @@
 use maicie::app::{
-    delegate, status, timeout_for_duration, DelegateRequest, DelegateResult, DelegationCandidate,
+    DelegateRequest, DelegateResult, DelegationCandidate, delegate, status, timeout_for_duration,
 };
 use maicie::config::DurationClasses;
 use maicie::domain::{ClasseDuree, EtatObjectif, EtatOutboxDelegation};
@@ -91,9 +91,11 @@ fn les_trois_classes_produisent_le_timeout_et_l_echeance_contractuelle_persistes
     let before_consultation = status(&store, None).unwrap();
     let after_consultation = status(&store, None).unwrap();
     assert_eq!(before_consultation, after_consultation);
-    assert!(after_consultation
-        .iter()
-        .all(|snapshot| snapshot.objective.etat == EtatObjectif::EnCoordination));
+    assert!(
+        after_consultation
+            .iter()
+            .all(|snapshot| snapshot.objective.etat == EtatObjectif::EnCoordination)
+    );
     assert_eq!(store.pending_delegation_outboxes().unwrap().len(), 3);
 
     drop(store);

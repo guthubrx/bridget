@@ -38,7 +38,10 @@ pub struct PreparedSpawn {
 pub enum SpawnDecision {
     Ready(PreparedSpawn),
     Await(SpawnWaiter),
-    Accepted { name: String, definition: Option<ResolvedAgentDefinition> },
+    Accepted {
+        name: String,
+        definition: Option<ResolvedAgentDefinition>,
+    },
     Rejected(SpawnRefusal),
     EnvelopeMismatch,
 }
@@ -116,11 +119,12 @@ pub fn prepare_recovery(
     source: &SourceEnvironment,
     candidate: RecoveryCandidate,
 ) -> Result<PreparedSpawn, SpawnRefusal> {
-    let resolved = candidate.resolved_definition.ok_or_else(|| {
-        SpawnRefusal::NegotiationFailed {
-            detail: "définition figée absente de la génération à reprendre".to_string(),
-        }
-    })?;
+    let resolved =
+        candidate
+            .resolved_definition
+            .ok_or_else(|| SpawnRefusal::NegotiationFailed {
+                detail: "définition figée absente de la génération à reprendre".to_string(),
+            })?;
     let frozen_registry = AgentRegistry::from_resolved(&candidate.agent_type, &resolved)
         .map_err(|detail| SpawnRefusal::NegotiationFailed { detail })?;
     prepare_spawn_parts(
@@ -254,12 +258,12 @@ fn refusal_record(reason: &SpawnRefusal) -> (&'static str, String) {
 
 fn decision_from_issue(issue: SpawnCommandIssue, quota: usize) -> SpawnDecision {
     match issue {
-        SpawnCommandIssue::Connected { name, definition, .. } => {
-            SpawnDecision::Accepted {
-                name,
-                definition: definition.map(|value| *value),
-            }
-        }
+        SpawnCommandIssue::Connected {
+            name, definition, ..
+        } => SpawnDecision::Accepted {
+            name,
+            definition: definition.map(|value| *value),
+        },
         SpawnCommandIssue::Cancelled { reason } if reason == "spawn_timeout" => {
             SpawnDecision::Rejected(SpawnRefusal::SpawnTimeout)
         }

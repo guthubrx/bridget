@@ -101,9 +101,11 @@ pub fn validate_tmux_content(content: &str) -> Result<(), TransportError> {
     // Limite de taille pour prévenir les attaques par mémoire
     const MAX_CONTENT_SIZE: usize = 100_000;
     if content.len() > MAX_CONTENT_SIZE {
-        return Err(TransportError::DeliveryFailed(
-            format!("Contenu trop volumineux: {} octets (max: {})", content.len(), MAX_CONTENT_SIZE)
-        ));
+        return Err(TransportError::DeliveryFailed(format!(
+            "Contenu trop volumineux: {} octets (max: {})",
+            content.len(),
+            MAX_CONTENT_SIZE
+        )));
     }
 
     // Séquences de contrôle tmux potentiellement dangereuses
@@ -134,16 +136,17 @@ pub fn validate_tmux_content(content: &str) -> Result<(), TransportError> {
     let content_lower = content.to_lowercase();
     for pattern in &dangerous_patterns {
         if content_lower.contains(pattern) {
-            return Err(TransportError::DeliveryFailed(
-                format!("Séquence tmux interdite détectée: {}", pattern)
-            ));
+            return Err(TransportError::DeliveryFailed(format!(
+                "Séquence tmux interdite détectée: {}",
+                pattern
+            )));
         }
     }
 
     // Vérifier les tentatives d'injection via caractères de contrôle
     if content.contains('\x1b') && (content.contains('[') || content.contains(']')) {
         return Err(TransportError::DeliveryFailed(
-            "Séquences ANSI ESC détectées".to_string()
+            "Séquences ANSI ESC détectées".to_string(),
         ));
     }
 

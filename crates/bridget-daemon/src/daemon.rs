@@ -1372,7 +1372,11 @@ fn drain_managed_events(
         {
             let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
             match event {
-                ManagedSupervisorEvent::Connected { lease, conn_id, definition } => {
+                ManagedSupervisorEvent::Connected {
+                    lease,
+                    conn_id,
+                    definition,
+                } => {
                     if let Some(record) = st.managed_spawns.get_mut(&lease.command_id) {
                         record.wrapper_conn = Some(conn_id);
                         let requesters = std::mem::take(&mut record.requester_conns);
@@ -1656,9 +1660,9 @@ impl DaemonState {
         if let Some(instance_id) = self.conn_instances.remove(conn_id)
             && let Some(presence) = self.presences.get_mut(&instance_id)
         {
-                presence.state = "stopped".to_string();
-                presence.last_seen = Instant::now();
-            }
+            presence.state = "stopped".to_string();
+            presence.last_seen = Instant::now();
+        }
     }
 
     fn set_turn_state(&mut self, conn_id: &str, in_progress: bool) -> Result<(), String> {
@@ -1754,7 +1758,7 @@ impl DaemonState {
         let listed_names: std::collections::HashSet<String> =
             agents.iter().map(|agent| agent.name.clone()).collect();
         for presence in self.presences.values().filter(|presence| {
-                matches!(presence.state.as_str(), "stopped" | "unreachable")
+            matches!(presence.state.as_str(), "stopped" | "unreachable")
                 && !listed_names.contains(&presence.name)
         }) {
             agents.push(bridget_transport::protocol::AgentInfo {
@@ -2002,7 +2006,9 @@ fn schedule_idempotent_delivery_recovery(
     };
     let mut controls = Vec::new();
     for delivery in deliveries {
-        if let Err(error) = defer_idempotent_delivery(state, conn_id, delivery.clone(), &mut controls) {
+        if let Err(error) =
+            defer_idempotent_delivery(state, conn_id, delivery.clone(), &mut controls)
+        {
             error!("reprise idempotente mise en quarantaine: {error}");
             let _ = state.idempotency.mark_delivery_indeterminate(
                 &delivery.delivery_id,
@@ -2124,11 +2130,11 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(n) = st.store.purge_older_than_days(config.retention_days)
             && n > 0
         {
-                info!(
-                    "purge: {} messages supprimés (> {} jours)",
-                    n, config.retention_days
-                );
-            }
+            info!(
+                "purge: {} messages supprimés (> {} jours)",
+                n, config.retention_days
+            );
+        }
     }
 
     // Thread de surveillance des --reply sans réponse (escalade progressive)
@@ -2139,85 +2145,85 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     let st_reminder = state.clone();
     thread::spawn(move || {
         loop {
-        thread::sleep(Duration::from_secs(1)); // Réduit de 3s à 1s pour meilleure réactivité
-        let now = std::time::Instant::now();
+            thread::sleep(Duration::from_secs(1)); // Réduit de 3s à 1s pour meilleure réactivité
+            let now = std::time::Instant::now();
 
-        // Collecter les actions à faire
-        let actions: Vec<ReminderAction> = {
-            let mut st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
-            collect_reminder_actions(&mut st, now)
-        };
+            // Collecter les actions à faire
+            let actions: Vec<ReminderAction> = {
+                let mut st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                collect_reminder_actions(&mut st, now)
+            };
 
-        // Exécuter les actions hors lock
-        for action in actions {
-            match action {
-                ReminderAction::Gentle {
-                    to,
-                    from,
-                    msg_id,
-                    target_conn,
-                } => {
-                    let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Some(target_writer) = st.connections.get(&target_conn) {
-                        let body = format!(
-                            "Rappel : {} attend ta reponse au message #{}.\nReponds avec: bridget reply \"ta reponse\"",
+            // Exécuter les actions hors lock
+            for action in actions {
+                match action {
+                    ReminderAction::Gentle {
+                        to,
+                        from,
+                        msg_id,
+                        target_conn,
+                    } => {
+                        let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                        if let Some(target_writer) = st.connections.get(&target_conn) {
+                            let body = format!(
+                                "Rappel : {} attend ta reponse au message #{}.\nReponds avec: bridget reply \"ta reponse\"",
                                 from,
                                 &msg_id[..msg_id.len().min(8)]
-                        );
-                        if let Err(e) = deliver_to_agent(target_writer, &to, &body) {
-                            error!("Impossible de délivrer le rappel doux à {}: {}", to, e);
+                            );
+                            if let Err(e) = deliver_to_agent(target_writer, &to, &body) {
+                                error!("Impossible de délivrer le rappel doux à {}: {}", to, e);
+                            }
+                            info!("palier 1 (rappel doux) → {} pour {}", to, from);
                         }
-                        info!("palier 1 (rappel doux) → {} pour {}", to, from);
                     }
-                }
-                ReminderAction::Firm {
-                    to,
-                    from,
-                    msg_id,
-                    target_conn,
-                } => {
-                    let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Some(target_writer) = st.connections.get(&target_conn) {
-                        let body = format!(
-                            "URGENT : {} attend toujours ta reponse au message #{}.\nTu DOIS repondre maintenant avec: bridget reply \"ta reponse\"\nSi tu ne peux pas repondre, notifie-le : bridget reply \"impossible de repondre : <raison>\"",
+                    ReminderAction::Firm {
+                        to,
+                        from,
+                        msg_id,
+                        target_conn,
+                    } => {
+                        let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                        if let Some(target_writer) = st.connections.get(&target_conn) {
+                            let body = format!(
+                                "URGENT : {} attend toujours ta reponse au message #{}.\nTu DOIS repondre maintenant avec: bridget reply \"ta reponse\"\nSi tu ne peux pas repondre, notifie-le : bridget reply \"impossible de repondre : <raison>\"",
                                 from,
                                 &msg_id[..msg_id.len().min(8)]
-                        );
-                        if let Err(e) = deliver_to_agent(target_writer, &to, &body) {
-                            error!("Impossible de délivrer le rappel ferme à {}: {}", to, e);
+                            );
+                            if let Err(e) = deliver_to_agent(target_writer, &to, &body) {
+                                error!("Impossible de délivrer le rappel ferme à {}: {}", to, e);
+                            }
+                            info!("palier 2 (rappel ferme) → {} pour {}", to, from);
                         }
-                        info!("palier 2 (rappel ferme) → {} pour {}", to, from);
                     }
-                }
-                ReminderAction::Timeout {
-                    to,
-                    from,
-                    msg_id,
-                    from_conn,
-                    timeout_secs,
-                } => {
-                    let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
-                    // Notifier l'émetteur que le destinataire n'a pas répondu
-                    if let Some(sender_writer) = st.connections.get(&from_conn) {
-                        let body = format!(
-                            "{} n'a pas repondu en {}s au message #{}.\nTu peux reessayer, changer de destinataire ou abandonner.",
+                    ReminderAction::Timeout {
+                        to,
+                        from,
+                        msg_id,
+                        from_conn,
+                        timeout_secs,
+                    } => {
+                        let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                        // Notifier l'émetteur que le destinataire n'a pas répondu
+                        if let Some(sender_writer) = st.connections.get(&from_conn) {
+                            let body = format!(
+                                "{} n'a pas repondu en {}s au message #{}.\nTu peux reessayer, changer de destinataire ou abandonner.",
                                 to,
                                 timeout_secs,
                                 &msg_id[..msg_id.len().min(8)]
-                        );
-                        if let Err(e) = deliver_to_agent(sender_writer, &from, &body) {
+                            );
+                            if let Err(e) = deliver_to_agent(sender_writer, &from, &body) {
                                 error!(
                                     "Impossible de délivrer la notification de timeout à {}: {}",
                                     from, e
                                 );
+                            }
+                            info!(
+                                "palier 3 (timeout notifié à {} : {} n'a pas répondu)",
+                                from, to
+                            );
                         }
-                        info!(
-                            "palier 3 (timeout notifié à {} : {} n'a pas répondu)",
-                            from, to
-                        );
                     }
-                }
-                ReminderAction::Deferred { to, msg_id, level } => {
+                    ReminderAction::Deferred { to, msg_id, level } => {
                         info!(
                             "relance différée (tour en cours) : palier {} pour {} sur demande {}",
                             level, to, msg_id
@@ -2233,9 +2239,9 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     let retention = config.retention_days;
     thread::spawn(move || {
         loop {
-        thread::sleep(Duration::from_secs(3600));
-        let st = st_purge.lock().unwrap_or_else(|e| e.into_inner());
-        if let Ok(n) = st.store.purge_older_than_days(retention)
+            thread::sleep(Duration::from_secs(3600));
+            let st = st_purge.lock().unwrap_or_else(|e| e.into_inner());
+            if let Ok(n) = st.store.purge_older_than_days(retention)
                 && n > 0
             {
                 info!("purge périodique: {} messages supprimés", n);
@@ -2290,9 +2296,9 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(json) = encode(&msg)
                     && let Ok(mut w) = writer.lock()
                 {
-                        let _ = writeln!(w, "{}", json);
-                        let _ = w.flush();
-                    }
+                    let _ = writeln!(w, "{}", json);
+                    let _ = w.flush();
+                }
             }
             drop(st);
             if let Err(e) = std::fs::remove_file(&config.socket_path) {
@@ -2423,10 +2429,10 @@ fn handle_connection(
     if let Some(writer_mutex) = writer_opt
         && let Ok(mut writer) = writer_mutex.lock()
     {
-            use std::io::Write;
-            let _ = writer.flush();
-            // Le drop explicite fermera le stream proprement
-        }
+        use std::io::Write;
+        let _ = writer.flush();
+        // Le drop explicite fermera le stream proprement
+    }
 
     if let Some(agent) = removed {
         info!("agent '{}' déconnecté ({})", agent.name, conn_id);
@@ -2510,8 +2516,9 @@ fn handle_register(
                 // valeur reste volontairement inconnue.
                 let mode = mode.or_else(|| previous.and_then(|presence| presence.mode));
                 let location = match mode {
-                    Some(PresenceMode::Tmux) => location
-                        .or_else(|| previous.and_then(|presence| presence.location.clone())),
+                    Some(PresenceMode::Tmux) => {
+                        location.or_else(|| previous.and_then(|presence| presence.location.clone()))
+                    }
                     _ => None,
                 };
 
@@ -2946,13 +2953,11 @@ fn replay_issue(
             category,
             reason,
             expires_at,
-        } => {
-            Ok(IdempotencyIssue::Rejected {
-                category,
-                reason,
-                expires_at,
-            })
-        }
+        } => Ok(IdempotencyIssue::Rejected {
+            category,
+            reason,
+            expires_at,
+        }),
         LookupResult::OutcomeUnknown { expires_at } => Ok(IdempotencyIssue::OutcomeUnknown {
             expires_at,
             delivery_id: st
@@ -2972,27 +2977,55 @@ fn handle_idempotency_lookup(
     st: &DaemonState,
 ) -> DaemonToWrapper {
     let Some(negotiated) = st.client_negotiations.get(conn_id) else {
-        return DaemonToWrapper::ClientRejected { reason: ClientRefusal::NegotiationRequired };
+        return DaemonToWrapper::ClientRejected {
+            reason: ClientRefusal::NegotiationRequired,
+        };
     };
     if operation_kind != "send" {
-        return DaemonToWrapper::Nack { id: idempotency_key, reason: "opération idempotente inconnue".to_string() };
+        return DaemonToWrapper::Nack {
+            id: idempotency_key,
+            reason: "opération idempotente inconnue".to_string(),
+        };
     }
-    let key = match IdempotencyKey::new(negotiated.issuer_scope.clone(), OperationKind::Send, idempotency_key) {
+    let key = match IdempotencyKey::new(
+        negotiated.issuer_scope.clone(),
+        OperationKind::Send,
+        idempotency_key,
+    ) {
         Ok(key) => key,
-        Err(error) => return DaemonToWrapper::Nack { id: "lookup".to_string(), reason: error.to_string() },
+        Err(error) => {
+            return DaemonToWrapper::Nack {
+                id: "lookup".to_string(),
+                reason: error.to_string(),
+            };
+        }
     };
     match st.idempotency.lookup(&key, unix_now_secs()) {
         Ok(result) => match replay_issue(st, &key, result) {
             Ok(issue) => issue_response(&key, issue),
-            Err(error) => DaemonToWrapper::Nack { id: key.idempotency_key, reason: error },
+            Err(error) => DaemonToWrapper::Nack {
+                id: key.idempotency_key,
+                reason: error,
+            },
         },
-        Err(error) => DaemonToWrapper::Nack { id: key.idempotency_key, reason: error.to_string() },
+        Err(error) => DaemonToWrapper::Nack {
+            id: key.idempotency_key,
+            reason: error.to_string(),
+        },
     }
 }
 
-fn handle_delivery_ack(conn_id: &str, delivery_id: String, delivery_generation: u64, st: &mut DaemonState) -> Option<DaemonToWrapper> {
+fn handle_delivery_ack(
+    conn_id: &str,
+    delivery_id: String,
+    delivery_generation: u64,
+    st: &mut DaemonState,
+) -> Option<DaemonToWrapper> {
     let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
-        return Some(DaemonToWrapper::Nack { id: delivery_id, reason: "accusé idempotent émis par une instance inconnue".to_string() });
+        return Some(DaemonToWrapper::Nack {
+            id: delivery_id,
+            reason: "accusé idempotent émis par une instance inconnue".to_string(),
+        });
     };
     match st
         .idempotency
@@ -3237,28 +3270,28 @@ fn handle_idempotent_send(
         Reservation::Prepared { expires_at } => expires_at,
         Reservation::Replayed(LookupResult::OutcomeUnknown { expires_at }) => {
             match st.idempotency.prepared_expiry(&key, now) {
-            Ok(Some(expires_at)) => expires_at,
-            Ok(None) => {
-                return issue_response(
-                    &key,
-                    IdempotencyIssue::OutcomeUnknown {
-                        expires_at,
-                        delivery_id: st
-                            .idempotency
-                            .send_delivery(&key)
-                            .ok()
-                            .flatten()
-                            .map(|delivery| delivery.delivery_id),
-                    },
-                );
-            }
-            Err(error) => {
-                error!("idempotence reprise préparée: {error}");
-                return DaemonToWrapper::Nack {
-                    id: key.idempotency_key.clone(),
-                    reason: "issue idempotente illisible".to_string(),
-                };
-            }
+                Ok(Some(expires_at)) => expires_at,
+                Ok(None) => {
+                    return issue_response(
+                        &key,
+                        IdempotencyIssue::OutcomeUnknown {
+                            expires_at,
+                            delivery_id: st
+                                .idempotency
+                                .send_delivery(&key)
+                                .ok()
+                                .flatten()
+                                .map(|delivery| delivery.delivery_id),
+                        },
+                    );
+                }
+                Err(error) => {
+                    error!("idempotence reprise préparée: {error}");
+                    return DaemonToWrapper::Nack {
+                        id: key.idempotency_key.clone(),
+                        reason: "issue idempotente illisible".to_string(),
+                    };
+                }
             }
         }
         Reservation::Replayed(result) => match replay_issue(st, &key, result) {
@@ -3278,114 +3311,111 @@ fn handle_idempotent_send(
             return issue_response(&key, IdempotencyIssue::IdempotencyExpired);
         }
     };
-            // Les gardes ci-dessous peuvent consulter ou modifier les limites
-            // historiques, mais seulement après la réservation d'une clé neuve.
-            // Les gardes historiques restent applicables à une clé neuve,
-            // mais leur espace est celui de l'émetteur idempotent : deux
-            // scopes sont deux émetteurs logiques et ne se contaminent pas.
-            let content_key = format!("{}:{}", key.issuer_scope, message.content_key());
-            let scoped_message_id = format!("{}:{}", key.issuer_scope, message.id);
-            let logical_sender = format!("client:{}", key.issuer_scope);
-            let prepared = match prepare_dispatch(
-                st,
-                &mut message,
-                conn_id,
-                logical_sender,
-                content_key,
-                scoped_message_id,
-            ) {
-                Ok(prepared) => prepared,
-                Err((category, reason)) => {
+    // Les gardes ci-dessous peuvent consulter ou modifier les limites
+    // historiques, mais seulement après la réservation d'une clé neuve.
+    // Les gardes historiques restent applicables à une clé neuve,
+    // mais leur espace est celui de l'émetteur idempotent : deux
+    // scopes sont deux émetteurs logiques et ne se contaminent pas.
+    let content_key = format!("{}:{}", key.issuer_scope, message.content_key());
+    let scoped_message_id = format!("{}:{}", key.issuer_scope, message.id);
+    let logical_sender = format!("client:{}", key.issuer_scope);
+    let prepared = match prepare_dispatch(
+        st,
+        &mut message,
+        conn_id,
+        logical_sender,
+        content_key,
+        scoped_message_id,
+    ) {
+        Ok(prepared) => prepared,
+        Err((category, reason)) => {
             return reject_idempotent_send(st, &key, category, reason).unwrap_or_else(|error| {
                 DaemonToWrapper::Nack {
-                            id: key.idempotency_key.clone(),
-                            reason: error,
-                }
-            });
-                }
-            };
-            let Some(recipient_instance_id) = st.conn_instances.get(&prepared.target_conn).cloned() else {
-                return reject_idempotent_send(
-                    st,
-                    &key,
-                    "recipient_unavailable",
-                    "instance destinataire inconnue",
-                )
-                .unwrap_or_else(|error| DaemonToWrapper::Nack {
                     id: key.idempotency_key.clone(),
                     reason: error,
-                });
-            };
-            let delivery = SendDelivery {
-                delivery_id: Uuid::new_v4().to_string(),
-                recipient_instance_id,
-                delivery_generation: next_delivery_generation(),
-                expires_at,
-                message_bytes: match serde_json::to_vec(&message) {
-                    Ok(message_bytes) => message_bytes,
-                    Err(error) => {
-                        return DaemonToWrapper::Nack {
-                            id: key.idempotency_key.clone(),
-                            reason: format!("impossible de sérialiser la remise: {error}"),
-                        };
-                    }
-                },
-            };
-            let reply_tracking = message.reply.then(|| ReplyTracking {
-                request_id: message.id.clone(),
-                sender: message.from.clone(),
-                target: message.to.clone(),
-                created_at: now,
-                deadline_at: message
-                    .deadline_at
-                    .expect("un reply idempotent est normalisé avant réservation")
-                    .min(i64::MAX as u64) as i64,
+                }
             });
-            let delivery_result = match reply_tracking.as_ref() {
-                Some(reply) => st
-                    .idempotency
-                    .begin_send_delivery_with_reply(&key, &delivery, reply),
-                None => st.idempotency.begin_send_delivery(&key, &delivery),
-            };
-            if let Err(error) = delivery_result {
-                error!("idempotence dispatch: {error}");
+        }
+    };
+    let Some(recipient_instance_id) = st.conn_instances.get(&prepared.target_conn).cloned() else {
+        return reject_idempotent_send(
+            st,
+            &key,
+            "recipient_unavailable",
+            "instance destinataire inconnue",
+        )
+        .unwrap_or_else(|error| DaemonToWrapper::Nack {
+            id: key.idempotency_key.clone(),
+            reason: error,
+        });
+    };
+    let delivery = SendDelivery {
+        delivery_id: Uuid::new_v4().to_string(),
+        recipient_instance_id,
+        delivery_generation: next_delivery_generation(),
+        expires_at,
+        message_bytes: match serde_json::to_vec(&message) {
+            Ok(message_bytes) => message_bytes,
+            Err(error) => {
                 return DaemonToWrapper::Nack {
                     id: key.idempotency_key.clone(),
-                    reason: "impossible de préparer la remise".to_string(),
+                    reason: format!("impossible de sérialiser la remise: {error}"),
                 };
             }
-            remember_reply_cycle(
-                st,
-                &message,
-                prepared.reply_sender_conn.clone(),
-                prepared.target_conn.clone(),
-            );
-            st.circuit_breaker
-                .record(&prepared.logical_sender, &message.to);
-            st.deduplicator
-                .mark_sent(&prepared.content_key, &message.to);
-            st.envelope_guard
-                .mark_relayed(&prepared.message_guard_id, &message.to);
-            if let Err(error) = defer_idempotent_delivery(
-                st,
-                &prepared.target_conn,
-                delivery.clone(),
-                controls,
-            ) {
-                error!("remise idempotente préparée mais non sérialisable: {error}");
-            }
-            #[cfg(feature = "test-support")]
-            crate::test_sync::checkpoint("after_delivery_before_issue");
-            let response = issue_response(
-                &key,
-                IdempotencyIssue::OutcomeUnknown {
-                    expires_at,
-                    delivery_id: Some(delivery.delivery_id),
-                },
-            );
-            #[cfg(feature = "test-support")]
-            crate::test_sync::checkpoint("after_issue_before_client_ack");
-            response
+        },
+    };
+    let reply_tracking = message.reply.then(|| ReplyTracking {
+        request_id: message.id.clone(),
+        sender: message.from.clone(),
+        target: message.to.clone(),
+        created_at: now,
+        deadline_at: message
+            .deadline_at
+            .expect("un reply idempotent est normalisé avant réservation")
+            .min(i64::MAX as u64) as i64,
+    });
+    let delivery_result = match reply_tracking.as_ref() {
+        Some(reply) => st
+            .idempotency
+            .begin_send_delivery_with_reply(&key, &delivery, reply),
+        None => st.idempotency.begin_send_delivery(&key, &delivery),
+    };
+    if let Err(error) = delivery_result {
+        error!("idempotence dispatch: {error}");
+        return DaemonToWrapper::Nack {
+            id: key.idempotency_key.clone(),
+            reason: "impossible de préparer la remise".to_string(),
+        };
+    }
+    remember_reply_cycle(
+        st,
+        &message,
+        prepared.reply_sender_conn.clone(),
+        prepared.target_conn.clone(),
+    );
+    st.circuit_breaker
+        .record(&prepared.logical_sender, &message.to);
+    st.deduplicator
+        .mark_sent(&prepared.content_key, &message.to);
+    st.envelope_guard
+        .mark_relayed(&prepared.message_guard_id, &message.to);
+    if let Err(error) =
+        defer_idempotent_delivery(st, &prepared.target_conn, delivery.clone(), controls)
+    {
+        error!("remise idempotente préparée mais non sérialisable: {error}");
+    }
+    #[cfg(feature = "test-support")]
+    crate::test_sync::checkpoint("after_delivery_before_issue");
+    let response = issue_response(
+        &key,
+        IdempotencyIssue::OutcomeUnknown {
+            expires_at,
+            delivery_id: Some(delivery.delivery_id),
+        },
+    );
+    #[cfg(feature = "test-support")]
+    crate::test_sync::checkpoint("after_issue_before_client_ack");
+    response
 }
 
 /// Traite un message wrapper et retourne une réponse optionnelle.
@@ -3597,11 +3627,22 @@ fn handle_wrapper_message(
             let _ = execute_controls(controls);
             Some(response)
         }
-        WrapperToDaemon::Lookup { operation_kind, idempotency_key } => {
+        WrapperToDaemon::Lookup {
+            operation_kind,
+            idempotency_key,
+        } => {
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
-            Some(handle_idempotency_lookup(conn_id, operation_kind, idempotency_key, &st))
+            Some(handle_idempotency_lookup(
+                conn_id,
+                operation_kind,
+                idempotency_key,
+                &st,
+            ))
         }
-        WrapperToDaemon::DeliverAcked { delivery_id, delivery_generation } => {
+        WrapperToDaemon::DeliverAcked {
+            delivery_id,
+            delivery_generation,
+        } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             handle_delivery_ack(conn_id, delivery_id, delivery_generation, &mut st)
         }
@@ -3717,15 +3758,19 @@ fn handle_wrapper_message(
                     None
                 }
                 Ok(SpawnDecision::Accepted { name, definition }) => {
-                    Some(DaemonToWrapper::SpawnAccepted { command_id, name, definition })
+                    Some(DaemonToWrapper::SpawnAccepted {
+                        command_id,
+                        name,
+                        definition,
+                    })
                 }
                 Ok(SpawnDecision::Rejected(reason)) => {
                     Some(DaemonToWrapper::SpawnRejected { command_id, reason })
                 }
                 Ok(SpawnDecision::EnvelopeMismatch) => Some(DaemonToWrapper::IdempotencyResult {
-                        operation_kind: "spawn".to_string(),
-                        idempotency_key: command_id,
-                        issue: IdempotencyIssue::EnvelopeMismatch,
+                    operation_kind: "spawn".to_string(),
+                    idempotency_key: command_id,
+                    issue: IdempotencyIssue::EnvelopeMismatch,
                 }),
                 Err(error) => Some(DaemonToWrapper::SpawnRejected {
                     command_id,
@@ -3917,11 +3962,11 @@ fn handle_wrapper_message(
                     .connections
                     .get(&subscription.wrapper_conn)
                     .map(|writer| DeferredControl {
-                    writer: writer.clone(),
-                    message: DaemonToWrapper::Unsubscribe {
-                        subscription_id: subscription_id.clone(),
-                    },
-                });
+                        writer: writer.clone(),
+                        message: DaemonToWrapper::Unsubscribe {
+                            subscription_id: subscription_id.clone(),
+                        },
+                    });
                 (control, st.attach_views.remove(&subscription_id))
             };
             if let Some(control) = control {
@@ -3951,11 +3996,11 @@ fn handle_wrapper_message(
                 st.connections
                     .get(&subscription.attach_conn)
                     .map(|writer| DeferredControl {
-                    writer: writer.clone(),
-                    message: DaemonToWrapper::Subscribed {
-                        subscription_id: subscription_id.clone(),
-                    },
-                })
+                        writer: writer.clone(),
+                        message: DaemonToWrapper::Subscribed {
+                            subscription_id: subscription_id.clone(),
+                        },
+                    })
             };
             let delivered =
                 control.is_some_and(|control| execute_controls(vec![control]).is_empty());
@@ -3967,11 +4012,11 @@ fn handle_wrapper_message(
                         st.connections
                             .get(&subscription.wrapper_conn)
                             .map(|writer| DeferredControl {
-                            writer: writer.clone(),
-                            message: DaemonToWrapper::Unsubscribe {
-                                subscription_id: subscription_id.clone(),
-                            },
-                        })
+                                writer: writer.clone(),
+                                message: DaemonToWrapper::Unsubscribe {
+                                    subscription_id: subscription_id.clone(),
+                                },
+                            })
                     });
                     (control, st.attach_views.remove(&subscription_id))
                 };
@@ -3999,14 +4044,14 @@ fn handle_wrapper_message(
                     st.connections
                         .get(&subscription.attach_conn)
                         .map(|writer| DeferredControl {
-                    writer: writer.clone(),
-                    message: DaemonToWrapper::AttachRejected {
-                        subscription_id: Some(subscription_id.clone()),
-                        reason,
-                        mode: None,
-                        location: None,
-                    },
-                });
+                            writer: writer.clone(),
+                            message: DaemonToWrapper::AttachRejected {
+                                subscription_id: Some(subscription_id.clone()),
+                                reason,
+                                mode: None,
+                                location: None,
+                            },
+                        });
                 st.attach_subscriptions.remove(&subscription_id);
                 (control, st.attach_views.remove(&subscription_id))
             };
@@ -4347,93 +4392,93 @@ fn handle_wrapper_message(
                 });
             }
             let target_conn = prepared.target_conn;
-                    let conv_key = format!("{}|{}", bridge_msg.from, bridge_msg.to);
+            let conv_key = format!("{}|{}", bridge_msg.from, bridge_msg.to);
 
-                    if let Err(e) = st.store.record_message(&bridge_msg, &conv_key) {
-                        error!("store: {}", e);
-                    }
-                    st.circuit_breaker
-                        .record(&prepared.logical_sender, &bridge_msg.to);
-                    st.deduplicator
-                        .mark_sent(&prepared.content_key, &bridge_msg.to);
-                    st.envelope_guard
-                        .mark_relayed(&prepared.message_guard_id, &bridge_msg.to);
+            if let Err(e) = st.store.record_message(&bridge_msg, &conv_key) {
+                error!("store: {}", e);
+            }
+            st.circuit_breaker
+                .record(&prepared.logical_sender, &bridge_msg.to);
+            st.deduplicator
+                .mark_sent(&prepared.content_key, &bridge_msg.to);
+            st.envelope_guard
+                .mark_relayed(&prepared.message_guard_id, &bridge_msg.to);
 
-                    // Le daemon est l'autorité de l'échéance : le wrapper ACP
-                    // reçoit sa valeur absolue pour purger un tour devenu trop
-                    // tardif juste avant `session/prompt`.
-                    let mut delivered_message = bridge_msg.clone();
-                    if delivered_message.reply {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs();
-                        delivered_message.deadline_at =
-                            Some(now.saturating_add(delivered_message.reply_timeout.unwrap_or(60)));
-                    }
-                    // Push vers le destinataire
-                    let dtw = DaemonToWrapper::Deliver(delivered_message);
-                    let json = encode(&dtw).unwrap_or_default();
-                    eprintln!("[BRIDGET] Push vers {}: {} octets", target_conn, json.len());
+            // Le daemon est l'autorité de l'échéance : le wrapper ACP
+            // reçoit sa valeur absolue pour purger un tour devenu trop
+            // tardif juste avant `session/prompt`.
+            let mut delivered_message = bridge_msg.clone();
+            if delivered_message.reply {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                delivered_message.deadline_at =
+                    Some(now.saturating_add(delivered_message.reply_timeout.unwrap_or(60)));
+            }
+            // Push vers le destinataire
+            let dtw = DaemonToWrapper::Deliver(delivered_message);
+            let json = encode(&dtw).unwrap_or_default();
+            eprintln!("[BRIDGET] Push vers {}: {} octets", target_conn, json.len());
 
-                    let mut delivery_succeeded = false;
-                    if let Some(target_writer) = st.connections.get(&target_conn) {
-                        log::debug!("push vers {}: écriture sur writer", target_conn);
-                        if let Ok(mut w) = target_writer.lock() {
-                            eprintln!("[BRIDGET] Writer locked for {}, écriture...", target_conn);
-                            match writeln!(w, "{}", json) {
-                                Ok(_) if w.flush().is_ok() => {
-                                    delivery_succeeded = true;
-                                    info!(
-                                        "livré: {} → « {} » (hops={}, reply={})",
+            let mut delivery_succeeded = false;
+            if let Some(target_writer) = st.connections.get(&target_conn) {
+                log::debug!("push vers {}: écriture sur writer", target_conn);
+                if let Ok(mut w) = target_writer.lock() {
+                    eprintln!("[BRIDGET] Writer locked for {}, écriture...", target_conn);
+                    match writeln!(w, "{}", json) {
+                        Ok(_) if w.flush().is_ok() => {
+                            delivery_succeeded = true;
+                            info!(
+                                "livré: {} → « {} » (hops={}, reply={})",
                                 bridge_msg.id, bridge_msg.to, bridge_msg.hops, bridge_msg.reply
-                                    );
-                                }
-                                Ok(_) => error!("push {}: flush échoué", target_conn),
-                                Err(e) => error!("push {}: {}", target_conn, e),
-                            }
+                            );
                         }
-                    } else {
-                        warn!("cible {} disparue", target_conn);
+                        Ok(_) => error!("push {}: flush échoué", target_conn),
+                        Err(e) => error!("push {}: {}", target_conn, e),
                     }
+                }
+            } else {
+                warn!("cible {} disparue", target_conn);
+            }
 
-                    if delivery_succeeded
-                        && prepared.valid_tracked_reply
-                        && let Some(request_id) = bridge_msg.in_reply_to.as_deref()
-                        && st
-                            .store
-                            .mark_answered(request_id, &bridge_msg.from, &bridge_msg.to)
-                            .unwrap_or(false)
-                    {
-                        st.pending_replies
-                            .retain(|pending| pending.msg_id != request_id);
-                        info!("demande {} répondue après livraison", request_id);
-                    }
+            if delivery_succeeded
+                && prepared.valid_tracked_reply
+                && let Some(request_id) = bridge_msg.in_reply_to.as_deref()
+                && st
+                    .store
+                    .mark_answered(request_id, &bridge_msg.from, &bridge_msg.to)
+                    .unwrap_or(false)
+            {
+                st.pending_replies
+                    .retain(|pending| pending.msg_id != request_id);
+                info!("demande {} répondue après livraison", request_id);
+            }
 
-                    if let Err(reason) = track_reply_cycle(
-                        &mut st,
-                        &bridge_msg,
-                        prepared.reply_sender_conn.clone(),
-                        target_conn.clone(),
-                    ) {
-                        return Some(DaemonToWrapper::Nack {
-                            id: bridge_msg.id.clone(),
-                            reason,
-                        });
-                    }
+            if let Err(reason) = track_reply_cycle(
+                &mut st,
+                &bridge_msg,
+                prepared.reply_sender_conn.clone(),
+                target_conn.clone(),
+            ) {
+                return Some(DaemonToWrapper::Nack {
+                    id: bridge_msg.id.clone(),
+                    reason,
+                });
+            }
 
-                    if is_attach {
-                        st.pending_attach_sends.insert(
-                            bridge_msg.id.clone(),
-                            PendingAttachSend {
-                                conn_id: conn_id.to_string(),
-                                expires_at: Instant::now() + PENDING_ATTACH_SEND_TTL,
-                            },
-                        );
-                    }
-                    Some(DaemonToWrapper::Ack {
-                        id: bridge_msg.id.clone(),
-                    })
+            if is_attach {
+                st.pending_attach_sends.insert(
+                    bridge_msg.id.clone(),
+                    PendingAttachSend {
+                        conn_id: conn_id.to_string(),
+                        expires_at: Instant::now() + PENDING_ATTACH_SEND_TTL,
+                    },
+                );
+            }
+            Some(DaemonToWrapper::Ack {
+                id: bridge_msg.id.clone(),
+            })
         }
 
         WrapperToDaemon::Heartbeat => {
@@ -4441,8 +4486,8 @@ fn handle_wrapper_message(
             if let Some(instance_id) = st.conn_instances.get(conn_id).cloned()
                 && let Some(presence) = st.presences.get_mut(&instance_id)
             {
-                    presence.last_seen = Instant::now();
-                }
+                presence.last_seen = Instant::now();
+            }
             None
         }
 
@@ -4503,7 +4548,7 @@ fn handle_wrapper_message(
                 if (reason.contains("échéance") || reason.contains("timeout ACP"))
                     && !claim_timeout(&st.store, &id)
                 {
-                        return None;
+                    return None;
                 }
                 if let Some(agent) = st.router.get_agent(&request.sender)
                     && let Some(writer) = st.connections.get(&agent.connection_id)
@@ -4611,24 +4656,27 @@ fn handle_wrapper_message(
 
         WrapperToDaemon::ListRequests { sender, limit } => {
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
-            match st.store.requests_for_participant(&sender, usize::from(limit)) {
+            match st
+                .store
+                .requests_for_participant(&sender, usize::from(limit))
+            {
                 Ok(requests) => match requests
-                        .into_iter()
-                        .map(|request| -> Result<_, crate::store::StoreError> {
-                            let deferred = st.store.latest_deferred_reminder(&request.id)?;
-                            Ok(bridget_transport::protocol::RequestInfo {
-                                id: request.id,
-                                sender: request.sender,
-                                target: request.target,
-                                state: request.state,
-                                created_at: request.created_at,
-                                deadline_at: request.deadline_at,
-                                cancel_reason: request.cancel_reason,
-                                deferred_reminder_level: deferred.map(|event| event.0),
-                                deferred_reminder_at: deferred.map(|event| event.1),
-                            })
+                    .into_iter()
+                    .map(|request| -> Result<_, crate::store::StoreError> {
+                        let deferred = st.store.latest_deferred_reminder(&request.id)?;
+                        Ok(bridget_transport::protocol::RequestInfo {
+                            id: request.id,
+                            sender: request.sender,
+                            target: request.target,
+                            state: request.state,
+                            created_at: request.created_at,
+                            deadline_at: request.deadline_at,
+                            cancel_reason: request.cancel_reason,
+                            deferred_reminder_level: deferred.map(|event| event.0),
+                            deferred_reminder_at: deferred.map(|event| event.1),
                         })
-                        .collect::<Result<Vec<_>, _>>()
+                    })
+                    .collect::<Result<Vec<_>, _>>()
                 {
                     Ok(requests) => Some(DaemonToWrapper::RequestList { requests }),
                     Err(error) => Some(DaemonToWrapper::Nack {
@@ -5463,7 +5511,10 @@ mod presence_tests {
         std::fs::set_permissions(&adapter, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::write(
             &changed_adapter,
-            format!("#!/bin/sh\necho changed >> {}\nexit 91\n", changed_runs.display()),
+            format!(
+                "#!/bin/sh\necho changed >> {}\nexit 91\n",
+                changed_runs.display()
+            ),
         )
         .unwrap();
         std::fs::set_permissions(&changed_adapter, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -5485,27 +5536,23 @@ mod presence_tests {
             .unwrap(),
         )
         .unwrap();
-        std::fs::set_permissions(
-            &registry_path,
-            std::fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
+        std::fs::set_permissions(&registry_path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
         let mut first_daemon = spawn_recovery_daemon(&root);
         wait_daemon_socket(&config.socket_path);
         let now = unix_timestamp();
         let accepted = daemon_request(
-                &config.socket_path,
-                WrapperToDaemon::SpawnOrder {
-                    agent_type: "fixture".to_string(),
-                    name: Some("persistent-one".to_string()),
-                    cwd: "/tmp".to_string(),
-                    persistent: true,
-                    command_id: "initial-persistent".to_string(),
-                    issued_at: now,
-                    deadline_at: now + 20,
-                }
-            );
+            &config.socket_path,
+            WrapperToDaemon::SpawnOrder {
+                agent_type: "fixture".to_string(),
+                name: Some("persistent-one".to_string()),
+                cwd: "/tmp".to_string(),
+                persistent: true,
+                command_id: "initial-persistent".to_string(),
+                issued_at: now,
+                deadline_at: now + 20,
+            },
+        );
         assert!(matches!(
             accepted,
             DaemonToWrapper::SpawnAccepted { ref name, definition: Some(ref definition), .. }
@@ -5580,12 +5627,16 @@ mod presence_tests {
             if executions == 2 {
                 break;
             }
-            assert!(Instant::now() < execution_deadline,
-                "la commande figée doit être exécutée une fois avant et une fois après le crash");
+            assert!(
+                Instant::now() < execution_deadline,
+                "la commande figée doit être exécutée une fois avant et une fois après le crash"
+            );
             thread::yield_now();
         }
-        assert!(!changed_runs.exists(),
-            "le registre modifié ne doit jamais piloter la génération reprise");
+        assert!(
+            !changed_runs.exists(),
+            "le registre modifié ne doit jamais piloter la génération reprise"
+        );
         assert!(matches!(
             daemon_request(
                 &config.socket_path,
@@ -5773,9 +5824,9 @@ mod presence_tests {
         ));
         assert!(
             !shared
-            .lock()
-            .unwrap()
-            .connection_roles
+                .lock()
+                .unwrap()
+                .connection_roles
                 .contains_key("client-before-role")
         );
         assert!(matches!(
@@ -6006,13 +6057,13 @@ mod presence_tests {
         let shared = Arc::new(Mutex::new(state));
         assert!(
             handle_wrapper_message(
-            "conn-1",
-            WrapperToDaemon::DeliverAcked {
-                delivery_id: "delivery-1".to_string(),
-                delivery_generation: 1,
-            },
-            &shared,
-        )
+                "conn-1",
+                WrapperToDaemon::DeliverAcked {
+                    delivery_id: "delivery-1".to_string(),
+                    delivery_generation: 1,
+                },
+                &shared,
+            )
             .is_none()
         );
         assert_eq!(
@@ -6333,8 +6384,8 @@ mod presence_tests {
         );
         assert!(
             state
-            .pending_replies
-            .iter()
+                .pending_replies
+                .iter()
                 .any(|pending| pending.msg_id == "reply-idempotent")
         );
         let _ = std::fs::remove_file(config.db_path);
@@ -6346,7 +6397,9 @@ mod presence_tests {
         state.router.rename("conn-1", "bridget").unwrap();
         state.presences.get_mut("instance-1").unwrap().name = "bridget".to_string();
         let (target_writer, mut target_reader) = control_socket("idempotent-linked-reply");
-        state.connections.insert("conn-1".to_string(), target_writer);
+        state
+            .connections
+            .insert("conn-1".to_string(), target_writer);
         state
             .store
             .create_request("request-open", "bridget", "coderBridget", 60)
@@ -6395,19 +6448,26 @@ mod presence_tests {
             }
             other => panic!("remise idempotente attendue: {other:?}"),
         };
-        assert!(handle_wrapper_message(
-            "conn-1",
-            WrapperToDaemon::DeliverAcked {
-                delivery_id,
-                delivery_generation,
-            },
-            &shared,
-        )
-        .is_none());
+        assert!(
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::DeliverAcked {
+                    delivery_id,
+                    delivery_generation,
+                },
+                &shared,
+            )
+            .is_none()
+        );
 
         let state = shared.lock().unwrap();
         assert_eq!(
-            state.store.get_request("request-open").unwrap().unwrap().state,
+            state
+                .store
+                .get_request("request-open")
+                .unwrap()
+                .unwrap()
+                .state,
             "answered"
         );
         assert!(state.pending_replies.is_empty());
@@ -6537,13 +6597,13 @@ mod presence_tests {
 
         assert!(
             handle_wrapper_message(
-            "attach-1",
-            WrapperToDaemon::Subscribe {
-                agent: "agent-2".to_string(),
-                window: bridget_transport::AttachWindow::Today,
-            },
-            &shared,
-        )
+                "attach-1",
+                WrapperToDaemon::Subscribe {
+                    agent: "agent-2".to_string(),
+                    window: bridget_transport::AttachWindow::Today,
+                },
+                &shared,
+            )
             .is_none()
         );
         let first_id = match read_control(&mut wrapper_reader) {
@@ -6566,12 +6626,12 @@ mod presence_tests {
         );
         assert!(
             handle_wrapper_message(
-            "conn-1",
-            WrapperToDaemon::Subscribed {
-                subscription_id: first_id.clone(),
-            },
-            &shared,
-        )
+                "conn-1",
+                WrapperToDaemon::Subscribed {
+                    subscription_id: first_id.clone(),
+                },
+                &shared,
+            )
             .is_none()
         );
         assert!(matches!(
@@ -6706,7 +6766,13 @@ mod presence_tests {
         state.presences.clear();
 
         let registrations = [
-            ("acp-conn", "acp-agent", "acp-instance", PresenceMode::Acp, None),
+            (
+                "acp-conn",
+                "acp-agent",
+                "acp-instance",
+                PresenceMode::Acp,
+                None,
+            ),
             (
                 "tmux-conn",
                 "tmux-agent",
@@ -7195,8 +7261,8 @@ mod presence_tests {
                     if error.kind() == std::io::ErrorKind::WouldBlock
                         || error.kind() == std::io::ErrorKind::TimedOut =>
                 {
-                        panic!("End ni EOF recus par la vue")
-                    }
+                    panic!("End ni EOF recus par la vue")
+                }
                 Err(error) => panic!("lecture pair: {error}"),
             }
         }
@@ -8009,9 +8075,7 @@ mod presence_tests {
             agent_type: "fixture".to_string(),
             command: "/bin/sh".to_string(),
             args: Vec::new(),
-            resolved_definition: Box::new(
-                frozen_registry.resolved_definition("fixture").unwrap(),
-            ),
+            resolved_definition: Box::new(frozen_registry.resolved_definition("fixture").unwrap()),
             cwd: root.to_path_buf(),
             env: BTreeMap::from([
                 ("HOME".to_string(), root.as_os_str().to_owned()),
@@ -8443,11 +8507,7 @@ mod presence_tests {
             .unwrap(),
         )
         .unwrap();
-        std::fs::set_permissions(
-            &registry_path,
-            std::fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
+        std::fs::set_permissions(&registry_path, std::fs::Permissions::from_mode(0o600)).unwrap();
         let config = DaemonConfig {
             socket_path: cache.join("bridget.sock"),
             db_path: cache.join("bridget.db"),

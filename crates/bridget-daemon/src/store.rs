@@ -160,7 +160,10 @@ impl Store {
         responder: &str,
         recipient: &str,
     ) -> Result<bool, StoreError> {
-        let transaction = self.conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        let transaction = self
+            .conn
+            .unchecked_transaction()
+            .map_err(StoreError::Sqlite)?;
         let answered = mark_answered_in_transaction(&transaction, id, responder, recipient)
             .map_err(StoreError::Sqlite)?;
         transaction.commit().map_err(StoreError::Sqlite)?;
@@ -192,10 +195,14 @@ impl Store {
         let mut statement = self.conn.prepare(
             "SELECT level, ts FROM request_events WHERE request_id = ?1 AND event_type = 'reminder_deferred' ORDER BY ts DESC, rowid DESC LIMIT 1",
         ).map_err(StoreError::Sqlite)?;
-        let mut rows = statement.query(rusqlite::params![id]).map_err(StoreError::Sqlite)?;
-        rows.next().map_err(StoreError::Sqlite)?.map(|row| {
-            Ok((row.get(0)?, row.get(1)?))
-        }).transpose().map_err(StoreError::Sqlite)
+        let mut rows = statement
+            .query(rusqlite::params![id])
+            .map_err(StoreError::Sqlite)?;
+        rows.next()
+            .map_err(StoreError::Sqlite)?
+            .map(|row| Ok((row.get(0)?, row.get(1)?)))
+            .transpose()
+            .map_err(StoreError::Sqlite)
     }
 
     fn query_requests<P: rusqlite::Params>(
@@ -217,7 +224,10 @@ impl Store {
         msg: &bridget_core::BridgetMessage,
         conversation_key: &str,
     ) -> Result<(), StoreError> {
-        let transaction = self.conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        let transaction = self
+            .conn
+            .unchecked_transaction()
+            .map_err(StoreError::Sqlite)?;
         record_message_in_transaction(&transaction, msg, conversation_key)
             .map_err(StoreError::Sqlite)?;
         transaction.commit().map_err(StoreError::Sqlite)?;
@@ -278,7 +288,10 @@ impl Store {
             .as_secs() as i64
             - (days as i64 * 86400);
 
-        let transaction = self.conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        let transaction = self
+            .conn
+            .unchecked_transaction()
+            .map_err(StoreError::Sqlite)?;
         let deleted = transaction
             .execute(
                 "DELETE FROM ledger WHERE ts < ?1",
@@ -441,36 +454,62 @@ mod tests {
 
     #[test]
     fn deferred_reminder_is_persisted_for_ledger_readers() {
-        let path = std::env::temp_dir().join(format!("bridget-store-events-{}.db", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("bridget-store-events-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let store = Store::open(&path).unwrap();
-        store.create_request("request-1", "alice", "bob", 60).unwrap();
+        store
+            .create_request("request-1", "alice", "bob", 60)
+            .unwrap();
         store.record_deferred_reminder("request-1", 2).unwrap();
-        assert_eq!(store.latest_deferred_reminder("request-1").unwrap().map(|event| event.0), Some(2));
+        assert_eq!(
+            store
+                .latest_deferred_reminder("request-1")
+                .unwrap()
+                .map(|event| event.0),
+            Some(2)
+        );
         drop(store);
         let reopened = Store::open(&path).unwrap();
-        assert_eq!(reopened.latest_deferred_reminder("request-1").unwrap().map(|event| event.0), Some(2));
+        assert_eq!(
+            reopened
+                .latest_deferred_reminder("request-1")
+                .unwrap()
+                .map(|event| event.0),
+            Some(2)
+        );
         drop(reopened);
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn purge_supprime_avec_la_demande_les_evenements_associes() {
-        let path = std::env::temp_dir().join(format!("bridget-store-purge-{}.db", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("bridget-store-purge-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let store = Store::open(&path).unwrap();
-        store.create_request("request-1", "alice", "bob", 60).unwrap();
+        store
+            .create_request("request-1", "alice", "bob", 60)
+            .unwrap();
         assert!(store.mark_timed_out("request-1").unwrap());
         store.record_deferred_reminder("request-1", 2).unwrap();
-        store.conn.execute(
-            "UPDATE tracked_requests SET completed_at = ?1 WHERE id = ?2",
-            rusqlite::params![now_secs() - 86_401, "request-1"],
-        ).unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE tracked_requests SET completed_at = ?1 WHERE id = ?2",
+                rusqlite::params![now_secs() - 86_401, "request-1"],
+            )
+            .unwrap();
 
         store.purge_older_than_days(1).unwrap();
 
         assert!(store.get_request("request-1").unwrap().is_none());
-        assert!(store.latest_deferred_reminder("request-1").unwrap().is_none());
+        assert!(
+            store
+                .latest_deferred_reminder("request-1")
+                .unwrap()
+                .is_none()
+        );
         drop(store);
         let _ = std::fs::remove_file(path);
     }

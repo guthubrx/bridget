@@ -4,7 +4,7 @@
 //! --test mvp_gate -- --ignored --nocapture`.
 
 use maicie::bridget_client::BridgetClient;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
