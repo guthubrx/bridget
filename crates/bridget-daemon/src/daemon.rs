@@ -2933,7 +2933,19 @@ fn handle_delivery_ack(conn_id: &str, delivery_id: String, delivery_generation: 
         .idempotency
         .acknowledge_send_delivery(&delivery_id, &instance_id, delivery_generation)
     {
-        Ok(()) => {
+        Ok(message_bytes) => {
+            if let Some(message_bytes) = message_bytes
+                && let Ok(message) = serde_json::from_slice::<bridget_core::BridgetMessage>(&message_bytes)
+                && let Some(request_id) = message.in_reply_to.as_deref()
+                && st
+                    .store
+                    .mark_answered(request_id, &message.from, &message.to)
+                    .unwrap_or(false)
+            {
+                st.pending_replies
+                    .retain(|pending| pending.msg_id != request_id);
+                info!("demande {} répondue après accusé idempotent", request_id);
+            }
             #[cfg(feature = "test-support")]
             crate::test_sync::checkpoint("after_delivery_acked");
             None
@@ -6143,6 +6155,80 @@ mod presence_tests {
             .iter()
                 .any(|pending| pending.msg_id == "reply-idempotent")
         );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn accuse_idempotent_d_une_reponse_liee_resout_la_demande_sans_relance() {
+        let (mut state, config) = state_with_registered_agent("idempotent-linked-reply");
+        state.router.rename("conn-1", "bridget").unwrap();
+        state.presences.get_mut("instance-1").unwrap().name = "bridget".to_string();
+        let (target_writer, mut target_reader) = control_socket("idempotent-linked-reply");
+        state.connections.insert("conn-1".to_string(), target_writer);
+        state
+            .store
+            .create_request("request-open", "bridget", "coderBridget", 60)
+            .unwrap();
+        state.pending_replies.push(PendingReply {
+            msg_id: "request-open".to_string(),
+            from: "bridget".to_string(),
+            from_conn: "conn-1".to_string(),
+            to: "coderBridget".to_string(),
+            target_conn: "client-reply".to_string(),
+            timeout_secs: 60,
+            created_at: Instant::now(),
+            escalation_level: 0,
+            deferred_level: None,
+        });
+        let shared = Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(&shared, "client-reply", "012_scope_replyyyyyyyyy");
+
+        let mut response = BridgetMessage::new("coderBridget", "bridget", "réponse MCP");
+        response.in_reply_to = Some("request-open".to_string());
+        let issued_at = unix_now_secs();
+        assert!(matches!(
+            handle_wrapper_message(
+                "client-reply",
+                WrapperToDaemon::SendIdempotent {
+                    message: response,
+                    message_id: "mcp-linked-reply".to_string(),
+                    issued_at,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { .. },
+                ..
+            })
+        ));
+        let (delivery_id, delivery_generation) = match read_control(&mut target_reader) {
+            DaemonToWrapper::DeliverIdempotent {
+                delivery_id,
+                delivery_generation,
+                message,
+                ..
+            } => {
+                assert_eq!(message.in_reply_to.as_deref(), Some("request-open"));
+                (delivery_id, delivery_generation)
+            }
+            other => panic!("remise idempotente attendue: {other:?}"),
+        };
+        assert!(handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation,
+            },
+            &shared,
+        )
+        .is_none());
+
+        let state = shared.lock().unwrap();
+        assert_eq!(
+            state.store.get_request("request-open").unwrap().unwrap().state,
+            "answered"
+        );
+        assert!(state.pending_replies.is_empty());
         let _ = std::fs::remove_file(config.db_path);
     }
 

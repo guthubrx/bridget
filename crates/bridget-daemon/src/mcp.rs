@@ -534,11 +534,23 @@ fn execute_send(
     arguments: &serde_json::Map<String, Value>,
     socket: &Path,
 ) -> Result<Value, ToolError> {
-    reject_unknown_arguments(arguments, &["to", "body", "reply", "reply_timeout", "id", "issued_at"])?;
+    reject_unknown_arguments(
+        arguments,
+        &[
+            "to",
+            "body",
+            "reply",
+            "reply_timeout",
+            "in_reply_to",
+            "id",
+            "issued_at",
+        ],
+    )?;
     let to = required_non_empty_string(arguments, "to")?;
     let body = required_non_empty_string(arguments, "body")?;
     let reply = optional_bool(arguments, "reply")?.unwrap_or(false);
     let reply_timeout = optional_positive_u64(arguments, "reply_timeout")?;
+    let in_reply_to = optional_non_empty_string(arguments, "in_reply_to")?;
     if !reply && reply_timeout.is_some() {
         return Err(ToolError::InvalidParams(
             "reply_timeout est réservé à reply=true".to_string(),
@@ -569,6 +581,7 @@ fn execute_send(
     message.id = id.clone();
     message.reply = reply;
     message.reply_timeout = reply_timeout;
+    message.in_reply_to = in_reply_to;
     let mut connection = DaemonConnection::connect(socket)?;
     match connection.exchange(&WrapperToDaemon::RoleHandshake {
         role: ConnectionRole::Client,
@@ -796,6 +809,22 @@ fn required_non_empty_string(
         .ok_or_else(|| ToolError::InvalidParams(format!("{key} doit être une chaîne non vide")))
 }
 
+fn optional_non_empty_string(
+    arguments: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, ToolError> {
+    arguments
+        .get(key)
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| ToolError::InvalidParams(format!("{key} doit être une chaîne non vide")))
+        })
+        .transpose()
+}
+
 fn optional_bool(
     arguments: &serde_json::Map<String, Value>,
     key: &str,
@@ -885,6 +914,7 @@ fn tools() -> Vec<Value> {
                     "body": { "type": "string", "minLength": 1 },
                     "reply": { "type": "boolean", "default": false },
                     "reply_timeout": { "type": "integer", "minimum": 1 },
+                    "in_reply_to": { "type": "string", "minLength": 1, "description": "Identifiant de la demande Bridget à résoudre par cette réponse." },
                     "id": { "type": "string", "minLength": 1, "description": "Clé métier à réutiliser pour un retry explicite." },
                     "issued_at": { "type": "integer", "minimum": 1, "description": "Horodatage renvoyé par le premier appel ; requis avec id pour rejouer le même contrat." }
                 },
@@ -1094,6 +1124,7 @@ mod tests {
                 match read_command(&mut reader) {
                     WrapperToDaemon::SendIdempotent { message, message_id, .. } => {
                         assert_eq!(message.body, expected_body);
+                        assert_eq!(message.in_reply_to, None);
                         assert_eq!(message_id, "retry-me");
                     }
                     other => panic!("commande inattendue: {other:?}"),
@@ -1124,6 +1155,80 @@ mod tests {
         assert_eq!(result["id"], "retry-me");
         server.join().unwrap();
         std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
+    fn send_transmet_in_reply_to_dans_l_enveloppe_idempotente() {
+        let socket = test_socket("send-reply");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::RoleHandshake { role: ConnectionRole::Client }
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client,
+                },
+            );
+            assert!(matches!(read_command(&mut reader), WrapperToDaemon::ClientHello { .. }));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![ClientCapability::SendIdempotent],
+                },
+            );
+            match read_command(&mut reader) {
+                WrapperToDaemon::SendIdempotent { message, .. } => {
+                    assert_eq!(message.in_reply_to.as_deref(), Some("request-open"));
+                    assert!(!message.reply);
+                }
+                other => panic!("commande inattendue: {other:?}"),
+            }
+            write_command(
+                &mut writer,
+                DaemonToWrapper::IdempotencyResult {
+                    operation_kind: "send".to_string(),
+                    idempotency_key: "reply-1".to_string(),
+                    issue: IdempotencyIssue::Accepted { expires_at: 60 },
+                },
+            );
+        });
+        let result = execute_tool_at(
+            "codex-1",
+            "bridget_send",
+            json!({
+                "to": "bridget",
+                "body": "réponse liée",
+                "in_reply_to": "request-open",
+                "id": "reply-1",
+                "issued_at": 1_700_000_000
+            })
+            .as_object()
+            .unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(result["status"], "accepted");
+        server.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
+    fn schema_send_expose_in_reply_to_non_vide() {
+        let send = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "bridget_send")
+            .unwrap();
+        assert_eq!(send["inputSchema"]["properties"]["in_reply_to"]["type"], "string");
+        assert_eq!(send["inputSchema"]["properties"]["in_reply_to"]["minLength"], 1);
     }
 
     #[test]

@@ -996,16 +996,23 @@ impl IdempotencyStore {
         delivery_id: &str,
         recipient_instance_id: &str,
         delivery_generation: u64,
-    ) -> Result<(), IdempotencyError> {
+    ) -> Result<Option<Vec<u8>>, IdempotencyError> {
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let row = tx.query_row(
-            "SELECT issuer_scope, idempotency_key, recipient_instance_id, delivery_generation, phase
+            "SELECT issuer_scope, idempotency_key, recipient_instance_id, delivery_generation, phase, message_bytes
              FROM send_deliveries WHERE delivery_id = ?1",
             params![delivery_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, u64>(3)?, row.get::<_, String>(4)?)),
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, u64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Vec<u8>>(5)?,
+            )),
         ).optional()?.ok_or(IdempotencyError::InvalidDelivery)?;
         if row.2 != recipient_instance_id || row.3 != delivery_generation { return Err(IdempotencyError::InvalidDelivery); }
-        if row.4 == "acked" { tx.commit()?; return Ok(()); }
+        if row.4 == "acked" { tx.commit()?; return Ok(None); }
         if row.4 != "dispatching" { return Err(IdempotencyError::InvalidDelivery); }
         let delivery = tx.execute("UPDATE send_deliveries SET phase = 'acked' WHERE delivery_id = ?1 AND phase = 'dispatching'", params![delivery_id])?;
         let record = tx.execute(
@@ -1015,7 +1022,7 @@ impl IdempotencyStore {
         )?;
         if delivery != 1 || record != 1 { return Err(IdempotencyError::DispatchUnavailable); }
         tx.commit()?;
-        Ok(())
+        Ok(Some(row.5))
     }
 
     #[cfg(test)]
