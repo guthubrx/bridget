@@ -11,7 +11,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
@@ -250,6 +250,49 @@ fn issue_perdue_puis_releve_regeneree_ne_double_ni_decision_ni_reponse() {
             if request_id == "request-reply-lost" && state == "answered"
     )));
     assert_eq!(store.objective_snapshots(Some(created.objective_id)).unwrap()[0].decisions.len(), 1);
+    drop(store);
+    server.join().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Mutation discriminante : si la lecture de `ClaimNext` cessait de recevoir
+/// l'échéance absolue, le sommeil du serveur dépasserait la borne de cette
+/// commande. Si elle greffait avant d'obtenir une issue, une décision
+/// apparaîtrait malgré l'absence totale de réponse Bridget.
+#[test]
+fn budget_epuise_conserve_la_demande_sans_decision_locale() {
+    let root = root("budget");
+    let database = root.join("maicie.sqlite3");
+    let created = seed(&database);
+    let issuer_scope = MaicieStore::open(&database).unwrap().issuer_scope().to_string();
+    let fixture = SocketFixture::new("budget");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let (mut reader, mut writer) = split(stream);
+        assert_service_handshake(&mut reader, &mut writer, &issuer_scope);
+        write_json(&mut writer, welcome());
+        assert_eq!(read_json(&mut reader), json!({"type":"guichet_claim_next","v":1}));
+        thread::sleep(Duration::from_millis(120));
+    });
+
+    let limits = BridgetClientLimits {
+        connect_timeout: Duration::from_millis(30),
+        io_timeout: Duration::from_millis(30),
+        max_frame_bytes: 64 * 1024,
+    };
+    let started = Instant::now();
+    let mut store = MaicieStore::open(&database).unwrap();
+    let report = reconcile_guichet_startup_with_limits(&mut store, fixture.path(), 1_010, limits)
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_millis(100));
+    assert!(matches!(
+        report.actions.last(),
+        Some(GuichetReconcileAction::TransportIndisponible)
+    ));
+    assert!(store.objective_snapshots(Some(created.objective_id)).unwrap()[0]
+        .decisions
+        .is_empty());
     drop(store);
     server.join().unwrap();
     fs::remove_dir_all(root).unwrap();
