@@ -56,9 +56,11 @@ Les clés sont dérivées d'identifiants durables, pas du contenu rendu :
 
 - notification F27 : `(event_id, recipient_id, policy_version)` ;
 - ouverture F28 : `(delegation_id, generation, opened_event_id)` ;
-- réassignation F29 : `(delegation_id, source_generation, threshold_event_id,
+- réémission F29 : `(delegation_id, generation, request_ordinal, answered_event_id)` ;
+- réassignation F29 : `(delegation_id, source_generation, trigger_event_id,
   effect_kind, recipient_id?)`, afin que l'annulation, la nouvelle demande et
-  les deux notifications aient chacune une clé stable distincte.
+  les deux notifications aient chacune une clé stable distincte, que le
+  déclencheur soit seuil, `timed_out` ou épuisement de `M`.
 
 Un crash avant commit ne laisse aucun effet ; après commit, toute reprise voit
 exactement les mêmes outboxes.
@@ -90,12 +92,16 @@ ne rescane pas tous les objectifs.
 
 ### D-1604 — Politique et admissibilité épinglées par délégation
 
-La configuration associe à chaque classe de délai un seuil `N > 0`. À la
-création, la délégation reçoit un snapshot immuable comprenant version, seuil
-et chaîne ordonnée de participants de repli. Chaque entrée épingle aussi les
-faits Maicie qui l'autorisent : `objective_id`, `participant_id`, version
-d'appartenance au registre et exclusion du pilote. Un changement de
-configuration ou d'annuaire ne modifie que les nouvelles délégations.
+La configuration associe à chaque classe de délai un seuil `N > 0` et une borne
+de réémission `M` dans `1..=8`. À la création, la délégation reçoit un snapshot
+immuable comprenant version, seuil, `M` et chaîne ordonnée de participants de
+repli. Chaque entrée épingle aussi les faits Maicie qui l'autorisent :
+`objective_id`, `participant_id`, version d'appartenance au registre et
+exclusion du pilote. Un changement de configuration ou d'annuaire ne modifie
+que les nouvelles délégations.
+
+La borne dure à huit est une garde anti-tempête indépendante de la
+configuration : une politique hors `1..=8` est refusée avant toute mutation.
 
 Ce snapshot supprime une double source de vérité : la configuration courante
 explique le futur ; le snapshot explique toute décision passée ou rejouée.
@@ -139,10 +145,13 @@ relances et possède leurs échéances. La session exige un événement de guich
 `reminder_sent` corrélé à la demande, au message de relance, au destinataire et
 à son instant. Seuls des `event_id` distincts comptent.
 
-Un `answered` attesté et corrélé à une relance de la génération active ne vaut
-pas livraison, mais termine l'épisode de silence : le compteur consécutif est
-remis à zéro. Une relance distincte postérieure le réarme à un. Cette règle
-protège une réponse réelle sans transformer son contenu en preuve de livraison.
+Un `answered` attesté est terminal pour sa demande 015 et ne vaut pas
+livraison. Si aucun `delivery_report` corrélé n'est présent dans le même lot,
+la transaction ferme cette demande et crée la suivante dans la même génération
+avec un identifiant dérivé de `(delegation_id, generation, request_ordinal)` et
+une échéance propre. Après `M` réémissions, le prochain `answered` déclenche le
+même arbitrage que le seuil au lieu de créer une neuvième demande. Cette borne
+reproduit les relances manuelles du référent sans boucle autonome infinie.
 
 La relève normalise chaque lot avant réduction : tous les `delivery_report`
 corrélés d'une génération sont appliqués avant ses `reminder_sent` et
@@ -225,11 +234,12 @@ délégation. Cette couverture partielle de F27 est mesurée telle quelle.
 1. Bridget dépose `reminder_sent`, `answered`, `timed_out` et
    `delivery_report` corrélés au guichet.
 2. Maicie priorise les rapports du lot, déduplique les événements et compte les
-   relances consécutives de la génération active ; `answered` remet ce compte à
-   zéro.
-3. Avant le seuil : aucun effet, sauf `timed_out` de la demande active. Au seuil
-   ou à cette expiration : la transaction arbitre entre une livraison déjà
-   durable, un successeur admissible ou l'intervention humaine.
+   relances de la demande suivie active ; `answered` clôt cette demande et
+   réémet dans la même génération tant que le quota `M` n'est pas consommé.
+3. Avant le seuil : aucun effet, sauf `answered` sans livraison, `timed_out` ou
+   épuisement de `M`. Le premier réémet sous la borne ; les deux derniers et le
+   seuil arbitrent entre livraison déjà durable, successeur admissible ou
+   intervention humaine.
 4. Le commit prépare l'annulation source, la demande suivie successeur et les
    notifications au sortant et au successeur ; le dispatcher les fait
    converger après commit.
@@ -271,7 +281,7 @@ provisoire avant cette gate.
 | C1, C5b | La transaction F29 crée l'annulation source, la demande suivie successeur et les notifications au sortant et au successeur. |
 | C2 | Chaque arête épingle `hash_greffé` par défaut ou `clôture_évaluée_exigée` ; l'écart du mode par défaut avec la vérification humaine est écrit. |
 | C3 | La v1 choisit uniquement dans le snapshot des faits du registre Maicie épinglé, jamais depuis une disponibilité Bridget volatile. |
-| C4 | Un `answered` corrélé remet le compteur consécutif à zéro ; une relance ultérieure le réarme, et le `timed_out` de la demande active arbitre même sous `N`. |
+| C4 | `answered` étant terminal en 015, il crée transactionnellement une nouvelle demande suivie de même génération jusqu'à `M<=8`; à la borne, ou sur `timed_out`, l'arbitrage empêche tout zombie. |
 | C5a | Une annulation ou clôture administrative inhibe le compteur et ne peut produire de successeur. |
 | C6 | Un `delivery_report` du même lot est réduit avant les relances de sa génération, indépendamment de l'ordre filaire. |
 | C7 | G-1600 interdit le lot A avant merge et gel du contrat 015. |
@@ -359,7 +369,7 @@ d'intégration.
 
 **Livrables** :
 
-- validation des seuils par classe et des chaînes de repli ;
+- validation des seuils par classe, de `M` dans `1..=8` et des chaînes de repli ;
 - relève bornée et passage des faits structurés au réducteur B ;
 - dispatcher des outboxes et projections CLI/JSON des issues ;
 - gate rejouant les trois incidents fondateurs, y compris arrêt/reprise des
@@ -388,7 +398,7 @@ si une voie de politique atteint profil/approve/spawn.
 |---|---|---|---|
 | FR-1601, FR-1602 | D-1602, D-1608 | B puis C | couture de toutes les clôtures + outboxes atomiques, crashs et zéro doublon |
 | FR-1603 à FR-1605 | D-1602, D-1603 | B | corpus DAG, concurrence du dernier prérequis, notification unique |
-| FR-1606 | D-1601, D-1606 | A puis C | relance/answered attestés, reset du compteur, texte libre refusé |
+| FR-1606, FR-1606a | D-1601, D-1604, D-1606 | A, B puis C | relance/answered attestés, réémission transactionnelle bornée, texte libre refusé |
 | FR-1607 à FR-1609, FR-1608a, FR-1608b | D-1604 à D-1606 | B puis C | candidats registre épinglés, priorité du lot, expiration sans zombie, cycle complet des demandes, aucun accès profil/spawn |
 | FR-1610 | D-1607 | A et C | Gap/Unavailable/non frais bloquent tout effet automatique |
 | FR-1611 | D-1601 | B | replay déterministe et mutations d'oracle sans réseau/horloge |
@@ -412,8 +422,9 @@ si une voie de politique atteint profil/approve/spawn.
 - `delivery_report` et chacun des déclencheurs `reminder_sent`/`timed_out`
   apparaissent dans le même lot dans les deux ordres filaires et la livraison
   gagne dans tous les cas ;
-- `answered` remet le compteur à zéro, une relance postérieure le réarme et une
-  annulation administrative interdit toute réassignation ;
+- avec `M=2`, deux `answered` successifs créent deux demandes suivies de même
+  génération et le troisième arbitre ; une annulation administrative interdit
+  toute réémission ou réassignation ;
 - `timed_out` sur une demande active sous le seuil produit un arbitrage unique,
   tandis que le même événement tardif sur une génération inactive reste sans
   effet ;

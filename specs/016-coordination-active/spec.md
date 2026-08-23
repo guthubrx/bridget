@@ -41,9 +41,9 @@ assurée par les outboxes durables existantes.
    polling, ni boucle résidente. Elle réagit à des événements datés et
    idempotents reçus au guichet.
 5. **Une politique est épinglée** : sa version, ses seuils et sa chaîne de
-   repli sont figés lors de la création de la délégation. Un changement de
-   configuration ne réécrit pas le passé et ne modifie que les nouvelles
-   délégations.
+   repli, y compris la borne `M` de réémissions, sont figés lors de la création
+   de la délégation. Un changement de configuration ne réécrit pas le passé et
+   ne modifie que les nouvelles délégations.
 6. **La couverture F27 v1 est volontairement partielle** : elle automatise les
    messagers après clôture durable d'objectif et ouverture de délégation, mais
    ne clôt pas elle-même un objectif et ne prétend pas couvrir tout événement
@@ -152,10 +152,12 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
    atteint, **alors**
    Maicie enregistre `intervention_humaine_requise`, notifie le référent et ne
    crée ni participant ni agent.
-5. **Étant donné** une réponse `answered` corrélée à une relance de la
-   génération active, **quand** elle est greffée, **alors** le compteur de
-   relances consécutives revient à zéro ; seules les relances attestées
-   postérieures peuvent le réarmer.
+5. **Étant donné** une réponse `answered` terminale corrélée à la demande suivie
+   active, sans `delivery_report` dans le même lot et avec moins de `M`
+   réémissions consommées, **quand** elle est greffée, **alors** la transaction
+   crée une nouvelle demande suivie pour la même génération, avec identifiant
+   stable et échéance propre. Après `M` réémissions, le prochain `answered`
+   déclenche l'arbitrage livraison/successeur/intervention humaine.
 6. **Étant donné** une annulation ou clôture administrative de la délégation,
    **quand** elle gagne la transaction, **alors** le compteur est inhibé, la
    demande source reçoit une intention d'annulation et le participant sortant
@@ -183,9 +185,11 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
   appliqué avant tout `reminder_sent` de cette génération, indépendamment de
   l'ordre filaire du lot. Une livraison présente dans le lot gagne donc avant
   le seuil ; deux lots déjà committés restent ordonnés par leurs transactions.
-- Une réponse corrélée à une relance remet à zéro le compteur de la génération
-  sans constituer une livraison. Une relance distincte ultérieure recommence
-  un nouvel épisode à un.
+- Une réponse `answered` termine sa demande 015 et ne peut donc attendre une
+  relance ultérieure sur celle-ci. Sans livraison corrélée dans le même lot,
+  Maicie réémet transactionnellement une demande de même génération jusqu'à la
+  borne épinglée `M`, puis arbitre ; elle ne laisse jamais une génération active
+  sans demande ni issue.
 - Une suppression ou modification de politique après création n'altère pas le
   snapshot épinglé de la délégation.
 
@@ -215,14 +219,22 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
 - **FR-1606 — Relances attestées (F29)** : seules les relances émises par
   Bridget et reçues comme événements versionnés, corrélés et idempotents
   peuvent alimenter le compteur de politique. Le temps local et le texte libre
-  ne comptent jamais. Un `answered` corrélé remet le compteur de relances
-  consécutives à zéro sans valoir livraison ; une annulation ou clôture
-  administrative l'inhibe définitivement pour cette génération.
+  ne comptent jamais. Une annulation ou clôture administrative inhibe
+  définitivement le compteur pour cette génération.
+- **FR-1606a — Réémission bornée après réponse** : puisque `answered` est
+  terminal pour une demande 015, un `answered` de la demande suivie active sans
+  `delivery_report` corrélé dans le même lot DOIT, dans une transaction unique,
+  soit préparer une nouvelle demande suivie de même génération avec sa propre
+  échéance si moins de `M` réémissions ont été consommées, soit déclencher
+  l'arbitrage FR-1608 à la borne. `M` est un entier épinglé par politique dans
+  l'intervalle fermé `1..=8` ; aucune génération ne peut donc produire plus de
+  huit réémissions ni rester active sans demande suivie.
 - **FR-1607 — Politique par classe** : chaque classe de délai définit un seuil
-  entier strictement positif et une stratégie de repli déclarative. La version,
-  le seuil, la chaîne ordonnée et les faits d'appartenance au registre Maicie
-  sont épinglés à la délégation avant toute I/O. La v1 ne consulte pas la
-  disponibilité volatile de candidats tiers dans Bridget.
+  entier strictement positif, une borne `M` de réémissions après réponse et une
+  stratégie de repli déclarative. La version, le seuil, `M`, la chaîne ordonnée
+  et les faits d'appartenance au registre Maicie sont épinglés à la délégation
+  avant toute I/O. La v1 ne consulte pas la disponibilité volatile de
+  candidats tiers dans Bridget.
 - **FR-1608 — Réassignation linéarisée** : au seuil, Maicie DOIT décider dans
   une transaction unique entre livraison déjà terminale, réassignation unique
   ou intervention humaine. Une réassignation écrit aussi, dans cette même
@@ -276,13 +288,14 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
 - **NotificationOutbox** : enveloppe immuable, état `prepared`,
   `outcome_unknown`, `accepted` ou `rejected`, rejouée sans reconstruction.
 - **PolitiqueRéassignation** : version, classe de délai, seuil et chaîne de
-  repli épinglés à une délégation, avec les faits d'appartenance au registre
-  qui autorisent chaque candidat.
+  repli épinglés à une délégation, borne `M` de réémissions après réponse et
+  faits d'appartenance au registre qui autorisent chaque candidat.
 - **LignéeDélégation** : générations successives reliées par un motif de
   réassignation ; une seule génération est active.
-- **ÉpisodeRelance** : demande suivie, génération, compteur consécutif et
-  dernier `answered` corrélé ; une réponse remet le compteur à zéro, une
-  annulation administrative le rend inactif.
+- **ÉpisodeRelance** : génération, demande suivie courante, ordinal de demande,
+  compteur de relances et nombre de réémissions consommées ; `answered` clôt la
+  demande courante et provoque réémission bornée ou arbitrage, une annulation
+  administrative rend l'épisode inactif.
 
 ## Critères mesurables
 
@@ -303,8 +316,9 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
   frontières de crash convergent vers le même terminal, sans double génération
   ni perte de livraison tardive. Un corpus par lots inverse l'ordre filaire
   `delivery_report`/`reminder_sent|timed_out` et conserve la priorité à la
-  livraison ; un `answered` intercalé remet le compteur à zéro et une
-  annulation administrative interdit tout successeur.
+  livraison. Avec `M=2`, deux `answered` sans rapport produisent exactement deux
+  nouvelles demandes suivies de même génération, le troisième produit un seul
+  arbitrage, et une annulation administrative interdit tout successeur.
 - **SC-1605** : 100 % des tentatives de réassignation vers un participant non
   déclaré dans le snapshot épinglé, avec événement source non frais ou après
   épuisement de chaîne aboutissent à `intervention_humaine_requise`, avec 0
@@ -354,7 +368,7 @@ vérifier zéro réassignation avant le seuil et une seule génération après.
 |---|---|---|---|
 | F27 / politique 1 | commits, verdicts et fins de banc muets ; le référent devait annoncer chaque hash | FR-1601, FR-1602, FR-1613 | SC-1601, SC-1607 |
 | F28 / politique 2 | prospective est restée en attente d'interfaces et de gates déjà livrés jusqu'au réveil manuel | FR-1603 à FR-1605 | SC-1602, SC-1607 |
-| F29 / politique 3 | creux d'agents constatés par l'utilisateur ; deux relances factuelles sans commit avant réassignation manuelle | FR-1606 à FR-1609, FR-1608a, FR-1608b | SC-1603 à SC-1605, SC-1607 |
+| F29 / politique 3 | creux d'agents constatés par l'utilisateur ; réponses courtoises puis relances manuelles répétées avant réassignation | FR-1606, FR-1606a, FR-1607 à FR-1609, FR-1608a, FR-1608b | SC-1603 à SC-1605, SC-1607 |
 | Relais manuels et corrélation perdue | des réponses non liées ont provoqué des rappels et doubles réponses ; les crashs imposaient de retrouver le terminal réel | FR-1613, FR-1614 | SC-1601, SC-1604 |
 | Politiques manuelles purement factuelles | aucune des trois politiques exécutées ce jour-là ne nécessitait de lire le contenu livré | FR-1611 | SC-1606 |
 | Tentatives répétées de préserver la porte humaine | une réassignation opérationnelle ne valait ni approbation ni naissance d'agent | FR-1609, FR-1612 | SC-1605 |
