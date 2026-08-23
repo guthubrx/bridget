@@ -65,9 +65,13 @@ pub fn write_private_file_atomic_observed(
         .ok_or_else(|| io::Error::other("fichier sans parent"))?;
     create_private_dir(parent)?;
     let suffix = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
+    // Le PID sépare les écrivains inter-processus ; le suffixe `.tmp` reste
+    // stable afin que les réconciliations existantes ignorent aussi bien les
+    // anciens `.N.tmp` que les nouveaux `.pid-N.tmp` laissés par un crash.
     let temporary = parent.join(format!(
-        ".{}.{}.tmp",
+        ".{}.{}-{}.tmp",
         path.file_name().unwrap_or_default().to_string_lossy(),
+        std::process::id(),
         suffix
     ));
     let mut file = OpenOptions::new()
@@ -94,6 +98,15 @@ pub fn write_private_file_atomic_observed(
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    const CONCURRENT_CHILD: &str = "BRIDGET_FSUTIL_CONCURRENT_CHILD";
+    const CONCURRENT_PATH: &str = "BRIDGET_FSUTIL_CONCURRENT_PATH";
+    const CONCURRENT_READY: &str = "BRIDGET_FSUTIL_CONCURRENT_READY";
+    const CONCURRENT_RELEASE: &str = "BRIDGET_FSUTIL_CONCURRENT_RELEASE";
+    const CONCURRENT_CONTENT: &str = "BRIDGET_FSUTIL_CONCURRENT_CONTENT";
 
     #[test]
     fn private_helpers_enforce_permissions_and_replace_content() {
@@ -112,5 +125,110 @@ mod tests {
             0o600
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn atomic_temporary_names_are_unique_across_processes() {
+        if std::env::var_os(CONCURRENT_CHILD).is_some() {
+            concurrent_writer_child();
+            return;
+        }
+
+        let root =
+            std::env::temp_dir().join(format!("bridget-fsutil-concurrent-{}", std::process::id()));
+        let path = root.join("fleet.json");
+        let _ = fs::remove_dir_all(&root);
+        create_private_dir(&root).unwrap();
+
+        let current_exe = std::env::current_exe().unwrap();
+        let mut children = Vec::new();
+        let mut ready_paths = Vec::new();
+        let mut release_paths = Vec::new();
+        for index in 0..2 {
+            let ready = root.join(format!("ready-{index}"));
+            let release = root.join(format!("release-{index}"));
+            let child = Command::new(&current_exe)
+                .arg("--exact")
+                .arg("fsutil::tests::atomic_temporary_names_are_unique_across_processes")
+                .arg("--nocapture")
+                .env(CONCURRENT_CHILD, "1")
+                .env(CONCURRENT_PATH, &path)
+                .env(CONCURRENT_READY, &ready)
+                .env(CONCURRENT_RELEASE, &release)
+                .env(CONCURRENT_CONTENT, format!("writer-{index}"))
+                .spawn()
+                .unwrap();
+            children.push(child);
+            ready_paths.push(ready);
+            release_paths.push(release);
+        }
+
+        for ready in &ready_paths {
+            wait_until(
+                || ready.exists(),
+                "temporaire ouvert par les deux processus",
+            );
+        }
+        let temporaries = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect::<Vec<_>>();
+        assert_eq!(temporaries.len(), 2);
+        assert!(
+            temporaries
+                .iter()
+                .all(|name| name.starts_with(".fleet.json."))
+        );
+        assert!(temporaries.iter().all(|name| {
+            name.rsplit_once('-')
+                .is_some_and(|(_, counter)| counter == "0.tmp")
+        }));
+
+        for release in &release_paths {
+            fs::write(release, b"release").unwrap();
+        }
+        for mut child in children {
+            assert!(child.wait().unwrap().success());
+        }
+
+        assert!(matches!(
+            fs::read(&path).unwrap().as_slice(),
+            b"writer-0" | b"writer-1"
+        ));
+        assert!(
+            fs::read_dir(&root)
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| !entry.file_name().to_string_lossy().ends_with(".tmp"))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn concurrent_writer_child() {
+        let path = std::env::var_os(CONCURRENT_PATH).unwrap();
+        let ready = std::env::var_os(CONCURRENT_READY).unwrap();
+        let release = std::env::var_os(CONCURRENT_RELEASE).unwrap();
+        let content = std::env::var(CONCURRENT_CONTENT).unwrap();
+        write_private_file_atomic_observed(Path::new(&path), content.as_bytes(), |phase| {
+            if phase == AtomicWritePhase::BeforeRename {
+                fs::write(&ready, b"ready")?;
+                wait_until(
+                    || Path::new(&release).exists(),
+                    "liberation du processus enfant",
+                );
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn wait_until(mut predicate: impl FnMut() -> bool, label: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !predicate() {
+            assert!(Instant::now() < deadline, "timeout : {label}");
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 }

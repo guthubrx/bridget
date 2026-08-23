@@ -490,7 +490,7 @@ impl CutProxy {
                     Err(error) => panic!("accept du proxy impossible: {error}"),
                 };
                 client.set_nonblocking(false).unwrap();
-                let target_stream = UnixStream::connect(&target).unwrap();
+                let target_stream = connect_target_within_bound(&target);
                 target_stream.set_nonblocking(false).unwrap();
                 let current_wrapper = Arc::clone(&observed_wrapper);
                 let connection_count = Arc::clone(&observed_connections);
@@ -550,8 +550,8 @@ impl CutProxy {
             .unwrap_or_else(|poison| poison.into_inner())
             .take()
             .expect("connexion wrapper à couper");
-        sockets.0.shutdown(std::net::Shutdown::Both).unwrap();
-        sockets.1.shutdown(std::net::Shutdown::Both).unwrap();
+        shutdown_for_cut(&sockets.0);
+        shutdown_for_cut(&sockets.1);
         let deadline = Instant::now() + MATRIX_TIMEOUT;
         while self.wrapper_connection_count() == before && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
@@ -569,6 +569,38 @@ impl CutProxy {
             handle.join().unwrap();
         }
         let _ = fs::remove_file(&self.socket);
+    }
+}
+
+/// La moitié du proxy peut déjà avoir atteint EOF quand l'autre la coupe.
+/// `NotConnected` confirme alors la même coupure et ne rend pas la matrice
+/// moins stricte : la reconnexion suivante reste attendue et contrôlée.
+fn shutdown_for_cut(stream: &UnixStream) {
+    match stream.shutdown(std::net::Shutdown::Both) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotConnected => {}
+        Err(error) => panic!("coupure du proxy impossible: {error}"),
+    }
+}
+
+/// Le fichier socket du daemon existe avant que son écoute soit atomiquement
+/// disponible. Le proxy de test attend donc cette disponibilité bornée au lieu
+/// de transformer ce démarrage concurrent en `ConnectionRefused` aléatoire.
+fn connect_target_within_bound(target: &Path) -> UnixStream {
+    let deadline = Instant::now() + MATRIX_TIMEOUT;
+    loop {
+        match UnixStream::connect(target) {
+            Ok(stream) => return stream,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+                ) && Instant::now() < deadline =>
+            {
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("connexion du proxy au daemon impossible: {error}"),
+        }
     }
 }
 
