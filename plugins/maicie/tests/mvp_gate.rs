@@ -42,19 +42,30 @@ fn delegation_reelle_est_accusee_et_visible_sans_fausse_correlation_de_reponse()
     let delegated: Value = serde_json::from_slice(&delegated.stdout).unwrap();
     let objective_id = delegated["objective_id"].as_str().unwrap();
 
+    let status_deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        let status = fixture.maicie(&[
+            "status",
+            objective_id,
+            "--config",
+            fixture.config.to_str().unwrap(),
+            "--json",
+        ]);
+        assert!(status.status.success(), "{:?}", status.stderr);
+        let json: Value = serde_json::from_slice(&status.stdout).unwrap();
+        if json["coordination"][0]["remises_locales"][0]["state"] == "accepted" {
+            break json;
+        }
+        assert!(Instant::now() < status_deadline, "status MVP: {json}");
+        thread::sleep(Duration::from_millis(25));
+    };
     let delivered_at = started.elapsed();
-    let status = fixture.maicie(&[
-        "status",
-        "--config",
-        fixture.config.to_str().unwrap(),
-        "--objective",
-        objective_id,
-        "--json",
-    ]);
-    assert!(status.status.success(), "{:?}", status.stderr);
-    let status: Value = serde_json::from_slice(&status.stdout).unwrap();
     assert_eq!(status["transport_snapshot"], "unknown");
-    assert_eq!(status["coordination"][0]["remises_locales"][0]["state"], "accepted");
+    assert_eq!(
+        status["coordination"][0]["remises_locales"][0]["state"],
+        "accepted",
+        "status MVP: {status}"
+    );
     assert_eq!(
         status["coordination"][0]["remises_locales"][0]["issue"]["kind"],
         "accepted"
@@ -93,6 +104,7 @@ impl Fixture {
         let root = std::env::temp_dir().join(format!("maicie-mvp-gate-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join(".config/bridget")).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let adapter = root.join("mvp-acp.sh");
         fs::write(
             &adapter,

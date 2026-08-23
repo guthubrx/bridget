@@ -147,7 +147,10 @@ fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
         explicit_target: arguments.target.as_deref(),
         required_tags: &arguments.required_tags,
         duration: arguments.duration,
-        reply: true,
+        // Maicie est un client public durable, pas un wrapper enregistré :
+        // demander une réponse Bridget serait refusé avant livraison. La
+        // corrélation de réponse attend T015b/Subscribe, sans la simuler ici.
+        reply: false,
         idempotency_key: &idempotency_key,
         now,
         retry_until,

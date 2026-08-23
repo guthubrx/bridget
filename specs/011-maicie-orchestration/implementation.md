@@ -27,3 +27,16 @@ T015b est reportée à la phase 4 : avant toute évolution du protocole Bridget,
 T017/T018 doivent établir si Subscribe 008 et `in_reply_to` corrèlent les
 réponses et les timeouts de manière suffisamment fraîche, sans inférence
 locale ni seconde source de vérité.
+
+## T016 — gate MVP réel (2026-08-23)
+
+Gate exécuté avec un daemon Bridget réel, un équipier ACP lancé par
+`bridget spawn`, puis `maicie delegate`, `status` et `close` réels. La remise
+est attestée dans le registre local Maicie (`accepted` + issue durable), tandis
+que le snapshot transport reste honnêtement `unknown`. Mesure : 1 527 ms de la
+délégation au statut accepté, 1 532 ms jusqu'à la clôture explicite.
+
+Le premier passage a refusé `reply=true` avec `reply_sender_unavailable` :
+Maicie est un client public durable, non un wrapper Bridget joignable. Le MVP
+émet donc sans demande de réponse ; T015b devra fournir une identité Maicie
+connectée avant d'activer une corrélation de réponse.
