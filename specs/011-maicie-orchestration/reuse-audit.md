@@ -47,6 +47,12 @@ contrats publics sessions 008 et 009 sont des gates avant leurs lots respectifs.
 Aucune. Le superviseur historique, le scheduler, le journal ACP interne et
 le spawn local sont explicitement exclus.
 
+## Arbitrages d'implémentation ultérieurs
+
+| Élément | Existant proche | Arbitrage | Preuve |
+|---|---|---|---|
+| Banc SC-008 `status` | fixture privée T018 `plugins/maicie/tests/integration/status_sources.rs` | Fixture dédiée : le benchmark requiert une chauffe et 21 consultations réelles successives, tandis que la fixture T018 vérifie seulement trois cas fonctionnels unitaires ; ne pas rendre ce harnais de charge implicite dans un test de contrat. | `plugins/maicie/tests/integration/status_benchmark.rs` |
+
 ## Gate avant tasks
 
 - [x] Aucune duplication evidente non arbitree

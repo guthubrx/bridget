@@ -81,3 +81,18 @@ mutation `connect_with_limits_until` vers `connect_with_limits` dépasse alors
 la borne du test, tandis que l'échéance absolue correcte expire avant le
 replay. Le protocole de mutation est consigné dans le test, qui redevient une
 preuve discriminante.
+
+## T020 — banc SC-008 : coût de `maicie status`
+
+Le banc reproductible exécute la vraie sous-commande `maicie status --json`
+sur une projection SQLite de 100 objectifs délégués, puis une capture Attach
+publique éphémère. Les 100 objectifs partagent le même équipier : la
+déduplication des abonnements est volontairement exercée, sans masquer le
+coût de projection des 100 coordinations. Une chauffe précède 21 échantillons
+mesurés ; le p95 utilise le rang le plus proche.
+
+Quatre campagnes locales ont donné un p95 de 29,390 ms, 23,534 ms, 22,969 ms
+et 23,419 ms (plage 22,969–29,390 ms), toutes sous le budget SC-008 de
+250 ms. À cette charge, la capture éphémère ne justifie donc pas un runtime
+résident v2 ; toute hausse future du nombre d'équipiers ou de la charge devra
+être mesurée par ce même banc avant d'étendre la surface.
