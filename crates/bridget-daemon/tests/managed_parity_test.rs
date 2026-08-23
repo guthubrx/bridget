@@ -585,13 +585,13 @@ fn start_daemon_behind_proxy(root: &Path) -> (DaemonProcess, CutProxy) {
     let target = daemon_cache.join("bridget.sock");
     let database = daemon_cache.join("bridget.db");
     let deadline = Instant::now() + MATRIX_TIMEOUT;
-    while !database.exists() && Instant::now() < deadline {
+    while !daemon_ledger_is_ready(&database) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
     }
     assert!(target.exists());
     assert!(
-        database.exists(),
-        "le daemon n'a pas achevé son initialisation"
+        daemon_ledger_is_ready(&database),
+        "le daemon n'a pas achevé l'initialisation de son ledger"
     );
     fs::remove_file(&cache_link).unwrap();
     std::os::unix::fs::symlink(&proxy_cache, &cache_link).unwrap();
@@ -599,6 +599,23 @@ fn start_daemon_behind_proxy(root: &Path) -> (DaemonProcess, CutProxy) {
     let proxy = CutProxy::start(proxy_socket, target);
     daemon.socket = cache_link.join("bridget.sock");
     (daemon, proxy)
+}
+
+/// Le fichier SQLite existe dès `Connection::open`, avant les DDL du store.
+/// La bascule du proxy attend donc l'observable utile pour le premier Send.
+fn daemon_ledger_is_ready(database: &Path) -> bool {
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let Ok(connection) = rusqlite::Connection::open_with_flags(database, flags) else {
+        return false;
+    };
+    connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ledger'",
+            [],
+            |_| Ok(()),
+        )
+        .is_ok()
 }
 
 struct Peer {
