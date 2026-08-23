@@ -996,7 +996,7 @@ impl IdempotencyStore {
         delivery_id: &str,
         recipient_instance_id: &str,
         delivery_generation: u64,
-    ) -> Result<Option<Vec<u8>>, IdempotencyError> {
+    ) -> Result<Option<String>, IdempotencyError> {
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let row = tx.query_row(
             "SELECT issuer_scope, idempotency_key, recipient_instance_id, delivery_generation, phase, message_bytes
@@ -1014,6 +1014,7 @@ impl IdempotencyStore {
         if row.2 != recipient_instance_id || row.3 != delivery_generation { return Err(IdempotencyError::InvalidDelivery); }
         if row.4 == "acked" { tx.commit()?; return Ok(None); }
         if row.4 != "dispatching" { return Err(IdempotencyError::InvalidDelivery); }
+        let message = serde_json::from_slice::<bridget_core::BridgetMessage>(&row.5).ok();
         let delivery = tx.execute("UPDATE send_deliveries SET phase = 'acked' WHERE delivery_id = ?1 AND phase = 'dispatching'", params![delivery_id])?;
         let record = tx.execute(
             "UPDATE idempotency_records SET state = 'terminal', public_result_kind = 'accepted', public_result_category = NULL, public_result_reason = NULL
@@ -1021,8 +1022,21 @@ impl IdempotencyStore {
             params![row.0, row.1],
         )?;
         if delivery != 1 || record != 1 { return Err(IdempotencyError::DispatchUnavailable); }
+        let answered_request = if let Some(message) = message
+            && let Some(request_id) = message.in_reply_to.as_deref()
+        {
+            let changed = tx.execute(
+                "UPDATE tracked_requests
+                 SET state = 'answered', completed_at = strftime('%s', 'now')
+                 WHERE id = ?1 AND sender = ?2 AND target = ?3 AND state = 'open'",
+                params![request_id, message.to, message.from],
+            )?;
+            (changed == 1).then(|| request_id.to_string())
+        } else {
+            None
+        };
         tx.commit()?;
-        Ok(Some(row.5))
+        Ok(answered_request)
     }
 
     #[cfg(test)]

@@ -1201,22 +1201,42 @@ mod tests {
                 },
             );
         });
-        let result = execute_tool_at(
-            "codex-1",
-            "bridget_send",
-            json!({
-                "to": "bridget",
-                "body": "réponse liée",
-                "in_reply_to": "request-open",
-                "id": "reply-1",
-                "issued_at": 1_700_000_000
-            })
-            .as_object()
-            .unwrap(),
-            &socket,
-        )
-        .unwrap();
-        assert_eq!(result["status"], "accepted");
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "bridget_send",
+                "arguments": {
+                    "to": "bridget",
+                    "body": "réponse liée",
+                    "in_reply_to": "request-open",
+                    "id": "reply-1",
+                    "issued_at": 1_700_000_000
+                }
+            }
+        });
+        let mut session = Session {
+            initialize_seen: true,
+            initialized: true,
+        };
+        let resolver = || Ok(crate::mcp_identity::ResolvedIdentity {
+            name: "codex-1".to_string(),
+            instance_id: "test-instance".to_string(),
+        });
+        let execute = |identity: &crate::mcp_identity::ResolvedIdentity,
+                       name: &str,
+                       arguments: &Value| {
+            execute_tool_at_with_scope(
+                &identity.name,
+                &identity.instance_id,
+                name,
+                arguments.as_object().expect("arguments objet"),
+                &socket,
+            )
+        };
+        let result = dispatch_with_executor(&request, &mut session, &resolver, &execute).unwrap();
+        assert_eq!(result["result"]["structuredContent"]["status"], "accepted");
         server.join().unwrap();
         std::fs::remove_file(socket).unwrap();
     }

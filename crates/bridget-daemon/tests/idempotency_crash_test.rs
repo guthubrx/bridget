@@ -9,6 +9,7 @@
 use bridget_core::BridgetMessage;
 use bridget_daemon::test_sync::DIRECTORY_ENV;
 use bridget_daemon::registry::AgentRegistry;
+use bridget_daemon::store::Store;
 use bridget_daemon::wrapper::launch_acp_with;
 use bridget_transport::protocol::{
     decode, encode, ClientCapability, ConnectionRole, IdempotencyIssue, CLIENT_CONTRACT_VERSION,
@@ -717,6 +718,57 @@ fn recovery_terminal_acked_rejoue_accepted_apres_crash_daemon() {
     wait_for_accepted(&socket_path, &idempotent_send(message_id, issued_at));
     restarted.stop();
     fs::remove_dir_all(root).expect("nettoyage terminal");
+}
+
+#[test]
+fn recovery_ack_d_une_reponse_liee_cloture_la_demande_atomiquement() {
+    let root = test_root("linked-reply-ack");
+    let database = root.join(".cache/bridget/bridget.db");
+    fs::create_dir_all(database.parent().expect("parent base")).expect("répertoire base");
+    Store::open(&database)
+        .expect("store initial")
+        .create_request("request-open", "recipient", "human", 60)
+        .expect("demande suivie initiale");
+
+    let (sync, marker) = checkpoint_root(&root, "after_delivery_acked");
+    let mut daemon = MatrixDaemonGuard::start(&root, &sync);
+    let socket_path = socket(&root);
+    let mut recipient = register_recipient_as(&socket_path, "linked-reply-instance");
+    let issued_at = issued_at();
+    let mut command = idempotent_send("linked-reply-ack".to_string(), issued_at);
+    let WrapperToDaemon::SendIdempotent { message, .. } = &mut command else {
+        unreachable!("commande idempotente attendue");
+    };
+    message.in_reply_to = Some("request-open".to_string());
+    let mut client = negotiate_client(&socket_path);
+    client.send(command);
+    let _ = client.receive();
+    let (delivery_id, delivery_generation) = match receive_delivery(&mut recipient) {
+        DaemonToWrapper::DeliverIdempotent {
+            delivery_id,
+            delivery_generation,
+            ..
+        } => (delivery_id, delivery_generation),
+        _ => unreachable!(),
+    };
+    recipient.send(WrapperToDaemon::DeliverAcked {
+        delivery_id,
+        delivery_generation,
+    });
+    watch_marker(&sync, &marker);
+    daemon.crash();
+    drop(client);
+    drop(recipient);
+
+    let mut restarted = MatrixDaemonGuard::start(&root, &sync);
+    let request = Store::open(&database)
+        .expect("store après redémarrage")
+        .get_request("request-open")
+        .expect("demande lisible")
+        .expect("demande présente");
+    assert_eq!(request.state, "answered");
+    restarted.stop();
+    fs::remove_dir_all(root).expect("nettoyage réponse liée");
 }
 
 #[test]

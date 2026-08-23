@@ -2933,15 +2933,8 @@ fn handle_delivery_ack(conn_id: &str, delivery_id: String, delivery_generation: 
         .idempotency
         .acknowledge_send_delivery(&delivery_id, &instance_id, delivery_generation)
     {
-        Ok(message_bytes) => {
-            if let Some(message_bytes) = message_bytes
-                && let Ok(message) = serde_json::from_slice::<bridget_core::BridgetMessage>(&message_bytes)
-                && let Some(request_id) = message.in_reply_to.as_deref()
-                && st
-                    .store
-                    .mark_answered(request_id, &message.from, &message.to)
-                    .unwrap_or(false)
-            {
+        Ok(answered_request) => {
+            if let Some(request_id) = answered_request {
                 st.pending_replies
                     .retain(|pending| pending.msg_id != request_id);
                 info!("demande {} répondue après accusé idempotent", request_id);
@@ -6229,6 +6222,62 @@ mod presence_tests {
             "answered"
         );
         assert!(state.pending_replies.is_empty());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn meme_cle_idempotente_avec_reponse_liee_divergente_est_refusee_sans_mutation() {
+        let (state, config) = state_with_registered_agent("idempotent-linked-mismatch");
+        state
+            .store
+            .create_request("request-a", "agent-2", "coderBridget", 60)
+            .unwrap();
+        state
+            .store
+            .create_request("request-b", "agent-2", "coderBridget", 60)
+            .unwrap();
+        let shared = Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(&shared, "client-reply", "012_scope_replyyyyyyyyy");
+        let issued_at = unix_now_secs();
+        for request_id in ["request-a", "request-b"] {
+            let mut response = BridgetMessage::new("coderBridget", "agent-2", "réponse MCP");
+            response.in_reply_to = Some(request_id.to_string());
+            let result = handle_wrapper_message(
+                "client-reply",
+                WrapperToDaemon::SendIdempotent {
+                    message: response,
+                    message_id: "mcp-linked-mismatch".to_string(),
+                    issued_at,
+                },
+                &shared,
+            );
+            if request_id == "request-a" {
+                assert!(matches!(
+                    result,
+                    Some(DaemonToWrapper::IdempotencyResult {
+                        issue: IdempotencyIssue::OutcomeUnknown { .. },
+                        ..
+                    })
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Some(DaemonToWrapper::IdempotencyResult {
+                        issue: IdempotencyIssue::EnvelopeMismatch,
+                        ..
+                    })
+                ));
+            }
+        }
+        let state = shared.lock().unwrap();
+        assert_eq!(
+            state.store.get_request("request-a").unwrap().unwrap().state,
+            "open"
+        );
+        assert_eq!(
+            state.store.get_request("request-b").unwrap().unwrap().state,
+            "open"
+        );
         let _ = std::fs::remove_file(config.db_path);
     }
 
