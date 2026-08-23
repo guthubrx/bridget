@@ -185,3 +185,9 @@ fleet.json, replay de contexte automatique au-delà de la carte de réveil.
   `bridget codex resume` non. Correctif : whitelist des sous-commandes codex
   connues (resume, exec) comme non-prompts. Recoupe la « carte de réveil » :
   même besoin, même endroit d'injection.
+- **`who` n'affiche pas le mode d'attelage** (confusion utilisateur constatée
+  2×, 2026-08-23) : la colonne transport ne décrit que le tronçon
+  daemon↔wrapper (unix/ssh) ; rien n'indique si l'équipier est géré ACP ou
+  interactif tmux, et les claude ne remontent ni modèle ni effort (sonde
+  runtime codex-only). Ajouter une colonne mode (acp/tmux/cli) et étendre la
+  sonde aux claude.
