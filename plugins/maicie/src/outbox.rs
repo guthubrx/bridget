@@ -4,9 +4,7 @@
 //! demeure l'unique autorite de transition ; le futur reconciliateur T008 ne
 //! recevra que des snapshots complets, sans resolution implicite de cible.
 
-use crate::bridget_client::{
-    BridgetClientError, BridgetClientLimits, PublicMessage, validate_send_idempotent_frame,
-};
+use crate::bridget_client::{BridgetClientError, PublicMessage, validate_send_idempotent_frame};
 use crate::domain::{
     Delegation, EtatDelegation, EtatObjectif, EtatOutboxDelegation, ObjectifCoordonne,
     OutboxDelegation,
@@ -30,13 +28,15 @@ pub struct PreparedDelegation {
 
 impl PreparedDelegation {
     /// Construit les octets filaires une seule fois, avant toute persistence ou
-    /// connexion Bridget.
+    /// connexion Bridget. La borne est celle du client runtime qui remettra
+    /// cette outbox ; aucune valeur implicite ne peut diverger de ce transport.
     pub fn new(
         objective: ObjectifCoordonne,
         delegation: Delegation,
         outbox: OutboxDelegation,
         issuer_scope: impl Into<String>,
         issued_at: i64,
+        max_frame_bytes: usize,
     ) -> Result<Self, OutboxError> {
         let body = std::str::from_utf8(&outbox.body_bytes)
             .map_err(|_| OutboxError::Invalid("body_bytes doit etre UTF-8"))?;
@@ -56,7 +56,7 @@ impl PreparedDelegation {
             &message,
             &outbox.message_id.to_string(),
             issued_at,
-            BridgetClientLimits::default().max_frame_bytes,
+            max_frame_bytes,
         )
         .map_err(OutboxError::Frame)?;
         let prepared = Self {

@@ -3,8 +3,9 @@ use maicie::domain::{
     ClasseDuree, Delegation, EtatDelegation, EtatObjectif, EtatOutboxDelegation, ModeObjectif,
     ObjectifCoordonne, OutboxDelegation,
 };
-use maicie::outbox::{MAX_MESSAGE_BYTES, PreparedDelegation, StoreCommitPhase, stable_body_hash};
+use maicie::outbox::{stable_body_hash, PreparedDelegation, StoreCommitPhase, MAX_MESSAGE_BYTES};
 use maicie::store::MaicieStore;
+use serde_json::json;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -20,6 +21,7 @@ const OBJECTIVE_ID: &str = "10000000-0000-4000-8000-000000000001";
 const DELEGATION_ID: &str = "20000000-0000-4000-8000-000000000002";
 const MESSAGE_ID: &str = "30000000-0000-4000-8000-000000000003";
 const BODY: &[u8] = b"Inspecte le chemin critique, puis reponds avec les preuves.";
+const FRAME_LIMIT: usize = 256 * 1024;
 const CHILD_MODE: &str = "MAICIE_T006_CHILD_MODE";
 const CHILD_ROOT: &str = "MAICIE_T006_CHILD_ROOT";
 
@@ -131,34 +133,74 @@ fn prepare_refuse_une_trame_finale_poison_et_des_champs_hors_contrat() {
         deadline_at: u64::try_from(base.outbox.deadline_contractuelle).ok(),
         in_reply_to: None,
     };
-    let public_overhead = serde_json::to_vec(&empty_message).unwrap().len();
-    let body = vec![b'x'; MAX_MESSAGE_BYTES - public_overhead];
+    let replay_overhead = serde_json::to_vec(&json!({
+        "type": "SendIdempotent",
+        "message": empty_message,
+        "message_id": base.outbox.message_id,
+        "issued_at": base.issued_at,
+    }))
+    .unwrap()
+    .len();
+    let body = vec![b'x'; MAX_MESSAGE_BYTES - replay_overhead - 1];
+    let mut at_limit = base.outbox.clone();
+    at_limit.body_bytes = body.clone();
+    at_limit.body_hash = stable_body_hash(&body);
+    assert!(PreparedDelegation::new(
+        base.objective.clone(),
+        base.delegation.clone(),
+        at_limit,
+        store.issuer_scope(),
+        base.issued_at,
+        FRAME_LIMIT,
+    )
+    .is_ok());
+
+    let mut body_over_limit = body;
+    body_over_limit.push(b'x');
     let mut oversized = base.outbox.clone();
-    oversized.body_bytes = body.clone();
-    oversized.body_hash = stable_body_hash(&body);
-    assert!(
-        PreparedDelegation::new(
-            base.objective.clone(),
-            base.delegation.clone(),
-            oversized,
-            store.issuer_scope(),
-            base.issued_at,
-        )
-        .is_err()
-    );
+    oversized.body_bytes = body_over_limit.clone();
+    oversized.body_hash = stable_body_hash(&body_over_limit);
+    assert!(PreparedDelegation::new(
+        base.objective.clone(),
+        base.delegation.clone(),
+        oversized,
+        store.issuer_scope(),
+        base.issued_at,
+        FRAME_LIMIT,
+    )
+    .is_err());
+
+    let base_message: PublicMessage = serde_json::from_slice(&base.message_bytes).unwrap();
+    let runtime_frame_bytes = serde_json::to_vec(&json!({
+        "type": "SendIdempotent",
+        "message": base_message,
+        "message_id": base.outbox.message_id,
+        "issued_at": base.issued_at,
+    }))
+    .unwrap()
+    .len()
+        + 1;
+    assert!(PreparedDelegation::new(
+        base.objective.clone(),
+        base.delegation.clone(),
+        base.outbox.clone(),
+        store.issuer_scope(),
+        base.issued_at,
+        runtime_frame_bytes - 1,
+    )
+    .is_err());
 
     let mut timeout = base.outbox.clone();
     timeout.timeout_secs = 7 * 24 * 60 * 60 + 1;
-    assert!(
-        PreparedDelegation::new(
-            base.objective.clone(),
-            base.delegation.clone(),
-            timeout,
-            store.issuer_scope(),
-            base.issued_at,
-        )
-        .is_err()
-    );
+    assert!(PreparedDelegation::new(
+        base.objective.clone(),
+        base.delegation.clone(),
+        timeout,
+        store.issuer_scope(),
+        base.issued_at,
+        FRAME_LIMIT,
+    )
+    .is_err());
 
     let mut wrong_hops = base.clone();
     let mut message: PublicMessage = serde_json::from_slice(&wrong_hops.message_bytes).unwrap();
@@ -209,6 +251,7 @@ fn transaction_unique_expose_l_enveloppe_exacte_et_le_snapshot() {
         second_outbox,
         store.issuer_scope(),
         1_000,
+        FRAME_LIMIT,
     )
     .unwrap();
     store.create_prepared_delegation(&second).unwrap();
@@ -250,6 +293,7 @@ fn un_objectif_clos_ne_peut_pas_etre_rouvert_par_un_nouvel_upsert() {
         second_outbox,
         &scope,
         1_000,
+        FRAME_LIMIT,
     )
     .unwrap();
     let mut store = MaicieStore::open(&database).unwrap();
@@ -308,15 +352,13 @@ fn issue_et_incertitude_sont_des_transitions_transactionnelles() {
             1_012,
         )
         .unwrap();
-    assert!(
-        store
-            .record_lookup_issue(
-                uuid(MESSAGE_ID),
-                &IdempotencyIssue::IdempotencyExpired,
-                1_013,
-            )
-            .is_err()
-    );
+    assert!(store
+        .record_lookup_issue(
+            uuid(MESSAGE_ID),
+            &IdempotencyIssue::IdempotencyExpired,
+            1_013,
+        )
+        .is_err());
     assert!(store.pending_delegation_outboxes().unwrap().is_empty());
     let terminal = store.recovery_snapshot(uuid(MESSAGE_ID)).unwrap().unwrap();
     assert_eq!(terminal.outbox.state, EtatOutboxDelegation::Accepted);
@@ -358,11 +400,9 @@ fn tous_les_refus_durables_convergent_vers_rejected_terminal() {
         assert_eq!(snapshot.outbox.state, EtatOutboxDelegation::Rejected);
         assert_eq!(snapshot.last_issue.unwrap()["kind"], expected_kind);
         assert_eq!(snapshot.issue_observed_at, Some(1_010));
-        assert!(
-            store
-                .record_transport_uncertainty(uuid(MESSAGE_ID), 1_012)
-                .is_err()
-        );
+        assert!(store
+            .record_transport_uncertainty(uuid(MESSAGE_ID), 1_012)
+            .is_err());
         drop(store);
         fs::remove_dir_all(root).unwrap();
     }
@@ -522,7 +562,15 @@ fn fixture(issuer_scope: &str) -> PreparedDelegation {
         retry_until: 1_050,
         dedup_retained_until: 1_100,
     };
-    PreparedDelegation::new(objective, delegation, outbox, issuer_scope, 1_000).unwrap()
+    PreparedDelegation::new(
+        objective,
+        delegation,
+        outbox,
+        issuer_scope,
+        1_000,
+        FRAME_LIMIT,
+    )
+    .unwrap()
 }
 
 fn spawn_child(mode: &str, root: &Path) -> (Child, UnixStream, PathBuf) {
