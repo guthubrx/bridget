@@ -249,14 +249,14 @@ fn reconciliation_budget(limits: BridgetClientLimits) -> Duration {
     limits.connect_timeout.max(limits.io_timeout)
 }
 
-/// Une ligne peut au pire négocier, lookup puis rejouer. En divisant le temps
-/// restant entre ces phases, les délais de `BridgetClient` ne peuvent pas
-/// repousser la borne globale de la passe.
+/// Une ligne peut au pire connecter, négocier (deux requêtes), lookup puis
+/// rejouer. En divisant le temps restant entre ces cinq opérations, les délais
+/// de `BridgetClient` ne peuvent pas repousser la borne globale de la passe.
 fn limits_for_remaining_budget(
     limits: BridgetClientLimits,
     remaining: Duration,
 ) -> BridgetClientLimits {
-    let per_operation = (remaining / 4).max(Duration::from_millis(1));
+    let per_operation = (remaining / 5).max(Duration::from_millis(1));
     BridgetClientLimits {
         connect_timeout: limits.connect_timeout.min(per_operation),
         io_timeout: limits.io_timeout.min(per_operation),
