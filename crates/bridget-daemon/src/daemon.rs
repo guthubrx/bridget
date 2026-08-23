@@ -3,8 +3,9 @@
 
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
 use bridget_transport::protocol::{
-    AttachRefusal, CLIENT_CONTRACT_VERSION, ClientCapability, ClientRefusal, ConnectionRole,
-    IdempotencyIssue, PresenceMode, SpawnRefusal, StopOutcome, decode, encode,
+    AttachRefusal, CLIENT_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION, ClientCapability,
+    ClientRefusal, ConnectionRole, IdempotencyIssue, PresenceMode, ServiceCapability,
+    ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use log::{error, info, warn};
@@ -260,6 +261,9 @@ struct DaemonState {
     /// Une négociation appartient à la connexion, tandis que le scope peut
     /// volontairement être partagé par plusieurs retries coopératifs.
     client_negotiations: HashMap<String, NegotiatedClient>,
+    /// La capacité du guichet ne dépend jamais d'un nom déclaré : elle est
+    /// attachée à cette négociation de service et disparaît avec la connexion.
+    service_negotiations: HashMap<String, NegotiatedService>,
     /// Souscriptions attach actives, distinctes de l'annuaire des équipiers.
     attach_subscriptions: HashMap<String, AttachSubscription>,
     attach_views: HashMap<String, Arc<AttachView>>,
@@ -407,6 +411,13 @@ struct NegotiatedClient {
     version: u16,
     issuer_scope: String,
     capabilities: Vec<ClientCapability>,
+}
+
+#[derive(Clone)]
+struct NegotiatedService {
+    version: u16,
+    issuer_scope: String,
+    capabilities: Vec<ServiceCapability>,
 }
 
 struct QueuedAttachMessage {
@@ -1627,6 +1638,7 @@ impl DaemonState {
             conn_instances: HashMap::new(),
             connection_roles: HashMap::new(),
             client_negotiations: HashMap::new(),
+            service_negotiations: HashMap::new(),
             attach_subscriptions: HashMap::new(),
             attach_views: HashMap::new(),
             view_closed_tx,
@@ -2418,6 +2430,7 @@ fn handle_connection(
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
         st.client_negotiations.remove(&conn_id);
+        st.service_negotiations.remove(&conn_id);
         (writer_opt, removed, controls, views)
     };
     let _ = execute_controls(controls);
@@ -3432,18 +3445,29 @@ fn handle_wrapper_message(
     for view in views {
         view.close_and_join();
     }
-    if matches!(msg, WrapperToDaemon::ClientHello { .. })
-        && !state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .connection_roles
-            .contains_key(conn_id)
+    if !state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .connection_roles
+        .contains_key(conn_id)
     {
-        // Un hello client ne doit jamais sélectionner implicitement le rôle
-        // wrapper : l'ordre public est strict et sans effet de bord.
-        return Some(DaemonToWrapper::ClientRejected {
-            reason: ClientRefusal::RoleHandshakeRequired,
-        });
+        match &msg {
+            // Un hello client ne doit jamais sélectionner implicitement le rôle
+            // wrapper : l'ordre public est strict et sans effet de bord.
+            WrapperToDaemon::ClientHello { .. } => {
+                return Some(DaemonToWrapper::ClientRejected {
+                    reason: ClientRefusal::RoleHandshakeRequired,
+                });
+            }
+            // Le nom réservé `maicie` ne donne aucun droit : seule une
+            // connexion explicitement négociée comme service peut le demander.
+            WrapperToDaemon::ServiceHello { .. } => {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::RoleHandshakeRequired,
+                });
+            }
+            _ => {}
+        }
     }
 
     if !matches!(msg, WrapperToDaemon::RoleHandshake { .. }) {
@@ -3459,10 +3483,18 @@ fn handle_wrapper_message(
     if let WrapperToDaemon::RoleHandshake { role } = &msg {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         if st.connection_roles.contains_key(conn_id) {
-            if *role == ConnectionRole::Client {
-                return Some(DaemonToWrapper::ClientRejected {
-                    reason: ClientRefusal::ClientRoleRequired,
-                });
+            match role {
+                ConnectionRole::Client => {
+                    return Some(DaemonToWrapper::ClientRejected {
+                        reason: ClientRefusal::ClientRoleRequired,
+                    });
+                }
+                ConnectionRole::Service => {
+                    return Some(DaemonToWrapper::ServiceRejected {
+                        reason: ServiceRefusal::ServiceRoleRequired,
+                    });
+                }
+                ConnectionRole::Wrapper | ConnectionRole::Attach => {}
             }
             return Some(DaemonToWrapper::AttachRejected {
                 subscription_id: None,
@@ -3488,6 +3520,61 @@ fn handle_wrapper_message(
             mode: None,
             location: None,
         });
+    }
+
+    let service_refusal = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let is_service_message = matches!(
+            &msg,
+            WrapperToDaemon::ServiceHello { .. }
+                | WrapperToDaemon::GuichetClaimNext
+                | WrapperToDaemon::GuichetClaim { .. }
+                | WrapperToDaemon::GuichetReply { .. }
+        );
+        match st.connection_roles.get(conn_id) {
+            Some(ConnectionRole::Service) => match &msg {
+                WrapperToDaemon::ServiceHello { .. }
+                    if st.service_negotiations.contains_key(conn_id) =>
+                {
+                    Some(ServiceRefusal::AlreadyNegotiated)
+                }
+                WrapperToDaemon::GuichetClaimNext
+                | WrapperToDaemon::GuichetClaim { .. }
+                | WrapperToDaemon::GuichetReply { .. }
+                    if !st.service_negotiations.contains_key(conn_id) =>
+                {
+                    Some(ServiceRefusal::NegotiationRequired)
+                }
+                WrapperToDaemon::GuichetClaimNext
+                | WrapperToDaemon::GuichetClaim { .. }
+                | WrapperToDaemon::GuichetReply { .. }
+                    if !st
+                        .service_negotiations
+                        .get(conn_id)
+                        .is_some_and(|negotiated| {
+                            negotiated.version == SERVICE_CONTRACT_VERSION
+                                && negotiated
+                                    .capabilities
+                                    .contains(&ServiceCapability::MaicieGuichet)
+                        }) =>
+                {
+                    Some(ServiceRefusal::CapabilityRequired)
+                }
+                WrapperToDaemon::ServiceHello { .. }
+                | WrapperToDaemon::GuichetClaimNext
+                | WrapperToDaemon::GuichetClaim { .. }
+                | WrapperToDaemon::GuichetReply { .. }
+                | WrapperToDaemon::Heartbeat => None,
+                _ => Some(ServiceRefusal::MessageOutsideServiceRole),
+            },
+            Some(ConnectionRole::Wrapper) | None if is_service_message => {
+                Some(ServiceRefusal::ServiceRoleRequired)
+            }
+            _ => None,
+        }
+    };
+    if let Some(reason) = service_refusal {
+        return Some(DaemonToWrapper::ServiceRejected { reason });
     }
 
     let client_refusal = {
@@ -3552,6 +3639,74 @@ fn handle_wrapper_message(
 
     match msg {
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
+        WrapperToDaemon::ServiceHello {
+            version,
+            service,
+            issuer_scope,
+            capabilities,
+        } => {
+            if version != SERVICE_CONTRACT_VERSION {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::UnsupportedVersion {
+                        supported_versions: vec![SERVICE_CONTRACT_VERSION],
+                    },
+                });
+            }
+            if service != "maicie" {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::ReservedServiceRequired,
+                });
+            }
+            if crate::idempotency::validate_issuer_scope(&issuer_scope).is_err() {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::InvalidIssuerScope,
+                });
+            }
+            if capabilities.len() > 1 {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::InvalidEnvelope,
+                });
+            }
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            st.service_negotiations.insert(
+                conn_id.to_string(),
+                NegotiatedService {
+                    version: SERVICE_CONTRACT_VERSION,
+                    issuer_scope,
+                    capabilities: capabilities.clone(),
+                },
+            );
+            Some(DaemonToWrapper::ServiceWelcome {
+                version: SERVICE_CONTRACT_VERSION,
+                horizon_secs: CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+                capabilities,
+            })
+        }
+        WrapperToDaemon::GuichetClaimNext => {
+            // T1503 clôt ici la frontière de capacité. T1504 substitue la
+            // transition durable au refus, sans jamais utiliser un `from`
+            // déclaré comme droit d'accès.
+            Some(DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::TransitionInvalid,
+            })
+        }
+        WrapperToDaemon::GuichetClaim { issuer_scope, .. }
+        | WrapperToDaemon::GuichetReply { issuer_scope, .. } => {
+            let scope_matches = state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .service_negotiations
+                .get(conn_id)
+                .is_some_and(|negotiated| negotiated.issuer_scope == issuer_scope);
+            Some(DaemonToWrapper::ServiceRejected {
+                reason: if scope_matches {
+                    ServiceRefusal::TransitionInvalid
+                } else {
+                    ServiceRefusal::InvalidEnvelope
+                },
+            })
+        }
         WrapperToDaemon::ClientHello {
             contract_version,
             issuer_scope,
@@ -4283,6 +4438,7 @@ fn handle_wrapper_message(
                 st.conn_names.remove(conn_id);
                 st.conn_hosts.remove(conn_id);
                 st.conn_operating_systems.remove(conn_id);
+                st.service_negotiations.remove(conn_id);
                 (controls, views)
             };
             let _ = execute_controls(controls);
@@ -5758,6 +5914,162 @@ mod presence_tests {
             shared.lock().unwrap().connection_roles.get("conn-role"),
             Some(&ConnectionRole::Wrapper)
         );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn service_maicie_negocie_sa_capacite_sans_lier_le_nom_au_droit() {
+        let (state, config) = state_with_registered_agent("service-guichet");
+        let shared = Arc::new(Mutex::new(state));
+        let scope = "015_scope_0123456789abcdef0123456789abcdef";
+
+        // Mutation discriminante : si un simple `from` ou nom de wrapper
+        // autorisait le guichet, ce claim serait accepté au lieu du refus.
+        assert!(matches!(
+            handle_wrapper_message(
+                "wrapper-maicie",
+                WrapperToDaemon::Register {
+                    agent_type: "codex".to_string(),
+                    name: Some("maicie".to_string()),
+                    host: None,
+                    transport: None,
+                    mode: None,
+                    location: None,
+                    os: None,
+                    instance_id: None,
+                    domain: None,
+                    turn_in_progress: false,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::Registered { .. })
+        ));
+        assert!(matches!(
+            handle_wrapper_message("wrapper-maicie", WrapperToDaemon::GuichetClaimNext, &shared),
+            Some(DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::ServiceRoleRequired
+            })
+        ));
+
+        for connection in ["service-without-capability", "service-capable"] {
+            assert!(matches!(
+                handle_wrapper_message(
+                    connection,
+                    WrapperToDaemon::RoleHandshake {
+                        role: ConnectionRole::Service,
+                    },
+                    &shared,
+                ),
+                Some(DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Service
+                })
+            ));
+        }
+        assert!(matches!(
+            handle_wrapper_message(
+                "service-without-capability",
+                WrapperToDaemon::ServiceHello {
+                    version: SERVICE_CONTRACT_VERSION,
+                    service: "maicie".to_string(),
+                    issuer_scope: scope.to_string(),
+                    capabilities: Vec::new(),
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ServiceWelcome { capabilities, .. }) if capabilities.is_empty()
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "service-without-capability",
+                WrapperToDaemon::GuichetClaimNext,
+                &shared,
+            ),
+            Some(DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::CapabilityRequired
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "service-without-capability",
+                WrapperToDaemon::GuichetReply {
+                    issuer_scope: scope.to_string(),
+                    request_id: "req-1".to_string(),
+                    claim_generation: 1,
+                    claim_token: "claim-1".to_string(),
+                    response_message_id: "message-1".to_string(),
+                    in_reply_to: "message-0".to_string(),
+                    outcome: "accepted".to_string(),
+                    payload: serde_json::json!({"kind":"delivery_report"}),
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::CapabilityRequired
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "service-capable",
+                WrapperToDaemon::ServiceHello {
+                    version: SERVICE_CONTRACT_VERSION,
+                    service: "maicie".to_string(),
+                    issuer_scope: scope.to_string(),
+                    capabilities: vec![ServiceCapability::MaicieGuichet],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ServiceWelcome { capabilities, .. })
+                if capabilities == vec![ServiceCapability::MaicieGuichet]
+        ));
+        assert!(matches!(
+            handle_wrapper_message("service-capable", WrapperToDaemon::GuichetClaimNext, &shared),
+            Some(DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::TransitionInvalid
+            })
+        ));
+
+        // Une nouvelle connexion ne récupère aucune capacité de l'ancienne.
+        {
+            let mut state = shared.lock().unwrap();
+            state.connection_roles.remove("service-without-capability");
+            state.service_negotiations.remove("service-without-capability");
+        }
+        assert!(matches!(
+            handle_wrapper_message(
+                "service-reconnected",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Service,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Service
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "service-reconnected",
+                WrapperToDaemon::ServiceHello {
+                    version: SERVICE_CONTRACT_VERSION,
+                    service: "maicie".to_string(),
+                    issuer_scope: scope.to_string(),
+                    capabilities: Vec::new(),
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ServiceWelcome { capabilities, .. }) if capabilities.is_empty()
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "service-reconnected",
+                WrapperToDaemon::GuichetClaimNext,
+                &shared,
+            ),
+            Some(DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::CapabilityRequired
+            })
+        ));
+        assert_eq!(shared.lock().unwrap().service_negotiations.len(), 2);
         let _ = std::fs::remove_file(config.db_path);
     }
 

@@ -18,6 +18,7 @@ pub enum ConnectionRole {
     Wrapper,
     Attach,
     Client,
+    Service,
 }
 
 /// Mode réel de présence d'un agent.
@@ -46,6 +47,8 @@ impl PresenceMode {
 
 /// Version actuellement publiée du contrat idempotent local.
 pub const CLIENT_CONTRACT_VERSION: u16 = 1;
+/// Version du contrat de service du guichet Maicie.
+pub const SERVICE_CONTRACT_VERSION: u16 = 1;
 
 /// Capacité optionnelle du client idempotent. L'énumération fermée évite une
 /// dégradation silencieuse lorsqu'un client demande une capacité inconnue.
@@ -54,6 +57,30 @@ pub const CLIENT_CONTRACT_VERSION: u16 = 1;
 pub enum ClientCapability {
     SendIdempotent,
     Lookup,
+}
+
+/// Capacité explicitement négociée par un service local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceCapability {
+    MaicieGuichet,
+}
+
+/// Refus structurés de la frontière réservée aux services.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ServiceRefusal {
+    RoleHandshakeRequired,
+    ServiceRoleRequired,
+    NegotiationRequired,
+    AlreadyNegotiated,
+    UnsupportedVersion { supported_versions: Vec<u16> },
+    InvalidIssuerScope,
+    ReservedServiceRequired,
+    InvalidEnvelope,
+    CapabilityRequired,
+    MessageOutsideServiceRole,
+    TransitionInvalid,
 }
 
 /// Refus structurés de la frontière publique client.
@@ -232,6 +259,36 @@ pub enum WrapperToDaemon {
         contract_version: u16,
         issuer_scope: String,
         capabilities: Vec<ClientCapability>,
+    },
+    /// Négocie le contrat du service Maicie, uniquement après RoleAccepted(Service).
+    #[serde(rename = "service_hello")]
+    ServiceHello {
+        version: u16,
+        service: String,
+        issuer_scope: String,
+        capabilities: Vec<ServiceCapability>,
+    },
+    /// Relève FIFO bornée d'une demande du guichet. T1504 en assure la persistance.
+    #[serde(rename = "guichet_claim_next")]
+    GuichetClaimNext,
+    /// Rejeu strict d'un claim existant, sous son token de lease courant.
+    #[serde(rename = "guichet_claim")]
+    GuichetClaim {
+        issuer_scope: String,
+        request_id: String,
+        claim_token: String,
+    },
+    /// Réponse de service corrélée à un claim. T1504 valide et persiste son canon.
+    #[serde(rename = "guichet_reply")]
+    GuichetReply {
+        issuer_scope: String,
+        request_id: String,
+        claim_generation: u64,
+        claim_token: String,
+        response_message_id: String,
+        in_reply_to: String,
+        outcome: String,
+        payload: serde_json::Value,
     },
     /// Envoi à clé client. T1205 raccorde cette variante au socle durable.
     SendIdempotent {
@@ -484,6 +541,17 @@ pub enum DaemonToWrapper {
     },
     /// Refus motivé de la négociation ou de la matrice client.
     ClientRejected { reason: ClientRefusal },
+    /// Contrat et capacité réellement négociés avec un service Maicie.
+    #[serde(rename = "service_welcome")]
+    ServiceWelcome {
+        version: u16,
+        horizon_secs: i64,
+        issued_at_tolerance_secs: i64,
+        capabilities: Vec<ServiceCapability>,
+    },
+    /// Refus motivé de la négociation ou de la matrice de service.
+    #[serde(rename = "service_rejected")]
+    ServiceRejected { reason: ServiceRefusal },
     /// Issue durable ou calculée d'un `SendIdempotent`.
     IdempotencyResult {
         operation_kind: String,
@@ -977,6 +1045,62 @@ mod tests {
             decode(&encode(&unsubscribe).unwrap()).unwrap(),
             WrapperToDaemon::Unsubscribe { subscription_id } if subscription_id == "sub-1"
         ));
+    }
+
+    #[test]
+    fn service_guichet_messages_roundtrip_et_restent_hors_attach() {
+        let hello = WrapperToDaemon::ServiceHello {
+            version: SERVICE_CONTRACT_VERSION,
+            service: "maicie".to_string(),
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+            capabilities: vec![ServiceCapability::MaicieGuichet],
+        };
+        assert_eq!(
+            encode(&hello).unwrap(),
+            "{\"type\":\"service_hello\",\"version\":1,\"service\":\"maicie\",\"issuer_scope\":\"015_scope_0123456789abcdef0123456789abcdef\",\"capabilities\":[\"maicie_guichet\"]}"
+        );
+        assert!(matches!(
+            decode(&encode(&hello).unwrap()).unwrap(),
+            WrapperToDaemon::ServiceHello {
+                version: SERVICE_CONTRACT_VERSION,
+                capabilities,
+                ..
+            } if capabilities == vec![ServiceCapability::MaicieGuichet]
+        ));
+
+        let reply = WrapperToDaemon::GuichetReply {
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+            request_id: "req-1".to_string(),
+            claim_generation: 3,
+            claim_token: "claim-1".to_string(),
+            response_message_id: "msg-1".to_string(),
+            in_reply_to: "message-1".to_string(),
+            outcome: "accepted".to_string(),
+            payload: serde_json::json!({"kind":"delivery_report"}),
+        };
+        assert!(matches!(
+            decode(&encode(&reply).unwrap()).unwrap(),
+            WrapperToDaemon::GuichetReply {
+                claim_generation: 3,
+                claim_token,
+                ..
+            } if claim_token == "claim-1"
+        ));
+        assert_eq!(
+            reply.attach_refusal(),
+            Some(AttachRefusal::MessageOutsideAttachRole)
+        );
+
+        let rejected = DaemonToWrapper::ServiceRejected {
+            reason: ServiceRefusal::CapabilityRequired,
+        };
+        assert!(matches!(
+            decode(&encode(&rejected).unwrap()).unwrap(),
+            DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::CapabilityRequired
+            }
+        ));
+        assert!(!rejected.allowed_for_attach());
     }
 
     #[test]
