@@ -835,21 +835,15 @@ impl GuichetClient {
         }
         let connect_deadline = deadline.unwrap_or_else(|| Instant::now() + limits.connect_timeout);
         let mut connection = WireConnection::connect(&socket_path, limits, connect_deadline)?;
-        let role = request_with_deadline(
+        let role = request_raw_with_deadline(
             &mut connection,
-            json!({"type": "RoleHandshake", "role": "service"}),
+            &canonical_service_role_handshake()?,
             deadline,
         )?;
         expect_role_accepted(&role, "service")?;
-        let welcome = request_with_deadline(
+        let welcome = request_raw_with_deadline(
             &mut connection,
-            json!({
-                "type": "ServiceHello",
-                "version": GUICHET_CONTRACT_VERSION,
-                "service": "maicie",
-                "issuer_scope": issuer_scope,
-                "capabilities": [REQUIRED_GUICHET_CAPABILITY],
-            }),
+            &canonical_service_hello(&issuer_scope)?,
             deadline,
         )?;
         let negotiated = parse_service_welcome(welcome)?;
@@ -1057,6 +1051,53 @@ fn request_with_deadline(
         Some(deadline) => connection.request_until(value, deadline),
         None => connection.request(value),
     }
+}
+
+fn request_raw_with_deadline(
+    connection: &mut WireConnection,
+    bytes: &[u8],
+    deadline: Option<Instant>,
+) -> Result<Value, BridgetClientError> {
+    match deadline {
+        Some(deadline) => connection.request_raw_json_until(bytes, deadline),
+        None => connection.request_raw_json(bytes),
+    }
+}
+
+#[derive(Serialize)]
+struct CanonicalServiceRoleHandshake<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+    role: &'a str,
+}
+
+#[derive(Serialize)]
+struct CanonicalServiceHello<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+    version: u16,
+    service: &'a str,
+    issuer_scope: &'a str,
+    capabilities: [&'a str; 1],
+}
+
+fn canonical_service_role_handshake() -> Result<Vec<u8>, BridgetClientError> {
+    serde_json::to_vec(&CanonicalServiceRoleHandshake {
+        kind: "RoleHandshake",
+        role: "service",
+    })
+    .map_err(BridgetClientError::Encode)
+}
+
+fn canonical_service_hello(issuer_scope: &str) -> Result<Vec<u8>, BridgetClientError> {
+    serde_json::to_vec(&CanonicalServiceHello {
+        kind: "ServiceHello",
+        version: GUICHET_CONTRACT_VERSION,
+        service: "maicie",
+        issuer_scope,
+        capabilities: [REQUIRED_GUICHET_CAPABILITY],
+    })
+    .map_err(BridgetClientError::Encode)
 }
 
 /// Vérifie la trame complète `SendIdempotent` avant sa persistance par
