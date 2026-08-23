@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DomainError {
     TransitionInterdite,
     DonneeInvalide(&'static str),
@@ -16,12 +17,14 @@ pub enum DomainError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ModeObjectif {
     Collaboratif,
     Delegue,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EtatObjectif {
     Ouvert,
     EnCoordination,
@@ -43,7 +46,11 @@ pub struct ObjectifCoordonne {
 }
 
 impl ObjectifCoordonne {
-    pub fn nouveau(but: impl Into<String>, mode: ModeObjectif, now: i64) -> Result<Self, DomainError> {
+    pub fn nouveau(
+        but: impl Into<String>,
+        mode: ModeObjectif,
+        now: i64,
+    ) -> Result<Self, DomainError> {
         let but = but.into();
         if but.trim().is_empty() {
             return Err(DomainError::DonneeInvalide("but vide"));
@@ -88,6 +95,7 @@ impl ObjectifCoordonne {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ClasseDuree {
     Courte,
     Normale,
@@ -95,6 +103,7 @@ pub enum ClasseDuree {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EtatDelegation {
     Creee,
     AEvaluer,
@@ -124,7 +133,10 @@ impl Delegation {
         let participant = participant.into();
         let instruction = instruction.into();
         let raison = raison.into();
-        if participant.trim().is_empty() || instruction.trim().is_empty() || raison.trim().is_empty() {
+        if participant.trim().is_empty()
+            || instruction.trim().is_empty()
+            || raison.trim().is_empty()
+        {
             return Err(DomainError::DonneeInvalide("délégation incomplète"));
         }
         Ok(Self {
@@ -151,7 +163,10 @@ impl Delegation {
     }
 
     pub fn annuler(&mut self) -> Result<(), DomainError> {
-        if matches!(self.etat, EtatDelegation::Terminee | EtatDelegation::Annulee) {
+        if matches!(
+            self.etat,
+            EtatDelegation::Terminee | EtatDelegation::Annulee
+        ) {
             return Err(DomainError::TransitionInterdite);
         }
         self.etat = EtatDelegation::Annulee;
@@ -160,6 +175,7 @@ impl Delegation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EtatOutboxDelegation {
     Prepared,
     OutcomeUnknown,
@@ -184,8 +200,11 @@ pub struct OutboxDelegation {
 
 impl OutboxDelegation {
     pub fn verifier(&self) -> Result<(), DomainError> {
-        if self.target.trim().is_empty() || self.body_bytes.is_empty() || self.body_hash.is_empty() {
-            return Err(DomainError::DonneeInvalide("enveloppe de délégation incomplète"));
+        if self.target.trim().is_empty() || self.body_bytes.is_empty() || self.body_hash.is_empty()
+        {
+            return Err(DomainError::DonneeInvalide(
+                "enveloppe de délégation incomplète",
+            ));
         }
         if self.retry_until > self.dedup_retained_until {
             return Err(DomainError::DonneeInvalide("retry hors horizon Bridget"));
@@ -196,9 +215,16 @@ impl OutboxDelegation {
     pub fn transition(&mut self, next: EtatOutboxDelegation, now: i64) -> Result<(), DomainError> {
         if !matches!(
             (self.etat, next),
-            (EtatOutboxDelegation::Prepared, EtatOutboxDelegation::OutcomeUnknown)
-                | (EtatOutboxDelegation::Prepared, EtatOutboxDelegation::Accepted)
-                | (EtatOutboxDelegation::OutcomeUnknown, EtatOutboxDelegation::Accepted)
+            (
+                EtatOutboxDelegation::Prepared,
+                EtatOutboxDelegation::OutcomeUnknown
+            ) | (
+                EtatOutboxDelegation::Prepared,
+                EtatOutboxDelegation::Accepted
+            ) | (
+                EtatOutboxDelegation::OutcomeUnknown,
+                EtatOutboxDelegation::Accepted
+            )
         ) {
             return Err(DomainError::TransitionInterdite);
         }
@@ -209,12 +235,14 @@ impl OutboxDelegation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SourceSnapshot {
     Bridget,
     AcpSubscription,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EtatFlux {
     Fresh,
     Gap,
@@ -236,14 +264,23 @@ pub struct SnapshotTransport {
 impl SnapshotTransport {
     pub fn verifier(&self) -> Result<(), DomainError> {
         match self.source {
-            SourceSnapshot::Bridget if self.subscription_id.is_none() && self.seq.is_none() => Ok(()),
-            SourceSnapshot::AcpSubscription if self.subscription_id.is_some() && self.seq.is_some() => Ok(()),
-            _ => Err(DomainError::DonneeInvalide("corrélation de snapshot invalide")),
+            SourceSnapshot::Bridget if self.subscription_id.is_none() && self.seq.is_none() => {
+                Ok(())
+            }
+            SourceSnapshot::AcpSubscription
+                if self.subscription_id.is_some() && self.seq.is_some() =>
+            {
+                Ok(())
+            }
+            _ => Err(DomainError::DonneeInvalide(
+                "corrélation de snapshot invalide",
+            )),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EtatActivationProfil {
     Inactif,
     Proposition,
@@ -267,9 +304,13 @@ impl ProfilEquipe {
     pub fn transition_activation(&mut self, next: EtatActivationProfil) -> Result<(), DomainError> {
         if !matches!(
             (self.etat_activation, next),
-            (EtatActivationProfil::Inactif, EtatActivationProfil::Proposition)
-                | (EtatActivationProfil::Proposition, EtatActivationProfil::Approuve)
-                | (EtatActivationProfil::Approuve, EtatActivationProfil::Lance)
+            (
+                EtatActivationProfil::Inactif,
+                EtatActivationProfil::Proposition
+            ) | (
+                EtatActivationProfil::Proposition,
+                EtatActivationProfil::Approuve
+            ) | (EtatActivationProfil::Approuve, EtatActivationProfil::Lance)
                 | (EtatActivationProfil::Lance, EtatActivationProfil::Connecte)
         ) {
             return Err(DomainError::TransitionInterdite);
@@ -318,6 +359,7 @@ impl ApprobationActivation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EtatActivationOutbox {
     Dispatching,
     OutcomeUnknown,
@@ -345,9 +387,16 @@ impl ActivationOutbox {
     pub fn transition(&mut self, next: EtatActivationOutbox) -> Result<(), DomainError> {
         if !matches!(
             (self.etat, next),
-            (EtatActivationOutbox::Dispatching, EtatActivationOutbox::OutcomeUnknown)
-                | (EtatActivationOutbox::Dispatching, EtatActivationOutbox::Applied)
-                | (EtatActivationOutbox::OutcomeUnknown, EtatActivationOutbox::Applied)
+            (
+                EtatActivationOutbox::Dispatching,
+                EtatActivationOutbox::OutcomeUnknown
+            ) | (
+                EtatActivationOutbox::Dispatching,
+                EtatActivationOutbox::Applied
+            ) | (
+                EtatActivationOutbox::OutcomeUnknown,
+                EtatActivationOutbox::Applied
+            )
         ) {
             return Err(DomainError::TransitionInterdite);
         }
