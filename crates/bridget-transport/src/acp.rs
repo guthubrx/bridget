@@ -1847,18 +1847,28 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
 
     #[test]
     fn echec_avant_flush_n_emet_pas_prompt_dispatched() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-acp-flush-before-dispatch-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let stdin_closed = root.join("stdin-closed");
         let script = r#"
 read initialize
 echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
 read session
 exec 0<&-
+touch "__BRIDGET_STDIN_CLOSED__"
 echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
-"#;
+sleep 30
+"#
+        .replace("__BRIDGET_STDIN_CLOSED__", &stdin_closed.display().to_string());
         let (observer, observed_events) = mpsc::channel();
         let mut transport = AcpTransport::spawn_with_clock_and_cancel_grace(
             AcpOptions {
                 command: "sh".to_string(),
-                args: vec!["-c".to_string(), script.to_string()],
+                args: vec!["-c".to_string(), script],
                 queue_capacity: 1,
                 permissions: "allow".to_string(),
                 notify_timeout_secs: 1,
@@ -1869,16 +1879,23 @@ echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
             Some(observer),
         )
         .unwrap();
+        // La réponse session/new n'est écrite par l'adaptateur qu'après la
+        // fermeture de stdin et ce jalon. spawn() est donc une barrière : le
+        // prompt ne peut pas être tenté contre un lecteur encore ouvert.
+        assert!(stdin_closed.exists(), "le jalon de fermeture stdin est absent");
         transport.deliver(&message("flush-failed")).unwrap();
-        let mut dispatched = false;
-        for _ in 0..20 {
-            match observed_events.recv_timeout(Duration::from_millis(50)) {
-                Ok(AcpEvent::PromptDispatched { .. }) => dispatched = true,
-                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        match observed_events.recv_timeout(Duration::from_secs(2)) {
+            Ok(AcpEvent::DeliveryRejected { message_id, .. }) => {
+                assert_eq!(message_id, "flush-failed")
             }
+            Ok(AcpEvent::PromptDispatched { .. }) => {
+                panic!("un échec avant flush ne peut pas être acquitté")
+            }
+            Ok(other) => panic!("issue ACP inattendue: {other:?}"),
+            Err(error) => panic!("échec de flush non observé: {error}"),
         }
-        assert!(!dispatched, "un échec avant flush ne peut pas être acquitté");
+        drop(transport);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

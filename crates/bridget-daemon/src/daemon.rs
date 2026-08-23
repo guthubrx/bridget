@@ -6507,6 +6507,83 @@ mod presence_tests {
     }
 
     #[test]
+    fn inscription_claude_geree_expose_acp_domaine_et_accepte_attach() {
+        let (mut state, config) = state_with_registered_agent("claude-managed-metadata");
+        state.router.unregister_by_conn("conn-1");
+        state.conn_instances.remove("conn-1");
+        state.presences.clear();
+
+        let (wrapper_writer, mut wrapper_reader) = control_socket("claude-managed-wrapper");
+        let (attach_writer, _attach_reader) = control_socket("claude-managed-attach");
+        state
+            .connections
+            .insert("claude-managed".to_string(), wrapper_writer);
+        state
+            .connections
+            .insert("attach-claude-managed".to_string(), attach_writer);
+
+        assert!(matches!(
+            handle_register(
+                "claude-managed",
+                "claude".to_string(),
+                Some("claude-managed".to_string()),
+                Some("local".to_string()),
+                Some("acp".to_string()),
+                Some("macOS".to_string()),
+                Some("instance-claude-managed".to_string()),
+                Some("bridget".to_string()),
+                false,
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { ref name } if name == "claude-managed"
+        ));
+
+        let agent = state.agent_infos().pop().expect("Claude inscrit");
+        assert_eq!(agent.transport, "acp");
+        assert_eq!(agent.domain.as_deref(), Some("bridget"));
+
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_wrapper_message(
+                "attach-claude-managed",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        assert!(
+            handle_wrapper_message(
+                "attach-claude-managed",
+                WrapperToDaemon::Subscribe {
+                    agent: "claude-managed".to_string(),
+                    window: bridget_transport::AttachWindow::Today,
+                },
+                &shared,
+            )
+            .is_none(),
+            "un Claude géré en ACP doit être attachable"
+        );
+        assert!(matches!(
+            read_control(&mut wrapper_reader),
+            DaemonToWrapper::Subscribe { .. }
+        ));
+
+        let (controls, views) = {
+            let mut state = shared.lock().unwrap();
+            close_attach_subscriptions(&mut state, "attach-claude-managed")
+        };
+        assert!(execute_controls(controls).is_empty());
+        for view in views {
+            view.close_and_join();
+        }
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
     fn confirmation_vers_vue_fermee_desabonne_le_wrapper() {
         let (mut state, config) = state_with_registered_agent("attach-closed-view");
         let (wrapper_writer, mut wrapper_reader) = control_socket("wrapper-closed-view");
