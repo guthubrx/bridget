@@ -425,3 +425,11 @@ plus vite ; le coût net est un report, pas une perte.
   faire de même au sien. Sous-constat : fenêtres de 60 s utilisées comme
   fenêtres de review par un agent (coaché par le juge directement — les
   mœurs se corrigent entre pairs désormais).
+- **Trade-offs de la fusion de présence** (review observabilité-bis,
+  reviewer2, nuit du 23) : (C1) wrapper mort puis filiation seule → la conn
+  MCP prend la présence avec mode/location tmux HÉRITÉS potentiellement
+  périmés sous état « connected » (joignabilité réelle : défendable ; un
+  marquage stale sur location serait plus honnête) ; (C3) previous-first
+  fige mode/location à la première attestation — un déménagement de pane
+  légitime n'est pas repris. Assumés contre l'écrasement ; à revoir avec
+  l'état occupé/inactif.
