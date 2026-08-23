@@ -288,3 +288,8 @@ Six tâches validées sur le principe par l'utilisateur (spec à créer au « go
   coquille et l'accès distant restant chez eux ; construire la couche équipe
   (who/ledger/fils liés/missions Maicie/routines). Voir
   docs/decisions/009-gui-plan-de-controle.md.
+- **Mode « planifié » chez Maicie** (question utilisateur 2026-08-23 soir) :
+  aucun état n'existe entre l'idée au catalogue et le contrat délégué (qui
+  arme échéances et relances immédiatement). Ajouter des objectifs PLANIFIÉS
+  — enregistrés, visibles au statut, sans horloge, activables d'un mot — pont
+  vers le panneau de planification GUI et cousin des routines (point 35).
