@@ -37,6 +37,21 @@ fn replay_exact_accepted_consomme_l_approbation_apres_l_issue_durable() {
     assert!(store.pending_activation_outboxes().unwrap().is_empty());
     server.join().unwrap();
     assert_eq!(approval_state(&fixture.database), "consumed");
+
+    // Mutation discriminante : si `record_activation_outcome` ne rendait pas
+    // l'outbox terminale dans la même transaction, ce second démarrage
+    // ouvrirait le listener et le test échouerait sur `accept`.
+    fs::remove_file(&fixture.socket).unwrap();
+    let listener = UnixListener::bind(&fixture.socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    assert!(
+        reconcile_activation_startup_at(&mut store, &fixture.socket, 21)
+            .unwrap()
+            .actions
+            .is_empty()
+    );
+    assert_no_connection(&listener);
+    assert_eq!(approval_state(&fixture.database), "consumed");
 }
 
 #[test]
@@ -62,6 +77,18 @@ fn digest_divergent_est_refuse_terminalement_sans_reapprobation() {
     );
     assert!(store.pending_activation_outboxes().unwrap().is_empty());
     server.join().unwrap();
+    fs::remove_file(&fixture.socket).unwrap();
+    let listener = UnixListener::bind(&fixture.socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    assert!(
+        reconcile_activation_startup_at(&mut store, &fixture.socket, 21)
+            .unwrap()
+            .actions
+            .is_empty()
+    );
+    // Mutation discriminante : laisser une divergence de digest pending
+    // ferait réémettre l'ordre au redémarrage et ouvrirait ce listener.
+    assert_no_connection(&listener);
     assert_eq!(approval_state(&fixture.database), "consumed");
 }
 
@@ -69,6 +96,8 @@ fn digest_divergent_est_refuse_terminalement_sans_reapprobation() {
 fn hors_horizon_refuse_sans_ouvrir_de_socket_ni_nouvelle_approbation() {
     let fixture = Fixture::new();
     let (mut store, bytes) = approved(&fixture);
+    let listener = UnixListener::bind(&fixture.socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
     let report = reconcile_activation_startup_at(&mut store, &fixture.socket, 81).unwrap();
     assert_eq!(
         report.actions,
@@ -77,7 +106,37 @@ fn hors_horizon_refuse_sans_ouvrir_de_socket_ni_nouvelle_approbation() {
         }]
     );
     assert!(store.pending_activation_outboxes().unwrap().is_empty());
+    // Mutation discriminante : supprimer le garde `observed_at >= retry_until`
+    // ferait ouvrir cette socket et échouerait ici.
+    assert_no_connection(&listener);
     assert_eq!(approval_state(&fixture.database), "consumed");
+}
+
+#[test]
+fn crash_avant_socket_conserve_l_outbox_sans_aucune_io() {
+    let fixture = Fixture::new();
+    let (mut store, _) = approved(&fixture);
+    let listener = UnixListener::bind(&fixture.socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let error =
+        reconcile_activation_startup_at_observed(&mut store, &fixture.socket, 20, |phase| {
+            match phase {
+                ActivationReconcilePhase::BeforeSocket => {
+                    Err(ReconcileError::InvalidSnapshot("crash avant socket"))
+                }
+                ActivationReconcilePhase::AfterIssueBeforeStoreCommit => Ok(()),
+            }
+        })
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ReconcileError::InvalidSnapshot("crash avant socket")
+    ));
+    assert_eq!(store.pending_activation_outboxes().unwrap().len(), 1);
+    // Mutation discriminante : déplacer le jalon après replay ouvrirait le
+    // listener et convertirait ce crash local en I/O réseau observable.
+    assert_no_connection(&listener);
 }
 
 #[test]
@@ -104,6 +163,14 @@ fn crash_apres_issue_avant_commit_conserve_l_activation_a_rejouer() {
     ));
     assert_eq!(store.pending_activation_outboxes().unwrap().len(), 1);
     server.join().unwrap();
+}
+
+fn assert_no_connection(listener: &UnixListener) {
+    match listener.accept() {
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Ok(_) => panic!("aucune connexion Bridget ne devait etre ouverte"),
+        Err(error) => panic!("accept inattendu: {error}"),
+    }
 }
 
 fn approved(fixture: &Fixture) -> (MaicieStore, Vec<u8>) {
