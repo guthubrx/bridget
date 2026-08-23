@@ -5,12 +5,16 @@
 //! les octets préparés avant I/O sont l'autorité.
 
 use crate::bridget_client::IdempotencyIssue;
-use crate::domain::{EtatDelegation, EtatObjectif, EtatOutboxDelegation, ObjectifCoordonne};
+use crate::domain::{
+    ActivationOutbox, ApprobationActivation, DecisionCoordination, DomainError,
+    EtatActivationOutbox, EtatDecision, EtatDelegation, EtatObjectif, EtatOutboxDelegation,
+    ObjectifCoordonne, TypeDecision,
+};
 use crate::outbox::{
     OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot, StoreCommitPhase,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use serde_json::{Value, json};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use serde_json::{json, Value};
 use std::fmt;
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -18,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 
@@ -27,6 +31,26 @@ pub struct MaicieStore {
     path: PathBuf,
     connection: Connection,
     issuer_scope: String,
+}
+
+/// Ligne de reprise d'un SpawnOrder. Les octets sont ceux validés lors de
+/// l'approbation ; le store ne les désérialise ni ne les reconstruit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingActivationOutbox {
+    pub activation: ActivationOutbox,
+    pub approval: ApprobationActivation,
+}
+
+/// Paramètres revalidés au moment du dispatch. Ils restent séparés de
+/// l'approbation persistée : les hashes viennent de l'état courant, tandis que
+/// les octets du SpawnOrder deviennent immuables seulement après validation.
+pub struct ActivationApprovalRequest<'a> {
+    pub now: i64,
+    pub profile_hash: &'a [u8],
+    pub context_hash: &'a [u8],
+    pub spawn_order_bytes: &'a [u8],
+    pub retry_until: i64,
+    pub dedup_retained_until: i64,
 }
 
 impl MaicieStore {
@@ -276,6 +300,280 @@ impl MaicieStore {
             .map_err(StoreError::Sql)?;
         raw.map(TryInto::try_into).transpose()
     }
+
+    /// Persiste une proposition de réveil et son approbation mono-usage. Le
+    /// `command_id` est déjà porté par l'approbation, donc existe avant toute
+    /// I/O vers Bridget et reste stable sur chaque replay.
+    pub fn create_activation_proposal(
+        &mut self,
+        decision: &DecisionCoordination,
+        approval: &ApprobationActivation,
+    ) -> Result<(), StoreError> {
+        validate_activation_proposal(decision, approval)?;
+        let decision_json = serde_json::to_vec(decision).map_err(StoreError::Json)?;
+        let approval_json = serde_json::to_vec(approval).map_err(StoreError::Json)?;
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        tx.execute(
+            "INSERT INTO coordination_decisions(id, objective_id, state, payload_json)\n\
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                decision.id.to_string(),
+                decision.objectif_id.to_string(),
+                decision_state_name(decision.etat),
+                decision_json,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+        tx.execute(
+            "INSERT INTO activation_approvals(\n\
+                 id, command_id, decision_id, objective_id, profile_id, profile_hash,\n\
+                 context_hash, state, expires_at, consumed_at, payload_json\n\
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'proposed', ?8, NULL, ?9)",
+            params![
+                approval.id.to_string(),
+                approval.command_id.to_string(),
+                decision.id.to_string(),
+                approval.objective_id.to_string(),
+                approval.profile_id,
+                approval.profile_hash,
+                approval.context_hash,
+                approval.expires_at,
+                approval_json,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+        tx.commit().map_err(StoreError::Sql)
+    }
+
+    /// Revalide l'approbation contre les hashes courants et écrit l'outbox
+    /// dans la même transaction que l'état approuvé de la décision. Un retry
+    /// ne peut jamais remplacer les octets d'un SpawnOrder déjà enregistré.
+    pub fn approve_activation(
+        &mut self,
+        approval_id: Uuid,
+        request: &ActivationApprovalRequest<'_>,
+    ) -> Result<ActivationOutbox, StoreError> {
+        self.approve_activation_observed(approval_id, request, |_| Ok(()))
+    }
+
+    /// Variante instrumentée par les crash-tests : la proposition approuvée
+    /// et son outbox restent une transaction SQLite indivisible.
+    pub fn approve_activation_observed(
+        &mut self,
+        approval_id: Uuid,
+        request: &ActivationApprovalRequest<'_>,
+        mut observer: impl FnMut(StoreCommitPhase) -> Result<(), StoreError>,
+    ) -> Result<ActivationOutbox, StoreError> {
+        if request.spawn_order_bytes.is_empty()
+            || request.retry_until < request.now
+            || request.retry_until > request.dedup_retained_until
+        {
+            return Err(StoreError::Invalid("activation outbox invalide"));
+        }
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        let row: Option<(Vec<u8>, Vec<u8>, String)> = tx
+            .query_row(
+                "SELECT a.payload_json, d.payload_json, a.id\n\
+                 FROM activation_approvals a\n\
+                 JOIN coordination_decisions d ON d.id = a.decision_id\n\
+                 WHERE a.id = ?1",
+                [approval_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let Some((approval_json, decision_json, _)) = row else {
+            return Err(StoreError::NotFound("approbation inconnue"));
+        };
+        let approval: ApprobationActivation =
+            serde_json::from_slice(&approval_json).map_err(StoreError::Json)?;
+        let mut decision: DecisionCoordination =
+            serde_json::from_slice(&decision_json).map_err(StoreError::Json)?;
+
+        let existing: Option<(Vec<u8>, String, i64, i64)> = tx
+            .query_row(
+                "SELECT spawn_order_bytes, state, retry_until, dedup_retained_until\n\
+                 FROM activation_outbox WHERE approval_id = ?1",
+                [approval.id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        if let Some((stored_bytes, state, stored_retry_until, stored_retained_until)) = existing {
+            if stored_bytes != request.spawn_order_bytes {
+                return Err(StoreError::Conflict(
+                    "SpawnOrder divergent pour la même approbation",
+                ));
+            }
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(ActivationOutbox {
+                command_id: approval.command_id,
+                approval_id: approval.id,
+                spawn_order_bytes: stored_bytes,
+                etat: parse_activation_state(&state)?,
+                retry_until: stored_retry_until,
+                dedup_retained_until: stored_retained_until,
+            });
+        }
+
+        approval
+            .verifier_pour_dispatch(request.now, request.profile_hash, request.context_hash)
+            .map_err(StoreError::Domain)?;
+        if decision.etat != EtatDecision::Proposee {
+            return Err(StoreError::Conflict("décision déjà traitée"));
+        }
+        decision.etat = EtatDecision::Approuvee;
+        let decision_json = serde_json::to_vec(&decision).map_err(StoreError::Json)?;
+        let activation = ActivationOutbox {
+            command_id: approval.command_id,
+            approval_id: approval.id,
+            spawn_order_bytes: request.spawn_order_bytes.to_vec(),
+            etat: EtatActivationOutbox::Dispatching,
+            retry_until: request.retry_until,
+            dedup_retained_until: request.dedup_retained_until,
+        };
+        activation.verifier().map_err(StoreError::Domain)?;
+        tx.execute(
+            "UPDATE coordination_decisions SET state = 'approved', payload_json = ?1\n\
+             WHERE id = ?2 AND state = 'proposed'",
+            params![decision_json, decision.id.to_string()],
+        )
+        .map_err(StoreError::Sql)?;
+        tx.execute(
+            "UPDATE activation_approvals SET state = 'approved'\n\
+             WHERE id = ?1 AND state = 'proposed'",
+            [approval.id.to_string()],
+        )
+        .map_err(StoreError::Sql)?;
+        tx.execute(
+            "INSERT INTO activation_outbox(\n\
+                 command_id, approval_id, spawn_order_bytes, state, retry_until,\n\
+                 dedup_retained_until, terminal\n\
+             ) VALUES (?1, ?2, ?3, 'dispatching', ?4, ?5, 0)",
+            params![
+                activation.command_id.to_string(),
+                activation.approval_id.to_string(),
+                activation.spawn_order_bytes,
+                activation.retry_until,
+                activation.dedup_retained_until,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+        observer(StoreCommitPhase::BeforeCommit)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        observer(StoreCommitPhase::AfterCommit)?;
+        Ok(activation)
+    }
+
+    /// Une issue durable est la seule opération qui consomme l'approbation.
+    /// La consommation et l'état terminal de l'outbox partagent la même
+    /// transaction afin qu'un crash ne puisse pas laisser un SpawnOrder
+    /// appliqué avec une approbation réutilisable.
+    pub fn record_activation_applied(
+        &mut self,
+        command_id: Uuid,
+        consumed_at: i64,
+    ) -> Result<(), StoreError> {
+        if consumed_at <= 0 {
+            return Err(StoreError::Invalid("consumed_at invalide"));
+        }
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        let row: Option<(Vec<u8>, String)> = tx
+            .query_row(
+                "SELECT a.payload_json, o.state\n\
+                 FROM activation_outbox o\n\
+                 JOIN activation_approvals a ON a.id = o.approval_id\n\
+                 WHERE o.command_id = ?1",
+                [command_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let Some((approval_json, state)) = row else {
+            return Err(StoreError::NotFound("activation inconnue"));
+        };
+        let mut approval: ApprobationActivation =
+            serde_json::from_slice(&approval_json).map_err(StoreError::Json)?;
+        let current = parse_activation_state(&state)?;
+        if current == EtatActivationOutbox::Applied && approval.consumed_at.is_some() {
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(());
+        }
+        if !matches!(
+            current,
+            EtatActivationOutbox::Dispatching | EtatActivationOutbox::OutcomeUnknown
+        ) {
+            return Err(StoreError::Conflict("transition activation interdite"));
+        }
+        approval.consumed_at = Some(consumed_at);
+        let approval_json = serde_json::to_vec(&approval).map_err(StoreError::Json)?;
+        tx.execute(
+            "UPDATE activation_approvals SET state = 'consumed', consumed_at = ?1, payload_json = ?2\n\
+             WHERE id = ?3 AND consumed_at IS NULL",
+            params![consumed_at, approval_json, approval.id.to_string()],
+        )
+        .map_err(StoreError::Sql)?;
+        tx.execute(
+            "UPDATE activation_outbox SET state = 'applied', terminal = 1\n\
+             WHERE command_id = ?1 AND terminal = 0",
+            [command_id.to_string()],
+        )
+        .map_err(StoreError::Sql)?;
+        tx.commit().map_err(StoreError::Sql)
+    }
+
+    pub fn pending_activation_outboxes(&self) -> Result<Vec<PendingActivationOutbox>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT o.command_id, o.approval_id, o.spawn_order_bytes, o.state,\n\
+                        o.retry_until, o.dedup_retained_until, a.payload_json\n\
+                 FROM activation_outbox o\n\
+                 JOIN activation_approvals a ON a.id = o.approval_id\n\
+                 WHERE o.terminal = 0\n\
+                 ORDER BY o.command_id",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, Vec<u8>>(6)?,
+                ))
+            })
+            .map_err(StoreError::Sql)?;
+        rows.map(|row| {
+            let (
+                command_id,
+                approval_id,
+                spawn_order_bytes,
+                state,
+                retry_until,
+                retained_until,
+                approval_json,
+            ) = row.map_err(StoreError::Sql)?;
+            let activation = ActivationOutbox {
+                command_id: parse_uuid(&command_id)?,
+                approval_id: parse_uuid(&approval_id)?,
+                spawn_order_bytes,
+                etat: parse_activation_state(&state)?,
+                retry_until,
+                dedup_retained_until: retained_until,
+            };
+            let approval = serde_json::from_slice(&approval_json).map_err(StoreError::Json)?;
+            activation.verifier().map_err(StoreError::Domain)?;
+            Ok(PendingActivationOutbox {
+                activation,
+                approval,
+            })
+        })
+        .collect()
+    }
 }
 
 fn validate_database_path(path: &Path) -> Result<(), StoreError> {
@@ -383,7 +681,37 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
          CREATE INDEX IF NOT EXISTS objectives_open_idx\n\
              ON objectives(state) WHERE state != 'clos';\n\
          CREATE INDEX IF NOT EXISTS delegation_outbox_pending_idx\n\
-             ON delegation_outbox(terminal, state, retry_until, message_id);",
+             ON delegation_outbox(terminal, state, retry_until, message_id);
+         CREATE TABLE IF NOT EXISTS coordination_decisions (
+             id TEXT PRIMARY KEY,
+             objective_id TEXT NOT NULL,
+             state TEXT NOT NULL CHECK(state IN ('proposed','approved','rejected','applied')),
+             payload_json BLOB NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS activation_approvals (
+             id TEXT PRIMARY KEY,
+             command_id TEXT NOT NULL UNIQUE,
+             decision_id TEXT NOT NULL UNIQUE REFERENCES coordination_decisions(id),
+             objective_id TEXT NOT NULL,
+             profile_id TEXT NOT NULL,
+             profile_hash BLOB NOT NULL,
+             context_hash BLOB NOT NULL,
+             state TEXT NOT NULL CHECK(state IN ('proposed','approved','consumed')),
+             expires_at INTEGER NOT NULL,
+             consumed_at INTEGER,
+             payload_json BLOB NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS activation_outbox (
+             command_id TEXT PRIMARY KEY REFERENCES activation_approvals(command_id),
+             approval_id TEXT NOT NULL UNIQUE REFERENCES activation_approvals(id),
+             spawn_order_bytes BLOB NOT NULL,
+             state TEXT NOT NULL CHECK(state IN ('dispatching','outcome_unknown','applied')),
+             retry_until INTEGER NOT NULL,
+             dedup_retained_until INTEGER NOT NULL,
+             terminal INTEGER NOT NULL DEFAULT 0 CHECK(terminal IN (0, 1))
+         );
+         CREATE INDEX IF NOT EXISTS activation_outbox_pending_idx
+             ON activation_outbox(terminal, state, retry_until, command_id);",
     )
     .map_err(StoreError::Sql)?;
     if current_version == 1 {
@@ -629,6 +957,51 @@ fn parse_outbox_state(value: &str) -> Result<EtatOutboxDelegation, StoreError> {
     }
 }
 
+fn validate_activation_proposal(
+    decision: &DecisionCoordination,
+    approval: &ApprobationActivation,
+) -> Result<(), StoreError> {
+    decision.verifier().map_err(StoreError::Domain)?;
+    if decision.kind != TypeDecision::ReveillerProfil
+        || decision.etat != EtatDecision::Proposee
+        || decision.objectif_id != approval.objective_id
+        || approval.profile_id.trim().is_empty()
+        || approval.context_scope.trim().is_empty()
+        || approval.parameters.trim().is_empty()
+        || approval.expires_at <= 0
+        || approval.consumed_at.is_some()
+        || approval.profile_hash.is_empty()
+        || approval.context_hash.is_empty()
+        || approval.command_id.is_nil()
+    {
+        return Err(StoreError::Invalid("proposition d'activation invalide"));
+    }
+    if approval.actor != "local_human" {
+        return Err(StoreError::Domain(DomainError::DonneeInvalide(
+            "acteur d'approbation invalide",
+        )));
+    }
+    Ok(())
+}
+
+fn decision_state_name(state: EtatDecision) -> &'static str {
+    match state {
+        EtatDecision::Proposee => "proposed",
+        EtatDecision::Approuvee => "approved",
+        EtatDecision::Refusee => "rejected",
+        EtatDecision::Appliquee => "applied",
+    }
+}
+
+fn parse_activation_state(value: &str) -> Result<EtatActivationOutbox, StoreError> {
+    match value {
+        "dispatching" => Ok(EtatActivationOutbox::Dispatching),
+        "outcome_unknown" => Ok(EtatActivationOutbox::OutcomeUnknown),
+        "applied" => Ok(EtatActivationOutbox::Applied),
+        _ => Err(StoreError::Corrupt("état activation inconnu")),
+    }
+}
+
 fn outbox_state_name(state: EtatOutboxDelegation) -> &'static str {
     match state {
         EtatOutboxDelegation::Prepared => "prepared",
@@ -774,6 +1147,7 @@ pub enum StoreError {
     Sql(rusqlite::Error),
     Json(serde_json::Error),
     Outbox(OutboxError),
+    Domain(DomainError),
 }
 
 impl fmt::Display for StoreError {
@@ -791,6 +1165,7 @@ impl fmt::Display for StoreError {
             Self::Sql(source) => write!(formatter, "SQLite impossible : {source}"),
             Self::Json(source) => write!(formatter, "JSON store impossible : {source}"),
             Self::Outbox(source) => write!(formatter, "{source}"),
+            Self::Domain(source) => write!(formatter, "domaine invalide : {source:?}"),
         }
     }
 }
@@ -802,6 +1177,7 @@ impl std::error::Error for StoreError {
             Self::Sql(source) => Some(source),
             Self::Json(source) => Some(source),
             Self::Outbox(source) => Some(source),
+            Self::Domain(_) => None,
             Self::Invalid(_)
             | Self::Conflict(_)
             | Self::NotFound(_)
