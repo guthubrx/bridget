@@ -33,7 +33,7 @@ fn migrations_idempotentes_et_base_privee() {
     let database = root.join("maicie.sqlite3");
     let first_scope = {
         let store = MaicieStore::open(&database).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 3);
+        assert_eq!(store.schema_version().unwrap(), 4);
         store.issuer_scope().to_string()
     };
     let connection = rusqlite::Connection::open(&database).unwrap();
@@ -43,7 +43,7 @@ fn migrations_idempotentes_et_base_privee() {
         .unwrap();
     drop(connection);
     let reopened = MaicieStore::open(&database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 3);
+    assert_eq!(reopened.schema_version().unwrap(), 4);
     assert_eq!(reopened.issuer_scope(), first_scope);
     assert_eq!(mode(&root), 0o700);
     assert_eq!(mode(&database), 0o600);
@@ -56,7 +56,7 @@ fn schema_futur_et_enveloppe_corrompue_sont_refuses_fail_closed() {
     let future_database = future_root.join("maicie.sqlite3");
     drop(MaicieStore::open(&future_database).unwrap());
     let connection = rusqlite::Connection::open(&future_database).unwrap();
-    connection.pragma_update(None, "user_version", 4).unwrap();
+    connection.pragma_update(None, "user_version", 5).unwrap();
     drop(connection);
     assert!(MaicieStore::open(&future_database).is_err());
     fs::remove_dir_all(future_root).unwrap();
@@ -176,7 +176,7 @@ fn migration_v1_convertit_un_refus_terminal_historique_en_rejected() {
     drop(connection);
 
     let store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 3);
+    assert_eq!(store.schema_version().unwrap(), 4);
     let snapshot = store.recovery_snapshot(uuid(MESSAGE_ID)).unwrap().unwrap();
     assert_eq!(snapshot.outbox.state, EtatOutboxDelegation::Rejected);
     assert_eq!(snapshot.last_issue.unwrap()["kind"], "invalid_issued_at");
@@ -185,7 +185,7 @@ fn migration_v1_convertit_un_refus_terminal_historique_en_rejected() {
 }
 
 #[test]
-fn migration_v2_vers_v3_conserve_les_donnees_historiques_et_cree_l_activation() {
+fn migration_v2_vers_v4_conserve_les_donnees_historiques_et_cree_l_activation() {
     let root = unique_root("migration-activation");
     let database = root.join("maicie.sqlite3");
     let mut store = MaicieStore::open(&database).unwrap();
@@ -213,7 +213,7 @@ fn migration_v2_vers_v3_conserve_les_donnees_historiques_et_cree_l_activation() 
     drop(connection);
 
     let store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 3);
+    assert_eq!(store.schema_version().unwrap(), 4);
     let pending = store.pending_delegation_outboxes().unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].message_bytes, prepared.message_bytes);
@@ -230,6 +230,58 @@ fn migration_v2_vers_v3_conserve_les_donnees_historiques_et_cree_l_activation() 
         )
         .unwrap();
     assert_eq!(activation_tables, 3);
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn migration_v3_vers_v4_ajoute_la_preuve_d_issue_activation() {
+    let root = unique_root("migration-activation-issue");
+    let database = root.join("maicie.sqlite3");
+    drop(MaicieStore::open(&database).unwrap());
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute("DROP INDEX activation_outbox_pending_idx", [])
+        .unwrap();
+    connection
+        .execute("DROP TABLE activation_outbox", [])
+        .unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE activation_outbox (
+                 command_id TEXT PRIMARY KEY REFERENCES activation_approvals(command_id),
+                 approval_id TEXT NOT NULL UNIQUE REFERENCES activation_approvals(id),
+                 spawn_order_bytes BLOB NOT NULL,
+                 state TEXT NOT NULL CHECK(state IN ('dispatching','outcome_unknown','applied')),
+                 retry_until INTEGER NOT NULL,
+                 dedup_retained_until INTEGER NOT NULL,
+                 terminal INTEGER NOT NULL DEFAULT 0 CHECK(terminal IN (0, 1))
+             );
+             CREATE INDEX activation_outbox_pending_idx
+                 ON activation_outbox(terminal, state, retry_until, command_id);",
+        )
+        .unwrap();
+    connection.pragma_update(None, "user_version", 3).unwrap();
+    connection
+        .execute("DELETE FROM schema_migrations WHERE version = 4", [])
+        .unwrap();
+    drop(connection);
+
+    let store = MaicieStore::open(&database).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 4);
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let columns: Vec<String> = connection
+        .prepare("PRAGMA table_info(activation_outbox)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(columns.contains(&"last_issue_json".to_string()));
+    assert!(columns.contains(&"issue_observed_at".to_string()));
     drop(connection);
     fs::remove_dir_all(root).unwrap();
 }

@@ -4,17 +4,18 @@
 //! transaction unique. Aucune méthode de reprise ne reconstruit l'enveloppe :
 //! les octets préparés avant I/O sont l'autorité.
 
-use crate::bridget_client::IdempotencyIssue;
+use crate::bridget_client::{IdempotencyIssue, SpawnOutcome};
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, DecisionCoordination, DomainError,
     EtatActivationOutbox, EtatDecision, EtatDelegation, EtatObjectif, EtatOutboxDelegation,
     ObjectifCoordonne, TypeDecision,
 };
 use crate::outbox::{
-    MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
-    StoreCommitPhase,
+    OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot, StoreCommitPhase,
+    MAX_MESSAGE_BYTES,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fmt;
 use std::fs::{self, DirBuilder, OpenOptions};
@@ -23,9 +24,28 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
+type StoredActivationOutcome = (
+    Vec<u8>,
+    String,
+    i64,
+    Option<Vec<u8>>,
+    String,
+    String,
+    String,
+);
+type StoredActivationApproval = (
+    Vec<u8>,
+    Vec<u8>,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+);
 
 /// Autorité d'écriture unique de l'état Maicie.
 pub struct MaicieStore {
@@ -83,6 +103,20 @@ pub struct ActivationApprovalRequest<'a> {
     pub spawn_order_bytes: &'a [u8],
     pub retry_until: i64,
     pub dedup_retained_until: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApprovedSpawnOrder {
+    #[serde(rename = "type")]
+    kind: String,
+    agent_type: String,
+    name: Option<String>,
+    cwd: String,
+    persistent: bool,
+    command_id: String,
+    issued_at: i64,
+    deadline_at: i64,
 }
 
 impl MaicieStore {
@@ -490,24 +524,55 @@ impl MaicieStore {
             return Err(StoreError::Invalid("activation outbox invalide"));
         }
         let tx = self.connection.transaction().map_err(StoreError::Sql)?;
-        let row: Option<(Vec<u8>, Vec<u8>, String)> = tx
+        let row: Option<StoredActivationApproval> = tx
             .query_row(
-                "SELECT a.payload_json, d.payload_json, a.id\n\
+                "SELECT a.payload_json, d.payload_json, a.id, a.command_id, a.objective_id,\n\
+                        a.state, d.objective_id, d.state\n\
                  FROM activation_approvals a\n\
                  JOIN coordination_decisions d ON d.id = a.decision_id\n\
                  WHERE a.id = ?1",
                 [approval_id.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                },
             )
             .optional()
             .map_err(StoreError::Sql)?;
-        let Some((approval_json, decision_json, _)) = row else {
+        let Some((
+            approval_json,
+            decision_json,
+            stored_approval_id,
+            stored_command_id,
+            stored_approval_objective_id,
+            stored_approval_state,
+            stored_decision_objective_id,
+            stored_decision_state,
+        )) = row
+        else {
             return Err(StoreError::NotFound("approbation inconnue"));
         };
         let approval: ApprobationActivation =
             serde_json::from_slice(&approval_json).map_err(StoreError::Json)?;
         let mut decision: DecisionCoordination =
             serde_json::from_slice(&decision_json).map_err(StoreError::Json)?;
+        if stored_approval_id != approval.id.to_string()
+            || stored_command_id != approval.command_id.to_string()
+            || stored_approval_objective_id != approval.objective_id.to_string()
+            || stored_decision_objective_id != decision.objectif_id.to_string()
+            || approval.objective_id != decision.objectif_id
+        {
+            return Err(StoreError::Corrupt("relations d'approbation divergentes"));
+        }
+        validate_approved_spawn_order(&approval, request.spawn_order_bytes)?;
 
         let existing: Option<(Vec<u8>, String, i64, i64)> = tx
             .query_row(
@@ -535,6 +600,10 @@ impl MaicieStore {
             });
         }
 
+        if stored_approval_state != "proposed" || stored_decision_state != "proposed" {
+            return Err(StoreError::Corrupt("état d'approbation divergent"));
+        }
+
         approval
             .verifier_pour_dispatch(request.now, request.profile_hash, request.context_hash)
             .map_err(StoreError::Domain)?;
@@ -552,18 +621,26 @@ impl MaicieStore {
             dedup_retained_until: request.dedup_retained_until,
         };
         activation.verifier().map_err(StoreError::Domain)?;
-        tx.execute(
-            "UPDATE coordination_decisions SET state = 'approved', payload_json = ?1\n\
+        let changed = tx
+            .execute(
+                "UPDATE coordination_decisions SET state = 'approved', payload_json = ?1\n\
              WHERE id = ?2 AND state = 'proposed'",
-            params![decision_json, decision.id.to_string()],
-        )
-        .map_err(StoreError::Sql)?;
-        tx.execute(
-            "UPDATE activation_approvals SET state = 'approved'\n\
+                params![decision_json, decision.id.to_string()],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict("décision modifiée concurremment"));
+        }
+        let changed = tx
+            .execute(
+                "UPDATE activation_approvals SET state = 'approved'\n\
              WHERE id = ?1 AND state = 'proposed'",
-            [approval.id.to_string()],
-        )
-        .map_err(StoreError::Sql)?;
+                [approval.id.to_string()],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict("approbation modifiée concurremment"));
+        }
         tx.execute(
             "INSERT INTO activation_outbox(\n\
                  command_id, approval_id, spawn_order_bytes, state, retry_until,\n\
@@ -588,56 +665,107 @@ impl MaicieStore {
     /// La consommation et l'état terminal de l'outbox partagent la même
     /// transaction afin qu'un crash ne puisse pas laisser un SpawnOrder
     /// appliqué avec une approbation réutilisable.
-    pub fn record_activation_applied(
+    pub fn record_activation_outcome(
         &mut self,
         command_id: Uuid,
-        consumed_at: i64,
+        outcome: &SpawnOutcome,
+        observed_at: i64,
     ) -> Result<(), StoreError> {
-        if consumed_at <= 0 {
-            return Err(StoreError::Invalid("consumed_at invalide"));
+        if observed_at <= 0 {
+            return Err(StoreError::Invalid("observed_at invalide"));
         }
+        let (next_state, issue_bytes) = activation_issue(command_id, outcome)?;
         let tx = self.connection.transaction().map_err(StoreError::Sql)?;
-        let row: Option<(Vec<u8>, String)> = tx
+        let row: Option<StoredActivationOutcome> = tx
             .query_row(
-                "SELECT a.payload_json, o.state\n\
+                "SELECT a.payload_json, o.state, o.terminal, o.last_issue_json,\n\
+                        o.command_id, o.approval_id, a.command_id\n\
                  FROM activation_outbox o\n\
                  JOIN activation_approvals a ON a.id = o.approval_id\n\
                  WHERE o.command_id = ?1",
                 [command_id.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
             )
             .optional()
             .map_err(StoreError::Sql)?;
-        let Some((approval_json, state)) = row else {
+        let Some((
+            approval_json,
+            state,
+            current_terminal,
+            current_issue,
+            stored_command_id,
+            stored_approval_id,
+            stored_approval_command_id,
+        )) = row
+        else {
             return Err(StoreError::NotFound("activation inconnue"));
         };
         let mut approval: ApprobationActivation =
             serde_json::from_slice(&approval_json).map_err(StoreError::Json)?;
+        if stored_command_id != command_id.to_string()
+            || stored_approval_command_id != command_id.to_string()
+            || stored_approval_id != approval.id.to_string()
+            || approval.command_id != command_id
+        {
+            return Err(StoreError::Corrupt("relations d'activation divergentes"));
+        }
         let current = parse_activation_state(&state)?;
-        if current == EtatActivationOutbox::Applied && approval.consumed_at.is_some() {
-            tx.commit().map_err(StoreError::Sql)?;
-            return Ok(());
+        if current_terminal == 1 {
+            if current_issue.as_deref() == Some(issue_bytes.as_slice()) {
+                tx.commit().map_err(StoreError::Sql)?;
+                return Ok(());
+            }
+            return Err(StoreError::Conflict(
+                "issue d'activation terminale déjà figée",
+            ));
         }
-        if !matches!(
-            current,
-            EtatActivationOutbox::Dispatching | EtatActivationOutbox::OutcomeUnknown
-        ) {
-            return Err(StoreError::Conflict("transition activation interdite"));
+        if next_state == EtatActivationOutbox::OutcomeUnknown {
+            if !matches!(current, EtatActivationOutbox::Dispatching) {
+                return Err(StoreError::Conflict("transition activation interdite"));
+            }
+            let changed = tx
+                .execute(
+                    "UPDATE activation_outbox\n\
+                 SET state = 'outcome_unknown', last_issue_json = ?1, issue_observed_at = ?2\n\
+                 WHERE command_id = ?3 AND state = 'dispatching' AND terminal = 0",
+                    params![issue_bytes, observed_at, command_id.to_string()],
+                )
+                .map_err(StoreError::Sql)?;
+            if changed != 1 {
+                return Err(StoreError::Conflict("activation modifiée concurremment"));
+            }
+            return tx.commit().map_err(StoreError::Sql);
         }
-        approval.consumed_at = Some(consumed_at);
+        approval.consumed_at = Some(observed_at);
         let approval_json = serde_json::to_vec(&approval).map_err(StoreError::Json)?;
-        tx.execute(
+        let changed = tx.execute(
             "UPDATE activation_approvals SET state = 'consumed', consumed_at = ?1, payload_json = ?2\n\
              WHERE id = ?3 AND consumed_at IS NULL",
-            params![consumed_at, approval_json, approval.id.to_string()],
+            params![observed_at, approval_json, approval.id.to_string()],
         )
         .map_err(StoreError::Sql)?;
-        tx.execute(
-            "UPDATE activation_outbox SET state = 'applied', terminal = 1\n\
-             WHERE command_id = ?1 AND terminal = 0",
-            [command_id.to_string()],
+        if changed != 1 {
+            return Err(StoreError::Conflict("approbation modifiée concurremment"));
+        }
+        let changed = tx.execute(
+            "UPDATE activation_outbox SET state = 'applied', terminal = 1, last_issue_json = ?1, issue_observed_at = ?2\n\
+             WHERE command_id = ?3 AND terminal = 0",
+            params![issue_bytes, observed_at, command_id.to_string()],
         )
         .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict("activation modifiée concurremment"));
+        }
         tx.commit().map_err(StoreError::Sql)
     }
 
@@ -827,6 +955,8 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
              state TEXT NOT NULL CHECK(state IN ('dispatching','outcome_unknown','applied')),
              retry_until INTEGER NOT NULL,
              dedup_retained_until INTEGER NOT NULL,
+             last_issue_json BLOB,
+             issue_observed_at INTEGER,
              terminal INTEGER NOT NULL DEFAULT 0 CHECK(terminal IN (0, 1))
          );
          CREATE INDEX IF NOT EXISTS activation_outbox_pending_idx
@@ -835,6 +965,13 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     .map_err(StoreError::Sql)?;
     if current_version == 1 {
         migrate_outbox_to_rejected_state(&tx)?;
+    }
+    if current_version == 3 {
+        tx.execute_batch(
+            "ALTER TABLE activation_outbox ADD COLUMN last_issue_json BLOB;
+             ALTER TABLE activation_outbox ADD COLUMN issue_observed_at INTEGER;",
+        )
+        .map_err(StoreError::Sql)?;
     }
     for version in (current_version + 1)..=SCHEMA_VERSION {
         tx.execute(
@@ -1101,6 +1238,62 @@ fn validate_activation_proposal(
         )));
     }
     Ok(())
+}
+
+fn validate_approved_spawn_order(
+    approval: &ApprobationActivation,
+    bytes: &[u8],
+) -> Result<(), StoreError> {
+    let order: ApprovedSpawnOrder = serde_json::from_slice(bytes).map_err(StoreError::Json)?;
+    if order.kind != "SpawnOrder"
+        || order.command_id != approval.command_id.to_string()
+        || order.agent_type != approval.profile_id
+        || order.issued_at <= 0
+        || order.deadline_at <= order.issued_at
+        || order.cwd.is_empty()
+        || approval.parameters.as_bytes() != bytes
+    {
+        return Err(StoreError::Invalid(
+            "SpawnOrder non conforme à l'approbation",
+        ));
+    }
+    let _ = (order.name, order.persistent);
+    Ok(())
+}
+
+fn activation_issue(
+    command_id: Uuid,
+    outcome: &SpawnOutcome,
+) -> Result<(EtatActivationOutbox, Vec<u8>), StoreError> {
+    let expected = command_id.to_string();
+    let value = match outcome {
+        SpawnOutcome::Accepted { command_id, name } => {
+            if command_id != &expected {
+                return Err(StoreError::Invalid("command_id d'issue divergent"));
+            }
+            json!({"kind":"accepted","command_id":command_id,"name":name})
+        }
+        SpawnOutcome::Rejected { command_id, reason } => {
+            if command_id != &expected {
+                return Err(StoreError::Invalid("command_id d'issue divergent"));
+            }
+            json!({"kind":"rejected","command_id":command_id,"reason":reason})
+        }
+        SpawnOutcome::Idempotency(IdempotencyIssue::OutcomeUnknown {
+            expires_at,
+            delivery_id,
+        }) => {
+            return serde_json::to_vec(&json!({"kind":"outcome_unknown","expires_at":expires_at,"delivery_id":delivery_id}))
+                .map(|bytes| (EtatActivationOutbox::OutcomeUnknown, bytes))
+                .map_err(StoreError::Json);
+        }
+        SpawnOutcome::Idempotency(issue) => {
+            json!({"kind":"idempotency","issue":encode_issue(issue)})
+        }
+    };
+    serde_json::to_vec(&value)
+        .map(|bytes| (EtatActivationOutbox::Applied, bytes))
+        .map_err(StoreError::Json)
 }
 
 fn decision_state_name(state: EtatDecision) -> &'static str {

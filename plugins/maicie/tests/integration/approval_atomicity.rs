@@ -1,3 +1,4 @@
+use maicie::bridget_client::SpawnOutcome;
 use maicie::domain::{
     ApprobationActivation, DecisionCoordination, EtatActivationOutbox, EtatDecision, TypeDecision,
 };
@@ -16,7 +17,7 @@ use uuid::Uuid;
 const CHILD_MODE: &str = "MAICIE_T007_CHILD_MODE";
 const CHILD_ROOT: &str = "MAICIE_T007_CHILD_ROOT";
 const BARRIER: &str = "MAICIE_T007_BARRIER";
-const SPAWN_BYTES: &[u8] = br#"{"type":"SpawnOrder","command_id":"33333333-3333-4333-8333-333333333333","agent_type":"codex"}"#;
+const SPAWN_BYTES: &[u8] = br#"{"type":"SpawnOrder","agent_type":"codex","name":null,"cwd":"/tmp/maicie","persistent":false,"command_id":"33333333-3333-4333-8333-333333333333","issued_at":10,"deadline_at":100}"#;
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 #[test]
@@ -35,6 +36,25 @@ fn approbation_et_activation_sont_atomiques_et_les_octets_restent_immuables() {
     ));
     assert!(store.pending_activation_outboxes().unwrap().is_empty());
 
+    for divergent in [
+        String::from_utf8(SPAWN_BYTES.to_vec()).unwrap().replace(
+            "33333333-3333-4333-8333-333333333333",
+            "55555555-5555-4555-8555-555555555555",
+        ),
+        String::from_utf8(SPAWN_BYTES.to_vec())
+            .unwrap()
+            .replace("\"agent_type\":\"codex\"", "\"agent_type\":\"claude\""),
+    ] {
+        assert!(matches!(
+            store.approve_activation(
+                approval.id,
+                &request_at(10, &[7], &[9], divergent.as_bytes())
+            ),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(store.pending_activation_outboxes().unwrap().is_empty());
+    }
+
     assert!(matches!(
         store.approve_activation(approval.id, &request_at(10, &[8], &[9], SPAWN_BYTES)),
         Err(StoreError::Domain(_))
@@ -50,20 +70,63 @@ fn approbation_et_activation_sont_atomiques_et_les_octets_restent_immuables() {
 
     let mut mutable_input = SPAWN_BYTES.to_vec();
     mutable_input[1] = b'X';
-    assert!(matches!(
-        store.approve_activation(approval.id, &request_at(10, &[7], &[9], &mutable_input)),
-        Err(StoreError::Conflict(_))
-    ));
+    let result = store.approve_activation(approval.id, &request_at(10, &[7], &[9], &mutable_input));
+    assert!(
+        matches!(
+            &result,
+            Err(StoreError::Invalid(_)) | Err(StoreError::Json(_)) | Err(StoreError::Conflict(_))
+        ),
+        "{result:?}"
+    );
     let pending = store.pending_activation_outboxes().unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].activation.spawn_order_bytes, SPAWN_BYTES);
     assert_eq!(pending[0].approval.consumed_at, None);
 
+    assert!(matches!(
+        store.record_activation_outcome(
+            approval.command_id,
+            &SpawnOutcome::Accepted {
+                command_id: "55555555-5555-4555-8555-555555555555".to_string(),
+                name: "codex-1".to_string(),
+            },
+            20,
+        ),
+        Err(StoreError::Invalid(_))
+    ));
+    assert_eq!(store.pending_activation_outboxes().unwrap().len(), 1);
+
+    assert!(matches!(
+        store.record_activation_outcome(
+            approval.command_id,
+            &SpawnOutcome::Idempotency(maicie::bridget_client::IdempotencyIssue::OutcomeUnknown {
+                expires_at: 30,
+                delivery_id: None
+            }),
+            20,
+        ),
+        Ok(())
+    ));
+    assert_eq!(store.pending_activation_outboxes().unwrap().len(), 1);
     store
-        .record_activation_applied(approval.command_id, 20)
+        .record_activation_outcome(
+            approval.command_id,
+            &SpawnOutcome::Accepted {
+                command_id: approval.command_id.to_string(),
+                name: "codex-1".to_string(),
+            },
+            21,
+        )
         .unwrap();
     store
-        .record_activation_applied(approval.command_id, 21)
+        .record_activation_outcome(
+            approval.command_id,
+            &SpawnOutcome::Accepted {
+                command_id: approval.command_id.to_string(),
+                name: "codex-1".to_string(),
+            },
+            22,
+        )
         .unwrap();
     assert!(store.pending_activation_outboxes().unwrap().is_empty());
     drop(store);
@@ -80,8 +143,85 @@ fn approbation_et_activation_sont_atomiques_et_les_octets_restent_immuables() {
         )
         .unwrap();
     assert_eq!(state, "consumed");
-    assert_eq!(consumed_at, 20);
+    assert_eq!(consumed_at, 21);
     assert_eq!(bytes, SPAWN_BYTES);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn relations_corrompues_refusent_les_deux_transitions_activation() {
+    let root = unique_root("relations-corrompues");
+    let database = root.join("maicie.sqlite3");
+    let (decision, approval) = proposal();
+    let mut store = MaicieStore::open(&database).unwrap();
+    store
+        .create_activation_proposal(&decision, &approval)
+        .unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute(
+            "UPDATE activation_approvals SET objective_id = '00000000-0000-4000-8000-000000000000'\n\
+             WHERE id = ?1",
+            [approval.id.to_string()],
+        )
+        .unwrap();
+    drop(connection);
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    assert!(matches!(
+        store.approve_activation(approval.id, &request_at(10, &[7], &[9], SPAWN_BYTES)),
+        Err(StoreError::Corrupt(_))
+    ));
+    assert!(store.pending_activation_outboxes().unwrap().is_empty());
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute(
+            "UPDATE activation_approvals\n\
+             SET objective_id = ?1\n\
+             WHERE id = ?2",
+            [approval.objective_id.to_string(), approval.id.to_string()],
+        )
+        .unwrap();
+    drop(connection);
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    store
+        .approve_activation(approval.id, &request_at(10, &[7], &[9], SPAWN_BYTES))
+        .unwrap();
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch("PRAGMA foreign_keys = OFF;")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE activation_approvals\n\
+             SET command_id = '55555555-5555-4555-8555-555555555555'\n\
+             WHERE id = ?1",
+            [approval.id.to_string()],
+        )
+        .unwrap();
+    drop(connection);
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    assert!(matches!(
+        store.record_activation_outcome(
+            approval.command_id,
+            &SpawnOutcome::Accepted {
+                command_id: approval.command_id.to_string(),
+                name: "codex-1".to_string(),
+            },
+            20,
+        ),
+        Err(StoreError::Corrupt(_))
+    ));
+    assert_eq!(store.pending_activation_outboxes().unwrap().len(), 1);
+    drop(store);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -156,7 +296,7 @@ fn proposal() -> (DecisionCoordination, ApprobationActivation) {
         profile_hash: vec![7],
         context_hash: vec![9],
         context_scope: "objectif:11111111-1111-4111-8111-111111111111".to_string(),
-        parameters: "{}".to_string(),
+        parameters: String::from_utf8(SPAWN_BYTES.to_vec()).unwrap(),
         actor: "local_human".to_string(),
         expires_at: 100,
         consumed_at: None,
