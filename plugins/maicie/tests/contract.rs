@@ -5,3 +5,5 @@ mod domain;
 mod domain_json;
 #[path = "contract/telemetry.rs"]
 mod telemetry;
+#[path = "contract/delegate.rs"]
+mod delegate;

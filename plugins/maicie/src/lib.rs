@@ -3,6 +3,7 @@
 //! Ce crate ne dépend d'aucun module interne de Bridget : la future frontière
 //! réseau restera limitée à son client public dédié.
 
+pub mod app;
 pub mod bridget_client;
 pub mod config;
 pub mod domain;
