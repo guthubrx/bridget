@@ -24,6 +24,40 @@ pub struct DelegationCandidate {
     pub dnd: bool,
 }
 
+/// Message Bridget entrant traité à la frontière de coordination. Il ne porte
+/// volontairement aucun accès au store ni au client réseau : une conversation
+/// directe ne peut donc pas devenir une mutation ou un envoi Maicie par effet
+/// de bord.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectBridgetMessage<'a> {
+    pub from: &'a str,
+    pub to: &'a str,
+    pub body: &'a str,
+}
+
+/// Routage fermé des messages directs. Seuls les messages explicitement
+/// adressés à Maicie pourront être affichés par le cas d'usage conversationnel
+/// suivant ; tous les autres restent hors du domaine Maicie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectMessageRoute {
+    OutsideMaicie,
+    AddressedToMaicie,
+}
+
+/// Garde structurel de la frontière conversationnelle : cette fonction est
+/// pure et ne peut ni créer objectif/délégation, ni construire un envoi
+/// Bridget. Une délégation reste exclusivement créée par [`delegate`].
+pub fn route_direct_message(
+    message: &DirectBridgetMessage<'_>,
+    maicie_identity: &str,
+) -> DirectMessageRoute {
+    if message.to == maicie_identity {
+        DirectMessageRoute::AddressedToMaicie
+    } else {
+        DirectMessageRoute::OutsideMaicie
+    }
+}
+
 /// Entrée complète du cas d'usage : aucune valeur de durée n'est implicite.
 pub struct DelegateRequest<'a> {
     pub goal: &'a str,
