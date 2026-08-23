@@ -106,11 +106,19 @@ de clé inconnue du compagnon :
 ```
 
 Le daemon sélectionne **une seule** demande relivable dans l'ordre FIFO
-durable `(deposited_sequence ASC)`. Une demande `claimed` dont la connexion de
-service a disparu ou dont le claim n'a pas de résultat durable redevient
-relivable avec sa séquence de dépôt d'origine : un crash ne change donc pas
-l'ordre. La réponse est `guichet_claimed` (et révèle alors `issuer_scope` et
-`request_id`) ou `guichet_empty`.
+durable `(deposited_sequence ASC)`. `deposited_sequence` est allouée par le
+store dans sa transaction d'insertion, jamais par une horloge. Le choix et le
+claim sont atomiques : une transaction `IMMEDIATE` sélectionne la première
+ligne `queued`, puis applique `queued → claimed` avec `claim_owner` égal à
+l'identifiant de connexion de service et une `claim_lease` bornée. L'`UPDATE`
+doit modifier exactement une ligne avant que le daemon retourne ses octets.
+
+Une demande `claimed` dont la connexion de service a disparu, dont le lease
+expire ou dont le daemon redémarre redevient `queued` avec sa séquence de dépôt
+d'origine : un crash ne change donc pas l'ordre. Deux `GuichetClaimNext`
+concurrents ne peuvent donc jamais retourner le même élément : le second voit
+l'élément suivant, ou `guichet_empty`. La réponse est `guichet_claimed` (et
+révèle alors `issuer_scope` et `request_id`) ou `guichet_empty`.
 
 La pagination est implicitement bornée à un élément par appel. Le client répète
 `GuichetClaimNext` seulement jusqu'à son échéance globale négociée ; le daemon
@@ -205,7 +213,7 @@ Maicie ne crée jamais un nouvel identifiant à la place du demandeur.
 |---|---|---|
 | avant insertion | aucune demande ou refus explicite | dépôt unique possible |
 | après dépôt, avant claim | `queued` + scope + octets canoniques + `expires_at` | même demande relevable |
-| après `ClaimNext`, avant résultat | `claimed` + `deposited_sequence` immuable | même élément FIFO relivable, sans seconde demande |
+| après `ClaimNext`, avant résultat | `claimed` + `deposited_sequence` immuable + propriétaire/lease | lease libéré au redémarrage ou expiration, même élément FIFO relivable, sans seconde demande |
 | après résultat, avant retour client | réponse + issue + `expires_at` durables | même `GuichetReply` reconstruite |
 | après terminal Bridget | événement unique durable | même `event_id`, jamais de seconde transition |
 
@@ -260,7 +268,11 @@ trois événements durables. La `guichet_claim_next` qui les suit rend
 `req-delivery`, premier dépôt FIFO, sous forme de `guichet_claimed`. Le test
 normatif dépose pendant l'absence de Maicie, ouvre une connexion de service
 fraîche, appelle cette unique trame puis constate que la première demande est
-relevée. Retirer l'écriture atomique de l'événement terminal fait échouer
+relevée. Une barrière ouvre deux connexions de service sur deux dépôts FIFO :
+un seul reçoit le premier élément ; l'autre reçoit le second ou `guichet_empty`.
+Après crash, le premier élément non finalisé conserve sa séquence et redevient
+relevable. Retirer l'`UPDATE` conditionnel `queued → claimed` fait échouer cet
+oracle ; retirer l'écriture atomique de l'événement terminal fait échouer
 l'oracle de redémarrage ; retirer `issuer_scope` fait échouer la validation de
 la clé composite ; remplacer la sélection FIFO par une clé exigée fait échouer
 l'amorçage.
@@ -335,6 +347,18 @@ cas de capacité qui utilise un service sans `maicie_guichet`.
 
    Mutation discriminante : déverrouiller le claim sur le seul rôle `service`
    rend une demande lisible et casse l'oracle de zéro relève.
+
+8. Amorçage sans capacité — issue `capability_required`, zéro sélection FIFO
+   et zéro octet divulgué :
+
+   ```json
+   {"type":"guichet_claim_next","v":1}
+   ```
+
+   Cette trame est émise par une connexion `service` qui n'a pas négocié
+   `maicie_guichet`. Mutation discriminante : omettre le contrôle de capacité
+   spécifiquement sur `GuichetClaimNext` retourne le premier dépôt et fait
+   échouer l'oracle de non-divulgation.
 
 ## 6. Frontière Bridget / Maicie
 
