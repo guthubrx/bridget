@@ -370,4 +370,12 @@ plus vite ; le coût net est un report, pas une perte.
   champs DÉCLARÉS seulement, jamais d'écriture dans les plans de l'hôte,
   format d'entrée fermé À LIVRER D'ABORD (le catalogue actuel est de la
   prose non machine-appendable — migration requise), volet « entrée au
-  plan » reporté aux routines.
+  plan » reporté aux routines. DÉCOUVRABILITÉ (question utilisateur
+  2026-08-24) : trois filets, aucun ne reposant sur une mémoire — (1) la
+  skill maicie prescrit « registre list » en début de session et avant toute
+  proposition de suite (motif DevKMS/mem context de la constitution) ;
+  (2) pied de page DÉTERMINISTE des sorties Maicie aux jalons : « N constats
+  OUVERT dont M récurrents, K liés à un gate raté » (un décompte, pas un
+  avis — le rappel d'inbox de l'Article XIV, version greffe) ; (3) le rituel
+  de clôture commence sa proposition de bloc suivant par la consultation de
+  la vue triée.
