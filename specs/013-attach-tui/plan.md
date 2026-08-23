@@ -16,6 +16,9 @@ champ additif optionnel).
 ## D-1303 — Clé de bloc et bascule replay→live (obj. 4)
 Clé de bloc = `session_id+message_id`. Un tour ouvert en rattrapage et clos
 en live reste UN bloc (ni doublon ni trou) ; test dédié de la bascule.
+Évacuation des blocs sans `turn_end` : à `Gap`, `End`, `SnapshotCaughtUp` ou
+ligne corrompue, flush VISIBLE « tour incomplet » (borne conservée) — aucun
+bloc n'est retenu indéfiniment ; une fixture par frontière.
 
 ## D-1304 — Bornes mémoire (obj. 5)
 Tampon par bloc borné (64 Kio / 400 lignes) ; troncature VISIBLE
@@ -23,14 +26,18 @@ Tampon par bloc borné (64 Kio / 400 lignes) ; troncature VISIBLE
 
 ## D-1305 — Resize (obj. 6)
 Politique : largeur recapturée avant chaque rendu ; si un bloc est ouvert au
-moment d'un changement de largeur, clôture propre + redessin du bloc courant.
+moment d'un changement de largeur, l'ancienne représentation est EFFACÉE puis
+le bloc TOUJOURS OUVERT est redessiné (la sémantique du tour ne change pas).
 Tests pseudo-TTY avec changement de largeur en cours de tour.
 
 ## D-1306 — Concurrence du renderer (obj. 7)
-Propriétaire unique du rendu : un seul thread écrit stdout. Ordre de verrous
-documenté ; AUCUNE I/O stdout ni attente socket sous le verrou `screen`
-(l'état se copie sous verrou, le rendu s'exécute hors verrou). Corrige le
-point existant attach.rs:1017.
+Propriétaire unique du rendu : UN SEUL thread écrit stdout, alimenté par un
+canal `RendererCommand` BORNÉ et COALESCÉ ; dès T1301, le thread de saisie
+n'écrit plus jamais stdout directement (write_input_bytes passe par le
+canal) ; les commandes Stop/restauration termios sont PRIORITAIRES et ne se
+coalescent pas. Ordre de verrous documenté ; aucune I/O ni attente socket
+sous le verrou `screen`. Corrige attach.rs:1017. Test : saturation du canal
+sans perte de Ctrl-C ni de la restauration.
 
 ## D-1307 — Golden et exception versionnée (obj. 9)
 Le golden non-TTY couvre le CHEMIN DE RENDU inchangé ; la correction du nom
