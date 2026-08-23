@@ -85,6 +85,16 @@ pub struct ProfileConfig {
     /// compatibilité avec les profils historiques dont `id` était ce nom.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    /// Type Bridget affiché à l'approbation. Son absence reste lisible dans
+    /// les configurations historiques, mais interdit une activation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
+    /// Modèle opaque déclaré pour le profil ; jamais inféré ni classé.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Niveau d'effort opaque affiché tel quel à l'approbation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     pub display_name: String,
     pub tags: Vec<String>,
     pub personality_ref: String,

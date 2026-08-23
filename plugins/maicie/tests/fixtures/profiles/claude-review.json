@@ -1,0 +1,26 @@
+{
+  "profile": {
+    "id": "review-hostile",
+    "agent_name": "cxbridget",
+    "display_name": "Revue hostile",
+    "agent_type": "claude",
+    "model": "claude-fable-5",
+    "effort": "raisonnement-renforce",
+    "tags": ["review", "security"],
+    "personality_ref": "profiles/cxbridget.md",
+    "tools": ["bridget_send"],
+    "spawn_order_ref": "agents/claude-review"
+  },
+  "resolved_definition": {
+    "command": "claude-code-acp",
+    "args": ["--model", "claude-fable-5"],
+    "protocol": "acp",
+    "forbidden_env": ["ANTHROPIC_API_KEY"],
+    "pass_env": ["HOME"],
+    "permissions": "allow",
+    "queue_capacity": 32,
+    "notify_timeout_secs": 60,
+    "mcp": {"interactive": "none", "acp_session": true},
+    "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

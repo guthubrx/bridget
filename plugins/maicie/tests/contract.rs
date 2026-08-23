@@ -10,3 +10,6 @@ mod telemetry;
 
 #[path = "contract/runtime_subscription.rs"]
 mod runtime_subscription;
+
+#[path = "contract/profiles.rs"]
+mod profiles;

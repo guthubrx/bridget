@@ -1123,6 +1123,9 @@ mod tests {
             profiles: vec![ProfileConfig {
                 id: "code-review".to_string(),
                 agent_name: Some("coderBridget".to_string()),
+                agent_type: None,
+                model: None,
+                effort: None,
                 display_name: "Code review".to_string(),
                 tags: vec!["review".to_string()],
                 personality_ref: "profiles/reviewer.md".to_string(),
