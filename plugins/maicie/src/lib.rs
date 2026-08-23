@@ -6,6 +6,8 @@
 pub mod bridget_client;
 pub mod config;
 pub mod domain;
+pub mod outbox;
+pub mod store;
 pub mod telemetry;
 
 /// Identité stable réservée au compagnon d'orchestration.
