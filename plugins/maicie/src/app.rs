@@ -338,6 +338,30 @@ pub fn approve_profile_activation(
         .map_err(profile_activation_store_error)
 }
 
+/// Recharge une proposition durable pour la commande locale `profile approve`.
+/// Les bytes du SpawnOrder viennent exclusivement de l'approbation persistée ;
+/// le CLI ne peut ni les éditer ni en produire une seconde version.
+pub fn stored_profile_activation_proposal(
+    store: &MaicieStore,
+    approval_id: Uuid,
+    retry_until: i64,
+    dedup_retained_until: i64,
+) -> Result<ProfileActivationProposal, ProfileActivationError> {
+    if retry_until <= 0 || retry_until > dedup_retained_until {
+        return Err(ProfileActivationError::Invalid("horizon de reprise invalide"));
+    }
+    let (decision, approval) = store
+        .activation_proposal(approval_id)
+        .map_err(profile_activation_store_error)?;
+    Ok(ProfileActivationProposal {
+        spawn_order_bytes: approval.parameters.as_bytes().to_vec(),
+        decision,
+        approval,
+        retry_until,
+        dedup_retained_until,
+    })
+}
+
 /// Lit les données de coordination disponibles localement. Les sources
 /// Bridget et ACP restent explicitement inconnues jusqu'à T018.
 pub fn status(
@@ -430,22 +454,9 @@ pub fn close(
     if reason.trim().is_empty() || now <= 0 {
         return Err(ObjectiveError::Invalid("motif ou horodatage absent"));
     }
-    let mut objective = one_objective(store, objective_id)?.objective;
-    objective
-        .clore(now)
-        .map_err(|_| ObjectiveError::Invalid("objectif déjà clos"))?;
-    let decision = DecisionCoordination {
-        id: Uuid::new_v4(),
-        objectif_id: objective_id,
-        kind: TypeDecision::Cloturer,
-        proposee_par: MAICIE_PILOT.to_string(),
-        etat: EtatDecision::Appliquee,
-        motif: reason.to_string(),
-    };
     store
-        .apply_objective_decision(&decision, Some(&objective))
-        .map_err(objective_store_error)?;
-    Ok(decision)
+        .close_objective(objective_id, reason, now)
+        .map_err(objective_store_error)
 }
 
 const MAICIE_PILOT: &str = "maicie";
@@ -460,7 +471,10 @@ fn apply_participant_decision(
     if participant.trim().is_empty() {
         return Err(ObjectiveError::Invalid("participant obligatoire"));
     }
-    let _ = one_objective(store, objective_id)?;
+    let objective = one_objective(store, objective_id)?.objective;
+    if objective.etat == EtatObjectif::Clos {
+        return Err(ObjectiveError::Invalid("objectif déjà clos"));
+    }
     let decision = DecisionCoordination {
         id: Uuid::new_v4(),
         objectif_id: objective_id,
@@ -470,7 +484,7 @@ fn apply_participant_decision(
         motif: format!("{reason}: {participant}"),
     };
     store
-        .apply_objective_decision(&decision, None)
+        .apply_objective_decision(&decision, None, objective.etat)
         .map_err(objective_store_error)?;
     Ok(decision)
 }
@@ -485,6 +499,7 @@ fn one_objective(
 fn objective_store_error(error: StoreError) -> ObjectiveError {
     match error {
         StoreError::NotFound(_) => ObjectiveError::NotFound(Uuid::nil()),
+        StoreError::Invalid("objectif déjà clos") => ObjectiveError::Invalid("objectif déjà clos"),
         other => ObjectiveError::Store(other.to_string()),
     }
 }

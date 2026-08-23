@@ -6,7 +6,9 @@
 //! réconciliateur d'outbox commun : aucun second chemin d'envoi n'existe.
 
 use maicie::app::{
-    add_participant, close, delegate, delegated_participants, remove_participant, status,
+    LocalProfileApproval, ProfileActivationError, ProfileActivationProposalRequest,
+    add_participant, approve_profile_activation, close, delegate, delegated_participants,
+    propose_profile_activation, remove_participant, status, stored_profile_activation_proposal,
     summarize, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, ObjectiveError,
 };
 use maicie::bridget_client::{
@@ -16,13 +18,16 @@ use maicie::config::{ConfigError, MaicieConfig};
 use maicie::domain::{
     ClasseDuree, DecisionCoordination, Delegation, EtatFlux, ObjectifCoordonne, SourceSnapshot,
 };
-use maicie::reconcile::{reconcile_startup_with_limits, ReconcileError};
+use maicie::profiles::{ApprovalProfileView, ProfileError, ResolvedAgentDefinition, approval_view, load_profiles};
+use maicie::reconcile::{reconcile_activation_startup_at, reconcile_startup_with_limits, ReconcileError};
 use maicie::runtime::{RuntimeNature, RuntimeObservation, RuntimeSignal, RuntimeSubscription};
 use maicie::store::{MaicieStore, ObjectiveSnapshot, StoreError};
 use maicie::MAICIE_IDENTITY;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::env;
 use std::fmt;
+use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -54,6 +59,7 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
         Command::Delegate(delegate_args) => run_delegate(delegate_args),
         Command::Status(status_args) => run_status(status_args),
         Command::Objective(objective_args) => run_objective(objective_args),
+        Command::Profile(profile_args) => run_profile(profile_args),
     }
 }
 
@@ -293,6 +299,8 @@ fn open_store_with_reconciliation(
 ) -> Result<MaicieStore, CliError> {
     let mut store = MaicieStore::open(&config.database_path).map_err(CliError::Store)?;
     reconcile_pending(&mut store, config, limits)?;
+    reconcile_activation_startup_at(&mut store, &config.bridget_socket, unix_now()?)
+        .map_err(CliError::Reconcile)?;
     Ok(store)
 }
 
@@ -352,6 +360,129 @@ fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
         .map_err(|_| CliError::Delegate(DelegateError::Invalid("sortie JSON indisponible")))
 }
 
+/// Expose le consentement local US4 sans jamais lancer de processus. La
+/// proposition ne fait qu'écrire l'approbation ; l'approbation ne produit que
+/// l'outbox, ensuite reprise par le protocole public Bridget.
+fn run_profile(arguments: ProfileArgs) -> Result<String, CliError> {
+    let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let mut store = open_store_with_reconciliation(&config, BridgetClientLimits::default())?;
+    let now = unix_now()?;
+    match arguments.action {
+        ProfileAction::Propose {
+            objective_id,
+            profile_id,
+            context_scope,
+            cwd,
+            persistent,
+            reason,
+        } => {
+            let (screen, profile_hash) = approval_screen(&config, &profile_id, &arguments.definition)?;
+            let retry_until = deadline_from(now, config.durations.long_secs)?;
+            let proposal = propose_profile_activation(
+                &mut store,
+                &ProfileActivationProposalRequest {
+                    objective_id,
+                    profile_id: &screen.profile.id,
+                    agent_type: &screen.profile.agent_type,
+                    profile_hash: &profile_hash,
+                    resolved_definition_digest: &screen.definition_digest,
+                    context_scope: &context_scope,
+                    cwd: &cwd,
+                    persistent,
+                    now,
+                    spawn_deadline_at: deadline_from(now, config.durations.normal_secs)?,
+                    approval_expires_at: deadline_from(now, config.durations.normal_secs)?,
+                    retry_until,
+                    dedup_retained_until: retry_until,
+                    reason: &reason,
+                },
+            )
+            .map_err(CliError::ProfileActivation)?;
+            render_profile_output(
+                ProfileOutput::Proposed {
+                    approval_id: proposal.approval.id,
+                    command_id: proposal.approval.command_id,
+                    expires_at: proposal.approval.expires_at,
+                    screen: ApprovalScreenOutput::from(screen),
+                },
+                arguments.json,
+            )
+        }
+        ProfileAction::Approve { approval_id } => {
+            let retry_until = deadline_from(now, config.durations.long_secs)?;
+            let proposal = stored_profile_activation_proposal(
+                &store,
+                approval_id,
+                retry_until,
+                retry_until,
+            )
+            .map_err(CliError::ProfileActivation)?;
+            let (screen, profile_hash) = approval_screen(
+                &config,
+                &proposal.approval.profile_id,
+                &arguments.definition,
+            )?;
+            let activation = approve_profile_activation(
+                &mut store,
+                &proposal,
+                &LocalProfileApproval {
+                    approval_id,
+                    now,
+                    profile_hash: &profile_hash,
+                    resolved_definition_digest: &screen.definition_digest,
+                },
+            )
+            .map_err(CliError::ProfileActivation)?;
+            // Une approbation arrive après la passe de démarrage : rejouer la
+            // même routine ici rend son SpawnOrder éligible sans inventer un
+            // second chemin d'émission.
+            reconcile_activation_startup_at(&mut store, &config.bridget_socket, now)
+                .map_err(CliError::Reconcile)?;
+            render_profile_output(
+                ProfileOutput::Approved {
+                    approval_id,
+                    command_id: activation.command_id,
+                    actor: "local_human",
+                    screen: ApprovalScreenOutput::from(screen),
+                },
+                arguments.json,
+            )
+        }
+    }
+}
+
+fn approval_screen(
+    config: &MaicieConfig,
+    profile_id: &str,
+    definition_path: &PathBuf,
+) -> Result<(ApprovalProfileView, Vec<u8>), CliError> {
+    let loaded = load_profiles(&config.profiles).map_err(CliError::Profile)?;
+    let profile = loaded
+        .into_iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or(CliError::Usage("profil inconnu"))?;
+    let profile_config = config
+        .profiles
+        .iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or(CliError::Usage("profil inconnu"))?;
+    let definition_bytes = fs::read(definition_path)
+        .map_err(|_| CliError::Usage("définition résolue illisible"))?;
+    let definition: ResolvedAgentDefinition = serde_json::from_slice(&definition_bytes)
+        .map_err(|_| CliError::Usage("définition résolue invalide"))?;
+    let profile_bytes = serde_json::to_vec(profile_config)
+        .map_err(|_| CliError::Usage("profil non sérialisable"))?;
+    let profile_hash = Sha256::digest(profile_bytes).to_vec();
+    approval_view(profile, definition)
+        .map(|view| (view, profile_hash))
+        .map_err(CliError::Profile)
+}
+
+fn deadline_from(now: i64, seconds: u64) -> Result<i64, CliError> {
+    now.checked_add(i64::try_from(seconds).map_err(|_| CliError::Usage("délai hors borne"))?)
+        .ok_or(CliError::Usage("échéance hors borne"))
+}
+
 fn render_output(output: DelegateOutput, json: bool) -> Result<String, serde_json::Error> {
     if json {
         return serde_json::to_string(&output);
@@ -404,6 +535,7 @@ enum Command {
     Delegate(DelegateArgs),
     Status(StatusArgs),
     Objective(ObjectiveArgs),
+    Profile(ProfileArgs),
 }
 
 #[derive(Debug)]
@@ -440,6 +572,30 @@ enum ObjectiveAction {
     Close { reason: String },
 }
 
+#[derive(Debug)]
+struct ProfileArgs {
+    config: PathBuf,
+    definition: PathBuf,
+    action: ProfileAction,
+    json: bool,
+}
+
+#[derive(Debug)]
+enum ProfileAction {
+    Propose {
+        objective_id: Uuid,
+        profile_id: String,
+        context_scope: String,
+        cwd: String,
+        persistent: bool,
+        reason: String,
+    },
+    /// Cette variante n'est constructible que par la sous-commande locale et
+    /// son drapeau `--confirm`. Elle n'appartient à aucun protocole Bridget ou
+    /// MCP : le domaine fixe ensuite toujours actor=local_human.
+    Approve { approval_id: Uuid },
+}
+
 fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
     let Some((verb, tail)) = arguments.split_first() else {
         return Err(CliError::Usage("commande attendue : delegate"));
@@ -448,8 +604,142 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
         "delegate" => parse_delegate(tail).map(Command::Delegate),
         "status" => parse_status(tail).map(Command::Status),
         "objective" => parse_objective(tail).map(Command::Objective),
+        "profile" => parse_profile(tail).map(Command::Profile),
         _ => Err(CliError::Usage("commande inconnue : delegate attendu")),
     }
+}
+
+fn parse_profile(arguments: &[String]) -> Result<ProfileArgs, CliError> {
+    let Some((verb, tail)) = arguments.split_first() else {
+        return Err(CliError::Usage("action profile obligatoire"));
+    };
+    let (action, config, definition, json) = match verb.as_str() {
+        "propose" => parse_profile_propose(tail)?,
+        "approve" => parse_profile_approve(tail)?,
+        _ => return Err(CliError::Usage("action profile inconnue")),
+    };
+    Ok(ProfileArgs {
+        config: config.ok_or(CliError::Usage("--config est obligatoire"))?,
+        definition: definition.ok_or(CliError::Usage("--definition est obligatoire"))?,
+        action,
+        json,
+    })
+}
+
+fn parse_profile_propose(
+    arguments: &[String],
+) -> Result<(ProfileAction, Option<PathBuf>, Option<PathBuf>, bool), CliError> {
+    let Some((objective_id, tail)) = arguments.split_first() else {
+        return Err(CliError::Usage("identifiant objectif obligatoire"));
+    };
+    let Some((profile_id, tail)) = tail.split_first() else {
+        return Err(CliError::Usage("identifiant profil obligatoire"));
+    };
+    let objective_id = parse_objective_id(objective_id)?;
+    let mut config = None;
+    let mut definition = None;
+    let mut context_scope = None;
+    let mut cwd = None;
+    let mut reason = None;
+    let mut persistent = false;
+    let mut json = false;
+    let mut index = 0;
+    while index < tail.len() {
+        match tail[index].as_str() {
+            "--config" => set_once_path(
+                &mut config,
+                next_value(tail, &mut index, "--config")?,
+            )?,
+            "--definition" => set_once_path(
+                &mut definition,
+                next_value(tail, &mut index, "--definition")?,
+            )?,
+            "--context-scope" => set_once_string(
+                &mut context_scope,
+                next_value(tail, &mut index, "--context-scope")?,
+                "context-scope",
+            )?,
+            "--cwd" => set_once_string(&mut cwd, next_value(tail, &mut index, "--cwd")?, "cwd")?,
+            "--reason" => set_once_string(
+                &mut reason,
+                next_value(tail, &mut index, "--reason")?,
+                "reason",
+            )?,
+            "--persistent" => {
+                if persistent {
+                    return Err(CliError::Usage("option --persistent dupliquée"));
+                }
+                persistent = true;
+            }
+            "--json" => {
+                if json {
+                    return Err(CliError::Usage("option --json dupliquée"));
+                }
+                json = true;
+            }
+            _ => return Err(CliError::Usage("option profile propose inconnue")),
+        }
+        index += 1;
+    }
+    Ok((
+        ProfileAction::Propose {
+            objective_id,
+            profile_id: profile_id.to_string(),
+            context_scope: context_scope
+                .ok_or(CliError::Usage("--context-scope est obligatoire"))?,
+            cwd: cwd.ok_or(CliError::Usage("--cwd est obligatoire"))?,
+            persistent,
+            reason: reason.ok_or(CliError::Usage("--reason est obligatoire"))?,
+        },
+        config,
+        definition,
+        json,
+    ))
+}
+
+fn parse_profile_approve(
+    arguments: &[String],
+) -> Result<(ProfileAction, Option<PathBuf>, Option<PathBuf>, bool), CliError> {
+    let Some((approval_id, tail)) = arguments.split_first() else {
+        return Err(CliError::Usage("identifiant approbation obligatoire"));
+    };
+    let approval_id = Uuid::parse_str(approval_id)
+        .map_err(|_| CliError::Usage("identifiant approbation UUID invalide"))?;
+    let mut config = None;
+    let mut definition = None;
+    let mut confirmed = false;
+    let mut json = false;
+    let mut index = 0;
+    while index < tail.len() {
+        match tail[index].as_str() {
+            "--config" => set_once_path(
+                &mut config,
+                next_value(tail, &mut index, "--config")?,
+            )?,
+            "--definition" => set_once_path(
+                &mut definition,
+                next_value(tail, &mut index, "--definition")?,
+            )?,
+            "--confirm" => {
+                if confirmed {
+                    return Err(CliError::Usage("option --confirm dupliquée"));
+                }
+                confirmed = true;
+            }
+            "--json" => {
+                if json {
+                    return Err(CliError::Usage("option --json dupliquée"));
+                }
+                json = true;
+            }
+            _ => return Err(CliError::Usage("option profile approve inconnue")),
+        }
+        index += 1;
+    }
+    if !confirmed {
+        return Err(CliError::Usage("--confirm est obligatoire"));
+    }
+    Ok((ProfileAction::Approve { approval_id }, config, definition, json))
 }
 
 fn parse_status(arguments: &[String]) -> Result<StatusArgs, CliError> {
@@ -749,6 +1039,110 @@ enum ObjectiveOutput {
     },
 }
 
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ProfileOutput {
+    Proposed {
+        approval_id: Uuid,
+        command_id: Uuid,
+        expires_at: i64,
+        screen: ApprovalScreenOutput,
+    },
+    Approved {
+        approval_id: Uuid,
+        command_id: Uuid,
+        actor: &'static str,
+        screen: ApprovalScreenOutput,
+    },
+}
+
+/// Écran local de consentement. Chaque champ potentiellement contrôlé par une
+/// configuration ou une définition résolue est neutralisé avant tout rendu
+/// terminal : aucun ESC, saut de ligne ou contrôle C1 ne peut y être exécuté.
+#[derive(Serialize)]
+struct ApprovalScreenOutput {
+    display_name: String,
+    agent_type: String,
+    model: String,
+    effort: String,
+    command: String,
+    args: Vec<String>,
+    forbidden_env: Vec<String>,
+    definition_digest: String,
+}
+
+impl From<ApprovalProfileView> for ApprovalScreenOutput {
+    fn from(view: ApprovalProfileView) -> Self {
+        Self {
+            display_name: sanitize_terminal(&view.profile.display_name),
+            agent_type: sanitize_terminal(&view.profile.agent_type),
+            model: sanitize_terminal(&view.profile.model),
+            effort: sanitize_terminal(&view.profile.effort),
+            command: sanitize_terminal(&view.command),
+            args: view.args.iter().map(|arg| sanitize_terminal(arg)).collect(),
+            forbidden_env: view
+                .forbidden_env
+                .iter()
+                .map(|value| sanitize_terminal(value))
+                .collect(),
+            definition_digest: sanitize_terminal(&view.definition_digest),
+        }
+    }
+}
+
+fn sanitize_terminal(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|character| {
+            if character.is_control() {
+                character.escape_default().collect::<Vec<_>>()
+            } else {
+                vec![character]
+            }
+        })
+        .collect()
+}
+
+fn render_profile_output(output: ProfileOutput, json: bool) -> Result<String, CliError> {
+    if json {
+        return serde_json::to_string(&output)
+            .map_err(|_| CliError::Usage("sortie profile JSON indisponible"));
+    }
+    match output {
+        ProfileOutput::Proposed {
+            approval_id,
+            command_id,
+            expires_at,
+            screen,
+        } => Ok(format!(
+            "profil={} type={} modèle={} effort={} commande={} args={} approval_id={} command_id={} expire_at={}",
+            screen.display_name,
+            screen.agent_type,
+            screen.model,
+            screen.effort,
+            screen.command,
+            screen.args.join(" "),
+            approval_id,
+            command_id,
+            expires_at,
+        )),
+        ProfileOutput::Approved {
+            approval_id,
+            command_id,
+            actor,
+            screen,
+        } => Ok(format!(
+            "profil={} commande={} args={} approval_id={} command_id={} actor={}",
+            screen.display_name,
+            screen.command,
+            screen.args.join(" "),
+            approval_id,
+            command_id,
+            actor,
+        )),
+    }
+}
+
 /// Fait d'annuaire Bridget, séparé de l'activité ACP. Il est daté de la
 /// consultation et ne prétend pas décrire une activité de l'agent.
 #[derive(Serialize)]
@@ -1024,6 +1418,8 @@ enum CliError {
     Objective(ObjectiveError),
     Store(StoreError),
     Reconcile(ReconcileError),
+    Profile(ProfileError),
+    ProfileActivation(ProfileActivationError),
 }
 
 impl CliError {
@@ -1035,9 +1431,11 @@ impl CliError {
             Self::Delegate(DelegateError::Store(_)) | Self::Store(_) => EXIT_STORE,
             Self::Reconcile(ReconcileError::Store(_)) => EXIT_STORE,
             Self::Objective(ObjectiveError::Store(_)) => EXIT_STORE,
+            Self::ProfileActivation(ProfileActivationError::Store(_)) => EXIT_STORE,
             Self::Reconcile(_) => EXIT_BRIDGET,
             Self::Delegate(_) => EXIT_DELEGATE,
             Self::Objective(_) => EXIT_DELEGATE,
+            Self::Profile(_) | Self::ProfileActivation(_) => EXIT_DELEGATE,
         }
     }
 
@@ -1055,6 +1453,9 @@ impl CliError {
             Self::Objective(ObjectiveError::NotFound(_)) => "objective_not_found",
             Self::Objective(ObjectiveError::Store(_)) => "store",
             Self::Objective(ObjectiveError::Invalid(_)) => "objective_invalid",
+            Self::Profile(_) => "profile_invalid",
+            Self::ProfileActivation(ProfileActivationError::Store(_)) => "store",
+            Self::ProfileActivation(_) => "profile_activation_invalid",
         }
     }
 
@@ -1073,13 +1474,15 @@ impl fmt::Display for CliError {
             Self::Objective(error) => error.fmt(formatter),
             Self::Store(error) => error.fmt(formatter),
             Self::Reconcile(error) => error.fmt(formatter),
+            Self::Profile(error) => error.fmt(formatter),
+            Self::ProfileActivation(error) => error.fmt(formatter),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{candidates_from, parse_command, Command, DelegateOutput};
+    use super::{candidates_from, parse_command, sanitize_terminal, Command, DelegateOutput};
     use maicie::bridget_client::AgentInfo;
     use maicie::config::{DurationClasses, MaicieConfig, ProfileConfig};
     use std::path::PathBuf;
@@ -1106,6 +1509,11 @@ mod tests {
         })
         .unwrap();
         assert_eq!(output, r#"{"kind":"candidates","candidates":["a","b"]}"#);
+    }
+
+    #[test]
+    fn ecran_d_approbation_ne_restitue_aucun_caractere_de_controle() {
+        assert_eq!(sanitize_terminal("nom\n\u{1b}[2J"), "nom\\n\\u{1b}[2J");
     }
 
     #[test]

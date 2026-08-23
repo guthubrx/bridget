@@ -49,6 +49,7 @@ type StoredActivationApproval = (
     String,
     String,
 );
+type StoredActivationProposal = (Vec<u8>, Vec<u8>, String, String);
 type StoredDelegationAggregates = (String, String, String, Vec<u8>, String, Vec<u8>);
 
 /// Autorité d'écriture unique de l'état Maicie.
@@ -258,6 +259,9 @@ impl MaicieStore {
         &self,
         objective_id: Option<Uuid>,
     ) -> Result<Vec<ObjectiveSnapshot>, StoreError> {
+        // Complexité : O(n) requêtes associées (délégations, décisions,
+        // remises) pour n objectifs. Le chemin `status` est borné par SC-008
+        // à 100 objectifs et son p95 mesuré reste sous 250 ms.
         let mut statement = self
             .connection
             .prepare(
@@ -338,6 +342,7 @@ impl MaicieStore {
         &mut self,
         decision: &DecisionCoordination,
         updated_objective: Option<&ObjectifCoordonne>,
+        expected_state: EtatObjectif,
     ) -> Result<(), StoreError> {
         decision.verifier().map_err(StoreError::Domain)?;
         if decision.etat != EtatDecision::Appliquee {
@@ -347,27 +352,44 @@ impl MaicieStore {
             return Err(StoreError::Invalid("décision et objectif divergents"));
         }
         let decision_json = serde_json::to_vec(decision).map_err(StoreError::Json)?;
-        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
-        let exists: Option<i64> = tx
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let stored: Option<(String, Vec<u8>)> = tx
             .query_row(
-                "SELECT 1 FROM objectives WHERE id = ?1",
+                "SELECT state, payload_json FROM objectives WHERE id = ?1",
                 [decision.objectif_id.to_string()],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
             .map_err(StoreError::Sql)?;
-        if exists.is_none() {
+        let Some((stored_state, stored_payload)) = stored else {
             return Err(StoreError::NotFound("objectif absent"));
+        };
+        let stored_objective: ObjectifCoordonne =
+            serde_json::from_slice(&stored_payload).map_err(StoreError::Json)?;
+        let indexed_state = parse_objective_state(&stored_state)?;
+        if stored_objective.id != decision.objectif_id || stored_objective.etat != indexed_state {
+            return Err(StoreError::Corrupt("objectif et index SQLite divergents"));
+        }
+        if indexed_state == EtatObjectif::Clos {
+            return Err(StoreError::Invalid("objectif déjà clos"));
+        }
+        if indexed_state != expected_state {
+            return Err(StoreError::Conflict("objectif modifié concurremment"));
         }
         if let Some(objective) = updated_objective {
             let payload = serde_json::to_vec(objective).map_err(StoreError::Json)?;
             let changed = tx
                 .execute(
-                    "UPDATE objectives SET state = ?1, payload_json = ?2 WHERE id = ?3",
+                    "UPDATE objectives SET state = ?1, payload_json = ?2\n\
+                     WHERE id = ?3 AND state = ?4",
                     params![
                         objective_state_name(objective.etat),
                         payload,
-                        objective.id.to_string()
+                        objective.id.to_string(),
+                        objective_state_name(expected_state),
                     ],
                 )
                 .map_err(StoreError::Sql)?;
@@ -391,6 +413,119 @@ impl MaicieStore {
             return Err(StoreError::Conflict("décision non enregistrée"));
         }
         tx.commit().map_err(StoreError::Sql)
+    }
+
+    /// Relit puis clôt l'objectif dans une transaction immédiate. La lecture
+    /// interne interdit qu'une issue terminale validée entre une ancienne
+    /// projection CLI et l'écriture de clôture.
+    pub fn close_objective(
+        &mut self,
+        objective_id: Uuid,
+        reason: &str,
+        now: i64,
+    ) -> Result<DecisionCoordination, StoreError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let stored: Option<(String, Vec<u8>)> = tx
+            .query_row(
+                "SELECT state, payload_json FROM objectives WHERE id = ?1",
+                [objective_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let Some((stored_state, stored_payload)) = stored else {
+            return Err(StoreError::NotFound("objectif absent"));
+        };
+        let mut objective: ObjectifCoordonne =
+            serde_json::from_slice(&stored_payload).map_err(StoreError::Json)?;
+        let expected_state = parse_objective_state(&stored_state)?;
+        if objective.id != objective_id || objective.etat != expected_state {
+            return Err(StoreError::Corrupt("objectif et index SQLite divergents"));
+        }
+        objective
+            .clore(now)
+            .map_err(|_| StoreError::Invalid("objectif déjà clos"))?;
+        let decision = DecisionCoordination {
+            id: Uuid::new_v4(),
+            objectif_id: objective_id,
+            kind: TypeDecision::Cloturer,
+            proposee_par: "maicie".to_string(),
+            etat: EtatDecision::Appliquee,
+            motif: reason.to_string(),
+        };
+        decision.verifier().map_err(StoreError::Domain)?;
+        let objective_json = serde_json::to_vec(&objective).map_err(StoreError::Json)?;
+        let changed = tx
+            .execute(
+                "UPDATE objectives SET state = 'clos', payload_json = ?1\n\
+                 WHERE id = ?2 AND state = ?3",
+                params![
+                    objective_json,
+                    objective_id.to_string(),
+                    objective_state_name(expected_state),
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict("objectif modifié concurremment"));
+        }
+        let decision_json = serde_json::to_vec(&decision).map_err(StoreError::Json)?;
+        let inserted = tx
+            .execute(
+                "INSERT INTO coordination_decisions(id, objective_id, state, payload_json)\n\
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    decision.id.to_string(),
+                    objective_id.to_string(),
+                    decision_state_name(decision.etat),
+                    decision_json,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("décision non enregistrée"));
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(decision)
+    }
+
+    /// Relit une proposition d'activation durable pour une commande CLI
+    /// séparée. Les bytes restent ceux déjà enregistrés dans l'approbation ;
+    /// aucun SpawnOrder n'est reconstruit à cette frontière.
+    pub fn activation_proposal(
+        &self,
+        approval_id: Uuid,
+    ) -> Result<(DecisionCoordination, ApprobationActivation), StoreError> {
+        let row: Option<StoredActivationProposal> = self
+            .connection
+            .query_row(
+                "SELECT a.payload_json, d.payload_json, a.state, d.state\n\
+                 FROM activation_approvals a\n\
+                 JOIN coordination_decisions d ON d.id = a.decision_id\n\
+                 WHERE a.id = ?1",
+                [approval_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let Some((approval_json, decision_json, approval_state, decision_state)) = row else {
+            return Err(StoreError::NotFound("approbation inconnue"));
+        };
+        let approval: ApprobationActivation =
+            serde_json::from_slice(&approval_json).map_err(StoreError::Json)?;
+        let decision: DecisionCoordination =
+            serde_json::from_slice(&decision_json).map_err(StoreError::Json)?;
+        if approval.id != approval_id || approval.objective_id != decision.objectif_id {
+            return Err(StoreError::Corrupt("proposition d'activation divergente"));
+        }
+        match (approval_state.as_str(), decision_state.as_str()) {
+            ("proposed", "proposed") | ("approved", "approved") => Ok((decision, approval)),
+            ("consumed", _) => Err(StoreError::Invalid("approbation déjà consommée")),
+            _ => Err(StoreError::Corrupt("état de proposition divergent")),
+        }
     }
 
     fn delegations_for(

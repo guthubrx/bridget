@@ -99,6 +99,36 @@ fn commandes_objectif_rendent_et_persistent_les_decisions_explicites() {
             .len(),
         3
     );
+
+    for command in [
+        vec!["objective", &objective_id, "add-participant", "sentry", "--json"],
+        vec![
+            "objective",
+            &objective_id,
+            "remove-participant",
+            "sentry",
+            "--reason",
+            "trop tard",
+            "--json",
+        ],
+        vec![
+            "objective",
+            &objective_id,
+            "close",
+            "--reason",
+            "doublon",
+            "--json",
+        ],
+    ] {
+        let rejected = run(&fixture, &command);
+        assert!(!rejected.status.success());
+        assert!(String::from_utf8_lossy(&rejected.stderr).contains("objectif déjà clos"));
+    }
+    // La synthèse est une lecture factuelle : elle reste disponible après la
+    // clôture, sans créer de décision supplémentaire.
+    assert!(run(&fixture, &["objective", &objective_id, "summarize", "--json"])
+        .status
+        .success());
 }
 
 fn run(fixture: &Fixture, tail: &[&str]) -> std::process::Output {
