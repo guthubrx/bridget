@@ -43,7 +43,10 @@ stable.
 2. **Étant donné** un constat avec sévérité inconnue, texte absent ou source
    sans identifiant, **quand** il est soumis, **alors** Maicie le refuse sans
    modifier le catalogue.
-3. **Étant donné** deux objectifs aux libellés semblables, **quand** un constat
+3. **Étant donné** un rejet ou une coupure après l'append d'un constat,
+   **quand** le même `id` et les mêmes octets canoniques sont rejoués,
+   **alors** Maicie répond de façon idempotente sans ajouter de seconde ligne.
+4. **Étant donné** deux objectifs aux libellés semblables, **quand** un constat
    les référence, **alors** seul l'identifiant explicite est accepté ; aucun
    rapprochement textuel n'est tenté.
 
@@ -51,8 +54,11 @@ stable.
 
 ### US2 — Constater automatiquement la clôture (P1)
 
-Lorsqu'un objectif référencé est clôturé de façon attestée, Maicie ajoute la
-transition automatique correspondante au constat lié. Elle ne reconstruit pas
+Lorsqu'un objectif explicitement lié par une délégation d'arbitrage est clôturé
+de façon attestée, Maicie ajoute la transition automatique correspondante au
+constat lié. Elle la déclenche par événement attesté ou, après une perte de
+transport, par réconciliation en lecture de l'état durable de cet objectif.
+Elle ne reconstruit pas
 une clôture depuis une échéance, une absence de message ou une interprétation.
 
 **Pourquoi P1** : les remèdes livrés ne doivent plus rester affichés comme dus
@@ -64,7 +70,8 @@ transition.
 
 **Scénarios d'acceptation** :
 
-1. **Étant donné** un constat ouvert lié à `objective_id`, **quand** cet
+1. **Étant donné** un constat ouvert dont une délégation d'arbitrage journalise
+   le couple `(constat_id, objective_id)`, **quand** cet
    objectif est clôturé durablement, **alors** son état dérivé devient livré
    par une transition automatique journalisée.
 2. **Étant donné** une clôture rejouée, **quand** Maicie la reçoit à nouveau,
@@ -72,6 +79,9 @@ transition.
 3. **Étant donné** un constat sans objectif clôturé attesté, **quand** une
    horloge avance ou qu'une mission devient silencieuse, **alors** son état ne
    change pas.
+4. **Étant donné** un événement de clôture perdu, **quand** la réconciliation
+   relit l'état durable de l'objectif identifié, **alors** elle dépose la même
+   transition unique sans inférer une clôture depuis le silence.
 
 ---
 
@@ -94,8 +104,8 @@ et vérifier que la vue et son pied de page restent identiques.
    de gate déclarées, **quand** `registre list` est demandé, **alors** leur
    ordre est déterministe et explicable par ces seuls champs.
 2. **Étant donné** une vue de jalon, **quand** elle est rendue, **alors** son
-   pied de page affiche exactement `N` ouverts, `M` récurrents et `K` liés à un
-   gate raté.
+   pied de page affiche exactement `N` ouverts, `M` récurrents, `K` liés à un
+   gate raté et `P` en attente de qualification.
 3. **Étant donné** un constat ouvert, **quand** la vue est consultée, **alors**
    aucune écriture n'est faite dans `tasks.md`, un plan, une issue ou un autre
    artefact hôte.
@@ -134,7 +144,8 @@ explicite conserve corrélation et reçu durable.
 ### Fonctionnelles
 
 - **FR-1701 — Format canonique fermé** : Maicie DOIT définir un catalogue v1
-  versionné, lisible dans le dépôt hôte et machine-appendable. Les entrées
+  versionné et machine-appendable. Ce fichier est un journal canonique ;
+  `registre list` est sa seule vue humaine d'autorité. Les entrées
   acceptées sont des enregistrements fermés, versionnés et append-only ; tout
   champ ou type inconnu est refusé.
 - **FR-1702 — Migration conservatrice** : Maicie DOIT migrer le
@@ -144,13 +155,20 @@ explicite conserve corrélation et reçu durable.
   et ne devient jamais un constat actif par défaut.
 - **FR-1703 — Constat add** : `constat add` DOIT exiger `id`, `date`,
   `mission_source`, `severity`, `recurrence_of` optionnel et `text` verbatim.
-  La sévérité est une énumération fermée déclarée par l'émetteur ; Maicie ne la
-  calcule jamais.
+  `date` est un horodatage ISO-8601/RFC 3339 avec fuseau explicite et la
+  sévérité est l'énumération fermée `blocker|major|minor|info`, déclarée par
+  l'émetteur ; Maicie ne la calcule jamais. Un `id` déjà présent est un no-op
+  idempotent si les octets canoniques sont identiques, sinon un refus sans
+  mutation : il ne peut jamais produire une seconde entrée.
 - **FR-1704 — Références exactes** : une mission source, une récurrence et une
   clôture d'objectif DOIVENT utiliser des identifiants stables. Le système NE
   DOIT effectuer aucune recherche par texte, similarité ou homonymie.
 - **FR-1705 — Transition attestée** : la clôture durable d'un objectif DOIT
-  ajouter atomiquement ou idempotemment la transition de constat associée. Les
+  ajouter atomiquement ou idempotemment la transition de constat associée. Le
+  seul lien admissible est le fait déclaré `(constat_id, objective_id)` porté
+  et journalisé par une délégation d'arbitrage. La transition est déclenchée
+  par un événement de clôture ou par la lecture de l'état durable attesté du
+  même `objective_id`, jamais par une horloge, une absence ou un texte. Les
   seuls états v1 sont `open` et `delivered`; aucun état `planned` n'existe.
 - **FR-1706 — Vue de lecture** : `registre list` DOIT être une fonction pure
   du catalogue : elle trie les constats ouverts sur les valeurs déclarées
@@ -166,6 +184,11 @@ explicite conserve corrélation et reçu durable.
   au début d'une session et avant une proposition de suite ; les sorties de
   jalon et le rituel de clôture DOIVENT rendre le décompte déterministe et la
   vue triée.
+- **FR-1710 — Append atomique** : l'ajout et l'idempotence DOIVENT être
+  décidés sous le même verrou exclusif du journal déclaré, puis la ligne entière
+  est appendée et synchronisée avant de rendre succès. Un remplacement global
+  par fichier temporaire est interdit, car il pourrait écraser un append
+  concurrent.
 
 ### Entités clés
 
@@ -175,6 +198,8 @@ explicite conserve corrélation et reçu durable.
   avec identifiant stable ; un gate raté est un fait de source, non un score.
 - **Transition de constat** : événement appendé qui dérive l'état `delivered`
   d'un constat à partir de la clôture durable d'un objectif identifié.
+- **Lien d'arbitrage** : fait durable de délégation portant le couple exact
+  `(constat_id, objective_id)` qui autorise, et seul autorise, une transition.
 - **Vue de registre** : projection en lecture seule du journal canonique et de
   ses champs explicitement déclarés.
 
@@ -189,10 +214,21 @@ explicite conserve corrélation et reçu durable.
   transition `delivered`; son rejeu produit zéro transition supplémentaire.
 - **SC-1704** : deux catalogues équivalents avec ordres physiques différents
   donnent une vue `registre list` octet pour octet identique, ainsi qu'un pied
-  de page exact `N/M/K`.
+  de page exact `N/M/K/P`.
 - **SC-1705** : les tests attestent qu'aucune commande de la greffière n'écrit
   dans les artefacts de planification de l'hôte ni n'émet de message libre ;
   tout lancement de travail observé correspond à une délégation durable.
+- **SC-1706** : un test de démarrage de session et un test de proposition de
+  suite vérifient que la skill prescrit `registre list` dans les deux cas.
+- **SC-1707** : un test de rituel de clôture vérifie que la première opération
+  consulte la vue triée et que le pied de page expose `N/M/K/P`.
+- **SC-1708** : un `add` rejoué avec le même identifiant et les mêmes octets
+  canoniques crée une seule entrée ; le même identifiant avec des octets
+  divergents est refusé sans append.
+- **SC-1709** : un événement de clôture absent suivi d'une réconciliation sur
+  l'objectif identifié produit exactement la même unique transition.
+- **SC-1710** : deux writers concurrents ajoutent deux lignes complètes et
+  distinctes au catalogue déclaré ; aucune entrée n'est perdue ni tronquée.
 
 ## Hors périmètre
 

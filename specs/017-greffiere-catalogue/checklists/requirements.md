@@ -29,6 +29,10 @@ conception détaillée.
       score ni état planifié.
 - [x] Les trois filets de découvrabilité sont mesurables.
 - [x] Toute création de travail est bornée à une délégation durable.
+- [x] Le lien constat-remède est un fait de délégation déclaré, jamais une déduction.
+- [x] Le journal, son idempotence et son append atomique ont une autorité unique.
+- [x] La perte d'événement est rattrapée par l'état durable attesté, sans inférence.
+- [x] Les collisions d'identifiant, l'horodatage de tri et les writers concurrents sont testables.
 
 ## Notes
 
