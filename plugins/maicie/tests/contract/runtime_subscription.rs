@@ -64,6 +64,16 @@ fn consomme_fragments_gap_et_fin_uniquement_via_subscribe_public() {
             &mut writer,
             json!({"type":"Gap","subscription_id":"sub-7","from_seq":8,"to_seq":9,"reason":"vue_lente"}),
         );
+        let after_gap = serde_json::to_vec(&json!({
+            "v": 1,
+            "seq": 10,
+            "ts": "2026-08-23T12:00:01Z",
+            "session_id": "acp-session-7",
+            "event": "turn_end",
+            "payload": {"stop_reason":"end_turn"}
+        }))
+        .unwrap();
+        write_fragment(&mut writer, "sub-7", 10, 0, true, &after_gap);
         write_json(
             &mut writer,
             json!({"type":"End","subscription_id":"sub-7","reason":"wrapper_parti"}),
@@ -108,12 +118,21 @@ fn consomme_fragments_gap_et_fin_uniquement_via_subscribe_public() {
         }
     ));
     assert_eq!(runtime.stream_state(), EtatFlux::Gap);
+    let RuntimeSignal::Observation(after_gap) = runtime.next_signal().unwrap() else {
+        panic!("une ligne valide après Gap reste une observation, pas une guérison implicite");
+    };
+    assert_eq!(after_gap.seq, 10);
+    assert_eq!(
+        runtime.stream_state(),
+        EtatFlux::Gap,
+        "Gap doit rester visible jusqu'à une nouvelle souscription"
+    );
     assert!(matches!(
         runtime.next_signal().unwrap(),
         RuntimeSignal::End { ref reason, .. } if reason == "wrapper_parti"
     ));
     assert_eq!(runtime.stream_state(), EtatFlux::Ended);
-    assert_eq!(runtime.resume_window().unwrap(), AttachWindow::Seq(8));
+    assert_eq!(runtime.resume_window().unwrap(), AttachWindow::Seq(11));
     server.join().expect("serveur termine");
 }
 

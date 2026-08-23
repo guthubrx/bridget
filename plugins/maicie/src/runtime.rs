@@ -348,7 +348,10 @@ impl RuntimeSubscription {
             )));
         }
         self.last_seq = Some(seq);
-        self.stream_state = EtatFlux::Fresh;
+        // Une ligne valide après une lacune ne répare pas rétroactivement le
+        // flux : seule une nouvelle souscription, avec son propre
+        // `SnapshotCaughtUp`, peut établir une vue fraîche. Cette génération
+        // conserve donc explicitement `Gap` jusqu'à sa fin.
         Ok(Some(RuntimeSignal::Observation(observation)))
     }
 }
