@@ -1,6 +1,6 @@
 //! Persistance SQLite — ledger, compteurs disjoncteur, historique.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction};
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,8 +160,11 @@ impl Store {
         responder: &str,
         recipient: &str,
     ) -> Result<bool, StoreError> {
-        let changed = self.conn.execute("UPDATE tracked_requests SET state = 'answered', completed_at = ?1 WHERE id = ?2 AND sender = ?3 AND target = ?4 AND state = 'open'", rusqlite::params![now_secs(), id, recipient, responder]).map_err(StoreError::Sqlite)?;
-        Ok(changed == 1)
+        let transaction = self.conn.unchecked_transaction().map_err(StoreError::Sqlite)?;
+        let answered = mark_answered_in_transaction(&transaction, id, responder, recipient)
+            .map_err(StoreError::Sqlite)?;
+        transaction.commit().map_err(StoreError::Sqlite)?;
+        Ok(answered)
     }
 
     pub fn mark_timed_out(&self, id: &str) -> Result<bool, StoreError> {
@@ -317,6 +320,23 @@ impl Store {
         let _ = max_bytes;
         Ok(())
     }
+}
+
+/// Transition commune de résolution d'une demande, réutilisable lorsqu'une
+/// opération adjacente doit être rendue atomique avec cette clôture.
+pub(crate) fn mark_answered_in_transaction(
+    transaction: &Transaction<'_>,
+    id: &str,
+    responder: &str,
+    recipient: &str,
+) -> Result<bool, rusqlite::Error> {
+    let changed = transaction.execute(
+        "UPDATE tracked_requests
+         SET state = 'answered', completed_at = ?1
+         WHERE id = ?2 AND sender = ?3 AND target = ?4 AND state = 'open'",
+        rusqlite::params![now_secs(), id, recipient, responder],
+    )?;
+    Ok(changed == 1)
 }
 
 fn now_secs() -> i64 {

@@ -117,6 +117,68 @@ struct Client {
     writer: BufWriter<UnixStream>,
 }
 
+struct McpProcess {
+    child: Child,
+    input: BufWriter<std::process::ChildStdin>,
+    output: BufReader<std::process::ChildStdout>,
+}
+
+impl McpProcess {
+    fn start(root: &Path, name: &str, instance_id: &str) -> Self {
+        let name_file = root.join("mcp-agent-name");
+        fs::write(&name_file, name).expect("nom MCP écrit");
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bridget"))
+            .arg("mcp")
+            .env("HOME", root)
+            .env("BRIDGET_AGENT_NAME_FILE", &name_file)
+            .env("BRIDGET_AGENT_INSTANCE_ID", instance_id)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("serveur MCP réel démarré");
+        Self {
+            input: BufWriter::new(child.stdin.take().expect("stdin MCP")),
+            output: BufReader::new(child.stdout.take().expect("stdout MCP")),
+            child,
+        }
+    }
+
+    fn request(&mut self, request: serde_json::Value) -> serde_json::Value {
+        writeln!(
+            self.input,
+            "{}",
+            serde_json::to_string(&request).expect("requête MCP sérialisable")
+        )
+        .expect("requête MCP écrite");
+        self.input.flush().expect("requête MCP vidée");
+        let mut line = String::new();
+        self.output.read_line(&mut line).expect("réponse MCP lisible");
+        serde_json::from_str(&line).expect("réponse MCP JSON")
+    }
+
+    fn notify(&mut self, notification: serde_json::Value) {
+        writeln!(
+            self.input,
+            "{}",
+            serde_json::to_string(&notification).expect("notification MCP sérialisable")
+        )
+        .expect("notification MCP écrite");
+        self.input.flush().expect("notification MCP vidée");
+    }
+
+    fn stop(self) {
+        let Self {
+            mut child,
+            input,
+            output,
+        } = self;
+        drop(input);
+        drop(output);
+        let _ = child.wait();
+    }
+}
+
 impl Client {
     fn connect(socket: &Path) -> Self {
         let stream = UnixStream::connect(socket).expect("connexion au daemon");
@@ -769,6 +831,102 @@ fn recovery_ack_d_une_reponse_liee_cloture_la_demande_atomiquement() {
     assert_eq!(request.state, "answered");
     restarted.stop();
     fs::remove_dir_all(root).expect("nettoyage réponse liée");
+}
+
+#[test]
+fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
+    let root = test_root("mcp-linked-mismatch");
+    let database = root.join(".cache/bridget/bridget.db");
+    fs::create_dir_all(database.parent().expect("parent base")).expect("répertoire base");
+    let store = Store::open(&database).expect("store initial");
+    store
+        .create_request("request-a", "recipient", "human", 60)
+        .expect("demande A initiale");
+    store
+        .create_request("request-b", "recipient", "human", 60)
+        .expect("demande B initiale");
+
+    let sync = root.join("sync");
+    fs::create_dir_all(&sync).expect("synchronisation vide");
+    let mut daemon = MatrixDaemonGuard::start(&root, &sync);
+    let socket_path = socket(&root);
+    let mut recipient = register_recipient_as(&socket_path, "mcp-linked-recipient");
+    let mut mcp = McpProcess::start(&root, "human", "mcp-linked-instance");
+    let initialize = mcp.request(serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}
+    }));
+    assert_eq!(initialize["result"]["protocolVersion"], "2025-06-18");
+    mcp.notify(serde_json::json!({
+        "jsonrpc": "2.0", "method": "notifications/initialized"
+    }));
+
+    let issued_at = issued_at();
+    let call = |id, in_reply_to| serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": {
+            "name": "bridget_send",
+            "arguments": {
+                "to": "recipient",
+                "body": "réponse MCP liée",
+                "in_reply_to": in_reply_to,
+                "id": "mcp-linked-retry",
+                "issued_at": issued_at
+            }
+        }
+    });
+    let first = mcp.request(call(2, "request-a"));
+    assert_eq!(first["result"]["structuredContent"]["status"], "outcome_unknown");
+    let (delivery_id, delivery_generation) = match receive_delivery(&mut recipient) {
+        DaemonToWrapper::DeliverIdempotent {
+            delivery_id,
+            delivery_generation,
+            ..
+        } => (delivery_id, delivery_generation),
+        _ => unreachable!(),
+    };
+    recipient.send(WrapperToDaemon::DeliverAcked {
+        delivery_id,
+        delivery_generation,
+    });
+
+    let accepted = mcp.request(call(3, "request-a"));
+    assert_eq!(accepted["result"]["structuredContent"]["status"], "accepted");
+    let before_a = store
+        .get_request("request-a")
+        .expect("demande A lisible")
+        .expect("demande A présente");
+    let before_b = store
+        .get_request("request-b")
+        .expect("demande B lisible")
+        .expect("demande B présente");
+    assert_eq!(before_a.state, "answered");
+    assert_eq!(before_b.state, "open");
+
+    let mismatch = mcp.request(call(4, "request-b"));
+    assert_eq!(
+        mismatch["result"]["structuredContent"]["status"],
+        "envelope_mismatch"
+    );
+    assert_eq!(
+        store
+            .get_request("request-a")
+            .expect("demande A finale lisible")
+            .expect("demande A finale présente"),
+        before_a
+    );
+    assert_eq!(
+        store
+            .get_request("request-b")
+            .expect("demande B finale lisible")
+            .expect("demande B finale présente"),
+        before_b
+    );
+    mcp.stop();
+    drop(recipient);
+    daemon.stop();
+    fs::remove_dir_all(root).expect("nettoyage MCP réponse liée");
 }
 
 #[test]

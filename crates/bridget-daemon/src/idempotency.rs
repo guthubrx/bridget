@@ -1025,13 +1025,13 @@ impl IdempotencyStore {
         let answered_request = if let Some(message) = message
             && let Some(request_id) = message.in_reply_to.as_deref()
         {
-            let changed = tx.execute(
-                "UPDATE tracked_requests
-                 SET state = 'answered', completed_at = strftime('%s', 'now')
-                 WHERE id = ?1 AND sender = ?2 AND target = ?3 AND state = 'open'",
-                params![request_id, message.to, message.from],
+            let changed = crate::store::mark_answered_in_transaction(
+                &tx,
+                request_id,
+                &message.from,
+                &message.to,
             )?;
-            (changed == 1).then(|| request_id.to_string())
+            changed.then(|| request_id.to_string())
         } else {
             None
         };
