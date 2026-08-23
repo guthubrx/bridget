@@ -68,6 +68,15 @@ l'issue durable. Après acceptation, Maicie compare le digest de définition
 résolue de `SpawnAccepted` au hash épinglé dans l'approbation. Elle ne relit
 jamais le registre courant pour calculer ou confirmer cette preuve.
 
+La session 009 réserve toutefois `SpawnOrder` et `CancelRequest` au rôle
+wrapper ; le rôle client négocié ne les admet pas. Maicie ouvre donc une
+connexion fraîche déclarée comme wrapper pour chaque émission ou reprise
+d'activation. Cette compatibilité ne constitue pas une autorisation : dans le
+modèle local coopératif v1, tout processus du même compte capable d'ouvrir ce
+rôle peut émettre le même ordre. L'approbation locale Maicie est une preuve de
+gouvernance durable dans Maicie, mais elle n'est pas opposable côté Bridget.
+Cette limite est assumée en v1 et n'est pas masquée par le digest.
+
 ## Arrêt et responsabilité des processus
 
 Maicie ne possède aucun processus enfant, groupe de processus, timer actif ou
@@ -95,6 +104,9 @@ une décision explicite.
 - aucun lancement, arrêt ou redémarrage d'agent par Maicie ;
 - les permissions ACP sont affichées comme décisions automatiques déjà prises
   par Bridget, jamais comme demandes humaines en attente ;
+- l'activation ne dispose pas encore d'un budget global unique couvrant toute
+  la passe de lookup, connexion, replay et accusé ; les bornes locales peuvent
+  donc se cumuler, contrairement à la voie de délégation ;
 - modèle local coopératif mono-utilisateur, sans frontière d'autorisation
   hostile entre processus du même compte.
 

@@ -103,6 +103,15 @@ pas de `SpawnLookup` séparé : rejouer exactement le `SpawnOrder` avec le même
 le digest de définition renvoyé par `SpawnAccepted` au hash épinglé dans
 l'approbation. Elle ne relit jamais `agents.json` pour refaire cette preuve.
 
+Limite v1 : le protocole 009 n'admet `SpawnOrder` et `CancelRequest` que sur
+une connexion déclarée avec le rôle wrapper, pas sur le rôle client négocié.
+Maicie utilise donc une connexion wrapper fraîche pour ces ordres. Ce rôle
+n'est pas une frontière d'autorisation : un autre processus local peut émettre
+le même `SpawnOrder`. L'approbation humaine durable prouve la décision dans
+Maicie, mais Bridget ne sait pas encore l'imposer. Une future capacité client
+`spawn`, négociée sur une session Bridget dédiée, devra déplacer cette garde
+du côté transport.
+
 ## Limites assumées
 
 - comportement déterministe, sans LLM, interprétation libre ni sélection
@@ -115,6 +124,8 @@ l'approbation. Elle ne relit jamais `agents.json` pour refaire cette preuve.
   MCP ;
 - les permissions ACP sont des faits déjà auto-décidés par Bridget, jamais une
   attente d'approbation humaine dans Maicie ;
+- la passe d'activation n'a pas encore de budget global partagé entre lookup,
+  connexion, replay et accusé ; ses délais locaux peuvent se cumuler ;
 - aucune lecture de `bridget.db`, du journal ACP ou d'un fichier interne
   Bridget : seul le protocole public est consommé.
 

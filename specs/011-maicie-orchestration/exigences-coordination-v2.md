@@ -102,6 +102,21 @@ chaque montée de version d'adaptateur. Compteur de spawns par classe/profil
 (visibilité du sur-calibrage). Backlog v2 : plafond de spawns actifs par
 objectif ; champ classe dans le modèle de données.
 
+## Suivis post-revue hostile finale — C5 et C7
+
+- **C5 — rendre l'approbation opposable côté Bridget** : la v1 émet
+  `SpawnOrder` et `CancelRequest` par des connexions fraîches de rôle wrapper,
+  parce que le rôle client négocié ne les admet pas. Ce rôle reste coopératif :
+  tout processus local peut produire le même ordre, indépendamment d'une
+  approbation Maicie. Candidat v2 : une session Bridget dédiée au client Maicie
+  négocie une capacité `spawn` ; Bridget n'admet ces ordres qu'après cette
+  négociation et devient l'autorité capable d'imposer la décision approuvée.
+- **C7 — budget global d'activation** : la passe d'activation additionne encore
+  des délais locaux de lookup, connexion, replay et accusé. Elle ne propage pas
+  une échéance absolue unique comme la voie de délégation. Suivi mineur : borner
+  toute la passe par un budget global consommé, sans modifier la sémantique
+  idempotente de l'outbox.
+
 ## Conclusion T015b (2026-08-23, prospective — instruite après T017)
 
 **NON : Subscribe seul ne suffit pas à la boucle de réponse.** Le journal
