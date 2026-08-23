@@ -9,7 +9,7 @@ use crate::domain::{
     ClasseDuree, DecisionCoordination, Delegation, EtatDecision, EtatObjectif,
     EtatOutboxDelegation, ModeObjectif, ObjectifCoordonne, OutboxDelegation, TypeDecision,
 };
-use crate::outbox::{PreparedDelegation, stable_body_hash};
+use crate::outbox::{stable_body_hash, PreparedDelegation};
 use crate::store::{
     DelegateReservation, MaicieStore, ObjectiveSnapshot, StoreError, StoredDelegateResult,
 };
@@ -139,7 +139,13 @@ pub struct DelegationCreated {
     pub delegation_id: Uuid,
     pub message_id: Uuid,
     pub participant: String,
+    /// Classe explicitement choisie, affichée sans l'interpréter comme un
+    /// état de retard local.
+    pub duration: ClasseDuree,
     pub timeout_secs: u64,
+    /// Échéance contractuelle déjà envoyée à Bridget ; Maicie l'affiche mais
+    /// ne déclenche aucune action quand elle est atteinte.
+    pub deadline_contractuelle: i64,
     pub replayed: bool,
 }
 
@@ -371,7 +377,7 @@ pub fn delegate(
         }
     };
 
-    let timeout_secs = timeout_for(request.duration, durations);
+    let timeout_secs = timeout_for_duration(request.duration, durations);
     let deadline = request
         .now
         .checked_add(
@@ -435,7 +441,9 @@ pub fn delegate(
             delegation_id: delegation.id,
             message_id,
             participant: selected,
+            duration: request.duration,
             timeout_secs,
+            deadline_contractuelle: deadline,
             replayed: false,
         })),
         DelegateReservation::Replay(stored) => {
@@ -497,7 +505,9 @@ fn created_from_stored(stored: StoredDelegateResult, replayed: bool) -> Delegati
         delegation_id: stored.delegation_id,
         message_id: stored.message_id,
         participant: stored.participant,
+        duration: stored.duration,
         timeout_secs: stored.timeout_secs,
+        deadline_contractuelle: stored.deadline_contractuelle,
         replayed,
     }
 }
@@ -510,7 +520,10 @@ fn tags_equal(left: &[String], right: &[String]) -> bool {
     left == right
 }
 
-fn timeout_for(duration: ClasseDuree, durations: DurationClasses) -> u64 {
+/// Projection pure de la classe configurée vers le timeout public Bridget.
+/// Aucun timer, aucune relance et aucune transition de coordination n'en
+/// découlent : l'échéance est un fait contractuel affichable seulement.
+pub fn timeout_for_duration(duration: ClasseDuree, durations: DurationClasses) -> u64 {
     match duration {
         ClasseDuree::Courte => durations.short_secs,
         ClasseDuree::Normale => durations.normal_secs,

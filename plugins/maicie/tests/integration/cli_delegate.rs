@@ -32,6 +32,11 @@ fn deux_delegations_cli_avec_la_meme_cle_rejouent_les_memes_ids_sans_seconde_out
     let first_delegation = first_json["delegations"][0]["id"].clone();
     let first_message = first_json["delegations"][0]["message_id"].clone();
     assert!(first_message.as_str().is_some_and(|id| !id.is_empty()));
+    assert_eq!(first_json["delegations"][0]["duration"], "courte");
+    assert_eq!(first_json["delegations"][0]["timeout_secs"], 30);
+    assert!(first_json["delegations"][0]["deadline_contractuelle"]
+        .as_i64()
+        .is_some_and(|deadline| deadline > 0));
 
     let second = run_delegate(&fixture, "conversation/delegate-1");
     assert!(
@@ -45,6 +50,10 @@ fn deux_delegations_cli_avec_la_meme_cle_rejouent_les_memes_ids_sans_seconde_out
     assert_eq!(second_json["objective_id"], first_objective);
     assert_eq!(second_json["delegations"][0]["id"], first_delegation);
     assert_eq!(second_json["delegations"][0]["message_id"], first_message);
+    assert_eq!(
+        second_json["delegations"][0]["deadline_contractuelle"],
+        first_json["delegations"][0]["deadline_contractuelle"]
+    );
 
     let store = MaicieStore::open(&fixture.database).unwrap();
     let pending = store.pending_delegation_outboxes().unwrap();

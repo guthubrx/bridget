@@ -521,7 +521,9 @@ struct DelegationOutput {
     participant: String,
     message_id: Uuid,
     coordination_state: &'static str,
+    duration: ClasseDuree,
     timeout_secs: u64,
+    deadline_contractuelle: i64,
 }
 
 impl From<DelegateResult> for DelegateOutput {
@@ -535,7 +537,9 @@ impl From<DelegateResult> for DelegateOutput {
                     participant: created.participant,
                     message_id: created.message_id,
                     coordination_state: "prepared",
+                    duration: created.duration,
                     timeout_secs: created.timeout_secs,
+                    deadline_contractuelle: created.deadline_contractuelle,
                 }],
                 replayed: created.replayed,
             },

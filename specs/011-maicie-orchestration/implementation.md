@@ -28,6 +28,16 @@ T017/T018 doivent établir si Subscribe 008 et `in_reply_to` corrèlent les
 réponses et les timeouts de manière suffisamment fraîche, sans inférence
 locale ni seconde source de vérité.
 
+## T019 — délais passifs
+
+La classe configurée est projetée vers le timeout Bridget et l'échéance
+contractuelle immuable est affichée dans la sortie de délégation, y compris
+pour un rejeu idempotent. Cette échéance ne produit ni minuterie ni transition
+locale : seule une issue Bridget ou une consultation peut faire évoluer la
+vue. T017/Subscribe n'étant pas encore consommé, il n'apporte à ce stade aucun
+fait supplémentaire pour trancher T015b sur la corrélation de réponse ou de
+timeout.
+
 ## T016 — gate MVP réel (2026-08-23)
 
 Gate exécuté avec un daemon Bridget réel, un équipier ACP lancé par

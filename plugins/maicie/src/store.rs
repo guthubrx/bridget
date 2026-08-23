@@ -7,16 +7,16 @@
 use crate::app::ConversationRecord;
 use crate::bridget_client::{IdempotencyIssue, SpawnOutcome};
 use crate::domain::{
-    ActivationOutbox, ApprobationActivation, DecisionCoordination, DomainError,
-    EtatActivationOutbox, EtatDecision, EtatDelegation, EtatObjectif, EtatOutboxDelegation,
-    Delegation, ObjectifCoordonne, TypeDecision,
+    ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
+    DomainError, EtatActivationOutbox, EtatDecision, EtatDelegation, EtatObjectif,
+    EtatOutboxDelegation, ObjectifCoordonne, TypeDecision,
 };
 use crate::outbox::{
-    MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
-    StoreCommitPhase,
+    OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot, StoreCommitPhase,
+    MAX_MESSAGE_BYTES,
 };
 use rusqlite::{
-    Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
+    params, Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -67,7 +67,9 @@ pub struct StoredDelegateResult {
     pub delegation_id: Uuid,
     pub message_id: Uuid,
     pub participant: String,
+    pub duration: ClasseDuree,
     pub timeout_secs: u64,
+    pub deadline_contractuelle: i64,
 }
 
 /// Issue de la réservation atomique d'une commande `delegate`.
@@ -499,8 +501,13 @@ impl MaicieStore {
         let stored = self
             .connection
             .query_row(
-                "SELECT canonical_request_bytes, objective_id, delegation_id, message_id, participant, timeout_secs\n\
-                 FROM delegate_idempotency WHERE idempotency_key = ?1",
+                "SELECT i.canonical_request_bytes, i.objective_id, i.delegation_id,\n\
+                        i.message_id, i.participant, i.timeout_secs, d.payload_json,\n\
+                        o.deadline_contractuelle\n\
+                 FROM delegate_idempotency i\n\
+                 JOIN delegations d ON d.id = i.delegation_id\n\
+                 JOIN delegation_outbox o ON o.message_id = i.message_id\n\
+                 WHERE i.idempotency_key = ?1",
                 [idempotency_key],
                 |row| {
                     Ok((
@@ -510,6 +517,8 @@ impl MaicieStore {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, i64>(5)?,
+                        row.get::<_, Vec<u8>>(6)?,
+                        row.get::<_, i64>(7)?,
                     ))
                 },
             )
@@ -559,8 +568,13 @@ impl MaicieStore {
             .map_err(StoreError::Sql)?;
         let stored = tx
             .query_row(
-                "SELECT canonical_request_bytes, objective_id, delegation_id, message_id, participant, timeout_secs\n\
-                 FROM delegate_idempotency WHERE idempotency_key = ?1",
+                "SELECT i.canonical_request_bytes, i.objective_id, i.delegation_id,\n\
+                        i.message_id, i.participant, i.timeout_secs, d.payload_json,\n\
+                        o.deadline_contractuelle\n\
+                 FROM delegate_idempotency i\n\
+                 JOIN delegations d ON d.id = i.delegation_id\n\
+                 JOIN delegation_outbox o ON o.message_id = i.message_id\n\
+                 WHERE i.idempotency_key = ?1",
                 [idempotency_key],
                 |row| {
                     Ok((
@@ -570,6 +584,8 @@ impl MaicieStore {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, i64>(5)?,
+                        row.get::<_, Vec<u8>>(6)?,
+                        row.get::<_, i64>(7)?,
                     ))
                 },
             )
@@ -1578,7 +1594,7 @@ fn insert_prepared(tx: &Transaction<'_>, prepared: &PreparedDelegation) -> Resul
     Ok(())
 }
 
-type RawDelegateResult = (Vec<u8>, String, String, String, String, i64);
+type RawDelegateResult = (Vec<u8>, String, String, String, String, i64, Vec<u8>, i64);
 
 fn decode_delegate_result(
     stored: RawDelegateResult,
@@ -1591,6 +1607,8 @@ fn decode_delegate_result(
         message_id,
         participant,
         timeout_secs,
+        delegation_payload,
+        deadline_contractuelle,
     ) = stored;
     if canonical_request_bytes != expected_canonical_request_bytes {
         return Err(StoreError::EnvelopeMismatch);
@@ -1600,13 +1618,22 @@ fn decode_delegate_result(
             "résultat de délégation idempotente invalide",
         ));
     }
+    let delegation: Delegation =
+        serde_json::from_slice(&delegation_payload).map_err(StoreError::Json)?;
+    if delegation.id.to_string() != delegation_id || delegation.participant != participant {
+        return Err(StoreError::Corrupt(
+            "résultat idempotent et délégation divergents",
+        ));
+    }
     Ok(StoredDelegateResult {
         objective_id: parse_uuid(&objective_id)?,
         delegation_id: parse_uuid(&delegation_id)?,
         message_id: parse_uuid(&message_id)?,
         participant,
+        duration: delegation.duree,
         timeout_secs: u64::try_from(timeout_secs)
             .map_err(|_| StoreError::Corrupt("timeout idempotent invalide"))?,
+        deadline_contractuelle,
     })
 }
 
