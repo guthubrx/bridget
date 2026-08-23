@@ -570,6 +570,15 @@ pub enum DaemonToWrapper {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subscription_id: Option<String>,
         reason: AttachRefusal,
+        /// Mode attesté qui motive un refus d'attachement. Absent pour les
+        /// refus sans agent ou émis par un wrapper qui ne connaît pas la
+        /// présence complète.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<PresenceMode>,
+        /// Localisation interactive attestée, uniquement utile pour le mode
+        /// tmux. Elle n'est jamais déduite ni reconstruite côté client.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        location: Option<String>,
     },
     /// Confirmation d'enregistrement avec le nom final.
     Registered { name: String },
@@ -1176,10 +1185,14 @@ mod tests {
             DaemonToWrapper::AttachRejected {
                 subscription_id: None,
                 reason: AttachRefusal::AgentStopped,
+                mode: None,
+                location: None,
             },
             DaemonToWrapper::AttachRejected {
                 subscription_id: None,
                 reason: AttachRefusal::AgentNotAcp,
+                mode: Some(PresenceMode::Tmux),
+                location: Some("bridget:4.2".to_string()),
             },
             DaemonToWrapper::JournalReadError {
                 subscription_id: "sub-1".to_string(),
@@ -1201,6 +1214,21 @@ mod tests {
             let decoded: DaemonToWrapper = decode(&json).unwrap();
             assert_eq!(json, encode(&decoded).unwrap());
             assert_eq!(decoded.allowed_for_attach(), reaches_attach);
+        }
+    }
+
+    #[test]
+    fn attach_rejected_historique_omet_les_details_de_presence() {
+        let legacy = r#"{"type":"AttachRejected","reason":"agent_not_acp"}"#;
+        let decoded: DaemonToWrapper = decode(legacy).unwrap();
+        match decoded {
+            DaemonToWrapper::AttachRejected {
+                subscription_id: None,
+                reason: AttachRefusal::AgentNotAcp,
+                mode: None,
+                location: None,
+            } => {}
+            other => panic!("message historique inattendu : {other:?}"),
         }
     }
 

@@ -849,18 +849,27 @@ fn purge_expired_attach_sends(state: &mut DaemonState) {
         .retain(|_, pending| pending.expires_at > now);
 }
 
-fn agent_uses_acp(state: &DaemonState, agent: &bridget_core::router::RegisteredAgent) -> bool {
-    state
-        .conn_instances
-        .get(&agent.connection_id)
-        .and_then(|instance_id| state.presences.get(instance_id))
-        .is_some_and(|presence| presence.mode == Some(PresenceMode::Acp))
+#[derive(Debug)]
+struct AttachSubscriptionRefusal {
+    reason: AttachRefusal,
+    mode: Option<PresenceMode>,
+    location: Option<String>,
+}
+
+impl AttachSubscriptionRefusal {
+    fn without_presence(reason: AttachRefusal) -> Self {
+        Self {
+            reason,
+            mode: None,
+            location: None,
+        }
+    }
 }
 
 fn attach_refusal_for_subscription(
     state: &DaemonState,
     agent: &str,
-) -> Result<String, AttachRefusal> {
+) -> Result<String, AttachSubscriptionRefusal> {
     let registered = match state.router.get_agent(agent) {
         Some(registered) => registered,
         None if state
@@ -868,15 +877,31 @@ fn attach_refusal_for_subscription(
             .values()
             .any(|presence| presence.name == agent && presence.state == "stopped") =>
         {
-            return Err(AttachRefusal::AgentStopped);
+            return Err(AttachSubscriptionRefusal::without_presence(
+                AttachRefusal::AgentStopped,
+            ));
         }
-        None => return Err(AttachRefusal::AgentUnknown),
+        None => {
+            return Err(AttachSubscriptionRefusal::without_presence(
+                AttachRefusal::AgentUnknown,
+            ));
+        }
     };
-    if !agent_uses_acp(state, registered) {
-        return Err(AttachRefusal::AgentNotAcp);
+    let presence = state
+        .conn_instances
+        .get(&registered.connection_id)
+        .and_then(|instance_id| state.presences.get(instance_id));
+    if !presence.is_some_and(|presence| presence.mode == Some(PresenceMode::Acp)) {
+        return Err(AttachSubscriptionRefusal {
+            reason: AttachRefusal::AgentNotAcp,
+            mode: presence.and_then(|presence| presence.mode),
+            location: presence.and_then(|presence| presence.location.clone()),
+        });
     }
     if !state.connections.contains_key(&registered.connection_id) {
-        return Err(AttachRefusal::WrapperUnavailable);
+        return Err(AttachSubscriptionRefusal::without_presence(
+            AttachRefusal::WrapperUnavailable,
+        ));
     }
     Ok(registered.connection_id.clone())
 }
@@ -3412,6 +3437,8 @@ fn handle_wrapper_message(
             return Some(DaemonToWrapper::AttachRejected {
                 subscription_id: None,
                 reason: AttachRefusal::MessageOutsideAttachRole,
+                mode: None,
+                location: None,
             });
         }
         st.connection_roles.insert(conn_id.to_string(), *role);
@@ -3428,6 +3455,8 @@ fn handle_wrapper_message(
         return Some(DaemonToWrapper::AttachRejected {
             subscription_id: None,
             reason,
+            mode: None,
+            location: None,
         });
     }
 
@@ -3798,14 +3827,18 @@ fn handle_wrapper_message(
                     return Some(DaemonToWrapper::AttachRejected {
                         subscription_id: None,
                         reason: AttachRefusal::MessageOutsideAttachRole,
+                        mode: None,
+                        location: None,
                     });
                 }
                 let wrapper_conn = match attach_refusal_for_subscription(&st, &agent) {
                     Ok(connection_id) => connection_id,
-                    Err(reason) => {
+                    Err(refusal) => {
                         return Some(DaemonToWrapper::AttachRejected {
                             subscription_id: None,
-                            reason,
+                            reason: refusal.reason,
+                            mode: refusal.mode,
+                            location: refusal.location,
                         });
                     }
                 };
@@ -3816,6 +3849,8 @@ fn handle_wrapper_message(
                     return Some(DaemonToWrapper::AttachRejected {
                         subscription_id: Some(subscription_id),
                         reason: AttachRefusal::WrapperUnavailable,
+                        mode: None,
+                        location: None,
                     });
                 };
                 let writer = st.connections.get(&wrapper_conn).cloned();
@@ -3855,6 +3890,8 @@ fn handle_wrapper_message(
                 Some(DaemonToWrapper::AttachRejected {
                     subscription_id: Some(subscription_id),
                     reason: AttachRefusal::WrapperUnavailable,
+                    mode: None,
+                    location: None,
                 })
             }
         }
@@ -3871,6 +3908,8 @@ fn handle_wrapper_message(
                     return Some(DaemonToWrapper::AttachRejected {
                         subscription_id: Some(subscription_id),
                         reason: AttachRefusal::MessageOutsideAttachRole,
+                        mode: None,
+                        location: None,
                     });
                 }
                 st.attach_subscriptions.remove(&subscription_id);
@@ -3964,6 +4003,8 @@ fn handle_wrapper_message(
                     message: DaemonToWrapper::AttachRejected {
                         subscription_id: Some(subscription_id.clone()),
                         reason,
+                        mode: None,
+                        location: None,
                     },
                 });
                 st.attach_subscriptions.remove(&subscription_id);
@@ -6711,18 +6752,14 @@ mod presence_tests {
         assert_eq!(info("cli-agent").mode, Some(PresenceMode::Cli));
         assert!(info("cli-agent").location.is_none());
 
-        let tmux = state.router.get_agent("tmux-agent").unwrap();
-        let cli = state.router.get_agent("cli-agent").unwrap();
-        assert_eq!(
-            attach_refusal_for_subscription(&state, "tmux-agent"),
-            Err(AttachRefusal::AgentNotAcp)
-        );
-        assert_eq!(
-            attach_refusal_for_subscription(&state, "cli-agent"),
-            Err(AttachRefusal::AgentNotAcp)
-        );
-        assert!(!agent_uses_acp(&state, tmux));
-        assert!(!agent_uses_acp(&state, cli));
+        let tmux_refusal = attach_refusal_for_subscription(&state, "tmux-agent").unwrap_err();
+        assert_eq!(tmux_refusal.reason, AttachRefusal::AgentNotAcp);
+        assert_eq!(tmux_refusal.mode, Some(PresenceMode::Tmux));
+        assert_eq!(tmux_refusal.location.as_deref(), Some("bridget:3.1"));
+        let cli_refusal = attach_refusal_for_subscription(&state, "cli-agent").unwrap_err();
+        assert_eq!(cli_refusal.reason, AttachRefusal::AgentNotAcp);
+        assert_eq!(cli_refusal.mode, Some(PresenceMode::Cli));
+        assert!(cli_refusal.location.is_none());
 
         // Une présence historique annoncée avec l'ancien transport `acp`
         // demeure inconnue et ne devient jamais attachable par élimination.
@@ -6743,10 +6780,10 @@ mod presence_tests {
             ),
             DaemonToWrapper::Registered { .. }
         ));
-        assert_eq!(
-            attach_refusal_for_subscription(&state, "legacy-agent"),
-            Err(AttachRefusal::AgentNotAcp)
-        );
+        let legacy_refusal = attach_refusal_for_subscription(&state, "legacy-agent").unwrap_err();
+        assert_eq!(legacy_refusal.reason, AttachRefusal::AgentNotAcp);
+        assert!(legacy_refusal.mode.is_none());
+        assert!(legacy_refusal.location.is_none());
         let _ = std::fs::remove_file(config.db_path);
     }
 

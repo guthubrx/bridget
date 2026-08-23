@@ -159,7 +159,14 @@ struct DispatchOutcome {
     events: Vec<AttachEvent>,
     resubscribe: Option<AttachWindow>,
     reconnect: bool,
-    rejected: Option<AttachRefusal>,
+    rejected: Option<AttachRejection>,
+}
+
+#[derive(Debug)]
+struct AttachRejection {
+    reason: AttachRefusal,
+    mode: Option<PresenceMode>,
+    location: Option<String>,
 }
 
 #[derive(Debug)]
@@ -330,12 +337,18 @@ impl AttachClientState {
             DaemonToWrapper::AttachRejected {
                 subscription_id,
                 reason,
+                mode,
+                location,
             } => {
                 if !subscription_id
                     .as_ref()
                     .is_some_and(|id| self.retired_subscriptions.contains(id))
                 {
-                    outcome.rejected = Some(reason);
+                    outcome.rejected = Some(AttachRejection {
+                        reason,
+                        mode,
+                        location,
+                    });
                 }
             }
             DaemonToWrapper::Ack { id } if self.pending_send.contains_key(&id) => {
@@ -1506,14 +1519,14 @@ fn spawn_attach_reader(
             {
                 let _ = observer.send(());
             }
-            if let Some(reason) = outcome.rejected {
-                let attachable_agents = if reason == AttachRefusal::AgentUnknown {
+            if let Some(rejection) = outcome.rejected {
+                let attachable_agents = if rejection.reason == AttachRefusal::AgentUnknown {
                     list_attachable_agents(&socket_path)
                 } else {
                     Vec::new()
                 };
                 let _ = status_tx.send(ReaderStatus::Failed(attach_refusal_message(
-                    &reason,
+                    &rejection,
                     &agent,
                     &attachable_agents,
                 )));
@@ -1653,13 +1666,13 @@ fn drive_connection(
         for event in outcome.events {
             on_event(&event);
         }
-        if let Some(reason) = outcome.rejected {
-            let attachable_agents = if reason == AttachRefusal::AgentUnknown {
+        if let Some(rejection) = outcome.rejected {
+            let attachable_agents = if rejection.reason == AttachRefusal::AgentUnknown {
                 list_attachable_agents(socket_path)
             } else {
                 Vec::new()
             };
-            return Err(attach_refusal_message(&reason, agent, &attachable_agents));
+            return Err(attach_refusal_message(&rejection, agent, &attachable_agents));
         }
         if let Some(window) = outcome.resubscribe
             && connection.subscribe(agent, window).is_err()
@@ -2064,11 +2077,11 @@ fn render_prefixed_with_limit(prefix: &str, content: &str, limit: usize) -> Stri
 }
 
 fn attach_refusal_message(
-    reason: &AttachRefusal,
+    rejection: &AttachRejection,
     agent: &str,
     attachable_agents: &[String],
 ) -> String {
-    match reason {
+    match rejection.reason {
         AttachRefusal::AgentUnknown => {
             if attachable_agents.is_empty() {
                 format!(
@@ -2091,10 +2104,28 @@ fn attach_refusal_message(
             "équipier « {} » arrêté ; son historique reste consultable dans le journal de session, mais le suivi direct exige de le relancer",
             sanitize_inline(agent)
         ),
-        AttachRefusal::AgentNotAcp => format!(
-            "« {} » est un agent interactif tmux ; ouvrez son pane dans la session tmux au lieu d’utiliser attach",
-            sanitize_inline(agent)
-        ),
+        AttachRefusal::AgentNotAcp => match rejection.mode {
+            Some(PresenceMode::Tmux) => match rejection.location.as_deref() {
+                Some(location) => format!(
+                    "« {} » est interactif tmux à {} ; ouvrez ce pane au lieu d’utiliser attach",
+                    sanitize_inline(agent),
+                    sanitize_inline(location)
+                ),
+                None => format!(
+                    "« {} » est interactif tmux ; ouvrez son pane dans la session tmux au lieu d’utiliser attach",
+                    sanitize_inline(agent)
+                ),
+            },
+            Some(mode) => format!(
+                "« {} » est enregistré en mode {} ; ce mode ne prend pas en charge attach",
+                sanitize_inline(agent),
+                mode.as_str()
+            ),
+            None => format!(
+                "« {} » a un mode de présence inconnu ; impossible de confirmer sa compatibilité attach",
+                sanitize_inline(agent)
+            ),
+        },
         AttachRefusal::WrapperUnavailable => format!(
             "le wrapper ACP de « {} » est indisponible",
             sanitize_inline(agent)
@@ -3830,6 +3861,8 @@ mod tests {
                         encode(&DaemonToWrapper::AttachRejected {
                             subscription_id: None,
                             reason: AttachRefusal::WrapperUnavailable,
+                            mode: None,
+                            location: None,
                         })
                         .unwrap()
                     )
@@ -4065,19 +4098,50 @@ mod tests {
 
     #[test]
     fn explique_les_refus_non_acp_et_nom_inconnu() {
-        let non_acp = attach_refusal_message(&AttachRefusal::AgentNotAcp, "claude-1", &[]);
+        let tmux = AttachRejection {
+            reason: AttachRefusal::AgentNotAcp,
+            mode: Some(PresenceMode::Tmux),
+            location: Some("bridget:4.2".to_string()),
+        };
+        let non_acp = attach_refusal_message(&tmux, "claude-1", &[]);
         assert!(non_acp.contains("interactif tmux"));
-        assert!(non_acp.contains("pane"));
+        assert!(non_acp.contains("bridget:4.2"));
+
+        let cli = AttachRejection {
+            reason: AttachRefusal::AgentNotAcp,
+            mode: Some(PresenceMode::Cli),
+            location: None,
+        };
+        assert!(attach_refusal_message(&cli, "cli-1", &[]).contains("mode cli"));
+
+        let unknown_mode = AttachRejection {
+            reason: AttachRefusal::AgentNotAcp,
+            mode: None,
+            location: None,
+        };
+        assert!(attach_refusal_message(&unknown_mode, "legacy-1", &[]).contains("mode de présence inconnu"));
 
         let unknown = attach_refusal_message(
-            &AttachRefusal::AgentUnknown,
+            &AttachRejection {
+                reason: AttachRefusal::AgentUnknown,
+                mode: None,
+                location: None,
+            },
             "absent",
             &["claude-acp".to_string(), "codex-acp".to_string()],
         );
         assert!(unknown.contains("équipier « absent » inconnu"));
         assert!(unknown.contains("claude-acp, codex-acp"));
 
-        let stopped = attach_refusal_message(&AttachRefusal::AgentStopped, "codex-1", &[]);
+        let stopped = attach_refusal_message(
+            &AttachRejection {
+                reason: AttachRefusal::AgentStopped,
+                mode: None,
+                location: None,
+            },
+            "codex-1",
+            &[],
+        );
         assert!(stopped.contains("équipier « codex-1 » arrêté"));
         assert!(stopped.contains("historique"));
 
