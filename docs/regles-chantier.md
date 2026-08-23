@@ -55,3 +55,7 @@ l'incident.
 15. **Jamais de réponse en double à une même demande**, même après un rappel
     du daemon — si le rappel arrive, c'est la *liaison* qui a échoué, pas la
     réponse.
+16. **Rien ne reste stagé dans l'index partagé.** On stage au moment du
+    commit, jamais avant : l'index est commun, un commit voisin emporte tout
+    ce qui y traîne. *(Incident : le commit socle-client a emporté le T017-2
+    stagé d'un autre agent, 2026-08-23.)*
