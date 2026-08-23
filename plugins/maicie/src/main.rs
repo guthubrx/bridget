@@ -24,7 +24,8 @@ use maicie::profiles::{
     ApprovalProfileView, ProfileError, ResolvedAgentDefinition, approval_view, load_profiles,
 };
 use maicie::reconcile::{
-    ReconcileError, reconcile_activation_startup_at, reconcile_startup_with_limits,
+    ReconcileError, reconcile_activation_startup_at, reconcile_guichet_startup_with_limits,
+    reconcile_startup_with_limits,
 };
 use maicie::runtime::{RuntimeNature, RuntimeObservation, RuntimeSignal, RuntimeSubscription};
 use maicie::store::{MaicieStore, ObjectiveSnapshot, StoreError};
@@ -307,6 +308,13 @@ fn open_store_with_reconciliation(
     reconcile_pending(&mut store, config, limits)?;
     reconcile_activation_startup_at(&mut store, &config.bridget_socket, unix_now()?)
         .map_err(CliError::Reconcile)?;
+    reconcile_guichet_startup_with_limits(
+        &mut store,
+        &config.bridget_socket,
+        unix_now()?,
+        limits,
+    )
+    .map_err(CliError::Reconcile)?;
     Ok(store)
 }
 

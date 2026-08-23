@@ -134,6 +134,7 @@ fn serve_status(socket: &std::path::Path, ready: mpsc::Sender<()>) {
     let _ = fs::remove_file(socket);
     let listener = UnixListener::bind(socket).unwrap();
     ready.send(()).unwrap();
+    accept_empty_guichet(&listener);
     let (stream, _) = listener.accept().unwrap();
     let (mut reader, mut writer) = split(stream);
     assert_eq!(
@@ -202,6 +203,7 @@ fn serve_status_until_timeout(socket: &std::path::Path, ready: mpsc::Sender<()>)
     let _ = fs::remove_file(socket);
     let listener = UnixListener::bind(socket).unwrap();
     ready.send(()).unwrap();
+    accept_empty_guichet(&listener);
     accept_status_client(&listener);
     let (stream, _) = listener.accept().unwrap();
     let (mut reader, mut writer) = split(stream);
@@ -227,6 +229,38 @@ fn serve_status_until_timeout(socket: &std::path::Path, ready: mpsc::Sender<()>)
         json!({"type":"Subscribed","subscription_id":"sub-timeout"}),
     );
     thread::sleep(std::time::Duration::from_millis(400));
+}
+
+fn accept_empty_guichet(listener: &UnixListener) {
+    let (stream, _) = listener.accept().unwrap();
+    let (mut reader, mut writer) = split(stream);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"RoleHandshake","role":"service"})
+    );
+    write_json(
+        &mut writer,
+        json!({"type":"RoleAccepted","role":"service"}),
+    );
+    let hello = read_json(&mut reader);
+    assert_eq!(hello["type"], "ServiceHello");
+    assert_eq!(hello["service"], "maicie");
+    assert_eq!(hello["capabilities"], json!(["maicie_guichet"]));
+    write_json(
+        &mut writer,
+        json!({
+            "type":"ServiceWelcome",
+            "version":1,
+            "horizon_secs":3600,
+            "issued_at_tolerance_secs":30,
+            "capabilities":["maicie_guichet"]
+        }),
+    );
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"guichet_claim_next","v":1})
+    );
+    write_json(&mut writer, json!({"type":"guichet_empty","v":1}));
 }
 
 fn accept_status_client(listener: &UnixListener) {
