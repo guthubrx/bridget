@@ -357,6 +357,8 @@ fn register_recipient_as(socket: &Path, instance_id: &str) -> Client {
         name: Some("recipient".to_string()),
         host: Some("t1209".to_string()),
         transport: Some("acp".to_string()),
+        mode: Some(bridget_transport::protocol::PresenceMode::Acp),
+        location: None,
         os: Some("test".to_string()),
         instance_id: Some(instance_id.to_string()),
         domain: None,

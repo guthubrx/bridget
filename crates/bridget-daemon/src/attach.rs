@@ -3,7 +3,7 @@
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     AgentInfo, AttachRefusal, AttachWindow, ConnectionRole, DaemonToWrapper,
-    MAX_ATTACH_SERIALIZED_FRAME_BYTES, WrapperToDaemon, decode, encode,
+    MAX_ATTACH_SERIALIZED_FRAME_BYTES, PresenceMode, WrapperToDaemon, decode, encode,
 };
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -159,7 +159,14 @@ struct DispatchOutcome {
     events: Vec<AttachEvent>,
     resubscribe: Option<AttachWindow>,
     reconnect: bool,
-    rejected: Option<AttachRefusal>,
+    rejected: Option<AttachRejection>,
+}
+
+#[derive(Debug)]
+struct AttachRejection {
+    reason: AttachRefusal,
+    mode: Option<PresenceMode>,
+    location: Option<String>,
 }
 
 #[derive(Debug)]
@@ -330,12 +337,18 @@ impl AttachClientState {
             DaemonToWrapper::AttachRejected {
                 subscription_id,
                 reason,
+                mode,
+                location,
             } => {
                 if !subscription_id
                     .as_ref()
                     .is_some_and(|id| self.retired_subscriptions.contains(id))
                 {
-                    outcome.rejected = Some(reason);
+                    outcome.rejected = Some(AttachRejection {
+                        reason,
+                        mode,
+                        location,
+                    });
                 }
             }
             DaemonToWrapper::Ack { id } if self.pending_send.contains_key(&id) => {
@@ -1506,14 +1519,14 @@ fn spawn_attach_reader(
             {
                 let _ = observer.send(());
             }
-            if let Some(reason) = outcome.rejected {
-                let attachable_agents = if reason == AttachRefusal::AgentUnknown {
+            if let Some(rejection) = outcome.rejected {
+                let attachable_agents = if rejection.reason == AttachRefusal::AgentUnknown {
                     list_attachable_agents(&socket_path)
                 } else {
                     Vec::new()
                 };
                 let _ = status_tx.send(ReaderStatus::Failed(attach_refusal_message(
-                    &reason,
+                    &rejection,
                     &agent,
                     &attachable_agents,
                 )));
@@ -1653,13 +1666,13 @@ fn drive_connection(
         for event in outcome.events {
             on_event(&event);
         }
-        if let Some(reason) = outcome.rejected {
-            let attachable_agents = if reason == AttachRefusal::AgentUnknown {
+        if let Some(rejection) = outcome.rejected {
+            let attachable_agents = if rejection.reason == AttachRefusal::AgentUnknown {
                 list_attachable_agents(socket_path)
             } else {
                 Vec::new()
             };
-            return Err(attach_refusal_message(&reason, agent, &attachable_agents));
+            return Err(attach_refusal_message(&rejection, agent, &attachable_agents));
         }
         if let Some(window) = outcome.resubscribe
             && connection.subscribe(agent, window).is_err()
@@ -1874,16 +1887,48 @@ fn turn_end_summary(payload: &serde_json::Value) -> String {
 
 fn short_timestamp(timestamp: Option<&str>) -> String {
     timestamp
-        .and_then(|value| value.get(11..16))
-        .filter(|value| {
-            value.as_bytes().get(2) == Some(&b':')
-                && value
-                    .bytes()
-                    .enumerate()
-                    .all(|(index, byte)| index == 2 || byte.is_ascii_digit())
+        .and_then(parse_utc_timestamp)
+        .and_then(|seconds| unsafe {
+            let mut local = std::mem::zeroed::<libc::tm>();
+            (!libc::localtime_r(&seconds, &mut local).is_null())
+                .then(|| format!("{:02}:{:02}", local.tm_hour, local.tm_min))
         })
-        .map(|clock| format!("{clock} UTC"))
         .unwrap_or_else(|| "??:??".to_string())
+}
+
+/// Le journal écrit son horodatage en RFC 3339 UTC sans fraction. L'affichage
+/// attach, lui, est local au terminal qui l'observe ; conserver le UTC brut
+/// aurait affiché une heure mensongère pour l'utilisateur.
+fn parse_utc_timestamp(timestamp: &str) -> Option<libc::time_t> {
+    let bytes = timestamp.as_bytes();
+    if bytes.len() != 20
+        || bytes.get(4) != Some(&b'-')
+        || bytes.get(7) != Some(&b'-')
+        || bytes.get(10) != Some(&b'T')
+        || bytes.get(13) != Some(&b':')
+        || bytes.get(16) != Some(&b':')
+        || bytes.get(19) != Some(&b'Z')
+    {
+        return None;
+    }
+    let number = |range: std::ops::Range<usize>| {
+        std::str::from_utf8(bytes.get(range)?)
+            .ok()?
+            .parse::<i32>()
+            .ok()
+    };
+    let mut utc = libc::tm {
+        tm_sec: number(17..19)?,
+        tm_min: number(14..16)?,
+        tm_hour: number(11..13)?,
+        tm_mday: number(8..10)?,
+        tm_mon: number(5..7)? - 1,
+        tm_year: number(0..4)? - 1900,
+        tm_isdst: 0,
+        ..unsafe { std::mem::zeroed() }
+    };
+    let seconds = unsafe { libc::timegm(&mut utc) };
+    (seconds != -1).then_some(seconds)
 }
 
 #[derive(Debug)]
@@ -2032,11 +2077,11 @@ fn render_prefixed_with_limit(prefix: &str, content: &str, limit: usize) -> Stri
 }
 
 fn attach_refusal_message(
-    reason: &AttachRefusal,
+    rejection: &AttachRejection,
     agent: &str,
     attachable_agents: &[String],
 ) -> String {
-    match reason {
+    match rejection.reason {
         AttachRefusal::AgentUnknown => {
             if attachable_agents.is_empty() {
                 format!(
@@ -2059,10 +2104,28 @@ fn attach_refusal_message(
             "équipier « {} » arrêté ; son historique reste consultable dans le journal de session, mais le suivi direct exige de le relancer",
             sanitize_inline(agent)
         ),
-        AttachRefusal::AgentNotAcp => format!(
-            "« {} » est un agent interactif tmux ; ouvrez son pane dans la session tmux au lieu d’utiliser attach",
-            sanitize_inline(agent)
-        ),
+        AttachRefusal::AgentNotAcp => match rejection.mode {
+            Some(PresenceMode::Tmux) => match rejection.location.as_deref() {
+                Some(location) => format!(
+                    "« {} » est interactif tmux à {} ; ouvrez ce pane au lieu d’utiliser attach",
+                    sanitize_inline(agent),
+                    sanitize_inline(location)
+                ),
+                None => format!(
+                    "« {} » est interactif tmux ; ouvrez son pane dans la session tmux au lieu d’utiliser attach",
+                    sanitize_inline(agent)
+                ),
+            },
+            Some(mode) => format!(
+                "« {} » est enregistré en mode {} ; ce mode ne prend pas en charge attach",
+                sanitize_inline(agent),
+                mode.as_str()
+            ),
+            None => format!(
+                "« {} » a un mode de présence inconnu ; impossible de confirmer sa compatibilité attach",
+                sanitize_inline(agent)
+            ),
+        },
         AttachRefusal::WrapperUnavailable => format!(
             "le wrapper ACP de « {} » est indisponible",
             sanitize_inline(agent)
@@ -2105,6 +2168,8 @@ fn list_attachable_agents(socket_path: &Path) -> Vec<String> {
         name: Some(probe_name),
         host: None,
         transport: None,
+        mode: Some(PresenceMode::Cli),
+        location: None,
         os: None,
         instance_id: None,
         domain: None,
@@ -2146,7 +2211,8 @@ fn attachable_agent_names(agents: Vec<AgentInfo>) -> Vec<String> {
     agents
         .into_iter()
         .filter(|agent| {
-            agent.transport == "acp" && matches!(agent.state.as_str(), "connected" | "busy" | "dnd")
+            agent.mode == Some(PresenceMode::Acp)
+                && matches!(agent.state.as_str(), "connected" | "busy" | "dnd")
         })
         .map(|agent| agent.name)
         .collect()
@@ -2171,6 +2237,7 @@ mod tests {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::os::fd::{AsRawFd, FromRawFd, RawFd};
     use std::os::unix::net::UnixListener;
+    use std::process::Command;
     use std::sync::mpsc;
 
     fn test_renderer_sender(raw_terminal: bool, tty_output: bool) -> RendererSender {
@@ -2843,7 +2910,10 @@ mod tests {
         );
         assert_eq!(
             renderer.current.as_ref().unwrap().header,
-            ["09:07 UTC [tour repris en cours]"]
+            [format!(
+                "{} [tour repris en cours]",
+                short_timestamp(Some("2026-08-23T09:07:01Z"))
+            )]
         );
     }
 
@@ -3791,6 +3861,8 @@ mod tests {
                         encode(&DaemonToWrapper::AttachRejected {
                             subscription_id: None,
                             reason: AttachRefusal::WrapperUnavailable,
+                            mode: None,
+                            location: None,
                         })
                         .unwrap()
                     )
@@ -3853,22 +3925,27 @@ mod tests {
             .lines()
             .map(|line| render_journal_event(line.as_bytes(), "codex-1"))
             .collect::<Vec<_>>();
-        assert_eq!(rendered[0], "00:00 UTC alice → bonjour intégral");
-        assert_eq!(rendered[1], "00:00 UTC codex-1 → réponse");
+        // Delta FR-1405 déclaré : seul le préfixe horaire devient local ; le
+        // reste de ce golden non-TTY reste comparé octet pour octet.
+        let midnight = short_timestamp(Some("2026-08-22T00:00:00Z"));
+        assert_eq!(rendered[0], format!("{midnight} alice → bonjour intégral"));
+        assert_eq!(rendered[1], format!("{midnight} codex-1 → réponse"));
         assert_eq!(
             rendered[2],
-            "00:00 UTC [fin] tour terminé : end_turn — réponse vers alice"
+            format!("{midnight} [fin] tour terminé : end_turn — réponse vers alice")
         );
 
         let permission = std::fs::read_to_string(fixture_root.join("permission.jsonl")).unwrap();
+        let permission_time = short_timestamp(Some("2026-08-23T00:00:00Z"));
         assert_eq!(
             render_journal_event(permission.trim_end().as_bytes(), "codex-1"),
-            "00:00 UTC [permission] écrire autorisation décidée : allow-1"
+            format!("{permission_time} [permission] écrire autorisation décidée : allow-1")
         );
         let error = std::fs::read_to_string(fixture_root.join("error.jsonl")).unwrap();
+        let error_time = short_timestamp(Some("2026-08-23T00:00:00Z"));
         assert_eq!(
             render_journal_event(error.trim_end().as_bytes(), "codex-1"),
-            "00:00 UTC [erreur] équipier arrêté"
+            format!("{error_time} [erreur] équipier arrêté")
         );
     }
 
@@ -3890,7 +3967,9 @@ mod tests {
         assert!(!rendered.contains('\u{200b}'));
         assert!(!rendered.contains('\r'));
         assert!(!rendered.contains('\u{0008}'));
-        let continuation_indent = " ".repeat("10:42 UTC codex-1 →".chars().count() + 1);
+        let hostile_time = short_timestamp(Some("2026-08-22T10:42:00Z"));
+        let continuation_indent =
+            " ".repeat(format!("{hostile_time} codex-1 →").chars().count() + 1);
         assert!(rendered.lines().nth(1).is_some_and(|line| {
             line.starts_with(&continuation_indent) && line.contains("10:42 [erreur] forgée")
         }));
@@ -3911,16 +3990,95 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(
-            rendered.iter().map(String::as_str).collect::<Vec<_>>(),
-            [
-                "10:00 UTC [outil] Read src/main.rs lecture",
-                "10:00 UTC [outil] Bash cargo test --workspace tests",
-                "10:00 UTC [outil] quantum_wrench kind inconnu",
-                "10:00 UTC [outil] ␛[2J␛]0;pwned␇ ·gnahc titre hostile",
+            rendered,
+            vec![
+                format!(
+                    "{} [outil] Read src/main.rs lecture",
+                    short_timestamp(Some("2026-08-23T10:00:00Z"))
+                ),
+                format!(
+                    "{} [outil] Bash cargo test --workspace tests",
+                    short_timestamp(Some("2026-08-23T10:00:01Z"))
+                ),
+                format!(
+                    "{} [outil] quantum_wrench kind inconnu",
+                    short_timestamp(Some("2026-08-23T10:00:02Z"))
+                ),
+                format!(
+                    "{} [outil] ␛[2J␛]0;pwned␇ ·gnahc titre hostile",
+                    short_timestamp(Some("2026-08-23T10:00:03Z"))
+                ),
             ]
         );
         assert!(rendered.iter().all(|line| !line.contains('\u{001b}')));
         assert!(rendered.iter().all(|line| !line.contains('\u{202e}')));
+    }
+
+    #[test]
+    fn golden_delta_tool_call_id_herite_le_titre_sur_toutes_les_mises_a_jour() {
+        let fixture = include_str!("../tests/fixtures/attach-tool-call-correlation.jsonl");
+        let rendered = fixture
+            .lines()
+            .map(|line| render_journal_event(line.as_bytes(), "codex-1"))
+            .collect::<Vec<_>>();
+
+        // Delta FR-1404/FR-1405 déclaré : les quatre lignes v1 portent le
+        // titre corrélé et seule leur heure passe en fuseau local.
+        assert_eq!(
+            rendered,
+            vec![
+                format!(
+                    "{} [outil] Read src/main.rs lecture",
+                    short_timestamp(Some("2026-08-23T10:00:00Z"))
+                ),
+                format!(
+                    "{} [outil] Read src/main.rs analyse",
+                    short_timestamp(Some("2026-08-23T10:00:01Z"))
+                ),
+                format!(
+                    "{} [outil] Read src/main.rs lecture du résultat",
+                    short_timestamp(Some("2026-08-23T10:00:02Z"))
+                ),
+                format!(
+                    "{} [outil] Read src/main.rs terminé",
+                    short_timestamp(Some("2026-08-23T10:00:03Z"))
+                ),
+            ]
+        );
+        assert!(rendered.iter().all(|line| !line.contains("inconnu")));
+    }
+
+    #[test]
+    fn rend_l_heure_locale_dans_un_processus_a_tz_forcee() {
+        const PROBE: &str = "BRIDGET_ATTACH_LOCAL_TIME_PROBE";
+        if std::env::var_os(PROBE).is_some() {
+            assert_eq!(
+                short_timestamp(Some("2026-08-23T10:00:00Z")),
+                "12:00",
+                "Europe/Paris applique l'heure d'été au journal UTC"
+            );
+            return;
+        }
+
+        // `TZ` est global au processus C. La sonde enfant évite une course
+        // avec les autres tests parallèles tout en vérifiant le vrai chemin
+        // libc::localtime_r employé par le renderer.
+        let current_test_binary = std::env::current_exe().unwrap();
+        let output = Command::new(current_test_binary)
+            .args([
+                "--exact",
+                "attach::tests::rend_l_heure_locale_dans_un_processus_a_tz_forcee",
+                "--nocapture",
+            ])
+            .env(PROBE, "1")
+            .env("TZ", "Europe/Paris")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "sonde TZ enfant en échec : {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -3940,28 +4098,61 @@ mod tests {
 
     #[test]
     fn explique_les_refus_non_acp_et_nom_inconnu() {
-        let non_acp = attach_refusal_message(&AttachRefusal::AgentNotAcp, "claude-1", &[]);
+        let tmux = AttachRejection {
+            reason: AttachRefusal::AgentNotAcp,
+            mode: Some(PresenceMode::Tmux),
+            location: Some("bridget:4.2".to_string()),
+        };
+        let non_acp = attach_refusal_message(&tmux, "claude-1", &[]);
         assert!(non_acp.contains("interactif tmux"));
-        assert!(non_acp.contains("pane"));
+        assert!(non_acp.contains("bridget:4.2"));
+
+        let cli = AttachRejection {
+            reason: AttachRefusal::AgentNotAcp,
+            mode: Some(PresenceMode::Cli),
+            location: None,
+        };
+        assert!(attach_refusal_message(&cli, "cli-1", &[]).contains("mode cli"));
+
+        let unknown_mode = AttachRejection {
+            reason: AttachRefusal::AgentNotAcp,
+            mode: None,
+            location: None,
+        };
+        assert!(attach_refusal_message(&unknown_mode, "legacy-1", &[]).contains("mode de présence inconnu"));
 
         let unknown = attach_refusal_message(
-            &AttachRefusal::AgentUnknown,
+            &AttachRejection {
+                reason: AttachRefusal::AgentUnknown,
+                mode: None,
+                location: None,
+            },
             "absent",
             &["claude-acp".to_string(), "codex-acp".to_string()],
         );
         assert!(unknown.contains("équipier « absent » inconnu"));
         assert!(unknown.contains("claude-acp, codex-acp"));
 
-        let stopped = attach_refusal_message(&AttachRefusal::AgentStopped, "codex-1", &[]);
+        let stopped = attach_refusal_message(
+            &AttachRejection {
+                reason: AttachRefusal::AgentStopped,
+                mode: None,
+                location: None,
+            },
+            "codex-1",
+            &[],
+        );
         assert!(stopped.contains("équipier « codex-1 » arrêté"));
         assert!(stopped.contains("historique"));
 
-        let agent = |name: &str, transport: &str, state: &str| AgentInfo {
+        let agent = |name: &str, transport: &str, mode: Option<PresenceMode>, state: &str| AgentInfo {
             name: name.to_string(),
             agent_type: "fixture".to_string(),
             connection_id: format!("conn-{name}"),
             host: "local".to_string(),
             transport: transport.to_string(),
+            mode,
+            location: None,
             os: "test".to_string(),
             state: state.to_string(),
             last_seen_secs: 0,
@@ -3971,15 +4162,17 @@ mod tests {
             effort: None,
         };
         let attachable = attachable_agent_names(vec![
-            agent("connected", "acp", "connected"),
-            agent("busy", "acp", "busy"),
-            agent("dnd", "acp", "dnd"),
-            agent("stopped", "acp", "stopped"),
-            agent("unreachable", "acp", "unreachable"),
-            agent("recovering", "acp", "recovering"),
-            agent("tmux", "unix", "connected"),
+            agent("connected", "acp", Some(PresenceMode::Acp), "connected"),
+            agent("busy", "acp", Some(PresenceMode::Acp), "busy"),
+            agent("dnd", "acp", Some(PresenceMode::Acp), "dnd"),
+            agent("stopped", "acp", Some(PresenceMode::Acp), "stopped"),
+            agent("unreachable", "acp", Some(PresenceMode::Acp), "unreachable"),
+            agent("recovering", "acp", Some(PresenceMode::Acp), "recovering"),
+            agent("tmux", "acp", Some(PresenceMode::Tmux), "connected"),
+            agent("historique", "acp", None, "connected"),
+            agent("acp-sur-unix", "unix", Some(PresenceMode::Acp), "connected"),
         ]);
-        assert_eq!(attachable, ["connected", "busy", "dnd"]);
+        assert_eq!(attachable, ["connected", "busy", "dnd", "acp-sur-unix"]);
     }
 
     #[test]

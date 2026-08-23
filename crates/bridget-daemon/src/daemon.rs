@@ -4,7 +4,7 @@
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
 use bridget_transport::protocol::{
     AttachRefusal, CLIENT_CONTRACT_VERSION, ClientCapability, ClientRefusal, ConnectionRole,
-    IdempotencyIssue, SpawnRefusal, StopOutcome, decode, encode,
+    IdempotencyIssue, PresenceMode, SpawnRefusal, StopOutcome, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use log::{error, info, warn};
@@ -117,6 +117,11 @@ struct Presence {
     agent_type: String,
     host: String,
     transport: String,
+    /// Mode de présence attesté à l'enregistrement. Les présences historiques
+    /// restent `None` : ne jamais le déduire du transport ou du type d'agent.
+    mode: Option<PresenceMode>,
+    /// Localisation tmux attestée au format `session:window.pane`.
+    location: Option<String>,
     os: String,
     state: String,
     last_seen: Instant,
@@ -844,18 +849,27 @@ fn purge_expired_attach_sends(state: &mut DaemonState) {
         .retain(|_, pending| pending.expires_at > now);
 }
 
-fn agent_uses_acp(state: &DaemonState, agent: &bridget_core::router::RegisteredAgent) -> bool {
-    state
-        .conn_instances
-        .get(&agent.connection_id)
-        .and_then(|instance_id| state.presences.get(instance_id))
-        .is_some_and(|presence| presence.transport == "acp")
+#[derive(Debug)]
+struct AttachSubscriptionRefusal {
+    reason: AttachRefusal,
+    mode: Option<PresenceMode>,
+    location: Option<String>,
+}
+
+impl AttachSubscriptionRefusal {
+    fn without_presence(reason: AttachRefusal) -> Self {
+        Self {
+            reason,
+            mode: None,
+            location: None,
+        }
+    }
 }
 
 fn attach_refusal_for_subscription(
     state: &DaemonState,
     agent: &str,
-) -> Result<String, AttachRefusal> {
+) -> Result<String, AttachSubscriptionRefusal> {
     let registered = match state.router.get_agent(agent) {
         Some(registered) => registered,
         None if state
@@ -863,15 +877,31 @@ fn attach_refusal_for_subscription(
             .values()
             .any(|presence| presence.name == agent && presence.state == "stopped") =>
         {
-            return Err(AttachRefusal::AgentStopped);
+            return Err(AttachSubscriptionRefusal::without_presence(
+                AttachRefusal::AgentStopped,
+            ));
         }
-        None => return Err(AttachRefusal::AgentUnknown),
+        None => {
+            return Err(AttachSubscriptionRefusal::without_presence(
+                AttachRefusal::AgentUnknown,
+            ));
+        }
     };
-    if !agent_uses_acp(state, registered) {
-        return Err(AttachRefusal::AgentNotAcp);
+    let presence = state
+        .conn_instances
+        .get(&registered.connection_id)
+        .and_then(|instance_id| state.presences.get(instance_id));
+    if !presence.is_some_and(|presence| presence.mode == Some(PresenceMode::Acp)) {
+        return Err(AttachSubscriptionRefusal {
+            reason: AttachRefusal::AgentNotAcp,
+            mode: presence.and_then(|presence| presence.mode),
+            location: presence.and_then(|presence| presence.location.clone()),
+        });
     }
     if !state.connections.contains_key(&registered.connection_id) {
-        return Err(AttachRefusal::WrapperUnavailable);
+        return Err(AttachSubscriptionRefusal::without_presence(
+            AttachRefusal::WrapperUnavailable,
+        ));
     }
     Ok(registered.connection_id.clone())
 }
@@ -1669,6 +1699,8 @@ impl DaemonState {
                     transport: presence
                         .map(|p| p.transport.clone())
                         .unwrap_or_else(|| "unix".to_string()),
+                    mode: presence.and_then(|p| p.mode),
+                    location: presence.and_then(|p| p.location.clone()),
                     os: presence
                         .map(|p| p.os.clone())
                         .or_else(|| {
@@ -1707,7 +1739,9 @@ impl DaemonState {
                 agent_type: record.agent_type.clone(),
                 connection_id: String::new(),
                 host: "local".to_string(),
-                transport: "acp".to_string(),
+                transport: "unix".to_string(),
+                mode: Some(PresenceMode::Acp),
+                location: None,
                 os: std::env::consts::OS.to_string(),
                 state: "recovering".to_string(),
                 last_seen_secs: 0,
@@ -1729,6 +1763,8 @@ impl DaemonState {
                 connection_id: String::new(),
                 host: presence.host.clone(),
                 transport: presence.transport.clone(),
+                mode: presence.mode,
+                location: presence.location.clone(),
                 os: presence.os.clone(),
                 state: presence.state.clone(),
                 last_seen_secs: presence.last_seen.elapsed().as_secs(),
@@ -2413,6 +2449,8 @@ fn handle_register(
     name: Option<String>,
     host: Option<String>,
     transport: Option<String>,
+    mode: Option<PresenceMode>,
+    location: Option<String>,
     os: Option<String>,
     instance_id: Option<String>,
     domain: Option<String>,
@@ -2467,6 +2505,15 @@ fn handle_register(
                     .clone()
                     .or_else(|| previous.and_then(|presence| presence.derived_domain.clone()));
                 let dnd_until = previous.and_then(|presence| presence.dnd_until);
+                // Une reconnexion par un binaire antérieur au champ conserve
+                // l'observation déjà attestée ; une présence historique sans
+                // valeur reste volontairement inconnue.
+                let mode = mode.or_else(|| previous.and_then(|presence| presence.mode));
+                let location = match mode {
+                    Some(PresenceMode::Tmux) => location
+                        .or_else(|| previous.and_then(|presence| presence.location.clone())),
+                    _ => None,
+                };
 
                 state
                     .conn_instances
@@ -2478,6 +2525,8 @@ fn handle_register(
                         agent_type: parsed_type.to_string(),
                         host: host.unwrap_or_else(|| "inconnu".to_string()),
                         transport: transport.unwrap_or_else(|| "unix".to_string()),
+                        mode,
+                        location,
                         os: os.unwrap_or_else(|| "inconnu".to_string()),
                         state: if turn_in_progress {
                             "busy"
@@ -3388,6 +3437,8 @@ fn handle_wrapper_message(
             return Some(DaemonToWrapper::AttachRejected {
                 subscription_id: None,
                 reason: AttachRefusal::MessageOutsideAttachRole,
+                mode: None,
+                location: None,
             });
         }
         st.connection_roles.insert(conn_id.to_string(), *role);
@@ -3404,6 +3455,8 @@ fn handle_wrapper_message(
         return Some(DaemonToWrapper::AttachRejected {
             subscription_id: None,
             reason,
+            mode: None,
+            location: None,
         });
     }
 
@@ -3774,14 +3827,18 @@ fn handle_wrapper_message(
                     return Some(DaemonToWrapper::AttachRejected {
                         subscription_id: None,
                         reason: AttachRefusal::MessageOutsideAttachRole,
+                        mode: None,
+                        location: None,
                     });
                 }
                 let wrapper_conn = match attach_refusal_for_subscription(&st, &agent) {
                     Ok(connection_id) => connection_id,
-                    Err(reason) => {
+                    Err(refusal) => {
                         return Some(DaemonToWrapper::AttachRejected {
                             subscription_id: None,
-                            reason,
+                            reason: refusal.reason,
+                            mode: refusal.mode,
+                            location: refusal.location,
                         });
                     }
                 };
@@ -3792,6 +3849,8 @@ fn handle_wrapper_message(
                     return Some(DaemonToWrapper::AttachRejected {
                         subscription_id: Some(subscription_id),
                         reason: AttachRefusal::WrapperUnavailable,
+                        mode: None,
+                        location: None,
                     });
                 };
                 let writer = st.connections.get(&wrapper_conn).cloned();
@@ -3831,6 +3890,8 @@ fn handle_wrapper_message(
                 Some(DaemonToWrapper::AttachRejected {
                     subscription_id: Some(subscription_id),
                     reason: AttachRefusal::WrapperUnavailable,
+                    mode: None,
+                    location: None,
                 })
             }
         }
@@ -3847,6 +3908,8 @@ fn handle_wrapper_message(
                     return Some(DaemonToWrapper::AttachRejected {
                         subscription_id: Some(subscription_id),
                         reason: AttachRefusal::MessageOutsideAttachRole,
+                        mode: None,
+                        location: None,
                     });
                 }
                 st.attach_subscriptions.remove(&subscription_id);
@@ -3940,6 +4003,8 @@ fn handle_wrapper_message(
                     message: DaemonToWrapper::AttachRejected {
                         subscription_id: Some(subscription_id.clone()),
                         reason,
+                        mode: None,
+                        location: None,
                     },
                 });
                 st.attach_subscriptions.remove(&subscription_id);
@@ -4117,6 +4182,8 @@ fn handle_wrapper_message(
             name,
             host,
             transport,
+            mode,
+            location,
             os,
             instance_id,
             domain,
@@ -4139,6 +4206,8 @@ fn handle_wrapper_message(
                 name,
                 host,
                 transport,
+                mode,
+                location,
                 os,
                 instance_id,
                 domain,
@@ -4476,7 +4545,7 @@ fn handle_wrapper_message(
                             .conn_instances
                             .get(&agent.connection_id)
                             .and_then(|instance| st.presences.get(instance))
-                            .is_some_and(|presence| presence.transport == "acp");
+                            .is_some_and(|presence| presence.mode == Some(PresenceMode::Acp));
                         if is_acp {
                             let cancel = DaemonToWrapper::CancelDelivery {
                                 id: request.id.clone(),
@@ -4618,6 +4687,8 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
         name: Some(format!("status-{}", std::process::id())),
         host: None,
         transport: None,
+        mode: Some(PresenceMode::Cli),
+        location: None,
         os: None,
         instance_id: None,
         domain: None,
@@ -4808,6 +4879,8 @@ mod presence_tests {
                 agent_type: "codex".to_string(),
                 host: "projet-a".to_string(),
                 transport: "ssh-unix".to_string(),
+                mode: None,
+                location: None,
                 os: "Linux".to_string(),
                 state: "connected".to_string(),
                 last_seen: Instant::now(),
@@ -4875,6 +4948,8 @@ mod presence_tests {
                 agent_type: "claude".to_string(),
                 host: "macbook".to_string(),
                 transport: "acp".to_string(),
+                mode: Some(PresenceMode::Acp),
+                location: None,
                 os: "macOS".to_string(),
                 state: "connected".to_string(),
                 last_seen: Instant::now(),
@@ -5132,6 +5207,8 @@ mod presence_tests {
                     name: Some("alpha".to_string()),
                     host: Some("local".to_string()),
                     transport: Some("tmux".to_string()),
+                    mode: Some(PresenceMode::Tmux),
+                    location: Some("fixture:0.1".to_string()),
                     os: Some("test".to_string()),
                     instance_id: None,
                     domain: None,
@@ -5149,6 +5226,8 @@ mod presence_tests {
                     name: Some("alpha".to_string()),
                     host: Some("local".to_string()),
                     transport: Some("acp".to_string()),
+                    mode: Some(PresenceMode::Acp),
+                    location: None,
                     os: Some("test".to_string()),
                     instance_id: Some(lease.instance_id.clone()),
                     domain: None,
@@ -5949,6 +6028,8 @@ mod presence_tests {
                     name: Some("historique-012".to_string()),
                     host: None,
                     transport: None,
+                    mode: None,
+                    location: None,
                     os: None,
                     instance_id: None,
                     domain: None,
@@ -6583,7 +6664,10 @@ mod presence_tests {
     #[test]
     fn abonnement_attach_refuse_un_wrapper_tmux_malgre_son_type() {
         let (mut state, config) = state_with_registered_agent("attach-tmux");
-        state.presences.get_mut("instance-1").unwrap().transport = "unix".to_string();
+        let presence = state.presences.get_mut("instance-1").unwrap();
+        presence.transport = "unix".to_string();
+        presence.mode = Some(PresenceMode::Tmux);
+        presence.location = Some("bridget:1.2".to_string());
         let shared = Arc::new(Mutex::new(state));
         assert!(matches!(
             handle_wrapper_message(
@@ -6611,6 +6695,95 @@ mod presence_tests {
                 ..
             })
         ));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn modes_reels_des_trois_enregistrements_ne_dependant_pas_du_transport() {
+        let (mut state, config) = state_with_registered_agent("presence-modes");
+        state.router.unregister_by_conn("conn-1");
+        state.conn_instances.remove("conn-1");
+        state.presences.clear();
+
+        let registrations = [
+            ("acp-conn", "acp-agent", "acp-instance", PresenceMode::Acp, None),
+            (
+                "tmux-conn",
+                "tmux-agent",
+                "tmux-instance",
+                PresenceMode::Tmux,
+                Some("bridget:3.1"),
+            ),
+            (
+                "cli-conn",
+                "cli-agent",
+                "cli-instance",
+                PresenceMode::Cli,
+                None,
+            ),
+        ];
+        for (conn_id, name, instance_id, mode, location) in registrations {
+            assert!(matches!(
+                handle_register(
+                    conn_id,
+                    "fixture".to_string(),
+                    Some(name.to_string()),
+                    Some("local".to_string()),
+                    // Les trois chemins peuvent emprunter le même socket Unix :
+                    // seul le mode attesté autorise ou refuse attach.
+                    Some("unix".to_string()),
+                    Some(mode),
+                    location.map(str::to_string),
+                    Some("test".to_string()),
+                    Some(instance_id.to_string()),
+                    None,
+                    false,
+                    &mut state,
+                ),
+                DaemonToWrapper::Registered { .. }
+            ));
+        }
+
+        let infos = state.agent_infos();
+        let info = |name: &str| infos.iter().find(|agent| agent.name == name).unwrap();
+        assert_eq!(info("acp-agent").mode, Some(PresenceMode::Acp));
+        assert_eq!(info("tmux-agent").mode, Some(PresenceMode::Tmux));
+        assert_eq!(info("tmux-agent").location.as_deref(), Some("bridget:3.1"));
+        assert_eq!(info("cli-agent").mode, Some(PresenceMode::Cli));
+        assert!(info("cli-agent").location.is_none());
+
+        let tmux_refusal = attach_refusal_for_subscription(&state, "tmux-agent").unwrap_err();
+        assert_eq!(tmux_refusal.reason, AttachRefusal::AgentNotAcp);
+        assert_eq!(tmux_refusal.mode, Some(PresenceMode::Tmux));
+        assert_eq!(tmux_refusal.location.as_deref(), Some("bridget:3.1"));
+        let cli_refusal = attach_refusal_for_subscription(&state, "cli-agent").unwrap_err();
+        assert_eq!(cli_refusal.reason, AttachRefusal::AgentNotAcp);
+        assert_eq!(cli_refusal.mode, Some(PresenceMode::Cli));
+        assert!(cli_refusal.location.is_none());
+
+        // Une présence historique annoncée avec l'ancien transport `acp`
+        // demeure inconnue et ne devient jamais attachable par élimination.
+        assert!(matches!(
+            handle_register(
+                "legacy-conn",
+                "fixture".to_string(),
+                Some("legacy-agent".to_string()),
+                Some("local".to_string()),
+                Some("acp".to_string()),
+                None,
+                None,
+                Some("test".to_string()),
+                Some("legacy-instance".to_string()),
+                None,
+                false,
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        let legacy_refusal = attach_refusal_for_subscription(&state, "legacy-agent").unwrap_err();
+        assert_eq!(legacy_refusal.reason, AttachRefusal::AgentNotAcp);
+        assert!(legacy_refusal.mode.is_none());
+        assert!(legacy_refusal.location.is_none());
         let _ = std::fs::remove_file(config.db_path);
     }
 
@@ -6671,7 +6844,9 @@ mod presence_tests {
                 "claude".to_string(),
                 Some("claude-managed".to_string()),
                 Some("local".to_string()),
-                Some("acp".to_string()),
+                Some("unix".to_string()),
+                Some(PresenceMode::Acp),
+                None,
                 Some("macOS".to_string()),
                 Some("instance-claude-managed".to_string()),
                 Some("bridget".to_string()),
@@ -6682,7 +6857,8 @@ mod presence_tests {
         ));
 
         let agent = state.agent_infos().pop().expect("Claude inscrit");
-        assert_eq!(agent.transport, "acp");
+        assert_eq!(agent.transport, "unix");
+        assert_eq!(agent.mode, Some(PresenceMode::Acp));
         assert_eq!(agent.domain.as_deref(), Some("bridget"));
 
         let shared = Arc::new(Mutex::new(state));
@@ -7446,6 +7622,8 @@ mod presence_tests {
             Some("agent-2".to_string()),
             Some("macbook".to_string()),
             Some("unix".to_string()),
+            Some(PresenceMode::Acp),
+            None,
             Some("macOS".to_string()),
             Some("instance-1".to_string()),
             Some("bridget".to_string()),
@@ -7584,7 +7762,9 @@ mod presence_tests {
             "claude".to_string(),
             Some("agent-2".to_string()),
             Some("macbook".to_string()),
-            Some("acp".to_string()),
+            Some("unix".to_string()),
+            Some(PresenceMode::Acp),
+            None,
             Some("macOS".to_string()),
             Some("instance-1".to_string()),
             None,

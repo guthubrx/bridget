@@ -8,7 +8,7 @@ use bridget_transport::journal::{
     IncrementalJournalReader, JournalLiveFeed, JournalReadItem, JournalSourceIdentity,
     JournalWindowError, current_host_date, resolve_window,
 };
-use bridget_transport::protocol::{decode, encode};
+use bridget_transport::protocol::{PresenceMode, decode, encode};
 use bridget_transport::{
     AcpEvent, AcpOptions, AcpTransport, AttachRefusal, AttachWindow, DaemonToWrapper,
     MAX_ATTACH_FRAGMENT_BYTES, MAX_ATTACH_SERIALIZED_FRAME_BYTES, TmuxTransport, Transport,
@@ -61,6 +61,130 @@ fn interactive_bridget_prompt(name: &str, mcp_enabled: bool) -> String {
     format!(
         "Tu es l'agent \"{name}\" dans une session Bridget. Tu peux recevoir des messages d'autres agents IA. Quand tu vois une ligne qui commence par 💬 dans ton terminal, c'est un message d'un autre agent IA, pas de l'humain. Le format est : 💬 <expéditeur> → <toi> (reply=yes/no, ...)\n<message>\n\nRègles ABSOLUES :\n1. Réponds TOUJOURS avec: bridget send --to <expéditeur> \"ta réponse\"\n2. N'accuse JAMAIS réception (pas de \"bien reçu\", \"OK\", \"compris\")\n3. Ne fais PAS bridget who, bridget ledger ou bridget --help sans y être explicitement invité\n4. reply=no = notification, ne réponds que si utile. reply=yes = réponds avec du contenu.\n5. Ne réponds JAMAIS uniquement dans ton terminal — l'expéditeur ne te verrait pas.\n\nTu es maintenant en attente. Dis \"Bridget ready\" puis attends les messages."
     )
+}
+
+/// Amorçage ajouté au prompt d'une reprise Codex.
+///
+/// Codex diffère les outils MCP hors de sa liste d'outils principale. Une
+/// reprise restaure l'historique, mais pas la décision d'avoir recherché ces
+/// outils dans `ALL_TOOLS` : l'instruction doit donc être rejouée explicitement.
+fn codex_resume_bootstrap(name: &str) -> String {
+    format!(
+        "Tu reprends la session de l'agent Bridget \"{name}\". Les outils MCP Bridget peuvent être différés. Cherche mcp__bridget__* dans ALL_TOOLS via functions.exec, puis appelle tools.mcp__bridget__bridget_send avec in_reply_to pour répondre aux demandes reply=yes. Utilise le shell bridget seulement si cette recherche ne rend aucun outil."
+    )
+}
+
+/// Options Codex qui consomment exactement la valeur suivante.
+fn codex_option_takes_value(argument: &str) -> bool {
+    matches!(
+        argument,
+        "-c" | "--config"
+            | "--enable"
+            | "--disable"
+            | "--remote"
+            | "--remote-auth-token-env"
+            | "-i"
+            | "--image"
+            | "-m"
+            | "--model"
+            | "--local-provider"
+            | "-p"
+            | "--profile"
+            | "-s"
+            | "--sandbox"
+            | "-C"
+            | "--cd"
+            | "--add-dir"
+            | "-a"
+            | "--ask-for-approval"
+    )
+}
+
+/// Rend les indices des arguments positionnels, sans confondre la valeur
+/// d'une option avec un prompt.
+fn codex_positionals(arguments: &[String], from: usize) -> Vec<usize> {
+    let mut positionals = Vec::new();
+    let mut index = from;
+    let mut after_separator = false;
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if after_separator {
+            positionals.push(index);
+            index += 1;
+            continue;
+        }
+        if argument == "--" {
+            after_separator = true;
+            index += 1;
+            continue;
+        }
+        if matches!(argument.as_str(), "-i" | "--image") {
+            // Clap accepte une ou plusieurs images : aucune de leurs valeurs
+            // ne constitue SESSION_ID ou PROMPT.
+            index += 1;
+            while index < arguments.len() && !arguments[index].starts_with('-') {
+                index += 1;
+            }
+            continue;
+        }
+        if codex_option_takes_value(argument) {
+            index = (index + 2).min(arguments.len());
+            continue;
+        }
+        if argument.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        positionals.push(index);
+        index += 1;
+    }
+    positionals
+}
+
+/// Prépare les arguments utilisateur Codex sans prendre `resume`, son
+/// identifiant de session ni les valeurs d'options pour un prompt.
+///
+/// Lors d'une reprise nommée (ou `--last`), l'amorçage est toujours présent :
+/// il devient le prompt s'il n'y en a pas, ou préfixe le prompt explicite.
+fn prepare_codex_agent_args(agent_args: &[String], name: &str, mcp_enabled: bool) -> Vec<String> {
+    let mut prepared = agent_args.to_vec();
+    let top_level_positionals = codex_positionals(agent_args, 0);
+    let Some(resume_index) = top_level_positionals
+        .first()
+        .copied()
+        .filter(|index| agent_args[*index] == "resume")
+    else {
+        if codex_positionals(agent_args, 0).is_empty() {
+            prepared.push(interactive_bridget_prompt(name, mcp_enabled));
+        }
+        return prepared;
+    };
+
+    let positionals = codex_positionals(agent_args, resume_index + 1);
+    let uses_last = agent_args[resume_index + 1..]
+        .iter()
+        .any(|argument| argument == "--last");
+    let prompt_index = if uses_last {
+        positionals.first().copied()
+    } else {
+        positionals.get(1).copied()
+    };
+    let has_selector = uses_last || !positionals.is_empty();
+    if !has_selector {
+        // `codex resume` ouvre le sélecteur interactif : un unique argument
+        // positionnel serait interprété comme SESSION_ID, pas comme PROMPT.
+        return prepared;
+    }
+
+    let bootstrap = codex_resume_bootstrap(name);
+    if let Some(prompt_index) = prompt_index {
+        prepared[prompt_index] = format!("{bootstrap}\n\n{}", prepared[prompt_index]);
+    } else {
+        // Toujours en dernière position : les options placées après le
+        // SESSION_ID restent des options, et l'amorçage occupe bien PROMPT.
+        prepared.push(bootstrap);
+    }
+    prepared
 }
 
 #[derive(Debug, Clone)]
@@ -395,20 +519,30 @@ fn operating_system() -> String {
     }
 }
 
-fn get_current_pane_id() -> Result<String, String> {
+/// Identité du pane courant et localisation humaine attestée par tmux.
+fn get_current_tmux_context() -> Result<(String, String), String> {
     let output = Command::new("tmux")
-        .args(["display-message", "-p", "#{pane_id}"])
+        .args([
+            "display-message",
+            "-p",
+            "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}",
+        ])
         .output()
         .map_err(|e| format!("tmux exec: {}", e))?;
     if !output.status.success() {
         return Err(format!("tmux: {}", String::from_utf8_lossy(&output.stderr)));
     }
-    let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if id.is_empty() {
-        Err("pane vide".into())
-    } else {
-        Ok(id)
+    parse_tmux_context(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_tmux_context(value: &str) -> Result<(String, String), String> {
+    let Some((pane_id, location)) = value.trim().split_once('\t') else {
+        return Err("contexte tmux incomplet".into());
+    };
+    if pane_id.is_empty() || location.is_empty() {
+        return Err("contexte tmux vide".into());
     }
+    Ok((pane_id.to_string(), location.to_string()))
 }
 
 /// Calcule un hash des args pour identifier une session (resume, etc.).
@@ -517,13 +651,82 @@ fn resolve_current_name(name_state_path: &std::path::Path, fallback: &str) -> St
         .unwrap_or_else(|| fallback.to_string())
 }
 
-/// Sonde qui suit le modèle et l'effort courants d'un agent Codex en observant
-/// son fichier de session.
+/// Localise le transcript Claude qui appartient au lancement courant.
+///
+/// Claude ne garde pas le transcript ouvert. Le wrapper photographie donc le
+/// dossier avant le spawn et ne retient ensuite qu'un fichier créé ou modifié
+/// depuis cette photographie. Cela écarte les anciens transcripts du même
+/// projet sans inventer un identifiant de session.
+struct ClaudeTranscriptLocator {
+    directory: PathBuf,
+    baseline: BTreeMap<PathBuf, SystemTime>,
+}
+
+impl ClaudeTranscriptLocator {
+    fn new(directory: PathBuf) -> Self {
+        let baseline = Self::transcripts(&directory)
+            .into_iter()
+            .collect();
+        Self { directory, baseline }
+    }
+
+    fn transcripts(directory: &Path) -> Vec<(PathBuf, SystemTime)> {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let file_type = entry.file_type().ok()?;
+                if !file_type.is_file() || entry.path().extension()?.to_str()? != "jsonl" {
+                    return None;
+                }
+                let modified = entry.metadata().ok()?.modified().ok()?;
+                Some((entry.path(), modified))
+            })
+            .collect()
+    }
+
+    fn resolve(&self) -> Option<PathBuf> {
+        Self::transcripts(&self.directory)
+            .into_iter()
+            .filter(|(path, modified)| self.baseline.get(path) != Some(modified))
+            .max_by_key(|(_, modified)| *modified)
+            .map(|(path, _)| path)
+    }
+}
+
+fn claude_project_slug(cwd: &Path) -> String {
+    cwd.to_string_lossy()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+fn claude_transcript_directory(home: &Path, cwd: &Path) -> PathBuf {
+    let canonical = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    home.join(".claude/projects")
+        .join(claude_project_slug(&canonical))
+}
+
+enum RuntimeProbeKind {
+    Codex { pid: u32 },
+    Claude { locator: ClaudeTranscriptLocator },
+}
+
+/// Sonde qui suit le modèle et l'effort courants d'un agent en observant son
+/// fichier de session.
 ///
 /// Elle n'émet que sur changement effectif : un agent inactif ne produit aucun
 /// trafic vers le daemon (FR-007).
 struct RuntimeProbe {
-    pid: u32,
+    kind: RuntimeProbeKind,
     path: Option<PathBuf>,
     path_resolved_at: Instant,
     last_check: Instant,
@@ -532,15 +735,48 @@ struct RuntimeProbe {
 }
 
 impl RuntimeProbe {
-    fn new(pid: u32) -> Self {
+    fn codex(pid: u32) -> Self {
+        Self::new(RuntimeProbeKind::Codex { pid })
+    }
+
+    fn claude(locator: ClaudeTranscriptLocator) -> Self {
+        Self::new(RuntimeProbeKind::Claude { locator })
+    }
+
+    fn new(kind: RuntimeProbeKind) -> Self {
         RuntimeProbe {
-            pid,
+            kind,
             path: None,
             // Forcer une première résolution au tout premier tick.
             path_resolved_at: Instant::now() - RUNTIME_PATH_REFRESH,
             last_check: Instant::now() - RUNTIME_PROBE_INTERVAL,
             last_mtime: None,
             last_sent: None,
+        }
+    }
+
+    fn resolve_path(&self) -> Option<PathBuf> {
+        match &self.kind {
+            RuntimeProbeKind::Codex { pid } => crate::runtime::open_session_file(*pid),
+            RuntimeProbeKind::Claude { locator } => locator.resolve(),
+        }
+    }
+
+    fn parse(&self, path: &Path) -> Option<crate::runtime::RuntimeObservation> {
+        match &self.kind {
+            RuntimeProbeKind::Codex { .. } => crate::runtime::parse_codex_rollout(path),
+            RuntimeProbeKind::Claude { .. } => crate::runtime::parse_claude_transcript(path),
+        }
+    }
+
+    fn source(&self) -> bridget_transport::protocol::RuntimeSource {
+        match &self.kind {
+            RuntimeProbeKind::Codex { .. } => {
+                bridget_transport::protocol::RuntimeSource::CodexRollout
+            }
+            RuntimeProbeKind::Claude { .. } => {
+                bridget_transport::protocol::RuntimeSource::ClaudeTranscript
+            }
         }
     }
 
@@ -557,7 +793,7 @@ impl RuntimeProbe {
             .map(|path| !path.exists())
             .unwrap_or(true);
         if stale_path || self.path_resolved_at.elapsed() >= RUNTIME_PATH_REFRESH {
-            let resolved = crate::runtime::open_session_file(self.pid);
+            let resolved = self.resolve_path();
             // Un changement de fichier invalide la date de modification
             // mémorisée : sans cela, un nouveau rollout dont la mtime coïncide
             // avec celle de l'ancien ne serait jamais lu. Défaut soulevé par
@@ -569,10 +805,7 @@ impl RuntimeProbe {
             self.path = resolved;
             self.path_resolved_at = Instant::now();
             if self.path.is_none() {
-                debug!(
-                    "sonde runtime : aucun fichier de session pour le pid {}",
-                    self.pid
-                );
+                debug!("sonde runtime : aucun fichier de session");
             }
         }
 
@@ -583,7 +816,7 @@ impl RuntimeProbe {
         }
         self.last_mtime = Some(mtime);
 
-        let observed = crate::runtime::parse_codex_rollout(path)?;
+        let observed = self.parse(path)?;
         if self.last_sent.as_ref() == Some(&observed) {
             return None;
         }
@@ -604,6 +837,8 @@ fn connect_and_register(
     name: Option<&str>,
     host: &str,
     transport: &str,
+    mode: PresenceMode,
+    location: Option<&str>,
     os: &str,
     instance_id: &str,
     domain: Option<&str>,
@@ -615,6 +850,8 @@ fn connect_and_register(
         name,
         host,
         transport,
+        mode,
+        location,
         os,
         instance_id,
         domain,
@@ -629,6 +866,8 @@ fn connect_and_register_at(
     name: Option<&str>,
     host: &str,
     transport: &str,
+    mode: PresenceMode,
+    location: Option<&str>,
     os: &str,
     instance_id: &str,
     domain: Option<&str>,
@@ -651,6 +890,8 @@ fn connect_and_register_at(
         name: name.map(str::to_owned),
         host: Some(host.to_string()),
         transport: Some(transport.to_string()),
+        mode: Some(mode),
+        location: location.map(str::to_owned),
         os: Some(os.to_string()),
         instance_id: Some(instance_id.to_string()),
         domain: domain.map(str::to_owned),
@@ -697,6 +938,13 @@ pub fn launch(
     let transport = transport_name();
     let os = operating_system();
     let instance_id = uuid::Uuid::new_v4().to_string();
+    let (pane_id, tmux_location) = match get_current_tmux_context() {
+        Ok((pane_id, location)) => (pane_id, Some(location)),
+        Err(error) => {
+            warn!("contexte tmux indisponible: {}", error);
+            (String::new(), None)
+        }
+    };
     // Au premier enregistrement, le nom définitif n'est pas encore connu : si
     // l'utilisateur en a demandé un, sa surcharge de domaine est déjà lisible,
     // sinon on part du domaine dérivé.
@@ -709,6 +957,8 @@ pub fn launch(
         effective_name.as_deref(),
         &host,
         &transport,
+        PresenceMode::Tmux,
+        tmux_location.as_deref(),
         &os,
         &instance_id,
         initial_domain.as_deref(),
@@ -741,11 +991,9 @@ pub fn launch(
         .map(PathBuf::from)
         .ok_or("HOME absent pour les reçus idempotents interactifs")?;
     let idempotent_deliveries = IdempotentDeliveryTracker::open(&home, &instance_id)?;
-
-    // 3. Détection du pane tmux
-    let pane_id = get_current_pane_id().unwrap_or_else(|e| {
-        warn!("pas de pane tmux: {}", e);
-        String::new()
+    let claude_transcript_locator = (agent_type == "claude").then(|| {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        ClaudeTranscriptLocator::new(claude_transcript_directory(&home, &cwd))
     });
 
     // 4. Lancer l'agent CLI
@@ -802,14 +1050,21 @@ pub fn launch(
         }
     }
 
-    // Si l'utilisateur n'a pas passé de prompt initial (un argument libre
-    // qui n'est pas un flag --xxx), injecter le prompt bridget.
-    let has_prompt = agent_args.iter().any(|a| !a.starts_with("--"));
-    if !has_prompt && (agent_type == "codex" || agent_type == "claude") {
-        final_args.push(interactive_bridget_prompt(&my_name, mcp_enabled));
+    if agent_type == "codex" {
+        final_args.extend(prepare_codex_agent_args(
+            &agent_args,
+            &my_name,
+            mcp_enabled,
+        ));
+    } else {
+        // Claude n'a pas de sous-commande `resume` dans la forme pilotée ici.
+        // Conserver son contrat historique et placer le prompt avant les args.
+        let has_prompt = agent_args.iter().any(|argument| !argument.starts_with("--"));
+        if !has_prompt && agent_type == "claude" {
+            final_args.push(interactive_bridget_prompt(&my_name, mcp_enabled));
+        }
+        final_args.extend(agent_args.iter().cloned());
     }
-
-    final_args.extend(agent_args.iter().cloned());
 
     // L'autorisation est déclarative : un type absent du registre est refusé
     // avant le spawn, avec les types disponibles et le fichier concerné.
@@ -856,6 +1111,7 @@ pub fn launch(
     let transport_for_thread = transport.clone();
     let os_for_thread = os.clone();
     let instance_id_for_thread = instance_id.clone();
+    let tmux_location_for_thread = tmux_location.clone();
     let stopping = Arc::new(AtomicBool::new(false));
     let stopping_for_thread = stopping.clone();
 
@@ -870,10 +1126,11 @@ pub fn launch(
         let mut connected_since = Instant::now();
         let mut failed_attempts = 0_u32;
         let mut last_heartbeat = Instant::now();
-        // Seul Codex tient son fichier de session ouvert ; pour Claude, c'est
-        // le hook `Stop` qui rapporte le runtime (research.md D-002).
-        let mut runtime_probe =
-            (agent_type_for_thread == "codex").then(|| RuntimeProbe::new(agent_pid));
+        let mut runtime_probe = match agent_type_for_thread.as_str() {
+            "codex" => Some(RuntimeProbe::codex(agent_pid)),
+            "claude" => claude_transcript_locator.map(RuntimeProbe::claude),
+            _ => None,
+        };
 
         'connection: while !stopping_for_thread.load(Ordering::SeqCst) {
             let mut line = String::new();
@@ -913,7 +1170,11 @@ pub fn launch(
 
                     // Sonde de runtime : greffée sur le même réveil que le
                     // heartbeat, elle ne coûte qu'un `stat` la plupart du temps.
-                    if let Some(observed) = runtime_probe.as_mut().and_then(RuntimeProbe::poll) {
+                    if let Some((observed, source)) = runtime_probe.as_mut().and_then(|probe| {
+                        probe
+                            .poll()
+                            .map(|observation| (observation, probe.source()))
+                    }) {
                         // Le nom est relu à chaque émission : `bridget rename`
                         // met à jour ce fichier, pas la variable capturée au
                         // démarrage. S'adresser au nom initial vaudrait un
@@ -927,7 +1188,7 @@ pub fn launch(
                             agent: current_name,
                             model: observed.model.clone(),
                             effort: observed.effort.clone(),
-                            source: bridget_transport::protocol::RuntimeSource::CodexRollout,
+                            source,
                         };
                         match encode(&message) {
                             Ok(json) => {
@@ -1017,6 +1278,8 @@ pub fn launch(
                         Some(&wanted_name),
                         &host_for_thread,
                         &transport_for_thread,
+                        PresenceMode::Tmux,
+                        tmux_location_for_thread.as_deref(),
                         &os_for_thread,
                         &instance_id_for_thread,
                         effective_domain(&wanted_name).as_deref(),
@@ -1158,6 +1421,8 @@ pub fn launch(
                             Some(&wanted_name),
                             &host_for_thread,
                             &transport_for_thread,
+                            PresenceMode::Tmux,
+                            tmux_location_for_thread.as_deref(),
                             &os_for_thread,
                             &instance_id_for_thread,
                             effective_domain(&wanted_name).as_deref(),
@@ -2126,6 +2391,8 @@ fn launch_acp_with_status(
         effective_name.as_deref(),
         &host,
         "acp",
+        PresenceMode::Acp,
+        None,
         &os,
         &instance_id,
         initial_domain.as_deref(),
@@ -2545,6 +2812,8 @@ fn reconnect_acp(
             Some(&wanted_name),
             host,
             "acp",
+            PresenceMode::Acp,
+            None,
             os,
             instance_id,
             effective_domain(&wanted_name).as_deref(),
@@ -2644,7 +2913,9 @@ fn stop_reason_is_error(stop_reason: &str) -> bool {
 
 #[cfg(test)]
 mod prompt_tests {
-    use super::interactive_bridget_prompt;
+    use super::{
+        codex_resume_bootstrap, interactive_bridget_prompt, prepare_codex_agent_args,
+    };
 
     const BEFORE: &str = include_str!("../tests/fixtures/prompts/v1-before.txt");
     const AFTER: &str = include_str!("../tests/fixtures/prompts/v1-after.txt");
@@ -2664,6 +2935,99 @@ mod prompt_tests {
             BEFORE.trim_end_matches('\n')
         );
     }
+
+    #[test]
+    fn reprise_nommee_conserve_overrides_et_place_l_amorcage_apres_les_options() {
+        let override_ = "mcp_servers.bridget.command=\"/tmp/bridget\"";
+        let args = [
+            "--yolo",
+            "resume",
+            "bridget-prospective",
+            "--cd",
+            "/tmp/projet",
+        ]
+        .map(str::to_string);
+
+        // Rejoue la panne du 2026-08-23 : l'override MCP est construit par le
+        // wrapper, puis les arguments utilisateur demandent une reprise.
+        let mut prepared = vec!["-c".to_string(), override_.to_string()];
+        prepared.extend(prepare_codex_agent_args(&args, "prospective", true));
+
+        assert_eq!(&prepared[..2], &["-c", override_]);
+        assert_eq!(&prepared[2..2 + args.len()], &args);
+        assert_eq!(prepared.last().unwrap(), &codex_resume_bootstrap("prospective"));
+        assert!(prepared.last().unwrap().contains("ALL_TOOLS"));
+        assert!(prepared.last().unwrap().contains("mcp__bridget__*"));
+        assert!(
+            prepared
+                .last()
+                .unwrap()
+                .contains("tools.mcp__bridget__bridget_send")
+        );
+        assert!(prepared.last().unwrap().contains("shell bridget"));
+    }
+
+    #[test]
+    fn reprise_avec_prompt_prefixe_l_amorcage_sans_prendre_une_valeur_d_option() {
+        let args = [
+            "resume",
+            "session-123",
+            "--model",
+            "gpt-5.6",
+            "Continue le diagnostic",
+        ]
+        .map(str::to_string);
+
+        let prepared = prepare_codex_agent_args(&args, "cxbridget", true);
+
+        assert_eq!(prepared[2], "--model");
+        assert_eq!(prepared[3], "gpt-5.6");
+        assert_eq!(
+            prepared[4],
+            format!(
+                "{}\n\nContinue le diagnostic",
+                codex_resume_bootstrap("cxbridget")
+            )
+        );
+    }
+
+    #[test]
+    fn reprise_last_sans_prompt_recoit_l_amorcage_en_derniere_position() {
+        let args = ["resume", "--last", "--cd", "/tmp/projet"].map(str::to_string);
+
+        let prepared = prepare_codex_agent_args(&args, "cxbridget", true);
+
+        assert_eq!(&prepared[..args.len()], &args);
+        assert_eq!(prepared.last().unwrap(), &codex_resume_bootstrap("cxbridget"));
+    }
+
+    #[test]
+    fn valeurs_d_options_et_images_ne_sont_jamais_prises_pour_la_sous_commande_ou_le_prompt() {
+        let args = [
+            "-c",
+            "resume",
+            "resume",
+            "session-123",
+            "--image",
+            "/tmp/a.png",
+            "/tmp/b.png",
+            "--model",
+            "gpt-5.6",
+        ]
+        .map(str::to_string);
+
+        let prepared = prepare_codex_agent_args(&args, "cxbridget", true);
+
+        assert_eq!(&prepared[..args.len()], &args);
+        assert_eq!(prepared.last().unwrap(), &codex_resume_bootstrap("cxbridget"));
+    }
+
+    #[test]
+    fn lancement_hors_reprise_conserve_le_prompt_historique() {
+        let prepared = prepare_codex_agent_args(&[], "agent-fixture", false);
+
+        assert_eq!(prepared, vec![BEFORE.trim_end_matches('\n').to_string()]);
+    }
 }
 
 #[cfg(test)]
@@ -2676,6 +3040,66 @@ fn journal_failure_requires_shutdown(events: &[AcpEvent]) -> bool {
 #[cfg(test)]
 mod reconnect_tests {
     use super::*;
+
+    #[test]
+    fn contexte_tmux_exige_pane_et_localisation() {
+        assert_eq!(
+            parse_tmux_context("%42\tbridget:3.1\n"),
+            Ok(("%42".to_string(), "bridget:3.1".to_string()))
+        );
+        assert!(parse_tmux_context("%42").is_err());
+        assert!(parse_tmux_context("%42\t").is_err());
+    }
+
+    #[test]
+    fn chemin_transcript_claude_suit_le_slug_du_cwd() {
+        assert_eq!(
+            claude_transcript_directory(
+                Path::new("/home/fixture"),
+                Path::new("/projet/.worktrees/session_014")
+            ),
+            PathBuf::from("/home/fixture/.claude/projects/-projet--worktrees-session-014")
+        );
+    }
+
+    #[test]
+    fn sonde_claude_ignore_l_historique_et_remonte_modele_effort_opaques() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-claude-probe-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("ancien.jsonl"),
+            concat!(
+                r#"{"type":"assistant","effort":"ancien","message":{"model":"claude-ancien"}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let locator = ClaudeTranscriptLocator::new(root.clone());
+        std::fs::write(
+            root.join("courant.jsonl"),
+            concat!(
+                r#"{"type":"assistant","isSidechain":false,"effort":"opaque-fournisseur","message":{"model":"claude-runtime-reel"}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let mut probe = RuntimeProbe::claude(locator);
+        let observed = probe.poll().expect("le transcript courant est observé");
+
+        assert_eq!(observed.model, "claude-runtime-reel");
+        assert_eq!(observed.effort.as_deref(), Some("opaque-fournisseur"));
+        assert_eq!(
+            probe.source(),
+            bridget_transport::protocol::RuntimeSource::ClaudeTranscript
+        );
+        assert!(probe.poll().is_none(), "aucun trafic sans changement");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn mcp_test_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

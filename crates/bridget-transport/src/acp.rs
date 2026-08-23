@@ -785,6 +785,11 @@ fn spawn_reader(
     test_observer: Option<mpsc::Sender<AcpEvent>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
+        // Le lecteur stdout est l'unique propriétaire de cette corrélation :
+        // un `tool_call_update` ACP ne répète pas nécessairement le titre du
+        // `tool_call` initial, mais chaque ligne du journal doit rester
+        // autonome pour les consommateurs de replay.
+        let mut tool_titles = HashMap::<String, String>::new();
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else {
                 break;
@@ -871,7 +876,7 @@ fn spawn_reader(
                             &events,
                             "update",
                             message_id.as_deref(),
-                            tool_call_journal_payload(&value),
+                            tool_call_journal_payload(&value, &mut tool_titles),
                         );
                     }
                 }
@@ -1206,7 +1211,7 @@ fn update_text<'a>(value: &'a Value, session_id: Option<&str>) -> Option<&'a str
         .and_then(Value::as_str)
 }
 
-fn tool_call_journal_payload(value: &Value) -> Value {
+fn tool_call_journal_payload(value: &Value, tool_titles: &mut HashMap<String, String>) -> Value {
     let update = value.pointer("/params/update").unwrap_or(&Value::Null);
     let content = update.get("content").unwrap_or(&Value::Null);
     let field = |name: &str| {
@@ -1219,7 +1224,23 @@ fn tool_call_journal_payload(value: &Value) -> Value {
     let title = field("title");
     let name = field("name");
     let tool_kind = field("kind");
-    let tool = title.or(name).or(tool_kind).unwrap_or("inconnu");
+    let tool_call_id = field("toolCallId");
+    let title = match (tool_call_id, title) {
+        (Some(tool_call_id), Some(title)) => Some(
+            tool_titles
+                .entry(tool_call_id.to_string())
+                .or_insert_with(|| title.to_string())
+                .clone(),
+        ),
+        (Some(tool_call_id), None) => tool_titles.get(tool_call_id).cloned(),
+        (None, Some(title)) => Some(title.to_string()),
+        (None, None) => None,
+    };
+    let tool = title
+        .as_deref()
+        .or(name)
+        .or(tool_kind)
+        .unwrap_or("inconnu");
     let summary = update
         .get("text")
         .or_else(|| content.get("text"))
@@ -1231,7 +1252,8 @@ fn tool_call_journal_payload(value: &Value) -> Value {
         ("summary".to_string(), Value::String(summary.to_string())),
     ]);
     for (key, value) in [
-        ("title", title),
+        ("tool_call_id", tool_call_id),
+        ("title", title.as_deref()),
         ("name", name),
         ("tool_kind", tool_kind),
     ] {
@@ -1438,24 +1460,36 @@ mod tests {
     #[test]
     fn tool_call_journal_prefers_title_then_name_then_kind() {
         let update = |fields: Value| json!({"params":{"update":fields}});
+        let mut tool_titles = HashMap::new();
         let titled = tool_call_journal_payload(&update(json!({
-            "title":"Read src/main.rs", "name":"read_file", "kind":"read",
+            "toolCallId":"tool-1", "title":"Read src/main.rs", "name":"read_file", "kind":"read",
             "content":{"text":"lecture"}
-        })));
+        })), &mut tool_titles);
         assert_eq!(titled["tool"], "Read src/main.rs");
         assert_eq!(titled["title"], "Read src/main.rs");
+        assert_eq!(titled["tool_call_id"], "tool-1");
         assert_eq!(titled["name"], "read_file");
         assert_eq!(titled["tool_kind"], "read");
         assert_eq!(titled["summary"], "lecture");
 
+        let titled_update = tool_call_journal_payload(
+            &update(json!({"toolCallId":"tool-1", "content":{"text":"terminé"}})),
+            &mut tool_titles,
+        );
+        assert_eq!(titled_update["tool"], "Read src/main.rs");
+        assert_eq!(titled_update["title"], "Read src/main.rs");
+        assert_eq!(titled_update["tool_call_id"], "tool-1");
+        assert_eq!(titled_update["summary"], "terminé");
+
         let named = tool_call_journal_payload(
             &update(json!({"name":"Bash cargo test", "kind":"execute"})),
+            &mut tool_titles,
         );
         assert_eq!(named["tool"], "Bash cargo test");
         assert!(named.get("title").is_none());
 
         let unknown_kind =
-            tool_call_journal_payload(&update(json!({"kind":"quantum_wrench"})));
+            tool_call_journal_payload(&update(json!({"kind":"quantum_wrench"})), &mut tool_titles);
         assert_eq!(unknown_kind["tool"], "quantum_wrench");
         assert_eq!(unknown_kind["tool_kind"], "quantum_wrench");
     }
@@ -1909,6 +1943,8 @@ read request
 echo '{"jsonrpc":"2.0","id":"permission-1","method":"session/request_permission","params":{"sessionId":"fixture-session","options":[{"optionId":"allow-1","kind":"allow_once"},{"optionId":"reject-1","kind":"reject_once"}]}}'
 read permission
 echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"tool_call","toolCallId":"tool-1","title":"Read src/main.rs","name":"read_file","kind":"read","content":{"type":"text","text":"lecture"}}}}'
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"tool_call_update","toolCallId":"tool-1","content":{"type":"text","text":"analyse"}}}}'
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"tool_call_update","toolCallId":"tool-1","content":{"type":"text","text":"terminé"}}}}'
 echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"réponse"}}}}'
 echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
 "#;
@@ -1943,11 +1979,21 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
                     "v": 1, "session_id": "fixture-session", "event": "update",
                     "message_id": "journal-message",
                     "payload": {
-                        "kind":"tool_call", "tool":"Read src/main.rs",
+                        "kind":"tool_call", "tool_call_id":"tool-1", "tool":"Read src/main.rs",
                         "title":"Read src/main.rs", "name":"read_file",
                         "tool_kind":"read", "summary":"lecture"
                     }
                 })));
+                for summary in ["analyse", "terminé"] {
+                    assert!(events.contains(&json!({
+                        "v": 1, "session_id": "fixture-session", "event": "update",
+                        "message_id": "journal-message",
+                        "payload": {
+                            "kind":"tool_call", "tool_call_id":"tool-1", "tool":"Read src/main.rs",
+                            "title":"Read src/main.rs", "summary":summary
+                        }
+                    })), "la mise à jour ACP {summary} doit porter le titre corrélé");
+                }
                 assert!(events.contains(&json!({
                     "v": 1, "session_id": "fixture-session", "event": "permission",
                     "message_id": "journal-message",

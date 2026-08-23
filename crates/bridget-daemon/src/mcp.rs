@@ -3,6 +3,7 @@
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue, LedgerScope,
+    PresenceMode,
     decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
@@ -710,6 +711,8 @@ fn registered_connection(socket: &Path) -> Result<DaemonConnection, ToolError> {
         name: Some(ephemeral_connection_name()),
         host: None,
         transport: None,
+        mode: Some(PresenceMode::Cli),
+        location: None,
         os: None,
         instance_id: None,
         domain: None,

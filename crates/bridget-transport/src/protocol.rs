@@ -20,6 +20,30 @@ pub enum ConnectionRole {
     Client,
 }
 
+/// Mode réel de présence d'un agent.
+///
+/// Cette information décrit le chemin d'attelage (et non le transport réseau)
+/// qui a effectivement enregistré l'agent. Une absence conserve la
+/// compatibilité des enregistrements antérieurs au champ et ne doit jamais
+/// être interprétée par déduction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresenceMode {
+    Acp,
+    Tmux,
+    Cli,
+}
+
+impl PresenceMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Acp => "acp",
+            Self::Tmux => "tmux",
+            Self::Cli => "cli",
+        }
+    }
+}
+
 /// Version actuellement publiée du contrat idempotent local.
 pub const CLIENT_CONTRACT_VERSION: u16 = 1;
 
@@ -309,6 +333,14 @@ pub enum WrapperToDaemon {
         host: Option<String>,
         #[serde(default)]
         transport: Option<String>,
+        /// Mode d'attelage réellement emprunté. Son absence représente un
+        /// enregistrement historique, jamais un mode à deviner.
+        #[serde(default)]
+        mode: Option<PresenceMode>,
+        /// Localisation interactive connue, au format `session:window.pane`
+        /// pour tmux. Elle reste absente lorsqu'elle n'est pas attestée.
+        #[serde(default)]
+        location: Option<String>,
         #[serde(default)]
         os: Option<String>,
         #[serde(default)]
@@ -397,6 +429,9 @@ pub enum RuntimeSource {
     /// Rapporté par le hook Stop d'un agent Claude Code.
     #[serde(rename = "claude-hook")]
     ClaudeHook,
+    /// Lu de manière périodique dans le transcript JSONL de Claude Code.
+    #[serde(rename = "claude-transcript")]
+    ClaudeTranscript,
     /// Déclaré explicitement via `bridget runtime`.
     #[serde(rename = "declared")]
     Declared,
@@ -407,6 +442,7 @@ impl std::fmt::Display for RuntimeSource {
         let label = match self {
             RuntimeSource::CodexRollout => "codex-rollout",
             RuntimeSource::ClaudeHook => "claude-hook",
+            RuntimeSource::ClaudeTranscript => "claude-transcript",
             RuntimeSource::Declared => "declared",
         };
         f.write_str(label)
@@ -534,6 +570,15 @@ pub enum DaemonToWrapper {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subscription_id: Option<String>,
         reason: AttachRefusal,
+        /// Mode attesté qui motive un refus d'attachement. Absent pour les
+        /// refus sans agent ou émis par un wrapper qui ne connaît pas la
+        /// présence complète.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<PresenceMode>,
+        /// Localisation interactive attestée, uniquement utile pour le mode
+        /// tmux. Elle n'est jamais déduite ni reconstruite côté client.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        location: Option<String>,
     },
     /// Confirmation d'enregistrement avec le nom final.
     Registered { name: String },
@@ -637,6 +682,13 @@ pub struct AgentInfo {
     pub connection_id: String,
     pub host: String,
     pub transport: String,
+    /// Mode d'attelage attesté. `None` représente une présence historique
+    /// dont le mode n'a jamais été annoncé.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<PresenceMode>,
+    /// Localisation interactive la plus précise attestée, jamais reconstruite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
     #[serde(default = "unknown_os")]
     pub os: String,
     pub state: String,
@@ -685,6 +737,8 @@ mod tests {
             name: None,
             host: Some("test-host".to_string()),
             transport: Some("unix".to_string()),
+            mode: Some(PresenceMode::Acp),
+            location: None,
             os: Some("Linux".to_string()),
             instance_id: Some("instance-test".to_string()),
             domain: Some("bridget".to_string()),
@@ -699,6 +753,8 @@ mod tests {
                 name,
                 host,
                 transport,
+                mode,
+                location,
                 os,
                 instance_id,
                 domain,
@@ -708,6 +764,8 @@ mod tests {
                 assert!(name.is_none());
                 assert_eq!(host.as_deref(), Some("test-host"));
                 assert_eq!(transport.as_deref(), Some("unix"));
+                assert_eq!(mode, Some(PresenceMode::Acp));
+                assert_eq!(location, None);
                 assert_eq!(os.as_deref(), Some("Linux"));
                 assert_eq!(instance_id.as_deref(), Some("instance-test"));
                 assert_eq!(domain.as_deref(), Some("bridget"));
@@ -715,6 +773,20 @@ mod tests {
             }
             _ => panic!("mauvais type"),
         }
+    }
+
+    #[test]
+    fn register_historique_conserve_un_mode_inconnu() {
+        let json = r#"{"type":"Register","agent_type":"codex","name":null,"turn_in_progress":false}"#;
+        let decoded: WrapperToDaemon = decode(json).unwrap();
+        assert!(matches!(
+            decoded,
+            WrapperToDaemon::Register {
+                mode: None,
+                location: None,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -815,6 +887,17 @@ mod tests {
             }
             other => panic!("mauvais type: {:?}", other),
         }
+    }
+
+    #[test]
+    fn runtime_source_claude_transcript_est_stable() {
+        let encoded = encode(&RuntimeSource::ClaudeTranscript).unwrap();
+        assert_eq!(encoded, "\"claude-transcript\"");
+        assert_eq!(
+            decode::<RuntimeSource>(&encoded).unwrap(),
+            RuntimeSource::ClaudeTranscript
+        );
+        assert_eq!(RuntimeSource::ClaudeTranscript.to_string(), "claude-transcript");
     }
 
     #[test]
@@ -1102,10 +1185,14 @@ mod tests {
             DaemonToWrapper::AttachRejected {
                 subscription_id: None,
                 reason: AttachRefusal::AgentStopped,
+                mode: None,
+                location: None,
             },
             DaemonToWrapper::AttachRejected {
                 subscription_id: None,
                 reason: AttachRefusal::AgentNotAcp,
+                mode: Some(PresenceMode::Tmux),
+                location: Some("bridget:4.2".to_string()),
             },
             DaemonToWrapper::JournalReadError {
                 subscription_id: "sub-1".to_string(),
@@ -1127,6 +1214,21 @@ mod tests {
             let decoded: DaemonToWrapper = decode(&json).unwrap();
             assert_eq!(json, encode(&decoded).unwrap());
             assert_eq!(decoded.allowed_for_attach(), reaches_attach);
+        }
+    }
+
+    #[test]
+    fn attach_rejected_historique_omet_les_details_de_presence() {
+        let legacy = r#"{"type":"AttachRejected","reason":"agent_not_acp"}"#;
+        let decoded: DaemonToWrapper = decode(legacy).unwrap();
+        match decoded {
+            DaemonToWrapper::AttachRejected {
+                subscription_id: None,
+                reason: AttachRefusal::AgentNotAcp,
+                mode: None,
+                location: None,
+            } => {}
+            other => panic!("message historique inattendu : {other:?}"),
         }
     }
 

@@ -116,6 +116,7 @@ struct InteractivePromptSession {
     release: PathBuf,
     done: PathBuf,
     slow_started: PathBuf,
+    bootstrap_rejected: PathBuf,
 }
 
 impl InteractivePromptSession {
@@ -129,9 +130,36 @@ impl InteractivePromptSession {
         );
         serde_json::from_slice(&fs::read(&self.done).unwrap()).unwrap()
     }
+
+    fn finish_without_mcp(self) {
+        assert!(
+            self.bootstrap_rejected.exists(),
+            "le faux Codex n'a pas refusé l'amorçage muté"
+        );
+        assert!(
+            !self.done.exists(),
+            "le corpus MCP a été exécuté malgré l'amorçage muté"
+        );
+        fs::write(&self.release, b"release").unwrap();
+        let output = self.child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "le wrapper interactif muté a échoué : {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !self.done.exists(),
+            "le corpus MCP a été exécuté après le refus de l'amorçage"
+        );
+    }
 }
 
-fn start_interactive_prompt_session(root: &Path, name: &str) -> InteractivePromptSession {
+fn start_interactive_prompt_session(
+    root: &Path,
+    name: &str,
+    resume_arguments: Option<&[&str]>,
+    mutate_resume_bootstrap: bool,
+) -> InteractivePromptSession {
     let bin = root.join("prompt-bin");
     let capture = root.join("captured-prompt.json");
     let release = root.join("release-prompt-cli");
@@ -139,6 +167,7 @@ fn start_interactive_prompt_session(root: &Path, name: &str) -> InteractivePromp
     let who = root.join("prompt-who.json");
     let inbox = root.join("prompt-inbox.jsonl");
     let slow_started = root.join("prompt-slow-started");
+    let bootstrap_rejected = root.join("prompt-bootstrap-rejected");
     let fake_tmux_root = root.join("fake-tmux");
     let codex = bin.join("codex");
     let tmux = bin.join("tmux");
@@ -159,6 +188,25 @@ temporary = capture + ".tmp"
 with open(temporary, "w", encoding="utf-8") as output:
     json.dump(sys.argv[1:], output, ensure_ascii=False)
 os.replace(temporary, capture)
+
+if os.environ["BRIDGET_REQUIRE_RESUME_BOOTSTRAP"] == "1":
+    prompt = next(
+        (argument for argument in sys.argv[1:] if argument.startswith("Tu reprends la session")),
+        "",
+    )
+    if os.environ["BRIDGET_MUTATE_RESUME_BOOTSTRAP"] == "1":
+        prompt = prompt.replace("ALL_TOOLS", "OUTILS_ABSENTS")
+    required = (
+        "Cherche mcp__bridget__* dans ALL_TOOLS via functions.exec",
+        "appelle tools.mcp__bridget__bridget_send avec in_reply_to",
+        "Utilise le shell bridget seulement si cette recherche ne rend aucun outil.",
+    )
+    if not all(instruction in prompt for instruction in required):
+        with open(os.environ["BRIDGET_PROMPT_BOOTSTRAP_REJECTED"], "w") as signal:
+            signal.write("rejected")
+        while not os.path.exists(os.environ["BRIDGET_PROMPT_RELEASE"]):
+            time.sleep(0.01)
+        sys.exit(0)
 
 marker = os.path.join(os.environ["HOME"], ".cache", "bridget", "agent-pids", str(os.getpid()))
 deadline = time.monotonic() + 10
@@ -274,7 +322,7 @@ def buffer_path():
     return os.path.join(root, option("-b").replace("/", "_"))
 
 if command == "display-message":
-    print("%prompt-mcp")
+    print("%prompt-mcp\tfixture:0.0")
 elif command == "load-buffer":
     with open(buffer_path(), "w", encoding="utf-8") as output:
         output.write(sys.stdin.read())
@@ -307,8 +355,12 @@ elif command == "delete-buffer":
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
     fs::set_permissions(&tmux, fs::Permissions::from_mode(0o700)).unwrap();
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_bridget"))
-        .args(["codex", "--name", name])
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
+    command.args(["codex", "--name", name]);
+    if let Some(arguments) = resume_arguments {
+        command.args(arguments);
+    }
+    let mut child = command
         .env_clear()
         .env("HOME", root)
         .env("PATH", format!("{}:{FROZEN_PATH}", bin.display()))
@@ -321,6 +373,18 @@ elif command == "delete-buffer":
         .env("BRIDGET_PROMPT_WHO", &who)
         .env("BRIDGET_PROMPT_INBOX", &inbox)
         .env("BRIDGET_PROMPT_SLOW", &slow_started)
+        .env(
+            "BRIDGET_PROMPT_BOOTSTRAP_REJECTED",
+            &bootstrap_rejected,
+        )
+        .env(
+            "BRIDGET_REQUIRE_RESUME_BOOTSTRAP",
+            if resume_arguments.is_some() { "1" } else { "0" },
+        )
+        .env(
+            "BRIDGET_MUTATE_RESUME_BOOTSTRAP",
+            if mutate_resume_bootstrap { "1" } else { "0" },
+        )
         .env("BRIDGET_FAKE_TMUX_ROOT", &fake_tmux_root)
         .env(
             "BRIDGET_FAKE_LAST_SENDER",
@@ -345,39 +409,80 @@ elif command == "delete-buffer":
     }
 
     let arguments: Vec<String> = serde_json::from_slice(&fs::read(&capture).unwrap()).unwrap();
-    let actual = arguments
-        .iter()
-        .find(|argument| argument.starts_with("Tu es l'agent"))
-        .expect("prompt Bridget absent des arguments du CLI MCP");
-    let expected = REDUCED_PROMPT
-        .trim_end_matches('\n')
-        .replace("agent-fixture", name);
-    assert_eq!(
-        actual, &expected,
-        "le lancement MCP n'utilise pas la fixture réduite"
-    );
-
-    let deadline = Instant::now() + MATRIX_TIMEOUT;
-    while !who.exists() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(10));
-    }
-    if !who.exists() {
-        let _ = child.kill();
-        let output = child.wait_with_output().unwrap();
-        panic!(
-            "bridget_who n'a pas été appelé par le faux Codex : {}",
-            String::from_utf8_lossy(&output.stderr)
+    if resume_arguments.is_some() {
+        let resume = arguments
+            .iter()
+            .position(|argument| argument == "resume")
+            .expect("sous-commande resume absente");
+        let session = arguments
+            .iter()
+            .position(|argument| argument == "bridget-prospective")
+            .expect("identifiant de session absent");
+        let cd = arguments
+            .iter()
+            .position(|argument| argument == "--cd")
+            .expect("option --cd absente");
+        let bootstrap = arguments
+            .iter()
+            .position(|argument| argument.starts_with("Tu reprends la session"))
+            .expect("amorçage Bridget absent de la reprise");
+        assert!(resume < session && session < cd && cd + 1 < bootstrap);
+        assert_eq!(bootstrap, arguments.len() - 1, "l'amorçage doit être PROMPT");
+        let actual = &arguments[bootstrap];
+        assert!(actual.contains(name), "identité absente de l'amorçage");
+        assert!(actual.contains("mcp__bridget__*"));
+        assert!(actual.contains("tools.mcp__bridget__bridget_send"));
+        assert!(actual.contains("shell bridget"));
+    } else {
+        let actual = arguments
+            .iter()
+            .find(|argument| argument.starts_with("Tu es l'agent"))
+            .expect("prompt Bridget absent des arguments du CLI MCP");
+        let expected = REDUCED_PROMPT
+            .trim_end_matches('\n')
+            .replace("agent-fixture", name);
+        assert_eq!(
+            actual, &expected,
+            "le lancement MCP n'utilise pas la fixture réduite"
         );
     }
-    let observed: serde_json::Value = serde_json::from_slice(&fs::read(who).unwrap()).unwrap();
-    assert!(
-        observed["result"]["structuredContent"]["agents"]
-            .as_array()
-            .is_some_and(|agents| agents.iter().any(|agent| agent["name"] == name)),
-        "la session MCP capturée n'apparaît pas dans bridget_who: {observed}"
-    );
 
-    InteractivePromptSession { child, release, done, slow_started }
+    if mutate_resume_bootstrap {
+        wait_path(
+            &bootstrap_rejected,
+            "le faux Codex n'a pas refusé l'amorçage muté",
+        );
+        assert!(!who.exists(), "MCP a été ouvert malgré l'amorçage muté");
+    } else {
+        let deadline = Instant::now() + MATRIX_TIMEOUT;
+        while !who.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        if !who.exists() {
+            let _ = child.kill();
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "bridget_who n'a pas été appelé par le faux Codex : {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let observed: serde_json::Value =
+            serde_json::from_slice(&fs::read(who).unwrap()).unwrap();
+        assert!(
+            observed["result"]["structuredContent"]["agents"]
+                .as_array()
+                .is_some_and(|agents| agents.iter().any(|agent| agent["name"] == name)),
+            "la session MCP capturée n'apparaît pas dans bridget_who: {observed}"
+        );
+    }
+
+    InteractivePromptSession {
+        child,
+        release,
+        done,
+        slow_started,
+        bootstrap_rejected,
+    }
 }
 
 fn write_cached_npx_fixture(root: &Path) {
@@ -683,6 +788,8 @@ impl Peer {
             name: Some(name.to_string()),
             host: Some("fixture-host".to_string()),
             transport: Some("unix".to_string()),
+            mode: Some(bridget_transport::protocol::PresenceMode::Acp),
+            location: None,
             os: Some("fixture-os".to_string()),
             instance_id: Some(format!("instance-{name}")),
             domain: None,
@@ -1233,8 +1340,78 @@ fn prompt_reduit_rejoue_le_corpus_dans_la_meme_session() {
     write_fixture(&root);
     let (daemon, proxy) = start_daemon_behind_proxy(&root);
     let prompt_name = "prompt-mcp";
-    let prompt_session = start_interactive_prompt_session(&root, prompt_name);
+    let prompt_session = start_interactive_prompt_session(&root, prompt_name, None, false);
     run_interactive_prompt_corpus(&daemon.socket, prompt_name, &proxy, prompt_session);
+    daemon.stop();
+    proxy.stop();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reprise_codex_rejoue_la_panne_mcp_et_clot_les_demandes_liees() {
+    let _serial = MANAGED_BENCH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = test_root("resume-mcp");
+    write_fixture(&root);
+    let (daemon, proxy) = start_daemon_behind_proxy(&root);
+    let name = "resume-mcp";
+    let root_argument = root.to_string_lossy().into_owned();
+    let resume_arguments = [
+        "--yolo",
+        "resume",
+        "bridget-prospective",
+        "--cd",
+        root_argument.as_str(),
+    ];
+    let session = start_interactive_prompt_session(&root, name, Some(&resume_arguments), false);
+
+    run_interactive_prompt_corpus(&daemon.socket, name, &proxy, session);
+
+    daemon.stop();
+    proxy.stop();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reprise_codex_sans_amorcage_ne_decouvre_pas_mcp() {
+    let _serial = MANAGED_BENCH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = test_root("resume-mcp-mutation");
+    write_fixture(&root);
+    let (daemon, proxy) = start_daemon_behind_proxy(&root);
+    let name = "resume-mcp-mutation";
+    let root_argument = root.to_string_lossy().into_owned();
+    let resume_arguments = [
+        "--yolo",
+        "resume",
+        "bridget-prospective",
+        "--cd",
+        root_argument.as_str(),
+    ];
+    let session =
+        start_interactive_prompt_session(&root, name, Some(&resume_arguments), true);
+    let mut peer = Peer::register(&daemon.socket, "prompt-mutation-sender");
+    wait_agent(&mut peer, name);
+
+    let request_id = send_tracked_with_timeout(&mut peer, name, "MUTATION-NO-MCP", 30);
+    peer.send(&WrapperToDaemon::ListRequests {
+        sender: peer.name.clone(),
+        limit: 20,
+    });
+    match peer.recv() {
+        DaemonToWrapper::RequestList { requests } => {
+            let request = requests
+                .iter()
+                .find(|request| request.id == request_id)
+                .expect("demande mutée absente du ledger");
+            assert_eq!(request.state, "open");
+        }
+        other => panic!("liste des demandes mutées inattendue: {other:?}"),
+    }
+    session.finish_without_mcp();
+
     daemon.stop();
     proxy.stop();
     fs::remove_dir_all(root).unwrap();
