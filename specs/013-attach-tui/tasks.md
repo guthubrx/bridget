@@ -4,15 +4,20 @@
 **Règles** : celles de `docs/regles-chantier.md` + validations avant commit,
 commit en review immuable, auteur ≠ relecteur, zéro trace IA, jamais de push.
 
-- [ ] T1301 Renderer de blocs : état « tour courant » rendu en place (ANSI),
-  en-têtes de tour, clôture sur end_turn/erreur ; détection TTY et REPLI
-  intégral sur le mode ligne actuel en non-TTY.
-  **Observable** : golden non-TTY octet pour octet (SC-002) ; démo TTY.
+- [ ] T1301 Renderer de blocs (D-1301, D-1303, D-1304, D-1306) : tour rendu
+  en place (ANSI), clé de bloc session_id+message_id, tampon borné 64Kio/400
+  lignes à troncature visible, un seul thread écrivain stdout (zéro I/O sous
+  le verrou screen — corrige attach.rs:1017) ; matrice stdin×stdout 4 cas,
+  repli non-TTY intégral.
+  **Observable** : golden stdout non-TTY byte-à-byte (4 cas), test bascule
+  replay→live sans doublon/trou, démo TTY.
 
-- [ ] T1302 Étiquetage des appels d'outils : nom/titre réel extrait de
-  l'événement ACP, kinds inconnus inclus, ligne compacte + statut.
-  **Observable** : fixture avec Read/Bash/kind-inconnu → trois lignes
-  étiquetées ; le constat n° 11 est clos.
+- [ ] T1302 Capture ET étiquetage des outils (D-1302, D-1307, D-1308) : le
+  mapping title→name→kind est capturé AU JOURNAL (acp.rs — champ additif
+  compatible v1), le renderer l'affiche sanitizé (Cc/Cf/ANSI), kinds
+  inconnus inclus ; exception golden versionnée pour ce délta transport.
+  **Observable** : fixture hostile (Read/Bash/kind-inconnu/titre ESC-OSC-bidi)
+  → lignes étiquetées et assainies ; constat n° 11 clos À LA SOURCE.
 
 - [ ] T1303 Rattrapage compact : historique rendu en blocs clos (zéro
   re-streaming), bascule rattrapage→live signalée, Gap/End inchangés.
@@ -24,6 +29,7 @@ commit en review immuable, auteur ≠ relecteur, zéro trace IA, jamais de push.
   toléré.
   **Observable** : test pseudo-TTY réel (saisie pendant un tour entrant).
 
-- [ ] T1305 Mesure et finition : SC-001 mesuré (échange réel ≤ 1 écran),
+- [ ] T1305 Mesure et finition : SC-001 mesuré en 80×24 sur corpus
+  déterministe 3 tours (lignes comptées avant/après, timeout global),
   README section vue attach mise à jour, DEPRECATIONS relu.
   **Observable** : chiffres consignés dans implementation.md.
