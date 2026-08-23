@@ -1,5 +1,6 @@
+use maicie::domain::EtatOutboxDelegation;
 use maicie::store::MaicieStore;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -47,11 +48,12 @@ fn deux_delegations_cli_avec_la_meme_cle_rejouent_les_memes_ids_sans_seconde_out
 
     let store = MaicieStore::open(&fixture.database).unwrap();
     let pending = store.pending_delegation_outboxes().unwrap();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(
-        pending[0].message_id.to_string(),
-        first_message.as_str().unwrap()
-    );
+    assert!(pending.is_empty());
+    let snapshot = store
+        .recovery_snapshot(Uuid::parse_str(first_message.as_str().unwrap()).unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.outbox.state, EtatOutboxDelegation::Accepted);
     drop(store);
     server.join().unwrap();
 }
@@ -91,34 +93,37 @@ fn run_delegate(fixture: &Fixture, idempotency_key: &str) -> std::process::Outpu
 fn serve_delegate_fixture(socket: &Path, ready: mpsc::Sender<()>) {
     let listener = UnixListener::bind(socket).unwrap();
     ready.send(()).unwrap();
-    for _ in 0..2 {
-        let (stream, _) = listener.accept().unwrap();
-        serve_client_handshake(stream);
-        let (stream, _) = listener.accept().unwrap();
-        serve_agent_list(stream);
-    }
+    let (stream, _) = listener.accept().unwrap();
+    serve_client_handshake(stream);
+    let (stream, _) = listener.accept().unwrap();
+    serve_agent_list(stream);
+    let (stream, _) = listener.accept().unwrap();
+    serve_reconcile_send(stream);
+    let (stream, _) = listener.accept().unwrap();
+    serve_client_handshake(stream);
+    let (stream, _) = listener.accept().unwrap();
+    serve_agent_list(stream);
 }
 
 fn serve_client_handshake(stream: UnixStream) {
     let mut writer = stream.try_clone().unwrap();
     let mut reader = BufReader::new(stream);
+    serve_client_handshake_io(&mut reader, &mut writer);
+}
+
+fn serve_client_handshake_io(reader: &mut BufReader<UnixStream>, writer: &mut UnixStream) {
     assert_eq!(
-        read_json(&mut reader),
+        read_json(reader),
         json!({"type": "RoleHandshake", "role": "client"})
     );
-    write_json(
-        &mut writer,
-        json!({"type": "RoleAccepted", "role": "client"}),
-    );
-    let hello = read_json(&mut reader);
+    write_json(writer, json!({"type": "RoleAccepted", "role": "client"}));
+    let hello = read_json(reader);
     assert_eq!(hello["type"], "ClientHello");
-    assert!(
-        hello["issuer_scope"]
-            .as_str()
-            .is_some_and(|scope| !scope.is_empty())
-    );
+    assert!(hello["issuer_scope"]
+        .as_str()
+        .is_some_and(|scope| !scope.is_empty()));
     write_json(
-        &mut writer,
+        writer,
         json!({
             "type": "ClientWelcome",
             "version": 1,
@@ -151,6 +156,39 @@ fn serve_agent_list(stream: UnixStream) {
                 "model": "test",
                 "effort": "low"
             }]
+        }),
+    );
+}
+
+fn serve_reconcile_send(stream: UnixStream) {
+    let mut writer = stream.try_clone().unwrap();
+    let mut reader = BufReader::new(stream);
+    serve_client_handshake_io(&mut reader, &mut writer);
+
+    let lookup = read_json(&mut reader);
+    assert_eq!(lookup["type"], "Lookup");
+    assert_eq!(lookup["operation_kind"], "send");
+    let message_id = lookup["idempotency_key"].as_str().unwrap().to_string();
+    write_json(
+        &mut writer,
+        json!({
+            "type": "IdempotencyResult",
+            "operation_kind": "send",
+            "idempotency_key": message_id,
+            "issue": {"kind": "idempotency_expired"}
+        }),
+    );
+
+    let send = read_json(&mut reader);
+    assert_eq!(send["type"], "SendIdempotent");
+    assert_eq!(send["message_id"], message_id);
+    write_json(
+        &mut writer,
+        json!({
+            "type": "IdempotencyResult",
+            "operation_kind": "send",
+            "idempotency_key": message_id,
+            "issue": {"kind": "accepted", "expires_at": 4_102_444_800i64}
         }),
     );
 }

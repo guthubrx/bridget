@@ -2,17 +2,19 @@
 //!
 //! La surface reste une projection mince des cas d'usage : elle charge une
 //! configuration explicite, consulte l'annuaire public puis délègue la
-//! décision durable à `app`. Elle n'envoie jamais elle-même une délégation.
+//! décision durable à `app`. Après le commit, elle délègue l'émission au
+//! réconciliateur d'outbox commun : aucun second chemin d'envoi n'existe.
 
-use maicie::MAICIE_IDENTITY;
 use maicie::app::{
-    DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, ObjectiveError,
-    add_participant, close, delegate, remove_participant, status, summarize,
+    add_participant, close, delegate, remove_participant, status, summarize, DelegateError,
+    DelegateRequest, DelegateResult, DelegationCandidate, ObjectiveError,
 };
 use maicie::bridget_client::{AgentInfo, BridgetClient, BridgetClientError, BridgetClientLimits};
 use maicie::config::{ConfigError, MaicieConfig};
 use maicie::domain::{ClasseDuree, DecisionCoordination, Delegation, ObjectifCoordonne};
+use maicie::reconcile::{reconcile_startup_with_limits, ReconcileError};
 use maicie::store::{MaicieStore, ObjectiveSnapshot, StoreError};
+use maicie::MAICIE_IDENTITY;
 use serde::Serialize;
 use std::env;
 use std::fmt;
@@ -99,13 +101,35 @@ fn run_objective(arguments: ObjectiveArgs) -> Result<String, CliError> {
 
 fn open_store(config_path: &PathBuf) -> Result<MaicieStore, CliError> {
     let config = MaicieConfig::load(config_path).map_err(CliError::Configuration)?;
-    MaicieStore::open(config.database_path).map_err(CliError::Store)
+    open_store_with_reconciliation(&config, BridgetClientLimits::default())
+}
+
+/// Toute commande qui ouvre la base rejoue d'abord les outboxes pendantes dans
+/// une fenêtre I/O bornée. L'indisponibilité Bridget laisse la ligne durable
+/// pending ; les erreurs de contrat restent explicites au CLI.
+fn open_store_with_reconciliation(
+    config: &MaicieConfig,
+    limits: BridgetClientLimits,
+) -> Result<MaicieStore, CliError> {
+    let mut store = MaicieStore::open(&config.database_path).map_err(CliError::Store)?;
+    reconcile_pending(&mut store, config, limits)?;
+    Ok(store)
+}
+
+fn reconcile_pending(
+    store: &mut MaicieStore,
+    config: &MaicieConfig,
+    limits: BridgetClientLimits,
+) -> Result<(), CliError> {
+    reconcile_startup_with_limits(store, &config.bridget_socket, limits)
+        .map(|_| ())
+        .map_err(CliError::Reconcile)
 }
 
 fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let mut store = MaicieStore::open(&config.database_path).map_err(CliError::Store)?;
     let limits = BridgetClientLimits::default();
+    let mut store = open_store_with_reconciliation(&config, limits)?;
     let client =
         BridgetClient::connect_with_limits(&config.bridget_socket, store.issuer_scope(), limits)
             .map_err(CliError::Bridget)?;
@@ -138,6 +162,9 @@ fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
         &request,
     )
     .map_err(CliError::Delegate)?;
+    // La transaction `delegate` est déjà commitée ici. T008 effectue ensuite
+    // lookup puis replay des octets persistés, sans reconstruire le message.
+    reconcile_pending(&mut store, &config, limits)?;
     render_output(DelegateOutput::from(result), arguments.json)
         .map_err(|_| CliError::Delegate(DelegateError::Invalid("sortie JSON indisponible")))
 }
@@ -578,6 +605,7 @@ enum CliError {
     Delegate(DelegateError),
     Objective(ObjectiveError),
     Store(StoreError),
+    Reconcile(ReconcileError),
 }
 
 impl CliError {
@@ -587,7 +615,9 @@ impl CliError {
             Self::Configuration(_) => EXIT_CONFIGURATION,
             Self::Bridget(_) => EXIT_BRIDGET,
             Self::Delegate(DelegateError::Store(_)) | Self::Store(_) => EXIT_STORE,
+            Self::Reconcile(ReconcileError::Store(_)) => EXIT_STORE,
             Self::Objective(ObjectiveError::Store(_)) => EXIT_STORE,
+            Self::Reconcile(_) => EXIT_BRIDGET,
             Self::Delegate(_) => EXIT_DELEGATE,
             Self::Objective(_) => EXIT_DELEGATE,
         }
@@ -601,6 +631,8 @@ impl CliError {
             Self::Delegate(DelegateError::EnvelopeMismatch) => "envelope_mismatch",
             Self::Delegate(DelegateError::TargetUnavailable(_)) => "target_unavailable",
             Self::Delegate(DelegateError::Store(_)) | Self::Store(_) => "store",
+            Self::Reconcile(ReconcileError::Store(_)) => "store",
+            Self::Reconcile(_) => "bridget",
             Self::Delegate(DelegateError::Invalid(_)) => "delegate_invalid",
             Self::Objective(ObjectiveError::NotFound(_)) => "objective_not_found",
             Self::Objective(ObjectiveError::Store(_)) => "store",
@@ -622,13 +654,14 @@ impl fmt::Display for CliError {
             Self::Delegate(error) => error.fmt(formatter),
             Self::Objective(error) => error.fmt(formatter),
             Self::Store(error) => error.fmt(formatter),
+            Self::Reconcile(error) => error.fmt(formatter),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, DelegateOutput, parse_command};
+    use super::{parse_command, Command, DelegateOutput};
 
     #[test]
     fn delegate_exige_les_options_structurantes() {
