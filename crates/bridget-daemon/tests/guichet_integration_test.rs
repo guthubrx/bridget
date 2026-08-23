@@ -349,8 +349,22 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
         },
     };
     assert!(matches!(
-        request(&mut service_reader, &mut service_writer, accepted),
+        request(&mut service_reader, &mut service_writer, accepted.clone()),
         DaemonToWrapper::GuichetResult { ref issue, .. } if issue == "accepted"
+    ));
+    let mut lifecycle_line = String::new();
+    service_reader.read_line(&mut lifecycle_line).unwrap();
+    assert!(matches!(
+        decode(lifecycle_line.trim_end()).unwrap(),
+        DaemonToWrapper::RequestLifecycleEvent {
+            request_id,
+            state: bridget_transport::protocol::GuichetLifecycleState::Answered,
+            in_reply_to: Some(in_reply_to),
+            response_message_id: Some(response_message_id),
+            ..
+        } if request_id == "gate-cli-deposit"
+            && in_reply_to == tracked.id
+            && response_message_id == "guichet-response-1"
     ));
     assert!(matches!(
         request(
@@ -361,6 +375,24 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
         DaemonToWrapper::RequestList { requests }
             if requests.iter().any(|request| request.id == tracked.id && request.state == "answered")
     ));
+
+    // Un retry de la transition durable renvoie la même issue sans créer un
+    // second fait. La ligne est relevable à une reconnexion du vrai service,
+    // ce qui est le contrat de consommation de GuichetClient.
+    assert!(matches!(
+        request(&mut service_reader, &mut service_writer, accepted),
+        DaemonToWrapper::GuichetResult { ref issue, .. } if issue == "accepted"
+    ));
+    let database = rusqlite::Connection::open(home.join(".cache/bridget/bridget.db")).unwrap();
+    let event_count: i64 = database
+        .query_row(
+            "SELECT COUNT(*) FROM guichet_lifecycle_events
+             WHERE issuer_scope = ?1 AND request_id = ?2",
+            [SCOPE, "gate-cli-deposit"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(event_count, 1, "un retry ne duplique jamais l'événement durable");
 
     // Mutation discriminante : retirer mark_answered_in_transaction du reply
     // laisse la demande ouverte malgré GuichetResult accepted.

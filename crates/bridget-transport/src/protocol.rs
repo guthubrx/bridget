@@ -122,6 +122,15 @@ pub enum GuichetOutcome {
     Refused,
 }
 
+/// Fait terminal attesté uniquement par Bridget pour une demande du guichet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuichetLifecycleState {
+    Answered,
+    Cancelled,
+    TimedOut,
+}
+
 /// Charge canonique d'une réponse Maicie. L'ordre de déclaration est l'ordre
 /// filaire normatif du contrat 015.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -742,6 +751,22 @@ pub enum DaemonToWrapper {
     GuichetEmpty {
         #[serde(rename = "v")]
         version: u16,
+    },
+    /// Fait terminal durable, émis exclusivement par Bridget vers le service
+    /// Maicie après la transition SQLite correspondante.
+    #[serde(rename = "request_lifecycle_event")]
+    RequestLifecycleEvent {
+        #[serde(rename = "v")]
+        version: u16,
+        issuer_scope: String,
+        event_id: String,
+        request_id: String,
+        state: GuichetLifecycleState,
+        observed_at: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        in_reply_to: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response_message_id: Option<String>,
     },
     /// Issue durable ou calculée d'un `SendIdempotent`.
     IdempotencyResult {
@@ -1376,6 +1401,27 @@ mod tests {
             }
         ));
         assert!(!rejected.allowed_for_attach());
+
+        let lifecycle = DaemonToWrapper::RequestLifecycleEvent {
+            version: SERVICE_CONTRACT_VERSION,
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+            event_id: "evt-1".to_string(),
+            request_id: "request-1".to_string(),
+            state: GuichetLifecycleState::Answered,
+            observed_at: 1_787_500_000,
+            in_reply_to: Some("message-1".to_string()),
+            response_message_id: Some("response-1".to_string()),
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(&encode(&lifecycle).unwrap()).unwrap(),
+            DaemonToWrapper::RequestLifecycleEvent {
+                state: GuichetLifecycleState::Answered,
+                in_reply_to: Some(in_reply_to),
+                response_message_id: Some(response_message_id),
+                ..
+            } if in_reply_to == "message-1" && response_message_id == "response-1"
+        ));
+        assert!(!lifecycle.allowed_for_attach());
     }
 
     #[test]

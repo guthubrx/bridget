@@ -1,7 +1,7 @@
 //! Persistance SQLite — ledger, compteurs disjoncteur, historique.
 
 use bridget_transport::protocol::{
-    GuichetOutcome, ServiceRequestOperation, ServiceRequestPayload,
+    GuichetLifecycleState, GuichetOutcome, ServiceRequestOperation, ServiceRequestPayload,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use std::path::Path;
@@ -38,7 +38,11 @@ pub struct GuichetClaim {
 pub enum GuichetResult {
     Queued { expires_at: i64 },
     OutcomeUnknown { expires_at: i64 },
-    Terminal { issue: String, expires_at: i64 },
+    Terminal {
+        issue: String,
+        expires_at: i64,
+        newly_finalized: bool,
+    },
     CanonicalBytesMismatch,
     IdempotencyExpired,
     InvalidIssuedAt,
@@ -57,9 +61,22 @@ pub struct GuichetReplyInput<'a> {
     pub request_id: &'a str,
     pub generation: u64,
     pub token: &'a str,
+    pub response_message_id: &'a str,
     pub reply_bytes: &'a [u8],
     pub in_reply_to: &'a str,
     pub outcome: GuichetOutcome,
+}
+
+/// Événement de cycle durable, relivable par une connexion de service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuichetLifecycleEvent {
+    pub issuer_scope: String,
+    pub event_id: String,
+    pub request_id: String,
+    pub state: GuichetLifecycleState,
+    pub observed_at: i64,
+    pub in_reply_to: Option<String>,
+    pub response_message_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +161,16 @@ impl Store {
             );
             CREATE INDEX IF NOT EXISTS idx_guichet_fifo
                 ON guichet_requests(state, deposited_sequence);
+            CREATE TABLE IF NOT EXISTS guichet_lifecycle_events (
+                issuer_scope TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                event_id TEXT NOT NULL UNIQUE,
+                state TEXT NOT NULL CHECK (state IN ('answered', 'cancelled', 'timed_out')),
+                observed_at INTEGER NOT NULL,
+                in_reply_to TEXT,
+                response_message_id TEXT,
+                PRIMARY KEY (issuer_scope, request_id)
+            );
             ",
         )
         .map_err(StoreError::Sqlite)?;
@@ -218,7 +245,7 @@ impl Store {
     }
 
     pub fn cancel_request(
-        &self,
+        &mut self,
         id: &str,
         sender: &str,
         reason: Option<&str>,
@@ -231,7 +258,27 @@ impl Store {
         }
         if request.state == "open" {
             let completed_at = now_secs();
-            self.conn.execute("UPDATE tracked_requests SET state = 'cancelled', cancel_reason = ?1, completed_at = ?2 WHERE id = ?3 AND state = 'open'", rusqlite::params![reason, completed_at, id]).map_err(StoreError::Sqlite)?;
+            let tx = self
+                .conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(StoreError::Sqlite)?;
+            let changed = tx
+                .execute(
+                    "UPDATE tracked_requests
+                     SET state = 'cancelled', cancel_reason = ?1, completed_at = ?2
+                     WHERE id = ?3 AND state = 'open'",
+                    rusqlite::params![reason, completed_at, id],
+                )
+                .map_err(StoreError::Sqlite)?;
+            if changed == 1 {
+                record_lifecycle_for_linked_request_in_transaction(
+                    &tx,
+                    id,
+                    GuichetLifecycleState::Cancelled,
+                    completed_at,
+                )?;
+            }
+            tx.commit().map_err(StoreError::Sqlite)?;
             return self.get_request(id);
         }
         Ok(Some(request))
@@ -253,8 +300,28 @@ impl Store {
         Ok(answered)
     }
 
-    pub fn mark_timed_out(&self, id: &str) -> Result<bool, StoreError> {
-        let changed = self.conn.execute("UPDATE tracked_requests SET state = 'timed_out', completed_at = ?1 WHERE id = ?2 AND state = 'open'", rusqlite::params![now_secs(), id]).map_err(StoreError::Sqlite)?;
+    pub fn mark_timed_out(&mut self, id: &str) -> Result<bool, StoreError> {
+        let completed_at = now_secs();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+        let changed = tx
+            .execute(
+                "UPDATE tracked_requests SET state = 'timed_out', completed_at = ?1
+                 WHERE id = ?2 AND state = 'open'",
+                rusqlite::params![completed_at, id],
+            )
+            .map_err(StoreError::Sqlite)?;
+        if changed == 1 {
+            record_lifecycle_for_linked_request_in_transaction(
+                &tx,
+                id,
+                GuichetLifecycleState::TimedOut,
+                completed_at,
+            )?;
+        }
+        tx.commit().map_err(StoreError::Sqlite)?;
         Ok(changed == 1)
     }
 
@@ -495,12 +562,47 @@ impl Store {
             // La clôture, lorsqu'elle est encore ouverte, est indissociable
             // du résultat guichet durable. Une demande déjà terminale relève
             // de D-208 : le rapport reste traçable sans la rouvrir.
-            let _ = mark_answered_in_transaction(&tx, linked_request_id, &row.sender, "maicie")
+            let answered = mark_answered_in_transaction(&tx, linked_request_id, &row.sender, "maicie")
                 .map_err(StoreError::Sqlite)?;
+            if answered {
+                record_lifecycle_event_in_transaction(
+                    &tx,
+                    &row.issuer_scope,
+                    &row.request_id,
+                    GuichetLifecycleState::Answered,
+                    now,
+                    Some(linked_request_id),
+                    Some(input.response_message_id),
+                )?;
+            }
         }
         let expires_at = row.expires_at;
         tx.commit().map_err(StoreError::Sqlite)?;
-        Ok(GuichetResult::Terminal { issue, expires_at })
+        Ok(GuichetResult::Terminal {
+            issue,
+            expires_at,
+            newly_finalized: true,
+        })
+    }
+
+    /// Lit les faits terminaux retenus par Bridget dans l'ordre d'observation.
+    /// La réception est idempotente côté Maicie par `event_id`; une nouvelle
+    /// connexion peut donc relever sans réinventer une transition.
+    pub fn guichet_lifecycle_events(&self) -> Result<Vec<GuichetLifecycleEvent>, StoreError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT issuer_scope, event_id, request_id, state, observed_at,
+                        in_reply_to, response_message_id
+                 FROM guichet_lifecycle_events
+                 ORDER BY observed_at ASC, event_id ASC",
+            )
+            .map_err(StoreError::Sqlite)?;
+        statement
+            .query_map([], lifecycle_event_from_row)
+            .map_err(StoreError::Sqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Sqlite)
     }
 
     /// La disparition d'une connexion ne laisse jamais son droit de claim
@@ -695,6 +797,121 @@ pub(crate) fn record_message_in_transaction(
     Ok(())
 }
 
+fn record_lifecycle_event_in_transaction(
+    transaction: &Transaction<'_>,
+    issuer_scope: &str,
+    request_id: &str,
+    state: GuichetLifecycleState,
+    observed_at: i64,
+    in_reply_to: Option<&str>,
+    response_message_id: Option<&str>,
+) -> Result<GuichetLifecycleEvent, StoreError> {
+    let existing = transaction
+        .query_row(
+            "SELECT issuer_scope, event_id, request_id, state, observed_at,
+                    in_reply_to, response_message_id
+             FROM guichet_lifecycle_events
+             WHERE issuer_scope = ?1 AND request_id = ?2",
+            params![issuer_scope, request_id],
+            lifecycle_event_from_row,
+        )
+        .optional()
+        .map_err(StoreError::Sqlite)?;
+    if let Some(existing) = existing {
+        return Ok(existing);
+    }
+    let event = GuichetLifecycleEvent {
+        issuer_scope: issuer_scope.to_string(),
+        event_id: format!("evt-{}", Uuid::new_v4()),
+        request_id: request_id.to_string(),
+        state,
+        observed_at,
+        in_reply_to: in_reply_to.map(str::to_string),
+        response_message_id: response_message_id.map(str::to_string),
+    };
+    transaction
+        .execute(
+            "INSERT INTO guichet_lifecycle_events
+                 (issuer_scope, request_id, event_id, state, observed_at,
+                  in_reply_to, response_message_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                event.issuer_scope,
+                event.request_id,
+                event.event_id,
+                lifecycle_state_name(event.state),
+                event.observed_at,
+                event.in_reply_to,
+                event.response_message_id,
+            ],
+        )
+        .map_err(StoreError::Sqlite)?;
+    Ok(event)
+}
+
+fn record_lifecycle_for_linked_request_in_transaction(
+    transaction: &Transaction<'_>,
+    linked_request_id: &str,
+    state: GuichetLifecycleState,
+    observed_at: i64,
+) -> Result<(), StoreError> {
+    let deposits = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT issuer_scope, request_id
+                 FROM guichet_requests
+                 WHERE linked_request_id = ?1
+                 ORDER BY deposited_sequence ASC",
+            )
+            .map_err(StoreError::Sqlite)?;
+        statement
+            .query_map(params![linked_request_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(StoreError::Sqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Sqlite)?
+    };
+    for (issuer_scope, request_id) in deposits {
+        let _ = record_lifecycle_event_in_transaction(
+            transaction,
+            &issuer_scope,
+            &request_id,
+            state,
+            observed_at,
+            Some(linked_request_id),
+            None,
+        )?;
+    }
+    Ok(())
+}
+
+fn lifecycle_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GuichetLifecycleEvent> {
+    let state = match row.get::<_, String>(3)?.as_str() {
+        "answered" => GuichetLifecycleState::Answered,
+        "cancelled" => GuichetLifecycleState::Cancelled,
+        "timed_out" => GuichetLifecycleState::TimedOut,
+        _ => return Err(rusqlite::Error::InvalidQuery),
+    };
+    Ok(GuichetLifecycleEvent {
+        issuer_scope: row.get(0)?,
+        event_id: row.get(1)?,
+        request_id: row.get(2)?,
+        state,
+        observed_at: row.get(4)?,
+        in_reply_to: row.get(5)?,
+        response_message_id: row.get(6)?,
+    })
+}
+
+fn lifecycle_state_name(state: GuichetLifecycleState) -> &'static str {
+    match state {
+        GuichetLifecycleState::Answered => "answered",
+        GuichetLifecycleState::Cancelled => "cancelled",
+        GuichetLifecycleState::TimedOut => "timed_out",
+    }
+}
+
 #[derive(Debug)]
 struct GuichetRow {
     deposited_sequence: i64,
@@ -776,6 +993,7 @@ fn guichet_existing_result(row: &GuichetRow, now: i64) -> GuichetResult {
         "replied" | "rejected" => GuichetResult::Terminal {
             issue: row.result_issue.clone().unwrap_or_else(|| "refused".to_string()),
             expires_at: row.expires_at,
+            newly_finalized: false,
         },
         _ => GuichetResult::IdempotencyExpired,
     }
@@ -953,6 +1171,7 @@ mod tests {
                     request_id: &claim_finalized.request_id,
                     generation: claim_finalized.claim_generation,
                     token: &claim_finalized.claim_token,
+                    response_message_id: "reply-finalized",
                     reply_bytes: br#"{\"reply\":\"a\"}"#,
                     in_reply_to: "",
                     outcome: GuichetOutcome::Accepted,
@@ -1008,6 +1227,7 @@ mod tests {
                 "service-a", GuichetReplyInput {
                     issuer_scope: &a.issuer_scope, request_id: &a.request_id,
                     generation: a.claim_generation, token: &a.claim_token,
+                    response_message_id: "reply-stale",
                     reply_bytes: br#"{\"reply\":\"a\"}"#, in_reply_to: "",
                     outcome: GuichetOutcome::Accepted,
                 },
@@ -1020,6 +1240,7 @@ mod tests {
                 "service-b", GuichetReplyInput {
                     issuer_scope: &b.issuer_scope, request_id: &b.request_id,
                     generation: b.claim_generation, token: &b.claim_token,
+                    response_message_id: "reply-current",
                     reply_bytes: br#"{\"reply\":\"b\"}"#, in_reply_to: "",
                     outcome: GuichetOutcome::Accepted,
                 },
@@ -1064,6 +1285,7 @@ mod tests {
                     request_id: &claim.request_id,
                     generation: claim.claim_generation,
                     token: &claim.claim_token,
+                    response_message_id: "reply-linked",
                     reply_bytes: br#"{"type":"guichet_reply"}"#,
                     in_reply_to: "message-lie",
                     outcome: GuichetOutcome::Accepted,
@@ -1077,6 +1299,41 @@ mod tests {
             "answered",
             "mutation discriminante : sans mark_answered_in_transaction dans la transaction du reply, la demande resterait open"
         );
+        let events = store.guichet_lifecycle_events().unwrap();
+        assert!(matches!(
+            events.as_slice(),
+            [GuichetLifecycleEvent {
+                request_id,
+                state: GuichetLifecycleState::Answered,
+                in_reply_to: Some(in_reply_to),
+                response_message_id: Some(response_message_id),
+                ..
+            }] if request_id == "request-answer"
+                && in_reply_to == "message-lie"
+                && response_message_id == "reply-linked"
+        ));
+
+        // Mutation discriminante : si l'événement était écrit hors de la
+        // transaction de clôture, un rejeu pourrait créer une seconde preuve
+        // ou laisser une demande answered sans fait durable correspondant.
+        assert!(matches!(
+            store.reply_guichet(
+                "maicie-connection",
+                GuichetReplyInput {
+                    issuer_scope: &claim.issuer_scope,
+                    request_id: &claim.request_id,
+                    generation: claim.claim_generation,
+                    token: &claim.claim_token,
+                    response_message_id: "reply-linked",
+                    reply_bytes: br#"{"type":"guichet_reply"}"#,
+                    in_reply_to: "message-lie",
+                    outcome: GuichetOutcome::Accepted,
+                },
+                now + 1,
+            ),
+            Ok(GuichetResult::Terminal { newly_finalized: false, .. })
+        ));
+        assert_eq!(store.guichet_lifecycle_events().unwrap().len(), 1);
         drop(store);
         let _ = std::fs::remove_file(path);
     }
@@ -1124,7 +1381,7 @@ mod tests {
     fn cancellation_is_idempotent_and_terminal() {
         let path = std::env::temp_dir().join(format!("bridget-store-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let store = Store::open(&path).unwrap();
+        let mut store = Store::open(&path).unwrap();
         store
             .create_request("request-1", "alice", "bob", 60)
             .unwrap();
@@ -1154,6 +1411,59 @@ mod tests {
             "cancelled"
         );
         drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn transitions_cancelled_et_timed_out_deposent_un_fait_guichet_unique() {
+        let path = std::env::temp_dir().join(format!("bridget-guichet-terminal-{}.db", Uuid::new_v4()));
+        let mut store = Store::open(&path).unwrap();
+        let now = 1_787_500_000;
+        for (request_id, state) in [
+            ("message-cancelled", GuichetLifecycleState::Cancelled),
+            ("message-timed-out", GuichetLifecycleState::TimedOut),
+        ] {
+            store.create_request(request_id, "alice", "bob", 60).unwrap();
+            let deposit = GuichetDeposit {
+                issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+                request_id: format!("request-{request_id}"),
+                issued_at: now,
+                from: "alice".to_string(),
+                operation: ServiceRequestOperation::DeliveryReport,
+                payload: ServiceRequestPayload::DeliveryReport {
+                    objective_id: "objective-1".to_string(),
+                    delegation_id: "delegation-1".to_string(),
+                    delivery_hash: "0".repeat(64),
+                    in_reply_to: request_id.to_string(),
+                },
+                canonical_bytes: format!("{{\"request\":\"{request_id}\"}}").into_bytes(),
+            };
+            store.deposit_guichet(&deposit, 600, 60, now).unwrap();
+            match state {
+                GuichetLifecycleState::Cancelled => {
+                    store.cancel_request(request_id, "alice", Some("annulé")).unwrap();
+                    store.cancel_request(request_id, "alice", Some("rejeu")).unwrap();
+                }
+                GuichetLifecycleState::TimedOut => {
+                    assert!(store.mark_timed_out(request_id).unwrap());
+                    assert!(!store.mark_timed_out(request_id).unwrap());
+                }
+                GuichetLifecycleState::Answered => unreachable!(),
+            }
+        }
+        let events = store.guichet_lifecycle_events().unwrap();
+        assert!(events.iter().any(|event| {
+            event.request_id == "request-message-cancelled"
+                && event.state == GuichetLifecycleState::Cancelled
+                && event.in_reply_to.as_deref() == Some("message-cancelled")
+        }));
+        assert!(events.iter().any(|event| {
+            event.request_id == "request-message-timed-out"
+                && event.state == GuichetLifecycleState::TimedOut
+                && event.in_reply_to.as_deref() == Some("message-timed-out")
+        }));
+        assert_eq!(events.len(), 2, "chaque transition terminale ne dépose qu'un seul fait");
+        drop(store);
         let _ = std::fs::remove_file(path);
     }
 
@@ -1192,7 +1502,7 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("bridget-store-purge-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let store = Store::open(&path).unwrap();
+        let mut store = Store::open(&path).unwrap();
         store
             .create_request("request-1", "alice", "bob", 60)
             .unwrap();

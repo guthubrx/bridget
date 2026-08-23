@@ -23,7 +23,9 @@ use crate::idempotency::{
     IdempotencyKey, IdempotencyStore, LookupResult, OperationKind, ReplyTracking, Reservation,
     SendDelivery,
 };
-use crate::store::{GuichetDeposit, GuichetNext, GuichetReplyInput, GuichetResult, Store};
+use crate::store::{
+    GuichetDeposit, GuichetLifecycleEvent, GuichetNext, GuichetReplyInput, GuichetResult, Store,
+};
 use crate::{
     desired_state::DesiredStateStore,
     fleet::{FleetConfig, FleetSupervisor, SpawnLease, SpawnOrder as FleetSpawnOrder},
@@ -2640,7 +2642,9 @@ fn guichet_result_response(
     let (issue, expires_at) = match result {
         GuichetResult::Queued { expires_at } => ("queued".to_string(), expires_at),
         GuichetResult::OutcomeUnknown { expires_at } => ("outcome_unknown".to_string(), expires_at),
-        GuichetResult::Terminal { issue, expires_at } => (issue, expires_at),
+        GuichetResult::Terminal {
+            issue, expires_at, ..
+        } => (issue, expires_at),
         GuichetResult::CanonicalBytesMismatch => ("canonical_bytes_mismatch".to_string(), 0),
         GuichetResult::IdempotencyExpired => ("idempotency_expired".to_string(), 0),
         GuichetResult::InvalidIssuedAt => ("invalid_issued_at".to_string(), 0),
@@ -2666,6 +2670,19 @@ fn guichet_claim_response(claim: crate::store::GuichetClaim) -> DaemonToWrapper 
         claim_token: claim.claim_token,
         claim_lease_expires_at: claim.claim_lease_expires_at,
         expires_at: claim.expires_at,
+    }
+}
+
+fn guichet_lifecycle_response(event: GuichetLifecycleEvent) -> DaemonToWrapper {
+    DaemonToWrapper::RequestLifecycleEvent {
+        version: SERVICE_CONTRACT_VERSION,
+        issuer_scope: event.issuer_scope,
+        event_id: event.event_id,
+        request_id: event.request_id,
+        state: event.state,
+        observed_at: event.observed_at,
+        in_reply_to: event.in_reply_to,
+        response_message_id: event.response_message_id,
     }
 }
 
@@ -3015,7 +3032,7 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
         let _ = state.store.record_deferred_reminder(&id, level);
     }
     for (to, from, msg_id, from_conn, timeout_secs) in timeout_candidates {
-        if claim_timeout(&state.store, &msg_id) {
+        if claim_timeout(&mut state.store, &msg_id) {
             actions.push(ReminderAction::Timeout {
                 to,
                 from,
@@ -3030,7 +3047,7 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
 
 /// Retourne vrai pour le seul chemin autorisé à notifier l'émetteur d'une
 /// échéance. SQLite arbitre l'intercalage transport ↔ thread de relance.
-fn claim_timeout(store: &Store, id: &str) -> bool {
+fn claim_timeout(store: &mut Store, id: &str) -> bool {
     store.mark_timed_out(id).unwrap_or(false)
 }
 
@@ -3892,6 +3909,26 @@ fn handle_wrapper_message(
                     capabilities: capabilities.clone(),
                 },
             );
+            if capabilities.contains(&ServiceCapability::MaicieGuichet) {
+                match st.store.guichet_lifecycle_events() {
+                    Ok(events) => {
+                        let controls = events
+                            .into_iter()
+                            .filter_map(|event| {
+                                st.connections.get(conn_id).map(|writer| DeferredControl {
+                                    writer: writer.clone(),
+                                    message: guichet_lifecycle_response(event),
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        if !controls.is_empty() {
+                            st.pending_post_response_controls
+                                .insert(conn_id.to_string(), controls);
+                        }
+                    }
+                    Err(error) => error!("lecture des événements guichet: {error}"),
+                }
+            }
             Some(DaemonToWrapper::ServiceWelcome {
                 version: SERVICE_CONTRACT_VERSION,
                 horizon_secs: CLIENT_IDEMPOTENCY_HORIZON_SECS,
@@ -4059,7 +4096,7 @@ fn handle_wrapper_message(
                 request_id: request_id.clone(),
                 claim_generation,
                 claim_token: claim_token.clone(),
-                response_message_id,
+                response_message_id: response_message_id.clone(),
                 in_reply_to: in_reply_to.clone(),
                 outcome,
                 payload,
@@ -4075,13 +4112,34 @@ fn handle_wrapper_message(
                     request_id: &request_id,
                     generation: claim_generation,
                     token: &claim_token,
+                    response_message_id: &response_message_id,
                     reply_bytes: &canonical,
                     in_reply_to: &in_reply_to,
                     outcome,
                 },
                 unix_timestamp(),
             ) {
-                Ok(result) => Some(guichet_result_response(issuer_scope, request_id, result)),
+                Ok(result) => {
+                    if matches!(&result, GuichetResult::Terminal { issue, newly_finalized: true, .. } if issue == "accepted") {
+                        match st.store.guichet_lifecycle_events() {
+                            Ok(events) => {
+                                if let Some(event) = events.into_iter().find(|event| {
+                                    event.issuer_scope == issuer_scope && event.request_id == request_id
+                                }) && let Some(writer) = st.connections.get(conn_id).cloned() {
+                                    st.pending_post_response_controls
+                                        .entry(conn_id.to_string())
+                                        .or_default()
+                                        .push(DeferredControl {
+                                            writer,
+                                            message: guichet_lifecycle_response(event),
+                                        });
+                                }
+                            }
+                            Err(error) => error!("lecture événement guichet: {error}"),
+                        }
+                    }
+                    Some(guichet_result_response(issuer_scope, request_id, result))
+                }
                 Err(error) => {
                     error!("réponse guichet: {error}");
                     Some(DaemonToWrapper::ServiceRejected { reason: ServiceRefusal::TransitionInvalid })
@@ -5083,7 +5141,7 @@ fn handle_wrapper_message(
             if let Some(request) = request {
                 st.pending_replies.retain(|pending| pending.msg_id != id);
                 if (reason.contains("échéance") || reason.contains("timeout ACP"))
-                    && !claim_timeout(&st.store, &id)
+                    && !claim_timeout(&mut st.store, &id)
                 {
                     return None;
                 }
@@ -8683,13 +8741,13 @@ mod presence_tests {
 
     #[test]
     fn intercalage_timeout_et_transport_n_autorise_qu_une_notification() {
-        let (state, config) = state_with_registered_agent("timeout-concurrent");
+        let (mut state, config) = state_with_registered_agent("timeout-concurrent");
         state
             .store
             .create_request("request-timeout", "sender", "agent-2", 60)
             .unwrap();
-        assert!(claim_timeout(&state.store, "request-timeout"));
-        assert!(!claim_timeout(&state.store, "request-timeout"));
+        assert!(claim_timeout(&mut state.store, "request-timeout"));
+        assert!(!claim_timeout(&mut state.store, "request-timeout"));
         let _ = std::fs::remove_file(&config.db_path);
     }
 
