@@ -1,10 +1,13 @@
-use maicie::bridget_client::BridgetClientLimits;
+use maicie::bridget_client::{BridgetClientLimits, PublicMessage};
 use maicie::domain::{
     ClasseDuree, Delegation, EtatDelegation, EtatObjectif, EtatOutboxDelegation, ModeObjectif,
     ObjectifCoordonne, OutboxDelegation,
 };
 use maicie::outbox::{stable_body_hash, PreparedDelegation};
-use maicie::reconcile::{reconcile_startup_at, reconcile_startup_at_observed, ReconcileAction};
+use maicie::reconcile::{
+    reconcile_startup_at, reconcile_startup_at_observed, reconcile_startup_at_with_limits,
+    ReconcileAction,
+};
 use maicie::store::MaicieStore;
 use serde_json::{json, Value};
 use std::fs::{self, DirBuilder};
@@ -179,6 +182,81 @@ fn issue_terminale_connue_est_persistee_sans_second_envoi() {
 }
 
 #[test]
+fn reprise_utilise_la_meme_borne_runtime_que_la_preparation() {
+    let root = unique_root("runtime-limit");
+    let database = root.join("maicie.sqlite3");
+    let socket = root.join("bridget.sock");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let default_limits = BridgetClientLimits::default();
+    let high_limits = BridgetClientLimits {
+        max_frame_bytes: default_limits.max_frame_bytes + 128,
+        ..default_limits
+    };
+    let empty_message = PublicMessage {
+        id: uuid(MESSAGE_ID).to_string(),
+        from: maicie::MAICIE_IDENTITY.to_string(),
+        to: "prospective".to_string(),
+        body: String::new(),
+        reply: true,
+        hops: 4,
+        reply_timeout: Some(60),
+        deadline_at: Some(1_060),
+        in_reply_to: None,
+    };
+    let replay_overhead = serde_json::to_vec(&json!({
+        "type":"SendIdempotent",
+        "message":empty_message,
+        "message_id":MESSAGE_ID,
+        "issued_at":ISSUED_AT,
+    }))
+    .unwrap()
+    .len();
+    let body = "x".repeat(default_limits.max_frame_bytes - replay_overhead);
+    let prepared = fixture_with_body(store.issuer_scope(), body, high_limits.max_frame_bytes);
+    let expected_message = prepared.message_bytes.clone();
+    store.create_prepared_delegation(&prepared).unwrap();
+
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = thread::spawn(move || serve_lookup_then_replay(listener, &expected_message));
+    let report = reconcile_startup_at_with_limits(&mut store, &socket, 1_010, high_limits).unwrap();
+    assert!(matches!(
+        &report.actions[..],
+        [ReconcileAction::Rejouee { .. }]
+    ));
+    assert!(store.pending_delegation_outboxes().unwrap().is_empty());
+    server.join().unwrap();
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn connexion_indisponible_conserve_l_outbox_prepared() {
+    let root = unique_root("unavailable");
+    let database = root.join("maicie.sqlite3");
+    let socket = root.join("absent.sock");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let prepared = fixture(store.issuer_scope());
+    store.create_prepared_delegation(&prepared).unwrap();
+
+    let report = reconcile_startup_at(&mut store, &socket, 1_010).unwrap();
+    assert!(matches!(
+        &report.actions[..],
+        [ReconcileAction::TransportIndisponible { .. }]
+    ));
+    assert_eq!(
+        store
+            .recovery_snapshot(uuid(MESSAGE_ID))
+            .unwrap()
+            .unwrap()
+            .outbox
+            .state,
+        EtatOutboxDelegation::Prepared
+    );
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn crash_reel_aux_frontieres_de_reprise_ne_cree_ni_double_envoi_ni_perte() {
     crash_avant_socket_rejoue_une_seule_fois();
     crash_apres_ecriture_avant_ack_reste_en_cours_sans_rejeu();
@@ -263,6 +341,12 @@ fn crash_apres_ecriture_avant_ack_reste_en_cours_sans_rejeu() {
         let raw_send = read_line(&mut reader);
         assert!(raw_send.contains("\"type\":\"SendIdempotent\""));
         sent.send(()).unwrap();
+        let mut eof = [0_u8; 1];
+        assert_eq!(
+            reader.read(&mut eof).unwrap(),
+            0,
+            "le serveur garde la socket ouverte jusqu'au crash enfant"
+        );
     });
     let mut child = spawn_crash_child_without_barrier("after_ack", &database, &socket, &root);
     observed_send.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -502,6 +586,18 @@ fn write_json(writer: &mut BufWriter<UnixStream>, value: Value) {
 }
 
 fn fixture(issuer_scope: &str) -> PreparedDelegation {
+    fixture_with_body(
+        issuer_scope,
+        "Inspecte les invariants".to_string(),
+        BridgetClientLimits::default().max_frame_bytes,
+    )
+}
+
+fn fixture_with_body(
+    issuer_scope: &str,
+    body: String,
+    max_frame_bytes: usize,
+) -> PreparedDelegation {
     let objective = ObjectifCoordonne {
         id: uuid(OBJECTIVE_ID),
         but: "Récupérer une délégation".to_string(),
@@ -516,12 +612,12 @@ fn fixture(issuer_scope: &str) -> PreparedDelegation {
         id: uuid(DELEGATION_ID),
         objectif_id: objective.id,
         participant: "prospective".to_string(),
-        instruction: "Inspecte les invariants".to_string(),
+        instruction: body.clone(),
         duree: ClasseDuree::Normale,
         etat: EtatDelegation::Creee,
         raison: "reprise contrôlée".to_string(),
     };
-    let body = delegation.instruction.as_bytes().to_vec();
+    let body = body.into_bytes();
     let outbox = OutboxDelegation {
         message_id: uuid(MESSAGE_ID),
         delegation_id: delegation.id,
@@ -542,7 +638,7 @@ fn fixture(issuer_scope: &str) -> PreparedDelegation {
         outbox,
         issuer_scope,
         ISSUED_AT,
-        BridgetClientLimits::default().max_frame_bytes,
+        max_frame_bytes,
     )
     .unwrap()
 }

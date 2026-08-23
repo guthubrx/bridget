@@ -5,7 +5,9 @@
 //! puis ne rejoue que l'enveloppe filaire strictement identique enregistrée
 //! avant la première I/O.
 
-use crate::bridget_client::{BridgetClient, BridgetClientError, IdempotencyIssue};
+use crate::bridget_client::{
+    BridgetClient, BridgetClientError, BridgetClientLimits, IdempotencyIssue,
+};
 use crate::outbox::{OutboxError, PendingDelegationOutbox};
 use crate::store::{MaicieStore, StoreError};
 use std::fmt;
@@ -45,6 +47,11 @@ pub enum ReconcileAction {
     },
     /// La frontière réseau est ambiguë ; la ligne reste éligible au prochain lookup.
     TransportIncertain {
+        objective_id: Uuid,
+        message_id: Uuid,
+    },
+    /// Bridget était indisponible avant toute écriture ; l'outbox reste prepared.
+    TransportIndisponible {
         objective_id: Uuid,
         message_id: Uuid,
     },
@@ -108,8 +115,18 @@ pub fn reconcile_startup(
     store: &mut MaicieStore,
     bridget_socket: impl AsRef<Path>,
 ) -> Result<ReconcileReport, ReconcileError> {
+    reconcile_startup_with_limits(store, bridget_socket, BridgetClientLimits::default())
+}
+
+/// Variante runtime : la même borne de trame sert à préparer puis à rejouer
+/// l'enveloppe, afin qu'une reprise ne devienne jamais plus restrictive.
+pub fn reconcile_startup_with_limits(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    limits: BridgetClientLimits,
+) -> Result<ReconcileReport, ReconcileError> {
     let observed_at = unix_now()?;
-    reconcile_startup_at(store, bridget_socket, observed_at)
+    reconcile_startup_at_with_limits(store, bridget_socket, observed_at, limits)
 }
 
 /// Variante déterministe pour les tests et les appels qui possèdent déjà une
@@ -119,7 +136,27 @@ pub fn reconcile_startup_at(
     bridget_socket: impl AsRef<Path>,
     observed_at: i64,
 ) -> Result<ReconcileReport, ReconcileError> {
-    reconcile_startup_at_observed(store, bridget_socket, observed_at, |_| Ok(()))
+    reconcile_startup_at_with_limits(
+        store,
+        bridget_socket,
+        observed_at,
+        BridgetClientLimits::default(),
+    )
+}
+
+pub fn reconcile_startup_at_with_limits(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    observed_at: i64,
+    limits: BridgetClientLimits,
+) -> Result<ReconcileReport, ReconcileError> {
+    reconcile_startup_at_observed_with_limits(
+        store,
+        bridget_socket,
+        observed_at,
+        limits,
+        |_| Ok(()),
+    )
 }
 
 /// Même reprise avec des jalons qui ne servent qu'aux crash-tests réels.
@@ -127,6 +164,22 @@ pub fn reconcile_startup_at_observed(
     store: &mut MaicieStore,
     bridget_socket: impl AsRef<Path>,
     observed_at: i64,
+    observer: impl FnMut(ReconcilePhase) -> Result<(), ReconcileError>,
+) -> Result<ReconcileReport, ReconcileError> {
+    reconcile_startup_at_observed_with_limits(
+        store,
+        bridget_socket,
+        observed_at,
+        BridgetClientLimits::default(),
+        observer,
+    )
+}
+
+pub fn reconcile_startup_at_observed_with_limits(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    observed_at: i64,
+    limits: BridgetClientLimits,
     mut observer: impl FnMut(ReconcilePhase) -> Result<(), ReconcileError>,
 ) -> Result<ReconcileReport, ReconcileError> {
     if observed_at <= 0 {
@@ -136,7 +189,7 @@ pub fn reconcile_startup_at_observed(
     let mut report = ReconcileReport::default();
     for outbox in store.pending_delegation_outboxes()? {
         observer(ReconcilePhase::BeforeSocket)?;
-        let action = reconcile_one(store, socket, &outbox, observed_at, &mut observer)?;
+        let action = reconcile_one(store, socket, &outbox, observed_at, limits, &mut observer)?;
         report.actions.push(action);
     }
     Ok(report)
@@ -147,6 +200,7 @@ fn reconcile_one(
     socket: &Path,
     outbox: &PendingDelegationOutbox,
     observed_at: i64,
+    limits: BridgetClientLimits,
     observer: &mut impl FnMut(ReconcilePhase) -> Result<(), ReconcileError>,
 ) -> Result<ReconcileAction, ReconcileError> {
     outbox.validate()?;
@@ -156,9 +210,10 @@ fn reconcile_one(
         ));
     }
     let message_id = outbox.message_id.to_string();
-    let mut client = match BridgetClient::connect(socket, &outbox.issuer_scope) {
+    let mut client = match BridgetClient::connect_with_limits(socket, &outbox.issuer_scope, limits)
+    {
         Ok(client) => client,
-        Err(error) => return uncertain_or_error(store, outbox, observed_at, error),
+        Err(error) => return unavailable_or_error(outbox, error),
     };
 
     match client.lookup(&message_id) {
@@ -250,15 +305,28 @@ fn can_replay_absent(
 fn transport_is_ambiguous(error: &BridgetClientError) -> bool {
     matches!(
         error,
-        BridgetClientError::Connect { .. }
-            | BridgetClientError::Read(_)
+        BridgetClientError::Read(_)
             | BridgetClientError::Write(_)
             | BridgetClientError::Decode { .. }
             | BridgetClientError::Closed
             | BridgetClientError::Protocol(_)
             | BridgetClientError::Timeout { .. }
-            | BridgetClientError::FrameTooLarge { .. }
     )
+}
+
+fn unavailable_or_error(
+    outbox: &PendingDelegationOutbox,
+    error: BridgetClientError,
+) -> Result<ReconcileAction, ReconcileError> {
+    match error {
+        BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. } => {
+            Ok(ReconcileAction::TransportIndisponible {
+                objective_id: outbox.objective_id,
+                message_id: outbox.message_id,
+            })
+        }
+        error => Err(ReconcileError::Client(error)),
+    }
 }
 
 fn unix_now() -> Result<i64, ReconcileError> {
