@@ -1,6 +1,6 @@
 # Métriques d'efficience — avant/après Maicie + contrat idempotent
 
-**Regravé le 2026-08-24** (la première version du 23 n'avait jamais été
+**Regravé le 2026-08-23 (soir)** (la première version du 23 n'avait jamais été
 commitée — leçon : toute métrique se grave le jour même, rituel de clôture).
 
 ## Sources
@@ -8,12 +8,12 @@ commitée — leçon : toute métrique se grave le jour même, rituel de clôtur
 - **Avant** (journée du 2026-08-22, coordination manuelle pré-Maicie,
   pré-contrat idempotent) : relevé du référent, reconstitué — ordres de
   grandeur, non re-vérifiables (le fichier d'origine a été perdu).
-- **Après** (2026-08-23 → 24 nuit) : greffe Maicie (`maicie status`),
+- **Après** (2026-08-23 soir) : greffe Maicie (`maicie status`),
   historique git, ledger — chaque chiffre re-calculable à la commande.
 
 ## Coordination
 
-| Métrique | Avant (22/08) | Après (23-24/08) |
+| Métrique | Avant (22/08) | Après (23/08) |
 |---|---|---|
 | Relances manuelles du référent | ~526 / jour | ~0 (rappels automatiques du daemon ; les envois du référent sont du contenu, plus du harcèlement) |
 | Messages de coordination | ~495 / jour | ~120 sur 36 h, tous porteurs (mandats, verdicts, arbitrages) |
@@ -24,7 +24,7 @@ commitée — leçon : toute métrique se grave le jour même, rituel de clôtur
 
 ## Production (36 h après vs journée type avant)
 
-| Livré 23-24/08 | Volume |
+| Livré 23/08 | Volume |
 |---|---|
 | Session 011 (Maicie complète) | 26 tâches, revue hostile finale MERGEABLE |
 | Session 014 (observabilité) | 7 tâches, **conception→merge en une soirée** |

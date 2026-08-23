@@ -1,4 +1,4 @@
-# Revue adverse — boucle d'amélioration continue générique (2026-08-24)
+# Revue adverse — boucle d'amélioration continue générique (2026-08-23 (soir))
 
 **Croisement** : relecture par un moteur distinct de celui de l'auteur.
 **Objet** : proposition utilisateur d'étendre « Maicie greffière du

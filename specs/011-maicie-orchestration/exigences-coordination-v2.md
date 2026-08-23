@@ -206,7 +206,7 @@ fleet.json, replay de contexte automatique au-delà de la carte de réveil.
   auparavant, après un reboot machine, zéro équipier géré ne revenait : la condition (b) de la
   revue reprise-crash est fausse aujourd'hui, empiriquement. Doctrine à
   adopter : --persistent par défaut pour les équipiers d'équipe.
-- ⏳ RELANCÉE (2026-08-24, G1502 franchi — engagement honoré, mission-d23-coder-2 au greffe) — **Binaire périmé : détection ET rituel** (incident ×2 le 2026-08-23 — 8h40
+- ⏳ RELANCÉE (2026-08-23 (soir), G1502 franchi — engagement honoré, mission-d23-coder-2 au greffe) — **Binaire périmé : détection ET rituel** (incident ×2 le 2026-08-23 — 8h40
   de retard l'après-midi, puis le daemon pré-014 servant encore le refus
   menteur le soir même, DEUX HEURES après le merge du correctif). Deux
   volets : (1) DÉTECTION — build-id (hash git) embarqué à la compilation,
@@ -327,7 +327,7 @@ l'accélération (F27-29 automatisent le référent, condition du passage à une
 L'ÉQUIPE → B (journal enrichi, traducteur, GUI) mené par l'équipe élargie,
 F-reste et D-reste en fil d'eau. La GUI arrive plus tard mais se construit
 plus vite ; le coût net est un report, pas une perte.
-- **État « en pause » manquant chez Maicie** (constat utilisateur 2026-08-24
+- **État « en pause » manquant chez Maicie** (constat utilisateur 2026-08-23 (soir)
   nuit) : une mission suspendue par arbitrage de priorité (bouche-trou D23
   interrompu par le lot A 015) garde son échéance qui court — le greffe la
   dira « en retard » quand la réalité dit « suspendue sur ordre ». Palliatif
@@ -336,17 +336,17 @@ plus vite ; le coût net est un report, pas une perte.
   même famille « états intermédiaires du travail », à traiter ENSEMBLE quand
   les routines l'exigeront.
 - **outcome_unknown quasi systématique sur premier envoi MCP** (observé sur
-  ~40 envois du référent, nuit du 23-24/08) : le contrat idempotent absorbe
+  ~40 envois du référent, soirée du 23/08) : le contrat idempotent absorbe
   parfaitement (rejeu → accepted, zéro doublon), mais la latence d'accusé
   sous-jacente n'est ni expliquée ni mesurée — le filet fonctionne si bien
   qu'il masque la chute. Diagnostiquer (fenêtre d'accusé ? contention ?
   timeout client trop court ?) avant que le volume d'agents ne double le
   trafic de rejeu.
 - **Maicie greffière du catalogue — CŒUR DE MAICIE, exigence produit**
-  (décision utilisateur 2026-08-24 : « je voudrais éviter que ce soit une
+  (décision utilisateur 2026-08-23 (soir) : « je voudrais éviter que ce soit une
   spécificité de notre session… je voudrais que ce soit dans le cœur de
   Maicie ») — bloc F, après 015. FORMULATION DIRECTRICE (utilisateur,
-  2026-08-24) : « Maicie écrit déjà tout ce qui a été fait [le greffe des
+  2026-08-23 (soir)) : « Maicie écrit déjà tout ce qui a été fait [le greffe des
   missions]. Ce que je veux, c'est systématiser le RESTE À FAIRE — le
   "j'ai découvert, donc je dois faire". » Le journal du DÛ doit avoir la
   même rigueur que le journal du FAIT : entrées nées d'événements (mission,
@@ -366,12 +366,12 @@ plus vite ; le coût net est un report, pas une perte.
   machine à états pure, zéro LLM). S'appuie sur le guichet 015 (l'événement
   de livraison est le déclencheur). Bonus : catalogue interrogeable (GUI) et
   métrologie incident→remède gratuite. AMENDÉE par revue adverse du
-  2026-08-24 (revue-adverse-boucle-amelioration-2026-08-24.md) : tri sur
+  2026-08-23 (soir) (revue-adverse-boucle-amelioration-2026-08-23 (soir).md) : tri sur
   champs DÉCLARÉS seulement, jamais d'écriture dans les plans de l'hôte,
   format d'entrée fermé À LIVRER D'ABORD (le catalogue actuel est de la
   prose non machine-appendable — migration requise), volet « entrée au
   plan » reporté aux routines. DÉCOUVRABILITÉ (question utilisateur
-  2026-08-24) : trois filets, aucun ne reposant sur une mémoire — (1) la
+  2026-08-23 (soir)) : trois filets, aucun ne reposant sur une mémoire — (1) la
   skill maicie prescrit « registre list » en début de session et avant toute
   proposition de suite (motif DevKMS/mem context de la constitution) ;
   (2) pied de page DÉTERMINISTE des sorties Maicie aux jalons : « N constats
