@@ -131,7 +131,11 @@ impl InteractivePromptSession {
     }
 }
 
-fn start_interactive_prompt_session(root: &Path, name: &str) -> InteractivePromptSession {
+fn start_interactive_prompt_session(
+    root: &Path,
+    name: &str,
+    resume_arguments: Option<&[&str]>,
+) -> InteractivePromptSession {
     let bin = root.join("prompt-bin");
     let capture = root.join("captured-prompt.json");
     let release = root.join("release-prompt-cli");
@@ -274,7 +278,7 @@ def buffer_path():
     return os.path.join(root, option("-b").replace("/", "_"))
 
 if command == "display-message":
-    print("%prompt-mcp")
+    print("%prompt-mcp\tfixture:0.0")
 elif command == "load-buffer":
     with open(buffer_path(), "w", encoding="utf-8") as output:
         output.write(sys.stdin.read())
@@ -307,8 +311,12 @@ elif command == "delete-buffer":
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
     fs::set_permissions(&tmux, fs::Permissions::from_mode(0o700)).unwrap();
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_bridget"))
-        .args(["codex", "--name", name])
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
+    command.args(["codex", "--name", name]);
+    if let Some(arguments) = resume_arguments {
+        command.args(arguments);
+    }
+    let mut child = command
         .env_clear()
         .env("HOME", root)
         .env("PATH", format!("{}:{FROZEN_PATH}", bin.display()))
@@ -345,17 +353,43 @@ elif command == "delete-buffer":
     }
 
     let arguments: Vec<String> = serde_json::from_slice(&fs::read(&capture).unwrap()).unwrap();
-    let actual = arguments
-        .iter()
-        .find(|argument| argument.starts_with("Tu es l'agent"))
-        .expect("prompt Bridget absent des arguments du CLI MCP");
-    let expected = REDUCED_PROMPT
-        .trim_end_matches('\n')
-        .replace("agent-fixture", name);
-    assert_eq!(
-        actual, &expected,
-        "le lancement MCP n'utilise pas la fixture réduite"
-    );
+    if resume_arguments.is_some() {
+        let resume = arguments
+            .iter()
+            .position(|argument| argument == "resume")
+            .expect("sous-commande resume absente");
+        let session = arguments
+            .iter()
+            .position(|argument| argument == "bridget-prospective")
+            .expect("identifiant de session absent");
+        let cd = arguments
+            .iter()
+            .position(|argument| argument == "--cd")
+            .expect("option --cd absente");
+        let bootstrap = arguments
+            .iter()
+            .position(|argument| argument.starts_with("Tu reprends la session"))
+            .expect("amorçage Bridget absent de la reprise");
+        assert!(resume < session && session < cd && cd + 1 < bootstrap);
+        assert_eq!(bootstrap, arguments.len() - 1, "l'amorçage doit être PROMPT");
+        let actual = &arguments[bootstrap];
+        assert!(actual.contains(name), "identité absente de l'amorçage");
+        assert!(actual.contains("mcp__bridget__*"));
+        assert!(actual.contains("tools.mcp__bridget__bridget_send"));
+        assert!(actual.contains("shell bridget"));
+    } else {
+        let actual = arguments
+            .iter()
+            .find(|argument| argument.starts_with("Tu es l'agent"))
+            .expect("prompt Bridget absent des arguments du CLI MCP");
+        let expected = REDUCED_PROMPT
+            .trim_end_matches('\n')
+            .replace("agent-fixture", name);
+        assert_eq!(
+            actual, &expected,
+            "le lancement MCP n'utilise pas la fixture réduite"
+        );
+    }
 
     let deadline = Instant::now() + MATRIX_TIMEOUT;
     while !who.exists() && Instant::now() < deadline {
@@ -1235,8 +1269,34 @@ fn prompt_reduit_rejoue_le_corpus_dans_la_meme_session() {
     write_fixture(&root);
     let (daemon, proxy) = start_daemon_behind_proxy(&root);
     let prompt_name = "prompt-mcp";
-    let prompt_session = start_interactive_prompt_session(&root, prompt_name);
+    let prompt_session = start_interactive_prompt_session(&root, prompt_name, None);
     run_interactive_prompt_corpus(&daemon.socket, prompt_name, &proxy, prompt_session);
+    daemon.stop();
+    proxy.stop();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reprise_codex_rejoue_la_panne_mcp_et_clot_les_demandes_liees() {
+    let _serial = MANAGED_BENCH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = test_root("resume-mcp");
+    write_fixture(&root);
+    let (daemon, proxy) = start_daemon_behind_proxy(&root);
+    let name = "resume-mcp";
+    let root_argument = root.to_string_lossy().into_owned();
+    let resume_arguments = [
+        "--yolo",
+        "resume",
+        "bridget-prospective",
+        "--cd",
+        root_argument.as_str(),
+    ];
+    let session = start_interactive_prompt_session(&root, name, Some(&resume_arguments));
+
+    run_interactive_prompt_corpus(&daemon.socket, name, &proxy, session);
+
     daemon.stop();
     proxy.stop();
     fs::remove_dir_all(root).unwrap();
