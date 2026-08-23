@@ -149,6 +149,7 @@ mod tests {
     use bridget_daemon::registry::AgentRegistry;
     use bridget_daemon::wrapper::launch_acp_with;
     use std::os::unix::net::UnixListener;
+    use std::os::unix::process::CommandExt;
     use std::process::{Child, Command, Stdio};
     use std::time::Instant;
 
@@ -181,7 +182,13 @@ mod tests {
         }
 
         fn crash(mut self) {
-            self.terminate();
+            if self.child.try_wait().expect("état daemon").is_none() {
+                // Ce processus est l'enfant direct du test. SIGKILL court-circuite
+                // explicitement la branche SHUTDOWN_REQUESTED du daemon : c'est
+                // donc une vraie reprise après crash, pas un arrêt coopératif.
+                assert_eq!(unsafe { libc::kill(self.child.id() as i32, libc::SIGKILL) }, 0);
+                self.child.wait().expect("daemon tué");
+            }
         }
 
         fn terminate(&mut self) {
@@ -224,12 +231,142 @@ mod tests {
         root.join(".cache/bridget/bridget.sock")
     }
 
-    fn saved_agent_name(name_state: &std::path::Path, fallback: &str) -> String {
-        std::fs::read_to_string(name_state)
-            .ok()
-            .map(|name| name.trim().to_string())
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| fallback.to_string())
+    struct InteractiveWrapperProcess {
+        child: Child,
+        process_group_id: i32,
+    }
+
+    impl InteractiveWrapperProcess {
+        fn start(root: &std::path::Path, agent: &std::path::Path, session: &str) -> (Self, PathBuf) {
+            let marker = root.join("agent-name-file-path");
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
+            command
+                .args(["--", agent.to_str().expect("agent UTF-8"), session])
+                .env_clear()
+                .env("HOME", root)
+                .env("PATH", "/usr/bin:/bin")
+                .env("BRIDGET_TEST_NAME_FILE_PATH", &marker)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setpgid(0, 0) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let child = command.spawn().expect("vrai wrapper interactif démarré");
+            let process = Self {
+                process_group_id: child.id() as i32,
+                child,
+            };
+            let name_state = wait_until("wrapper enregistré", || {
+                std::fs::read_to_string(&marker)
+                    .ok()
+                    .map(|path| PathBuf::from(path.trim()))
+                    .filter(|path| path.exists())
+            });
+            (process, name_state)
+        }
+
+        fn terminate(&mut self) {
+            if self.child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            // Groupe créé par le test : le faux agent enfant est arrêté avec
+            // son wrapper, sans laisser de processus de test orphelin.
+            let _ = unsafe { libc::kill(-self.process_group_id, libc::SIGTERM) };
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if self.child.try_wait().ok().flatten().is_some() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            panic!("le wrapper de test n'a pas quitté après SIGTERM");
+        }
+    }
+
+    impl Drop for InteractiveWrapperProcess {
+        fn drop(&mut self) {
+            self.terminate();
+        }
+    }
+
+    fn wait_until<T>(label: &str, mut condition: impl FnMut() -> Option<T>) -> T {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline {
+            if let Some(value) = condition() {
+                return value;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("borne dépassée en attente de {label}");
+    }
+
+    fn registered_agent_names(socket: &PathBuf) -> Option<Vec<String>> {
+        let stream = UnixStream::connect(socket).ok()?;
+        let read_stream = stream.try_clone().ok()?;
+        let mut writer = BufWriter::new(stream);
+        let mut reader = BufReader::new(read_stream);
+        writeln!(writer, "{}", encode(&WrapperToDaemon::ListAgents).ok()?).ok()?;
+        writer.flush().ok()?;
+        let mut line = String::new();
+        reader.read_line(&mut line).ok().filter(|read| *read > 0)?;
+        match decode(line.trim()).ok()? {
+            DaemonToWrapper::AgentList { agents } => {
+                Some(agents.into_iter().map(|agent| agent.name).collect())
+            }
+            _ => None,
+        }
+    }
+
+    fn wait_for_agent(socket: &PathBuf, expected_name: &str) {
+        wait_until("Register du wrapper", || {
+            registered_agent_names(socket)
+                .filter(|names| names.iter().any(|name| name == expected_name))
+        });
+    }
+
+    fn prepare_interactive_wrapper(root: &std::path::Path) -> PathBuf {
+        let config_directory = root.join(".config/bridget");
+        std::fs::create_dir_all(&config_directory).expect("répertoire config");
+        let agent = root.join("fixture-agent");
+        std::fs::write(
+            &agent,
+            "#!/bin/sh\nprintf '%s' \"$BRIDGET_AGENT_NAME_FILE\" > \"$BRIDGET_TEST_NAME_FILE_PATH\"\nwhile :; do /bin/sleep 1; done\n",
+        )
+        .expect("faux agent écrit");
+        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o700))
+            .expect("faux agent exécutable");
+        let registry = serde_json::json!({
+            "agents": {
+                "fixture": {
+                    "command": agent,
+                    "protocol": "tmux",
+                    "permissions": "allow",
+                    "mcp": {"interactive": "none"}
+                }
+            }
+        });
+        let registry_path = config_directory.join("agents.json");
+        std::fs::write(&registry_path, registry.to_string()).expect("registre privé écrit");
+        std::fs::set_permissions(&registry_path, std::fs::Permissions::from_mode(0o600))
+            .expect("registre privé");
+        agent
+    }
+
+    fn rename_via_cli(root: &std::path::Path, name_state: &std::path::Path, target: &str) -> std::process::Output {
+        Command::new(env!("CARGO_BIN_EXE_bridget"))
+            .args(["rename", target])
+            .env_clear()
+            .env("HOME", root)
+            .env("PATH", "/usr/bin:/bin")
+            .env("BRIDGET_AGENT_NAME_FILE", name_state)
+            .output()
+            .expect("vraie commande rename exécutée")
     }
 
     fn registry_with_unknown_stdio_agent() -> (AgentRegistry, PathBuf) {
@@ -767,32 +904,41 @@ sleep 2
     fn reprise_apres_renommage_reel_conserve_le_nouveau_nom() {
         let root = restart_test_root("accepted");
         let socket = daemon_socket(&root);
-        let name_state = root.join("agent-name");
+        let agent_binary = prepare_interactive_wrapper(&root);
         let daemon = DaemonProcess::start(&root);
 
-        let mut agent = FakeAgent::connect(&socket, "codex", Some("codex-resume"))
-            .expect("premier enregistrement");
-        std::fs::write(&name_state, &agent.name).expect("nom initial persistant");
-        assert!(matches!(
-            agent.rename("analyse-persistante").expect("renommage"),
-            DaemonToWrapper::Renamed { name, .. } if name == "analyse-persistante"
-        ));
-        // Mutation discriminante : si l'écriture précédait Renamed, le test de
-        // refus ci-dessous laisserait un nom non confirmé ; ici le nom durable
-        // est bien celui confirmé par le daemon.
-        std::fs::write(&name_state, &agent.name).expect("nom renommé persistant");
-        drop(agent);
+        let session = "11111111-1111-4111-8111-111111111111";
+        let (mut wrapper, name_state) =
+            InteractiveWrapperProcess::start(&root, &agent_binary, session);
+        let initial_state = std::fs::read(&name_state).expect("nom initial du vrai wrapper");
+        let initial_name = std::str::from_utf8(&initial_state)
+            .expect("nom UTF-8")
+            .trim()
+            .to_string();
+        wait_for_agent(&socket, &initial_name);
+
+        let renamed = rename_via_cli(&root, &name_state, "analyse-persistante");
+        assert!(
+            renamed.status.success(),
+            "rename réel refusé : {}",
+            String::from_utf8_lossy(&renamed.stderr)
+        );
+        // Barrière déterministe : la commande ne rend la main qu'après la
+        // réponse Renamed du daemon et l'écriture du fichier d'état production.
+        assert_eq!(
+            std::fs::read(&name_state).expect("état renommé"),
+            b"analyse-persistante"
+        );
 
         daemon.crash();
         let restarted = DaemonProcess::start(&root);
-        let resumed_name = saved_agent_name(&name_state, "codex-resume");
-        assert_eq!(resumed_name, "analyse-persistante");
-        let resumed = FakeAgent::connect(&socket, "codex", Some(&resumed_name))
-            .expect("reprise après crash réel");
-        assert_eq!(resumed.name, "analyse-persistante");
 
-        drop(resumed);
+        // Mutation discriminante : supprimer l'écriture production après
+        // Renamed laisse `initial_name` sur disque et ce Register échoue.
+        wait_for_agent(&socket, "analyse-persistante");
+
         drop(restarted);
+        wrapper.terminate();
         std::fs::remove_dir_all(root).ok();
     }
 
@@ -800,37 +946,41 @@ sleep 2
     fn refus_de_renommage_ne_persiste_pas_apres_redemarrage_reel() {
         let root = restart_test_root("rejected");
         let socket = daemon_socket(&root);
-        let name_state = root.join("agent-name");
+        let agent_binary = prepare_interactive_wrapper(&root);
         let daemon = DaemonProcess::start(&root);
 
         let _reserved = FakeAgent::connect(&socket, "claude", Some("nom-pris"))
             .expect("nom réservé");
-        let mut agent = FakeAgent::connect(&socket, "codex", Some("codex-originel"))
-            .expect("agent à renommer");
-        std::fs::write(&name_state, &agent.name).expect("nom initial persistant");
+        let session = "22222222-2222-4222-8222-222222222222";
+        let (mut wrapper, name_state) =
+            InteractiveWrapperProcess::start(&root, &agent_binary, session);
+        let initial_state = std::fs::read(&name_state).expect("nom initial du vrai wrapper");
+        let initial_name = std::str::from_utf8(&initial_state)
+            .expect("nom UTF-8")
+            .trim()
+            .to_string();
+        wait_for_agent(&socket, &initial_name);
 
-        for refused_name in ["nom-pris", "invalide "] {
-            let response = agent.rename(refused_name).expect("réponse au renommage");
+        for refused_name in ["nom-pris", "invalide!"] {
+            let response = rename_via_cli(&root, &name_state, refused_name);
             assert!(
-                matches!(response, DaemonToWrapper::Nack { .. }),
-                "le renommage refusé {refused_name:?} doit produire Nack, reçu {response:?}"
+                !response.status.success(),
+                "le renommage refusé {refused_name:?} doit échouer"
             );
-            assert_eq!(agent.name, "codex-originel");
-            // Mutation discriminante : persister la cible avant la réponse
-            // ferait survivre l'un de ces deux refus après le crash.
-            assert_eq!(saved_agent_name(&name_state, "absent"), "codex-originel");
+            // Mutation discriminante : écrire malgré Nack modifierait ces
+            // octets production et ferait échouer l'assertion immédiatement.
+            assert_eq!(std::fs::read(&name_state).expect("état relu"), initial_state);
         }
-        drop(agent);
 
         daemon.crash();
         let restarted = DaemonProcess::start(&root);
-        let resumed_name = saved_agent_name(&name_state, "codex-originel");
-        let resumed = FakeAgent::connect(&socket, "codex", Some(&resumed_name))
-            .expect("reprise après refus et crash réel");
-        assert_eq!(resumed.name, "codex-originel");
 
-        drop(resumed);
+        // Le daemon redémarré est vierge : voir l'ancien nom dans l'annuaire
+        // atteste le Register du vrai wrapper, pas un état mémoire résiduel.
+        wait_for_agent(&socket, &initial_name);
+
         drop(restarted);
+        wrapper.terminate();
         std::fs::remove_dir_all(root).ok();
     }
 
