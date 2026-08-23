@@ -238,11 +238,13 @@ already supplied.
 | Command | Effect |
 |---|---|
 | `bridget send --to <name> <msg>` | sends a message |
+| `… --in-reply-to <id>` | links an answer to a tracked request and closes it after delivery |
 | `… --reply` | expects an answer: the request is tracked, with a deadline and reminders |
 | `… --timeout <s>` | request deadline (default: 60 s) |
 | `… --hops <n>` | remaining hop budget (default: 4) |
 | `… --from <name>` | declared sender, for relaying |
-| `bridget reply <msg>` | answers the last sender without retyping their name |
+| `bridget reply <msg>` | answers the last sender and automatically links their latest tracked request |
+| `bridget reply --in-reply-to <id> <msg>` | answers a specific request when several are active |
 | `bridget cancel <id> [--reason <text>]` | cancels a request that became pointless: no more reminders, recipient released |
 | `bridget requests` | lists my tracked requests and their state |
 
@@ -357,6 +359,23 @@ no longer matters. It is idempotent, and a terminal state is never reopened.
 
 The state survives a daemon restart: still-open requests are read back from
 SQLite and their supervision resumes where it left off.
+
+An agent without the native MCP tools can preserve correlation through the
+binary fallback:
+
+```bash
+bridget send --to agent-1 --in-reply-to fa09fa7800694 "Review completed"
+```
+
+Linked replies use the same idempotent contract as `bridget_send`. The command
+prints its `id` and `issued_at`; if it reports `outcome_unknown`, replay the
+exact body with both values. The stable issuer scope is derived from the current
+Bridget instance, so the retry remains valid after a rename:
+
+```bash
+bridget send --to agent-1 --in-reply-to fa09fa7800694 \
+  --id <printed-id> --issued-at <printed-timestamp> "Review completed"
+```
 
 Finally, reminders honour the recipient's do-not-disturb: they are suspended while
 it refuses interruptions. The failure notice to the sender still goes out — it

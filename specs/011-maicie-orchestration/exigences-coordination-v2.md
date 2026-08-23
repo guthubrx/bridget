@@ -133,12 +133,10 @@ consultation passive des échéances (T019), observations ACP datées (T017).
 
 ## Suivi Bridget (constaté le 2026-08-23, session 011 Phase 5/6)
 
-- **Parité de repli du binaire** : `bridget send` n'expose pas `--in-reply-to`.
-  Un agent privé de ses outils MCP (panne d'environnement observée) ne peut
-  jamais clore une demande liée : ses verdicts arrivent non liés (règle 17)
-  et les rappels du daemon provoquent des réémissions en boucle (règle 15).
-  Ajouter `--in-reply-to <id>` au binaire pour que le repli dégradé reste
-  capable de fermer les boucles qu'on lui ouvre.
+- **Parité de repli du binaire — livrée par D24** : `bridget send` et
+  `bridget reply` acceptent `--in-reply-to <id>`. Un agent privé de ses outils
+  MCP peut donc lier son verdict à la demande suivie et arrêter ses rappels,
+  par la même transition transactionnelle que la voie MCP.
 
 ## Reprise après crash total (revue adverse du 2026-08-23 — idée utilisateur)
 

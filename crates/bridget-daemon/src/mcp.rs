@@ -825,7 +825,7 @@ fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value
     }
 }
 
-fn public_refusal_category(category: &str) -> &str {
+pub(crate) fn public_refusal_category(category: &str) -> &str {
     match category {
         "dnd" | "circuit_breaker" | "hops_exhausted" | "queue_full" => category,
         "duplicate_content" | "quarantined" => "duplicate",
@@ -962,7 +962,7 @@ fn request_dto(request: bridget_transport::protocol::RequestInfo) -> Value {
     })
 }
 
-fn issuer_scope(identity: &str) -> String {
+pub(crate) fn issuer_scope(identity: &str) -> String {
     let mut first = 0xcbf29ce484222325_u64;
     let mut second = 0x9e3779b97f4a7c15_u64;
     for byte in identity.bytes() {

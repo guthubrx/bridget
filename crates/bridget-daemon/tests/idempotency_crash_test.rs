@@ -543,6 +543,53 @@ fn issued_at() -> i64 {
         .as_secs() as i64
 }
 
+fn run_linked_cli(root: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .args(args)
+        .env_clear()
+        .env("HOME", root)
+        .env("PATH", "/usr/bin:/bin")
+        .env("BRIDGET_AGENT_NAME", "worker")
+        .env("BRIDGET_AGENT_INSTANCE_ID", "shared-cli-mcp-instance")
+        .output()
+        .expect("binaire Bridget exécuté")
+}
+
+fn output_text(output: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+fn output_field(output: &std::process::Output, field: &str) -> String {
+    let prefix = format!("{field}=");
+    output_text(output)
+        .split_whitespace()
+        .find_map(|token| token.strip_prefix(&prefix))
+        .map(|value| value.trim_end_matches(':').to_string())
+        .unwrap_or_else(|| panic!("champ {field} absent de la sortie: {}", output_text(output)))
+}
+
+fn mcp_send_call(request_id: i64, message_id: &str, sent_at: i64, body: &str) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "tools/call",
+        "params": {
+            "name": "bridget_send",
+            "arguments": {
+                "to": "recipient",
+                "body": body,
+                "in_reply_to": "request-open",
+                "id": message_id,
+                "issued_at": sent_at
+            }
+        }
+    })
+}
+
 #[allow(dead_code)]
 fn run_amont_cycle(point: &str, serial: usize) {
     let root = test_root(point);
@@ -998,6 +1045,171 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
     drop(recipient);
     daemon.stop();
     fs::remove_dir_all(root).expect("nettoyage MCP réponse liée");
+}
+
+#[test]
+fn binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee() {
+    let root = test_root("cli-mcp-linked-parity");
+    let database = root.join(".cache/bridget/bridget.db");
+    fs::create_dir_all(database.parent().expect("parent base")).expect("répertoire base");
+    let store = Store::open(&database).expect("store initial");
+    store
+        .create_request("request-open", "recipient", "worker", 60)
+        .expect("demande suivie initiale");
+
+    let sync = root.join("sync");
+    fs::create_dir_all(&sync).expect("synchronisation vide");
+    let mut daemon = MatrixDaemonGuard::start(&root, &sync);
+    let socket_path = socket(&root);
+    let mut recipient = register_recipient_as(&socket_path, "recipient-parity-instance");
+
+    let first = run_linked_cli(
+        &root,
+        &[
+            "send",
+            "--to",
+            "recipient",
+            "--in-reply-to",
+            "request-open",
+            "réponse liée paritaire",
+        ],
+    );
+    assert!(!first.status.success(), "première issue attendue inconnue");
+    assert!(output_text(&first).contains("outcome_unknown"));
+    let message_id = output_field(&first, "id");
+    let sent_at = output_field(&first, "issued_at")
+        .parse::<i64>()
+        .expect("issued_at CLI entier");
+    let (delivery_id, delivery_generation) = match receive_delivery(&mut recipient) {
+        DaemonToWrapper::DeliverIdempotent {
+            message,
+            delivery_id,
+            delivery_generation,
+            ..
+        } => {
+            assert_eq!(message.id, message_id);
+            assert_eq!(message.in_reply_to.as_deref(), Some("request-open"));
+            (delivery_id, delivery_generation)
+        }
+        _ => unreachable!(),
+    };
+    recipient.send(WrapperToDaemon::DeliverAcked {
+        delivery_id,
+        delivery_generation,
+    });
+
+    let retry = run_linked_cli(
+        &root,
+        &[
+            "send",
+            "--to",
+            "recipient",
+            "--in-reply-to",
+            "request-open",
+            "--id",
+            &message_id,
+            "--issued-at",
+            &sent_at.to_string(),
+            "réponse liée paritaire",
+        ],
+    );
+    assert!(retry.status.success(), "retry CLI: {}", output_text(&retry));
+    assert!(output_text(&retry).contains("accepted"));
+    assert_no_delivery(&mut recipient);
+
+    let mut mcp = McpProcess::start(&root, "worker", "shared-cli-mcp-instance");
+    let initialized = mcp.request(serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}
+    }));
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
+    mcp.notify(serde_json::json!({
+        "jsonrpc": "2.0", "method": "notifications/initialized"
+    }));
+    let mcp_retry = mcp.request(mcp_send_call(
+        2,
+        &message_id,
+        sent_at,
+        "réponse liée paritaire",
+    ));
+    assert_eq!(
+        mcp_retry["result"]["structuredContent"]["status"],
+        "accepted"
+    );
+    assert_no_delivery(&mut recipient);
+
+    let duplicate_id = "cli-linked-new-id";
+    let duplicate_at = issued_at();
+    let duplicate = run_linked_cli(
+        &root,
+        &[
+            "send",
+            "--to",
+            "recipient",
+            "--in-reply-to",
+            "request-open",
+            "--id",
+            duplicate_id,
+            "--issued-at",
+            &duplicate_at.to_string(),
+            "réponse liée paritaire",
+        ],
+    );
+    assert!(!duplicate.status.success());
+    assert!(
+        output_text(&duplicate).contains("REJET: duplicate"),
+        "projection CLI du doublon: {}",
+        output_text(&duplicate)
+    );
+    assert_no_delivery(&mut recipient);
+
+    recipient.send(WrapperToDaemon::Availability {
+        agent: "recipient".to_string(),
+        until_secs: Some((issued_at() + 60) as u64),
+    });
+    assert!(matches!(recipient.receive(), DaemonToWrapper::Ack { .. }));
+    let closed_at = issued_at();
+    let closed = run_linked_cli(
+        &root,
+        &[
+            "send",
+            "--to",
+            "recipient",
+            "--in-reply-to",
+            "request-open",
+            "--id",
+            "cli-terminal-request",
+            "--issued-at",
+            &closed_at.to_string(),
+            "message ordinaire après clôture",
+        ],
+    );
+    assert!(!closed.status.success());
+    assert!(
+        output_text(&closed).contains("REJET: dnd"),
+        "D-208 doit conserver DND côté CLI: {}",
+        output_text(&closed)
+    );
+    let mcp_closed = mcp.request(mcp_send_call(
+        3,
+        "mcp-terminal-request",
+        issued_at(),
+        "autre message ordinaire après clôture",
+    ));
+    assert_eq!(mcp_closed["result"]["structuredContent"]["status"], "dnd");
+    assert_no_delivery(&mut recipient);
+    assert_eq!(
+        store
+            .get_request("request-open")
+            .expect("demande lisible")
+            .expect("demande présente")
+            .state,
+        "answered"
+    );
+
+    mcp.stop();
+    drop(recipient);
+    daemon.stop();
+    fs::remove_dir_all(root).expect("nettoyage parité CLI MCP");
 }
 
 #[test]
