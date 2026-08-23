@@ -1595,7 +1595,8 @@ impl DaemonState {
         managed_tx: Sender<ManagedSupervisorCommand>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         std::fs::create_dir_all(config.socket_path.parent().unwrap())?;
-        let store = Store::open(&config.db_path)?;
+        let mut store = Store::open(&config.db_path)?;
+        store.recover_guichet_claims_after_restart()?;
         let idempotency = IdempotencyStore::open(&config.db_path)?;
         let desired = DesiredStateStore::at_path(desired_state_path(config));
         let fleet = Arc::new(FleetSupervisor::open(
@@ -2393,6 +2394,17 @@ fn handle_connection(
                 Err(_) => break,
             };
             if line.is_empty() {
+                continue;
+            }
+            if line.len() > 64 * 1024
+                && (line.contains("\"type\":\"service_request\"")
+                    || line.contains("\"type\":\"guichet_"))
+            {
+                let json = encode(&DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::FrameTooLarge,
+                })?;
+                writeln!(my_writer, "{}", json)?;
+                my_writer.flush()?;
                 continue;
             }
 

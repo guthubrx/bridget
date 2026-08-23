@@ -85,16 +85,6 @@ impl Store {
         conn.busy_timeout(std::time::Duration::from_secs(2))
             .map_err(StoreError::Sqlite)?;
         Self::init_schema(&conn)?;
-        // Un daemon arrêté n'a plus de détenteur de lease : la reprise doit
-        // relivrer le même dépôt FIFO, jamais conserver un propriétaire mort.
-        conn.execute(
-            "UPDATE guichet_requests
-             SET state = 'queued', claim_owner = NULL, claim_token = NULL,
-                 claim_lease_expires_at = NULL
-             WHERE state = 'claimed'",
-            [],
-        )
-        .map_err(StoreError::Sqlite)?;
         Ok(Store { conn })
     }
 
@@ -516,6 +506,22 @@ impl Store {
         Ok(())
     }
 
+    /// Uniquement au bootstrap du daemon : toute lease d'un processus arrêté
+    /// redevient FIFO. Ouvrir un second handle SQLite ne doit jamais voler le
+    /// claim vivant du premier.
+    pub fn recover_guichet_claims_after_restart(&mut self) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "UPDATE guichet_requests
+                 SET state = 'queued', claim_owner = NULL, claim_token = NULL,
+                     claim_lease_expires_at = NULL
+                 WHERE state = 'claimed'",
+                [],
+            )
+            .map_err(StoreError::Sqlite)?;
+        Ok(())
+    }
+
     fn query_requests<P: rusqlite::Params>(
         &self,
         sql: &str,
@@ -888,6 +894,7 @@ mod tests {
         // Mutation discriminante : sans remise en file au redémarrage, le
         // premier dépôt resterait bloqué claimed et request-2 serait relevé.
         let mut reopened = Store::open(&path).unwrap();
+        reopened.recover_guichet_claims_after_restart().unwrap();
         let replay = match reopened.claim_next_guichet("service-b", first.issued_at + 1).unwrap() {
             GuichetNext::Claimed(claim) => claim,
             GuichetNext::Empty => panic!("dépôt persistant absent"),
