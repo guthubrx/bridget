@@ -21,6 +21,152 @@ const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
 const MAX_UI_AGENT_NAME_BYTES: usize = 100;
 const MAX_UI_SSE_EVENTS: usize = 20_000;
 
+// Cette page ne détient aucun état métier et ne connaît aucune socket Unix.
+// Elle ne consomme que les deux projections HTTP de ce relais : instantané et
+// flux Attach. L'interface graphique est donc une fenêtre, pas un quatrième
+// produit avec son propre protocole.
+const UI_PAGE: &str = r#"<!doctype html>
+<html lang="fr">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bridget — lecture seule</title>
+<style>
+  body { font: 14px ui-monospace, Menlo, monospace; margin: 1rem; color: #1f2933; background: #fff; }
+  h1 { font-size: 1.25rem; } h2 { font-size: 1rem; margin-top: 1.5rem; }
+  table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #bcccdc; padding: .35rem; text-align: left; vertical-align: top; }
+  button, select { font: inherit; padding: .3rem; } pre { white-space: pre-wrap; border: 1px solid #bcccdc; min-height: 12rem; padding: .6rem; overflow-wrap: anywhere; }
+  .unknown { color: #7b341e; } .status { padding: .5rem; border-left: 4px solid #486581; background: #f0f4f8; }
+</style>
+<body>
+<h1>Bridget — lecture seule</h1>
+<p id="source-status" class="status">Chargement de l'instantané attesté…</p>
+
+<h2>Agents</h2>
+<table><thead><tr><th>nom</th><th>état</th><th>modèle</th><th>mode</th><th>localisation</th></tr></thead><tbody id="agents"></tbody></table>
+
+<h2>Missions en cours</h2>
+<table><thead><tr><th>objectif</th><th>agent</th><th>état</th><th>âge</th></tr></thead><tbody id="missions"></tbody></table>
+
+<h2>Journal</h2>
+<label>Agent <select id="agent"></select></label>
+<button id="follow" type="button">Suivre</button>
+<p id="journal-status" class="status">Aucun agent sélectionné.</p>
+<pre id="journal" aria-live="polite"></pre>
+
+<script>
+(() => {
+  const token = new URLSearchParams(location.search).get("token");
+  const status = document.getElementById("source-status");
+  const agentsNode = document.getElementById("agents");
+  const missionsNode = document.getElementById("missions");
+  const selector = document.getElementById("agent");
+  const journal = document.getElementById("journal");
+  const journalStatus = document.getElementById("journal-status");
+  let stream = null;
+
+  const unknown = (value, label) => value == null || value === "" ? `${label} inconnu` : String(value);
+  const row = (parent, values) => {
+    const tr = document.createElement("tr");
+    values.forEach(([value, missing]) => {
+      const td = document.createElement("td");
+      td.textContent = value;
+      if (missing) td.className = "unknown";
+      tr.appendChild(td);
+    });
+    parent.appendChild(tr);
+  };
+  const age = (seconds) => {
+    if (!Number.isFinite(seconds) || seconds <= 0) return ["âge indisponible", true];
+    const elapsed = Math.max(0, Math.floor(Date.now() / 1000) - seconds);
+    if (elapsed < 60) return [`${elapsed}s`, false];
+    if (elapsed < 3600) return [`${Math.floor(elapsed / 60)}min`, false];
+    return [`${Math.floor(elapsed / 3600)}h`, false];
+  };
+  const renderSnapshot = (snapshot) => {
+    agentsNode.replaceChildren();
+    selector.replaceChildren();
+    const agents = snapshot.agents || [];
+    if (agents.length === 0) row(agentsNode, [["annuaire indisponible ou vide", true], ["—", true], ["—", true], ["—", true], ["—", true]]);
+    agents.forEach((agent) => {
+      row(agentsNode, [
+        [unknown(agent.name, "nom"), !agent.name], [unknown(agent.state, "état"), !agent.state],
+        [unknown(agent.model, "modèle non observé"), !agent.model], [unknown(agent.mode, "mode"), !agent.mode],
+        [unknown(agent.location, "localisation non attestée"), !agent.location]
+      ]);
+      const option = document.createElement("option"); option.value = agent.name; option.textContent = agent.name; selector.appendChild(option);
+    });
+
+    missionsNode.replaceChildren();
+    const objectives = snapshot.missions && snapshot.missions.objectives;
+    if (!Array.isArray(objectives)) {
+      row(missionsNode, [["source Maicie indisponible", true], ["—", true], ["—", true], ["—", true]]);
+      return;
+    }
+    const active = objectives.filter((item) => item.objective && item.objective.etat !== "Clos" && item.objective.etat !== "clos");
+    if (active.length === 0) row(missionsNode, [["aucune mission en cours", false], ["—", false], ["—", false], ["—", false]]);
+    active.forEach((item) => {
+      const objective = item.objective;
+      const delegations = Array.isArray(item.delegations) && item.delegations.length ? item.delegations : [null];
+      delegations.forEach((delegation) => row(missionsNode, [
+        [unknown(objective.but, "objectif"), !objective.but],
+        [delegation ? unknown(delegation.participant, "agent") : "agent non déclaré", !delegation || !delegation.participant],
+        [unknown(objective.etat, "état"), !objective.etat], age(objective.cree_at)
+      ]));
+    });
+  };
+  const append = (text) => { journal.textContent += `${text}\n`; journal.scrollTop = journal.scrollHeight; };
+  const fragmentText = (encoded) => {
+    try { return new TextDecoder().decode(Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0))); }
+    catch (_) { return "[fragment binaire non UTF-8]"; }
+  };
+  const renderEvent = (payload) => {
+    const event = payload.event || {};
+    switch (event.type) {
+      case "JournalFragment": append(fragmentText(event.bytes)); break;
+      case "Gap": append(`[lacune attestée seq ${event.from_seq}..${event.to_seq}${event.reason ? ` : ${event.reason}` : ""}]`); break;
+      case "JournalReadError": append(`[journal illisible : ${event.reason}]`); break;
+      case "SnapshotCaughtUp": append("[rattrapage terminé]"); break;
+      case "Subscribed": append("[abonnement actif]"); break;
+      case "End": journalStatus.textContent = `Flux terminé : ${event.reason || "motif indisponible"}`; append("[fin du flux]"); break;
+      default: append(`[événement Bridget ${event.type || "inconnu"}]`);
+    }
+  };
+  const follow = () => {
+    if (stream) stream.close();
+    const agent = selector.value;
+    if (!agent) { journalStatus.textContent = "Journal indisponible : aucun agent attesté."; return; }
+    journal.textContent = "";
+    journalStatus.textContent = `Abonnement en cours pour ${agent}…`;
+    stream = new EventSource(`/v1/watch?token=${encodeURIComponent(token || "")}&agent=${encodeURIComponent(agent)}`);
+    stream.addEventListener("snapshot", (message) => {
+      renderSnapshot(JSON.parse(message.data));
+      journalStatus.textContent = `Journal en flux continu : ${agent}`;
+    });
+    stream.addEventListener("journal", (message) => renderEvent(JSON.parse(message.data)));
+    stream.onerror = () => {
+      journalStatus.textContent = "Journal indisponible ou interrompu ; les lignes déjà affichées ne sont pas une observation fraîche.";
+      if (stream) stream.close();
+    };
+  };
+  document.getElementById("follow").addEventListener("click", follow);
+  if (!token) { status.textContent = "Jeton UI absent : le relais refuse toute projection."; return; }
+  fetch(`/v1/snapshot?token=${encodeURIComponent(token)}`).then((response) => {
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
+  }).then((snapshot) => {
+    renderSnapshot(snapshot);
+    status.textContent = "Instantané lu depuis les projections Bridget et Maicie.";
+    if (selector.value) follow(); else journalStatus.textContent = "Journal indisponible : l'annuaire ne contient aucun agent.";
+  }).catch((error) => {
+    status.textContent = `Instantané indisponible : ${error.message}`;
+    agentsNode.replaceChildren(); missionsNode.replaceChildren();
+    row(agentsNode, [["source Bridget indisponible", true], ["—", true], ["—", true], ["—", true], ["—", true]]);
+    row(missionsNode, [["source Maicie indisponible", true], ["—", true], ["—", true], ["—", true]]);
+  });
+})();
+</script>
+</body></html>"#;
+
 #[derive(Debug, Clone)]
 pub struct UiRelayConfig {
     pub daemon_socket: PathBuf,
@@ -154,7 +300,7 @@ fn serve_connection(stream: &mut TcpStream, config: &UiRelayConfig) -> Result<()
         return write_text(stream, 403, "jeton UI invalide");
     }
     match request.path.as_str() {
-        "/" => write_text(stream, 200, "Bridget UI relay ready\n"),
+        "/" => write_html(stream, 200, UI_PAGE),
         "/v1/snapshot" => {
             let snapshot = read_snapshot(config)?;
             write_json(stream, 200, &snapshot)
@@ -472,6 +618,17 @@ fn write_text(stream: &mut TcpStream, status: u16, body: &str) -> Result<(), UiE
     Ok(())
 }
 
+fn write_html(stream: &mut TcpStream, status: u16, body: &str) -> Result<(), UiError> {
+    write!(
+        stream,
+        "HTTP/1.1 {status} {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        status_text(status),
+        body.len()
+    )?;
+    stream.flush()?;
+    Ok(())
+}
+
 fn write_json<T: Serialize>(stream: &mut TcpStream, status: u16, value: &T) -> Result<(), UiError> {
     let body = serde_json::to_vec(value)
         .map_err(|error| UiError::Protocol(format!("projection JSON invalide: {error}")))?;
@@ -524,6 +681,37 @@ mod tests {
         client.read_to_string(&mut response).unwrap();
         worker.join().unwrap();
         assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+    }
+
+    #[test]
+    fn page_locale_ne_connait_que_les_projections_du_relais() {
+        let config = UiRelayConfig {
+            daemon_socket: PathBuf::from("/tmp/ui-page-ne-doit-pas-etre-ouvert.sock"),
+            maicie_config: PathBuf::from("/tmp/ui-page-ne-doit-pas-etre-ouvert.json"),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "jeton-page".to_string(),
+        };
+        let relay = UiRelay::bind(config).unwrap();
+        let address = relay.local_addr().unwrap();
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .write_all(b"GET /?token=jeton-page HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        worker.join().unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.contains("/v1/snapshot"), "{response}");
+        assert!(response.contains("/v1/watch"), "{response}");
+        assert!(response.contains("EventSource"), "{response}");
+        assert!(
+            !response.contains("bridget.sock"),
+            "Mutation : une page qui recevrait la socket Unix contournerait le relais; {response}"
+        );
     }
 
     #[test]
