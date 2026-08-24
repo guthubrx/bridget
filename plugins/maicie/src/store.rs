@@ -367,9 +367,11 @@ struct ApprovedSpawnOrder {
 impl MaicieStore {
     /// Ouvre la base privée sans migrer un schéma déjà versionné.
     ///
-    /// Une base neuve (`user_version = 0`) est bootstrappée : créer n'est pas
-    /// migrer. Une base dont le schéma est antérieur au binaire est refusée
-    /// tant que l'appelant n'a pas consenti via [`Self::open_and_migrate`].
+    /// Une base neuve (`user_version = 0` et aucun objet utilisateur dans
+    /// `sqlite_master`) est bootstrappée : créer n'est pas migrer. Une base
+    /// peuplée, même avec `user_version` remis à 0, ou dont le schéma est
+    /// antérieur au binaire, est refusée tant que l'appelant n'a pas consenti
+    /// via [`Self::open_and_migrate`].
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         Self::open_with_migration_consent(path, false)
     }
@@ -6411,7 +6413,7 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
     // migrations, pour que le second ouvre ensuite un schéma déjà cohérent.
     // Un refus (schéma trop récent ou migration non consentie) sort avant
     // toute écriture : le Drop de la transaction annule le verrou sans
-    // mutation durable — oracle : user_version inchangé.
+    // mutation durable — oracle : user_version ET sqlite_master inchangés.
     let tx = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(StoreError::Sql)?;
@@ -6424,13 +6426,19 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
             supported: SCHEMA_VERSION,
         });
     }
-    // user_version == 0 : base neuve (fichier vide) → bootstrap autorisé.
-    // 0 < version < SCHEMA : schéma antérieur → consentement explicite requis.
-    if current_version > 0 && current_version < SCHEMA_VERSION && !allow_upgrade {
-        return Err(StoreError::MigrationRequired {
-            found: current_version,
-            supported: SCHEMA_VERSION,
-        });
+    let schema_populated = database_has_user_schema(&tx)?;
+    // Bootstrap sans flag : UNIQUEMENT user_version == 0 ET base vide.
+    // Une base peuplée avec user_version remis à 0 n'est PAS neuve — c'est
+    // une migration déguisée (porte v0) et exige le même consentement.
+    if !allow_upgrade {
+        let needs_consent = (current_version > 0 && current_version < SCHEMA_VERSION)
+            || (current_version == 0 && schema_populated);
+        if needs_consent {
+            return Err(StoreError::MigrationRequired {
+                found: current_version,
+                supported: SCHEMA_VERSION,
+            });
+        }
     }
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (\n\
@@ -6878,6 +6886,21 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(StoreError::Sql)?;
     tx.commit().map_err(StoreError::Sql)
+}
+
+/// Vrai si la base contient déjà un objet de schéma utilisateur.
+/// Les tables/index internes `sqlite_*` ne comptent pas : un fichier SQLite
+/// fraîchement créé reste « vide » au sens bootstrap.
+fn database_has_user_schema(tx: &Transaction<'_>) -> Result<bool, StoreError> {
+    let count: i64 = tx
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master\n\
+             WHERE name NOT LIKE 'sqlite_%'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::Sql)?;
+    Ok(count > 0)
 }
 
 fn migrate_outbox_to_rejected_state(tx: &Transaction<'_>) -> Result<(), StoreError> {

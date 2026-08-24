@@ -71,9 +71,11 @@ résultat. Réutiliser cette clé avec un contenu différent est refusé.
 ## Migration de schéma — consentement explicite
 
 L'ouverture d'une base Maicie **ne migre plus** un schéma déjà versionné.
-Créer une base neuve (`user_version = 0`) reste autorisé sans flag : créer
-n'est pas migrer. Un schéma trop récent pour le binaire reste refusé
-(fail-closed, inchangé).
+Créer une base neuve reste autorisé sans flag : `user_version = 0` **et**
+aucun objet utilisateur dans `sqlite_master` (créer n'est pas migrer). Une
+base peuplée dont on remet `user_version` à 0 est refusée comme une
+migration — ce n'est pas une base neuve. Un schéma trop récent pour le
+binaire reste refusé (fail-closed, inchangé).
 
 Quand la base porte un schéma **antérieur** au binaire, l'ouverture refuse
 avec un message parlant et **n'écrit rien** (`user_version` inchangé). Le
