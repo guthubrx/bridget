@@ -831,6 +831,14 @@ pub enum RateLimitSource {
     /// Réponse ou notification `account/rateLimits/*` de Codex app-server.
     #[serde(rename = "codex-app-server")]
     CodexAppServer,
+    /// Bloc `rate_limits` du payload StatusLine de Claude Code, relevé par le
+    /// hook. Distinct de `claude-stream-json` : ce n'est ni le même canal ni
+    /// les mêmes champs — le StatusLine atteste un pourcentage consommé et un
+    /// instant de retour, jamais un statut `allowed`/`rejected`. C'est la
+    /// seule source de limite pour un Claude interactif, qui n'a pas de flux
+    /// natif.
+    #[serde(rename = "claude-statusline")]
+    ClaudeStatusLine,
 }
 
 impl std::fmt::Display for RateLimitSource {
@@ -838,6 +846,7 @@ impl std::fmt::Display for RateLimitSource {
         match self {
             RateLimitSource::ClaudeStreamJson => f.write_str("claude-stream-json"),
             RateLimitSource::CodexAppServer => f.write_str("codex-app-server"),
+            RateLimitSource::ClaudeStatusLine => f.write_str("claude-statusline"),
         }
     }
 }
