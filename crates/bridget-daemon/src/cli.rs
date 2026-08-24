@@ -1858,7 +1858,7 @@ fn hook_claude_statusline() {
         log::debug!("hook claude-statusline : aucune limite attestée");
         return;
     }
-    if let Err(error) = send_rate_limits_to_daemon(&agent, &facts) {
+    if let Err(error) = send_rate_limits_to_daemon(&socket_path(), &agent, &facts) {
         log::debug!("hook claude-statusline : {}", error);
     }
 }
@@ -1914,9 +1914,28 @@ fn statusline_epoch(value: &serde_json::Value) -> Option<i64> {
 }
 
 /// Envoie les faits relevés sur une seule connexion : deux fenêtres ne valent
-/// pas deux poignées de main.
-fn send_rate_limits_to_daemon(agent: &str, facts: &[StatusLineLimit]) -> Result<(), String> {
-    let stream = UnixStream::connect(socket_path()).map_err(|e| e.to_string())?;
+/// pas deux allers-retours.
+///
+/// La connexion ne se DÉCLARE PAS : aucun `Register` n'est émis, donc aucune
+/// présence n'est inscrite à l'annuaire. C'est volontaire et c'est le cœur du
+/// correctif. Le StatusLine s'exécute à chaque tour (débounce 300 ms) ; un
+/// `Register` par poussée peuplait l'annuaire de `cli-statusline-<pid>`
+/// éphémères, comptés comme agents LIBRES par les rondes.
+///
+/// Cette suppression ne coûte rien à l'attribution : le daemon route un
+/// `RateLimit` sur le champ `agent` du message — `handle_rate_limit` résout la
+/// cible par `presence_of_agent(state, agent)` et ne lit jamais l'identité de
+/// la connexion émettrice. Il n'y a pas non plus de poignée de main
+/// obligatoire : la boucle de connexion décode chaque ligne et la dispatche
+/// telle quelle, et l'accusé repart par le writer de la connexion, pas par le
+/// registre des présences. Le nom de repli n'attestait donc rien — il ne
+/// faisait que du bruit.
+fn send_rate_limits_to_daemon(
+    socket: &std::path::Path,
+    agent: &str,
+    facts: &[StatusLineLimit],
+) -> Result<(), String> {
+    let stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
     let read_stream = stream.try_clone().map_err(|e| e.to_string())?;
     // Même garde que la sonde de runtime : un daemon d'une version antérieure
     // ignore ce message, et sans délai borné le hook bloquerait le
@@ -1928,25 +1947,7 @@ fn send_rate_limits_to_daemon(agent: &str, facts: &[StatusLineLimit]) -> Result<
         .map_err(|e| e.to_string())?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(read_stream);
-    let register = WrapperToDaemon::Register {
-        agent_type: "cli".to_string(),
-        name: Some(format!("cli-statusline-{}", std::process::id())),
-        host: None,
-        transport: None,
-        mode: Some(PresenceMode::Cli),
-        location: None,
-        os: None,
-        instance_id: None,
-        domain: None,
-        turn_in_progress: false,
-        journal_available: None,
-    };
-    writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    writer.flush().map_err(|e| e.to_string())?;
     let mut line = String::new();
-    reader.read_line(&mut line).map_err(|e| e.to_string())?;
-    let _: DaemonToWrapper = decode(line.trim()).map_err(|e| e.to_string())?;
 
     for fact in facts {
         let message = WrapperToDaemon::RateLimit {
@@ -3706,6 +3707,209 @@ mod hook_tests {
             rendered, "—",
             "la colonne du référent ne doit plus être vide"
         );
+    }
+
+    /// ORACLE PRINCIPAL DU CORRECTIF : le hook n'émet AUCUN `Register`.
+    ///
+    /// La propriété se mesure à LA SOURCE — les trames émises — et non par une
+    /// inspection de l'annuaire après la poussée. Ce choix n'est pas un confort
+    /// de test, c'est une nécessité démontrée : à la fermeture d'une connexion
+    /// le daemon appelle `router.unregister_by_conn`, si bien qu'une présence
+    /// transitoire a TOUJOURS disparu au moment où on interroge `ListAgents`.
+    /// Un oracle tardif passe donc au vert même avec le `Register` remis en
+    /// place — vérifié : le mutant survivait. C'est exactement le piège qui a
+    /// rendu le constat d'origine difficile à saisir (« observée comme agent
+    /// LIBRE, disparue avant inspection »).
+    ///
+    /// `Register` étant le seul chemin vers `router.register` hors tests, ne
+    /// pas l'émettre suffit à ne jamais peupler l'annuaire.
+    #[test]
+    fn statusline_n_emet_aucune_declaration_de_presence() {
+        let unique = format!("{}-{}", std::process::id(), line!());
+        let socket = std::env::temp_dir().join(format!("bridget-statusline-{unique}.sock"));
+        std::fs::remove_file(&socket).ok();
+        let listener = UnixListener::bind(&socket).unwrap();
+
+        // Faux daemon : il accuse tout, et retient ce qu'on lui a dit.
+        let recu = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let journal = std::sync::Arc::clone(&recu);
+        let serveur = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut writer = BufWriter::new(stream.try_clone().unwrap());
+            let reader = BufReader::new(stream);
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                journal.lock().unwrap().push(line);
+                let ack = DaemonToWrapper::Ack {
+                    id: "rate-limit".to_string(),
+                };
+                if writeln!(writer, "{}", encode(&ack).unwrap()).is_err() || writer.flush().is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        let facts = rate_limit_facts_from_statusline(&statusline_payload_complet());
+        send_rate_limits_to_daemon(&socket, "referent-oracle", &facts).unwrap();
+        serveur.join().unwrap();
+        std::fs::remove_file(&socket).ok();
+
+        let trames = recu.lock().unwrap().clone();
+        let declarations: Vec<_> = trames
+            .iter()
+            .filter(|trame| {
+                matches!(
+                    decode::<WrapperToDaemon>(trame.trim()),
+                    Ok(WrapperToDaemon::Register { .. })
+                )
+            })
+            .collect();
+        assert!(
+            declarations.is_empty(),
+            "le hook s'est déclaré à l'annuaire : {declarations:?}"
+        );
+
+        // Et il n'a rien émis d'autre que ses deux faits, attribués au référent.
+        let fenetres: Vec<_> = trames
+            .iter()
+            .map(|trame| decode::<WrapperToDaemon>(trame.trim()).unwrap())
+            .map(|message| match message {
+                WrapperToDaemon::RateLimit { agent, window, .. } => (agent, window),
+                other => panic!("trame inattendue émise par le hook : {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            fenetres,
+            vec![
+                ("referent-oracle".to_string(), "five_hour".to_string()),
+                ("referent-oracle".to_string(), "seven_day".to_string()),
+            ],
+            "le hook doit émettre ses deux faits, et rien de plus"
+        );
+    }
+
+    /// ORACLE D'ATTRIBUTION, contre un daemon jetable : la poussée sans
+    /// déclaration remplit bel et bien la colonne du référent.
+    ///
+    /// Complément indispensable du précédent : supprimer le `Register` sans
+    /// vérifier l'attribution échangerait un annuaire bruyant contre une
+    /// colonne muette. On observe par la projection publique `ListAgents`,
+    /// celle-là même que lisent les rondes.
+    ///
+    /// Le daemon est jetable : socket et base sous `TMPDIR`, uniques, détruits
+    /// en fin de test. Jamais la production.
+    #[test]
+    fn statusline_attribue_ses_faits_sans_se_declarer() {
+        let unique = format!("{}-{}", std::process::id(), line!());
+        let socket = std::env::temp_dir().join(format!("bridget-statusline-{unique}.sock"));
+        let db_path = std::env::temp_dir().join(format!("bridget-statusline-{unique}.db"));
+        let config = crate::daemon::DaemonConfig {
+            socket_path: socket.clone(),
+            db_path: db_path.clone(),
+            log_path: std::env::temp_dir().join(format!("bridget-statusline-{unique}.log")),
+            ..Default::default()
+        };
+        let daemon_socket = socket.clone();
+        thread::spawn(move || {
+            let _ = crate::daemon::run(config);
+        });
+        for _ in 0..100 {
+            if daemon_socket.exists() {
+                break;
+            }
+            thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(socket.exists(), "daemon jetable non prêt");
+
+        // Le référent, lui, est un vrai agent : il se déclare. C'est la cible
+        // des faits, et le seul nom qui a le droit d'être à l'annuaire.
+        let referent = UnixStream::connect(&socket).unwrap();
+        let mut referent_writer = BufWriter::new(referent.try_clone().unwrap());
+        let mut referent_reader = BufReader::new(referent);
+        let register = WrapperToDaemon::Register {
+            agent_type: "claude".to_string(),
+            name: Some("referent-oracle".to_string()),
+            host: None,
+            transport: None,
+            mode: Some(PresenceMode::Tmux),
+            location: None,
+            os: None,
+            // Indispensable, et pas un détail de fixture : une présence est
+            // indexée par instance, et `presence_of_agent` remonte
+            // agent → connexion → instance. Sans `instance_id`, le référent
+            // serait à l'annuaire mais sans présence — donc sans colonne à
+            // remplir, et l'oracle mesurerait autre chose que la mission.
+            instance_id: Some("instance-referent-oracle".to_string()),
+            domain: None,
+            turn_in_progress: false,
+            journal_available: None,
+        };
+        writeln!(referent_writer, "{}", encode(&register).unwrap()).unwrap();
+        referent_writer.flush().unwrap();
+        let mut line = String::new();
+        referent_reader.read_line(&mut line).unwrap();
+        assert!(
+            matches!(
+                decode(line.trim()).unwrap(),
+                DaemonToWrapper::Registered { .. }
+            ),
+            "le référent doit être enregistré : {line}"
+        );
+
+        // LA POUSSÉE, par le chemin de production exact.
+        let facts = rate_limit_facts_from_statusline(&statusline_payload_complet());
+        assert_eq!(facts.len(), 2, "le payload d'essai porte deux fenêtres");
+        send_rate_limits_to_daemon(&socket, "referent-oracle", &facts)
+            .expect("la poussée doit aboutir sans se déclarer");
+
+        let agents = match ask_agent_list(&socket) {
+            DaemonToWrapper::AgentList { agents } => agents,
+            other => panic!("AgentList attendu, reçu {other:?}"),
+        };
+
+        // On n'assert PAS ici l'absence de `cli-statusline-*` : la connexion
+        // du hook est déjà refermée, donc déjà désenregistrée. L'assertion
+        // serait vraie quoi qu'il arrive, y compris avec le défaut. Cette
+        // propriété-là se prouve à la source, dans l'oracle précédent.
+        let referent_info = agents
+            .iter()
+            .find(|agent| agent.name == "referent-oracle")
+            .expect("le référent doit rester à l'annuaire");
+        let mut windows: Vec<_> = referent_info
+            .rate_limits
+            .iter()
+            .map(|fact| (fact.window.as_str(), fact.used_percent))
+            .collect();
+        windows.sort_unstable();
+        assert_eq!(
+            windows,
+            vec![("five_hour", Some(19)), ("seven_day", Some(61))],
+            "les faits poussés doivent être attribués au référent"
+        );
+        assert!(
+            referent_info
+                .rate_limits
+                .iter()
+                .all(|fact| fact.status == STATUSLINE_LIMIT_STATUS),
+            "le statut non attesté doit être conservé tel quel"
+        );
+
+        std::fs::remove_file(&socket).ok();
+        std::fs::remove_file(&db_path).ok();
+    }
+
+    /// Interroge la projection publique de l'annuaire, sans se déclarer non
+    /// plus : l'observateur ne doit pas fausser ce qu'il mesure.
+    fn ask_agent_list(socket: &Path) -> DaemonToWrapper {
+        let stream = UnixStream::connect(socket).unwrap();
+        let mut writer = BufWriter::new(stream.try_clone().unwrap());
+        let mut reader = BufReader::new(stream);
+        writeln!(writer, "{}", encode(&WrapperToDaemon::ListAgents).unwrap()).unwrap();
+        writer.flush().unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        decode(line.trim()).unwrap()
     }
 }
 
