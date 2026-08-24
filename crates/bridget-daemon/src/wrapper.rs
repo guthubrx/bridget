@@ -814,11 +814,14 @@ fn resolve_current_name(name_state_path: &std::path::Path, fallback: &str) -> St
 ///
 /// Claude ne garde pas le transcript ouvert. Le wrapper photographie donc le
 /// dossier avant le spawn et ne retient ensuite qu'un fichier créé ou modifié
-/// depuis cette photographie. Cela écarte les anciens transcripts du même
-/// projet sans inventer un identifiant de session.
+/// depuis cette photographie. Plusieurs sessions du même projet cohabitent
+/// sous `~/.claude/projects/<slug>/` : on préfère un fichier **né** après le
+/// spawn, puis on le **fixe** — sans cela, une session voisine plus récemment
+/// écrite (ex. opus-5) contaminerait l'agent courant (ex. fable-5).
 struct ClaudeTranscriptLocator {
     directory: PathBuf,
     baseline: BTreeMap<PathBuf, SystemTime>,
+    pinned: Option<PathBuf>,
 }
 
 impl ClaudeTranscriptLocator {
@@ -827,6 +830,7 @@ impl ClaudeTranscriptLocator {
         Self {
             directory,
             baseline,
+            pinned: None,
         }
     }
 
@@ -847,12 +851,47 @@ impl ClaudeTranscriptLocator {
             .collect()
     }
 
-    fn resolve(&self) -> Option<PathBuf> {
-        Self::transcripts(&self.directory)
+    fn resolve(&mut self) -> Option<PathBuf> {
+        if let Some(path) = &self.pinned {
+            if path.is_file() {
+                return Some(path.clone());
+            }
+            // Transcript disparu (rotation / purge) : autoriser une nouvelle
+            // résolution plutôt que de rester muet.
+            self.pinned = None;
+        }
+
+        let changed: Vec<(PathBuf, SystemTime)> = Self::transcripts(&self.directory)
             .into_iter()
             .filter(|(path, modified)| self.baseline.get(path) != Some(modified))
-            .max_by_key(|(_, modified)| *modified)
+            .collect();
+
+        // Priorité aux fichiers absents de la photo pré-spawn : c'est la
+        // session de CE wrapper. Parmi eux, le plus ancien est le premier
+        // créé après le lancement — typiquement le nôtre si un voisin démarre
+        // ensuite. Une fois choisi, `pinned` empêche tout basculement.
+        let mut newborns: Vec<(PathBuf, SystemTime)> = changed
+            .iter()
+            .filter(|(path, _)| !self.baseline.contains_key(path))
+            .cloned()
+            .collect();
+        newborns.sort_by_key(|(_, modified)| *modified);
+
+        let chosen = newborns
+            .into_iter()
+            .next()
             .map(|(path, _)| path)
+            .or_else(|| {
+                // Reprise sans nouveau fichier : dernière mtime parmi les
+                // transcripts déjà connus et modifiés depuis la photo.
+                changed
+                    .into_iter()
+                    .max_by_key(|(_, modified)| *modified)
+                    .map(|(path, _)| path)
+            })?;
+
+        self.pinned = Some(chosen.clone());
+        Some(chosen)
     }
 }
 
@@ -915,8 +954,8 @@ impl RuntimeProbe {
         }
     }
 
-    fn resolve_path(&self) -> Option<PathBuf> {
-        match &self.kind {
+    fn resolve_path(&mut self) -> Option<PathBuf> {
+        match &mut self.kind {
             RuntimeProbeKind::Codex { pid } => crate::runtime::open_session_file(*pid),
             RuntimeProbeKind::Claude { locator } => locator.resolve(),
         }
@@ -3971,6 +4010,65 @@ mod reconnect_tests {
             .poll()
             .expect("republication forcée après reconnect");
         assert_eq!(again, first);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sonde_ne_bascule_pas_vers_un_transcript_voisin_plus_recent() {
+        // Deux sessions Claude du même projet : la nôtre (fable-5) puis une
+        // voisine (opus-5) écrite plus tard. Sans pin, max(mtime) basculait
+        // vers le voisin — c'est l'anomalie observée sur la ligne bridget.
+        let root = std::env::temp_dir().join(format!(
+            "bridget-claude-probe-voisin-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let locator = ClaudeTranscriptLocator::new(root.clone());
+        std::fs::write(
+            root.join("aaaa-session-fable.jsonl"),
+            concat!(
+                r#"{"type":"assistant","isSidechain":false,"effort":"high","message":{"model":"claude-fable-5"}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        // Garantir une mtime strictement postérieure pour le voisin.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(
+            root.join("bbbb-session-opus.jsonl"),
+            concat!(
+                r#"{"type":"assistant","isSidechain":false,"effort":"high","message":{"model":"claude-opus-5"}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let mut probe = RuntimeProbe::claude(locator);
+        let first = probe.poll().expect("session fable d'abord");
+        assert_eq!(first.model, "claude-fable-5");
+
+        // Force une re-résolution de chemin (comme le refresh périodique).
+        probe.invalidate_after_reconnect();
+        // Réécrire le voisin pour qu'il soit le plus récent.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(
+            root.join("bbbb-session-opus.jsonl"),
+            concat!(
+                r#"{"type":"assistant","isSidechain":false,"effort":"high","message":{"model":"claude-opus-5"}}"#,
+                "\n",
+                r#"{"type":"assistant","isSidechain":false,"effort":"high","message":{"model":"claude-opus-5"}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let again = probe.poll().expect("republication de LA même session");
+        assert_eq!(
+            again.model, "claude-fable-5",
+            "la sonde ne doit pas adopter le transcript voisin opus-5"
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }

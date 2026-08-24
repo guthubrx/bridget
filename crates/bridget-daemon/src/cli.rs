@@ -1734,16 +1734,27 @@ fn hook_claude_runtime() {
         log::debug!("hook claude-runtime : pas de transcript_path");
         return;
     };
+    let transcript_path = std::path::Path::new(transcript);
+    let session_id = payload.get("session_id").and_then(|v| v.as_str());
+    // Claude Code nomme le fichier `{session_id}.jsonl`. Si le payload porte
+    // les deux, exiger l'accord : un chemin voisin contaminerait la présence.
+    if !transcript_matches_hook_session(transcript_path, session_id) {
+        log::debug!(
+            "hook claude-runtime : transcript {:?} ≠ session_id {:?}",
+            transcript_path.file_name(),
+            session_id
+        );
+        return;
+    }
     // Journalisé pour rendre diagnosticable le cas d'une session Claude
     // imbriquée qui hériterait du nom de l'agent parent (research.md D-002).
     log::debug!(
         "hook claude-runtime : agent={} session={:?}",
         agent,
-        payload.get("session_id").and_then(|v| v.as_str())
+        session_id
     );
 
-    let Some(observed) = crate::runtime::parse_claude_transcript(std::path::Path::new(transcript))
-    else {
+    let Some(observed) = crate::runtime::parse_claude_transcript(transcript_path) else {
         log::debug!("hook claude-runtime : aucun modèle dans {}", transcript);
         return;
     };
@@ -1758,6 +1769,24 @@ fn hook_claude_runtime() {
         Ok(other) => log::debug!("hook claude-runtime : réponse inattendue {:?}", other),
         Err(error) => log::debug!("hook claude-runtime : daemon inaccessible: {}", error),
     }
+}
+
+/// Vérifie que le chemin de transcript appartient bien à la session du hook.
+///
+/// Sans `session_id`, on ne peut pas trancher : le chemin fourni par Claude
+/// Code reste l'unique source. Avec les deux, le stem du fichier doit être
+/// l'identifiant — sinon c'est un voisin du même projet.
+fn transcript_matches_hook_session(
+    transcript: &std::path::Path,
+    session_id: Option<&str>,
+) -> bool {
+    let Some(session_id) = session_id.filter(|value| !value.is_empty()) else {
+        return true;
+    };
+    transcript
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .is_some_and(|stem| stem == session_id)
 }
 
 fn claude_settings_path() -> std::path::PathBuf {
@@ -2879,6 +2908,31 @@ mod hook_tests {
         assert!(insert_bridget_hook(&mut settings));
         assert!(hook_is_present(&settings));
         assert_eq!(settings["hooks"]["Stop"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn hook_exige_l_accord_session_id_et_transcript() {
+        use std::path::Path;
+        assert!(transcript_matches_hook_session(
+            Path::new("/tmp/proj/aaaa-session.jsonl"),
+            Some("aaaa-session")
+        ));
+        assert!(
+            !transcript_matches_hook_session(
+                Path::new("/tmp/proj/bbbb-voisin.jsonl"),
+                Some("aaaa-session")
+            ),
+            "un transcript voisin ne doit pas passer pour la session du hook"
+        );
+        // Sans session_id, le chemin fourni par Claude Code reste accepté.
+        assert!(transcript_matches_hook_session(
+            Path::new("/tmp/proj/bbbb-voisin.jsonl"),
+            None
+        ));
+        assert!(transcript_matches_hook_session(
+            Path::new("/tmp/proj/bbbb-voisin.jsonl"),
+            Some("")
+        ));
     }
 
     #[test]
