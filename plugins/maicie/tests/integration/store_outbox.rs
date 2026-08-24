@@ -56,7 +56,8 @@ fn schema_futur_et_enveloppe_corrompue_sont_refuses_fail_closed() {
     let future_database = future_root.join("maicie.sqlite3");
     drop(MaicieStore::open(&future_database).unwrap());
     let connection = rusqlite::Connection::open(&future_database).unwrap();
-    connection.pragma_update(None, "user_version", 15).unwrap();
+    // Futur = STRICTEMENT supérieur à SCHEMA_VERSION (15) — fail-closed.
+    connection.pragma_update(None, "user_version", 16).unwrap();
     drop(connection);
     assert!(MaicieStore::open(&future_database).is_err());
     fs::remove_dir_all(future_root).unwrap();
