@@ -3243,10 +3243,7 @@ fn handle_rate_limit(
 /// message n'arrive ici — le greffe rendra « inconnu », jamais zéro.
 fn handle_usage(
     agent: &str,
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_creation_input_tokens: u64,
-    cache_read_input_tokens: u64,
+    tokens: bridget_transport::protocol::UsageTokens,
     source: bridget_transport::protocol::UsageSource,
     state: &mut DaemonState,
 ) -> DaemonToWrapper {
@@ -3266,15 +3263,11 @@ fn handle_usage(
             reason: format!("agent introuvable: {agent}"),
         };
     }
-    if let Err(error) = state.store.record_usage_sample(
-        agent,
-        observed_at,
-        input_tokens,
-        output_tokens,
-        cache_creation_input_tokens,
-        cache_read_input_tokens,
-        &source.to_string(),
-    ) {
+    if let Err(error) =
+        state
+            .store
+            .record_usage_sample(agent, observed_at, tokens, &source.to_string())
+    {
         return DaemonToWrapper::Nack {
             id: "usage".to_string(),
             reason: format!("ledger usage: {error}"),
@@ -5767,10 +5760,12 @@ fn handle_wrapper_message(
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             Some(handle_usage(
                 &agent,
-                input_tokens,
-                output_tokens,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
+                bridget_transport::protocol::UsageTokens {
+                    input_tokens,
+                    output_tokens,
+                    cache_creation_input_tokens,
+                    cache_read_input_tokens,
+                },
                 source,
                 &mut st,
             ))
@@ -9656,15 +9651,17 @@ mod presence_tests {
 
     #[test]
     fn usage_atteste_s_agrege_et_sans_source_reste_inconnu() {
-        use bridget_transport::protocol::UsageSource;
+        use bridget_transport::protocol::{UsageSource, UsageTokens};
         let (mut state, config) = state_with_registered_agent("usage-atteste");
 
         let ack = handle_usage(
             "agent-2",
-            2,
-            175,
-            40_804,
-            13_907,
+            UsageTokens {
+                input_tokens: 2,
+                output_tokens: 175,
+                cache_creation_input_tokens: 40_804,
+                cache_read_input_tokens: 13_907,
+            },
             UsageSource::ClaudeStreamJson,
             &mut state,
         );

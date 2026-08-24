@@ -6611,6 +6611,7 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
         )
         .map_err(StoreError::Sql)?;
     }
+    // L4 : objective_costs en v13, derrière la v12 réelle (F36+F37).
     if current_version < 13 {
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS objective_costs (

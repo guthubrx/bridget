@@ -72,14 +72,14 @@ fn migration_v8_main_vers_v11_puis_seconde_ouverture_conservent_l_historique() {
     connection.pragma_update(None, "user_version", 8).unwrap();
     connection
         .execute(
-            "DELETE FROM schema_migrations WHERE version IN (9, 10, 11, 12)",
+            "DELETE FROM schema_migrations WHERE version IN (9, 10, 11, 12, 13)",
             [],
         )
         .unwrap();
     drop(connection);
 
     let store = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 12);
+    assert_eq!(store.schema_version().unwrap(), 13);
     assert_eq!(
         store.objective_snapshots(Some(objectif.id)).unwrap()[0].delegations[0].id,
         delegation
@@ -117,7 +117,7 @@ fn migration_v8_main_vers_v11_puis_seconde_ouverture_conservent_l_historique() {
     );
     drop(connection);
     let reopened = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 12);
+    assert_eq!(reopened.schema_version().unwrap(), 13);
     assert_eq!(
         reopened
             .objective_snapshots(Some(objectif.id))
@@ -170,14 +170,14 @@ fn migration_v9_refuse_de_rejouer_une_notification_sans_horodatage_atteste() {
     connection.pragma_update(None, "user_version", 9).unwrap();
     connection
         .execute(
-            "DELETE FROM schema_migrations WHERE version IN (10, 11, 12)",
+            "DELETE FROM schema_migrations WHERE version IN (10, 11, 12, 13)",
             [],
         )
         .unwrap();
     drop(connection);
 
     let store = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 12);
+    assert_eq!(store.schema_version().unwrap(), 13);
     assert!(matches!(
         store.pending_notification_outboxes(),
         Err(StoreError::Corrupt(
@@ -1694,7 +1694,7 @@ impl Drop for Fixture {
 
 #[test]
 fn l4_cout_atteste_non_nul_et_sans_source_reste_inconnu() {
-    use maicie::domain::CoutMissionAgent;
+    use maicie::domain::{CoutMissionAgent, CoutMissionCompteurs};
 
     let fixture = Fixture::new("l4-cout-atteste");
     let mut store = MaicieStore::open(&fixture.database).unwrap();
@@ -1710,11 +1710,13 @@ fn l4_cout_atteste_non_nul_et_sans_source_reste_inconnu() {
                 "claude-natif",
                 1_787_500_000,
                 1_787_600_000,
-                2,
-                10,
-                20,
-                30,
-                100,
+                CoutMissionCompteurs {
+                    turns: 2,
+                    input_tokens: 10,
+                    output_tokens: 20,
+                    cache_creation_input_tokens: 30,
+                    cache_read_input_tokens: 100,
+                },
             )],
         )
         .unwrap();
@@ -1739,7 +1741,7 @@ fn l4_cout_atteste_non_nul_et_sans_source_reste_inconnu() {
 
 #[test]
 fn l4_rejouer_close_ne_change_pas_le_cout_porte() {
-    use maicie::domain::CoutMissionAgent;
+    use maicie::domain::{CoutMissionAgent, CoutMissionCompteurs};
 
     let fixture = Fixture::new("l4-anti-double-comptage");
     let mut store = MaicieStore::open(&fixture.database).unwrap();
@@ -1754,11 +1756,13 @@ fn l4_rejouer_close_ne_change_pas_le_cout_porte() {
                 "claude-1",
                 1_787_600_000,
                 1_787_700_000,
-                1,
-                2,
-                175,
-                40_804,
-                13_907,
+                CoutMissionCompteurs {
+                    turns: 1,
+                    input_tokens: 2,
+                    output_tokens: 175,
+                    cache_creation_input_tokens: 40_804,
+                    cache_read_input_tokens: 13_907,
+                },
             )],
         )
         .unwrap();
@@ -1774,11 +1778,13 @@ fn l4_rejouer_close_ne_change_pas_le_cout_porte() {
             "claude-1",
             1_787_600_000,
             1_787_700_001,
-            9,
-            999,
-            999,
-            999,
-            999,
+            CoutMissionCompteurs {
+                turns: 9,
+                input_tokens: 999,
+                output_tokens: 999,
+                cache_creation_input_tokens: 999,
+                cache_read_input_tokens: 999,
+            },
         )],
     );
     assert!(matches!(

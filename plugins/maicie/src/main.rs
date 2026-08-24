@@ -20,8 +20,8 @@ use maicie::bridget_client::{
 use maicie::catalogue::{self, AppendOutcome, CatalogueEntry, CatalogueError, CatalogueJournal};
 use maicie::config::{ConfigError, MaicieConfig};
 use maicie::domain::{
-    ClasseDuree, CoutMissionAgent, DecisionCoordination, Delegation, EtatFlux, ObjectifCoordonne,
-    SourceSnapshot, SuiteObjective,
+    ClasseDuree, CoutMissionAgent, CoutMissionCompteurs, DecisionCoordination, Delegation,
+    EtatFlux, ObjectifCoordonne, SourceSnapshot, SuiteObjective,
 };
 use maicie::profiles::{
     ApprovalProfileView, ProfileError, ResolvedAgentDefinition, approval_view, load_profiles,
@@ -2058,11 +2058,13 @@ fn collect_mission_costs(
                     agent,
                     from_secs,
                     to_secs,
-                    aggregate.turns,
-                    aggregate.input_tokens,
-                    aggregate.output_tokens,
-                    aggregate.cache_creation_input_tokens,
-                    aggregate.cache_read_input_tokens,
+                    CoutMissionCompteurs {
+                        turns: aggregate.turns,
+                        input_tokens: aggregate.input_tokens,
+                        output_tokens: aggregate.output_tokens,
+                        cache_creation_input_tokens: aggregate.cache_creation_input_tokens,
+                        cache_read_input_tokens: aggregate.cache_read_input_tokens,
+                    },
                 ),
                 None => CoutMissionAgent::unknown(agent, from_secs, to_secs),
             }

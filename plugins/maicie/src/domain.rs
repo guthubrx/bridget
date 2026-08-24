@@ -1686,6 +1686,25 @@ pub struct RecuCorrelation {
     pub lifecycle_state: Option<EtatRequeteGuichet>,
 }
 
+/// Compteurs attestés d'une fenêtre de mission. `facturable` = in + out +
+/// cache_create ; `cache_read` reste hors facturable (leçon du comparatif).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoutMissionCompteurs {
+    pub turns: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
+}
+
+impl CoutMissionCompteurs {
+    pub fn facturable_tokens(self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.cache_creation_input_tokens)
+    }
+}
+
 /// Coût porté par un objectif clos pour un agent délégué.
 ///
 /// `attested == false` signifie « inconnu » : les compteurs restent absents,
@@ -1733,27 +1752,19 @@ impl CoutMissionAgent {
         agent: impl Into<String>,
         from_secs: i64,
         to_secs: i64,
-        turns: u64,
-        input_tokens: u64,
-        output_tokens: u64,
-        cache_creation_input_tokens: u64,
-        cache_read_input_tokens: u64,
+        compteurs: CoutMissionCompteurs,
     ) -> Self {
         Self {
             agent: agent.into(),
             from_secs,
             to_secs,
             attested: true,
-            turns: Some(turns),
-            input_tokens: Some(input_tokens),
-            output_tokens: Some(output_tokens),
-            cache_creation_input_tokens: Some(cache_creation_input_tokens),
-            cache_read_input_tokens: Some(cache_read_input_tokens),
-            facturable_tokens: Some(
-                input_tokens
-                    .saturating_add(output_tokens)
-                    .saturating_add(cache_creation_input_tokens),
-            ),
+            turns: Some(compteurs.turns),
+            input_tokens: Some(compteurs.input_tokens),
+            output_tokens: Some(compteurs.output_tokens),
+            cache_creation_input_tokens: Some(compteurs.cache_creation_input_tokens),
+            cache_read_input_tokens: Some(compteurs.cache_read_input_tokens),
+            facturable_tokens: Some(compteurs.facturable_tokens()),
         }
     }
 }

@@ -856,6 +856,24 @@ impl std::fmt::Display for UsageSource {
     }
 }
 
+/// Compteurs d'un échantillon de tour. `facturable` = in + out + cache_create ;
+/// `cache_read` reste hors facturable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageTokens {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
+}
+
+impl UsageTokens {
+    pub fn facturable_tokens(self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.cache_creation_input_tokens)
+    }
+}
+
 /// Agrégat de consommation sur une fenêtre. `facturable` = in + out +
 /// cache_create ; `cache_read` reste séparé (leçon du comparatif).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

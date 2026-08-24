@@ -266,10 +266,7 @@ impl Store {
         &self,
         agent: &str,
         observed_at: i64,
-        input_tokens: u64,
-        output_tokens: u64,
-        cache_creation_input_tokens: u64,
-        cache_read_input_tokens: u64,
+        tokens: bridget_transport::protocol::UsageTokens,
         source: &str,
     ) -> Result<(), StoreError> {
         self.conn
@@ -281,10 +278,10 @@ impl Store {
                 params![
                     agent,
                     observed_at,
-                    input_tokens as i64,
-                    output_tokens as i64,
-                    cache_creation_input_tokens as i64,
-                    cache_read_input_tokens as i64,
+                    tokens.input_tokens as i64,
+                    tokens.output_tokens as i64,
+                    tokens.cache_creation_input_tokens as i64,
+                    tokens.cache_read_input_tokens as i64,
                     source,
                 ],
             )
@@ -2131,7 +2128,17 @@ mod tests {
             None
         );
         store
-            .record_usage_sample("claude-1", 50, 2, 175, 40_804, 13_907, "claude-stream-json")
+            .record_usage_sample(
+                "claude-1",
+                50,
+                bridget_transport::protocol::UsageTokens {
+                    input_tokens: 2,
+                    output_tokens: 175,
+                    cache_creation_input_tokens: 40_804,
+                    cache_read_input_tokens: 13_907,
+                },
+                "claude-stream-json",
+            )
             .unwrap();
         let aggregate = store
             .aggregate_usage_window("claude-1", 1, 100)
