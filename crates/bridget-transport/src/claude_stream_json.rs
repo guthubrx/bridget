@@ -677,13 +677,19 @@ fn rate_limit_event(value: &Value) -> Option<ManagedEventKind> {
     })
 }
 
-/// Extrait une consommation complète depuis un message assistant ou un résultat.
-/// Schéma attesté : `input_tokens`, `output_tokens`, `cache_creation_input_tokens`,
-/// `cache_read_input_tokens`. Un champ manquant → aucun fait (jamais zéro inventé).
+/// Extrait la consommation d'un tour depuis l'événement terminal `result`.
+///
+/// Un tour Claude émet souvent `assistant` (usage sous `/message/usage`) puis
+/// `result` (usage à la racine) avec les mêmes compteurs. Ne lire que `result`
+/// : un seul échantillon par tour, jamais un facturable doublé. Schéma attesté
+/// complet requis ; un champ manquant → aucun fait (jamais zéro inventé).
 fn usage_event(value: &Value) -> Option<ManagedEventKind> {
+    if value.get("type").and_then(Value::as_str) != Some("result") {
+        return None;
+    }
     let usage = value
-        .pointer("/message/usage")
-        .or_else(|| value.get("usage"))?;
+        .get("usage")
+        .or_else(|| value.pointer("/message/usage"))?;
     let input_tokens = usage.get("input_tokens")?.as_u64()?;
     let output_tokens = usage.get("output_tokens")?.as_u64()?;
     let cache_creation_input_tokens = usage.get("cache_creation_input_tokens")?.as_u64()?;
@@ -1079,9 +1085,9 @@ mod tests {
     }
 
     #[test]
-    fn usage_assistant_reel_devient_un_fait_complet() {
+    fn usage_result_reel_devient_un_fait_complet() {
         let event: Value = serde_json::from_str(
-            r#"{"type":"assistant","message":{"usage":{"input_tokens":2,"output_tokens":175,"cache_creation_input_tokens":40804,"cache_read_input_tokens":13907}}}"#,
+            r#"{"type":"result","usage":{"input_tokens":2,"output_tokens":175,"cache_creation_input_tokens":40804,"cache_read_input_tokens":13907}}"#,
         )
         .unwrap();
         assert!(matches!(
@@ -1098,9 +1104,34 @@ mod tests {
     #[test]
     fn usage_incomplet_ne_devient_pas_un_zero_invente() {
         let event: Value = serde_json::from_str(
-            r#"{"type":"assistant","message":{"usage":{"input_tokens":2,"output_tokens":10}}}"#,
+            r#"{"type":"result","usage":{"input_tokens":2,"output_tokens":10}}"#,
         )
         .unwrap();
         assert!(usage_event(&event).is_none());
+    }
+
+    #[test]
+    fn usage_assistant_puis_result_ne_compte_qu_un_echantillon() {
+        let assistant: Value = serde_json::from_str(
+            r#"{"type":"assistant","message":{"usage":{"input_tokens":2,"output_tokens":175,"cache_creation_input_tokens":40804,"cache_read_input_tokens":13907}}}"#,
+        )
+        .unwrap();
+        let result: Value = serde_json::from_str(
+            r#"{"type":"result","usage":{"input_tokens":2,"output_tokens":175,"cache_creation_input_tokens":40804,"cache_read_input_tokens":13907}}"#,
+        )
+        .unwrap();
+        let counted = [assistant, result]
+            .iter()
+            .filter(|event| usage_event(event).is_some())
+            .count();
+        assert_eq!(
+            counted, 1,
+            "un tour assistant+result ne doit poser qu'un échantillon"
+        );
+        assert!(usage_event(&serde_json::from_str(
+            r#"{"type":"assistant","message":{"usage":{"input_tokens":2,"output_tokens":175,"cache_creation_input_tokens":40804,"cache_read_input_tokens":13907}}}"#,
+        )
+        .unwrap())
+        .is_none());
     }
 }

@@ -2154,6 +2154,11 @@ mod tests {
             store.aggregate_usage_window("claude-1", 80, 100).unwrap(),
             None
         );
+        assert_eq!(
+            store.aggregate_usage_window("claude-1", 1, 40).unwrap(),
+            None,
+            "échantillon après to_secs exclu"
+        );
         drop(store);
         let _ = std::fs::remove_file(path);
     }
