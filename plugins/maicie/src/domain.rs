@@ -362,9 +362,19 @@ impl EvaluationCloture {
 }
 
 /// Preuve évaluée produite uniquement par le réducteur 016 depuis une
-/// `EvaluationCloture` structurée. Ses champs privés empêchent qu'un appelant
-/// fabrique l'autorité stricte à côté du réducteur.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// `EvaluationCloture` structurée. Ses champs privés et l'absence volontaire
+/// de `Deserialize` empêchent qu'un appelant fabrique l'autorité stricte à
+/// partir d'un document externe.
+///
+/// ```compile_fail
+/// use maicie::domain::ActeClotureEvaluee;
+///
+/// let _: ActeClotureEvaluee = serde_json::from_str(
+///     r#"{"acte_id":"00000000-0000-0000-0000-000000000000"}"#,
+/// )?;
+/// # Ok::<(), serde_json::Error>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ActeClotureEvaluee {
     acte_id: Uuid,
     objectif_id: Uuid,
@@ -729,7 +739,7 @@ impl EntreeReductionCoordination {
 
 /// Transition fermée produite par le réducteur. Les prochaines politiques
 /// étendront la variante génération sans changer la couture transactionnelle.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum TransitionCoordinationActive {
     Aucune,
@@ -737,7 +747,7 @@ pub enum TransitionCoordinationActive {
     ClotureEvaluee(ActeClotureEvaluee),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReductionCoordinationActive {
     pub decision: DecisionCoordinationActive,
     pub transition: TransitionCoordinationActive,

@@ -5026,7 +5026,7 @@ mod coordination_transaction_tests {
     use crate::domain::{EtatGenerationDelegation, TypeDecisionCoordinationActive};
 
     #[test]
-    fn decision_transition_et_outbox_sont_toutes_annulees_apres_la_derniere_ecriture() {
+    fn faute_apres_une_vraie_outbox_annule_decision_transition_et_notification() {
         let mut connection = Connection::open_in_memory().unwrap();
         connection
             .execute_batch(
@@ -5102,6 +5102,9 @@ mod coordination_transaction_tests {
                 etat: EtatNotificationOutbox::Prepared,
             }],
         };
+        // Oracle de mutation : retirer l'insertion de l'outbox ou déplacer son
+        // écriture après l'observateur rend la reprise ci-dessous divergente.
+        assert_eq!(reduction.outboxes.len(), 1);
         let decision_bytes = serde_json::to_vec(&decision).unwrap();
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)

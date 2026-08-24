@@ -286,11 +286,10 @@ fn reduction_est_idempotente_et_l_acte_evalue_est_produit_dans_la_transaction() 
 }
 
 #[test]
-fn faute_entre_decision_transition_et_outboxes_annule_toutes_les_ecritures() {
+fn faute_entre_decision_et_transition_annule_toutes_les_ecritures() {
     for phase in [
         CoordinationCommitPhase::AfterDecisionInsert,
         CoordinationCommitPhase::AfterTransition,
-        CoordinationCommitPhase::AfterOutboxes,
     ] {
         let fixture = Fixture::new(&format!("rollback-{phase:?}"));
         let (objectif_id, delegation_id) = seed_coordination(&fixture.database, "alice");

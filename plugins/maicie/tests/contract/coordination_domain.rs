@@ -96,8 +96,14 @@ fn reducteur_est_le_seul_producteur_de_l_acte_de_cloture_evaluee() {
         evaluated_at: 1_787_500_100,
     });
     let first = reduire_coordination(&generation, &policy, &input).unwrap();
-    let second = reduire_coordination(&generation, &policy, &input).unwrap();
-    assert_eq!(first, second);
+    let expected = serde_json::to_vec(&first).unwrap();
+    for _ in 0..100 {
+        assert_eq!(
+            serde_json::to_vec(&reduire_coordination(&generation, &policy, &input).unwrap())
+                .unwrap(),
+            expected
+        );
+    }
     let TransitionCoordinationActive::ClotureEvaluee(act) = first.transition else {
         panic!("acte de clôture attendu")
     };
