@@ -1438,12 +1438,17 @@ jamais par engagement. Donc on encode.
   `--suite <objectif>` ou `--suite aucune` EXPLICITE, refus d'usage sinon
   (même mécanique que --reason). L'omission devient impossible ; ne reste
   que le mensonge traçable.
-- **F37 — Détecteur de chaîne manuelle** : refus déterministe d'un mandat
-  qui CITE l'identifiant d'un autre objectif sans lien --depends-on ; et en
-  réconciliation, un objectif « aucune suite » suivi dans l'heure d'une
-  délégation du même auteur citant sa livraison → constat automatique au
-  registre (« chaîne pilotée à la main non déclarée »), qui reste ouvert
-  jusqu'à qualification. Zéro LLM : identifiants et horodatages seulement.
+- **F37 — Classement obligatoire des citations** (affiné sur objection
+  utilisateur : citer un lot pour simple contexte est légitime et fréquent —
+  le refus brut créerait des faux positifs) : un mandat qui cite
+  l'identifiant d'un autre objectif doit le classer — `--depends-on <id>`
+  (vraie chaîne : déblocage auto, notifications) OU `--reference <id>`
+  (contexte, aucun couplage). Refus UNIQUEMENT si l'identifiant cité n'est
+  classé ni l'un ni l'autre : Maicie ne juge jamais la nature du lien, elle
+  exige que l'auteur la déclare. Et en réconciliation : un `--reference` ou
+  un « aucune suite » suivi dans l'heure d'un déblocage manuel citant la
+  livraison → constat automatique au registre, ouvert jusqu'à
+  qualification. Zéro LLM : identifiants et horodatages seulement.
 
 Même doctrine que la fermeture par fait : rendre le contournement plus
 coûteux que la conformité. Mission à ouvrir après le train de merge du
