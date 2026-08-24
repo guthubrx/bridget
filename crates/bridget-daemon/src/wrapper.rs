@@ -2,11 +2,9 @@
 //!
 //! Appelé par le CLI quand l'utilisateur tape : bridget codex, bridget claude, etc.
 
-#[cfg(test)]
-use bridget_transport::journal::JournalWriter;
 use bridget_transport::journal::{
     IncrementalJournalReader, JournalLiveFeed, JournalReadItem, JournalSourceIdentity,
-    JournalWindowError, current_host_date, resolve_window,
+    JournalWindowError, JournalWriter, current_host_date, resolve_window,
 };
 use bridget_transport::protocol::{PresenceMode, decode, encode};
 use bridget_transport::{
@@ -1159,6 +1157,31 @@ pub fn launch(
         ClaudeTranscriptLocator::new(claude_transcript_directory(&home, &cwd))
     });
 
+    // Journal append-only interactif : Register annonce `false`, puis
+    // JournalReady atteste la réalité une fois le writer ouvert. Aucune
+    // inversion en dur — un chemin sans activation reste refusé par le gate.
+    let live_feed = JournalLiveFeed::default();
+    let journal_root = home.join(".cache/bridget/sessions");
+    let journal = Arc::new(
+        JournalWriter::start_with_live_feed_and_failure(
+            &journal_root,
+            &my_name,
+            &instance_id,
+            Arc::new(|detail| {
+                warn!("journal interactif en échec: {detail}");
+            }),
+            Some(live_feed.clone()),
+        )
+        .map_err(|error| format!("activation du journal interactif impossible: {error}"))?,
+    );
+    send_wrapper_message(&writer, WrapperToDaemon::JournalReady);
+    let relay_writer = writer.clone();
+    let mut relay = AttachRelayWorker::start(
+        journal_root.join(&my_name),
+        live_feed,
+        Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
+    );
+
     // 4. Lancer l'agent CLI
     // Pour Codex : ajouter automatiquement --dangerously-bypass-approvals-and-sandbox
     // (= --yolo) sinon le sandbox bloque la connexion socket vers le daemon.
@@ -1242,7 +1265,7 @@ pub fn launch(
         final_args.join(" ")
     );
 
-    let mut child = Command::new(agent_binary)
+    let mut child = match Command::new(agent_binary)
         .args(&final_args)
         .env("BRIDGET_AGENT_NAME", &my_name)
         .env("BRIDGET_AGENT_NAME_FILE", &name_state_path)
@@ -1251,7 +1274,14 @@ pub fn launch(
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
-        .map_err(|e| format!("impossible de lancer '{}': {}", agent_binary, e))?;
+    {
+        Ok(child) => child,
+        Err(error) => {
+            relay.shutdown();
+            journal.stop();
+            return Err(format!("impossible de lancer '{}': {}", agent_binary, error).into());
+        }
+    };
 
     let agent_pid = child.id();
     let marker_directory = socket_path().parent().unwrap().join("agent-pids");
@@ -1294,6 +1324,8 @@ pub fn launch(
             "claude" => claude_transcript_locator.map(RuntimeProbe::claude),
             _ => None,
         };
+        let journal = journal;
+        let mut relay = relay;
 
         'connection: while !stopping_for_thread.load(Ordering::SeqCst) {
             let mut line = String::new();
@@ -1464,6 +1496,13 @@ pub fn launch(
                             last_heartbeat = Instant::now();
                             failed_attempts = 0; // Reset du compteur
                             my_name_for_thread = registered_name;
+                            // Register réinitialise l'attestation : le journal
+                            // local reste actif, il faut le réannoncer.
+                            relay.reset_generation();
+                            send_wrapper_message(
+                                &writer_for_listener,
+                                WrapperToDaemon::JournalReady,
+                            );
 
                             info!(
                                 "✅ Agent « {} » reconnecté au daemon avec succès !",
@@ -1516,6 +1555,7 @@ pub fn launch(
                         bm.from,
                         bm.body.chars().take(60).collect::<String>()
                     );
+                    record_interactive_turn(journal.as_ref(), &bm);
                     // Stocker le dernier expéditeur pour la commande reply
                     let name_for_reply = std::fs::read_to_string(&name_state_for_thread)
                         .unwrap_or_default()
@@ -1556,16 +1596,39 @@ pub fn launch(
                         expires_at,
                         message,
                         unix_now_secs(),
-                        |message| match transport.as_mut() {
-                            Some(transport) => transport
-                                .deliver(message)
-                                .map_err(|error| error.to_string()),
-                            None => Err("aucun pane tmux pour la livraison idempotente".into()),
+                        |message| {
+                            record_interactive_turn(journal.as_ref(), message);
+                            match transport.as_mut() {
+                                Some(transport) => transport
+                                    .deliver(message)
+                                    .map_err(|error| error.to_string()),
+                                None => {
+                                    Err("aucun pane tmux pour la livraison idempotente".into())
+                                }
+                            }
                         },
                     );
                     for report in reports {
                         send_wrapper_message(&writer_for_listener, report);
                     }
+                }
+                DaemonToWrapper::Subscribe {
+                    subscription_id,
+                    window,
+                    ..
+                } => {
+                    if let Err(reason) = relay.subscribe(subscription_id.clone(), window) {
+                        send_wrapper_message(
+                            &writer_for_listener,
+                            WrapperToDaemon::AttachRejected {
+                                subscription_id: Some(subscription_id),
+                                reason,
+                            },
+                        );
+                    }
+                }
+                DaemonToWrapper::Unsubscribe { subscription_id } => {
+                    relay.unsubscribe(subscription_id);
                 }
                 DaemonToWrapper::Disconnect => {
                     info!("daemon déconnecté");
@@ -1601,6 +1664,11 @@ pub fn launch(
                                 connected_since = Instant::now();
                                 last_heartbeat = Instant::now();
                                 my_name_for_thread = registered_name;
+                                relay.reset_generation();
+                                send_wrapper_message(
+                                    &writer_for_listener,
+                                    WrapperToDaemon::JournalReady,
+                                );
                                 continue 'connection;
                             }
                             Ok((_, _, registered_name)) => warn!(
@@ -1617,6 +1685,8 @@ pub fn launch(
                 _ => {}
             }
         }
+        relay.shutdown();
+        journal.stop();
     });
 
     // 6. Attendre la fin de l'agent
@@ -3059,6 +3129,22 @@ fn send_wrapper_message(
         .map(|writer| writeln!(writer, "{}", json).and_then(|_| writer.flush()));
     if let Some(Err(error)) = write_result {
         warn!("envoi wrapper géré impossible: {}", error);
+    }
+}
+
+/// Consigne une livraison interactive dans le journal append-only. Le rendu
+/// attach réutilise le même événement `turn_start` que les pilotes gérés.
+fn record_interactive_turn(journal: &JournalWriter, message: &bridget_core::BridgetMessage) {
+    if let Err(detail) = journal.enqueue(
+        "turn_start",
+        Some(&message.id),
+        serde_json::json!({
+            "from": &message.from,
+            "reply": message.reply,
+            "body": &message.body,
+        }),
+    ) {
+        warn!("écriture journal interactif impossible: {detail}");
     }
 }
 
