@@ -259,6 +259,58 @@ fn timeout_gagne_mais_le_rapport_et_son_hash_restent_greffes() {
 }
 
 #[test]
+fn depot_sur_objectif_clos_est_refuse_sans_tuer_maicie_ni_reouvrir() {
+    let root = root("closed-objective");
+    let database = root.join("maicie.sqlite3");
+    let created = seed(&database);
+    let mut store = MaicieStore::open(&database).unwrap();
+    store
+        .close_objective(created.objective_id, "clôture manuelle", 1_005)
+        .unwrap();
+    let claim = delivery_claim("request-after-close", &created);
+    let first = process_guichet_claim(&mut store, &claim, "response-after-close", 1_010).unwrap();
+    assert!(!first.replayed);
+    let reply = String::from_utf8(first.reply_bytes.clone()).unwrap();
+    assert!(reply.contains("\"outcome\":\"request_already_terminal\""));
+
+    let replay = process_guichet_claim(&mut store, &claim, "ignored-on-replay", 1_020).unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.reply_bytes, first.reply_bytes);
+
+    let snapshots = store
+        .objective_snapshots(Some(created.objective_id))
+        .unwrap();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].objective.etat, EtatObjectif::Clos);
+    assert_eq!(snapshots[0].delegations[0].etat, EtatDelegation::Creee);
+    assert!(
+        snapshots[0]
+            .decisions
+            .iter()
+            .any(|decision| decision.motif.contains("état métier incompatible"))
+    );
+    drop(store);
+
+    let connection = Connection::open(&database).unwrap();
+    let receptions: i64 = connection
+        .query_row("SELECT COUNT(*) FROM guichet_receptions", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(receptions, 1);
+    let outcome: String = connection
+        .query_row(
+            "SELECT outcome FROM guichet_receptions WHERE request_id = 'request-after-close'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(outcome, "request_already_terminal");
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
     let root = root("migration-v6");
     let database = root.join("maicie.sqlite3");
