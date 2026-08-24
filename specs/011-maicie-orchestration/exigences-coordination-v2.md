@@ -1642,3 +1642,27 @@ registre Cartae, et qui compte pour nous :
 Généalogie actée : Rekall (12/2025) → Veilleurs Cartae V2 → lentilles
 MAICompany → lentilles de profil Maicie (ARBITRÉ OUI par l'utilisateur le
 24/08 : intégration à la phase autonomie).
+
+## F38 — Carte de criticité auto-élue (exigence gravée le 2026-08-24 20:26, demande utilisateur)
+
+Le déclenchement du jury de revue (doctrine à deux étages, règles de
+chantier du 24/08) doit devenir systémique DE BOUT EN BOUT : non seulement
+la décision par lot (diff comparé à une liste — déjà mécanique), mais
+L'ÉLECTION DE LA LISTE elle-même. Aucun humain ni référent ne choisit les
+fichiers critiques ; la carte s'alimente par trois voies :
+1. **Auto-détection dans le contenu du diff** : marqueurs intrinsèques
+   (SCHEMA_VERSION, ALTER TABLE, migrations) => jury sans liste.
+2. **Élection par le registre du dû** : toute zone citée dans un constat
+   Bloquant, ou dans >=2 Majors, entre automatiquement dans la carte tenue
+   par Maicie. Vérité fondatrice : la liste « choisie » le 24/08 au soir
+   était déjà, de fait, une lecture du registre (chaque zone <=> son
+   constat : attestation<=>outcome-unknown, migrations<=>panne v16, vie des
+   agents<=>spawn-fantôme+boot+cartes, sécurité<=>second-facteur).
+3. **Ancrage contractuel** : les fichiers cités par specs/*/contracts/ sont
+   critiques par construction.
+Geste humain résiduel : approuver les SORTIES de carte uniquement (zone
+calme depuis N jours => proposition de rétrogradation, régime
+propose/approve des profils, ADR 011). Portée : par projet — la carte est
+un état de config Maicie par dépôt, le mécanisme est générique.
+Chaînage : phase autonomie, après routines (F-suite) — la relève qui évalue
+les routines peut évaluer la carte au même battement.
