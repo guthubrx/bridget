@@ -638,6 +638,8 @@ enum RegistreAction {
     List,
     /// Append d'une ligne JSON fermée `add` (idempotent aux octets identiques).
     Add { line: String },
+    /// Migration d'un corpus prose intermédiaire vers `pending_qualification`.
+    Migrer { depuis: PathBuf },
 }
 
 #[derive(Debug)]
@@ -714,10 +716,13 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
 
 fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
     let Some((verb, tail)) = arguments.split_first() else {
-        return Err(CliError::Usage("action registre obligatoire : list ou add"));
+        return Err(CliError::Usage(
+            "action registre obligatoire : list, add ou migrer",
+        ));
     };
     let mut config = None;
     let mut line = None;
+    let mut depuis = None;
     let mut index = 0;
     while index < tail.len() {
         match tail[index].as_str() {
@@ -725,6 +730,7 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             "--line" => {
                 set_once_string(&mut line, next_value(tail, &mut index, "--line")?, "line")?
             }
+            "--depuis" => set_once_path(&mut depuis, next_value(tail, &mut index, "--depuis")?)?,
             _ => return Err(CliError::Usage("option registre inconnue")),
         }
         index += 1;
@@ -735,12 +741,34 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             if line.is_some() {
                 return Err(CliError::Usage("--line interdit pour registre list"));
             }
+            if depuis.is_some() {
+                return Err(CliError::Usage("--depuis interdit pour registre list"));
+            }
             RegistreAction::List
         }
-        "add" => RegistreAction::Add {
-            line: line.ok_or(CliError::Usage("--line est obligatoire pour registre add"))?,
-        },
-        _ => return Err(CliError::Usage("action registre inconnue : list ou add")),
+        "add" => {
+            if depuis.is_some() {
+                return Err(CliError::Usage("--depuis interdit pour registre add"));
+            }
+            RegistreAction::Add {
+                line: line.ok_or(CliError::Usage("--line est obligatoire pour registre add"))?,
+            }
+        }
+        "migrer" => {
+            if line.is_some() {
+                return Err(CliError::Usage("--line interdit pour registre migrer"));
+            }
+            RegistreAction::Migrer {
+                depuis: depuis.ok_or(CliError::Usage(
+                    "--depuis est obligatoire pour registre migrer",
+                ))?,
+            }
+        }
+        _ => {
+            return Err(CliError::Usage(
+                "action registre inconnue : list, add ou migrer",
+            ));
+        }
     };
     Ok(RegistreArgs { config, action })
 }
@@ -772,6 +800,17 @@ fn run_registre(arguments: RegistreArgs) -> Result<String, CliError> {
                 AppendOutcome::Appended => "registre add: appended".to_string(),
                 AppendOutcome::IdempotentNoop => "registre add: idempotent_noop".to_string(),
             })
+        }
+        RegistreAction::Migrer { depuis } => {
+            let mut journal =
+                CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
+            let report = journal
+                .migrate_prose_file(&depuis)
+                .map_err(CliError::Catalogue)?;
+            Ok(format!(
+                "registre migrer: {} lues, {} appended, {} skipped",
+                report.read, report.appended, report.skipped
+            ))
         }
     }
 }
@@ -1822,5 +1861,21 @@ mod tests {
             })
         ));
         assert!(parse_command(&["registre".to_string(), "list".to_string()]).is_err());
+        let migrer = parse_command(&[
+            "registre".to_string(),
+            "migrer".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+            "--depuis".to_string(),
+            "/tmp/prose.jsonl".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            migrer,
+            Command::Registre(RegistreArgs {
+                action: RegistreAction::Migrer { .. },
+                ..
+            })
+        ));
     }
 }

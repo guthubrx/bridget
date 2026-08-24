@@ -259,6 +259,14 @@ pub enum AppendOutcome {
     IdempotentNoop,
 }
 
+/// Compte-rendu d'une migration de corpus prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MigrationReport {
+    pub read: usize,
+    pub appended: usize,
+    pub skipped: usize,
+}
+
 /// État dérivé d'un constat dans la projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DerivedState {
@@ -366,12 +374,76 @@ impl CatalogueJournal {
         self.append_entry(entry)
     }
 
+    /// Migre un corpus prose intermédiaire `{provenance_id, text, …}` vers le
+    /// journal. Parse intégral avant toute écriture : une ligne mal formée
+    /// refuse tout le lot. Une provenance déjà présente n'est jamais
+    /// redoublée (rejeu prudent du référent).
+    pub fn migrate_prose_file(
+        &mut self,
+        prose_path: impl AsRef<Path>,
+    ) -> Result<MigrationReport, CatalogueError> {
+        let prose_path = prose_path.as_ref();
+        let bytes = fs::read(prose_path)?;
+        let records = parse_prose_corpus(&bytes)?;
+        let mut appended = 0usize;
+        let mut skipped = 0usize;
+        for record in &records {
+            let entry = migrate_prose_record(record)?;
+            let outcome = match entry {
+                CatalogueEntry::PendingQualification(pending) => {
+                    self.append_pending_dedup_provenance(pending)?
+                }
+                CatalogueEntry::Add(add) => self.append_add(add)?,
+                CatalogueEntry::Transition(_) => {
+                    return Err(CatalogueError::Format(
+                        "migration : une transition ne peut pas naître d'un corpus prose".into(),
+                    ));
+                }
+            };
+            match outcome {
+                AppendOutcome::Appended => appended += 1,
+                AppendOutcome::IdempotentNoop => skipped += 1,
+            }
+        }
+        Ok(MigrationReport {
+            read: records.len(),
+            appended,
+            skipped,
+        })
+    }
+
+    fn append_pending_dedup_provenance(
+        &mut self,
+        entry: PendingQualificationEntry,
+    ) -> Result<AppendOutcome, CatalogueError> {
+        let existing = self.read_entries()?;
+        if existing.iter().any(|previous| match previous {
+            CatalogueEntry::PendingQualification(pending) => {
+                pending.provenance_id == entry.provenance_id
+            }
+            _ => false,
+        }) {
+            return Ok(AppendOutcome::IdempotentNoop);
+        }
+        let wrapped = CatalogueEntry::PendingQualification(entry);
+        wrapped.validate_standalone()?;
+        self.append_entry_with_existing(wrapped, &existing)
+    }
+
     fn append_entry(&mut self, entry: CatalogueEntry) -> Result<AppendOutcome, CatalogueError> {
         let existing = self.read_entries()?;
-        validate_entry_against_journal(&entry, &existing)?;
+        self.append_entry_with_existing(entry, &existing)
+    }
+
+    fn append_entry_with_existing(
+        &mut self,
+        entry: CatalogueEntry,
+        existing: &[CatalogueEntry],
+    ) -> Result<AppendOutcome, CatalogueError> {
+        validate_entry_against_journal(&entry, existing)?;
         let line = canonical_line(&entry)?;
         let key = entry.identity_key();
-        for previous in &existing {
+        for previous in existing {
             if previous.identity_key() != key {
                 continue;
             }
@@ -773,6 +845,31 @@ pub fn migrate_prose_record(
     }
 }
 
+/// Parse un corpus prose JSONL. Toute ligne non vide doit être un
+/// `ProseMigrationRecord` fermé ; le premier défaut refuse le fichier entier
+/// avant toute écriture journal.
+pub fn parse_prose_corpus(bytes: &[u8]) -> Result<Vec<ProseMigrationRecord>, CatalogueError> {
+    let mut records = Vec::new();
+    for (index, raw) in BufReader::new(bytes).lines().enumerate() {
+        let line = raw?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let record: ProseMigrationRecord = serde_json::from_str(trimmed).map_err(|source| {
+            CatalogueError::Format(format!("corpus prose ligne {}: {}", index + 1, source))
+        })?;
+        if record.provenance_id.trim().is_empty() || record.text.is_empty() {
+            return Err(CatalogueError::Format(format!(
+                "corpus prose ligne {}: provenance_id et text obligatoires",
+                index + 1
+            )));
+        }
+        records.push(record);
+    }
+    Ok(records)
+}
+
 /// Réduit le journal en vue déterministe (aucune écriture).
 pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
     let mut delivered: BTreeSet<String> = BTreeSet::new();
@@ -1052,6 +1149,44 @@ mod tests {
             })
             .collect();
         assert_eq!(ids, BTreeSet::from(["w1", "w2"]));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn migrer_corpus_puis_rejeu_ne_redouble_pas_les_provenances() {
+        let root =
+            std::env::temp_dir().join(format!("maicie-catalogue-migrer-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let journal_path = root.join("catalogue.jsonl");
+        let prose_path = root.join("prose.jsonl");
+        fs::write(
+            &prose_path,
+            concat!(
+                r#"{"provenance_id":"doc#1","text":"premier constat historique"}"#,
+                "\n",
+                r#"{"provenance_id":"doc#2","text":"second constat historique"}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        {
+            let mut journal = CatalogueJournal::open(&journal_path).unwrap();
+            let first = journal.migrate_prose_file(&prose_path).unwrap();
+            assert_eq!(first.read, 2);
+            assert_eq!(first.appended, 2);
+            assert_eq!(first.skipped, 0);
+            let second = journal.migrate_prose_file(&prose_path).unwrap();
+            assert_eq!(second.read, 2);
+            assert_eq!(second.appended, 0);
+            assert_eq!(second.skipped, 2);
+            assert_eq!(journal.read_entries().unwrap().len(), 2);
+        }
+        // Malformé : aucune écriture supplémentaire.
+        fs::write(&prose_path, "{\"text\":\"sans provenance\"}\n").unwrap();
+        let mut journal = CatalogueJournal::open(&journal_path).unwrap();
+        let before = journal.read_entries().unwrap().len();
+        assert!(journal.migrate_prose_file(&prose_path).is_err());
+        assert_eq!(journal.read_entries().unwrap().len(), before);
         let _ = fs::remove_dir_all(&root);
     }
 }
