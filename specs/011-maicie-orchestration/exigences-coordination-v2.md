@@ -898,3 +898,19 @@ les blocs G : ce sont des compléments, pas des prérequis.
   recevoir l'état de son worktree — branche, diff non commité, dernière
   mission au greffe. C'est exactement la carte de reprise, mais à l'échelle
   d'un agent au lieu du référent. Même problème, même remède.
+- **Les missions longues tuent les agents gérés — timeout de transport,
+  constaté le 2026-08-24 à 06h21.** Un agent Cursor est mort en plein
+  travail sur « timeout ACP pour session/prompt ». Sa mission exigeait vingt
+  exécutions d'un test en isolation PUIS une campagne sous charge : un tour
+  de plusieurs dizaines de minutes. Le transport a expiré avant la fin.
+  Établi par lecture du journal, pas par déduction — et il était mort SEIZE
+  MINUTES avant le redémarrage du daemon, qui n'est donc pas en cause.
+  RÈGLE POUR LES MANDATS : ne jamais demander une campagne longue dans le
+  même tour qu'une analyse. Découper — mesurer d'abord, conclure ensuite —
+  ou borner explicitement le nombre d'exécutions. Une campagne de vingt
+  itérations qui confirme ce que cinq suffisent à démontrer coûte la vie de
+  l'agent qui la mène. J'ai d'ailleurs raccourci sa consigne en cours de
+  route pour cette raison ; c'était trop tard.
+  À INSTRUIRE : le timeout est-il configurable par mission ? Un mandat qui
+  annonce sa durée attendue pourrait obtenir une fenêtre adaptée, au lieu de
+  mourir silencieusement contre une valeur fixe.
