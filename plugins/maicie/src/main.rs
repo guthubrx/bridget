@@ -20,6 +20,7 @@ use maicie::catalogue::{self, AppendOutcome, CatalogueEntry, CatalogueError, Cat
 use maicie::config::{ConfigError, MaicieConfig};
 use maicie::domain::{
     ClasseDuree, DecisionCoordination, Delegation, EtatFlux, ObjectifCoordonne, SourceSnapshot,
+    SuiteObjective,
 };
 use maicie::profiles::{
     ApprovalProfileView, ProfileError, ResolvedAgentDefinition, approval_view, load_profiles,
@@ -378,6 +379,9 @@ fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
         // corrélation de réponse attend T015b/Subscribe, sans la simuler ici.
         reply: false,
         constat_id: arguments.constat_id.as_deref(),
+        suite: arguments.suite.clone(),
+        depends_on: &arguments.depends_on,
+        references: &arguments.references,
         idempotency_key: &idempotency_key,
         now,
         retry_until,
@@ -590,9 +594,13 @@ fn render_output(output: DelegateOutput, json: bool) -> Result<String, serde_jso
             ..
         } => {
             let delegation = &delegations[0];
+            let message = delegation
+                .message_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "—".to_string());
             format!(
-                "objectif={objective_id} délégation={} participant={} message_id={} état=prepared replayed={replayed}",
-                delegation.id, delegation.participant, delegation.message_id
+                "objectif={objective_id} délégation={} participant={} message_id={message} état={} replayed={replayed}",
+                delegation.id, delegation.participant, delegation.coordination_state,
             )
         }
         DelegateOutput::Candidates { candidates } => format!("candidats={}", candidates.join(",")),
@@ -704,6 +712,9 @@ struct DelegateArgs {
     required_tags: Vec<String>,
     duration: ClasseDuree,
     constat_id: Option<String>,
+    suite: SuiteObjective,
+    depends_on: Vec<Uuid>,
+    references: Vec<Uuid>,
     idempotency_key: Option<String>,
     json: bool,
 }
@@ -1326,6 +1337,9 @@ fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
     let mut target = None;
     let mut duration = ClasseDuree::Normale;
     let mut constat_id = None;
+    let mut suite = None;
+    let mut depends_on = Vec::new();
+    let mut references = Vec::new();
     let mut idempotency_key = None;
     let mut required_tags = Vec::new();
     let mut json = false;
@@ -1354,6 +1368,26 @@ fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
                 next_value(arguments, &mut index, "--constat-id")?,
                 "constat-id",
             )?,
+            "--suite" => {
+                if suite.is_some() {
+                    return Err(CliError::Usage("option --suite dupliquée"));
+                }
+                suite = Some(parse_suite(next_value(arguments, &mut index, "--suite")?)?);
+            }
+            "--depends-on" => {
+                depends_on.push(parse_objective_id(next_value(
+                    arguments,
+                    &mut index,
+                    "--depends-on",
+                )?)?);
+            }
+            "--reference" => {
+                references.push(parse_objective_id(next_value(
+                    arguments,
+                    &mut index,
+                    "--reference",
+                )?)?);
+            }
             "--idempotency-key" => set_once_string(
                 &mut idempotency_key,
                 next_value(arguments, &mut index, "--idempotency-key")?,
@@ -1372,6 +1406,9 @@ fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
     }
     let config = config.ok_or(CliError::Usage("--config est obligatoire"))?;
     let goal = goal.ok_or(CliError::Usage("--goal est obligatoire"))?;
+    let suite = suite.ok_or(CliError::Usage(
+        "--suite est obligatoire (--suite <objectif-id> ou --suite aucune)",
+    ))?;
     Ok(DelegateArgs {
         config,
         goal,
@@ -1379,9 +1416,20 @@ fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
         required_tags,
         duration,
         constat_id,
+        suite,
+        depends_on,
+        references,
         idempotency_key,
         json,
     })
+}
+
+fn parse_suite(value: &str) -> Result<SuiteObjective, CliError> {
+    if value == "aucune" {
+        Ok(SuiteObjective::Aucune)
+    } else {
+        Ok(SuiteObjective::Objectif(parse_objective_id(value)?))
+    }
 }
 
 fn next_value<'a>(
@@ -1442,7 +1490,8 @@ enum DelegateOutput {
 struct DelegationOutput {
     id: Uuid,
     participant: String,
-    message_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_id: Option<Uuid>,
     coordination_state: &'static str,
     duration: ClasseDuree,
     timeout_secs: u64,
@@ -1459,7 +1508,11 @@ impl From<DelegateResult> for DelegateOutput {
                     id: created.delegation_id,
                     participant: created.participant,
                     message_id: created.message_id,
-                    coordination_state: "prepared",
+                    coordination_state: if created.waiting_on_prerequisites {
+                        "en_attente_prerequis"
+                    } else {
+                        "prepared"
+                    },
                     duration: created.duration,
                     timeout_secs: created.timeout_secs,
                     deadline_contractuelle: created.deadline_contractuelle,
@@ -2035,12 +2088,28 @@ mod tests {
     #[test]
     fn delegate_exige_les_options_structurantes() {
         assert!(parse_command(&["delegate".to_string()]).is_err());
+        let sans_suite = parse_command(&[
+            "delegate".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+            "--goal".to_string(),
+            "audit".to_string(),
+            "--json".to_string(),
+        ]);
+        assert!(
+            sans_suite
+                .err()
+                .is_some_and(|error| error.to_string().contains("--suite")),
+            "F36 : omission de --suite refusée"
+        );
         let command = parse_command(&[
             "delegate".to_string(),
             "--config".to_string(),
             "/tmp/maicie.json".to_string(),
             "--goal".to_string(),
             "audit".to_string(),
+            "--suite".to_string(),
+            "aucune".to_string(),
             "--json".to_string(),
         ])
         .unwrap();

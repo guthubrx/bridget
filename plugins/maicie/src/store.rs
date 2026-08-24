@@ -20,16 +20,16 @@ use crate::domain::{
     EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, FaitReassignation,
     FraicheurCoordination, GenerationDelegation, IssueGreffe, LienArbitrage, LigneeDelegation,
     LotReassignation, MotifRefusGreffe, NotificationOutbox, NotificationReassignation,
-    ObjectifCoordonne, OperationGuichet, PolitiqueReassignation, QualificationDependance,
-    ReceptionGreffe, RecuCorrelation, ReductionCoordinationActive, ReductionOuvertureDelegation,
-    ReductionReassignation, TransitionCoordinationActive, TypeDecision, TypeEffetDemandeSuivie,
-    TypeEvenementAttendu, TypeFaitReassignation, TypeNotificationReassignation,
-    identifiant_deterministe, reduire_coordination, reduire_ouverture_dependance,
-    reduire_reassignation,
+    ObjectifCoordonne, OperationGuichet, OutboxDelegation, PolitiqueReassignation,
+    QualificationDependance, ReceptionGreffe, RecuCorrelation, ReductionCoordinationActive,
+    ReductionOuvertureDelegation, ReductionReassignation, TransitionCoordinationActive,
+    TypeDecision, TypeEffetDemandeSuivie, TypeEvenementAttendu, TypeFaitReassignation,
+    TypeNotificationReassignation, identifiant_deterministe, reduire_coordination,
+    reduire_ouverture_dependance, reduire_reassignation,
 };
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
-    StoreCommitPhase,
+    StoreCommitPhase, stable_body_hash,
 };
 use bridget_transport::protocol::{CoordinationEventKind, WrapperToDaemon};
 use rusqlite::{
@@ -45,7 +45,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -78,6 +78,19 @@ pub struct MaicieStore {
     issuer_scope: String,
 }
 
+/// Paramètres figés pour créer l'outbox au déblocage F37 (aucune intention
+/// d'envoi tant que la délégation reste en attente).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredDispatchParams {
+    pub reply: bool,
+    pub timeout_secs: u64,
+    pub retry_until: i64,
+    pub dedup_retained_until: i64,
+    pub max_frame_bytes: usize,
+    pub deadline_contractuelle: i64,
+    pub issuer_scope: String,
+}
+
 /// Résultat durable d'une commande `delegate` idempotente. Les identifiants
 /// sont conservés séparément de l'outbox afin qu'un rejeu local ne dépende pas
 /// de la disponibilité du transport Bridget.
@@ -85,7 +98,8 @@ pub struct MaicieStore {
 pub struct StoredDelegateResult {
     pub objective_id: Uuid,
     pub delegation_id: Uuid,
-    pub message_id: Uuid,
+    /// Absent tant que la délégation est `EnAttentePrerequis` (aucune outbox).
+    pub message_id: Option<Uuid>,
     pub participant: String,
     pub duration: ClasseDuree,
     pub timeout_secs: u64,
@@ -2055,10 +2069,9 @@ impl MaicieStore {
             .query_row(
                 "SELECT i.canonical_request_bytes, i.objective_id, i.delegation_id,\n\
                         i.message_id, i.participant, i.timeout_secs, d.payload_json,\n\
-                        o.deadline_contractuelle\n\
+                        i.deadline_contractuelle\n\
                  FROM delegate_idempotency i\n\
                  JOIN delegations d ON d.id = i.delegation_id\n\
-                 JOIN delegation_outbox o ON o.message_id = i.message_id\n\
                  WHERE i.idempotency_key = ?1",
                 [idempotency_key],
                 |row| {
@@ -2066,7 +2079,7 @@ impl MaicieStore {
                         row.get::<_, Vec<u8>>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, i64>(5)?,
                         row.get::<_, Vec<u8>>(6)?,
@@ -2122,10 +2135,9 @@ impl MaicieStore {
             .query_row(
                 "SELECT i.canonical_request_bytes, i.objective_id, i.delegation_id,\n\
                         i.message_id, i.participant, i.timeout_secs, d.payload_json,\n\
-                        o.deadline_contractuelle\n\
+                        i.deadline_contractuelle\n\
                  FROM delegate_idempotency i\n\
                  JOIN delegations d ON d.id = i.delegation_id\n\
-                 JOIN delegation_outbox o ON o.message_id = i.message_id\n\
                  WHERE i.idempotency_key = ?1",
                 [idempotency_key],
                 |row| {
@@ -2133,7 +2145,7 @@ impl MaicieStore {
                         row.get::<_, Vec<u8>>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, i64>(5)?,
                         row.get::<_, Vec<u8>>(6)?,
@@ -2152,8 +2164,8 @@ impl MaicieStore {
         tx.execute(
             "INSERT INTO delegate_idempotency(\n\
                  idempotency_key, canonical_request_bytes, objective_id, delegation_id,\n\
-                 message_id, participant, timeout_secs\n\
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 message_id, participant, timeout_secs, deadline_contractuelle\n\
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 idempotency_key,
                 canonical_request_bytes,
@@ -2163,6 +2175,7 @@ impl MaicieStore {
                 prepared.delegation.participant,
                 i64::try_from(prepared.outbox.timeout_secs)
                     .map_err(|_| StoreError::Invalid("timeout_secs hors borne SQLite"))?,
+                prepared.outbox.deadline_contractuelle,
             ],
         )
         .map_err(StoreError::Sql)?;
@@ -2170,6 +2183,221 @@ impl MaicieStore {
         tx.commit().map_err(StoreError::Sql)?;
         observer(StoreCommitPhase::AfterCommit)?;
         Ok(DelegateReservation::Created)
+    }
+
+    /// Objectifs présents en base parmi les identifiants fournis (lookup F37).
+    pub fn existing_objective_ids(&self, candidates: &[Uuid]) -> Result<Vec<Uuid>, StoreError> {
+        let mut found = Vec::new();
+        for id in candidates {
+            let exists: bool = self
+                .connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM objectives WHERE id = ?1)",
+                    [id.to_string()],
+                    |row| row.get(0),
+                )
+                .map_err(StoreError::Sql)?;
+            if exists {
+                found.push(*id);
+            }
+        }
+        Ok(found)
+    }
+
+    /// `true` si l'objectif est présent et déjà clos.
+    pub fn objective_is_closed(&self, objective_id: Uuid) -> Result<bool, StoreError> {
+        let state: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT state FROM objectives WHERE id = ?1",
+                [objective_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        Ok(matches!(state.as_deref(), Some("clos")))
+    }
+
+    /// Réserve une délégation sans outbox (F37 voie A) + arêtes objectif→objectif.
+    pub fn lookup_or_reserve_waiting_delegate(
+        &mut self,
+        idempotency_key: &str,
+        canonical_request_bytes: &[u8],
+        objective: &ObjectifCoordonne,
+        delegation: &Delegation,
+        deferred: &DeferredDispatchParams,
+    ) -> Result<DelegateReservation, StoreError> {
+        validate_delegate_idempotency_key(idempotency_key)?;
+        if deferred.issuer_scope != self.issuer_scope {
+            return Err(StoreError::Conflict(
+                "issuer_scope différent de l'identité durable du store",
+            ));
+        }
+        if delegation.etat != EtatDelegation::EnAttentePrerequis {
+            return Err(StoreError::Invalid(
+                "délégation d'attente hors EnAttentePrerequis",
+            ));
+        }
+        if objective.depends_on.is_empty() {
+            return Err(StoreError::Invalid("attente sans prérequis objectif"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let stored = tx
+            .query_row(
+                "SELECT i.canonical_request_bytes, i.objective_id, i.delegation_id,\n\
+                        i.message_id, i.participant, i.timeout_secs, d.payload_json,\n\
+                        i.deadline_contractuelle\n\
+                 FROM delegate_idempotency i\n\
+                 JOIN delegations d ON d.id = i.delegation_id\n\
+                 WHERE i.idempotency_key = ?1",
+                [idempotency_key],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, Vec<u8>>(6)?,
+                        row.get::<_, i64>(7)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        if let Some(stored) = stored {
+            return decode_delegate_result(stored, canonical_request_bytes)
+                .map(DelegateReservation::Replay);
+        }
+
+        upsert_objective(&tx, objective)?;
+        let delegation_json = serde_json::to_vec(delegation).map_err(StoreError::Json)?;
+        tx.execute(
+            "INSERT INTO delegations(id, objective_id, state, payload_json) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                delegation.id.to_string(),
+                objective.id.to_string(),
+                delegation_state_name(delegation.etat),
+                delegation_json
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+        for prerequisite in &objective.depends_on {
+            let exists: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM objectives WHERE id = ?1)",
+                    [prerequisite.to_string()],
+                    |row| row.get(0),
+                )
+                .map_err(StoreError::Sql)?;
+            if !exists {
+                return Err(StoreError::NotFound("prérequis objectif absent"));
+            }
+            if *prerequisite == objective.id {
+                return Err(StoreError::Invalid("dépendance objective réflexive"));
+            }
+            tx.execute(
+                "INSERT INTO objective_dependencies(
+                     dependent_objective_id, prerequisite_objective_id
+                 ) VALUES (?1, ?2)",
+                params![objective.id.to_string(), prerequisite.to_string()],
+            )
+            .map_err(StoreError::Sql)?;
+        }
+        tx.execute(
+            "INSERT INTO deferred_delegation_dispatch(
+                 delegation_id, reply, timeout_secs, retry_until, dedup_retained_until,
+                 max_frame_bytes, idempotency_key, issuer_scope
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                delegation.id.to_string(),
+                i64::from(deferred.reply),
+                i64::try_from(deferred.timeout_secs)
+                    .map_err(|_| StoreError::Invalid("timeout_secs hors borne SQLite"))?,
+                deferred.retry_until,
+                deferred.dedup_retained_until,
+                i64::try_from(deferred.max_frame_bytes)
+                    .map_err(|_| StoreError::Invalid("max_frame_bytes hors borne"))?,
+                idempotency_key,
+                deferred.issuer_scope,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+        tx.execute(
+            "INSERT INTO delegate_idempotency(\n\
+                 idempotency_key, canonical_request_bytes, objective_id, delegation_id,\n\
+                 message_id, participant, timeout_secs, deadline_contractuelle\n\
+             ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7)",
+            params![
+                idempotency_key,
+                canonical_request_bytes,
+                objective.id.to_string(),
+                delegation.id.to_string(),
+                delegation.participant,
+                i64::try_from(deferred.timeout_secs)
+                    .map_err(|_| StoreError::Invalid("timeout_secs hors borne SQLite"))?,
+                deferred.deadline_contractuelle,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(DelegateReservation::Created)
+    }
+
+    /// Dépendants OBJECTIF→OBJECTIF d'un prérequis (index F37).
+    pub fn dependents_of_objective(&self, prerequisite: Uuid) -> Result<Vec<Uuid>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT dependent_objective_id FROM objective_dependencies
+                 WHERE prerequisite_objective_id = ?1 ORDER BY dependent_objective_id",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([prerequisite.to_string()], |row| row.get::<_, String>(0))
+            .map_err(StoreError::Sql)?;
+        rows.map(|row| parse_uuid(&row.map_err(StoreError::Sql)?))
+            .collect()
+    }
+
+    /// Pose les arêtes OBJECTIF→OBJECTIF pour une délégation déjà créée
+    /// (prérequis tous clos → dispatch immédiat, arêtes journalisées quand même).
+    pub fn register_objective_dependencies(
+        &mut self,
+        dependent: Uuid,
+        prerequisites: &[Uuid],
+    ) -> Result<(), StoreError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        for prerequisite in prerequisites {
+            if *prerequisite == dependent {
+                return Err(StoreError::Invalid("dépendance objective réflexive"));
+            }
+            let exists: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM objectives WHERE id = ?1)",
+                    [prerequisite.to_string()],
+                    |row| row.get(0),
+                )
+                .map_err(StoreError::Sql)?;
+            if !exists {
+                return Err(StoreError::NotFound("prérequis objectif absent"));
+            }
+            tx.execute(
+                "INSERT OR IGNORE INTO objective_dependencies(
+                     dependent_objective_id, prerequisite_objective_id
+                 ) VALUES (?1, ?2)",
+                params![dependent.to_string(), prerequisite.to_string()],
+            )
+            .map_err(StoreError::Sql)?;
+        }
+        tx.commit().map_err(StoreError::Sql)
     }
 
     /// Retourne uniquement les outboxes non terminales, avec l'enveloppe
@@ -5011,6 +5239,9 @@ where
     for outbox in objective_closure_outboxes(tx, objective.id, decision, issued_at)? {
         insert_notification_outbox(tx, &outbox)?;
     }
+    // F37 : déblocage OBJECTIF→OBJECTIF dans la même transaction que 016.
+    // Aucun dépendant → zéro écriture supplémentaire (oracle silencieux).
+    release_waiting_dependents_on_prerequisite_closure(tx, objective.id, decision, issued_at)?;
     observer(ObjectiveClosureCommitPhase::AfterOutboxes)
 }
 
@@ -5093,6 +5324,297 @@ fn objective_closure_outboxes(
         outboxes.push(outbox);
     }
     Ok(outboxes)
+}
+
+/// Débloque les dépendants F37 dont tous les prérequis objectifs sont clos.
+/// Aucun dépendant → aucune écriture (exigence oracle silencieux).
+fn release_waiting_dependents_on_prerequisite_closure(
+    tx: &Transaction<'_>,
+    closed_prerequisite: Uuid,
+    decision: &DecisionCoordination,
+    issued_at: i64,
+) -> Result<(), StoreError> {
+    let mut statement = tx
+        .prepare(
+            "SELECT dependent_objective_id FROM objective_dependencies
+             WHERE prerequisite_objective_id = ?1 ORDER BY dependent_objective_id",
+        )
+        .map_err(StoreError::Sql)?;
+    let dependents = statement
+        .query_map([closed_prerequisite.to_string()], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(StoreError::Sql)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::Sql)?;
+    drop(statement);
+
+    for dependent_raw in dependents {
+        let dependent_id = parse_uuid(&dependent_raw)?;
+        if !all_objective_prerequisites_closed(tx, dependent_id)? {
+            continue;
+        }
+        let Some((objective, mut delegation, deferred)) =
+            load_waiting_dependent_bundle(tx, dependent_id)?
+        else {
+            continue;
+        };
+        delegation
+            .transition(EtatDelegation::Creee)
+            .map_err(StoreError::Domain)?;
+        let body_bytes = delegation.instruction.as_bytes().to_vec();
+        let message_id = Uuid::new_v4();
+        let deadline = issued_at
+            .checked_add(
+                i64::try_from(deferred.timeout_secs)
+                    .map_err(|_| StoreError::Invalid("timeout hors borne"))?,
+            )
+            .ok_or(StoreError::Invalid("échéance hors borne"))?;
+        let outbox = OutboxDelegation {
+            message_id,
+            delegation_id: delegation.id,
+            target: delegation.participant.clone(),
+            body_bytes: body_bytes.clone(),
+            reply: deferred.reply,
+            timeout_secs: deferred.timeout_secs,
+            deadline_contractuelle: deadline,
+            body_hash: stable_body_hash(&body_bytes),
+            etat: EtatOutboxDelegation::Prepared,
+            attempted_at: None,
+            retry_until: deferred.retry_until.max(issued_at),
+            dedup_retained_until: deferred.dedup_retained_until.max(issued_at),
+        };
+        let prepared = PreparedDelegation::new(
+            objective.clone(),
+            delegation.clone(),
+            outbox,
+            deferred.issuer_scope.clone(),
+            issued_at,
+            deferred.max_frame_bytes,
+        )
+        .map_err(StoreError::Outbox)?;
+        // L'objectif existe déjà : insert_prepared ferait upsert puis INSERT
+        // délégation (conflit). On pose seulement l'outbox + transition.
+        let delegation_json = serde_json::to_vec(&delegation).map_err(StoreError::Json)?;
+        let changed = tx
+            .execute(
+                "UPDATE delegations SET state = ?1, payload_json = ?2
+                 WHERE id = ?3 AND state = ?4",
+                params![
+                    delegation_state_name(EtatDelegation::Creee),
+                    delegation_json,
+                    delegation.id.to_string(),
+                    delegation_state_name(EtatDelegation::EnAttentePrerequis),
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict(
+                "délégation d'attente modifiée concurremment",
+            ));
+        }
+        tx.execute(
+            "INSERT INTO delegation_outbox(\n\
+                 message_id, delegation_id, objective_id, issuer_scope, issued_at, target,\n\
+                 body_bytes, reply, timeout_secs, deadline_contractuelle, body_hash,\n\
+                 message_bytes, state, attempted_at, retry_until, dedup_retained_until, terminal\n\
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'prepared',NULL,?13,?14,0)",
+            params![
+                prepared.outbox.message_id.to_string(),
+                prepared.delegation.id.to_string(),
+                prepared.objective.id.to_string(),
+                prepared.issuer_scope,
+                prepared.issued_at,
+                prepared.outbox.target,
+                prepared.outbox.body_bytes,
+                i64::from(prepared.outbox.reply),
+                i64::try_from(prepared.outbox.timeout_secs)
+                    .map_err(|_| StoreError::Invalid("timeout_secs hors borne SQLite"))?,
+                prepared.outbox.deadline_contractuelle,
+                prepared.outbox.body_hash,
+                prepared.message_bytes,
+                prepared.outbox.retry_until,
+                prepared.outbox.dedup_retained_until,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+        tx.execute(
+            "UPDATE delegate_idempotency
+             SET message_id = ?1, deadline_contractuelle = ?2
+             WHERE delegation_id = ?3 AND message_id IS NULL",
+            params![message_id.to_string(), deadline, delegation.id.to_string(),],
+        )
+        .map_err(StoreError::Sql)?;
+        tx.execute(
+            "DELETE FROM deferred_delegation_dispatch WHERE delegation_id = ?1",
+            [delegation.id.to_string()],
+        )
+        .map_err(StoreError::Sql)?;
+
+        let notify_id = identifiant_deterministe(
+            b"notification-deblocage-objectif-v1",
+            &[
+                closed_prerequisite.as_bytes(),
+                dependent_id.as_bytes(),
+                decision.id.as_bytes(),
+            ],
+        );
+        let notify_bytes = serde_json::to_vec(&ObjectiveClosureMessage {
+            id: notify_id.to_string(),
+            from: crate::MAICIE_IDENTITY,
+            to: &delegation.participant,
+            body: format!(
+                "Prérequis {closed_prerequisite} clôturé — délégation {} débloquée",
+                delegation.id
+            ),
+            reply: false,
+            hops: 4,
+        })
+        .map_err(StoreError::Json)?;
+        let notify = NotificationOutbox {
+            message_id: notify_id,
+            idempotency_key: format!("notification:{notify_id}"),
+            issued_at,
+            objectif_id: dependent_id,
+            delegation_id: Some(delegation.id),
+            generation: None,
+            event_id: format!("objective-unblocked:{dependent_id}:{}", closed_prerequisite),
+            policy_version: DEPENDENCY_POLICY_VERSION,
+            recipient: delegation.participant.clone(),
+            message_bytes: notify_bytes,
+            etat: EtatNotificationOutbox::Prepared,
+        };
+        notify.verifier().map_err(StoreError::Domain)?;
+        insert_notification_outbox(tx, &notify)?;
+    }
+    Ok(())
+}
+
+fn all_objective_prerequisites_closed(
+    tx: &Transaction<'_>,
+    dependent_id: Uuid,
+) -> Result<bool, StoreError> {
+    let mut statement = tx
+        .prepare(
+            "SELECT prerequisite_objective_id FROM objective_dependencies
+             WHERE dependent_objective_id = ?1",
+        )
+        .map_err(StoreError::Sql)?;
+    let rows = statement
+        .query_map([dependent_id.to_string()], |row| row.get::<_, String>(0))
+        .map_err(StoreError::Sql)?;
+    let mut any = false;
+    for row in rows {
+        any = true;
+        let prereq = parse_uuid(&row.map_err(StoreError::Sql)?)?;
+        let state: String = tx
+            .query_row(
+                "SELECT state FROM objectives WHERE id = ?1",
+                [prereq.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::Sql)?;
+        if state != "clos" {
+            return Ok(false);
+        }
+    }
+    Ok(any)
+}
+
+struct LoadedDeferred {
+    reply: bool,
+    timeout_secs: u64,
+    retry_until: i64,
+    dedup_retained_until: i64,
+    max_frame_bytes: usize,
+    issuer_scope: String,
+}
+
+fn load_waiting_dependent_bundle(
+    tx: &Transaction<'_>,
+    dependent_id: Uuid,
+) -> Result<Option<(ObjectifCoordonne, Delegation, LoadedDeferred)>, StoreError> {
+    let objective_row: Option<(String, Vec<u8>)> = tx
+        .query_row(
+            "SELECT state, payload_json FROM objectives WHERE id = ?1",
+            [dependent_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    let Some((state, payload)) = objective_row else {
+        return Ok(None);
+    };
+    let objective: ObjectifCoordonne =
+        serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+    if objective.id != dependent_id || objective.etat != parse_objective_state(&state)? {
+        return Err(StoreError::Corrupt("objectif dépendant divergent"));
+    }
+    let delegation_row: Option<(String, Vec<u8>)> = tx
+        .query_row(
+            "SELECT state, payload_json FROM delegations
+             WHERE objective_id = ?1 ORDER BY id LIMIT 1",
+            [dependent_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    let Some((delegation_state, delegation_payload)) = delegation_row else {
+        return Ok(None);
+    };
+    let delegation: Delegation =
+        serde_json::from_slice(&delegation_payload).map_err(StoreError::Json)?;
+    if delegation.etat != EtatDelegation::EnAttentePrerequis
+        || parse_delegation_state(&delegation_state)? != EtatDelegation::EnAttentePrerequis
+    {
+        return Ok(None);
+    }
+    let deferred_row: Option<(i64, i64, i64, i64, i64, String)> = tx
+        .query_row(
+            "SELECT reply, timeout_secs, retry_until, dedup_retained_until,
+                    max_frame_bytes, issuer_scope
+             FROM deferred_delegation_dispatch WHERE delegation_id = ?1",
+            [delegation.id.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    let Some((
+        reply,
+        timeout_secs,
+        retry_until,
+        dedup_retained_until,
+        max_frame_bytes,
+        issuer_scope,
+    )) = deferred_row
+    else {
+        return Err(StoreError::Corrupt(
+            "délégation en attente sans paramètres de dispatch",
+        ));
+    };
+    Ok(Some((
+        objective,
+        delegation,
+        LoadedDeferred {
+            reply: reply != 0,
+            timeout_secs: u64::try_from(timeout_secs)
+                .map_err(|_| StoreError::Corrupt("timeout différé invalide"))?,
+            retry_until,
+            dedup_retained_until,
+            max_frame_bytes: usize::try_from(max_frame_bytes)
+                .map_err(|_| StoreError::Corrupt("max_frame_bytes différé invalide"))?,
+            issuer_scope,
+        },
+    )))
 }
 
 fn active_generation_optional(
@@ -5758,6 +6280,52 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
         )
         .map_err(StoreError::Sql)?;
     }
+    if current_version < 12 {
+        // F36+F37 : arêtes OBJECTIF→OBJECTIF + paramètres de dispatch différé.
+        // message_id nullable dans delegate_idempotency : une délégation
+        // EnAttentePrerequis n'a pas d'outbox (voie A — pas d'intention bâillonnée).
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS objective_dependencies (
+                 dependent_objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 prerequisite_objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 PRIMARY KEY (dependent_objective_id, prerequisite_objective_id),
+                 CHECK (dependent_objective_id != prerequisite_objective_id)
+             );
+             CREATE INDEX IF NOT EXISTS objective_dependencies_prerequisite_idx
+                 ON objective_dependencies(prerequisite_objective_id, dependent_objective_id);
+             CREATE TABLE IF NOT EXISTS deferred_delegation_dispatch (
+                 delegation_id TEXT PRIMARY KEY REFERENCES delegations(id),
+                 reply INTEGER NOT NULL CHECK(reply IN (0, 1)),
+                 timeout_secs INTEGER NOT NULL CHECK(timeout_secs > 0),
+                 retry_until INTEGER NOT NULL,
+                 dedup_retained_until INTEGER NOT NULL,
+                 max_frame_bytes INTEGER NOT NULL CHECK(max_frame_bytes > 0),
+                 idempotency_key TEXT NOT NULL,
+                 issuer_scope TEXT NOT NULL
+             );
+             ALTER TABLE delegate_idempotency RENAME TO delegate_idempotency_v11;
+             CREATE TABLE delegate_idempotency (
+                 idempotency_key TEXT PRIMARY KEY,
+                 canonical_request_bytes BLOB NOT NULL,
+                 objective_id TEXT NOT NULL UNIQUE REFERENCES objectives(id),
+                 delegation_id TEXT NOT NULL UNIQUE REFERENCES delegations(id),
+                 message_id TEXT UNIQUE REFERENCES delegation_outbox(message_id),
+                 participant TEXT NOT NULL,
+                 timeout_secs INTEGER NOT NULL CHECK(timeout_secs > 0),
+                 deadline_contractuelle INTEGER NOT NULL
+             );
+             INSERT INTO delegate_idempotency(
+                 idempotency_key, canonical_request_bytes, objective_id, delegation_id,
+                 message_id, participant, timeout_secs, deadline_contractuelle
+             )
+             SELECT i.idempotency_key, i.canonical_request_bytes, i.objective_id, i.delegation_id,
+                    i.message_id, i.participant, i.timeout_secs, o.deadline_contractuelle
+             FROM delegate_idempotency_v11 i
+             JOIN delegation_outbox o ON o.message_id = i.message_id;
+             DROP TABLE delegate_idempotency_v11;",
+        )
+        .map_err(StoreError::Sql)?;
+    }
     for version in (current_version + 1)..=SCHEMA_VERSION {
         tx.execute(
             "INSERT OR IGNORE INTO schema_migrations(version, applied_at)\n\
@@ -5890,7 +6458,16 @@ fn insert_prepared(tx: &Transaction<'_>, prepared: &PreparedDelegation) -> Resul
     Ok(())
 }
 
-type RawDelegateResult = (Vec<u8>, String, String, String, String, i64, Vec<u8>, i64);
+type RawDelegateResult = (
+    Vec<u8>,
+    String,
+    String,
+    Option<String>,
+    String,
+    i64,
+    Vec<u8>,
+    i64,
+);
 
 fn decode_delegate_result(
     stored: RawDelegateResult,
@@ -5921,10 +6498,14 @@ fn decode_delegate_result(
             "résultat idempotent et délégation divergents",
         ));
     }
+    let message_id = match message_id {
+        Some(raw) => Some(parse_uuid(&raw)?),
+        None => None,
+    };
     Ok(StoredDelegateResult {
         objective_id: parse_uuid(&objective_id)?,
         delegation_id: parse_uuid(&delegation_id)?,
-        message_id: parse_uuid(&message_id)?,
+        message_id,
         participant,
         duration: delegation.duree,
         timeout_secs: u64::try_from(timeout_secs)
@@ -6274,6 +6855,7 @@ fn parse_objective_state(value: &str) -> Result<EtatObjectif, StoreError> {
 
 fn delegation_state_name(state: EtatDelegation) -> &'static str {
     match state {
+        EtatDelegation::EnAttentePrerequis => "en_attente_prerequis",
         EtatDelegation::Creee => "creee",
         EtatDelegation::AEvaluer => "a_evaluer",
         EtatDelegation::Terminee => "terminee",
@@ -6283,6 +6865,7 @@ fn delegation_state_name(state: EtatDelegation) -> &'static str {
 
 fn parse_delegation_state(value: &str) -> Result<EtatDelegation, StoreError> {
     match value {
+        "en_attente_prerequis" => Ok(EtatDelegation::EnAttentePrerequis),
         "creee" => Ok(EtatDelegation::Creee),
         "a_evaluer" => Ok(EtatDelegation::AEvaluer),
         "terminee" => Ok(EtatDelegation::Terminee),

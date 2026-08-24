@@ -47,6 +47,15 @@ pub enum EtatObjectif {
     Clos,
 }
 
+/// Suite déclarée à la création (F36). Absent uniquement pour les objectifs
+/// historiques antérieurs au refus obligatoire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SuiteObjective {
+    Aucune,
+    Objectif(Uuid),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectifCoordonne {
     pub id: Uuid,
@@ -57,6 +66,15 @@ pub struct ObjectifCoordonne {
     pub mis_a_jour_at: i64,
     pub synthese: Option<String>,
     pub decision_en_attente_id: Option<Uuid>,
+    /// F36 — journalisée au delegate ; `None` = objectif antérieur au gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suite: Option<SuiteObjective>,
+    /// F37 — prérequis objectifs (`--depends-on`) ; arêtes aussi indexées en table.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<Uuid>,
+    /// F37 — citations classées `--reference` (contexte, aucun couplage).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<Uuid>,
 }
 
 /// Décision locale explicitement auditée. Elle ne déclenche aucune I/O Bridget
@@ -120,6 +138,9 @@ impl ObjectifCoordonne {
             mis_a_jour_at: now,
             synthese: None,
             decision_en_attente_id: None,
+            suite: None,
+            depends_on: Vec::new(),
+            references: Vec::new(),
         })
     }
 
@@ -166,6 +187,9 @@ pub enum ClasseDuree {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EtatDelegation {
+    /// Visible au greffe, aucune outbox tant que les prérequis objectifs
+    /// déclarés par `--depends-on` ne sont pas clos (F37 voie A).
+    EnAttentePrerequis,
     Creee,
     AEvaluer,
     Terminee,
@@ -1751,7 +1775,8 @@ impl Delegation {
     pub fn transition(&mut self, next: EtatDelegation) -> Result<(), DomainError> {
         if !matches!(
             (self.etat, next),
-            (EtatDelegation::Creee, EtatDelegation::AEvaluer)
+            (EtatDelegation::EnAttentePrerequis, EtatDelegation::Creee)
+                | (EtatDelegation::Creee, EtatDelegation::AEvaluer)
                 | (EtatDelegation::AEvaluer, EtatDelegation::Terminee)
         ) {
             return Err(DomainError::TransitionInterdite);
@@ -1769,6 +1794,15 @@ impl Delegation {
         }
         self.etat = EtatDelegation::Annulee;
         Ok(())
+    }
+
+    /// Pose l'état d'attente de prérequis à la construction (avant persistence).
+    pub fn en_attente_de_prerequis(mut self) -> Result<Self, DomainError> {
+        if self.etat != EtatDelegation::Creee {
+            return Err(DomainError::TransitionInterdite);
+        }
+        self.etat = EtatDelegation::EnAttentePrerequis;
+        Ok(self)
     }
 }
 

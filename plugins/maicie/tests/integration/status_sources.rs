@@ -421,6 +421,9 @@ impl Fixture {
                 duration: ClasseDuree::Normale,
                 reply: false,
                 constat_id: None,
+                suite: maicie::domain::SuiteObjective::Aucune,
+                depends_on: &[],
+                references: &[],
                 idempotency_key: "status-sources",
                 now: 100,
                 retry_until: 150,
@@ -434,7 +437,7 @@ impl Fixture {
         };
         store
             .record_lookup_issue(
-                created.message_id,
+                created.message_id.unwrap(),
                 &IdempotencyIssue::Accepted { expires_at: 150 },
                 110,
             )

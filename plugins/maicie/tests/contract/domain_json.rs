@@ -121,6 +121,7 @@ fn exhaustive_classe_duree(value: ClasseDuree) {
 fn all_etat_delegation() -> Vec<EtatDelegation> {
     exhaustive_etat_delegation(EtatDelegation::Creee);
     vec![
+        EtatDelegation::EnAttentePrerequis,
         EtatDelegation::Creee,
         EtatDelegation::AEvaluer,
         EtatDelegation::Terminee,
@@ -130,7 +131,8 @@ fn all_etat_delegation() -> Vec<EtatDelegation> {
 
 fn exhaustive_etat_delegation(value: EtatDelegation) {
     match value {
-        EtatDelegation::Creee
+        EtatDelegation::EnAttentePrerequis
+        | EtatDelegation::Creee
         | EtatDelegation::AEvaluer
         | EtatDelegation::Terminee
         | EtatDelegation::Annulee => {}

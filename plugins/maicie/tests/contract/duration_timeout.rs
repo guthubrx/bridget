@@ -50,6 +50,9 @@ fn les_trois_classes_produisent_le_timeout_et_l_echeance_contractuelle_persistes
             duration,
             reply: false,
             constat_id: None,
+            suite: maicie::domain::SuiteObjective::Aucune,
+            depends_on: &[],
+            references: &[],
             idempotency_key: match index {
                 0 => "duration-short",
                 1 => "duration-normal",
@@ -78,7 +81,7 @@ fn les_trois_classes_produisent_le_timeout_et_l_echeance_contractuelle_persistes
             now + i64::try_from(expected_timeout).unwrap()
         );
         let snapshot = store
-            .recovery_snapshot(created.message_id)
+            .recovery_snapshot(created.message_id.unwrap())
             .unwrap()
             .unwrap();
         assert_eq!(snapshot.outbox.timeout_secs, expected_timeout);

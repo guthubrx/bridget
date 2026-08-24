@@ -161,6 +161,8 @@ fn run_delegate_to(fixture: &Fixture, target: &str, idempotency_key: &str) -> st
             fixture.config.to_str().unwrap(),
             "--goal",
             "vérifier le contrat CLI",
+            "--suite",
+            "aucune",
             "--to",
             target,
             "--duration",
