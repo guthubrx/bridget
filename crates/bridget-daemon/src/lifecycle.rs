@@ -248,6 +248,9 @@ pub fn build_environment(
     }
     env.entry("PATH".to_string())
         .or_insert_with(|| OsString::from(FALLBACK_PATH));
+    if let Some(path) = env.get("PATH").cloned() {
+        env.insert("PATH".to_string(), prepend_current_exe_dir(&path));
+    }
     env.entry("TMPDIR".to_string())
         .or_insert_with(|| OsString::from("/tmp"));
     for name in &definition.pass_env {
@@ -256,6 +259,35 @@ pub fn build_environment(
         }
     }
     Ok(env)
+}
+
+/// Intention : le répertoire du binaire courant est le **premier** élément du
+/// PATH, pour que `bridget` gagne la résolution même s'il figure déjà ailleurs.
+/// Les entrées vides (POSIX = « répertoire courant ») sont retirées du reste :
+/// un spawn géré ne doit pas résoudre via `.` implicite.
+pub fn path_with_current_exe_dir_first(existing: &str) -> Option<String> {
+    let directory = std::env::current_exe()
+        .ok()?
+        .parent()?
+        .to_string_lossy()
+        .into_owned();
+    let rest: Vec<&str> = existing
+        .split(':')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty() && *entry != directory.as_str())
+        .collect();
+    if rest.is_empty() {
+        Some(directory)
+    } else {
+        Some(format!("{directory}:{}", rest.join(":")))
+    }
+}
+
+fn prepend_current_exe_dir(path: &OsString) -> OsString {
+    match path_with_current_exe_dir_first(&path.to_string_lossy()) {
+        Some(prefixed) => OsString::from(prefixed),
+        None => path.clone(),
+    }
 }
 
 fn command_exists(command: &str, env: &SourceEnvironment) -> bool {
@@ -456,6 +488,19 @@ mod tests {
         let env = build_environment(&definition, &source).unwrap();
         assert_eq!(env.get("SPECIAL_AUTH"), Some(&OsString::from("présent")));
         assert!(!env.contains_key("SECRET_INATTENDU"));
+        let directory = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let path = env.get("PATH").unwrap().to_string_lossy();
+        // Intention : le binaire courant doit gagner la résolution (premier élément).
+        assert_eq!(
+            path.split(':').map(str::trim).next(),
+            Some(directory.as_str()),
+            "PATH géré sans préfixe du binaire courant: {path}"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

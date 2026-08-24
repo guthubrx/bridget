@@ -2231,6 +2231,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         std::fs::remove_file(&config.socket_path)?;
     }
     std::fs::create_dir_all(config.socket_path.parent().unwrap())?;
+    crate::wrapper::purge_orphan_mcp_configs(config.socket_path.parent().unwrap());
 
     let listener = UnixListener::bind(&config.socket_path)?;
     info!("bridget daemon écoute sur {}", config.socket_path.display());
