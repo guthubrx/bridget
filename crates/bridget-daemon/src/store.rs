@@ -1521,7 +1521,7 @@ mod tests {
 
     #[test]
     fn cancellation_is_idempotent_and_terminal() {
-        let path = std::env::temp_dir().join(format!("bridget-store-{}.db", std::process::id()));
+        let path = std::env::temp_dir().join(format!("bridget-store-{}.db", Uuid::new_v4()));
         let _ = std::fs::remove_file(&path);
         let mut store = Store::open(&path).unwrap();
         store
@@ -1622,8 +1622,7 @@ mod tests {
 
     #[test]
     fn deferred_reminder_is_persisted_for_ledger_readers() {
-        let path =
-            std::env::temp_dir().join(format!("bridget-store-events-{}.db", std::process::id()));
+        let path = std::env::temp_dir().join(format!("bridget-store-events-{}.db", Uuid::new_v4()));
         let _ = std::fs::remove_file(&path);
         let store = Store::open(&path).unwrap();
         store
@@ -1652,8 +1651,7 @@ mod tests {
 
     #[test]
     fn purge_supprime_avec_la_demande_les_evenements_associes() {
-        let path =
-            std::env::temp_dir().join(format!("bridget-store-purge-{}.db", std::process::id()));
+        let path = std::env::temp_dir().join(format!("bridget-store-purge-{}.db", Uuid::new_v4()));
         let _ = std::fs::remove_file(&path);
         let mut store = Store::open(&path).unwrap();
         store

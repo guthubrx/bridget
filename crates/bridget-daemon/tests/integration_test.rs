@@ -4,6 +4,7 @@
 //! et vérifie qu'un message envoyé par l'un est bien reçu par l'autre.
 
 use bridget_core::BridgetMessage;
+use bridget_daemon::store::Store;
 use bridget_transport::protocol::{decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -12,7 +13,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn unique_socket_path() -> PathBuf {
     let pid = std::process::id();
@@ -1066,7 +1067,52 @@ sleep 2
             ));
         }
 
-        thread::sleep(Duration::from_secs(4));
+        let reply_timeout_secs = 3_u64;
+        let poll_deadline = Instant::now() + Duration::from_secs(5);
+        let mut deadline_at = None;
+        while Instant::now() < poll_deadline {
+            let store = Store::open(&db_path).expect("store");
+            if let Some(request) = store.get_request(&request_id).expect("get_request")
+                && request.state == "cancelled"
+            {
+                deadline_at = Some(request.deadline_at);
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let deadline_at = deadline_at.expect("annulation non persistée dans le store");
+
+        let delivery_deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < delivery_deadline {
+            if received.lock().unwrap().len() >= 2 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        // Barrière observable : une demande encore suivie recevrait des rappels
+        // avant deadline_at. Une fois cette échéance dépassée, l'absence de
+        // messages supplémentaires prouve que la surveillance a bien cessé.
+        let reminder_deadline = Instant::now() + Duration::from_secs(reply_timeout_secs + 2);
+        loop {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            if now >= deadline_at {
+                break;
+            }
+            assert!(
+                Instant::now() < reminder_deadline,
+                "échéance store {deadline_at} jamais atteinte"
+            );
+            assert_eq!(
+                received.lock().unwrap().len(),
+                2,
+                "rappel reçu avant la fin de l'échéance malgré l'annulation"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
         let messages = received.lock().unwrap();
         assert_eq!(messages.len(), 2, "la demande et son annulation seulement");
         assert_eq!(messages[1].from, "bridget");
