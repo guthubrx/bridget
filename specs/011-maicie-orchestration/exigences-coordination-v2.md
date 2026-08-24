@@ -753,3 +753,28 @@ aucune ne coupe le pont existant avant que son remplaçant soit prouvé.
   Conséquence sur G10 : le pont ACP ne sert plus seulement un fournisseur
   obsolète, il sert Cursor — il n'est donc PAS à retirer, seulement à ne
   plus être le chemin par défaut pour Codex et Claude.
+- **G11 — Nommer le protocole, pas seulement le canal (remarque de
+  l'utilisateur, 2026-08-24).** Aujourd'hui `who` affiche `acp` à la fois en
+  TRANSPORT et en MODE, ce qui confond deux choses distinctes : COMMENT
+  l'agent est relié (socket locale pour un pane tmux, processus fils piloté
+  pour un agent géré) et QUELLE LANGUE il parle. Tant qu'il n'y avait qu'un
+  protocole, l'amalgame était sans conséquence. Avec trois — ACP pour Cursor
+  et Gemini, app-server pour Codex, flux natif pour Claude — la colonne
+  devient mensongère : deux agents affichés `acp` ne parleront plus la même
+  langue. À faire pendant G4 et G6, pas après : distinguer le canal du
+  protocole dans le modèle de présence ET dans l'affichage, et rendre le
+  protocole visible (`json/acp`, `json/codex`, `json/claude`). Corollaire de
+  diagnostic, appris cette nuit : quand un agent meurt, savoir quel protocole
+  il parlait est la PREMIÈRE information utile — c'est le pont figé qui a tué
+  les agents Codex, pas le canal.
+- **Observation connexe, mesurée le 2026-08-24 : seuls les agents gérés
+  savent dire qu'ils travaillent.** `state: busy` remonte pour les agents
+  connectés en agent géré (Cursor observé en `busy` pendant sa mission ; les
+  relecteurs Claude aussi), jamais pour les panes tmux — qui affichent
+  `connected` même en plein travail. C'est la cause racine de l'angle mort
+  occupé/inactif reproché par l'utilisateur, et la raison d'être des rondes
+  de vigilance à sept minutes : faute de pouvoir distinguer, il faut
+  demander. Conséquence pour le plan : les ponts natifs porteront cet état
+  (vérifié dans le flux Claude), donc migrer les agents interactifs vers le
+  mode géré supprimerait le besoin de ronde. À instruire après G4/G6 — c'est
+  un changement d'ergonomie pour l'utilisateur, qui perd le pane visible.
