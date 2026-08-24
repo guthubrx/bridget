@@ -20,7 +20,7 @@ const FRAME_LIMIT: usize = 256 * 1024;
 
 #[test]
 fn migration_v7_puis_seconde_ouverture_conservent_l_historique() {
-    let fixture = Fixture::new("migration-v8");
+    let fixture = Fixture::new("migration-v9");
     let mut store = MaicieStore::open(&fixture.database).unwrap();
     let objectif = ObjectifCoordonne::nouveau("historique", ModeObjectif::Delegue, 1).unwrap();
     let delegation = create_delegation(&mut store, &objectif, "alice");
@@ -43,12 +43,12 @@ fn migration_v7_puis_seconde_ouverture_conservent_l_historique() {
         .unwrap();
     connection.pragma_update(None, "user_version", 7).unwrap();
     connection
-        .execute("DELETE FROM schema_migrations WHERE version = 8", [])
+        .execute("DELETE FROM schema_migrations WHERE version IN (8, 9)", [])
         .unwrap();
     drop(connection);
 
     let store = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 8);
+    assert_eq!(store.schema_version().unwrap(), 9);
     assert_eq!(
         store.objective_snapshots(Some(objectif.id)).unwrap()[0].delegations[0].id,
         delegation
@@ -71,7 +71,7 @@ fn migration_v7_puis_seconde_ouverture_conservent_l_historique() {
     assert_eq!(coordination_tables, 10);
     drop(connection);
     let reopened = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 8);
+    assert_eq!(reopened.schema_version().unwrap(), 9);
     assert_eq!(
         reopened
             .objective_snapshots(Some(objectif.id))
@@ -79,6 +79,71 @@ fn migration_v7_puis_seconde_ouverture_conservent_l_historique() {
             .len(),
         1
     );
+}
+
+#[test]
+fn migration_v8_refuse_de_rejouer_une_notification_sans_horodatage_atteste() {
+    let fixture = Fixture::new("migration-v8-notification");
+    drop(MaicieStore::open(&fixture.database).unwrap());
+    let connection = Connection::open(&fixture.database).unwrap();
+    connection
+        .execute_batch(
+            "DROP TABLE notification_outbox;
+             CREATE TABLE notification_outbox (
+                 message_id TEXT PRIMARY KEY,
+                 idempotency_key TEXT NOT NULL UNIQUE,
+                 objective_id TEXT NOT NULL,
+                 delegation_id TEXT,
+                 generation INTEGER,
+                 event_id TEXT NOT NULL,
+                 policy_version INTEGER NOT NULL,
+                 recipient TEXT NOT NULL,
+                 message_bytes BLOB NOT NULL,
+                 state TEXT NOT NULL,
+                 last_issue_json BLOB,
+                 terminal INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO notification_outbox(
+                 message_id,idempotency_key,objective_id,delegation_id,generation,
+                 event_id,policy_version,recipient,message_bytes,state,terminal
+             ) VALUES (?1,?2,?3,NULL,NULL,?4,1,?5,?6,'prepared',0)",
+            params![
+                Uuid::new_v4().to_string(),
+                "legacy-notification-key",
+                Uuid::new_v4().to_string(),
+                "legacy-event",
+                "alice",
+                b"octets-historiques".as_slice(),
+            ],
+        )
+        .unwrap();
+    connection.pragma_update(None, "user_version", 8).unwrap();
+    connection
+        .execute("DELETE FROM schema_migrations WHERE version = 9", [])
+        .unwrap();
+    drop(connection);
+
+    let store = MaicieStore::open(&fixture.database).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 9);
+    assert!(matches!(
+        store.pending_notification_outboxes(),
+        Err(StoreError::Corrupt(
+            "notification historique sans issued_at"
+        ))
+    ));
+    drop(store);
+
+    let connection = Connection::open(&fixture.database).unwrap();
+    let issued_at: Option<i64> = connection
+        .query_row("SELECT issued_at FROM notification_outbox", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(issued_at, None);
 }
 
 #[test]

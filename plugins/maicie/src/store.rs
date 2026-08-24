@@ -528,12 +528,13 @@ impl MaicieStore {
     }
 
     /// Lit les notifications non terminales sans reconstruire leur charge.
-    /// Les octets et la clé idempotente sont exactement ceux du commit métier.
+    /// Les octets, la clé idempotente et l'horodatage canonique sont exactement
+    /// ceux du commit métier.
     pub fn pending_notification_outboxes(&self) -> Result<Vec<NotificationOutbox>, StoreError> {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT message_id, idempotency_key, objective_id, delegation_id,
+                "SELECT message_id, idempotency_key, issued_at, objective_id, delegation_id,
                         generation, event_id, policy_version, recipient, message_bytes, state
                  FROM notification_outbox
                  WHERE terminal = 0 AND state IN ('prepared','outcome_unknown')
@@ -545,14 +546,15 @@ impl MaicieStore {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, Option<i64>>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, i64>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, Vec<u8>>(8)?,
-                    row.get::<_, String>(9)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, Vec<u8>>(9)?,
+                    row.get::<_, String>(10)?,
                 ))
             })
             .map_err(StoreError::Sql)?;
@@ -560,6 +562,7 @@ impl MaicieStore {
             let (
                 message_id,
                 idempotency_key,
+                issued_at,
                 objective_id,
                 delegation_id,
                 generation,
@@ -572,6 +575,9 @@ impl MaicieStore {
             let outbox = NotificationOutbox {
                 message_id: parse_uuid(&message_id)?,
                 idempotency_key,
+                issued_at: issued_at.ok_or(StoreError::Corrupt(
+                    "notification historique sans issued_at",
+                ))?,
                 objectif_id: parse_uuid(&objective_id)?,
                 delegation_id: delegation_id.as_deref().map(parse_uuid).transpose()?,
                 generation: generation
@@ -3615,13 +3621,14 @@ fn insert_notification_outbox(
     let inserted = tx
         .execute(
             "INSERT INTO notification_outbox(
-                 message_id, idempotency_key, objective_id, delegation_id,
+                 message_id, idempotency_key, issued_at, objective_id, delegation_id,
                  generation, event_id, policy_version, recipient, message_bytes,
                  state, last_issue_json, terminal
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'prepared',NULL,0)",
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'prepared',NULL,0)",
             params![
                 outbox.message_id.to_string(),
                 outbox.idempotency_key,
+                outbox.issued_at,
                 outbox.objectif_id.to_string(),
                 outbox.delegation_id.map(|id| id.to_string()),
                 outbox
@@ -3705,18 +3712,19 @@ fn verify_replayed_coordination_effects(
         }
     }
     for outbox in &reduction.outboxes {
-        let stored: Option<(String, Vec<u8>, String)> = tx
+        let stored: Option<(String, i64, Vec<u8>, String)> = tx
             .query_row(
-                "SELECT idempotency_key, message_bytes, state
+                "SELECT idempotency_key, issued_at, message_bytes, state
                  FROM notification_outbox WHERE message_id = ?1",
                 [outbox.message_id.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()
             .map_err(StoreError::Sql)?;
         if stored
             != Some((
                 outbox.idempotency_key.clone(),
+                outbox.issued_at,
                 outbox.message_bytes.clone(),
                 notification_state_name(outbox.etat).to_string(),
             ))
@@ -4139,6 +4147,7 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
              CREATE TABLE IF NOT EXISTS notification_outbox (
                  message_id TEXT PRIMARY KEY,
                  idempotency_key TEXT NOT NULL UNIQUE,
+                 issued_at INTEGER NOT NULL CHECK(issued_at > 0),
                  objective_id TEXT NOT NULL REFERENCES objectives(id),
                  delegation_id TEXT,
                  generation INTEGER,
@@ -4154,6 +4163,17 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
              );
              CREATE INDEX IF NOT EXISTS notification_outbox_pending_idx
                  ON notification_outbox(terminal, state, message_id);",
+        )
+        .map_err(StoreError::Sql)?;
+    }
+    if current_version == 8 {
+        // Une ancienne notification ne possède aucune preuve permettant de
+        // reconstruire son horodatage canonique. La colonne reste donc NULL
+        // pour ces lignes et la lecture des pending échoue fermée, au lieu de
+        // fabriquer une enveloppe différente au rejeu.
+        tx.execute_batch(
+            "ALTER TABLE notification_outbox
+             ADD COLUMN issued_at INTEGER CHECK(issued_at > 0);",
         )
         .map_err(StoreError::Sql)?;
     }
@@ -5023,6 +5043,7 @@ mod coordination_transaction_tests {
                  );
                  CREATE TABLE notification_outbox(
                      message_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE,
+                     issued_at INTEGER NOT NULL,
                      objective_id TEXT NOT NULL, delegation_id TEXT, generation INTEGER,
                      event_id TEXT NOT NULL, policy_version INTEGER NOT NULL,
                      recipient TEXT NOT NULL, message_bytes BLOB NOT NULL,
@@ -5070,6 +5091,7 @@ mod coordination_transaction_tests {
             outboxes: vec![NotificationOutbox {
                 message_id: Uuid::new_v4(),
                 idempotency_key: "event-atomic:alice:1".to_string(),
+                issued_at: 1_787_500_100,
                 objectif_id,
                 delegation_id: Some(delegation_id),
                 generation: Some(1),

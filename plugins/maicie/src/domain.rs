@@ -644,6 +644,8 @@ impl EtatNotificationOutbox {
 pub struct NotificationOutbox {
     pub message_id: Uuid,
     pub idempotency_key: String,
+    /// Horodatage canonique du `SendIdempotent`, figé avant toute I/O.
+    pub issued_at: i64,
     pub objectif_id: Uuid,
     pub delegation_id: Option<Uuid>,
     pub generation: Option<u64>,
@@ -657,6 +659,7 @@ pub struct NotificationOutbox {
 impl NotificationOutbox {
     pub fn verifier(&self) -> Result<(), DomainError> {
         if self.idempotency_key.trim().is_empty()
+            || self.issued_at <= 0
             || self.event_id.trim().is_empty()
             || self.policy_version == 0
             || self.recipient.trim().is_empty()
