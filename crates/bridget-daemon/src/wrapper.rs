@@ -2984,6 +2984,25 @@ fn forward_managed_events(
                     send_wrapper_message(writer, report);
                 }
             }
+            ManagedEventKind::RateLimitObserved {
+                window,
+                status,
+                resets_at,
+            } => match source {
+                bridget_transport::ManagedEventSource::ClaudeStreamJson => send_wrapper_message(
+                    writer,
+                    WrapperToDaemon::RateLimit {
+                        agent: my_name.to_string(),
+                        window,
+                        status,
+                        resets_at,
+                        source: bridget_transport::protocol::RateLimitSource::ClaudeStreamJson,
+                    },
+                ),
+                bridget_transport::ManagedEventSource::Acp => {
+                    warn!("fait de limite ignoré : source ACP non autorisée")
+                }
+            },
             ManagedEventKind::Update { .. } | ManagedEventKind::Error { .. } => {}
         }
     }
@@ -3146,6 +3165,44 @@ mod reconnect_tests {
             ),
             PathBuf::from("/home/fixture/.claude/projects/-projet--worktrees-session-014")
         );
+    }
+
+    #[test]
+    fn evenement_de_limite_claude_est_transmis_sans_transformation() {
+        let root = mcp_test_root("rate-limit");
+        std::fs::create_dir_all(&root).unwrap();
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "instance-rate-limit").unwrap();
+        let event = ManagedEvent::source_line(
+            bridget_transport::ManagedEventSource::ClaudeStreamJson,
+            br#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1787572200,"rateLimitType":"five_hour"}}"#.to_vec(),
+            ManagedEventKind::RateLimitObserved {
+                window: "five_hour".to_string(),
+                status: "rejected".to_string(),
+                resets_at: Some(1_787_572_200),
+            },
+        );
+
+        assert!(!forward_managed_events(
+            &writer,
+            "claude-1",
+            vec![event],
+            &mut tracker
+        ));
+        let mut line = String::new();
+        BufReader::new(reader_stream).read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode(line.trim_end()).unwrap(),
+            WrapperToDaemon::RateLimit {
+                agent,
+                window,
+                status,
+                resets_at: Some(1_787_572_200),
+                source: bridget_transport::protocol::RateLimitSource::ClaudeStreamJson,
+            } if agent == "claude-1" && window == "five_hour" && status == "rejected"
+        ));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

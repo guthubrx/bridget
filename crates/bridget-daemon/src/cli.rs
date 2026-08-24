@@ -2355,6 +2355,7 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
     let effort_w = column("EFFORT", &|a: &AgentInfo| {
         cell(a.effort.as_deref()).to_string()
     });
+    let rate_limit_w = column("LIMITE", &|a: &AgentInfo| format_rate_limit(a));
 
     let mut output = String::new();
     match filter {
@@ -2363,14 +2364,14 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
     }
     writeln!(
         output,
-        "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  ÉTAT",
-        "NOM", "TYPE", "HÔTE", "OS", "TRANSPORT", "MODE", "LOCALISATION", "DOMAINE", "MODÈLE", "EFFORT"
+        "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  ÉTAT",
+        "NOM", "TYPE", "HÔTE", "OS", "TRANSPORT", "MODE", "LOCALISATION", "DOMAINE", "MODÈLE", "EFFORT", "LIMITE"
     )
     .unwrap();
     for agent in agents {
         writeln!(
             output,
-            "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {}",
+            "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {}",
             agent.name,
             agent.agent_type,
             agent.host,
@@ -2381,6 +2382,7 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
             cell(agent.domain.as_deref()),
             cell(agent.model.as_deref()),
             cell(agent.effort.as_deref()),
+            format_rate_limit(agent),
             agent.state
         )
         .unwrap();
@@ -2393,6 +2395,34 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
 /// colonnes.
 fn cell(value: Option<&str>) -> &str {
     value.unwrap_or("—")
+}
+
+/// Affiche une limite uniquement lorsqu'elle a été attestée. L'instant de
+/// retour vient du fournisseur ; absent, il est rendu explicitement inconnu.
+fn format_rate_limit(agent: &AgentInfo) -> String {
+    let Some(limit) = &agent.rate_limit else {
+        return "—".to_string();
+    };
+    let status = if limit.status == "rejected" {
+        "épuisée"
+    } else {
+        limit.status.as_str()
+    };
+    let reset = limit
+        .resets_at
+        .and_then(format_local_unix_time)
+        .map(|time| format!("retour {time}"))
+        .unwrap_or_else(|| "retour inconnu".to_string());
+    format!("{status} ({}, {reset})", limit.window)
+}
+
+fn format_local_unix_time(timestamp: i64) -> Option<String> {
+    let seconds: libc::time_t = timestamp;
+    let mut local: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&seconds, &mut local) }.is_null() {
+        return None;
+    }
+    Some(format!("{:02}:{:02}", local.tm_hour, local.tm_min))
 }
 
 fn cmd_discover() {
@@ -3484,6 +3514,7 @@ mod idempotency_projection_tests {
             domain: None,
             model: None,
             effort: None,
+            rate_limit: None,
         };
         let rendered = render_who(
             &[
@@ -3501,6 +3532,7 @@ mod idempotency_projection_tests {
         assert!(rendered.starts_with("Agents connectés :\n"));
         assert!(rendered.contains("MODE"));
         assert!(rendered.contains("LOCALISATION"));
+        assert!(rendered.contains("LIMITE"));
         assert!(rendered.contains("acp-gere"));
         assert!(rendered.contains("tmux-interactif"));
         assert!(rendered.contains("cli-ephemere"));
@@ -3509,6 +3541,44 @@ mod idempotency_projection_tests {
         assert!(rendered.contains("tmux"));
         assert!(rendered.contains("cli"));
         assert!(!rendered.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn who_rend_une_limite_epuisee_et_garde_l_absence_inconnue() {
+        let mut agent = AgentInfo {
+            name: "claude-1".to_string(),
+            agent_type: "claude".to_string(),
+            connection_id: "conn-claude".to_string(),
+            host: "local".to_string(),
+            transport: "stdio".to_string(),
+            mode: Some(PresenceMode::Cli),
+            location: None,
+            os: "macOS".to_string(),
+            state: "connected".to_string(),
+            last_seen_secs: 0,
+            reconnect_count: 0,
+            domain: None,
+            model: Some("claude-opus-5".to_string()),
+            effort: None,
+            rate_limit: Some(bridget_transport::protocol::RateLimitFact {
+                window: "five_hour".to_string(),
+                status: "rejected".to_string(),
+                resets_at: Some(1_787_572_200),
+            }),
+        };
+        assert!(format_rate_limit(&agent).starts_with("épuisée (five_hour, retour "));
+
+        agent.rate_limit = Some(bridget_transport::protocol::RateLimitFact {
+            window: "five_hour".to_string(),
+            status: "rejected".to_string(),
+            resets_at: None,
+        });
+        assert_eq!(
+            format_rate_limit(&agent),
+            "épuisée (five_hour, retour inconnu)"
+        );
+        agent.rate_limit = None;
+        assert_eq!(format_rate_limit(&agent), "—");
     }
 
     #[test]

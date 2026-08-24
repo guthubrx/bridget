@@ -137,6 +137,9 @@ struct Presence {
     model: Option<String>,
     /// Niveau d'effort courant, `None` si jamais observé ou observé absent.
     effort: Option<String>,
+    /// Dernière limite fournisseur attestée. Son absence signifie « inconnue »
+    /// et ne déclenche aucune décision automatique.
+    rate_limit: Option<bridget_transport::protocol::RateLimitFact>,
     /// Domaine dérivé annoncé à l'enregistrement, conservé pour pouvoir revenir
     /// dessus après une surcharge.
     derived_domain: Option<String>,
@@ -1747,6 +1750,7 @@ impl DaemonState {
                     domain: presence.and_then(|p| p.domain.clone()),
                     model: presence.and_then(|p| p.model.clone()),
                     effort: presence.and_then(|p| p.effort.clone()),
+                    rate_limit: presence.and_then(|p| p.rate_limit.clone()),
                 }
             })
             .collect();
@@ -1778,6 +1782,7 @@ impl DaemonState {
                 domain: None,
                 model,
                 effort,
+                rate_limit: None,
             });
         }
         let listed_names: std::collections::HashSet<String> =
@@ -1802,6 +1807,7 @@ impl DaemonState {
                 // FR-010 : un agent injoignable garde sa dernière capacité connue.
                 model: presence.model.clone(),
                 effort: presence.effort.clone(),
+                rate_limit: presence.rate_limit.clone(),
             });
         }
         agents.sort_by(|left, right| left.name.cmp(&right.name));
@@ -2860,6 +2866,11 @@ fn handle_register(
                     .and_then(|presence| presence.derived_domain.clone())
                     .or_else(|| domain.clone());
                 let dnd_until = previous.as_ref().and_then(|presence| presence.dnd_until);
+                // Un fait de limite reste la dernière observation attestée à
+                // travers une reconnexion ; son absence demeure inconnue.
+                let rate_limit = previous
+                    .as_ref()
+                    .and_then(|presence| presence.rate_limit.clone());
                 // Une reconnexion par un binaire antérieur au champ conserve
                 // l'observation déjà attestée ; une présence historique sans
                 // valeur reste volontairement inconnue.
@@ -2939,6 +2950,7 @@ fn handle_register(
                         reconnect_count,
                         model,
                         effort,
+                        rate_limit,
                         domain: derived_domain.clone(),
                         derived_domain,
                         dnd_until,
@@ -3040,6 +3052,53 @@ fn handle_runtime(
 
     DaemonToWrapper::Ack {
         id: "runtime".to_string(),
+    }
+}
+
+/// Enregistre un fait de limite fournisseur sans changer l'état de l'agent.
+/// Les champs sont validés comme les valeurs runtime : ils resteront affichés
+/// dans `who`, donc aucun contrôle ni valeur démesurée ne traverse la frontière.
+fn handle_rate_limit(
+    agent: &str,
+    window: String,
+    status: String,
+    resets_at: Option<i64>,
+    source: bridget_transport::protocol::RateLimitSource,
+    state: &mut DaemonState,
+) -> DaemonToWrapper {
+    if let Err(reason) = validate_runtime_value(&window) {
+        return DaemonToWrapper::Nack {
+            id: "rate-limit".to_string(),
+            reason: format!("fenêtre de limite invalide: {reason}"),
+        };
+    }
+    if let Err(reason) = validate_runtime_value(&status) {
+        return DaemonToWrapper::Nack {
+            id: "rate-limit".to_string(),
+            reason: format!("statut de limite invalide: {reason}"),
+        };
+    }
+    if resets_at.is_some_and(|timestamp| timestamp <= 0) {
+        return DaemonToWrapper::Nack {
+            id: "rate-limit".to_string(),
+            reason: "instant de retour invalide".to_string(),
+        };
+    }
+    let Some(presence) = presence_of_agent(state, agent) else {
+        return DaemonToWrapper::Nack {
+            id: "rate-limit".to_string(),
+            reason: format!("agent introuvable: {agent}"),
+        };
+    };
+    presence.rate_limit = Some(bridget_transport::protocol::RateLimitFact {
+        window,
+        status,
+        resets_at,
+    });
+    presence.last_seen = Instant::now();
+    log::debug!("limite de '{}' mise à jour par {}", presence.name, source);
+    DaemonToWrapper::Ack {
+        id: "rate-limit".to_string(),
     }
 }
 
@@ -5321,6 +5380,19 @@ fn handle_wrapper_message(
             Some(handle_runtime(&agent, model, effort, source, &mut st))
         }
 
+        WrapperToDaemon::RateLimit {
+            agent,
+            window,
+            status,
+            resets_at,
+            source,
+        } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            Some(handle_rate_limit(
+                &agent, window, status, resets_at, source, &mut st,
+            ))
+        }
+
         WrapperToDaemon::Domain { agent, domain } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             Some(handle_domain(&agent, domain, &mut st))
@@ -5826,6 +5898,7 @@ mod presence_tests {
                 reconnect_count: 0,
                 model: Some("gpt-5.3-codex".to_string()),
                 effort: Some("xhigh".to_string()),
+                rate_limit: None,
                 derived_domain: Some("projet-a".to_string()),
                 domain: Some("projet-a".to_string()),
                 dnd_until: None,
@@ -5903,6 +5976,7 @@ mod presence_tests {
                 reconnect_count: 0,
                 model: None,
                 effort: None,
+                rate_limit: None,
                 derived_domain: None,
                 domain: None,
                 dnd_until: None,
@@ -8963,6 +9037,34 @@ mod presence_tests {
             Some("claude-haiku-4-5-20251001")
         );
         assert_eq!(agents[0].effort, None);
+
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    #[test]
+    fn limite_attestee_est_exposee_sans_decision_automatique() {
+        use bridget_transport::protocol::RateLimitSource;
+        let (mut state, config) = state_with_registered_agent("limite-attestee");
+
+        let ack = handle_rate_limit(
+            "agent-2",
+            "five_hour".to_string(),
+            "rejected".to_string(),
+            Some(1_787_572_200),
+            RateLimitSource::ClaudeStreamJson,
+            &mut state,
+        );
+        assert!(matches!(ack, DaemonToWrapper::Ack { .. }));
+        let agent = state.agent_infos().pop().unwrap();
+        assert_eq!(agent.state, "connected", "la limite ne change pas l'état");
+        assert!(matches!(
+            agent.rate_limit,
+            Some(bridget_transport::protocol::RateLimitFact {
+                window,
+                status,
+                resets_at: Some(1_787_572_200),
+            }) if window == "five_hour" && status == "rejected"
+        ));
 
         let _ = std::fs::remove_file(&config.db_path);
     }

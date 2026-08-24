@@ -574,13 +574,16 @@ fn spawn_reader(
                     let _ = active.completion.send(terminal);
                 }
             }
-            push_source(
-                &events,
-                raw,
+            let managed_event = if kind == "rate_limit_event" {
+                rate_limit_event(&value).unwrap_or_else(|| ManagedEventKind::Update {
+                    detail: "événement Claude rate_limit_event incomplet".to_string(),
+                })
+            } else {
                 ManagedEventKind::Update {
                     detail: format!("événement Claude: {kind}"),
-                },
-            );
+                }
+            };
+            push_source(&events, raw, managed_event);
         }
         alive.store(false, Ordering::SeqCst);
         let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -590,6 +593,22 @@ fn spawn_reader(
             });
         }
         queue.1.notify_all();
+    })
+}
+
+/// Extrait uniquement un fait complet du schéma `rate_limit_event` attesté par
+/// Claude. Une date absente reste `None` : aucune heure de retour n'est déduite.
+fn rate_limit_event(value: &Value) -> Option<ManagedEventKind> {
+    let info = value.get("rate_limit_info")?;
+    let window = info.get("rateLimitType")?.as_str()?.trim();
+    let status = info.get("status")?.as_str()?.trim();
+    if window.is_empty() || status.is_empty() {
+        return None;
+    }
+    Some(ManagedEventKind::RateLimitObserved {
+        window: window.to_string(),
+        status: status.to_string(),
+        resets_at: info.get("resetsAt").and_then(Value::as_i64),
     })
 }
 
@@ -795,5 +814,33 @@ mod tests {
             )
         }));
         transport.stop();
+    }
+
+    #[test]
+    fn rate_limit_event_reel_devient_un_fait_sans_inventer_de_retour() {
+        let event: Value = serde_json::from_str(
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1787572200,"rateLimitType":"five_hour"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            rate_limit_event(&event),
+            Some(ManagedEventKind::RateLimitObserved {
+                ref window,
+                ref status,
+                resets_at: Some(1_787_572_200),
+            }) if window == "five_hour" && status == "rejected"
+        ));
+
+        let no_reset: Value = serde_json::from_str(
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            rate_limit_event(&no_reset),
+            Some(ManagedEventKind::RateLimitObserved {
+                resets_at: None,
+                ..
+            })
+        ));
     }
 }
