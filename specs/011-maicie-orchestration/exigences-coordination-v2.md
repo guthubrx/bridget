@@ -1022,3 +1022,34 @@ me souviens de chaque pièce.
   parce que les agents ne savaient pas qu'il existait, ensuite parce que je
   ne leur donne pas de quoi s'en servir. Vérifier qu'une chose marche et
   vérifier qu'elle sert sont deux gestes différents.
+- **PANNE : une seule demande au guichet a paralysé Maicie — 2026-08-24,
+  07h45.** Symptôme : toute commande `maicie` échouait sur « traitement
+  guichet impossible : état métier incompatible avec la greffe ». Plus de
+  status, plus de registre, et le service de relève échouait en boucle. Cinq
+  minutes d'arrêt complet de la coordinatrice.
+  CAUSE ÉTABLIE en lisant la base : un agent avait déposé un rapport de
+  livraison — il suivait ma consigne, et il avait trouvé les identifiants
+  seul — sur l'objectif T1607, que je venais de clore À LA MAIN quelques
+  minutes plus tôt. Le rapport arrive sur un objectif terminal ; le
+  traitement refuse ; le refus est FATAL.
+  DEUX DÉFAUTS DISTINCTS, à ne pas confondre.
+  (1) ROBUSTESSE. Une demande impossible à traiter doit être REJETÉE avec
+  son motif, et l'exécution doit continuer. Aujourd'hui elle est fatale :
+  **un seul dépôt mal placé paralyse la coordinatrice**, sans malveillance
+  ni bug de l'agent. C'est un déni de service par accident, et il deviendra
+  quotidien dès que les agents déposeront en nombre. La conception 015
+  prévoyait pourtant ce cas — `request_already_terminal` devait être « greffé
+  sans réouverture ni perte » — mais le chemin réel produit une erreur
+  fatale, pas un rejet propre.
+  (2) COLLISION DE PRATIQUES, et celle-là est de moi. Je clos les objectifs
+  à la main dès que je reçois le message de l'agent. Un dépôt asynchrone
+  arrive donc TOUJOURS après la clôture. Le guichet et ma clôture immédiate
+  sont incompatibles en l'état : soit j'attends le dépôt pour clore, soit la
+  clôture accepte un rapport tardif. À trancher — mais ne rien trancher
+  signifie que chaque agent obéissant à ma consigne provoquera la panne.
+  DÉBLOCAGE : sauvegarde de la base, puis passage de la demande en rejeté
+  avec motif. Intervention d'exploitation, pas de code.
+  LEÇON : j'ai passé la matinée à demander aux agents d'utiliser le guichet.
+  Le premier qui l'a fait a mis Maicie à terre. Une capacité livrée, prouvée
+  par un gate, et dont le premier usage réel casse le système — c'est la
+  différence entre « ça marche » et « ça tient ».
