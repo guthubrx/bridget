@@ -8,6 +8,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 const GUICHET_LEASE_SECS: i64 = 60;
+pub(crate) const MAX_GUICHET_FRAME_BYTES: usize = 64 * 1024;
 
 /// Requête de guichet validée par le daemon avant toute persistance.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -369,6 +370,11 @@ impl Store {
         issued_at_tolerance_secs: i64,
         now: i64,
     ) -> Result<GuichetResult, StoreError> {
+        if deposit.canonical_bytes.len().saturating_add(1) > MAX_GUICHET_FRAME_BYTES {
+            return Err(StoreError::FrameTooLarge {
+                max_frame_bytes: MAX_GUICHET_FRAME_BYTES,
+            });
+        }
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1115,6 +1121,7 @@ pub struct LedgerEntry {
 pub enum StoreError {
     Sqlite(rusqlite::Error),
     Invariant(&'static str),
+    FrameTooLarge { max_frame_bytes: usize },
 }
 
 impl std::fmt::Display for StoreError {
@@ -1122,6 +1129,9 @@ impl std::fmt::Display for StoreError {
         match self {
             StoreError::Sqlite(e) => write!(f, "SQLite: {}", e),
             StoreError::Invariant(detail) => write!(f, "invariant store: {detail}"),
+            StoreError::FrameTooLarge { max_frame_bytes } => {
+                write!(f, "trame guichet supérieure à {max_frame_bytes} octets")
+            }
         }
     }
 }
@@ -1198,6 +1208,38 @@ mod tests {
             Ok(GuichetResult::CanonicalBytesMismatch)
         ));
         drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn depot_direct_refuse_une_trame_guichet_superieure_a_64_kio() {
+        let path =
+            std::env::temp_dir().join(format!("bridget-guichet-frame-limit-{}.db", Uuid::new_v4()));
+        let mut store = Store::open(&path).unwrap();
+        let now = 1_787_500_000;
+        let exact = guichet_deposit("request-exact", &vec![b'x'; MAX_GUICHET_FRAME_BYTES - 1]);
+        let oversized = guichet_deposit("request-oversized", &vec![b'x'; MAX_GUICHET_FRAME_BYTES]);
+
+        assert!(matches!(
+            store.deposit_guichet(&exact, 600, 60, now),
+            Ok(GuichetResult::Queued { .. })
+        ));
+        assert!(matches!(
+            store.deposit_guichet(&oversized, 600, 60, now),
+            Err(StoreError::FrameTooLarge {
+                max_frame_bytes: MAX_GUICHET_FRAME_BYTES
+            })
+        ));
+        let oversized_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM guichet_requests WHERE request_id = ?1",
+                [&oversized.request_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(oversized_count, 0, "le refus précède toute persistance");
+        drop(store);
         let _ = std::fs::remove_file(path);
     }
 

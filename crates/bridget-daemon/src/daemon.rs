@@ -24,7 +24,8 @@ use crate::idempotency::{
     SendDelivery,
 };
 use crate::store::{
-    GuichetDeposit, GuichetLifecycleEvent, GuichetNext, GuichetReplyInput, GuichetResult, Store,
+    GuichetDeposit, GuichetLifecycleEvent, GuichetNext, GuichetReplyInput, GuichetResult,
+    MAX_GUICHET_FRAME_BYTES, Store, StoreError,
 };
 use crate::{
     desired_state::DesiredStateStore,
@@ -2511,8 +2512,6 @@ fn is_guichet_frame(message: &WrapperToDaemon) -> bool {
     )
 }
 
-const MAX_GUICHET_FRAME_BYTES: usize = 64 * 1024;
-
 /// `BufRead::lines` enlève le séparateur : la borne du contrat porte bien sur
 /// la trame JSONL entière, donc sur la ligne plus son LF filaire.
 fn guichet_frame_exceeds_wire_limit(line: &str) -> bool {
@@ -4120,6 +4119,9 @@ fn handle_wrapper_message(
                 now,
             ) {
                 Ok(result) => Some(guichet_result_response(issuer_scope, request_id, result)),
+                Err(StoreError::FrameTooLarge { .. }) => Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::FrameTooLarge,
+                }),
                 Err(error) => {
                     error!("dépôt guichet: {error}");
                     Some(DaemonToWrapper::ServiceRejected {
