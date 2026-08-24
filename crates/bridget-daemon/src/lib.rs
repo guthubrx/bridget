@@ -4,6 +4,7 @@ pub mod build_info;
 pub mod cli;
 pub mod daemon;
 pub mod desired_state;
+pub mod disk_hygiene;
 pub mod fleet;
 pub mod idempotency;
 pub mod ledger;
