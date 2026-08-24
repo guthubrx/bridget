@@ -403,7 +403,10 @@ fn validate_registry(
                 source.display()
             ));
         }
-        if !matches!(definition.protocol.as_str(), "acp" | "tmux") {
+        if !matches!(
+            definition.protocol.as_str(),
+            "acp" | "claude_stream_json" | "tmux"
+        ) {
             return Err(format!(
                 "registre invalide {}: protocol invalide pour '{name}'",
                 source.display()
@@ -514,6 +517,36 @@ fn definition(
     }
 }
 
+fn native_claude_definition() -> AgentDefinition {
+    AgentDefinition {
+        command: "claude".to_string(),
+        args: vec!["--model".to_string(), "claude-opus-5".to_string()],
+        protocol: "claude_stream_json".to_string(),
+        forbidden_env: vec!["ANTHROPIC_API_KEY".to_string()],
+        pass_env: [
+            "CLAUDE_CONFIG_DIR",
+            "XDG_CONFIG_HOME",
+            "XDG_CACHE_HOME",
+            "SSH_AUTH_SOCK",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "NO_PROXY",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        permissions: "allow".to_string(),
+        queue_capacity: DEFAULT_QUEUE_CAPACITY,
+        notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
+        mcp: McpDefinition {
+            interactive: "claude".to_string(),
+            acp_session: false,
+        },
+    }
+}
+
 fn default_agents() -> BTreeMap<String, AgentDefinition> {
     BTreeMap::from([
         (
@@ -543,27 +576,7 @@ fn default_agents() -> BTreeMap<String, AgentDefinition> {
                 "codex",
             ),
         ),
-        (
-            "claude".to_string(),
-            definition(
-                "npx",
-                &["@zed-industries/claude-code-acp@0.16.2"],
-                &["ANTHROPIC_API_KEY"],
-                &[
-                    "CLAUDE_CONFIG_DIR",
-                    "XDG_CONFIG_HOME",
-                    "XDG_CACHE_HOME",
-                    "SSH_AUTH_SOCK",
-                    "NPM_CONFIG_CACHE",
-                    "HTTPS_PROXY",
-                    "HTTP_PROXY",
-                    "NO_PROXY",
-                    "SSL_CERT_FILE",
-                    "SSL_CERT_DIR",
-                ],
-                "claude",
-            ),
-        ),
+        ("claude".to_string(), native_claude_definition()),
         (
             "gemini".to_string(),
             definition(
@@ -623,6 +636,11 @@ mod tests {
         assert_eq!(registry.get("gemini").unwrap().args, vec!["--acp"]);
         assert_eq!(codex.mcp.interactive, "codex");
         assert!(codex.mcp.acp_session);
+        let claude = registry.get("claude").unwrap();
+        assert_eq!(claude.command, "claude");
+        assert_eq!(claude.protocol, "claude_stream_json");
+        assert_eq!(claude.args, ["--model", "claude-opus-5"]);
+        assert!(!claude.mcp.acp_session);
         assert_eq!(
             registry.get("gemini").unwrap().mcp.interactive,
             "unsupported"
@@ -868,11 +886,15 @@ mod tests {
 
     #[test]
     fn ambiguous_command_is_refused_without_map_order_fallback() {
-        let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
-        let error = registry.type_for_command("npx").unwrap_err();
-        assert!(error.contains("commande ambiguë 'npx'"));
-        assert!(error.contains("claude"));
-        assert!(error.contains("codex"));
+        let registry = AgentRegistry::from_json(
+            r#"{"agents":{"one":{"command":"bridge"},"two":{"command":"bridge"}}}"#,
+            "/tmp/agents.json",
+        )
+        .unwrap();
+        let error = registry.type_for_command("bridge").unwrap_err();
+        assert!(error.contains("commande ambiguë 'bridge'"));
+        assert!(error.contains("one"));
+        assert!(error.contains("two"));
     }
 
     #[test]

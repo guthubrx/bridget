@@ -161,7 +161,7 @@ fn prepare_spawn_parts(
     ) {
         return Err(SpawnRefusal::BillingGuard { variable });
     }
-    if definition.protocol != "acp" {
+    if !matches!(definition.protocol.as_str(), "acp" | "claude_stream_json") {
         return Err(SpawnRefusal::NegotiationFailed {
             detail: format!("le protocole '{}' n'est pas ACP", definition.protocol),
         });
@@ -396,6 +396,24 @@ mod tests {
         let env = build_environment(&definition, &source).unwrap();
         assert_eq!(env.get("SPECIAL_AUTH"), Some(&OsString::from("présent")));
         assert!(!env.contains_key("SECRET_INATTENDU"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_claude_native_est_preparable_comme_equipier_gere() {
+        let root = root("claude-stream-json");
+        fs::create_dir_all(&root).unwrap();
+        let supervisor = supervisor(&root, 1);
+        let decision = submit_spawn(
+            &supervisor,
+            &registry("/bin/sh", "claude_stream_json", &[]),
+            &source(&root),
+            &order(&root, "claude-native", "claude-agent"),
+            NOW,
+            false,
+        )
+        .unwrap();
+        assert!(matches!(decision, SpawnDecision::Ready(_)));
         let _ = fs::remove_dir_all(root);
     }
 
