@@ -375,8 +375,11 @@ bridget send --to agent-1 --in-reply-to fa09fa7800694 "Review completed"
 ```
 
 Linked replies use the same idempotent contract as `bridget_send`. The command
-prints its `id` and `issued_at`; if it reports `outcome_unknown`, replay the
-exact body with both values. The stable issuer scope is derived from the current
+prints its `id` and `issued_at`; replay the exact body with both values to read
+the real outcome of a delivery still in flight, or to settle an
+`outcome_unknown`. A nominal first send is not an incident: the daemon answers
+before the recipient has acknowledged, so it reports `DÉPÔT: en vol` (MCP tool:
+`status: "in_flight"`). The stable issuer scope is derived from the current
 Bridget instance, so the retry remains valid after a rename:
 
 ```bash

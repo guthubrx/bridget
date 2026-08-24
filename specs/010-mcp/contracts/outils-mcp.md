@@ -14,10 +14,15 @@ MCP servi : `initialize` (version pinnée, capacité `tools` seule),
 | Résultat **métier** (`isError` absent) | accusé ou refus Bridget | objet structuré : `status` à catégorie fermée + champs utiles |
 
 Catégories métier fermées (extensibles — un client ignore une catégorie
-inconnue sans casser) : `accepted`, `dnd`, `circuit_breaker`, `duplicate`,
-`hops_exhausted`, `unknown_recipient`, `queue_full`, `reply_requires_agent`,
-`outcome_unknown`, `envelope_mismatch`, `idempotency_expired`,
-`invalid_issued_at`.
+inconnue sans casser) : `accepted`, `in_flight`, `dnd`, `circuit_breaker`,
+`duplicate`, `hops_exhausted`, `unknown_recipient`, `queue_full`,
+`reply_requires_agent`, `outcome_unknown`, `envelope_mismatch`,
+`idempotency_expired`, `invalid_issued_at`.
+
+Deux de ces catégories attestent un **dépôt réussi** : `accepted` et
+`in_flight`. Un client qui ne connaîtrait pas encore `in_flight` l'ignore sans
+casser, conformément à la règle ci-dessus — mais il retombe alors dans le
+comportement prudent (revérifier), jamais dans une perte.
 
 ## `bridget_send`
 
@@ -39,7 +44,7 @@ Résultat métier :
 ```json
 { "status": "accepted", "id": "…", "issued_at": 1700000000, "hops": 4 }
 { "status": "dnd", "reason": "« sol » ne souhaite pas être dérangé (encore 12 min)", "minutes_left": 12 }
-{ "status": "outcome_unknown", "id": "…", "issued_at": 1700000000, "delivery_id": "…", "reason": "remise en vol — le destinataire n'a pas encore accusé ; rejouer à l'identique — même id, même issued_at, même corps — lit le sort réel sans jamais dupliquer" }
+{ "status": "in_flight", "id": "…", "issued_at": 1700000000, "delivery_id": "…", "reason": "remise en vol — le destinataire n'a pas encore accusé ; rejouer à l'identique — même id, même issued_at, même corps — lit le sort réel sans jamais dupliquer" }
 { "status": "outcome_unknown", "id": "…", "issued_at": 1700000000, "reason": "sort indéterminé ; rejouer à l'identique — même id, même issued_at, même corps — lit le sort réel sans jamais dupliquer" }
 { "status": "outcome_unknown", "id": "…", "issued_at": 1700000000, "reason": "accusé perdu après transmission — rejouer à l'identique … (détail technique)" }
 ```
@@ -49,27 +54,36 @@ daemon ; retour dès accusé/refus (jamais d'attente de la réponse du
 destinataire) ; le premier résultat renvoie `id` et `issued_at`, qui doivent
 être rejoués ensemble pour un retry → déduplication daemon.
 
-`outcome_unknown` est le retour **nominal** d'un premier envoi : le daemon
-répond avant que le destinataire ait accusé. La présence de `delivery_id`
-distingue les deux cas — avec lui, la remise est en vol et le dépôt a réussi ;
-sans lui, le sort est réellement indéterminé. Dans les deux cas le rejeu à
-l'identique (**même `id`, même `issued_at`, même corps**) est une
-**consultation** sûre, jamais une seconde émission : il rend `accepted` une fois
-l'accusé aval consolidé.
+**`in_flight` est le retour NOMINAL d'un premier envoi, et c'est un succès.**
+Le daemon répond avant que le destinataire ait accusé : il n'attend jamais
+l'aval, par construction. Le `delivery_id` atteste alors que la remise est
+prise. Le rejeu à l'identique (**même `id`, même `issued_at`, même corps**) est
+une **consultation** sûre, jamais une seconde émission : il rend `accepted` une
+fois l'accusé aval consolidé.
 
-`outcome_unknown` a donc **trois** formes, pas deux. Les deux premières viennent
-d'une issue rendue par le daemon (avec ou sans `delivery_id`). La troisième naît
-côté client, sans issue du tout : la connexion tombe **après** l'écriture de la
-commande, si bien que l'outil ne lit jamais la réponse. Le message a pu partir
-ou non ; c'est le seul cas où l'outil l'ignore vraiment. Le rejeu à l'identique
-est là aussi le geste correct, et le seul.
+Les deux cas portent des **statuts différents**, et pas seulement des motifs
+différents : un consommateur branche sur le CHAMP `status`, pas sur la prose du
+motif. Cette distinction a été payée par un incident réel — un relecteur a lu
+deux `outcome_unknown` sur le même `id`, rejeu à l'identique compris, pour un
+message qui était en cours d'acheminement ; il en a conclu une perte, a
+diagnostiqué un canal cassé, et un constat BLOQUANT FAUX a été gravé au registre
+sur cette base avant rétractation. Tant que le succès nominal et l'ignorance
+partagent un statut, le lecteur prudent conclut à la panne.
+
+`outcome_unknown` garde **deux** formes, toutes deux sans `delivery_id`. La
+première vient d'une issue rendue par le daemon. La seconde naît côté client,
+sans issue du tout : la connexion tombe **après** l'écriture de la commande, si
+bien que l'outil ne lit jamais la réponse. Le message a pu partir ou non ; c'est
+le seul cas où l'outil l'ignore vraiment. Le rejeu à l'identique est là aussi le
+geste correct, et le seul.
 
 Un `delivery_id` n'atteste un dépôt que tant que la remise est **en vol**. Une
 remise mise en quarantaine — échec de reprise, `DeliveryIndeterminate`, ou
 migration écartant une enveloppe absente — cesse d'être annoncée comme telle et
-retombe sur la forme « sort indéterminé » : cet état est absorbant, plus rien ne
-l'accusera, et l'annoncer comme un dépôt réussi serait un mensonge tenu jusqu'à
-l'expiration de l'horizon.
+retombe sur `outcome_unknown` : cet état est absorbant, plus rien ne l'accusera,
+et l'annoncer comme un dépôt réussi serait un mensonge tenu jusqu'à l'expiration
+de l'horizon. C'est ce qui interdit d'assimiler `in_flight` à « livré » : il
+atteste le DÉPÔT, jamais la remise au destinataire.
 
 `envelope_mismatch` survient lorsqu'un rejeu réutilise un `id` déjà connu avec
 un contenu différent — corps modifié, destinataire changé, `issued_at` distinct.

@@ -882,11 +882,16 @@ fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value
         // Le daemon répond AVANT l'accusé du destinataire : sur un premier envoi
         // nominal, l'issue est donc toujours `OutcomeUnknown`. Un `delivery_id`
         // atteste que la remise est en vol — rien n'est perdu. Sans lui, le sort
-        // est réellement indéterminé. Le distinguo évite d'annoncer une panne
-        // sur le cas nominal, et donc d'inviter au double envoi.
+        // est réellement indéterminé.
+        //
+        // Les deux cas portent des STATUTS DIFFÉRENTS, pas seulement des motifs
+        // différents : le lecteur d'un retour MCP branche sur `status`, jamais
+        // sur la prose. Tant que le cas nominal s'annonçait `outcome_unknown`,
+        // chaque agent revérifiait le ledger à la main — c'est le défaut mesuré
+        // sur ~100 envois d'une seule journée.
         IdempotencyIssue::OutcomeUnknown { delivery_id, .. } => match delivery_id {
             Some(delivery_id) => json!({
-                "status": "outcome_unknown",
+                "status": "in_flight",
                 "id": id,
                 "issued_at": issued_at,
                 "delivery_id": delivery_id,
@@ -1599,6 +1604,9 @@ mod tests {
     /// répond avant l'accusé du destinataire, donc TOUT premier envoi passe
     /// par là. Annoncer « accusé perdu » sur un succès, c'est inviter au
     /// double envoi — le défaut mesuré sur ~100 envois d'une seule journée.
+    ///
+    /// Le statut lui-même doit changer : un lecteur branche sur `status`, pas
+    /// sur la prose du motif.
     #[test]
     fn une_remise_en_vol_ne_s_annonce_pas_comme_un_accuse_perdu() {
         let issue = IdempotencyIssue::OutcomeUnknown {
@@ -1606,7 +1614,7 @@ mod tests {
             delivery_id: Some("livraison-7".to_string()),
         };
         let rendered = send_issue_result("msg-1", 1_700_000_000, issue);
-        assert_eq!(rendered["status"], "outcome_unknown");
+        assert_eq!(rendered["status"], "in_flight");
         assert_eq!(rendered["delivery_id"], "livraison-7");
         // Forme CLOSE : diagnostic puis consigne, rien avant, rien après. Un
         // `contains` laissait passer tout préfixe ajouté — dont un préfixe qui
@@ -1672,7 +1680,9 @@ mod tests {
 
     /// Contre-épreuve : sans `delivery_id`, le sort est vraiment inconnu et le
     /// retour ne doit pas rassurer. Si ce test tombe, le correctif a effacé la
-    /// distinction qu'il avait pour but d'établir.
+    /// distinction qu'il avait pour but d'établir — c'est-à-dire qu'il aurait
+    /// remplacé un mensonge pessimiste par un mensonge optimiste, bien pire
+    /// dans un système d'attestation.
     #[test]
     fn un_sort_indetermine_ne_promet_pas_une_remise() {
         let issue = IdempotencyIssue::OutcomeUnknown {
@@ -1685,6 +1695,34 @@ mod tests {
         assert_eq!(
             rendered["reason"].as_str().unwrap(),
             format!("{DIAGNOSTIC_SORT_INDETERMINE} ; {REJEU_A_L_IDENTIQUE}")
+        );
+    }
+
+    /// L'invariant qui porte tout le correctif : les deux cas ne partagent pas
+    /// leur statut. Les deux tests précédents pourraient rester verts alors que
+    /// les statuts auraient reconvergé sur une valeur commune ; celui-ci le
+    /// constate directement.
+    #[test]
+    fn la_remise_en_vol_et_le_sort_inconnu_ne_partagent_pas_leur_statut() {
+        let en_vol = send_issue_result(
+            "msg-3",
+            1_700_000_000,
+            IdempotencyIssue::OutcomeUnknown {
+                expires_at: 1_700_000_060,
+                delivery_id: Some("livraison-8".to_string()),
+            },
+        );
+        let inconnu = send_issue_result(
+            "msg-3",
+            1_700_000_000,
+            IdempotencyIssue::OutcomeUnknown {
+                expires_at: 1_700_000_060,
+                delivery_id: None,
+            },
+        );
+        assert_ne!(
+            en_vol["status"], inconnu["status"],
+            "un dépôt réussi et un sort inconnu doivent se lire sur le statut seul"
         );
     }
 
@@ -1879,7 +1917,7 @@ mod tests {
             &socket,
         )
         .unwrap();
-        assert_eq!(first["status"], "outcome_unknown");
+        assert_eq!(first["status"], "in_flight");
         assert_eq!(first["delivery_id"], "livraison-differee");
         assert!(!first["reason"].as_str().unwrap().contains("perdu"));
 

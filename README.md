@@ -216,9 +216,14 @@ une enveloppe différente avec la même clé est refusée par
 `IdempotencyExpired` interdit toute réémission aveugle. Les trois options sont
 obligatoires ensemble ; un envoi historique sans elles reste inchangé. Une
 réponse portant `--in-reply-to` négocie toutefois ce contrat automatiquement :
-le binaire affiche son `id` et son `issued_at`, à réutiliser ensemble si le
-premier résultat vaut `outcome_unknown`. Sa portée stable vient de l'instance
+le binaire affiche son `id` et son `issued_at`, à réutiliser ensemble pour lire
+le sort d'un envoi non encore consolidé. Sa portée stable vient de l'instance
 Bridget courante, comme pour l'outil MCP.
+
+Le premier résultat d'un envoi nominal n'est pas un incident : le daemon répond
+avant que le destinataire ait accusé, donc il annonce `DÉPÔT: en vol` (outil
+MCP : `status: "in_flight"`), avec l'identifiant de remise qui l'atteste. Le
+sort n'est déclaré `outcome_unknown` que lorsqu'il est réellement indéterminé.
 
 Cette garantie est disponible sur le protocole local et la CLI.
 
@@ -509,8 +514,9 @@ bridget send --to agent-1 --in-reply-to fa09fa7800694 "Relecture terminée"
 La demande est marquée `answered` dans la même transition transactionnelle que
 les autres réponses liées ; ses rappels cessent. `bridget reply` reprend
 automatiquement l'identifiant de la dernière demande reçue, ou accepte le même
-flag pour lever une ambiguïté. Si le binaire annonce `outcome_unknown`, rejouez
-exactement le même corps avec les valeurs affichées :
+flag pour lever une ambiguïté. Pour lire le sort réel d'un dépôt encore en vol —
+ou lever un `outcome_unknown` —, rejouez exactement le même corps avec les
+valeurs affichées ; c'est une consultation, jamais une seconde émission :
 
 ```bash
 bridget send --to agent-1 --in-reply-to fa09fa7800694 \
