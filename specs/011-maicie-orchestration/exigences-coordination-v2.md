@@ -1423,3 +1423,28 @@ du référent » est retiré, c'était de la valeur d'outil, pas de produit).
 ORDRE : après stabilisation du jour (lots en vol) et les routines (M5 est
 leur premier client) ; M3 avant M2 — un référent sans clavier ET sans
 médiation d'approbation serait une régression de sécurité, pas un progrès.
+
+## Bloc F-suite — Lier le référent par le refus, pas par la promesse
+
+Constat utilisateur (2026-08-24, 13h45) : le référent s'était engagé à
+déclarer la prochaine séquence multi-étapes en chaîne chez Maicie — « le
+fait que tu ne l'aies pas fait prouve que tu n'es pas tenu de le faire ».
+Principe validé par toute la journée : le référent n'acquiert une
+discipline QUE quand une machine refuse d'avancer sans (les trois
+identifiants par le refus du guichet, le --reason par le refus de close) ;
+jamais par engagement. Donc on encode.
+
+- **F36 — Suite obligatoire au delegate** : `maicie delegate` exige
+  `--suite <objectif>` ou `--suite aucune` EXPLICITE, refus d'usage sinon
+  (même mécanique que --reason). L'omission devient impossible ; ne reste
+  que le mensonge traçable.
+- **F37 — Détecteur de chaîne manuelle** : refus déterministe d'un mandat
+  qui CITE l'identifiant d'un autre objectif sans lien --depends-on ; et en
+  réconciliation, un objectif « aucune suite » suivi dans l'heure d'une
+  délégation du même auteur citant sa livraison → constat automatique au
+  registre (« chaîne pilotée à la main non déclarée »), qui reste ouvert
+  jusqu'à qualification. Zéro LLM : identifiants et horodatages seulement.
+
+Même doctrine que la fermeture par fait : rendre le contournement plus
+coûteux que la conformité. Mission à ouvrir après le train de merge du
+24/08 (codex → L2 → attach).
