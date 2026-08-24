@@ -30,6 +30,21 @@ normalisé (chemins absolus / relatifs, suffixe `@version`) pour que
 l'annonce « refuse toute définition » soit vraie aussi pour le style vivant
 du projet (`/opt/homebrew/bin/codex-acp`, etc.).
 
+Recensement AVANT retrait (G10, 2026-08-24, tête main `3dcca2c`) — aucun
+appelant vivant du pont dans le code de lancement ni dans
+`~/.config/bridget/agents.json` (seule entrée : `cursor-agent` + `acp`).
+
+| Lieu | Nature | Décision |
+|---|---|---|
+| `registry.rs` `default_agents()` | Déjà `codex app-server` / `claude_stream_json` | Conservé |
+| `acp.rs` + protocole ACP | Couche générique Cursor/Gemini (ADR 010) | Conservé |
+| Fixtures Maicie `codex-acp` / `claude-code-acp` | Définitions de test encore zed | Remplacées par les pilotes natifs |
+| `daemon.rs` test runtime géré `npx`+`codex-acp` | Fixture ACP, pas un pont | Remplacée par `fixture-acp` |
+| `npx` + `fixture-acp` (fleet, cli, parity, protocol) | Adaptateur ACP de test | Conservé (pas Zed) |
+| `managed_process` / `mcp_identity` tests `npx` | Cycle de vie du groupe, pas le paquet | Conservé |
+| Specs 007/009/010, catalogue, ADR 010 (contexte) | Archive historique du pin npm | Conservée, non réécrite |
+| `attach.rs` noms `claude-acp`,`codex-acp` | Libellés d'erreur, pas une commande | Renommés pour ne plus coller au pont |
+
 Relecture T911 : la gestion du cycle de vie par le daemon est additive. Le
 lancement historique par wrapper-terminal reste supporté et aucun nouveau
 chemin n'est déprécié par la session 009.

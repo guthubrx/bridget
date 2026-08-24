@@ -4241,10 +4241,10 @@ mod tests {
                 location: None,
             },
             "absent",
-            &["claude-acp".to_string(), "codex-acp".to_string()],
+            &["claude-review".to_string(), "codex-native".to_string()],
         );
         assert!(unknown.contains("équipier « absent » inconnu"));
-        assert!(unknown.contains("claude-acp, codex-acp"));
+        assert!(unknown.contains("claude-review, codex-native"));
 
         let stopped = attach_refusal_message(
             &AttachRejection {
