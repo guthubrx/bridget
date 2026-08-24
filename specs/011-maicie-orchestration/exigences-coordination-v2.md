@@ -1098,8 +1098,9 @@ ils ne sont plus hypothétiques, le canal qui les porte existe.
 
 ### Quand remplacer les panes tmux ?
 
-Question de l'utilisateur, 2026-08-24. Réponse : **pas encore, et voici les
-conditions.** Aujourd'hui la bascule serait une régression déguisée.
+Question de l'utilisateur, 2026-08-24. Réponse du matin : **pas encore, et
+voici les conditions.** *(Caduc depuis 12h25 — les quatre conditions ont été
+remplies et la bascule est FAITE ; voir le point d'étape en fin de bloc.)*
 
 Ce que les panes apportent et que les agents gérés n'ont pas encore : le
 modèle demandé est réellement servi (les gérés Claude rendent Opus 4.6 pour
@@ -1126,6 +1127,56 @@ CONDITIONS CUMULATIVES avant toute bascule :
 ORDRE : L1 puis L3 (ils évitent des pannes déjà survenues), puis G5 (pont
 Claude), puis la reprise de session, puis la bascule. Le retrait des panes
 est le DERNIER geste, pas le premier.
+
+### Point d'étape — 2026-08-24, 12h40 : LA BASCULE EST FAITE
+
+Les quatre conditions cumulatives ont été remplies dans la matinée, dans
+l'ordre prévu, et le retrait des panes a commencé sur ordre utilisateur.
+
+- **Condition 1 (deux ponts natifs)** : FAIT. Câblage des types par défaut
+  mergé (0a3872b) après revue croisée en deux passes — BLOCKED d'abord
+  (gel de 600 s sur EOF en plein tour, défaut réel vérifié sur pièces par le
+  référent), APPROVE après correctif d6e454c. Chemins ABSOLUS dans les
+  définitions embarquées (le PATH minimal de launchd était la cause du refus
+  « commande introuvable »). Preuves : spawn réel des deux pilotes,
+  daemon volontairement privé de PATH pour Claude.
+- **Condition 2 (reprise de session)** : FAIT et prouvé deux fois en réel —
+  au redémarrage de 11h47 (agents sans mission) puis à celui de 12h24 :
+  cursor4, tué en plein codage, a repris sa mission SEUL en citant ses
+  identifiants.
+- **Condition 3 (présence stable à la reconnexion)** : PARTIEL et instruit —
+  les inscriptions fraîches tiennent (mode, domaine, étiquette de modèle) ;
+  la RE-connexion perd encore les attributs enrichis. Constat au registre,
+  mission liée --constat-id en cours (cursor5). Jugé non bloquant : le
+  défaut est d'affichage, pas d'autorité.
+- **Condition 4 (une vue pour l'utilisateur)** : FAIT — `bridget ui` locale
+  trois zones + tunnel lecture seule, livrés avant la bascule.
+
+ÉTAT DE LA FLOTTE à 12h40 : coder2, coder3, coder4 en `codex_app_server`
+(gpt-5.6-terra épinglé), fable-reviewer en `claude_stream_json`
+(claude-opus-5 épinglé), quatre cursor en ACP sain (leur CLI expose ACP
+nativement — décision ADR 010 confirmée). La colonne TRANSPORT dit le vrai
+protocole ; la colonne LIMITE a affiché son premier fait de forfait réel
+(fable-reviewer : fenêtre 5 h, statut, réinitialisation). Extinction tmux :
+cxbridget et prospective terminés proprement sur ordre (kill simple, PID par
+PID, checklist) ; coderBridget part à sa dernière livraison ; le référent
+RESTE en tmux par nature (session interactive de l'utilisateur — un géré
+n'a pas de clavier).
+
+LEÇON DE BASCULE consignée : une naissance gérée = spawn + profil Maicie
+dans config.json — sinon l'agent est vivant mais indélégable
+(target_missing_maicie_profile, constaté sur coder3/coder4, profils ajoutés).
+
+RESTE EN VOL (blocs G/K/L) : effort+forfait Codex dans who (coderBridget,
+dernière mission tmux) ; format LIMITE générique par fenêtre « 5h 19%
+rst 13:30 · 7d … » + fait par fenêtre + hook référent (coder4, sérialisé
+règle 17 avec le précédent) ; attestabilité des limites Cursor
+(fable-reviewer, investigation) ; L4 coût par mission (cursor4) ;
+reconnexion cursor (cursor5) ; garde M1 des migrations (cursorbridget) ;
+vérification G11 (coder3, délégation liée) ; K1 rejoué sur cartae.app au
+niveau du jour (coder2). K2 (ronde portable) : LIVRÉ, mergé (ca592ab),
+unité com.bridget.ronde ACTIVE sur le Mac, premier rapport daté écrit,
+sidecars de la base de prod prouvés intacts.
 
 ### Exigence de fond rappelée par l'utilisateur (2026-08-24)
 
