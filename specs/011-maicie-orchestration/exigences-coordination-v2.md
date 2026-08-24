@@ -533,3 +533,41 @@ plus vite ; le coût net est un report, pas une perte.
   charge au mauvais endroit. Lien direct avec 017 (la greffière ne peut pas
   qualifier ce qu'elle ne voit pas) et avec la GUI (une vue unifiée doit
   montrer le journal, pas seulement les messages).
+- **Test de reprise à froid par un agent d'un autre fournisseur — résultat,
+  nuit du 24/08.** Protocole : un agent Codex relancé sans contexte, corpus
+  écrit seul (catalogue, règles, ADR, specs, greffe, git, who/ledger),
+  interdiction de demander quoi que ce soit à quiconque ; ma propre réponse
+  de référence scellée AVANT lecture de la sienne, pour ne pas rationaliser
+  l'écart après coup.
+  SON VERDICT, honnête : « non, pas proprement — les documents permettent de
+  retrouver le gros du chantier, mais pas de reprendre la coordination sans
+  trous opérationnels ».
+  CE QU'IL A RETROUVÉ SEUL, et qui valide le corpus : l'état exact des huit
+  worktrees avec leurs têtes en SHA complets, l'ordre 015→016→017 et son
+  verrouillage, l'interdiction de coder 016/017 avant le merge, la séquence
+  du prochain geste presque à l'identique, la gate rustfmt, et — sans que
+  personne le lui dise — que l'absence de Maicie à l'annuaire est nominale
+  et non une panne. Il a même produit deux constats que JE n'avais pas dans
+  ma référence : le spec.md 015 affiche encore « Conception — aucune
+  implémentation autorisée » alors que tout est livré (document faux dans le
+  corpus, à corriger), et trois worktrees fantômes (014, fix-001-t008,
+  maicie-skill) absorbés par main mais jamais nettoyés.
+  CE QU'IL N'A PAS PU ÉTABLIR, exactement ce que j'avais parié : les
+  réserves nommées (qui attend quoi et pour quel rendez-vous — elles
+  n'existent que dans des messages), l'ordonnancement délibéré du
+  reformatage de main, et la non-régression finale due. Il conclut lui-même
+  qu'il lui manque « une carte de reprise déterministe complète : qui est
+  référent, quel jalon exact, quels agents réveiller, quelle commande
+  suivante » et « un catalogue machine du dû — la feature 017 est conçue
+  mais n'existe pas encore, c'est précisément le trou qui empêche une
+  reprise fournisseur-agnostique ». Un agent extérieur redécouvre donc
+  seul, par la seule expérience du manque, la justification de la 017.
+  SON SEUL FAUX DIAGNOSTIC est le plus instructif : il conclut « daemon
+  Bridget hors ligne, 0 agent » alors que le daemon tournait et que onze
+  agents étaient connectés. Sa commande a échoué faute de trouver la socket
+  (/Users/moi/.cache/bridget/bridget.sock) — et il a bâti tout son
+  paragraphe « qui attend quoi » sur cette fausse observation. LEÇON : la
+  carte de reprise doit donner les chemins d'accès à l'état vivant (socket,
+  binaire de référence, config Maicie), pas seulement les chemins des
+  documents. Un successeur qui ne trouve pas la socket déclare l'équipe
+  morte et agit en conséquence.
