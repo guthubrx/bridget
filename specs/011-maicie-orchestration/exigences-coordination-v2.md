@@ -1666,3 +1666,20 @@ propose/approve des profils, ADR 011). Portée : par projet — la carte est
 un état de config Maicie par dépôt, le mécanisme est générique.
 Chaînage : phase autonomie, après routines (F-suite) — la relève qui évalue
 les routines peut évaluer la carte au même battement.
+
+### F38-b — Germe générique de la carte (2026-08-24 20:31, issu d'une revue à charge du démarrage à froid, demandée par l'utilisateur)
+
+Constat d'analyse : l'élection par le registre (voie 2) est RÉACTIVE — elle
+exige de payer un incident avant de protéger une zone — et souffre d'une
+boucle morte au démarrage (pas de revue => incidents non détectés => registre
+vide => pas de revue). Or les erreurs de jeunesse sont les plus chères : les
+portes sans retour se franchissent dans du code « simple » (pièce : le rc
+menteur d'outcome_unknown est né avec la commande d'envoi elle-même).
+AMENDEMENT : la carte de criticité ne naît jamais vide. Elle naît avec un
+GERME GÉNÉRIQUE identique pour tout projet, sans élection humaine : (1)
+schéma de persistance, (2) format de protocole/messages, (3)
+authentification-permissions — les portes sans retour universelles, dont
+deux sont de toute façon détectables dans le contenu du diff (voie 1). Tout
+le reste naît non-critique ; le registre densifie ensuite. La courbe voulue
+(jury rare au début, densifiant avec la ramification) est préservée, l'angle
+mort réactif est fermé.
