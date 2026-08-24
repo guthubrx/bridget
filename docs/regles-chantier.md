@@ -215,6 +215,13 @@ deux échecs successifs pour un même agent.)*
   passage unique et bâti leurs conclusions dessus.)* Corollaire du même
   incident : un rouge intermittent se qualifie par un TAUX mesuré des deux
   côtés (lot et base), jamais par une impression.
+- **Jamais d'accent grave dans un mandat passé en ligne de commande.** Le
+  shell les interprète comme une substitution : les mots encadrés
+  DISPARAISSENT du mandat livré à l'agent, silencieusement, et seule une
+  ligne « command not found » sur la sortie d'erreur le signale. *(Incident
+  2026-08-24 ~21h40 : deux mandats de jury livrés amputés de leurs termes
+  techniques, réparés par message.)* Écrire les identifiants en clair, ou
+  passer le mandat par un fichier.
 - **Les heures déclarées par les agents ne font pas foi ; l'horodatage
   d'inscription au ledger, oui.** Mesuré le 2026-08-24 : décalages de +1 à
   +40 minutes, collectifs et dans le même sens — les agents alignent leur
