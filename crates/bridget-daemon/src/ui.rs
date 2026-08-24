@@ -44,6 +44,9 @@ const UI_PAGE: &str = r#"<!doctype html>
 <h2>Agents</h2>
 <table><thead><tr><th>nom</th><th>état</th><th>modèle</th><th>mode</th><th>localisation</th></tr></thead><tbody id="agents"></tbody></table>
 
+<h2>Pertes à la reprise</h2>
+<table><thead><tr><th>nom</th><th>raison</th><th>détail</th></tr></thead><tbody id="losses"></tbody></table>
+
 <h2>Missions en cours</h2>
 <table><thead><tr><th>objectif</th><th>agent</th><th>état</th><th>âge</th></tr></thead><tbody id="missions"></tbody></table>
 
@@ -58,6 +61,7 @@ const UI_PAGE: &str = r#"<!doctype html>
   const token = new URLSearchParams(location.search).get("token");
   const status = document.getElementById("source-status");
   const agentsNode = document.getElementById("agents");
+  const lossesNode = document.getElementById("losses");
   const missionsNode = document.getElementById("missions");
   const selector = document.getElementById("agent");
   const journal = document.getElementById("journal");
@@ -95,6 +99,14 @@ const UI_PAGE: &str = r#"<!doctype html>
       ]);
       const option = document.createElement("option"); option.value = agent.name; option.textContent = agent.name; selector.appendChild(option);
     });
+
+    lossesNode.replaceChildren();
+    const losses = snapshot.recovery_losses || [];
+    losses.forEach((loss) => row(lossesNode, [
+      [unknown(loss.name, "nom"), !loss.name],
+      [unknown(loss.reason, "raison"), !loss.reason],
+      [loss.detail || "—", !loss.detail]
+    ]));
 
     missionsNode.replaceChildren();
     const objectives = snapshot.missions && snapshot.missions.objectives;
@@ -159,8 +171,9 @@ const UI_PAGE: &str = r#"<!doctype html>
     if (selector.value) follow(); else journalStatus.textContent = "Journal indisponible : l'annuaire ne contient aucun agent.";
   }).catch((error) => {
     status.textContent = `Instantané indisponible : ${error.message}`;
-    agentsNode.replaceChildren(); missionsNode.replaceChildren();
+    agentsNode.replaceChildren(); missionsNode.replaceChildren(); lossesNode.replaceChildren();
     row(agentsNode, [["source Bridget indisponible", true], ["—", true], ["—", true], ["—", true], ["—", true]]);
+    row(lossesNode, [["source indisponible", true], ["—", true], ["—", true]]);
     row(missionsNode, [["source Maicie indisponible", true], ["—", true], ["—", true], ["—", true]]);
   });
 })();
@@ -283,6 +296,16 @@ struct UiSnapshotV1 {
     agents: Vec<bridget_transport::protocol::AgentInfo>,
     open_requests: Vec<bridget_transport::protocol::RequestInfo>,
     missions: UiMissionProjectionV1,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    recovery_losses: Vec<UiRecoveryLossV1>,
+}
+
+#[derive(Serialize)]
+struct UiRecoveryLossV1 {
+    name: String,
+    reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -344,12 +367,51 @@ fn read_snapshot(config: &UiRelayConfig) -> Result<UiSnapshotV1, UiError> {
     let (agents, open_requests) = read_bridget_snapshot(&config.daemon_socket)?;
     let missions = read_ui_mission_projection_v1(&config.maicie_config)
         .map_err(|error| UiError::Configuration(error.to_string()))?;
+    let recovery_losses = read_recovery_losses(&config.daemon_socket);
     Ok(UiSnapshotV1 {
         version: UI_VERSION,
         agents,
         open_requests,
         missions,
+        recovery_losses,
     })
+}
+
+fn read_recovery_losses(socket_path: &Path) -> Vec<UiRecoveryLossV1> {
+    let fleet_path = crate::desired_state::path_for_daemon_db(&socket_path.with_extension("db"));
+    // En prod socket et db partagent le parent `.cache/bridget` : même résolution
+    // que path_for_daemon_db(db). Si le socket n'est pas sous ce schéma, on tente
+    // aussi le voisin direct de fleet.json dérivé du parent du socket.
+    let candidates = [
+        crate::recovery_trace::report_path(&fleet_path),
+        socket_path
+            .parent()
+            .map(|parent| parent.join(crate::recovery_trace::REPORT_FILE_NAME))
+            .unwrap_or_else(|| PathBuf::from(crate::recovery_trace::REPORT_FILE_NAME)),
+        dirs_home_report(),
+    ];
+    for path in candidates {
+        if let Ok(Some(report)) = crate::recovery_trace::load_report(&path) {
+            return report
+                .absents
+                .into_iter()
+                .map(|entry| UiRecoveryLossV1 {
+                    name: entry.name,
+                    reason: entry.reason,
+                    detail: entry.detail,
+                })
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+fn dirs_home_report() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".config/bridget")
+        .join(crate::recovery_trace::REPORT_FILE_NAME)
 }
 
 /// Projection globale déjà détenue par le daemon. La connexion reste dans le
@@ -708,6 +770,7 @@ mod tests {
         assert!(response.contains("/v1/snapshot"), "{response}");
         assert!(response.contains("/v1/watch"), "{response}");
         assert!(response.contains("EventSource"), "{response}");
+        assert!(response.contains("Pertes à la reprise"), "{response}");
         assert!(
             !response.contains("bridget.sock"),
             "Mutation : une page qui recevrait la socket Unix contournerait le relais; {response}"

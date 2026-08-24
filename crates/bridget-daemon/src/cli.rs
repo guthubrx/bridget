@@ -367,6 +367,14 @@ fn cmd_spawn(args: &[String]) {
         eprintln!("bridget spawn: {error}");
         std::process::exit(1);
     });
+    if let Some(name) = parsed.name.as_deref()
+        && !parsed.persistent
+    {
+        eprintln!(
+            "avertissement: {}",
+            crate::recovery_trace::non_persistent_spawn_warning(name)
+        );
+    }
     let command_id = match &order {
         WrapperToDaemon::SpawnOrder { command_id, .. } => command_id.clone(),
         _ => unreachable!("resolve_spawn_order ne produit qu'un SpawnOrder"),
@@ -2968,6 +2976,22 @@ mod hook_tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn spawn_nomme_sans_persistent_avertit_qu_il_ne_survivra_pas() {
+        let parsed = parse_spawn_args(&[
+            "cursor".to_string(),
+            "--name".to_string(),
+            "cursor3".to_string(),
+        ])
+        .unwrap();
+        assert!(!parsed.persistent);
+        assert_eq!(parsed.name.as_deref(), Some("cursor3"));
+        let warning = crate::recovery_trace::non_persistent_spawn_warning("cursor3");
+        assert!(warning.contains("cursor3"));
+        assert!(warning.contains("ne survivra pas au redémarrage"));
+        assert!(warning.contains("sans --persistent"));
     }
 
     #[test]

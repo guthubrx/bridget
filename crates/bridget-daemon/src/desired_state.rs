@@ -26,6 +26,9 @@ pub struct DesiredEquipier {
     /// qu'à lire les anciens fichiers : leur reprise est refusée fail-closed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_definition: Option<ResolvedAgentDefinition>,
+    /// Domaine du protocole, persisté pour recomposer l'équipe après crash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
 }
 
 /// Contenu versionné de `fleet.json`.
@@ -43,6 +46,19 @@ impl Default for DesiredFleet {
             equipiers: BTreeMap::new(),
         }
     }
+}
+
+/// Chemin de `fleet.json` dérivé du `db_path` daemon (prod vs tests).
+pub fn path_for_daemon_db(db_path: &Path) -> PathBuf {
+    let production_home = db_path
+        .parent()
+        .filter(|directory| directory.file_name().is_some_and(|name| name == "bridget"))
+        .and_then(|directory| directory.parent())
+        .filter(|directory| directory.file_name().is_some_and(|name| name == ".cache"))
+        .and_then(|directory| directory.parent());
+    production_home
+        .map(|home| home.join(".config/bridget/fleet.json"))
+        .unwrap_or_else(|| db_path.with_extension("fleet.json"))
 }
 
 #[derive(Debug)]
@@ -334,6 +350,7 @@ mod tests {
             generation,
             created: "2026-08-22T20:14:00Z".to_string(),
             resolved_definition: None,
+            domain: None,
         }
     }
 
@@ -462,6 +479,23 @@ mod tests {
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn domain_est_ecrit_dans_fleet_json_apres_upsert() {
+        let root = test_root("domain");
+        let path = root.join("fleet.json");
+        let store = DesiredStateStore::at_path(&path);
+        let mut entry = equipier("command-domain", 1);
+        entry.domain = Some("bridget".to_string());
+        store.upsert("cursor6".to_string(), entry).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"domain\": \"bridget\""), "{raw}");
+        assert_eq!(
+            store.load().unwrap().equipiers["cursor6"].domain.as_deref(),
+            Some("bridget")
         );
         fs::remove_dir_all(root).unwrap();
     }
