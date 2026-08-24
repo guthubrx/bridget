@@ -989,8 +989,9 @@ ce qui existe ici :
   **État 2026-08-24** : `scripts/install-k1.sh` + `make install-k1`.
   Cibles : Darwin (launchd) et Linux (systemd --user) ; Windows refusé
   proprement. Voie Rust : rustup + compilation sur place (autoportant).
-  Preuves Mac — (1) idempotence ici ; (2) pose bac à sable. Preuve Linux —
-  cartae.app (activation + guichet E2E) : en cours / à attester.
+  Preuves Mac — idempotence ici + pose bac à sable. Preuve Linux cartae.app
+  — **attestée** : daemon systemd actif, spawn/stop fixture, dépôt guichet
+  `queued` puis relève Maicie sans panne (`--verify-guichet`).
 - **K2 — Rendre la ronde portable.** Elle doit vivre dans le dépôt, pas dans
   la session d'un référent. Soit un service au même titre que la relève, soit
   une commande que n'importe quel référent lance. Aujourd'hui, changer de

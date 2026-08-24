@@ -10,8 +10,10 @@
 #   3. Outil vs projet : pose le générique ; profils et catalogue restent des gabarits vides.
 #
 # Preuves :
-#   Mac — idempotence ici + pose bac à sable (2026-08-24, b8fc9c8).
-#   Linux — activation services + guichet E2E sur cartae.app (à attester).
+#   Mac — idempotence ici + pose bac à sable (2026-08-24).
+#   Linux cartae.app — daemon systemd, spawn/stop, dépôt guichet queued +
+#     relève Maicie sans panne (--verify-guichet, 2026-08-24).
+#   Windows — différé (refus nommé).
 #
 # Flags :
 #   --catalogue-path PATH   journal du dû
