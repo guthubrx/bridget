@@ -5,7 +5,25 @@ tenue par le référent humain-agent. Chaque règle exécutée à la main ici es
 candidate à devenir un comportement produit de Maicie. Hors périmètre de la
 v1 (spec 011) — intrants pour les itérations suivantes.
 
-## Tableau de bord — mis à jour le 2026-08-24, 18h04
+## Tableau de bord — mis à jour le 2026-08-24, 19h15
+
+**État du soir (19h15)** : jury n°2 rendu — les deux collèges (à charge :
+j2-ingrid/j2-viktor ; constructif : j2-aminata/j2-hiroshi) signent le même
+APPROVE_WITH_CHANGES avec C1 bloquante sur le lot outcome_unknown de fable2
+(la quarantaine, trouvaille Viktor, sort en rc=0 ; 3 portes dont une
+migration ; occurrence vivante mesurée : 1/1527 remises = 0,065 %, prémisse
+« rare » confirmée par DEUX requêtes indépendantes). C2 du collège à charge
+RETIRÉE après preuve au banc (le lot est mieux gardé qu'accusé). Témoins
+cursor5/cursor9 encore en gates (saturation machine), verdicts ~19h45-20h.
+Correctif boot LIVRÉ par cursor8 (@ 0e5bad4, 8/8 + 11/11) — revue chaînée
+cursor3 débloquée par F37. Chiffre « 3h23 de boot » CORRIGÉ au greffe
+(mauvais répertoire + coût charge-dépendant : ordre de grandeur minutes).
+Hook StatusLine livré par fable-reviewer (@ d2f2723, 9 oracles, 5/5
+mutants morts), revue au dégel. 3 constats Majors missionnés (spawn
+fantôme → cursor6, délégations orphelines → cursor4 [migration v16, v15
+tenue par cursor7], attach natifs → cursorbridget). Reste du soir :
+verdicts témoins → réconciliation manche 2 → dégel fable2 (conditions
+consolidées) → revue+merge boot → alors seulement rebuild/redémarrage.
 
 Vue d'avancement des blocs. Détail et jurisprudence dans chaque bloc plus
 bas ; ce tableau ne remplace pas la lecture, il dit où on en est.
@@ -22,7 +40,8 @@ bas ; ce tableau ne remplace pas la lecture, il dit où on en est.
 Rayé d'un commun accord : J4, B7. À trier le moment venu : D22.
 
 **Bloc M — le référent géré** (détail en fin de document)
-- [ ] M5 rondes → routines — 🔄 note de conception chez coder5
+- [ ] M5 rondes → routines — 🔄 note validée, commit 1 livré (27cc289,
+      cursor7), commit 2 état-pause #009 en cours, jury n°3 ensuite
 - [ ] M3 permissions sans terminal — ⬜ phase sécurité
 - [ ] M1 composer dans la page — ⬜ (intérim : attach est déjà un composer)
 - [ ] M2 référent spawné en flux natif — ⬜ après M3+M5

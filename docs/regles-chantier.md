@@ -188,6 +188,46 @@ deux échecs successifs pour un même agent.)*
   ont échoué de façon intermittente cette nuit ; deux cachaient un vrai défaut.
   La preuve d'instabilité est un taux mesuré, pas une impression.
 
+Complété le 2026-08-24 au soir, après le jury n°2 : six relecteurs, cinq
+incidents de mesure, tous rattrapés — aucun par son auteur seul.
+
+- **Un verdict de test exige le COMPTE de tests exécutés, jamais le seul
+  code retour.** Trois faux résultats la même soirée : un `rc=0` avec
+  « 0 passed; 411 filtered out » (filtre de module faux — vert vide) ; un
+  `rc=1` « unexpected argument » pris pour un mutant mort (jamais exécuté) ;
+  12 rouges constants de protocole (`--lib` sans le binaire) livrables par
+  erreur comme rouges du lot. Annoncer : N passed / M failed / liste des
+  rouges de référence.
+- **Jamais de code retour lu après un pipe.** Sous zsh, `${PIPESTATUS[0]}`
+  rend une chaîne VIDE (c'est `pipestatus`, minuscule). Un gate lu après un
+  pipe est un gate mort qui se fait passer pour vert. Troisième variante du
+  même piège que `fmt` sans PATH et `--workspace` sans feature : l'outil
+  absent ou muet ressemble à l'outil satisfait.
+- **Un `CARGO_TARGET_DIR` isolé par mesureur.** Deux jurés partageant le
+  target du dépôt depuis deux copies sources se sont invalidé mutuellement
+  les empreintes : 31 erreurs de compilation fantômes, presque écrites
+  « base rouge ». Économiser le disque en partageant le target d'autrui,
+  c'est polluer son banc. Si le disque ne permet pas l'isolation, le
+  dispositif de mesure n'est pas soutenable tel quel — ce n'est pas au
+  mesureur d'arbitrer.
+- **Un binaire d'essai se copie à l'abri avant usage.** Sur un target
+  partagé, `target/debug/bridget` peut être réécrit sous vos pieds par un
+  agent voisin (cargo verrouille les artefacts, pas votre séquence
+  build→essai) : « hook inconnu » sur du code correct, faux diagnostic
+  évité de justesse le 24/08.
+- **Un chiffre d'alerte se mesure, il ne se multiplie pas.** « 2557 entrées
+  × 4,8 s = 3h23 de boot » : les DEUX facteurs étaient faux (mauvais
+  répertoire compté — le code scanne `std::env::temp_dir()` = `$TMPDIR`,
+  pas `/tmp` ; coût unitaire pris sous la charge qu'on prétendait écarter).
+  Ordre de grandeur réel : minutes. Un boot de daemon se mesure en
+  démarrant un daemon. Le produit de deux estimations est une extrapolation,
+  pas une mesure — l'annoncer comme telle.
+- **Dépannage du banc de crash (valable jusqu'au merge du correctif boot)** :
+  `mkdir -p /tmp/vide && TMPDIR=/tmp/vide cargo test -p bridget-daemon
+  --features test-support --test idempotency_crash_test`. Le scan de purge au
+  boot lit `$TMPDIR` : un répertoire vide rend le banc vert en ~2 s sans rien
+  purger. (Trouvaille j2-viktor, confirmée j2-ingrid, deux mains.)
+
 
 ## Rapporter à Maicie : le guichet (tous les agents)
 
