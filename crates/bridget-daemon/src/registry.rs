@@ -403,7 +403,10 @@ fn validate_registry(
                 source.display()
             ));
         }
-        if !matches!(definition.protocol.as_str(), "acp" | "tmux") {
+        if !matches!(
+            definition.protocol.as_str(),
+            "acp" | "tmux" | "codex_app_server"
+        ) {
             return Err(format!(
                 "registre invalide {}: protocol invalide pour '{name}'",
                 source.display()
@@ -514,17 +517,26 @@ fn definition(
     }
 }
 
+fn native_codex_definition(
+    command: &str,
+    args: &[&str],
+    forbidden_env: &[&str],
+    pass_env: &[&str],
+    mcp_interactive: &str,
+) -> AgentDefinition {
+    let mut definition = definition(command, args, forbidden_env, pass_env, mcp_interactive);
+    definition.protocol = "codex_app_server".to_string();
+    definition.mcp.acp_session = false;
+    definition
+}
+
 fn default_agents() -> BTreeMap<String, AgentDefinition> {
     BTreeMap::from([
         (
             "codex".to_string(),
-            definition(
-                "npx",
-                &[
-                    "@zed-industries/codex-acp@0.16.0",
-                    "-c",
-                    "model=\"gpt-5.5\"",
-                ],
+            native_codex_definition(
+                "codex",
+                &["-c", "model=\"gpt-5.6-terra\"", "app-server"],
                 &["OPENAI_API_KEY", "CODEX_API_KEY"],
                 &[
                     "CODEX_HOME",
@@ -604,17 +616,13 @@ mod tests {
     fn defaults_cover_the_three_priorities() {
         let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
         let codex = registry.get("codex").unwrap();
-        assert_eq!(codex.command, "npx");
+        assert_eq!(codex.command, "codex");
         assert_eq!(
             codex.args,
-            vec![
-                "@zed-industries/codex-acp@0.16.0",
-                "-c",
-                "model=\"gpt-5.5\""
-            ]
+            vec!["-c", "model=\"gpt-5.6-terra\"", "app-server"]
         );
         assert_eq!(codex.forbidden_env, vec!["OPENAI_API_KEY", "CODEX_API_KEY"]);
-        assert_eq!(codex.protocol, "acp");
+        assert_eq!(codex.protocol, "codex_app_server");
         assert_eq!(codex.permissions, "allow");
         assert_eq!(codex.queue_capacity, 32);
         assert_eq!(codex.notify_timeout_secs, 600);
@@ -622,7 +630,7 @@ mod tests {
         assert!(!codex.pass_env.contains(&"OPENAI_API_KEY".to_string()));
         assert_eq!(registry.get("gemini").unwrap().args, vec!["--acp"]);
         assert_eq!(codex.mcp.interactive, "codex");
-        assert!(codex.mcp.acp_session);
+        assert!(!codex.mcp.acp_session);
         assert_eq!(
             registry.get("gemini").unwrap().mcp.interactive,
             "unsupported"
@@ -665,16 +673,19 @@ mod tests {
         let first = registry.resolved_definition("codex").unwrap();
         let second = registry.resolved_definition("codex").unwrap();
         assert_eq!(first, second);
-        assert_eq!(first.command, "npx");
-        assert_eq!(first.args[0], "@zed-industries/codex-acp@0.16.0");
-        assert_eq!(first.protocol, "acp");
+        assert_eq!(first.command, "codex");
+        assert_eq!(
+            first.args,
+            vec!["-c", "model=\"gpt-5.6-terra\"", "app-server"]
+        );
+        assert_eq!(first.protocol, "codex_app_server");
         assert_eq!(first.forbidden_env, vec!["OPENAI_API_KEY", "CODEX_API_KEY"]);
         assert!(first.pass_env.contains(&"CODEX_HOME".to_string()));
         assert_eq!(first.permissions, "allow");
         assert_eq!(first.queue_capacity, 32);
         assert_eq!(first.notify_timeout_secs, 600);
         assert_eq!(first.mcp.interactive, "codex");
-        assert!(first.mcp.acp_session);
+        assert!(!first.mcp.acp_session);
         assert_eq!(first.digest.len(), 64);
 
         let baseline = default_agents().remove("codex").unwrap();
@@ -868,11 +879,16 @@ mod tests {
 
     #[test]
     fn ambiguous_command_is_refused_without_map_order_fallback() {
-        let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
+        let registry = AgentRegistry::from_json(
+            r#"{"agents":{"other":{"command":"npx"},"third":{"command":"npx"}}}"#,
+            "/tmp/agents.json",
+        )
+        .unwrap();
         let error = registry.type_for_command("npx").unwrap_err();
         assert!(error.contains("commande ambiguë 'npx'"));
         assert!(error.contains("claude"));
-        assert!(error.contains("codex"));
+        assert!(error.contains("other"));
+        assert!(error.contains("third"));
     }
 
     #[test]
@@ -880,6 +896,6 @@ mod tests {
         let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
         let error = registry.type_for_command("not-declared").unwrap_err();
         assert!(error.contains("/tmp/agents.json"));
-        assert!(error.contains("codex (npx)"));
+        assert!(error.contains("codex (codex)"));
     }
 }

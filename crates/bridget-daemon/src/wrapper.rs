@@ -10,10 +10,10 @@ use bridget_transport::journal::{
 };
 use bridget_transport::protocol::{PresenceMode, decode, encode};
 use bridget_transport::{
-    AcpOptions, AcpTransport, AttachRefusal, AttachWindow, DaemonToWrapper,
-    MAX_ATTACH_FRAGMENT_BYTES, MAX_ATTACH_SERIALIZED_FRAME_BYTES, ManagedEvent, ManagedEventKind,
-    ManagedSession, ManagedSessionDescriptor, ManagedTerminal, TmuxTransport, Transport,
-    WrapperToDaemon,
+    AcpOptions, AcpTransport, AttachRefusal, AttachWindow, CodexAppServerOptions,
+    CodexAppServerTransport, DaemonToWrapper, MAX_ATTACH_FRAGMENT_BYTES,
+    MAX_ATTACH_SERIALIZED_FRAME_BYTES, ManagedEvent, ManagedEventKind, ManagedSession,
+    ManagedSessionDescriptor, ManagedTerminal, TmuxTransport, Transport, WrapperToDaemon,
 };
 use log::{debug, error, info, warn};
 use std::collections::{BTreeMap, HashSet, VecDeque};
@@ -2282,7 +2282,7 @@ fn launch_acp(
 }
 
 /// Point d'entrée du wrapper supervisé. Le FD `managed-status` est fermé
-/// uniquement après Register, transport ACP, journal et relais initialisés.
+/// uniquement après Register, transport géré, journal et relais initialisés.
 pub fn launch_managed_acp(
     agent_type: &str,
     explicit_name: &str,
@@ -2310,7 +2310,7 @@ pub fn launch_managed_acp(
     })();
     if let Err(error) = &result {
         let detail = error.to_string();
-        let kind = if detail.contains("impossible de lancer l'adaptateur ACP")
+        let kind = if detail.contains("impossible de lancer")
             && (detail.contains("os error 2") || detail.contains("No such file"))
         {
             "command_missing"
@@ -2327,9 +2327,9 @@ pub fn launch_managed_acp(
     result
 }
 
-/// Lance un équipier ACP avec ses dépendances de configuration et de chemins
-/// explicites. Le flux de production passe par [`launch_acp`]; cette variante
-/// rend le même chemin vérifiable avec un registre et un daemon temporaires.
+/// Lance un équipier géré avec ses dépendances de configuration et de chemins
+/// explicites. Le flux de production passe par [`launch_acp`]; ce nom est
+/// conservé pour les appels 007 historiques.
 pub fn launch_acp_with(
     agent_type: &str,
     agent_args: &[String],
@@ -2363,8 +2363,8 @@ fn launch_acp_with_status(
         return Err("le mode --equipier n'accepte pas d'arguments d'agent".into());
     }
     let definition = registry.get(agent_type)?;
-    if definition.protocol != "acp" {
-        return Err(format!("le type '{agent_type}' n'utilise pas le protocole ACP").into());
+    if !matches!(definition.protocol.as_str(), "acp" | "codex_app_server") {
+        return Err(format!("le type '{agent_type}' n'utilise pas un pilote géré").into());
     }
     if let Some(variable) = crate::registry::forbidden_environment_variable(
         definition,
@@ -2387,35 +2387,8 @@ fn launch_acp_with_status(
         .as_deref()
         .and_then(effective_domain)
         .or_else(derive_domain);
-    let mcp_environment = vec![(
-        "BRIDGET_AGENT_INSTANCE_ID".into(),
-        instance_id.clone().into(),
-    )];
-    let mcp_servers = definition
-        .mcp
-        .acp_session
-        .then(mcp_server_entry)
-        .transpose()?
-        .into_iter()
-        .collect();
-    let options = AcpOptions {
-        command: definition.command.clone(),
-        args: definition.args.clone(),
-        queue_capacity: definition.queue_capacity,
-        permissions: definition.permissions.clone(),
-        notify_timeout_secs: definition.notify_timeout_secs,
-    };
-    let mut transport: Box<dyn ManagedSession> = Box::new(if managed_reporter.is_some() {
-        AcpTransport::spawn_inheriting_stderr_with_environment_and_mcp(
-            options,
-            &mcp_environment,
-            mcp_servers,
-        )
-    } else {
-        AcpTransport::spawn_with_environment_and_mcp(options, &mcp_environment, mcp_servers)
-    }?);
-    let descriptor = transport.descriptor();
-    let (mut reader, initial_writer, mut my_name) = match connect_and_register_at(
+    let descriptor = managed_descriptor(definition.protocol.as_str());
+    let (mut reader, initial_writer, mut my_name) = connect_and_register_at(
         socket,
         agent_type,
         effective_name.as_deref(),
@@ -2427,13 +2400,7 @@ fn launch_acp_with_status(
         &instance_id,
         initial_domain.as_deref(),
         false,
-    ) {
-        Ok(connection) => connection,
-        Err(error) => {
-            transport.stop();
-            return Err(error.into());
-        }
-    };
+    )?;
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
     let mut idempotent_deliveries = IdempotentDeliveryTracker::open(home, &instance_id)?;
     let name_state_path = socket
@@ -2445,6 +2412,64 @@ fn launch_acp_with_status(
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&name_state_path, &my_name)?;
+    let mcp_environment = vec![(
+        "BRIDGET_AGENT_INSTANCE_ID".into(),
+        instance_id.clone().into(),
+    )];
+    let mut transport: Box<dyn ManagedSession> = match definition.protocol.as_str() {
+        "acp" => {
+            let mcp_servers = definition
+                .mcp
+                .acp_session
+                .then(mcp_server_entry)
+                .transpose()?
+                .into_iter()
+                .collect();
+            let options = AcpOptions {
+                command: definition.command.clone(),
+                args: definition.args.clone(),
+                queue_capacity: definition.queue_capacity,
+                permissions: definition.permissions.clone(),
+                notify_timeout_secs: definition.notify_timeout_secs,
+            };
+            Box::new(if managed_reporter.is_some() {
+                AcpTransport::spawn_inheriting_stderr_with_environment_and_mcp(
+                    options,
+                    &mcp_environment,
+                    mcp_servers,
+                )
+            } else {
+                AcpTransport::spawn_with_environment_and_mcp(options, &mcp_environment, mcp_servers)
+            }?)
+        }
+        "codex_app_server" => {
+            let options = CodexAppServerOptions {
+                command: definition.command.clone(),
+                args: definition.args.clone(),
+                queue_capacity: definition.queue_capacity,
+                notify_timeout_secs: definition.notify_timeout_secs,
+                model: codex_model_from_args(&definition.args),
+            };
+            let environment = mcp_environment
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        name.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            Box::new(if managed_reporter.is_some() {
+                CodexAppServerTransport::spawn_inheriting_stderr_with_environment(
+                    options,
+                    &environment,
+                )
+            } else {
+                CodexAppServerTransport::spawn_with_environment(options, &environment, false)
+            }?)
+        }
+        _ => unreachable!("protocole géré validé avant le lancement"),
+    };
     let marker_directory = socket.parent().unwrap().join("agent-pids");
     let adapter_pid = transport.process_id();
     crate::mcp_identity::write_marker(
@@ -2631,6 +2656,43 @@ fn billing_guard_error(variable: &str) -> String {
         "variable d'environnement refusée pour l'équipier ACP : {variable} \
          (utilisez BRIDGET_ALLOW_API_KEY=1 uniquement si vous acceptez la facturation API)"
     )
+}
+
+/// Lit uniquement la valeur `model=` déjà portée par la définition figée.
+/// Les autres options Codex restent du ressort du binaire fournisseur : ce
+/// pont ne doit ni les interpréter ni les réécrire.
+fn codex_model_from_args(args: &[String]) -> Option<String> {
+    args.windows(2)
+        .find(|pair| pair[0] == "-c" || pair[0] == "--config")
+        .and_then(|pair| pair[1].strip_prefix("model="))
+        .map(|value| {
+            value
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string()
+        })
+        .filter(|model| !model.is_empty())
+}
+
+/// Le Register précède historiquement le lancement du sous-processus : un
+/// échec de commande est donc corrélé au wrapper déjà connu du daemon. Le
+/// descripteur est une propriété stable du pilote, disponible sans démarrer
+/// celui-ci et réemployée à la reconnexion.
+fn managed_descriptor(protocol: &str) -> ManagedSessionDescriptor {
+    match protocol {
+        "acp" => ManagedSessionDescriptor {
+            transport: "acp".to_string(),
+            mode: PresenceMode::Acp,
+            location: None,
+        },
+        "codex_app_server" => ManagedSessionDescriptor {
+            transport: "stdio".to_string(),
+            mode: PresenceMode::Cli,
+            location: None,
+        },
+        _ => unreachable!("protocole géré validé avant le Register"),
+    }
 }
 
 fn mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {

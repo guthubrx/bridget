@@ -2732,6 +2732,7 @@ fn definition_presence_mode(definition: &ResolvedAgentDefinition) -> Option<Pres
     match definition.protocol.as_str() {
         "acp" => Some(PresenceMode::Acp),
         "tmux" => Some(PresenceMode::Tmux),
+        "codex_app_server" => Some(PresenceMode::Cli),
         _ => None,
     }
 }

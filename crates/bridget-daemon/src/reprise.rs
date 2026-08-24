@@ -204,6 +204,7 @@ fn send_ledger_both(
         instance_id: None,
         domain: None,
         turn_in_progress: false,
+        journal_available: None,
     };
     writeln!(writer, "{}", encode(&reg).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     writer.flush().map_err(|e| e.to_string())?;

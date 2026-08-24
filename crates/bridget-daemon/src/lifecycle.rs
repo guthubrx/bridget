@@ -161,9 +161,9 @@ fn prepare_spawn_parts(
     ) {
         return Err(SpawnRefusal::BillingGuard { variable });
     }
-    if definition.protocol != "acp" {
+    if !matches!(definition.protocol.as_str(), "acp" | "codex_app_server") {
         return Err(SpawnRefusal::NegotiationFailed {
-            detail: format!("le protocole '{}' n'est pas ACP", definition.protocol),
+            detail: format!("le protocole '{}' n'est pas géré", definition.protocol),
         });
     }
     if !cwd.is_dir() {
@@ -440,7 +440,7 @@ mod tests {
             (
                 "negotiation",
                 SpawnRefusal::NegotiationFailed {
-                    detail: "le protocole 'tmux' n'est pas ACP".to_string(),
+                    detail: "le protocole 'tmux' n'est pas géré".to_string(),
                 },
             ),
             ("timeout", SpawnRefusal::SpawnTimeout),

@@ -3,6 +3,7 @@
 //! Définit les messages JSON qui circulent sur la socket locale.
 
 pub mod acp;
+pub mod codex_app_server;
 pub mod fsutil;
 pub mod journal;
 pub mod managed_session;
@@ -11,6 +12,7 @@ pub mod tmux;
 pub mod transport;
 
 pub use acp::{AcpEvent, AcpEventQueue, AcpOptions, AcpTransport, TurnState};
+pub use codex_app_server::{CodexAppServerOptions, CodexAppServerTransport};
 pub use managed_session::{
     ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource, ManagedSession,
     ManagedSessionDescriptor, ManagedTerminal,
