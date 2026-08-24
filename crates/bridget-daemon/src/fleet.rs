@@ -9,6 +9,10 @@ use crate::idempotency::{
     IdempotencyError, IdempotencyKey, IdempotencyStore, OperationKind, SpawnCommand,
     SpawnCommandIssue, SpawnCommandState, SpawnReservation,
 };
+use crate::recovery_trace::{
+    NamedRosterEntry, NamedRosterStore, RecoveryLossEntry, persist_report, report_path,
+    resolved_domain, roster_path,
+};
 use bridget_transport::ResolvedAgentDefinition;
 use log::warn;
 use serde::Serialize;
@@ -288,6 +292,7 @@ pub struct FleetSupervisor {
     inner: Mutex<FleetInner>,
     terminal_changed: Condvar,
     desired: DesiredStateStore,
+    roster: NamedRosterStore,
     config: FleetConfig,
 }
 
@@ -315,10 +320,12 @@ impl FleetSupervisor {
             next_generation: 1,
         };
         recover_commands(&mut inner, &desired_fleet)?;
+        let roster = NamedRosterStore::at_path(roster_path(desired.path()));
         Ok(Self {
             inner: Mutex::new(inner),
             terminal_changed: Condvar::new(),
             desired,
+            roster,
             config,
         })
     }
@@ -406,6 +413,47 @@ impl FleetSupervisor {
 
     pub fn remove_desired(&self, name: &str) -> Result<(), FleetError> {
         self.desired.remove(name)?;
+        self.roster.forget(name);
+        Ok(())
+    }
+
+    pub fn drain_non_persistent_named(&self) -> Vec<(String, NamedRosterEntry)> {
+        self.roster.drain_non_persistent()
+    }
+
+    pub fn persistent_named(&self) -> Vec<(String, NamedRosterEntry)> {
+        self.roster.persistent_entries()
+    }
+
+    pub fn forget_named(&self, name: &str) {
+        self.roster.forget(name);
+    }
+
+    pub fn persist_recovery_losses(
+        &self,
+        recorded_at: i64,
+        absents: Vec<RecoveryLossEntry>,
+    ) -> Result<(), FleetError> {
+        persist_report(&report_path(self.desired.path()), recorded_at, absents)
+            .map_err(FleetError::Observation)
+    }
+
+    pub fn recovery_losses_path(&self) -> PathBuf {
+        report_path(self.desired.path())
+    }
+
+    pub fn desired_domain(&self, name: &str) -> Option<String> {
+        self.desired
+            .load()
+            .ok()?
+            .equipiers
+            .get(name)?
+            .domain
+            .clone()
+    }
+
+    pub fn set_desired_domain(&self, name: &str, domain: Option<&str>) -> Result<(), FleetError> {
+        self.desired.set_domain(name, domain)?;
         Ok(())
     }
 
@@ -542,7 +590,7 @@ impl FleetSupervisor {
             .unwrap_or_else(|poison| poison.into_inner());
         let active = active_for_lease(&inner, lease)?.clone();
         if now >= active.deadline_at {
-            expire_locked(&mut inner, &self.desired, &active)?;
+            expire_locked(&mut inner, &self.desired, &self.roster, &active)?;
             self.terminal_changed.notify_all();
             return Err(FleetError::DeadlineElapsed);
         }
@@ -600,7 +648,7 @@ impl FleetSupervisor {
             return Err(FleetError::StaleGeneration);
         }
         if now >= active.deadline_at {
-            expire_locked(&mut inner, &self.desired, &active)?;
+            expire_locked(&mut inner, &self.desired, &self.roster, &active)?;
             self.terminal_changed.notify_all();
             return Err(FleetError::DeadlineElapsed);
         }
@@ -621,9 +669,18 @@ impl FleetSupervisor {
                     generation: active.generation,
                     created: now.to_string(),
                     resolved_definition: active.resolved_definition.clone(),
+                    domain: resolved_domain(None, &active.cwd),
                 },
             )?;
         }
+        self.roster.remember(
+            active.name.clone(),
+            NamedRosterEntry {
+                agent_type: active.agent_type.clone(),
+                persistent: active.persistent,
+                domain: resolved_domain(None, &active.cwd),
+            },
+        );
         after_fleet().map_err(FleetError::Observation)?;
         let issue = SpawnCommandIssue::Connected {
             name: active.name.clone(),
@@ -680,6 +737,7 @@ impl FleetSupervisor {
             if active.persistent {
                 self.desired.remove(&active.name)?;
             }
+            self.roster.forget(&active.name);
             let issue = SpawnCommandIssue::Cancelled {
                 reason: "arrêt demandé".to_string(),
             };
@@ -708,6 +766,7 @@ impl FleetSupervisor {
         if lease.persistent {
             self.desired.remove(&lease.name)?;
         }
+        self.roster.forget(&lease.name);
         Ok(())
     }
 
@@ -724,6 +783,7 @@ impl FleetSupervisor {
         if active.persistent {
             self.desired.remove(&active.name)?;
         }
+        self.roster.forget(&active.name);
         let key = spawn_key(&inner, &active.command_id)?;
         inner
             .idempotency
@@ -749,7 +809,7 @@ impl FleetSupervisor {
         if now < active.deadline_at {
             return Ok(false);
         }
-        expire_locked(&mut inner, &self.desired, &active)?;
+        expire_locked(&mut inner, &self.desired, &self.roster, &active)?;
         self.terminal_changed.notify_all();
         Ok(true)
     }
@@ -974,11 +1034,13 @@ fn complete_locked(inner: &mut FleetInner, active: &ActiveSpawn, issue: SpawnCom
 fn expire_locked(
     inner: &mut FleetInner,
     desired: &DesiredStateStore,
+    roster: &NamedRosterStore,
     active: &ActiveSpawn,
 ) -> Result<(), FleetError> {
     if active.persistent {
         desired.remove(&active.name)?;
     }
+    roster.forget(&active.name);
     let issue = SpawnCommandIssue::Cancelled {
         reason: "spawn_timeout".to_string(),
     };
@@ -1054,6 +1116,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn domain_est_persiste_dans_fleet_json_apres_connexion() {
+        let root = test_root("domain-connect");
+        let supervisor = open(&root);
+        let mut spawn = order("command-domain", Some("cursor6"), true);
+        spawn.cwd = PathBuf::from("/tmp/bridget");
+        let lease = start(&supervisor, &spawn);
+        supervisor
+            .mark_starting(&lease, NOW, &resolved_test_definition())
+            .unwrap();
+        supervisor
+            .register_connected(&lease, &lease.instance_id, NOW + 1)
+            .unwrap();
+        let fleet = supervisor.desired_fleet().unwrap();
+        assert_eq!(
+            fleet.equipiers["cursor6"].domain.as_deref(),
+            Some("bridget")
+        );
+        let raw = fs::read_to_string(root.join("fleet.json")).unwrap();
+        assert!(raw.contains("\"domain\": \"bridget\""), "{raw}");
+        supervisor
+            .set_desired_domain("cursor6", Some("nouveau-projet"))
+            .unwrap();
+        assert_eq!(
+            supervisor.desired_fleet().unwrap().equipiers["cursor6"]
+                .domain
+                .as_deref(),
+            Some("nouveau-projet")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn resolved_test_definition() -> ResolvedAgentDefinition {
         ResolvedAgentDefinition {
             command: "npx".to_string(),
@@ -1123,6 +1217,7 @@ mod tests {
                         generation: lease.generation,
                         created: NOW.to_string(),
                         resolved_definition: Some(resolved_test_definition()),
+                        domain: None,
                     },
                 )
                 .unwrap();

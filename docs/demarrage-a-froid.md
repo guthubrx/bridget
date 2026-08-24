@@ -15,7 +15,7 @@ la machine le 2026-08-24 ; un écart observé est noté comme découverte.
 
 | Ordre | Commande | Ce qu’on y lit |
 |------:|----------|----------------|
-| 1 | `bridget reprise` | Carte : daemon vivant ?, socket, DB, agents, worktrees, dirty. Option `--write <chemin>` pour figer. |
+| 1 | `bridget reprise` | Carte : daemon vivant ?, socket, DB, agents, worktrees, dirty. Si le dernier redémarrage a laissé des absents, le bloc `vivant.pertes_reprise` les nomme (`reason` + `detail`) — porte d'entrée : [data-model § Trace de reprise](../specs/009-daemon-spawn/data-model.md). Option `--write <chemin>` pour figer. |
 | 2 | `bridget who` | Présence runtime : transport, mode, domaine, modèle, effort, **LIMITE** (si attestée), état `connected`/`busy`. |
 | 3 | `maicie status --config /Users/moi/.config/maicie/config.json` | Greffe : une ligne `objectifs=N … coordination_fraîcheur=…`. `--json` pour le détail. |
 | 4 | `maicie registre list --config …` | Constats **ouverts** + pied `N/M/K/P`. Ajouter `--attente` pour les pending. |

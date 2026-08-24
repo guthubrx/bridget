@@ -82,6 +82,8 @@ pub struct RepriseSnapshot {
     pub git: Result<GitSnapshot, String>,
     pub maicie: Result<MaicieSummary, String>,
     pub pin: Option<Result<LoadedPin, String>>,
+    /// Trace durable des équipiers absents au dernier redémarrage.
+    pub recovery_losses: Result<Option<crate::recovery_trace::RecoveryLossReport>, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +134,7 @@ pub fn collect_snapshot(
             .and_then(|loaded| loaded.pin.maicie_config.as_deref()),
     );
     let maicie = collect_maicie(maicie_config.as_deref());
+    let recovery_losses = collect_recovery_losses(&db_path);
 
     RepriseSnapshot {
         now,
@@ -145,7 +148,17 @@ pub fn collect_snapshot(
         git,
         maicie,
         pin,
+        recovery_losses,
     }
+}
+
+fn collect_recovery_losses(
+    db_path: &Path,
+) -> Result<Option<crate::recovery_trace::RecoveryLossReport>, String> {
+    let fleet_path = crate::desired_state::path_for_daemon_db(db_path);
+    let path = crate::recovery_trace::report_path(&fleet_path);
+    crate::recovery_trace::load_report(&path)
+        .map_err(|error| format!("trace de reprise illisible {}: {error}", path.display()))
 }
 
 fn collect_ledger(
@@ -490,6 +503,7 @@ fn render_vivant(out: &mut String, snapshot: &RepriseSnapshot) {
                     out.push_str(&format!("    - {}\n", yaml_string(&format_agent(agent))));
                 }
             }
+            render_recovery_losses(out, snapshot);
             out.push_str("  preuve_30s: \"bridget status && bridget who\"\n");
         }
         Err(error) => {
@@ -505,11 +519,41 @@ fn render_vivant(out: &mut String, snapshot: &RepriseSnapshot) {
             out.push_str("  build_id_daemon: indisponible\n");
             out.push_str("  binaire_cli: indisponible\n");
             out.push_str("  agents_connectes: 0\n");
-            out.push_str(&format!(
-                "  noms:\n    - {}\n",
-                yaml_string(&format!("indisponible: {error}"))
-            ));
+            out.push_str("  noms:\n");
+            out.push_str(&format!("    - indisponible: {}\n", yaml_string(error)));
+            render_recovery_losses(out, snapshot);
             out.push_str("  preuve_30s: \"bridget status && bridget who\"\n");
+        }
+    }
+}
+
+fn render_recovery_losses(out: &mut String, snapshot: &RepriseSnapshot) {
+    match &snapshot.recovery_losses {
+        Ok(None) => {}
+        Ok(Some(report)) => {
+            out.push_str(&format!("  pertes_reprise_at: {}\n", report.recorded_at));
+            out.push_str("  pertes_reprise:\n");
+            for absent in &report.absents {
+                match absent.detail.as_deref() {
+                    Some(detail) if !detail.is_empty() => out.push_str(&format!(
+                        "    - name: {}\n      reason: {}\n      detail: {}\n",
+                        yaml_string(&absent.name),
+                        yaml_string(&absent.reason),
+                        yaml_string(detail)
+                    )),
+                    _ => out.push_str(&format!(
+                        "    - name: {}\n      reason: {}\n",
+                        yaml_string(&absent.name),
+                        yaml_string(&absent.reason)
+                    )),
+                }
+            }
+        }
+        Err(error) => {
+            out.push_str(&format!(
+                "  pertes_reprise: indisponible ({})\n",
+                yaml_string(error)
+            ));
         }
     }
 }
@@ -1033,6 +1077,7 @@ mod tests {
             }),
             maicie: Err("greffe volontairement absente".to_string()),
             pin: None,
+            recovery_losses: Ok(None),
         }
     }
 
@@ -1052,6 +1097,10 @@ mod tests {
         );
         assert!(card.contains("build_id_daemon: abc123"));
         assert!(card.contains("coderBridget (codex, connected)"));
+        assert!(
+            !card.contains("pertes_reprise"),
+            "zéro perte ne doit pas faire de bruit: {card}"
+        );
     }
 
     #[test]
@@ -1079,6 +1128,32 @@ mod tests {
             !card.contains("inventé") && !card.contains("/tmp/bridget.sock"),
             "pas de valeur inventée: {card}"
         );
+    }
+
+    #[test]
+    fn carte_nomme_chaque_absent_de_la_trace_de_reprise() {
+        let mut snapshot = base_snapshot(SystemTime::UNIX_EPOCH + Duration::from_secs(10));
+        snapshot.recovery_losses = Ok(Some(crate::recovery_trace::RecoveryLossReport {
+            schema: 1,
+            recorded_at: 42,
+            absents: vec![
+                crate::recovery_trace::RecoveryLossEntry {
+                    name: "cursor3".to_string(),
+                    reason: crate::recovery_trace::REASON_NON_PERSISTENT.to_string(),
+                    detail: Some("spawn sans --persistent".to_string()),
+                },
+                crate::recovery_trace::RecoveryLossEntry {
+                    name: "cursor8".to_string(),
+                    reason: crate::recovery_trace::REASON_QUOTA.to_string(),
+                    detail: Some("quota de flotte atteint (8)".to_string()),
+                },
+            ],
+        }));
+        let card = render_card(&snapshot);
+        assert!(card.contains("name: cursor3"));
+        assert!(card.contains("reason: non_persistant"));
+        assert!(card.contains("name: cursor8"));
+        assert!(card.contains("reason: quota_flotte"));
     }
 
     #[test]

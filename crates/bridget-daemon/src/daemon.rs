@@ -39,6 +39,10 @@ use crate::{
         ManagedIdentity, ManagedLaunch, ManagedMarkerStore, ManagedStatus, ManagedStderrStore,
         ManagedStopResult, RunningManagedChild, spawn_managed_bootstrap_with_stderr,
     },
+    recovery_trace::{
+        REASON_ABSENT_FROM_FLEET, REASON_FROZEN_DEFINITION, REASON_NON_PERSISTENT, REASON_QUOTA,
+        REASON_RECOVERY_FAILED, RecoveryLossEntry,
+    },
     registry::AgentRegistry,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -233,16 +237,7 @@ fn dirs_cache() -> PathBuf {
 }
 
 fn desired_state_path(config: &DaemonConfig) -> PathBuf {
-    let production_home = config
-        .db_path
-        .parent()
-        .filter(|directory| directory.file_name().is_some_and(|name| name == "bridget"))
-        .and_then(|directory| directory.parent())
-        .filter(|directory| directory.file_name().is_some_and(|name| name == ".cache"))
-        .and_then(|directory| directory.parent());
-    production_home
-        .map(|home| home.join(".config/bridget/fleet.json"))
-        .unwrap_or_else(|| config.db_path.with_extension("fleet.json"))
+    crate::desired_state::path_for_daemon_db(&config.db_path)
 }
 
 /// État partagé du daemon.
@@ -1824,7 +1819,7 @@ impl DaemonState {
                 state: "recovering".to_string(),
                 last_seen_secs: 0,
                 reconnect_count: 0,
-                domain: None,
+                domain: self.fleet.desired_domain(&record.lease.name),
                 model,
                 effort,
                 rate_limit: None,
@@ -1936,6 +1931,15 @@ fn reserve_managed_recoveries(
     now: i64,
 ) -> Result<Vec<ManagedRecovery>, Box<dyn std::error::Error>> {
     state.recovering = true;
+    let mut absents = Vec::new();
+    for (name, _) in state.fleet.drain_non_persistent_named() {
+        absents.push(RecoveryLossEntry {
+            name,
+            reason: REASON_NON_PERSISTENT.to_string(),
+            detail: Some("spawn sans --persistent".to_string()),
+        });
+    }
+    let roster_persistents = state.fleet.persistent_named();
     let candidates = state.fleet.recovery_candidates();
     let in_flight_names = candidates
         .iter()
@@ -1950,6 +1954,11 @@ fn reserve_managed_recoveries(
                 state
                     .fleet
                     .expire(&candidate.lease.command_id, candidate.lease.generation, now);
+            absents.push(RecoveryLossEntry {
+                name: candidate.lease.name.clone(),
+                reason: REASON_RECOVERY_FAILED.to_string(),
+                detail: Some("échéance de spawn dépassée avant reprise".to_string()),
+            });
             continue;
         }
         let lease = candidate.lease.clone();
@@ -1958,6 +1967,11 @@ fn reserve_managed_recoveries(
             Err(reason) => {
                 let detail = serde_json::to_string(&reason)
                     .unwrap_or_else(|_| "échec de préparation de reprise".to_string());
+                absents.push(RecoveryLossEntry {
+                    name: lease.name.clone(),
+                    reason: REASON_RECOVERY_FAILED.to_string(),
+                    detail: Some(detail.clone()),
+                });
                 let _ = state.fleet.fail(&lease, "recovery_failed", detail);
             }
         }
@@ -1969,6 +1983,11 @@ fn reserve_managed_recoveries(
         }
         let Some(resolved_definition) = equipier.resolved_definition else {
             warn!("reprise de {name} refusée: définition figée absente");
+            absents.push(RecoveryLossEntry {
+                name: name.clone(),
+                reason: REASON_FROZEN_DEFINITION.to_string(),
+                detail: Some("définition figée absente".to_string()),
+            });
             state.fleet.remove_desired(&name)?;
             continue;
         };
@@ -1996,20 +2015,58 @@ fn reserve_managed_recoveries(
                         "{}",
                         crate::fleet::resume_quota_refusal_message(&name, *limit)
                     );
+                    absents.push(RecoveryLossEntry {
+                        name: name.clone(),
+                        reason: REASON_QUOTA.to_string(),
+                        detail: Some(crate::fleet::quota_exceeded_detail(*limit)),
+                    });
                 } else {
                     warn!("reprise de {name} refusée: {reason:?}");
+                    absents.push(RecoveryLossEntry {
+                        name: name.clone(),
+                        reason: REASON_RECOVERY_FAILED.to_string(),
+                        detail: Some(format!("{reason:?}")),
+                    });
                 }
                 state.fleet.remove_desired(&name)?;
             }
             SpawnDecision::EnvelopeMismatch => {
                 warn!("reprise de {name} refusée: enveloppe divergente");
+                absents.push(RecoveryLossEntry {
+                    name: name.clone(),
+                    reason: REASON_RECOVERY_FAILED.to_string(),
+                    detail: Some("enveloppe divergente".to_string()),
+                });
                 state.fleet.remove_desired(&name)?;
             }
             SpawnDecision::Await(_) | SpawnDecision::Accepted { .. } => {
                 warn!("reprise de {name} rattachée à un état inattendu");
+                absents.push(RecoveryLossEntry {
+                    name: name.clone(),
+                    reason: REASON_RECOVERY_FAILED.to_string(),
+                    detail: Some("état de reprise inattendu".to_string()),
+                });
                 state.fleet.remove_desired(&name)?;
             }
         }
+    }
+
+    let remaining = state.fleet.desired_fleet()?;
+    let already: HashSet<String> = absents.iter().map(|entry| entry.name.clone()).collect();
+    for (name, _) in roster_persistents {
+        if remaining.equipiers.contains_key(&name) || already.contains(&name) {
+            continue;
+        }
+        absents.push(RecoveryLossEntry {
+            name: name.clone(),
+            reason: REASON_ABSENT_FROM_FLEET.to_string(),
+            detail: Some("présent au roster persistant, absent de fleet.json".to_string()),
+        });
+        state.fleet.forget_named(&name);
+    }
+
+    if let Err(error) = state.fleet.persist_recovery_losses(now, absents) {
+        warn!("trace de reprise non écrite: {error}");
     }
 
     prepared.sort_by(|left, right| left.lease.name.cmp(&right.lease.name));
@@ -3117,6 +3174,11 @@ fn handle_register(
                 state
                     .conn_instances
                     .insert(conn_id.to_string(), instance_id.clone());
+                if state.managed_by_instance.contains_key(&instance_id) {
+                    let _ = state
+                        .fleet
+                        .set_desired_domain(&final_name, derived_domain.as_deref());
+                }
                 // Les wrappers récents réinitialisent explicitement ce fait à
                 // `false` puis annoncent `JournalReady`. Les binaires
                 // historiques ne portent pas ce champ, mais leur chemin ACP
@@ -6723,6 +6785,7 @@ mod presence_tests {
                     generation: index + 1,
                     created: index.to_string(),
                     resolved_definition: (index != 0).then(recovery_fixture_definition),
+                    domain: None,
                 },
             );
         }
@@ -6738,6 +6801,246 @@ mod presence_tests {
         // agent-03 et agent-04 refusés pour quota (message complet oraclé côté fleet).
         assert!(!remaining.equipiers.contains_key("agent-03"));
         assert!(!remaining.equipiers.contains_key("agent-04"));
+        let report = crate::recovery_trace::load_report(&reopened.fleet.recovery_losses_path())
+            .unwrap()
+            .expect("trace des absents attendue");
+        let by_name: std::collections::BTreeMap<_, _> = report
+            .absents
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.reason.as_str()))
+            .collect();
+        assert_eq!(
+            by_name.get("agent-00"),
+            Some(&crate::recovery_trace::REASON_FROZEN_DEFINITION)
+        );
+        assert_eq!(
+            by_name.get("agent-03"),
+            Some(&crate::recovery_trace::REASON_QUOTA)
+        );
+        assert_eq!(
+            by_name.get("agent-04"),
+            Some(&crate::recovery_trace::REASON_QUOTA)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reprise_trace_les_non_persistants_nommes_absents() {
+        let root = PathBuf::from(format!(
+            "/tmp/bg-d20-ephemere-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let (_, config) = recovery_fixture_state(&root);
+        let fleet_path = desired_state_path(&config);
+        let roster = crate::recovery_trace::NamedRosterStore::at_path(
+            crate::recovery_trace::roster_path(&fleet_path),
+        );
+        roster.remember(
+            "cursor-ephemere".to_string(),
+            crate::recovery_trace::NamedRosterEntry {
+                agent_type: "cursor".to_string(),
+                persistent: false,
+                domain: Some("bridget".to_string()),
+            },
+        );
+
+        let (mut reopened, _) = recovery_fixture_state(&root);
+        let recoveries = reserve_managed_recoveries(&mut reopened, unix_timestamp()).unwrap();
+        assert!(recoveries.is_empty());
+        let report = crate::recovery_trace::load_report(&reopened.fleet.recovery_losses_path())
+            .unwrap()
+            .expect("trace des non-persistants");
+        assert_eq!(report.absents.len(), 1);
+        assert_eq!(report.absents[0].name, "cursor-ephemere");
+        assert_eq!(
+            report.absents[0].reason,
+            crate::recovery_trace::REASON_NON_PERSISTENT
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reprise_trace_pertes_mixtes_au_meme_redemarrage() {
+        let root = PathBuf::from(format!(
+            "/tmp/bg-d20-mixte-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let (_, config) = recovery_fixture_state(&root);
+        let desired = DesiredStateStore::at_path(desired_state_path(&config));
+        let mut fleet = crate::desired_state::DesiredFleet::default();
+        let _env = crate::fleet::TestFleetQuotaGuard::set(2);
+        for index in 0..5_u64 {
+            fleet.equipiers.insert(
+                format!("agent-{index:02}"),
+                crate::desired_state::DesiredEquipier {
+                    agent_type: if index == 0 { "inconnu" } else { "fixture" }.to_string(),
+                    cwd: PathBuf::from("/tmp"),
+                    command_id: format!("ancien-{index}"),
+                    generation: index + 1,
+                    created: index.to_string(),
+                    resolved_definition: (index != 0).then(recovery_fixture_definition),
+                    domain: None,
+                },
+            );
+        }
+        desired.persist(&fleet).unwrap();
+        crate::recovery_trace::NamedRosterStore::at_path(crate::recovery_trace::roster_path(
+            &desired_state_path(&config),
+        ))
+        .remember(
+            "cursor-ephemere".to_string(),
+            crate::recovery_trace::NamedRosterEntry {
+                agent_type: "cursor".to_string(),
+                persistent: false,
+                domain: Some("bridget".to_string()),
+            },
+        );
+
+        let (mut reopened, _) = recovery_fixture_state(&root);
+        let _ = reserve_managed_recoveries(&mut reopened, unix_timestamp()).unwrap();
+        let report = crate::recovery_trace::load_report(&reopened.fleet.recovery_losses_path())
+            .unwrap()
+            .expect("trace mixte");
+        let by_name: std::collections::BTreeMap<_, _> = report
+            .absents
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.reason.as_str()))
+            .collect();
+        assert_eq!(
+            by_name.get("agent-00"),
+            Some(&crate::recovery_trace::REASON_FROZEN_DEFINITION)
+        );
+        assert_eq!(
+            by_name.get("agent-03"),
+            Some(&crate::recovery_trace::REASON_QUOTA)
+        );
+        assert_eq!(
+            by_name.get("agent-04"),
+            Some(&crate::recovery_trace::REASON_QUOTA)
+        );
+        assert_eq!(
+            by_name.get("cursor-ephemere"),
+            Some(&crate::recovery_trace::REASON_NON_PERSISTENT)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reprise_retire_une_trace_residuelle_si_zero_perte() {
+        let root = PathBuf::from(format!(
+            "/tmp/bg-d20-stale-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let (_, config) = recovery_fixture_state(&root);
+        let desired = DesiredStateStore::at_path(desired_state_path(&config));
+        let mut fleet = crate::desired_state::DesiredFleet::default();
+        fleet.equipiers.insert(
+            "agent-ok".to_string(),
+            crate::desired_state::DesiredEquipier {
+                agent_type: "fixture".to_string(),
+                cwd: PathBuf::from("/tmp"),
+                command_id: "ancien-ok".to_string(),
+                generation: 1,
+                created: "1".to_string(),
+                resolved_definition: Some(recovery_fixture_definition()),
+                domain: None,
+            },
+        );
+        desired.persist(&fleet).unwrap();
+        let losses_path = crate::recovery_trace::report_path(&desired_state_path(&config));
+        crate::recovery_trace::persist_report(
+            &losses_path,
+            1,
+            vec![crate::recovery_trace::RecoveryLossEntry {
+                name: "fantome".to_string(),
+                reason: crate::recovery_trace::REASON_QUOTA.to_string(),
+                detail: None,
+            }],
+        )
+        .unwrap();
+        assert!(losses_path.exists());
+
+        let (mut reopened, _) = recovery_fixture_state(&root);
+        let recoveries = reserve_managed_recoveries(&mut reopened, unix_timestamp()).unwrap();
+        assert_eq!(recoveries.len(), 1);
+        assert!(
+            !reopened.fleet.recovery_losses_path().exists(),
+            "zéro perte doit retirer le fichier, pas seulement le vider"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn roster_illisible_n_empeche_pas_la_reprise() {
+        let root = PathBuf::from(format!(
+            "/tmp/bg-d20-roster-ko-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let (_, config) = recovery_fixture_state(&root);
+        let desired = DesiredStateStore::at_path(desired_state_path(&config));
+        let mut fleet = crate::desired_state::DesiredFleet::default();
+        fleet.equipiers.insert(
+            "agent-ok".to_string(),
+            crate::desired_state::DesiredEquipier {
+                agent_type: "fixture".to_string(),
+                cwd: PathBuf::from("/tmp"),
+                command_id: "ancien-ok".to_string(),
+                generation: 1,
+                created: "1".to_string(),
+                resolved_definition: Some(recovery_fixture_definition()),
+                domain: None,
+            },
+        );
+        desired.persist(&fleet).unwrap();
+        std::fs::write(
+            crate::recovery_trace::roster_path(&desired_state_path(&config)),
+            "ce n'est pas du json",
+        )
+        .unwrap();
+
+        let (mut reopened, _) = recovery_fixture_state(&root);
+        let recoveries = reserve_managed_recoveries(&mut reopened, unix_timestamp())
+            .expect("un roster illisible ne doit pas avorter la reprise");
+        assert_eq!(recoveries.len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn persistant_disparu_de_fleet_json_est_trace() {
+        let root = PathBuf::from(format!(
+            "/tmp/bg-d20-silence-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let (_, config) = recovery_fixture_state(&root);
+        crate::recovery_trace::NamedRosterStore::at_path(crate::recovery_trace::roster_path(
+            &desired_state_path(&config),
+        ))
+        .remember(
+            "agent-z".to_string(),
+            crate::recovery_trace::NamedRosterEntry {
+                agent_type: "fixture".to_string(),
+                persistent: true,
+                domain: Some("bridget".to_string()),
+            },
+        );
+
+        let (mut reopened, _) = recovery_fixture_state(&root);
+        let recoveries = reserve_managed_recoveries(&mut reopened, unix_timestamp()).unwrap();
+        assert!(recoveries.is_empty());
+        let report = crate::recovery_trace::load_report(&reopened.fleet.recovery_losses_path())
+            .unwrap()
+            .expect("perte roster/fleet");
+        assert_eq!(report.absents.len(), 1);
+        assert_eq!(report.absents[0].name, "agent-z");
+        assert_eq!(
+            report.absents[0].reason,
+            crate::recovery_trace::REASON_ABSENT_FROM_FLEET
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -6761,6 +7064,7 @@ mod presence_tests {
                     generation: index + 1,
                     created: index.to_string(),
                     resolved_definition: Some(recovery_fixture_definition()),
+                    domain: None,
                 },
             );
         }
@@ -6774,6 +7078,16 @@ mod presence_tests {
         let remaining = reopened.fleet.desired_fleet().unwrap();
         assert_eq!(remaining.equipiers.len(), 10);
         assert!(remaining.equipiers.contains_key("agent-09"));
+        assert!(
+            crate::recovery_trace::load_report(&reopened.fleet.recovery_losses_path())
+                .unwrap()
+                .is_none(),
+            "zéro perte ne doit pas laisser de trace"
+        );
+        assert!(
+            !reopened.fleet.recovery_losses_path().exists(),
+            "zéro perte retire le fichier"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -6796,6 +7110,7 @@ mod presence_tests {
                 generation: 1,
                 created: "initial".to_string(),
                 resolved_definition: Some(recovery_fixture_definition()),
+                domain: None,
             },
         );
         desired.persist(&fleet).unwrap();
@@ -6902,6 +7217,7 @@ mod presence_tests {
                     generation: 1,
                     created: "initial".to_string(),
                     resolved_definition: Some(recovery_fixture_definition()),
+                    domain: None,
                 },
             );
         }

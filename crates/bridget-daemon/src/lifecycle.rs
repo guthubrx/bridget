@@ -67,6 +67,15 @@ pub fn submit_spawn(
     if recovering && !supervisor.knows_command(&order.command_id) {
         return Ok(SpawnDecision::Rejected(SpawnRefusal::DaemonRecovering));
     }
+    if let Some(name) = order.requested_name.as_deref()
+        && !order.persistent
+        && !supervisor.knows_command(&order.command_id)
+    {
+        log::warn!(
+            "{}",
+            crate::recovery_trace::non_persistent_spawn_warning(name)
+        );
+    }
     // Une capacité absente est une propriété du registre déclaratif, pas une
     // issue de la saga. Pour une commande neuve, elle est donc refusée avant
     // toute réservation durable et, a fortiori, avant toute création de
