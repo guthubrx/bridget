@@ -311,3 +311,25 @@ Toute mission dont on attend un rapport doit être déléguée, pas seulement
 **Idempotence.** Le dépôt porte une clé ; rejouer le même dépôt à
 l'identique ne crée pas de doublon. En cas de doute sur un envoi perdu,
 rejouer est sans danger — et préférable au silence.
+
+## Doctrine de revue à deux étages (2026-08-24 20:20, arbitrage utilisateur — config de jury élue par la manche 4)
+
+**Étage 1 — toujours, pour tout lot** : UN relecteur distinct de l'auteur,
+portant une fiche de lentille (gratuite), mutants sur les propriétés du lot,
+COMPTES de tests annoncés. Régime de base prouvé (trois verdicts justes en
+une heure le 24/08 au soir).
+
+**Étage 2 — le jury** (configuration élue par la manche 4 : 1+1 ou 2×2 à
+polarités croisées) UNIQUEMENT si le diff touche l'un des cinq critères,
+vérifiables par les CHEMINS des fichiers modifiés :
+1. migration de schéma (greffe Maicie ou daemon) ;
+2. idempotence/attestation des messages (remises, accusés, codes retour) ;
+3. chemin de boot/arrêt du daemon, naissance/mort d'agents ;
+4. sécurité (permissions, approbations, second facteur) ;
+5. demande de l'auteur, ou doute déclaré par le relecteur d'étage 1.
+
+Motif : ~2 h et 4-6× le quota par jury contre 15-30 min pour un solo — le
+jury permanent transformerait la flotte en tribunal. Les erreurs de polarité
+observées le 24/08 sont apparues sur un lot d'attestation (critère 2), pas
+sur les lots simples. À terme : liste des chemins critiques portée en config
+Maicie pour que le déclenchement soit machine, pas jugement.
