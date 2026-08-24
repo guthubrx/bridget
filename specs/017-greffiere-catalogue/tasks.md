@@ -150,8 +150,9 @@ clôture ou append.
   **Observable** : chaque SC pointe une sortie reproductible ; les quatre
   décomptes et le zéro-perte verbatim sont explicitement mesurés.
   **Gate** : `cargo test -p maicie --test catalogue_session_gate` — cinq
-  promesses + mutations documentées dans `implementation.md`. SC-1703/1705/1709
-  bout-en-bout restent bloqués (couloir B).
+  promesses + mutations documentées dans `implementation.md` ; oracles d'état
+  (pas de libellé de rendu). SC-1705 (remède via délégation) reste ouvert
+  (T1711).
 - [ ] T1715 Lancer `cargo test --workspace` puis
   `cargo clippy --workspace --all-targets -- -D warnings`, et conduire la
   revue hostile finale de la session 017.
