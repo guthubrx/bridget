@@ -110,7 +110,7 @@ La reprise de la connexion attach après coupure est ainsi démontrée.
 ## T807 — Bancs locaux SC-001 et SC-002
 
 - **Date** : 2026-08-22.
-- **SC-001** : le banc `sc001_append_vers_rendu_attach_reel_reste_sous_les_seuils_locaux`
+- **SC-001** : la campagne explicite `sc001_append_vers_rendu_attach_reel_reste_sous_les_seuils_locaux`
   utilise le faux adaptateur ACP déterministe de T704, un writer JSONL, le
   wrapper et le daemon réels, puis deux connexions Unix négociant le rôle
   `Attach` et consommant les frames. L'instrumentation de test prélève
@@ -118,8 +118,21 @@ La reprise de la connexion attach après coupure est ainsi démontrée.
   le corrèle à son `seq` rendu par la première vue. Sur 600 tours (1 200
   événements) cadencés à 10 tours/s pendant 60,92 s, le p95 append→rendu est
   de **11,888459 ms** et le maximum de **13,178 ms** : les seuils locaux
-  respectifs de 1 s et 3 s sont satisfaits. Le timeout global de 75 s fait
-  échouer proprement le banc en cas de blocage.
+  respectifs de 1 s et 3 s sont satisfaits. Le watchdog de 75 s par campagne
+  fait échouer proprement un blocage ; il n'est pas un seuil de performance.
+  La campagne est exclue de la suite ordinaire et doit désormais être exécutée
+  21 fois par cette commande :
+
+  ```bash
+BRIDGET_PERF_REPORT="$PWD/specs/008-attach/measurements/sc001-local-reference.json" \
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p bridget-daemon --test sc005_attach_budget -- \
+    --ignored --exact sc001_append_vers_rendu_attach_reel_reste_sous_les_seuils_locaux
+  ```
+
+  Le rapport consigne les distributions brutes, le p95, le maximum et
+  machine/système/commit/charge. Il doit être relu et versionné comme référence
+  locale ; un p95 mesuré sur une machine chargée ne constitue pas un oracle
+  fonctionnel.
 - **SC-002** : `sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon`
   injecte l'événement `seq=5` dans le fichier de la veille, ouvre la vue et
   attend `SnapshotCaughtUp`, puis démarre un tour actif qui crée le fichier du

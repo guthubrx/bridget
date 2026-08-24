@@ -464,7 +464,7 @@ impl BridgetClient {
         validate_limits(limits)?;
         let socket_path = socket_path.as_ref().to_path_buf();
         let issuer_scope = issuer_scope.into();
-        let connect_deadline = deadline.unwrap_or_else(|| Instant::now() + limits.connect_timeout);
+        let connect_deadline = deadline.unwrap_or_else(|| monotonic_now() + limits.connect_timeout);
         let mut connection = WireConnection::connect(&socket_path, limits, connect_deadline)?;
 
         let role = request_with_deadline(
@@ -641,7 +641,7 @@ impl BridgetClient {
         Self::list_agents_at_with_limits_until(
             socket_path,
             limits,
-            Instant::now() + limits.connect_timeout + limits.io_timeout,
+            monotonic_now() + limits.connect_timeout + limits.io_timeout,
         )
     }
 
@@ -678,7 +678,7 @@ impl BridgetClient {
         let mut connection = WireConnection::connect(
             &self.socket_path,
             self.limits,
-            Instant::now() + self.limits.connect_timeout,
+            monotonic_now() + self.limits.connect_timeout,
         )?;
         let role = connection.request(json!({"type": "RoleHandshake", "role": "wrapper"}))?;
         expect_role_accepted(&role, "wrapper")?;
@@ -710,7 +710,7 @@ impl BridgetClient {
         self.subscribe_until(
             agent,
             window,
-            Instant::now() + self.limits.connect_timeout + self.limits.io_timeout * 2,
+            monotonic_now() + self.limits.connect_timeout + self.limits.io_timeout * 2,
         )
     }
 
@@ -743,7 +743,7 @@ impl BridgetClient {
         let mut connection = WireConnection::connect(
             &self.socket_path,
             self.limits,
-            Instant::now() + self.limits.connect_timeout,
+            monotonic_now() + self.limits.connect_timeout,
         )?;
         let role = connection.request(json!({"type": "RoleHandshake", "role": "wrapper"}))?;
         expect_role_accepted(&role, "wrapper")?;
@@ -782,7 +782,7 @@ impl BridgetClient {
         let mut connection = WireConnection::connect(
             socket_path.as_ref(),
             limits,
-            Instant::now() + limits.connect_timeout,
+            monotonic_now() + limits.connect_timeout,
         )?;
         let role = connection.request(json!({"type": "RoleHandshake", "role": "wrapper"}))?;
         expect_role_accepted(&role, "wrapper")?;
@@ -833,7 +833,7 @@ impl GuichetClient {
                 "issuer_scope guichet doit contenir au moins 128 bits opaques".to_string(),
             ));
         }
-        let connect_deadline = deadline.unwrap_or_else(|| Instant::now() + limits.connect_timeout);
+        let connect_deadline = deadline.unwrap_or_else(|| monotonic_now() + limits.connect_timeout);
         let mut connection = WireConnection::connect(&socket_path, limits, connect_deadline)?;
         let role = request_raw_with_deadline(
             &mut connection,
@@ -948,7 +948,7 @@ impl GuichetClient {
     pub fn next_lifecycle_event(&mut self) -> Result<GuichetLifecycleEvent, BridgetClientError> {
         let deadline = self
             .deadline
-            .unwrap_or_else(|| Instant::now() + self.limits.io_timeout);
+            .unwrap_or_else(|| monotonic_now() + self.limits.io_timeout);
         let event = self.connection.receive_until(deadline);
         self.connection.poison_after(&event);
         parse_guichet_lifecycle_event(event?)
@@ -1231,7 +1231,7 @@ impl WireConnection {
     }
 
     fn request(&mut self, value: Value) -> Result<Value, BridgetClientError> {
-        let deadline = Instant::now() + self.limits.io_timeout;
+        let deadline = monotonic_now() + self.limits.io_timeout;
         self.request_until(value, deadline)
     }
 
@@ -1250,7 +1250,7 @@ impl WireConnection {
     }
 
     fn request_raw_json(&mut self, json_bytes: &[u8]) -> Result<Value, BridgetClientError> {
-        let deadline = Instant::now() + self.limits.io_timeout;
+        let deadline = monotonic_now() + self.limits.io_timeout;
         self.request_raw_json_until(json_bytes, deadline)
     }
 
@@ -1306,7 +1306,7 @@ impl WireConnection {
 
     fn receive(&mut self) -> Result<Value, BridgetClientError> {
         self.ensure_usable()?;
-        let result = self.receive_until(Instant::now() + self.limits.io_timeout);
+        let result = self.receive_until(monotonic_now() + self.limits.io_timeout);
         self.poison_after(&result);
         result
     }
@@ -1386,7 +1386,7 @@ impl WireConnection {
 }
 
 fn connect_nonblocking(path: &Path, deadline: Instant) -> Result<UnixStream, BridgetClientError> {
-    if Instant::now() >= deadline {
+    if monotonic_now() >= deadline {
         return Err(BridgetClientError::Timeout {
             operation: "connexion",
         });
@@ -1530,13 +1530,57 @@ fn validate_limits(limits: BridgetClientLimits) -> Result<(), BridgetClientError
     Ok(())
 }
 
+/// Source monotone unique des échéances I/O. La production utilise l'horloge
+/// système ; les tests unitaires peuvent avancer une horloge contrôlée entre
+/// deux phases filaires afin de prouver qu'aucune ne renouvelle le budget.
+fn monotonic_now() -> Instant {
+    #[cfg(test)]
+    if let Some(clock) = test_clock_slot()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .cloned()
+    {
+        return clock.now();
+    }
+    Instant::now()
+}
+
 fn remaining(deadline: Instant) -> Result<Duration, BridgetClientError> {
     deadline
-        .checked_duration_since(Instant::now())
+        .checked_duration_since(monotonic_now())
         .filter(|duration| !duration.is_zero())
         .ok_or(BridgetClientError::Timeout {
             operation: "I/O socket",
         })
+}
+
+#[cfg(test)]
+struct TestMonotonicClock {
+    base: Instant,
+    elapsed_ms: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(test)]
+impl TestMonotonicClock {
+    fn now(&self) -> Instant {
+        self.base + Duration::from_millis(self.elapsed_ms.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    fn advance(&self, duration: Duration) {
+        self.elapsed_ms.fetch_add(
+            u64::try_from(duration.as_millis()).expect("durée de test en millisecondes"),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+}
+
+#[cfg(test)]
+fn test_clock_slot() -> &'static std::sync::Mutex<Option<std::sync::Arc<TestMonotonicClock>>> {
+    static CLOCK: std::sync::OnceLock<
+        std::sync::Mutex<Option<std::sync::Arc<TestMonotonicClock>>>,
+    > = std::sync::OnceLock::new();
+    CLOCK.get_or_init(|| std::sync::Mutex::new(None))
 }
 
 fn read_error(source: std::io::Error) -> BridgetClientError {
@@ -1887,10 +1931,16 @@ fn unexpected(expected: &str, received: &str) -> BridgetClientError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BridgetClientError, PublicMessage, ReplayPublicMessage, replay_idempotent_request,
+        BridgetClientError, BridgetClientLimits, GuichetClient, PublicMessage, ReplayPublicMessage,
+        TestMonotonicClock, monotonic_now, replay_idempotent_request, test_clock_slot,
         validate_send_idempotent_frame,
     };
     use serde_json::json;
+    use std::io::{BufRead, BufReader, BufWriter, Write};
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::sync::{Arc, MutexGuard, OnceLock};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn reprise_conserve_les_extensions_inconnues_octet_pour_octet() {
@@ -1934,5 +1984,102 @@ mod tests {
         ));
         validate_send_idempotent_frame(&message, "message-1", 1_700_000_000, without_delimiter + 1)
             .unwrap();
+    }
+
+    #[test]
+    fn echeance_guichet_absolue_interdit_la_phase_suivante_sans_sommeil_reel() {
+        let (clock, _reset) = install_test_clock();
+        let socket = std::path::PathBuf::from(format!(
+            "/tmp/mgc-{}-{}.sock",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).expect("socket guichet");
+        let server_clock = Arc::clone(&clock);
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("connexion service");
+            let reader_stream = stream.try_clone().expect("clone lecteur");
+            let mut reader = BufReader::new(reader_stream);
+            let mut writer = BufWriter::new(stream);
+            assert_eq!(
+                read_json(&mut reader),
+                json!({"type":"RoleHandshake","role":"service"})
+            );
+
+            // La barrière avance l'horloge contrôlée avant que le client ne
+            // reçoive RoleAccepted. Une échéance renouvelée par phase enverrait
+            // alors ServiceHello ; l'échéance absolue correcte l'interdit.
+            server_clock.advance(Duration::from_millis(100));
+            write_json(&mut writer, json!({"type":"RoleAccepted","role":"service"}));
+            reader
+                .get_mut()
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .expect("timeout harnais");
+            let mut forbidden = String::new();
+            assert!(
+                matches!(reader.read_line(&mut forbidden), Ok(0)),
+                "mutation échéance renouvelée : ServiceHello ne doit jamais être atteint ({forbidden:?})"
+            );
+        });
+
+        let limits = BridgetClientLimits {
+            connect_timeout: Duration::from_millis(100),
+            io_timeout: Duration::from_millis(100),
+            max_frame_bytes: 64 * 1024,
+        };
+        let deadline = monotonic_now() + Duration::from_millis(100);
+        let error = match GuichetClient::connect_with_limits_until(
+            &socket,
+            "scope-guichet-0123456789abcdef",
+            limits,
+            deadline,
+        ) {
+            Ok(_) => panic!("la seconde phase doit consommer l'échéance déjà épuisée"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, BridgetClientError::Timeout { .. }));
+        server.join().expect("serveur de barrière");
+        let _ = std::fs::remove_file(socket);
+    }
+
+    fn install_test_clock() -> (Arc<TestMonotonicClock>, TestClockReset) {
+        static SERIAL: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+        let serial = SERIAL
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let clock = Arc::new(TestMonotonicClock {
+            base: Instant::now(),
+            elapsed_ms: std::sync::atomic::AtomicU64::new(0),
+        });
+        *test_clock_slot()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(Arc::clone(&clock));
+        (clock, TestClockReset { _serial: serial })
+    }
+
+    struct TestClockReset {
+        _serial: MutexGuard<'static, ()>,
+    }
+
+    impl Drop for TestClockReset {
+        fn drop(&mut self) {
+            *test_clock_slot()
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = None;
+        }
+    }
+
+    fn read_json(reader: &mut BufReader<UnixStream>) -> serde_json::Value {
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("lecture JSONL");
+        serde_json::from_str(&line).expect("JSONL valide")
+    }
+
+    fn write_json(writer: &mut BufWriter<UnixStream>, value: serde_json::Value) {
+        serde_json::to_writer(&mut *writer, &value).expect("écriture JSONL");
+        writer.write_all(b"\n").expect("délimiteur JSONL");
+        writer.flush().expect("flush JSONL");
     }
 }

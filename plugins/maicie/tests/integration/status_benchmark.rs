@@ -24,7 +24,13 @@ const STATUS_P95_BUDGET: Duration = Duration::from_millis(250);
 /// projection SQLite de 100 objectifs et une capture Attach publique réelle.
 /// Les 100 objectifs partagent l'unique équipier délégué : la déduplication
 /// des abonnements est donc elle aussi exercée, sans simuler le runtime.
+///
+/// Ce n'est volontairement pas un test ordinaire : le p95 dépend du noyau, de
+/// la charge et du coût de création du binaire enfant. La commande explicite
+/// produit 21 mesures brutes et peut écrire sa référence locale versionnée si
+/// `BRIDGET_PERF_REPORT` désigne son fichier JSON.
 #[test]
+#[ignore = "mesure locale explicite SC-008 ; voir specs/011-maicie-orchestration/implementation.md"]
 fn status_sur_cent_objectifs_respecte_le_budget_p95() {
     let fixture = BenchmarkFixture::new();
     fixture.seed_accepted_objectives(OBJECTIVE_COUNT);
@@ -45,16 +51,72 @@ fn status_sur_cent_objectifs_respecte_le_budget_p95() {
     server.join().expect("serveur de benchmark termine");
 
     let p95 = percentile_95(&samples);
-    eprintln!(
-        "SC-008 maicie status: objectifs={OBJECTIVE_COUNT}, échantillons={MEASURED_RUNS}, p95_ms={}",
-        p95.as_micros() as f64 / 1_000.0
-    );
+    let report = json!({
+        "v": 1,
+        "criterion": "SC-008",
+        "commit": git_commit(),
+        "machine": machine_reference(),
+        "system": system_reference(),
+        "load_1m": load_average(),
+        "charge": "campagne locale explicite ; autres charges à consigner par l'opérateur",
+        "objectives": OBJECTIVE_COUNT,
+        "warmup_runs": WARMUP_RUNS,
+        "samples_ms": samples.iter().map(duration_ms).collect::<Vec<_>>(),
+        "p95_ms": duration_ms(&p95),
+        "budget_ms": duration_ms(&STATUS_P95_BUDGET),
+    });
+    eprintln!("SC-008 rapport={report}");
+    write_optional_report(&report);
     assert!(
         p95 < STATUS_P95_BUDGET,
         "p95 status = {:?}, budget = {:?}",
         p95,
         STATUS_P95_BUDGET
     );
+}
+
+fn duration_ms(duration: &Duration) -> f64 {
+    duration.as_secs_f64() * 1_000.0
+}
+
+fn git_commit() -> String {
+    command_output("git", &["rev-parse", "HEAD"]).unwrap_or_else(|| "inconnu".to_string())
+}
+
+fn machine_reference() -> String {
+    command_output("sysctl", &["-n", "hw.model"])
+        .or_else(|| command_output("uname", &["-m"]))
+        .unwrap_or_else(|| std::env::consts::ARCH.to_string())
+}
+
+fn system_reference() -> String {
+    command_output("uname", &["-sr"]).unwrap_or_else(|| std::env::consts::OS.to_string())
+}
+
+fn command_output(program: &str, arguments: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(arguments).output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn load_average() -> Option<f64> {
+    let mut values = [0.0_f64; 3];
+    // `getloadavg` est disponible sur les deux plateformes cibles locales de
+    // Bridget. Sa valeur est informative dans une campagne, jamais un oracle.
+    (unsafe { libc::getloadavg(values.as_mut_ptr(), 3) } > 0).then_some(values[0])
+}
+
+fn write_optional_report(report: &Value) {
+    let Some(path) = std::env::var_os("BRIDGET_PERF_REPORT") else {
+        return;
+    };
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(report).expect("rapport JSON"),
+    )
+    .expect("écriture référence locale SC-008");
 }
 
 fn run_status(fixture: &BenchmarkFixture, expected_objectives: usize) {

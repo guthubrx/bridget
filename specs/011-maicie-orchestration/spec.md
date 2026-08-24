@@ -280,8 +280,12 @@ lancement avant validation humaine.
   scénarios P1 sans GUI ni TUI ; aucune dépendance DSH ou T3 Code n'est ajoutée.
 - **SC-007**: Les tests unitaires, d'intégration et de contrat du plugin sont
   verts, et `cargo clippy --all-targets -- -D warnings` est vert avant livraison.
-- **SC-008**: Le benchmark de consultation sur 100 objectifs satisfait p95 <
-  250 ms, avec commande reproductible et résultat consigné.
+- **SC-008**: Une campagne locale explicitement déclenchée, jamais la suite de
+  tests ordinaire, mesure la vraie consultation sur 100 objectifs : 21
+  échantillons bruts, leur p95 < 250 ms et la distribution sont consignés avec
+  une référence Git versionnée (machine, système, commit et charge). Cette
+  mesure décrit l'hôte de référence ; elle ne transforme pas une machine
+  chargée en oracle fonctionnel.
 - **SC-009**: Les barrières de crash avant écriture socket, après écriture avant
   Ack et après Ack avant commit local ne produisent ni double message ni double
   SpawnOrder ; les payloads rejoués sont identiques aux bytes persistés.

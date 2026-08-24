@@ -91,12 +91,24 @@ preuve discriminante.
 
 ## T020 — banc SC-008 : coût de `maicie status`
 
-Le banc reproductible exécute la vraie sous-commande `maicie status --json`
+La campagne explicitement déclenchée exécute la vraie sous-commande `maicie status --json`
 sur une projection SQLite de 100 objectifs délégués, puis une capture Attach
 publique éphémère. Les 100 objectifs partagent le même équipier : la
 déduplication des abonnements est volontairement exercée, sans masquer le
 coût de projection des 100 coordinations. Une chauffe précède 21 échantillons
-mesurés ; le p95 utilise le rang le plus proche.
+mesurés ; le p95 utilise le rang le plus proche. Elle est `#[ignore]` dans la
+suite ordinaire : le scheduler, la charge et la création du binaire enfant
+rendent ce p95 impropre à un verdict fonctionnel. La commande de référence est
+
+```bash
+BRIDGET_PERF_REPORT="$PWD/specs/011-maicie-orchestration/measurements/sc008-local-reference.json" \
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p maicie --test status_benchmark_integration -- \
+  --ignored --exact status_benchmark::status_sur_cent_objectifs_respecte_le_budget_p95
+```
+
+Elle écrit les 21 valeurs brutes, le p95 et machine/système/commit/charge dans
+la référence locale. Cette référence doit être relue puis versionnée ; elle ne
+vaut que pour l'hôte et la charge qu'elle déclare.
 
 Quatre campagnes locales ont donné un p95 de 29,390 ms, 23,534 ms, 22,969 ms
 et 23,419 ms (plage 22,969–29,390 ms), toutes sous le budget SC-008 de

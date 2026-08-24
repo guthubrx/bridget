@@ -51,3 +51,16 @@ distant et son wrapper : `attach` affiche le message d'indisponibilité défini
 
 `cargo test` du banc dédié : faux adaptateur déterministe, N ≥ 200 tours,
 p95 de latence d'append avec 0 puis 2 vues — dégradation < 5 %.
+
+## 8. Mesure locale explicite (SC-001)
+
+Cette campagne ne fait pas partie de la suite ordinaire : ses durées dépendent
+de la machine. Elle produit 21 échantillons bruts, leur p95, ainsi que la
+machine, le système, le commit et la charge locale. Le watchdog de 75 secondes
+ne détecte qu'un blocage ; il n'est pas un seuil de performance.
+
+```bash
+BRIDGET_PERF_REPORT="$PWD/specs/008-attach/measurements/sc001-local-reference.json" \
+PATH="$HOME/.cargo/bin:$PATH" cargo test -p bridget-daemon --test sc005_attach_budget -- \
+  --ignored --exact sc001_append_vers_rendu_attach_reel_reste_sous_les_seuils_locaux
+```
