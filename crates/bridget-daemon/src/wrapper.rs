@@ -3161,14 +3161,15 @@ pub(crate) fn purge_orphan_mcp_configs(directory: &Path) {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with("mcp-") && name.ends_with(".json") {
-            if let Err(error) = std::fs::remove_file(entry.path()) {
-                warn!(
-                    "purge MCP orphelin impossible {}: {}",
-                    entry.path().display(),
-                    error
-                );
-            }
+        if name.starts_with("mcp-")
+            && name.ends_with(".json")
+            && let Err(error) = std::fs::remove_file(entry.path())
+        {
+            warn!(
+                "purge MCP orphelin impossible {}: {}",
+                entry.path().display(),
+                error
+            );
         }
     }
 }

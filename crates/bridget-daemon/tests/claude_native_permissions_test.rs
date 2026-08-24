@@ -265,9 +265,11 @@ fn claude_gere_recoit_mcp_identite_et_path() {
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    assert!(
-        path.split(':').any(|entry| entry == directory),
-        "PATH enfant sans binaire courant: {path}"
+    // Intention : premier élément = binaire courant (trim, comme C2).
+    assert_eq!(
+        path.split(':').map(str::trim).next(),
+        Some(directory.as_str()),
+        "PATH enfant sans préfixe du binaire courant: {path}"
     );
     let _ = fs::remove_dir_all(root);
 }

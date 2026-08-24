@@ -254,6 +254,8 @@ pub fn build_environment(
 
 /// Intention : le répertoire du binaire courant est le **premier** élément du
 /// PATH, pour que `bridget` gagne la résolution même s'il figure déjà ailleurs.
+/// Les entrées vides (POSIX = « répertoire courant ») sont retirées du reste :
+/// un spawn géré ne doit pas résoudre via `.` implicite.
 pub fn path_with_current_exe_dir_first(existing: &str) -> Option<String> {
     let directory = std::env::current_exe()
         .ok()?
