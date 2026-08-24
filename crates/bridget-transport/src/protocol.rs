@@ -6,6 +6,7 @@
 
 use bridget_core::BridgetMessage;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Rôle négocié au début d'une connexion persistante avec le daemon.
 ///
@@ -261,6 +262,14 @@ pub enum SpawnRefusal {
     CommandMissing {
         command: String,
         registry: String,
+    },
+    /// La définition figée ne déclare pas la capacité indispensable au
+    /// lancement demandé. Ce refus intervient avant toute réservation de
+    /// lancement neuve et avant tout processus.
+    UnsupportedCapability {
+        agent_type: String,
+        model: String,
+        capability: String,
     },
     BillingGuard {
         variable: String,
@@ -718,6 +727,40 @@ pub struct ResolvedMcpDefinition {
     pub acp_session: bool,
 }
 
+/// Matrice déclarative des capacités réellement promises par un adaptateur.
+///
+/// Elle est portée par la définition résolue et donc par son digest : une
+/// reprise ne relit jamais une sonde volatile du pilote pour décider si elle
+/// peut démarrer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterCapabilities {
+    #[serde(default)]
+    pub execution_paths: Vec<String>,
+    #[serde(default)]
+    pub models: BTreeMap<String, ModelCapabilities>,
+}
+
+impl Default for AdapterCapabilities {
+    fn default() -> Self {
+        // Les définitions historiques étaient toutes lancées par ACP. Ce seul
+        // chemin reste la valeur de migration ; un modèle explicite demeure
+        // absent tant qu'il n'est pas réellement déclaré.
+        Self {
+            execution_paths: vec!["acp".to_string()],
+            models: BTreeMap::new(),
+        }
+    }
+}
+
+/// Capacités opaques déclarées pour un modèle précis, sans substitution.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ModelCapabilities {
+    #[serde(default)]
+    pub efforts: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResolvedAgentDefinition {
     pub command: String,
@@ -731,6 +774,8 @@ pub struct ResolvedAgentDefinition {
     pub queue_capacity: usize,
     pub notify_timeout_secs: u64,
     pub mcp: ResolvedMcpDefinition,
+    #[serde(default)]
+    pub capabilities: AdapterCapabilities,
     /// SHA-256 hexadécimal de tous les paramètres runtime précédents.
     pub digest: String,
 }
@@ -1771,6 +1816,15 @@ mod tests {
                     interactive: "codex".to_string(),
                     acp_session: true,
                 },
+                capabilities: AdapterCapabilities {
+                    execution_paths: vec!["acp".to_string()],
+                    models: BTreeMap::from([(
+                        "gpt-5.6-terra".to_string(),
+                        ModelCapabilities {
+                            efforts: vec!["high".to_string()],
+                        },
+                    )]),
+                },
                 digest: "a".repeat(64),
             }),
         };
@@ -1782,6 +1836,7 @@ mod tests {
                 if definition.command == "npx"
                     && definition.args == ["adapter@1.2.3"]
                     && definition.forbidden_env == ["API_KEY"]
+                    && definition.capabilities.models["gpt-5.6-terra"].efforts == ["high"]
                     && definition.digest == "a".repeat(64)
         ));
         assert!(matches!(

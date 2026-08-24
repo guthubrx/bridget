@@ -1,6 +1,9 @@
 //! Registre déclaratif des types d'agents lancés par Bridget.
 
-use bridget_transport::{ResolvedAgentDefinition, ResolvedMcpDefinition};
+use bridget_transport::{
+    AdapterCapabilities, ModelCapabilities, ResolvedAgentDefinition, ResolvedMcpDefinition,
+    SpawnRefusal,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -12,6 +15,7 @@ const DEFAULT_QUEUE_CAPACITY: usize = 32;
 const DEFAULT_NOTIFY_TIMEOUT_SECS: u64 = 600;
 const MAX_PASS_ENV_ENTRIES: usize = 64;
 const MAX_ENV_NAME_BYTES: usize = 128;
+const MAX_CAPABILITY_VALUE_CHARS: usize = 100;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct McpDefinition {
@@ -53,6 +57,10 @@ pub struct AgentDefinition {
     /// configuration utilisateur persistante.
     #[serde(default)]
     pub mcp: McpDefinition,
+    /// Matrice déclarative qui autorise un lancement sans interroger le
+    /// pilote. Son contenu est figé avec le reste de la définition résolue.
+    #[serde(default = "default_capabilities")]
+    pub capabilities: AdapterCapabilities,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -81,6 +89,13 @@ fn default_notify_timeout_secs() -> u64 {
 }
 fn default_interactive_mcp() -> String {
     "none".to_string()
+}
+
+fn default_capabilities() -> AdapterCapabilities {
+    // Compatibilité des registres historiques : ACP était déjà le seul chemin
+    // réellement lancé par ce daemon. Un modèle explicite, lui, reste refusé
+    // tant qu'il n'est pas déclaré dans la matrice.
+    AdapterCapabilities::default()
 }
 
 impl AgentRegistry {
@@ -143,7 +158,7 @@ impl AgentRegistry {
         agent_type: &str,
         resolved: &ResolvedAgentDefinition,
     ) -> Result<Self, String> {
-        let definition = AgentDefinition {
+        let mut definition = AgentDefinition {
             command: resolved.command.clone(),
             args: resolved.args.clone(),
             protocol: resolved.protocol.clone(),
@@ -156,10 +171,16 @@ impl AgentRegistry {
                 interactive: resolved.mcp.interactive.clone(),
                 acp_session: resolved.mcp.acp_session,
             },
+            capabilities: resolved.capabilities.clone(),
         };
         let expected = resolved_definition(&definition)?;
-        if expected.digest != resolved.digest {
+        let legacy_digest = expected.digest != resolved.digest
+            && legacy_resolved_digest(&definition)? == resolved.digest;
+        if expected.digest != resolved.digest && !legacy_digest {
             return Err("digest de la définition figée invalide".to_string());
+        }
+        if legacy_digest {
+            definition.capabilities = legacy_capabilities_for(&definition);
         }
         let source = PathBuf::from("<définition-figée>");
         let agents = BTreeMap::from([(agent_type.to_string(), definition)]);
@@ -227,6 +248,157 @@ impl AgentRegistry {
     }
 }
 
+fn legacy_capabilities_for(definition: &AgentDefinition) -> AdapterCapabilities {
+    let mut capabilities = AdapterCapabilities::default();
+    if let Some((model, effort)) = runtime_model_and_effort(&definition.args) {
+        capabilities.models.insert(
+            model,
+            ModelCapabilities {
+                efforts: effort.into_iter().collect(),
+            },
+        );
+    }
+    capabilities
+}
+
+/// Vérifie une demande de lancement contre la matrice persistable du registre.
+/// Aucune sonde du pilote n'est exécutée : le même ordre rejoué conserve donc
+/// la même décision après un crash ou une évolution externe.
+pub(crate) fn validate_launch_capabilities(
+    agent_type: &str,
+    definition: &AgentDefinition,
+) -> Result<(), SpawnRefusal> {
+    let (model, effort) = runtime_labels(&definition.args);
+    let model_label = model.clone().unwrap_or_else(|| "<non déclaré>".to_string());
+    if !definition
+        .capabilities
+        .execution_paths
+        .iter()
+        .any(|path| path == &definition.protocol)
+    {
+        return Err(SpawnRefusal::UnsupportedCapability {
+            agent_type: agent_type.to_string(),
+            model: model_label,
+            capability: format!("chemin d'exécution '{}'", definition.protocol),
+        });
+    }
+    if model
+        .as_deref()
+        .is_some_and(|value| !valid_capability_value(value))
+    {
+        return Err(SpawnRefusal::UnsupportedCapability {
+            agent_type: agent_type.to_string(),
+            model: model_label,
+            capability: "étiquette de modèle valide".to_string(),
+        });
+    }
+    if effort
+        .as_deref()
+        .is_some_and(|value| !valid_capability_value(value))
+    {
+        return Err(SpawnRefusal::UnsupportedCapability {
+            agent_type: agent_type.to_string(),
+            model: model_label,
+            capability: "étiquette d'effort valide".to_string(),
+        });
+    }
+    let Some(model) = model else {
+        if effort.is_some() {
+            return Err(SpawnRefusal::UnsupportedCapability {
+                agent_type: agent_type.to_string(),
+                model: model_label,
+                capability: "modèle explicite requis pour l'effort".to_string(),
+            });
+        }
+        return Ok(());
+    };
+    let Some(model_capabilities) = definition.capabilities.models.get(&model) else {
+        return Err(SpawnRefusal::UnsupportedCapability {
+            agent_type: agent_type.to_string(),
+            model,
+            capability: "modèle pris en charge par l'adaptateur".to_string(),
+        });
+    };
+    if let Some(effort) = effort
+        && !model_capabilities
+            .efforts
+            .iter()
+            .any(|declared| declared == &effort)
+    {
+        return Err(SpawnRefusal::UnsupportedCapability {
+            agent_type: agent_type.to_string(),
+            model,
+            capability: format!("effort '{effort}' accepté par le modèle"),
+        });
+    }
+    Ok(())
+}
+
+/// Extrait les étiquettes opaques du lancement sans les normaliser ni les
+/// substituer. La projection de l'annuaire et la garde de lancement partagent
+/// ainsi exactement la même lecture des arguments.
+pub(crate) fn runtime_model_and_effort(args: &[String]) -> Option<(String, Option<String>)> {
+    let (model, effort) = runtime_labels(args);
+    let model = model.filter(|value| valid_capability_value(value))?;
+    let effort = effort.filter(|value| valid_capability_value(value));
+    Some((model, effort))
+}
+
+fn runtime_labels(args: &[String]) -> (Option<String>, Option<String>) {
+    let mut model = None;
+    let mut effort = None;
+    let mut index = 0;
+    while index < args.len() {
+        let argument = &args[index];
+        if matches!(argument.as_str(), "--model" | "--effort" | "--effort-level") {
+            if let Some(value) = args.get(index + 1) {
+                let value = unquote_runtime_value(value);
+                if argument == "--model" {
+                    model = Some(value);
+                } else {
+                    effort = Some(value);
+                }
+            }
+            index += 2;
+            continue;
+        }
+        if let Some(value) = runtime_assignment(argument, "model") {
+            model = Some(unquote_runtime_value(value));
+        }
+        if let Some(value) = runtime_assignment(argument, "model_reasoning_effort")
+            .or_else(|| runtime_assignment(argument, "effort"))
+        {
+            effort = Some(unquote_runtime_value(value));
+        }
+        index += 1;
+    }
+    (model, effort)
+}
+
+fn runtime_assignment<'a>(argument: &'a str, key: &str) -> Option<&'a str> {
+    argument
+        .strip_prefix(key)
+        .and_then(|suffix| suffix.strip_prefix('='))
+}
+
+fn unquote_runtime_value(value: &str) -> String {
+    let value = value.trim();
+    if value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
+    {
+        value[1..value.len() - 1].to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn valid_capability_value(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= MAX_CAPABILITY_VALUE_CHARS
+        && !value.chars().any(char::is_control)
+}
+
 fn command_basename(command: &str) -> &str {
     Path::new(command)
         .file_name()
@@ -249,6 +421,7 @@ fn registry_warnings(
         "queue_capacity",
         "notify_timeout_secs",
         "mcp",
+        "capabilities",
     ];
     let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
         return Vec::new();
@@ -342,12 +515,49 @@ struct CanonicalResolvedDefinition<'a> {
     queue_capacity: usize,
     notify_timeout_secs: u64,
     mcp: CanonicalResolvedMcpDefinition<'a>,
+    capabilities: &'a AdapterCapabilities,
 }
 
 #[derive(Serialize)]
 struct CanonicalResolvedMcpDefinition<'a> {
     interactive: &'a str,
     acp_session: bool,
+}
+
+/// Forme de digest publiée avant la matrice L1. Elle n'est acceptée qu'à la
+/// lecture d'une génération déjà persistée, puis la prochaine transition
+/// réécrit la définition complète avec les capacités déclaratives.
+#[derive(Serialize)]
+struct LegacyCanonicalResolvedDefinition<'a> {
+    command: &'a str,
+    args: &'a [String],
+    protocol: &'a str,
+    forbidden_env: &'a [String],
+    pass_env: &'a [String],
+    permissions: &'a str,
+    queue_capacity: usize,
+    notify_timeout_secs: u64,
+    mcp: CanonicalResolvedMcpDefinition<'a>,
+}
+
+fn legacy_resolved_digest(definition: &AgentDefinition) -> Result<String, String> {
+    let canonical = LegacyCanonicalResolvedDefinition {
+        command: &definition.command,
+        args: &definition.args,
+        protocol: &definition.protocol,
+        forbidden_env: &definition.forbidden_env,
+        pass_env: &definition.pass_env,
+        permissions: &definition.permissions,
+        queue_capacity: definition.queue_capacity,
+        notify_timeout_secs: definition.notify_timeout_secs,
+        mcp: CanonicalResolvedMcpDefinition {
+            interactive: &definition.mcp.interactive,
+            acp_session: definition.mcp.acp_session,
+        },
+    };
+    let bytes = serde_json::to_vec(&canonical)
+        .map_err(|err| format!("définition historique impossible à sérialiser: {err}"))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
 fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefinition, String> {
@@ -364,6 +574,7 @@ fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefi
             interactive: &definition.mcp.interactive,
             acp_session: definition.mcp.acp_session,
         },
+        capabilities: &definition.capabilities,
     };
     let bytes = serde_json::to_vec(&canonical)
         .map_err(|err| format!("définition résolue impossible à sérialiser: {err}"))?;
@@ -381,6 +592,7 @@ fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefi
             interactive: definition.mcp.interactive.clone(),
             acp_session: definition.mcp.acp_session,
         },
+        capabilities: definition.capabilities.clone(),
         digest,
     })
 }
@@ -412,6 +624,7 @@ fn validate_registry(
                 source.display()
             ));
         }
+        validate_capabilities(name, &definition.capabilities, source)?;
         if !matches!(definition.permissions.as_str(), "allow" | "deny") {
             return Err(format!(
                 "registre invalide {}: permissions invalides pour '{name}'",
@@ -456,6 +669,52 @@ fn validate_registry(
             if definition.forbidden_env.contains(variable) {
                 return Err(format!(
                     "registre invalide {}: '{variable}' est à la fois dans pass_env et forbidden_env pour '{name}'",
+                    source.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_capabilities(
+    name: &str,
+    capabilities: &AdapterCapabilities,
+    source: &Path,
+) -> Result<(), String> {
+    let mut paths = std::collections::HashSet::new();
+    for path in &capabilities.execution_paths {
+        if !valid_capability_value(path) {
+            return Err(format!(
+                "registre invalide {}: chemin de capacité invalide pour '{name}'",
+                source.display()
+            ));
+        }
+        if !paths.insert(path) {
+            return Err(format!(
+                "registre invalide {}: chemin de capacité dupliqué '{path}' pour '{name}'",
+                source.display()
+            ));
+        }
+    }
+    for (model, model_capabilities) in &capabilities.models {
+        if !valid_capability_value(model) {
+            return Err(format!(
+                "registre invalide {}: modèle de capacité invalide pour '{name}'",
+                source.display()
+            ));
+        }
+        let mut efforts = std::collections::HashSet::new();
+        for effort in &model_capabilities.efforts {
+            if !valid_capability_value(effort) {
+                return Err(format!(
+                    "registre invalide {}: effort de capacité invalide pour '{name}'",
+                    source.display()
+                ));
+            }
+            if !efforts.insert(effort) {
+                return Err(format!(
+                    "registre invalide {}: effort de capacité dupliqué '{effort}' pour '{name}'",
                     source.display()
                 ));
             }
@@ -514,6 +773,7 @@ fn definition(
             interactive: mcp_interactive.to_string(),
             acp_session: true,
         },
+        capabilities: default_capabilities(),
     }
 }
 
@@ -544,38 +804,44 @@ fn native_claude_definition() -> AgentDefinition {
             interactive: "claude".to_string(),
             acp_session: false,
         },
+        capabilities: AdapterCapabilities {
+            execution_paths: vec!["claude_stream_json".to_string()],
+            models: BTreeMap::from([("claude-opus-5".to_string(), ModelCapabilities::default())]),
+        },
     }
 }
 
 fn default_agents() -> BTreeMap<String, AgentDefinition> {
+    let mut codex = definition(
+        "npx",
+        &[
+            "@zed-industries/codex-acp@0.16.0",
+            "-c",
+            "model=\"gpt-5.5\"",
+        ],
+        &["OPENAI_API_KEY", "CODEX_API_KEY"],
+        &[
+            "CODEX_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "SSH_AUTH_SOCK",
+            "NPM_CONFIG_CACHE",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "NO_PROXY",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+        ],
+        "codex",
+    );
+    codex
+        .capabilities
+        .models
+        .insert("gpt-5.5".to_string(), ModelCapabilities::default());
     BTreeMap::from([
-        (
-            "codex".to_string(),
-            definition(
-                "npx",
-                &[
-                    "@zed-industries/codex-acp@0.16.0",
-                    "-c",
-                    "model=\"gpt-5.5\"",
-                ],
-                &["OPENAI_API_KEY", "CODEX_API_KEY"],
-                &[
-                    "CODEX_HOME",
-                    "XDG_CONFIG_HOME",
-                    "XDG_CACHE_HOME",
-                    "XDG_DATA_HOME",
-                    "XDG_STATE_HOME",
-                    "SSH_AUTH_SOCK",
-                    "NPM_CONFIG_CACHE",
-                    "HTTPS_PROXY",
-                    "HTTP_PROXY",
-                    "NO_PROXY",
-                    "SSL_CERT_FILE",
-                    "SSL_CERT_DIR",
-                ],
-                "codex",
-            ),
-        ),
+        ("codex".to_string(), codex),
         ("claude".to_string(), native_claude_definition()),
         (
             "gemini".to_string(),
@@ -642,6 +908,14 @@ mod tests {
         assert_eq!(claude.args, ["--model", "claude-opus-5"]);
         assert!(!claude.mcp.acp_session);
         assert_eq!(
+            claude.capabilities.execution_paths,
+            vec!["claude_stream_json"]
+        );
+        assert_eq!(
+            claude.capabilities.models.get("claude-opus-5"),
+            Some(&ModelCapabilities::default())
+        );
+        assert_eq!(
             registry.get("gemini").unwrap().mcp.interactive,
             "unsupported"
         );
@@ -693,6 +967,10 @@ mod tests {
         assert_eq!(first.notify_timeout_secs, 600);
         assert_eq!(first.mcp.interactive, "codex");
         assert!(first.mcp.acp_session);
+        assert_eq!(
+            first.capabilities.models.get("gpt-5.5"),
+            Some(&ModelCapabilities::default())
+        );
         assert_eq!(first.digest.len(), 64);
 
         let baseline = default_agents().remove("codex").unwrap();
@@ -727,6 +1005,14 @@ mod tests {
         let mut changed = baseline.clone();
         changed.mcp.acp_session = !changed.mcp.acp_session;
         mutations.push(("mcp.acp_session", changed));
+        let mut changed = baseline.clone();
+        changed.capabilities.models.insert(
+            "gpt-5.5".to_string(),
+            ModelCapabilities {
+                efforts: vec!["high".to_string()],
+            },
+        );
+        mutations.push(("capabilities.models", changed));
         for (field, changed) in mutations {
             assert_ne!(
                 first.digest,
@@ -738,6 +1024,19 @@ mod tests {
         let mut forged = first;
         forged.queue_capacity += 1;
         assert!(AgentRegistry::from_resolved("codex", &forged).is_err());
+    }
+
+    #[test]
+    fn definition_figee_historique_reste_reprise_avec_la_capacite_acp_de_migration() {
+        let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
+        let definition = registry.get("codex").unwrap().clone();
+        let mut legacy = resolved_definition(&definition).unwrap();
+        legacy.digest = legacy_resolved_digest(&definition).unwrap();
+        let mut value = serde_json::to_value(&legacy).unwrap();
+        value.as_object_mut().unwrap().remove("capabilities");
+        let decoded: ResolvedAgentDefinition = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.capabilities, AdapterCapabilities::default());
+        assert!(AgentRegistry::from_resolved("codex", &decoded).is_ok());
     }
 
     #[test]
@@ -787,6 +1086,25 @@ mod tests {
             "/tmp/agents.json",
         );
         assert!(result.unwrap_err().contains("mcp.interactive invalide"));
+    }
+
+    #[test]
+    fn matrice_de_capacites_refuse_les_champs_inconnus_et_les_doublons() {
+        let unknown = AgentRegistry::from_json(
+            r#"{"agents":{"fixture":{"command":"/bin/sh","capabilities":{"execution_paths":["acp"],"future":true}}}}"#,
+            "/tmp/agents.json",
+        );
+        assert!(unknown.unwrap_err().contains("unknown field `future`"));
+
+        let duplicate = AgentRegistry::from_json(
+            r#"{"agents":{"fixture":{"command":"/bin/sh","capabilities":{"execution_paths":["acp","acp"]}}}}"#,
+            "/tmp/agents.json",
+        );
+        assert!(
+            duplicate
+                .unwrap_err()
+                .contains("chemin de capacité dupliqué")
+        );
     }
 
     #[test]

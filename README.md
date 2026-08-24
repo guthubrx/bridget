@@ -220,6 +220,11 @@ API déclarées dans `forbidden_env`, pour préserver l’authentification par
 abonnement ; `BRIDGET_ALLOW_API_KEY=1` est un contournement explicite à
 employer seulement si la facturation API est voulue.
 
+Chaque type lancé déclare aussi `capabilities` : `execution_paths`, puis les
+modèles et efforts exacts acceptés. Cette matrice fait partie de la définition
+figée et de son digest : un modèle, un effort ou un chemin absent est refusé
+avant tout processus, sans interrogation du pilote au démarrage.
+
 Gemini reste déclaratif, mais les comptes individuels ne sont pas supportés au
 2026-08-22 : Google demande la migration vers Antigravity. Les agents tmux
 existants, lancés sans `--equipier`, conservent leur comportement `💬`.

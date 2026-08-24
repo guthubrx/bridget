@@ -3588,6 +3588,10 @@ mod reconnect_tests {
             queue_capacity: 32,
             notify_timeout_secs: 600,
             mcp: crate::registry::McpDefinition::default(),
+            capabilities: bridget_transport::AdapterCapabilities {
+                execution_paths: vec!["acp".to_string()],
+                models: std::collections::BTreeMap::new(),
+            },
         }
     }
 
