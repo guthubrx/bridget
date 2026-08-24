@@ -4094,9 +4094,7 @@ mod reconnect_tests {
         // Simule la reconnexion après un redémarrage daemon : la présence est
         // vide, l'observation locale est pourtant inchangée.
         probe.invalidate_after_reconnect();
-        let again = probe
-            .poll()
-            .expect("republication forcée après reconnect");
+        let again = probe.poll().expect("republication forcée après reconnect");
         assert_eq!(again, first);
 
         std::fs::remove_dir_all(root).unwrap();

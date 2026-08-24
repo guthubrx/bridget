@@ -2232,6 +2232,16 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     }
     std::fs::create_dir_all(config.socket_path.parent().unwrap())?;
     crate::wrapper::purge_orphan_mcp_configs(config.socket_path.parent().unwrap());
+    // Ramasse-copies : même emplacement/discipline que la purge MCP — orphelins
+    // /tmp/bridget-* âgés, jamais sous un processus vivant.
+    let tmp_purge = crate::disk_hygiene::purge_orphan_bridget_tmp(std::env::temp_dir().as_path());
+    if !tmp_purge.deleted.is_empty() {
+        info!(
+            "ramasse-copies: {} orphelin(s) /tmp/bridget-* retiré(s)",
+            tmp_purge.deleted.len()
+        );
+    }
+    crate::disk_hygiene::warn_if_disk_low(std::path::Path::new("/"));
 
     let listener = UnixListener::bind(&config.socket_path)?;
     info!("bridget daemon écoute sur {}", config.socket_path.display());

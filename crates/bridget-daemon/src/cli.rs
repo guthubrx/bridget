@@ -11,7 +11,7 @@ use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDae
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Fonction générique pour lancer un agent wrapper (M-001)
@@ -137,6 +137,7 @@ pub fn run() {
         "ledger" => cmd_ledger(),
         "reprise" => cmd_reprise(&args[2..]),
         "reaper" => cmd_reaper(&args[2..]),
+        "cleanup" => cmd_cleanup(&args[2..]),
         "version" | "--version" | "-v" => {
             println!("bridget {}", env!("CARGO_PKG_VERSION"));
         }
@@ -294,6 +295,7 @@ fn print_usage() {
            ledger                 Historique des messages\n  \
            reprise [--write P]    Carte de reprise du référent\n  \
            reaper report          Observateur J2 (ne tue jamais)\n  \
+           cleanup --dry-run      Liste target/ des worktrees mergés\n  \
            version                Version\n  \
            help                   Cette aide\n\n\
          Options de send :\n  \
@@ -1786,10 +1788,7 @@ fn hook_claude_runtime() {
 /// Sans `session_id`, on ne peut pas trancher : le chemin fourni par Claude
 /// Code reste l'unique source. Avec les deux, le stem du fichier doit être
 /// l'identifiant — sinon c'est un voisin du même projet.
-fn transcript_matches_hook_session(
-    transcript: &std::path::Path,
-    session_id: Option<&str>,
-) -> bool {
+fn transcript_matches_hook_session(transcript: &std::path::Path, session_id: Option<&str>) -> bool {
     let Some(session_id) = session_id.filter(|value| !value.is_empty()) else {
         return true;
     };
@@ -2369,6 +2368,7 @@ fn cmd_who(args: &[String]) {
     print!("{}", render_who(&agents, filter.as_deref()));
     println!("Daemon build-id: {build_id}");
     emit_stale_daemon_warning(status.build_id.as_deref());
+    emit_disk_warning();
 }
 
 /// Rend l'annuaire sans dépendre d'un terminal : les appels non-TTY reçoivent
@@ -2626,6 +2626,9 @@ fn cmd_reaper(args: &[String]) {
         i += 1;
     }
 
+    // Relève disque à chaque observation (fait attesté, pas de panique auto).
+    crate::disk_hygiene::warn_if_disk_low(Path::new("/"));
+
     match crate::reaper::observe_live(&state_dir, &tmp_dir, min_age_secs) {
         Ok(report) => {
             if json_output {
@@ -2635,10 +2638,33 @@ fn cmd_reaper(args: &[String]) {
                 );
             } else {
                 print!("{}", crate::reaper::render_human(&report));
+                if let Some(warning) = crate::disk_hygiene::disk_warning_for_display(Path::new("/"))
+                {
+                    println!("{warning}");
+                }
             }
         }
         Err(error) => {
             eprintln!("bridget reaper report: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_cleanup(args: &[String]) {
+    if args.first().map(String::as_str) != Some("--dry-run") {
+        eprintln!("usage: bridget cleanup --dry-run");
+        eprintln!("Liste les target/ des worktrees déjà mergés — aucune suppression.");
+        std::process::exit(2);
+    }
+    let repo = std::env::current_dir().unwrap_or_else(|error| {
+        eprintln!("bridget cleanup: répertoire courant indisponible: {error}");
+        std::process::exit(1);
+    });
+    match crate::disk_hygiene::list_merged_worktree_targets(&repo) {
+        Ok(targets) => print!("{}", crate::disk_hygiene::render_cleanup_dry_run(&targets)),
+        Err(error) => {
+            eprintln!("bridget cleanup: {error}");
             std::process::exit(1);
         }
     }
@@ -2664,6 +2690,7 @@ fn cmd_status() {
         status.build_id.as_deref().unwrap_or("inconnu")
     );
     emit_stale_daemon_warning(status.build_id.as_deref());
+    emit_disk_warning();
 }
 
 fn stale_daemon_warning_for_status(build_id: Option<&str>) -> Option<String> {
@@ -2672,6 +2699,12 @@ fn stale_daemon_warning_for_status(build_id: Option<&str>) -> Option<String> {
 
 fn emit_stale_daemon_warning(build_id: Option<&str>) {
     if let Some(warning) = stale_daemon_warning_for_status(build_id) {
+        eprintln!("{warning}");
+    }
+}
+
+fn emit_disk_warning() {
+    if let Some(warning) = crate::disk_hygiene::disk_warning_for_display(Path::new("/")) {
         eprintln!("{warning}");
     }
 }

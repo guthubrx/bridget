@@ -924,11 +924,7 @@ fn native_cursor_definition() -> AgentDefinition {
     // honnête `auto`, jamais un nom inventé. Sans `--model`, who reste vide.
     AgentDefinition {
         command: "cursor-agent".to_string(),
-        args: vec![
-            "--model".to_string(),
-            "auto".to_string(),
-            "acp".to_string(),
-        ],
+        args: vec!["--model".to_string(), "auto".to_string(), "acp".to_string()],
         protocol: "acp".to_string(),
         forbidden_env: vec![
             "CURSOR_API_KEY".to_string(),
