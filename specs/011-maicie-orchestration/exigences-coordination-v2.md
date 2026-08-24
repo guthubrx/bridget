@@ -1526,3 +1526,13 @@ ni les Teams de silo, ni les orchestrateurs, ni les clones mailbox n'ont.
 ORDRE INCHANGÉ : phase 2 (autonomie — les routines SONT les opérations de
 l'AI company), puis sécurité (sortie de dette ADR 011, exigée par toute
 ouverture), puis N1-N4.
+- **N6 — Confinement d'exécution** (question utilisateur du 24/08, réf.
+  Grogbot/VM) : aujourd'hui les agents tournent sous le compte utilisateur,
+  permissions débrayées — gouvernance sans confinement, plafond assumé et
+  documenté. Échelle retenue, du proche au lointain : (1) réactiver les
+  sandbox NATIFS des CLI par profil (codex sandbox, claude permission-mode
+  — les flags qu'on débraye aujourd'hui, remis à l'endroit pour les agents
+  « supervisés ») ; (2) conteneurs pour les déploiements Linux
+  (cartae.app) ; (3) VM par équipe seulement si hébergement pour tiers.
+  MÊME CHANTIER que M3 + second facteur + sortie du bypass : une seule
+  phase sécurité, pas quatre.
