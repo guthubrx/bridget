@@ -1,7 +1,7 @@
 # Spec 015 — Guichet Maicie : identité joignable et demandes corrélées
 
 **Branche** : `session-15-guichet-maicie` | **Créée** : 2026-08-23
-**Statut** : Conception — aucune implémentation autorisée par cette session
+**Statut** : Livrée — T1501 à T1514 closes, revue hostile finale MERGEABLE
 **Origine** : D18 du catalogue de coordination v2. Les deux besoins sont
 prouvés : un agent a tenté d'écrire à Maicie alors qu'elle était absente, et
 deux clôtures liées ont été oubliées au greffe. La conclusion T015b a aussi
