@@ -98,3 +98,55 @@ Diff in /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/cr
 Le contrôle signale ensuite d'autres écarts de formatage dans les fichiers
 Rust de la tête 015. Conformément au mandat T1513, la validation s'arrête sur
 ce rouge et ne modifie aucun fichier de production.
+
+## T1513-bis — Solder le contrôle Rustfmt
+
+**Commit code dédié** : `f0c682c`
+**Verdict** : **PASS** — les trois commandes finales sont vertes.
+
+### Audit du diff de formatage
+
+Commande appliquée au worktree :
+
+```bash
+/Users/moi/.cargo/bin/cargo fmt --all
+```
+
+Rustfmt 1.8.0-stable a modifié 16 fichiers Rust. Pour exclure tout changement
+étranger au formateur, une archive propre de `HEAD` a été extraite dans un
+répertoire temporaire, formatée indépendamment avec le même
+`rust-toolchain.toml`, puis comparée fichier par fichier avec `cmp`. Résultat :
+
+```text
+fichiers_audites=16
+AUDIT_RUSTFMT_IDENTIQUE
+```
+
+Le commit `f0c682c` contient exclusivement ces 16 fichiers `.rs`. Les WIP
+documentaires préexistants restent hors index.
+
+### Validations finales
+
+Commande exécutée :
+
+```bash
+/usr/bin/time -p /Users/moi/.cargo/bin/cargo test --workspace
+```
+
+Résultat : **PASS**, zéro échec. Durée réelle : **191,61 s**.
+
+Commande exécutée :
+
+```bash
+/usr/bin/time -p /Users/moi/.cargo/bin/cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Résultat : **PASS**, zéro warning. Durée réelle : **5,96 s**.
+
+Commande exécutée :
+
+```bash
+/usr/bin/time -p /Users/moi/.cargo/bin/cargo fmt --all --check
+```
+
+Résultat : **PASS**, aucun diff. Durée réelle : **0,66 s**.
