@@ -6,8 +6,10 @@ use bridget_transport::protocol::{
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
+use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SCOPE: &str = "015_scope_0123456789abcdef0123456789abcdef";
@@ -49,19 +51,139 @@ fn socket(home: &Path) -> PathBuf {
     home.join(".cache/bridget/bridget.sock")
 }
 
-fn start_daemon(home: &Path) -> Child {
-    std::fs::create_dir_all(home).unwrap();
-    let child = isolated_bridget_command()
-        .arg("daemon")
-        .env("HOME", home)
-        .spawn()
-        .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while UnixStream::connect(socket(home)).is_err() {
-        assert!(Instant::now() < deadline, "daemon guichet non démarré");
-        std::thread::sleep(Duration::from_millis(10));
+/// Possède le daemon guichet. Créée avant le spawn : panique d'amorçage ou
+/// injectée ne laisse pas l'enfant sous PID 1. `Drop` ne panique jamais.
+struct DaemonGuard {
+    child: Option<Child>,
+}
+
+impl DaemonGuard {
+    fn start(home: &Path) -> Self {
+        let mut guard = Self { child: None };
+        std::fs::create_dir_all(home).unwrap();
+        guard.child = Some(
+            isolated_bridget_command()
+                .arg("daemon")
+                .env("HOME", home)
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while UnixStream::connect(socket(home)).is_err() {
+            assert!(Instant::now() < deadline, "daemon guichet non démarré");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        guard
     }
-    child
+
+    /// Crash réel : ce n'est pas le chemin SIGTERM coopératif du daemon.
+    fn kill(mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl Drop for DaemonGuard {
+    fn drop(&mut self) {
+        let _ = stop_daemon_child_best_effort(self.child.as_mut());
+    }
+}
+
+fn stop_daemon_child_best_effort(child: Option<&mut Child>) -> bool {
+    let Some(child) = child else {
+        return true;
+    };
+    match child.try_wait() {
+        Ok(Some(_)) => return true,
+        Ok(None) => {}
+        Err(_) => {}
+    }
+    let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(_) => break,
+        }
+    }
+    let _ = child.kill();
+    child.wait().is_ok()
+}
+
+fn harness_daemon_home_count() -> usize {
+    let output = Command::new("/bin/ps")
+        .args(["-axo", "pid=,command="])
+        .output()
+        .expect("ps pour l'oracle de non-fuite");
+    assert!(output.status.success(), "ps indisponible pour l'oracle");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let (pid, command) = line.split_once(char::is_whitespace)?;
+            let command = command.trim_start();
+            let mut parts = command.split_whitespace();
+            let binary = parts.next()?;
+            let argv1 = parts.next()?;
+            if !binary.contains("bridget") || argv1 != "daemon" || parts.next().is_some() {
+                return None;
+            }
+            Some(pid.trim())
+        })
+        .filter(|pid| daemon_home_matches_harness_prefix(pid))
+        .count()
+}
+
+fn daemon_home_matches_harness_prefix(pid: &str) -> bool {
+    let output = Command::new("lsof").args(["-p", pid, "-Fn"]).output();
+    let Ok(output) = output else {
+        return false;
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix('n'))
+        .any(path_is_harness_daemon_home)
+}
+
+fn path_is_harness_daemon_home(path: &str) -> bool {
+    // Borné au PID du binaire de test : un compteur global croise les orphelins
+    // des autres agents et rend l'oracle flaky (observé : 8→7 pendant un run).
+    let mine = std::process::id().to_string();
+    let bg909_marker = format!("-{mine}-");
+    path.split('/').any(|component| {
+        if let Some(rest) = component.strip_prefix("bg909-") {
+            return rest.contains(&bg909_marker) || rest.ends_with(&format!("-{mine}"));
+        }
+        let Some(rest) = component.strip_prefix("bg-") else {
+            return false;
+        };
+        let mut parts = rest.splitn(2, '-');
+        let Some(process_id) = parts.next() else {
+            return false;
+        };
+        let Some(nonce) = parts.next() else {
+            return false;
+        };
+        process_id == mine && !nonce.is_empty() && nonce.chars().all(|c| c.is_ascii_hexdigit())
+    })
+}
+
+fn assert_harness_daemon_home_count(expected: usize) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if harness_daemon_home_count() == expected {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        harness_daemon_home_count(),
+        expected,
+        "le harnais guichet a laissé un daemon orphelin (préfixes bg909-/bg-)"
+    );
 }
 
 fn connect(home: &Path) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
@@ -120,7 +242,7 @@ fn service(home: &Path, issuer_scope: &str) -> (BufReader<UnixStream>, BufWriter
 #[test]
 fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
     let home = unique_home();
-    let mut daemon = start_daemon(&home);
+    let daemon = DaemonGuard::start(&home);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -191,12 +313,11 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
     };
 
     // Crash réel : ce n'est pas le chemin SIGTERM coopératif du daemon.
-    daemon.kill().unwrap();
-    daemon.wait().unwrap();
+    daemon.kill();
     drop(reader_a);
     drop(writer_a);
 
-    let mut restarted = start_daemon(&home);
+    let restarted = DaemonGuard::start(&home);
     // A survit côté client au crash du daemon, puis se reconnecte : son ancien
     // token doit rester sans droit quand B obtient une génération neuve.
     let (mut reader_a_after_crash, mut writer_a_after_crash) = service(&home, SERVICE_SCOPE);
@@ -245,8 +366,7 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
         DaemonToWrapper::GuichetResult { ref issue, .. } if issue == "accepted"
     ));
 
-    restarted.kill().unwrap();
-    restarted.wait().unwrap();
+    restarted.kill();
     let _ = std::fs::remove_dir_all(home);
 }
 
@@ -271,7 +391,7 @@ fn reply(generation: u64, token: String, response_message_id: &str) -> WrapperTo
 #[test]
 fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois() {
     let home = unique_home();
-    let mut daemon = start_daemon(&home);
+    let daemon = DaemonGuard::start(&home);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -489,7 +609,50 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
 
     // Mutation discriminante : retirer mark_answered_in_transaction du reply
     // laisse la demande ouverte malgré GuichetResult accepted.
-    daemon.kill().unwrap();
-    daemon.wait().unwrap();
+    daemon.kill();
     let _ = std::fs::remove_dir_all(home);
+}
+
+/// La garde doit être active avant le spawn : une panique juste après le
+/// démarrage ne laisse aucun daemon `bg-` sous PID 1.
+#[test]
+fn daemon_guard_nettoie_apres_une_panique_injectee() {
+    let before = harness_daemon_home_count();
+    let home_slot = Mutex::new(None::<PathBuf>);
+    let mid = std::sync::atomic::AtomicUsize::new(usize::MAX);
+    let failed = catch_unwind(AssertUnwindSafe(|| {
+        let home = unique_home();
+        *home_slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(home.clone());
+        let _daemon = DaemonGuard::start(&home);
+        // Premier temps : le spawn doit apparaître au compteur (sinon l'égalité
+        // avant/après ne prouverait rien).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut seen = harness_daemon_home_count();
+        while seen != before + 1 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            seen = harness_daemon_home_count();
+        }
+        mid.store(seen, std::sync::atomic::Ordering::SeqCst);
+        panic!("échec injecté après le spawn : la garde doit nettoyer");
+    }));
+    assert!(
+        failed.is_err(),
+        "la branche d'échec doit réellement paniquer"
+    );
+    assert_eq!(
+        mid.load(std::sync::atomic::Ordering::SeqCst),
+        before + 1,
+        "premier temps : le daemon spawné doit être compté"
+    );
+    // Second temps : après Drop (dépliage), retour au compteur initial.
+    assert_harness_daemon_home_count(before);
+    if let Some(home) = home_slot
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+    {
+        let _ = std::fs::remove_dir_all(home);
+    }
 }
