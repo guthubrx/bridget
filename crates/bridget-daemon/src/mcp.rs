@@ -1624,7 +1624,13 @@ mod tests {
     /// disparu de la version précédente.
     #[test]
     fn la_consigne_de_rejeu_nomme_ses_trois_invariants_et_l_absence_de_doublon() {
-        for invariant in ["id", "issued_at", "corps"] {
+        // Chercher « id » ne gardait RIEN : « id » est déjà contenu dans
+        // « à l'identique ». Amputer la consigne de « même id, » laissait donc
+        // ce gardien vert — sur l'invariant précisément qui avait disparu de la
+        // version précédente, celui qu'il était censé protéger. Chaque
+        // invariant se vérifie sous la forme qui l'énonce, pas sous un fragment
+        // que le reste de la phrase fournit déjà.
+        for invariant in ["même id", "même issued_at", "même corps"] {
             assert!(
                 REJEU_A_L_IDENTIQUE.contains(invariant),
                 "la consigne doit nommer l'invariant « {invariant} »"
