@@ -5,7 +5,7 @@ tenue par le référent humain-agent. Chaque règle exécutée à la main ici es
 candidate à devenir un comportement produit de Maicie. Hors périmètre de la
 v1 (spec 011) — intrants pour les itérations suivantes.
 
-## Tableau de bord — mis à jour le 2026-08-24, 15h30
+## Tableau de bord — mis à jour le 2026-08-24, 15h20
 
 Vue d'avancement des blocs. Détail et jurisprudence dans chaque bloc plus
 bas ; ce tableau ne remplace pas la lecture, il dit où on en est.
@@ -77,7 +77,7 @@ ont été créés directement dans ce fichier le 24/08.
       avec transitions automatiques, en production depuis le 24/08
 - [x] 36-37 (ajout 24/08) lier le référent par le refus (--suite obligatoire,
       classement des citations, EnAttentePrerequis, refus de cycle, v12) —
-      MERGÉ 15h05 après BLOCKED (4 défauts réels dont un fail-closed
+      MERGÉ 15h04 après BLOCKED (4 défauts réels dont un fail-closed
       menteur) puis APPROVE ; actif au prochain déploiement du binaire
 
 **Sections antérieures complémentaires (hors plan A-F)**
