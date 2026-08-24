@@ -3,9 +3,9 @@
 
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
 use bridget_transport::protocol::{
-    AttachRefusal, CLIENT_CONTRACT_VERSION, ClientCapability, ClientRefusal, ConnectionRole,
-    IdempotencyIssue, PresenceMode, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal,
-    SpawnRefusal, StopOutcome, decode, encode,
+    AttachRefusal, CLIENT_CONTRACT_VERSION, COORDINATION_EVENTS_VERSION, ClientCapability,
+    ClientRefusal, ConnectionRole, IdempotencyIssue, PresenceMode, SERVICE_CONTRACT_VERSION,
+    ServiceCapability, ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
@@ -24,8 +24,8 @@ use crate::idempotency::{
     SendDelivery,
 };
 use crate::store::{
-    GuichetDeposit, GuichetLifecycleEvent, GuichetNext, GuichetReplyInput, GuichetResult,
-    MAX_GUICHET_FRAME_BYTES, Store, StoreError,
+    GuichetCoordinationEvent, GuichetDeposit, GuichetLifecycleEvent, GuichetNext,
+    GuichetReplyInput, GuichetResult, MAX_GUICHET_FRAME_BYTES, Store, StoreError,
 };
 use crate::{
     desired_state::DesiredStateStore,
@@ -784,8 +784,9 @@ fn deliver_to_agent(
     writer: &Arc<Mutex<BufWriter<UnixStream>>>,
     target_name: &str,
     body: &str,
-) -> Result<(), DeliveryError> {
+) -> Result<String, DeliveryError> {
     let msg = bridget_core::BridgetMessage::new("bridget", target_name, body);
+    let message_id = msg.id.clone();
     let dtw = DaemonToWrapper::Deliver(msg);
     let json = encode(&dtw).map_err(|e| {
         error!("Erreur d'encodage message pour {}: {}", target_name, e);
@@ -811,7 +812,7 @@ fn deliver_to_agent(
     })?;
 
     info!("Message délivré à {}", target_name);
-    Ok(())
+    Ok(message_id)
 }
 
 fn push_control_message(
@@ -2194,15 +2195,27 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                         msg_id,
                         target_conn,
                     } => {
-                        let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
-                        if let Some(target_writer) = st.connections.get(&target_conn) {
+                        let target_writer = {
+                            let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                            st.connections.get(&target_conn).cloned()
+                        };
+                        if let Some(target_writer) = target_writer {
                             let body = format!(
                                 "Rappel : {} attend ta reponse au message #{}.\nReponds avec: bridget reply \"ta reponse\"",
                                 from,
                                 &msg_id[..msg_id.len().min(8)]
                             );
-                            if let Err(e) = deliver_to_agent(target_writer, &to, &body) {
-                                error!("Impossible de délivrer le rappel doux à {}: {}", to, e);
+                            match deliver_to_agent(&target_writer, &to, &body) {
+                                Ok(reminder_message_id) => attest_reminder_sent(
+                                    &st_reminder,
+                                    &msg_id,
+                                    &reminder_message_id,
+                                    &to,
+                                    1,
+                                ),
+                                Err(e) => {
+                                    error!("Impossible de délivrer le rappel doux à {}: {}", to, e)
+                                }
                             }
                             info!("palier 1 (rappel doux) → {} pour {}", to, from);
                         }
@@ -2213,15 +2226,27 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                         msg_id,
                         target_conn,
                     } => {
-                        let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
-                        if let Some(target_writer) = st.connections.get(&target_conn) {
+                        let target_writer = {
+                            let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                            st.connections.get(&target_conn).cloned()
+                        };
+                        if let Some(target_writer) = target_writer {
                             let body = format!(
                                 "URGENT : {} attend toujours ta reponse au message #{}.\nTu DOIS repondre maintenant avec: bridget reply \"ta reponse\"\nSi tu ne peux pas repondre, notifie-le : bridget reply \"impossible de repondre : <raison>\"",
                                 from,
                                 &msg_id[..msg_id.len().min(8)]
                             );
-                            if let Err(e) = deliver_to_agent(target_writer, &to, &body) {
-                                error!("Impossible de délivrer le rappel ferme à {}: {}", to, e);
+                            match deliver_to_agent(&target_writer, &to, &body) {
+                                Ok(reminder_message_id) => attest_reminder_sent(
+                                    &st_reminder,
+                                    &msg_id,
+                                    &reminder_message_id,
+                                    &to,
+                                    2,
+                                ),
+                                Err(e) => {
+                                    error!("Impossible de délivrer le rappel ferme à {}: {}", to, e)
+                                }
                             }
                             info!("palier 2 (rappel ferme) → {} pour {}", to, from);
                         }
@@ -2513,7 +2538,8 @@ fn handle_connection(
 fn is_guichet_frame(message: &WrapperToDaemon) -> bool {
     matches!(
         message,
-        WrapperToDaemon::ServiceRequest { .. }
+        WrapperToDaemon::ServiceHello { .. }
+            | WrapperToDaemon::ServiceRequest { .. }
             | WrapperToDaemon::GuichetClaimNext { .. }
             | WrapperToDaemon::GuichetClaim { .. }
             | WrapperToDaemon::GuichetLookup { .. }
@@ -2542,11 +2568,13 @@ fn raw_guichet_frame(line: &str) -> bool {
         .is_some_and(|kind| {
             matches!(
                 kind.as_str(),
-                "service_request"
+                "ServiceHello"
+                    | "service_request"
                     | "guichet_claim_next"
                     | "guichet_claim"
                     | "guichet_lookup"
                     | "guichet_reply"
+                    | "coordination_event"
             )
         })
 }
@@ -2694,6 +2722,67 @@ fn guichet_lifecycle_response(event: GuichetLifecycleEvent) -> DaemonToWrapper {
         in_reply_to: event.in_reply_to,
         response_message_id: event.response_message_id,
     }
+}
+
+fn guichet_coordination_response(event: GuichetCoordinationEvent) -> DaemonToWrapper {
+    DaemonToWrapper::CoordinationEvent {
+        version: COORDINATION_EVENTS_VERSION,
+        event_id: event.event_id,
+        request_id: event.request_id,
+        kind: event.kind,
+        reminder_message_id: event.reminder_message_id,
+        recipient: event.recipient,
+        generation: event.generation,
+        observed_at: event.observed_at,
+    }
+}
+
+/// Atteste le rappel seulement après l'écriture et le flush effectifs vers son
+/// destinataire. B (persistance Maicie) relève ce fait pour l'observation,
+/// C (reconcile) le déduplique par `event_id`; aucun consommateur ne calcule
+/// l'instant ni la génération à la place du transport.
+fn attest_reminder_sent(
+    state: &Arc<Mutex<DaemonState>>,
+    request_id: &str,
+    reminder_message_id: &str,
+    recipient: &str,
+    generation: u64,
+) {
+    let controls = {
+        let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let event = match st.store.record_reminder_sent(
+            request_id,
+            reminder_message_id,
+            recipient,
+            generation,
+            unix_timestamp(),
+        ) {
+            Ok(event) => event,
+            Err(error) => {
+                error!("persistance du rappel de coordination: {error}");
+                return;
+            }
+        };
+        st.service_negotiations
+            .iter()
+            .filter(|(_, negotiated)| {
+                negotiated.version == SERVICE_CONTRACT_VERSION
+                    && negotiated
+                        .capabilities
+                        .contains(&ServiceCapability::MaicieGuichet)
+                    && negotiated
+                        .capabilities
+                        .contains(&ServiceCapability::CoordinationEventsV1)
+            })
+            .filter_map(|(connection_id, _)| {
+                st.connections.get(connection_id).map(|writer| DeferredControl {
+                    writer: writer.clone(),
+                    message: guichet_coordination_response(event.clone()),
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let _ = execute_controls(controls);
 }
 
 /// Traite l'enregistrement d'un wrapper
@@ -4060,7 +4149,16 @@ fn handle_wrapper_message(
                     reason: ServiceRefusal::InvalidIssuerScope,
                 });
             }
-            if capabilities.len() > 1 {
+            let canonical_capabilities = matches!(
+                capabilities.as_slice(),
+                []
+                    | [ServiceCapability::MaicieGuichet]
+                    | [
+                        ServiceCapability::MaicieGuichet,
+                        ServiceCapability::CoordinationEventsV1,
+                    ]
+            );
+            if !canonical_capabilities {
                 return Some(DaemonToWrapper::ServiceRejected {
                     reason: ServiceRefusal::InvalidEnvelope,
                 });
@@ -4091,6 +4189,28 @@ fn handle_wrapper_message(
                         }
                     }
                     Err(error) => error!("lecture des événements guichet: {error}"),
+                }
+            }
+            if capabilities.contains(&ServiceCapability::CoordinationEventsV1) {
+                match st.store.guichet_coordination_events() {
+                    Ok(events) => {
+                        let controls = events
+                            .into_iter()
+                            .filter_map(|event| {
+                                st.connections.get(conn_id).map(|writer| DeferredControl {
+                                    writer: writer.clone(),
+                                    message: guichet_coordination_response(event),
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        if !controls.is_empty() {
+                            st.pending_post_response_controls
+                                .entry(conn_id.to_string())
+                                .or_default()
+                                .extend(controls);
+                        }
+                    }
+                    Err(error) => error!("lecture des événements de coordination: {error}"),
                 }
             }
             Some(DaemonToWrapper::ServiceWelcome {

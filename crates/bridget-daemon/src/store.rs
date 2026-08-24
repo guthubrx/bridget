@@ -1,7 +1,8 @@
 //! Persistance SQLite — ledger, compteurs disjoncteur, historique.
 
 use bridget_transport::protocol::{
-    GuichetLifecycleState, GuichetOutcome, ServiceRequestOperation, ServiceRequestPayload,
+    CoordinationEventKind, GuichetLifecycleState, GuichetOutcome, ServiceRequestOperation,
+    ServiceRequestPayload,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use std::path::Path;
@@ -82,6 +83,20 @@ pub struct GuichetLifecycleEvent {
     pub observed_at: i64,
     pub in_reply_to: Option<String>,
     pub response_message_id: Option<String>,
+}
+
+/// Fait de coordination v1 durable, produit par le transport après une
+/// relance réellement écrite. Il reste séparé des terminaux 015 : plusieurs
+/// relances peuvent appartenir à une même demande suivie.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuichetCoordinationEvent {
+    pub event_id: String,
+    pub request_id: String,
+    pub kind: CoordinationEventKind,
+    pub reminder_message_id: String,
+    pub recipient: String,
+    pub generation: u64,
+    pub observed_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,6 +193,16 @@ impl Store {
                 in_reply_to TEXT,
                 response_message_id TEXT,
                 PRIMARY KEY (issuer_scope, request_id)
+            );
+            CREATE TABLE IF NOT EXISTS guichet_coordination_events (
+                event_id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('reminder_sent')),
+                reminder_message_id TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK (generation > 0),
+                observed_at INTEGER NOT NULL,
+                UNIQUE (request_id, generation)
             );
             ",
         )
@@ -634,6 +659,94 @@ impl Store {
             .map_err(StoreError::Sqlite)
     }
 
+    /// Atteste une relance après son écriture transport. La clé
+    /// `(request_id, generation)` empêche qu'un même palier soit exposé deux
+    /// fois après un rejeu local ; les clients relisent ensuite les mêmes
+    /// bytes via l'`event_id` durable.
+    pub fn record_reminder_sent(
+        &mut self,
+        request_id: &str,
+        reminder_message_id: &str,
+        recipient: &str,
+        generation: u64,
+        observed_at: i64,
+    ) -> Result<GuichetCoordinationEvent, StoreError> {
+        if request_id.is_empty()
+            || reminder_message_id.is_empty()
+            || recipient.is_empty()
+            || generation == 0
+        {
+            return Err(StoreError::Invariant("rappel de coordination incomplet"));
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+        let existing = tx
+            .query_row(
+                "SELECT event_id, request_id, kind, reminder_message_id, recipient,
+                        generation, observed_at
+                 FROM guichet_coordination_events
+                 WHERE request_id = ?1 AND generation = ?2",
+                params![request_id, generation as i64],
+                coordination_event_from_row,
+            )
+            .optional()
+            .map_err(StoreError::Sqlite)?;
+        if let Some(event) = existing {
+            tx.commit().map_err(StoreError::Sqlite)?;
+            return Ok(event);
+        }
+        let event = GuichetCoordinationEvent {
+            event_id: format!("evt-{}", Uuid::new_v4()),
+            request_id: request_id.to_string(),
+            kind: CoordinationEventKind::ReminderSent,
+            reminder_message_id: reminder_message_id.to_string(),
+            recipient: recipient.to_string(),
+            generation,
+            observed_at,
+        };
+        tx.execute(
+            "INSERT INTO guichet_coordination_events
+                 (event_id, request_id, kind, reminder_message_id, recipient,
+                  generation, observed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                event.event_id,
+                event.request_id,
+                coordination_event_kind_name(event.kind),
+                event.reminder_message_id,
+                event.recipient,
+                event.generation as i64,
+                event.observed_at,
+            ],
+        )
+        .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+        Ok(event)
+    }
+
+    /// Relève les faits 016 dans l'ordre attesté. T1604 ajoutera le curseur
+    /// et les états de fraîcheur sans demander à Maicie une lecture SQLite.
+    pub fn guichet_coordination_events(
+        &self,
+    ) -> Result<Vec<GuichetCoordinationEvent>, StoreError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT event_id, request_id, kind, reminder_message_id, recipient,
+                        generation, observed_at
+                 FROM guichet_coordination_events
+                 ORDER BY observed_at ASC, event_id ASC",
+            )
+            .map_err(StoreError::Sqlite)?;
+        statement
+            .query_map([], coordination_event_from_row)
+            .map_err(StoreError::Sqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Sqlite)
+    }
+
     /// La disparition d'une connexion ne laisse jamais son droit de claim
     /// actif : la prochaine relève récupère le même dépôt et une génération neuve.
     pub fn release_guichet_claims(&mut self, owner: &str) -> Result<(), StoreError> {
@@ -959,6 +1072,30 @@ fn lifecycle_state_name(state: GuichetLifecycleState) -> &'static str {
         GuichetLifecycleState::Answered => "answered",
         GuichetLifecycleState::Cancelled => "cancelled",
         GuichetLifecycleState::TimedOut => "timed_out",
+    }
+}
+
+fn coordination_event_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<GuichetCoordinationEvent> {
+    let kind = match row.get::<_, String>(2)?.as_str() {
+        "reminder_sent" => CoordinationEventKind::ReminderSent,
+        _ => return Err(rusqlite::Error::InvalidQuery),
+    };
+    Ok(GuichetCoordinationEvent {
+        event_id: row.get(0)?,
+        request_id: row.get(1)?,
+        kind,
+        reminder_message_id: row.get(3)?,
+        recipient: row.get(4)?,
+        generation: row.get::<_, i64>(5)? as u64,
+        observed_at: row.get(6)?,
+    })
+}
+
+fn coordination_event_kind_name(kind: CoordinationEventKind) -> &'static str {
+    match kind {
+        CoordinationEventKind::ReminderSent => "reminder_sent",
     }
 }
 
