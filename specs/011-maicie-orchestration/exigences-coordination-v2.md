@@ -1593,3 +1593,23 @@ pratique implicite : le « Juge froid » de fable-reviewer est un Veilleur
 qui s'ignore) ; (2) les mandats cessent de redire la doctrine — la fiche
 la porte. S'inscrit dans la phase AUTONOMIE (« les profils portent la
 doctrine ») ; le FinOps d'Argos rejoint le coût par mission déjà livré.
+
+**COMPLÉMENT — la source originelle (indiquée par l'utilisateur)** :
+/Users/moi/Nextcloud/10.Scripts/19.rekall — « Les 14 Agents Cognitifs »
+(déc. 2025, ANTÉRIEUR aux Veilleurs de Cartae ; docs_comprehensive/
+04_AGENTS_COGNITIFS/00_Vue_Ensemble_Agents.md + specs/005-agent-swarm +
+implémentations src/rekall/agents/). Ce que Rekall porte en PLUS du
+registre Cartae, et qui compte pour nous :
+- la doctrine « FRICTION CONSTRUCTIVE » : des agents qui challengent au
+  lieu de complaire (« agent servile rejeté ») — c'est le fondement
+  théorique de notre culture de revue hostile, écrit huit mois avant elle ;
+- QUATRE dimensions par agent : personnalité, spécialité cognitive,
+  PERMISSIONS PAR UTILISATEUR (« TrustPact ») et apprentissage — le
+  TrustPact préfigure notre chantier Supervised/M3 : l'axe caractère et
+  l'axe permissions étaient DÉJÀ liés dans la vision d'origine ;
+- des usages vivants : salon avec interpellation @agent, rituels
+  périodiques (l'éveil présenté par Aminata) — matière pour M1/composer
+  et les routines.
+Généalogie actée : Rekall (12/2025) → Veilleurs Cartae V2 → lentilles
+MAICompany → lentilles de profil Maicie (ARBITRÉ OUI par l'utilisateur le
+24/08 : intégration à la phase autonomie).
