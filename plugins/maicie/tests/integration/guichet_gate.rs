@@ -764,8 +764,11 @@ fn run_g1504(force_failure_after_spawn: bool) {
             panic!("échec G1504 injecté après le spawn : la garde doit nettoyer");
         }
         fixture.start_ephemeral_maicie();
-        fixture.wait_for_deposit();
         let tracked_id = created.message_id.to_string();
+        fixture.wait_for_emitter_completion();
+        fixture.assert_request_open(&tracked_id);
+        fixture.release_deposit();
+        fixture.wait_for_deposit();
 
         let deposit = fixture.deposit_args(&tracked_id);
 
@@ -875,6 +878,8 @@ struct RealGateFixture {
     config: PathBuf,
     database: PathBuf,
     release_deposit: PathBuf,
+    emitter_finished: PathBuf,
+    emitter_status: PathBuf,
     deposit_sentinel: PathBuf,
     deposit_output: PathBuf,
     adapter_error: PathBuf,
@@ -936,6 +941,8 @@ impl RealGateFixture {
         fs::create_dir_all(root.join(".config/bridget")).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let release_deposit = root.join("release-deposit");
+        let emitter_finished = root.join("maicie-emitter-finished");
+        let emitter_status = root.join("maicie-emitter-status");
         let deposit_sentinel = root.join("guichet-deposited");
         let deposit_output = root.join("guichet-deposit.out");
         let adapter_error = root.join("g1504-adapter.err");
@@ -963,6 +970,8 @@ impl RealGateFixture {
             config,
             database,
             release_deposit,
+            emitter_finished,
+            emitter_status,
             deposit_sentinel,
             deposit_output,
             adapter_error,
@@ -1013,13 +1022,14 @@ impl RealGateFixture {
         fs::write(
             &emitter,
             format!(
-                "#!/bin/sh\nread initialize\necho '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1}}}}'\nread session\necho '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"sessionId\":\"g1504-maicie-emitter\"}}}}'\n'{bridget}' send --from maicie --to g1504-agent --reply --timeout 60 --id '{tracked_id}' --issued-at {issued_at} --issuer-scope '{scope}' 'attestation de livraison attendue' > '{errors}.emitter' 2>&1\nsend_status=$?\n[ $send_status -eq 0 ] || grep -q 'ISSUE INCONNUE' '{errors}.emitter' || exit 41\n: > '{release_deposit}'\n",
+                "#!/bin/sh\nread initialize\necho '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1}}}}'\nread session\necho '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"sessionId\":\"g1504-maicie-emitter\"}}}}'\n'{bridget}' send --from maicie --to g1504-agent --reply --timeout 60 --id '{tracked_id}' --issued-at {issued_at} --issuer-scope '{scope}' 'attestation de livraison attendue' > '{errors}.emitter' 2>&1\nprintf '%s' \"$?\" > '{emitter_status}'\n: > '{emitter_finished}'\n",
                 bridget = self.bridget.display(),
                 tracked_id = created.message_id,
                 issued_at = issued_at,
                 scope = scope,
                 errors = self.adapter_error.display(),
-                release_deposit = self.release_deposit.display(),
+                emitter_finished = self.emitter_finished.display(),
+                emitter_status = self.emitter_status.display(),
             ),
         )
         .unwrap();
@@ -1150,6 +1160,30 @@ impl RealGateFixture {
         );
     }
 
+    /// Le résultat de `bridget send` reste volontairement non terminal au
+    /// premier passage (`outcome_unknown` est le contrat). Son texte et son
+    /// code de sortie ne sont pas l'oracle : la projection JSON `requests`
+    /// ci-dessous atteste la demande durable effectivement créée.
+    fn wait_for_emitter_completion(&self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if self.emitter_finished.exists() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "l'émetteur Maicie n'a pas terminé son envoi: statut={} sortie={}",
+            fs::read_to_string(&self.emitter_status).unwrap_or_default(),
+            fs::read_to_string(format!("{}.emitter", self.adapter_error.display()))
+                .unwrap_or_default(),
+        );
+    }
+
+    fn release_deposit(&self) {
+        fs::write(&self.release_deposit, []).expect("libération du dépôt G1504");
+    }
+
     fn deposit_args(&self, tracked_id: &str) -> Vec<String> {
         vec![
             "guichet".to_string(),
@@ -1196,12 +1230,7 @@ impl RealGateFixture {
     }
 
     fn assert_request_answered(&self, request_id: &str) {
-        let requests = isolated_bridget_command(&self.bridget)
-            .args(["requests", "--json"])
-            .env("HOME", &self.root)
-            .env("BRIDGET_AGENT_NAME", "maicie")
-            .output()
-            .unwrap();
+        let requests = self.maicie_requests();
         assert!(requests.status.success(), "requests: {:?}", requests.stderr);
         let requests: Value = serde_json::from_slice(&requests.stdout).unwrap();
         assert!(
@@ -1211,6 +1240,29 @@ impl RealGateFixture {
                 .iter()
                 .any(|request| { request["id"] == request_id && request["state"] == "answered" })
         );
+    }
+
+    fn assert_request_open(&self, request_id: &str) {
+        let requests = self.maicie_requests();
+        assert!(requests.status.success(), "requests: {:?}", requests.stderr);
+        let requests: Value = serde_json::from_slice(&requests.stdout).unwrap();
+        assert!(
+            requests
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|request| request["id"] == request_id && request["state"] == "open"),
+            "l'envoi doit créer la demande ouverte avant la relève: {requests}"
+        );
+    }
+
+    fn maicie_requests(&self) -> std::process::Output {
+        isolated_bridget_command(&self.bridget)
+            .args(["requests", "--json"])
+            .env("HOME", &self.root)
+            .env("BRIDGET_AGENT_NAME", "maicie")
+            .output()
+            .unwrap()
     }
 
     fn stop_agents_best_effort(&self) -> bool {
