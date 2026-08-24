@@ -850,3 +850,29 @@ les blocs G : ce sont des compléments, pas des prérequis.
   les tests rapides et déterministes, jouables par chaque agent en quelques
   secondes, des campagnes lentes ou mesurées, jouées au merge. Aujourd'hui
   tout est mélangé, donc tout coûte le prix du plus lent.
+- **ARBITRAGE : une sévérité DÉRIVÉE n'est pas une sévérité JUGÉE.** Question
+  remontée le 2026-08-24 par l'agent de la session 017, qui a refusé de
+  trancher seul : pour que le dû s'inscrive tout seul, il faudrait qu'un
+  gate échoué ou une revue qui amende laissent une trace — mais toute trace
+  porte une sévérité, et l'inventer reviendrait à laisser Maicie juger, ce
+  que le cadre-loi interdit. Il s'est arrêté et m'a passé la question. Bonne
+  conduite : c'est un arbitrage de frontière, pas un détail d'implémentation.
+  DÉCISION. La sévérité peut être DÉRIVÉE du TYPE DE FAIT, à trois
+  conditions cumulatives : (1) la correspondance est écrite À L'AVANCE dans
+  la conception, pas décidée par le code au moment de l'écriture ; (2) elle
+  est TOTALE et sans exception sur les types couverts — pas de « selon le
+  contexte », qui serait du jugement déguisé ; (3) tout fait qui ne tombe
+  dans AUCUNE case part en attente de qualification, donc chez un humain.
+  Le défaut est l'attente, jamais l'invention.
+  MOTIF. Traduire « ce gate a échoué » en « bloquant » n'est pas une
+  évaluation : c'est la définition d'un gate. Traduire un verdict AMENDER en
+  « majeur » n'est pas une opinion : c'est ce que le relecteur a déjà décidé
+  en écrivant AMENDER. Dans les deux cas la décision est prise EN AMONT par
+  un humain ou par un fait vérifiable ; Maicie ne fait que la transcrire.
+  Ce qui reste interdit : classer par importance, calculer une priorité,
+  décider qu'un constat mérite attention plus qu'un autre. La frontière est
+  entre TRANSCRIRE une décision prise ailleurs et FORMER un avis.
+  CONSÉQUENCE PRATIQUE : la table de correspondance doit être versionnée
+  dans la spec 017 et relue comme un contrat. Si un jour on hésite sur une
+  case, c'est le signe qu'elle n'appartient pas à la table — elle part en
+  attente.
