@@ -664,6 +664,21 @@ Puis il valide et recharge le service (`sshd -t` puis `systemctl reload ssh`). C
 reste limitée au compte concerné ; Bridget ne requiert ni port TCP public ni daemon Bridget sur
 l'hôte Linux fédéré.
 
+## Consulter une vue distante (lecture seule)
+
+Depuis le portable, une seule commande lance le relais sur la boucle locale de
+l'hôte distant, crée un tunnel SSH lié à `127.0.0.1` sur les deux machines et
+ouvre la page dans le navigateur local :
+
+```bash
+/Users/moi/Nextcloud/10.Scripts/bridget/scripts/open-remote-ui.sh user@exemple.tld --maicie-config /home/user/.config/maicie/config.json
+```
+
+`--maicie-config` est un chemin absolu **sur l'hôte distant**. Le tunnel reste
+attaché au terminal et se ferme avec `Ctrl-C`; le jeton et le relais HTTP ne
+sont jamais publiés sur le réseau. Cette page est strictement en lecture seule :
+elle ne peut ni lancer, ni arrêter, ni approuver quoi que ce soit.
+
 ## Licence
 
 MIT — voir [LICENSE](LICENSE).
