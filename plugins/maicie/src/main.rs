@@ -16,6 +16,7 @@ use maicie::app::{
 use maicie::bridget_client::{
     AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits,
 };
+use maicie::catalogue::{self, AppendOutcome, CatalogueEntry, CatalogueError, CatalogueJournal};
 use maicie::config::{ConfigError, MaicieConfig};
 use maicie::domain::{
     ClasseDuree, DecisionCoordination, Delegation, EtatFlux, ObjectifCoordonne, SourceSnapshot,
@@ -67,6 +68,7 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
         Command::Status(status_args) => run_status(status_args),
         Command::Objective(objective_args) => run_objective(objective_args),
         Command::Profile(profile_args) => run_profile(profile_args),
+        Command::Registre(registre_args) => run_registre(registre_args),
     }
 }
 
@@ -621,6 +623,21 @@ enum Command {
     Status(StatusArgs),
     Objective(ObjectiveArgs),
     Profile(ProfileArgs),
+    Registre(RegistreArgs),
+}
+
+#[derive(Debug)]
+struct RegistreArgs {
+    config: PathBuf,
+    action: RegistreAction,
+}
+
+#[derive(Debug)]
+enum RegistreAction {
+    /// Vue humaine d'autorité : projection pure, aucune écriture.
+    List,
+    /// Append d'une ligne JSON fermée `add` (idempotent aux octets identiques).
+    Add { line: String },
 }
 
 #[derive(Debug)]
@@ -690,7 +707,72 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
         "status" => parse_status(tail).map(Command::Status),
         "objective" => parse_objective(tail).map(Command::Objective),
         "profile" => parse_profile(tail).map(Command::Profile),
+        "registre" => parse_registre(tail).map(Command::Registre),
         _ => Err(CliError::Usage("commande inconnue : delegate attendu")),
+    }
+}
+
+fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
+    let Some((verb, tail)) = arguments.split_first() else {
+        return Err(CliError::Usage("action registre obligatoire : list ou add"));
+    };
+    let mut config = None;
+    let mut line = None;
+    let mut index = 0;
+    while index < tail.len() {
+        match tail[index].as_str() {
+            "--config" => set_once_path(&mut config, next_value(tail, &mut index, "--config")?)?,
+            "--line" => {
+                set_once_string(&mut line, next_value(tail, &mut index, "--line")?, "line")?
+            }
+            _ => return Err(CliError::Usage("option registre inconnue")),
+        }
+        index += 1;
+    }
+    let config = config.ok_or(CliError::Usage("--config est obligatoire"))?;
+    let action = match verb.as_str() {
+        "list" => {
+            if line.is_some() {
+                return Err(CliError::Usage("--line interdit pour registre list"));
+            }
+            RegistreAction::List
+        }
+        "add" => RegistreAction::Add {
+            line: line.ok_or(CliError::Usage("--line est obligatoire pour registre add"))?,
+        },
+        _ => return Err(CliError::Usage("action registre inconnue : list ou add")),
+    };
+    Ok(RegistreArgs { config, action })
+}
+
+fn run_registre(arguments: RegistreArgs) -> Result<String, CliError> {
+    let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let catalogue_path = config.catalogue_path.ok_or(CliError::Usage(
+        "catalogue_path absent de la configuration : registre exige un journal déclaré",
+    ))?;
+    match arguments.action {
+        RegistreAction::List => {
+            let mut journal =
+                CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
+            let entries = journal.read_entries().map_err(CliError::Catalogue)?;
+            let view = catalogue::project_registre(&entries);
+            Ok(catalogue::render_registre_list(&view))
+        }
+        RegistreAction::Add { line } => {
+            let entry = catalogue::parse_closed_line(line.trim()).map_err(CliError::Catalogue)?;
+            let CatalogueEntry::Add(add) = entry else {
+                return Err(CliError::Usage(
+                    "registre add n'accepte qu'une ligne kind=add fermée",
+                ));
+            };
+            let mut journal =
+                CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
+            let outcome = journal.append_add(add).map_err(CliError::Catalogue)?;
+            Ok(match outcome {
+                AppendOutcome::Appended => "registre add: appended".to_string(),
+                AppendOutcome::IdempotentNoop => "registre add: idempotent_noop".to_string(),
+            })
+        }
     }
 }
 
@@ -1479,6 +1561,7 @@ fn flux_name(state: EtatFlux) -> &'static str {
 enum CliError {
     Usage(&'static str),
     Configuration(ConfigError),
+    Catalogue(CatalogueError),
     Bridget(BridgetClientError),
     Delegate(DelegateError),
     TargetUnknownBridget(String),
@@ -1497,7 +1580,7 @@ impl CliError {
     fn exit_code(&self) -> u8 {
         match self {
             Self::Usage(_) => EXIT_USAGE,
-            Self::Configuration(_) => EXIT_CONFIGURATION,
+            Self::Configuration(_) | Self::Catalogue(_) => EXIT_CONFIGURATION,
             Self::Bridget(_) => EXIT_BRIDGET,
             Self::Delegate(DelegateError::Store(_)) | Self::Store(_) => EXIT_STORE,
             Self::Reconcile(ReconcileError::Store(_)) => EXIT_STORE,
@@ -1517,6 +1600,7 @@ impl CliError {
         match self {
             Self::Usage(_) => "usage",
             Self::Configuration(_) => "configuration",
+            Self::Catalogue(_) => "catalogue",
             Self::Bridget(_) => "bridget",
             Self::Delegate(DelegateError::EnvelopeMismatch) => "envelope_mismatch",
             Self::Delegate(DelegateError::TargetUnavailable(_)) => "target_unavailable",
@@ -1545,6 +1629,7 @@ impl fmt::Display for CliError {
         match self {
             Self::Usage(detail) => write!(formatter, "usage invalide : {detail}"),
             Self::Configuration(error) => error.fmt(formatter),
+            Self::Catalogue(error) => error.fmt(formatter),
             Self::Bridget(error) => error.fmt(formatter),
             Self::Delegate(error) => error.fmt(formatter),
             Self::TargetUnknownBridget(target) => write!(
@@ -1574,8 +1659,8 @@ impl fmt::Display for CliError {
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, DelegateError, DelegateOutput, candidates_from, delegate_error_for_cli,
-        parse_command, sanitize_terminal,
+        Command, DelegateError, DelegateOutput, RegistreAction, RegistreArgs, candidates_from,
+        delegate_error_for_cli, parse_command, sanitize_terminal,
     };
     use maicie::bridget_client::AgentInfo;
     use maicie::config::{DurationClasses, MaicieConfig, ProfileConfig};
@@ -1622,6 +1707,7 @@ mod tests {
                 long_secs: 90,
             },
             status_capture_budget_ms: None,
+            catalogue_path: None,
             profiles: vec![ProfileConfig {
                 id: "code-review".to_string(),
                 agent_name: Some("coderBridget".to_string()),
@@ -1701,5 +1787,40 @@ mod tests {
             error.to_string(),
             "agent Bridget connecté mais sans profil Maicie : cursorbridget; ajoutez un profil dans /tmp/maicie.json avec \"agent_name\": \"cursorbridget\""
         );
+    }
+
+    #[test]
+    fn registre_list_et_add_passent_par_la_commande_mince() {
+        let list = parse_command(&[
+            "registre".to_string(),
+            "list".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            list,
+            Command::Registre(RegistreArgs {
+                action: RegistreAction::List,
+                ..
+            })
+        ));
+        let add = parse_command(&[
+            "registre".to_string(),
+            "add".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+            "--line".to_string(),
+            r#"{"v":1,"kind":"add","id":"c1","date":"2026-08-24T04:00:00+02:00","mission_source":{"kind":"incident","id":"i1"},"severity":"info","text":"x"}"#.to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            add,
+            Command::Registre(RegistreArgs {
+                action: RegistreAction::Add { .. },
+                ..
+            })
+        ));
+        assert!(parse_command(&["registre".to_string(), "list".to_string()]).is_err());
     }
 }

@@ -40,6 +40,11 @@ pub struct MaicieConfig {
     /// remplace jamais cette absence par une valeur implicite.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_capture_budget_ms: Option<u64>,
+    /// Chemin absolu du journal de catalogue v1 déclaré pour le projet hôte.
+    /// Absent : les commandes hors greffière restent valides ; `registre`
+    /// exige sa présence. Aucune valeur implicite n'est inventée.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalogue_path: Option<PathBuf>,
     pub profiles: Vec<ProfileConfig>,
 }
 
@@ -130,12 +135,22 @@ impl MaicieConfig {
             path: path.to_path_buf(),
             source,
         })?;
+        // Pas de racine projet déduite du parent du fichier de config : un
+        // dépôt peut placer la config dans un sous-dossier (.maicie/) tandis
+        // que le journal reste à la racine versionnée. L'appartenance au
+        // projet reste une déclaration absolue explicite.
         config.validate()?;
         Ok(config)
     }
 
     /// Valide une configuration construite en memoire avant tout effet de bord.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        self.validate_in_project(None)
+    }
+
+    /// Valide la configuration ; `project_root` borne optionnellement le
+    /// catalogue (tests et outils qui connaissent déjà la racine hôte).
+    pub fn validate_in_project(&self, project_root: Option<&Path>) -> Result<(), ConfigError> {
         if self.version != CONFIG_VERSION {
             return Err(ConfigError::validation(
                 "version",
@@ -192,6 +207,15 @@ impl MaicieConfig {
             }
             _ => {}
         }
+        if let Some(catalogue_path) = &self.catalogue_path {
+            validate_catalogue_path_field(catalogue_path, project_root)?;
+            if catalogue_path == &self.database_path || catalogue_path == &self.bridget_socket {
+                return Err(ConfigError::validation(
+                    "catalogue_path",
+                    "le catalogue doit etre distinct du socket Bridget et de la base SQLite",
+                ));
+            }
+        }
         validate_profiles(&self.profiles)
     }
 }
@@ -210,6 +234,15 @@ fn validate_absolute_path(field: &'static str, path: &Path) -> Result<(), Config
         ));
     }
     Ok(())
+}
+
+fn validate_catalogue_path_field(
+    catalogue_path: &Path,
+    project_root: Option<&Path>,
+) -> Result<(), ConfigError> {
+    validate_absolute_path("catalogue_path", catalogue_path)?;
+    crate::catalogue::validate_catalogue_path(catalogue_path, project_root)
+        .map_err(|error| ConfigError::validation("catalogue_path", error.to_string()))
 }
 
 fn validate_profiles(profiles: &[ProfileConfig]) -> Result<(), ConfigError> {
