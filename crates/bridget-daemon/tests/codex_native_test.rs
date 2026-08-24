@@ -88,6 +88,31 @@ fn start_native_wrapper(root: &Path, extra_environment: &[(String, String)]) -> 
     ChildGuard(child)
 }
 
+fn write_native_registry(root: &Path, script: &str) {
+    let registry = serde_json::json!({
+        "agents": {
+            "codex": {
+                "command": "sh",
+                "args": ["-c", script],
+                "protocol": "codex_app_server",
+                "permissions": "allow",
+                "queue_capacity": 4,
+                "notify_timeout_secs": 3,
+                "forbidden_env": [],
+                "pass_env": []
+            }
+        }
+    });
+    let registry_path = root.join(".config/bridget/agents.json");
+    fs::write(
+        &registry_path,
+        serde_json::to_vec(&registry).expect("registre JSON"),
+    )
+    .expect("registre privé");
+    fs::set_permissions(&registry_path, fs::Permissions::from_mode(0o600))
+        .expect("permissions registre");
+}
+
 fn sender(socket: &Path) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
     let stream = UnixStream::connect(socket).expect("connexion expéditeur");
     stream
@@ -147,36 +172,16 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {
         case "$line" in
             *'"method":"initialize"'*) printf '%s\n' '{"id":1,"result":{"userAgent":"fake","codexHome":"/tmp","platformFamily":"unix","platformOs":"macos"}}' ;;
             *'"method":"initialized"'*) started=1 ;;
-            *'"method":"thread/start"'*) printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-native"}}}' ;;
+            *'"method":"thread/start"'*) printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-native"},"model":"gpt-5.6-terra","reasoningEffort":"high"}}' ;;
+            *'"method":"account/rateLimits/read"'*) printf '%s\n' '{"id":3,"result":{"rateLimits":{"primary":{"usedPercent":42,"windowDurationMins":300,"resetsAt":1787572200},"rateLimitReachedType":null}}}' ;;
             *'"method":"turn/start"'*)
                 [ "$started" = 1 ] || exit 72
-                printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-native"}}}'
+                printf '%s\n' '{"id":4,"result":{"turn":{"id":"turn-native"}}}'
                 printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"item","delta":"réponse gpt-5.6-terra"}}'
                 printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"completed","items":[]}}}' ;;
         esac
     done"#;
-    let registry = serde_json::json!({
-        "agents": {
-            "codex": {
-                "command": "sh",
-                "args": ["-c", script],
-                "protocol": "codex_app_server",
-                "permissions": "allow",
-                "queue_capacity": 4,
-                "notify_timeout_secs": 3,
-                "forbidden_env": [],
-                "pass_env": []
-            }
-        }
-    });
-    let registry_path = root.join(".config/bridget/agents.json");
-    fs::write(
-        &registry_path,
-        serde_json::to_vec(&registry).expect("registre JSON"),
-    )
-    .expect("registre privé");
-    fs::set_permissions(&registry_path, fs::Permissions::from_mode(0o600))
-        .expect("permissions registre");
+    write_native_registry(&root, script);
 
     let daemon = start_daemon(&root);
     let wrapper = start_native_wrapper(&root, &[]);
@@ -200,6 +205,40 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {
             other => panic!("attach natif refusé: {other:?}"),
         }
     };
+    write_frame(&mut sender_writer, &WrapperToDaemon::ListAgents);
+    let agents = match read_frame(&mut sender_reader) {
+        DaemonToWrapper::AgentList { agents } => agents,
+        other => panic!("annuaire Codex natif inattendu: {other:?}"),
+    };
+    let codex = agents
+        .iter()
+        .find(|agent| agent.name == "codex-native")
+        .expect("agent Codex natif absent de l'annuaire");
+    assert_eq!(codex.model.as_deref(), Some("gpt-5.6-terra"));
+    assert_eq!(codex.effort.as_deref(), Some("high"));
+    assert!(matches!(
+        codex.rate_limit.as_ref(),
+        Some(limit)
+            if limit.window == "primary/300m"
+                && limit.status == "available"
+                && limit.resets_at == Some(1_787_572_200)
+    ));
+    let who = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .arg("who")
+        .env_clear()
+        .env("HOME", &root)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("exécution who réelle");
+    assert!(
+        who.status.success(),
+        "who réel échoue: {}",
+        String::from_utf8_lossy(&who.stderr)
+    );
+    let who = String::from_utf8(who.stdout).expect("who UTF-8");
+    assert!(who.contains("EFFORT") && who.contains("LIMITE"));
+    assert!(who.contains("high"));
+    assert!(who.contains("primary/300m"));
     let mut request = BridgetMessage::new("sender-native", "codex-native", "mission réelle");
     request.reply = true;
     write_frame(&mut sender_writer, &WrapperToDaemon::Send(request.clone()));
@@ -237,6 +276,48 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {
         }
     }
     assert!(saw_journal, "attach ne reçoit aucun journal natif");
+    drop(wrapper);
+    drop(daemon);
+    fs::remove_dir_all(root).expect("nettoyage HOME isolé");
+}
+
+#[test]
+fn wrapper_codex_sans_signal_laisse_effort_et_limite_inconnus() {
+    let root = root();
+    let script = r#"while IFS= read -r line; do
+        case "$line" in
+            *'"method":"initialize"'*) printf '%s\n' '{"id":1,"result":{"userAgent":"fake","codexHome":"/tmp","platformFamily":"unix","platformOs":"macos"}}' ;;
+            *'"method":"thread/start"'*) printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-native"}}}' ;;
+            *'"method":"account/rateLimits/read"'*) printf '%s\n' '{"id":3,"result":{}}' ;;
+        esac
+    done"#;
+    write_native_registry(&root, script);
+
+    let daemon = start_daemon(&root);
+    let wrapper = start_native_wrapper(&root, &[]);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let (mut sender_reader, mut sender_writer) = sender(&socket);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        write_frame(&mut sender_writer, &WrapperToDaemon::ListAgents);
+        match read_frame(&mut sender_reader) {
+            DaemonToWrapper::AgentList { agents }
+                if agents.iter().any(|agent| agent.name == "codex-native") =>
+            {
+                let codex = agents
+                    .iter()
+                    .find(|agent| agent.name == "codex-native")
+                    .expect("agent Codex natif absent");
+                assert!(codex.effort.is_none(), "effort inventé: {codex:?}");
+                assert!(codex.rate_limit.is_none(), "limite inventée: {codex:?}");
+                break;
+            }
+            DaemonToWrapper::AgentList { .. } if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            other => panic!("annuaire sans signal inattendu: {other:?}"),
+        }
+    }
     drop(wrapper);
     drop(daemon);
     fs::remove_dir_all(root).expect("nettoyage HOME isolé");
@@ -302,6 +383,39 @@ fn gate_reel_codex_app_server_gpt_5_6_terra_et_attach() {
             other => panic!("attach Codex réel refusé: {other:?}"),
         }
     };
+    write_frame(&mut sender_writer, &WrapperToDaemon::ListAgents);
+    let agents = match read_frame(&mut sender_reader) {
+        DaemonToWrapper::AgentList { agents } => agents,
+        other => panic!("annuaire Codex réel inattendu: {other:?}"),
+    };
+    let codex = agents
+        .iter()
+        .find(|agent| agent.name == "codex-native")
+        .expect("agent Codex réel absent de l'annuaire");
+    assert_eq!(codex.model.as_deref(), Some("gpt-5.6-terra"));
+    assert!(
+        codex.effort.is_some(),
+        "effort Codex non attesté: {codex:?}"
+    );
+    assert!(
+        codex.rate_limit.is_some(),
+        "limite Codex non attestée: {codex:?}"
+    );
+    let who = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .arg("who")
+        .env_clear()
+        .env("HOME", &root)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("exécution who Codex réelle");
+    assert!(
+        who.status.success(),
+        "who Codex réel échoue: {}",
+        String::from_utf8_lossy(&who.stderr)
+    );
+    let who = String::from_utf8(who.stdout).expect("who Codex réel UTF-8");
+    assert!(who.contains(codex.effort.as_deref().expect("effort attesté")));
+    assert!(who.contains(&codex.rate_limit.as_ref().expect("limite attestée").window));
     let mut request = BridgetMessage::new(
         "sender-native",
         "codex-native",

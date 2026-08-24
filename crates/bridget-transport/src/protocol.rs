@@ -763,6 +763,9 @@ pub enum RuntimeSource {
     /// Lu dans le fichier rollout d'un agent Codex.
     #[serde(rename = "codex-rollout")]
     CodexRollout,
+    /// Réponse `thread/start` effectivement lue du pilote Codex natif.
+    #[serde(rename = "codex-app-server")]
+    CodexAppServer,
     /// Rapporté par le hook Stop d'un agent Claude Code.
     #[serde(rename = "claude-hook")]
     ClaudeHook,
@@ -778,6 +781,7 @@ impl std::fmt::Display for RuntimeSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let label = match self {
             RuntimeSource::CodexRollout => "codex-rollout",
+            RuntimeSource::CodexAppServer => "codex-app-server",
             RuntimeSource::ClaudeHook => "claude-hook",
             RuntimeSource::ClaudeTranscript => "claude-transcript",
             RuntimeSource::Declared => "declared",
@@ -793,12 +797,16 @@ pub enum RateLimitSource {
     /// Événement `rate_limit_event` effectivement lu du flux Claude natif.
     #[serde(rename = "claude-stream-json")]
     ClaudeStreamJson,
+    /// Réponse ou notification `account/rateLimits/*` de Codex app-server.
+    #[serde(rename = "codex-app-server")]
+    CodexAppServer,
 }
 
 impl std::fmt::Display for RateLimitSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RateLimitSource::ClaudeStreamJson => f.write_str("claude-stream-json"),
+            RateLimitSource::CodexAppServer => f.write_str("codex-app-server"),
         }
     }
 }
@@ -1529,6 +1537,24 @@ mod tests {
             RuntimeSource::ClaudeTranscript.to_string(),
             "claude-transcript"
         );
+    }
+
+    #[test]
+    fn runtime_et_limite_codex_app_server_sont_fermes() {
+        let runtime = encode(&RuntimeSource::CodexAppServer).unwrap();
+        assert_eq!(runtime, "\"codex-app-server\"");
+        assert_eq!(
+            decode::<RuntimeSource>(&runtime).unwrap(),
+            RuntimeSource::CodexAppServer
+        );
+        let limit = encode(&RateLimitSource::CodexAppServer).unwrap();
+        assert_eq!(limit, "\"codex-app-server\"");
+        assert_eq!(
+            decode::<RateLimitSource>(&limit).unwrap(),
+            RateLimitSource::CodexAppServer
+        );
+        assert!(decode::<RuntimeSource>("\"codex-app-server-futur\"").is_err());
+        assert!(decode::<RateLimitSource>("\"codex-app-server-futur\"").is_err());
     }
 
     #[test]
