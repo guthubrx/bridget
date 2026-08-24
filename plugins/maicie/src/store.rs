@@ -365,9 +365,29 @@ struct ApprovedSpawnOrder {
 }
 
 impl MaicieStore {
-    /// Ouvre la base privée, applique les migrations idempotentes et charge
-    /// l'identité stable utilisée par le contrat client Bridget.
+    /// Ouvre la base privée sans migrer un schéma déjà versionné.
+    ///
+    /// Une base neuve (`user_version = 0` et aucun objet utilisateur dans
+    /// `sqlite_master`) est bootstrappée : créer n'est pas migrer. Une base
+    /// peuplée, même avec `user_version` remis à 0, ou dont le schéma est
+    /// antérieur au binaire, est refusée tant que l'appelant n'a pas consenti
+    /// via [`Self::open_and_migrate`].
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        Self::open_with_migration_consent(path, false)
+    }
+
+    /// Ouvre la base privée et applique les migrations idempotentes jusqu'à
+    /// la version de schéma portée par ce binaire. Réservé au consentement
+    /// explicite (CLI `maicie migrate --config <chemin>` / flag `--migrate`) :
+    /// c'est le seul chemin qui peut avancer un schéma déjà versionné.
+    pub fn open_and_migrate(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        Self::open_with_migration_consent(path, true)
+    }
+
+    fn open_with_migration_consent(
+        path: impl AsRef<Path>,
+        allow_upgrade: bool,
+    ) -> Result<Self, StoreError> {
         let path = path.as_ref();
         validate_database_path(path)?;
         prepare_private_database(path)?;
@@ -382,7 +402,7 @@ impl MaicieStore {
                  PRAGMA synchronous = FULL;",
             )
             .map_err(StoreError::Sql)?;
-        migrate(&mut connection)?;
+        migrate(&mut connection, allow_upgrade)?;
         set_wal_mode(&connection)?;
         let issuer_scope = load_or_create_issuer_scope(&mut connection)?;
 
@@ -6386,11 +6406,14 @@ fn parse_tracked_request_kind(value: &str) -> Result<TypeEffetDemandeSuivie, Sto
     }
 }
 
-fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
+fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), StoreError> {
     // L'ouverture est un chemin concurrent normal : plusieurs processus
     // Maicie peuvent démarrer avant qu'un seul ait fini de poser le schéma.
     // Le verrou IMMEDIATE couvre donc la lecture de version et toutes les
     // migrations, pour que le second ouvre ensuite un schéma déjà cohérent.
+    // Un refus (schéma trop récent ou migration non consentie) sort avant
+    // toute écriture : le Drop de la transaction annule le verrou sans
+    // mutation durable — oracle : user_version ET sqlite_master inchangés.
     let tx = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(StoreError::Sql)?;
@@ -6402,6 +6425,20 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
             found: current_version,
             supported: SCHEMA_VERSION,
         });
+    }
+    let schema_populated = database_has_user_schema(&tx)?;
+    // Bootstrap sans flag : UNIQUEMENT user_version == 0 ET base vide.
+    // Une base peuplée avec user_version remis à 0 n'est PAS neuve — c'est
+    // une migration déguisée (porte v0) et exige le même consentement.
+    if !allow_upgrade {
+        let needs_consent = (current_version > 0 && current_version < SCHEMA_VERSION)
+            || (current_version == 0 && schema_populated);
+        if needs_consent {
+            return Err(StoreError::MigrationRequired {
+                found: current_version,
+                supported: SCHEMA_VERSION,
+            });
+        }
     }
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (\n\
@@ -6849,6 +6886,21 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(StoreError::Sql)?;
     tx.commit().map_err(StoreError::Sql)
+}
+
+/// Vrai si la base contient déjà un objet de schéma utilisateur.
+/// Les tables/index internes `sqlite_*` ne comptent pas : un fichier SQLite
+/// fraîchement créé reste « vide » au sens bootstrap.
+fn database_has_user_schema(tx: &Transaction<'_>) -> Result<bool, StoreError> {
+    let count: i64 = tx
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master\n\
+             WHERE name NOT LIKE 'sqlite_%'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::Sql)?;
+    Ok(count > 0)
 }
 
 fn migrate_outbox_to_rejected_state(tx: &Transaction<'_>) -> Result<(), StoreError> {
@@ -7661,6 +7713,11 @@ pub enum StoreError {
         found: i64,
         supported: i64,
     },
+    /// Schéma antérieur au binaire : migration refusée sans consentement.
+    MigrationRequired {
+        found: i64,
+        supported: i64,
+    },
     Io(std::io::Error),
     Sql(rusqlite::Error),
     Json(serde_json::Error),
@@ -7687,6 +7744,10 @@ impl fmt::Display for StoreError {
                 formatter,
                 "schéma SQLite {found} non supporté (maximum {supported})"
             ),
+            Self::MigrationRequired { found, supported } => write!(
+                formatter,
+                "schéma SQLite {found} antérieur au binaire (attend {supported}) ; relancer avec : maicie migrate --config <chemin>"
+            ),
             Self::Io(source) => write!(formatter, "I/O store impossible : {source}"),
             Self::Sql(source) => write!(formatter, "SQLite impossible : {source}"),
             Self::Json(source) => write!(formatter, "JSON store impossible : {source}"),
@@ -7710,7 +7771,8 @@ impl std::error::Error for StoreError {
             | Self::EnvelopeMismatch
             | Self::NotFound(_)
             | Self::Corrupt(_)
-            | Self::UnsupportedSchema { .. } => None,
+            | Self::UnsupportedSchema { .. }
+            | Self::MigrationRequired { .. } => None,
         }
     }
 }

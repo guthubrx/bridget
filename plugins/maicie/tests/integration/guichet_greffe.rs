@@ -394,7 +394,7 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
         .unwrap();
     drop(connection);
 
-    let mut store = MaicieStore::open(&database).unwrap();
+    let mut store = MaicieStore::open_and_migrate(&database).unwrap();
     assert_eq!(store.schema_version().unwrap(), 14);
     assert_eq!(
         store

@@ -66,23 +66,51 @@ fn main() -> ExitCode {
 }
 
 fn run(arguments: Vec<String>) -> Result<String, CliError> {
-    let command = parse_command(&arguments)?;
+    let (migrate, rest) = peel_migrate_flag(&arguments)?;
+    let command = parse_command(&rest)?;
     match command {
-        Command::Delegate(delegate_args) => run_delegate(delegate_args),
-        Command::Status(status_args) => run_status(status_args),
-        Command::Objective(objective_args) => run_objective(objective_args),
-        Command::Profile(profile_args) => run_profile(profile_args),
-        Command::Registre(registre_args) => run_registre(registre_args),
-        Command::Plage(plage_args) => run_plage(plage_args),
+        Command::Delegate(delegate_args) => run_delegate(delegate_args, migrate),
+        Command::Status(status_args) => run_status(status_args, migrate),
+        Command::Objective(objective_args) => run_objective(objective_args, migrate),
+        Command::Profile(profile_args) => run_profile(profile_args, migrate),
+        Command::Registre(registre_args) => run_registre(registre_args, migrate),
+        Command::Plage(plage_args) => run_plage(plage_args, migrate),
+        Command::Migrate(migrate_args) => {
+            if migrate {
+                return Err(CliError::Usage(
+                    "maicie migrate implique déjà le consentement ; retirez --migrate",
+                ));
+            }
+            run_migrate(migrate_args)
+        }
     }
 }
 
-fn run_status(arguments: StatusArgs) -> Result<String, CliError> {
+/// Extrait le consentement explicite de migration (flag global `--migrate`).
+/// Le flag peut apparaître avant ou après le verbe ; une duplication est un
+/// usage invalide.
+fn peel_migrate_flag(arguments: &[String]) -> Result<(bool, Vec<String>), CliError> {
+    let mut migrate = false;
+    let mut rest = Vec::with_capacity(arguments.len());
+    for argument in arguments {
+        if argument.as_str() == "--migrate" {
+            if migrate {
+                return Err(CliError::Usage("option --migrate dupliquée"));
+            }
+            migrate = true;
+        } else {
+            rest.push(argument.clone());
+        }
+    }
+    Ok((migrate, rest))
+}
+
+fn run_status(arguments: StatusArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
     let ReconciledStore {
         store,
         coordination: coordination_report,
-    } = open_store_with_reconciliation(&config, BridgetClientLimits::default())?;
+    } = open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)?;
     let snapshots = status(&store, arguments.objective_id).map_err(CliError::Objective)?;
     let sources = capture_status_sources(&config, &delegated_participants(&snapshots));
     render_objective_output(
@@ -273,8 +301,8 @@ fn capture_runtime_reason(error: &maicie::runtime::RuntimeError) -> String {
     }
 }
 
-fn run_objective(arguments: ObjectiveArgs) -> Result<String, CliError> {
-    let mut store = open_store(&arguments.config)?;
+fn run_objective(arguments: ObjectiveArgs, migrate: bool) -> Result<String, CliError> {
+    let mut store = open_store(&arguments.config, migrate)?;
     let output = match arguments.action {
         ObjectiveAction::AddParticipant { participant } => {
             let decision = add_participant(&mut store, arguments.objective_id, &participant)
@@ -310,9 +338,9 @@ fn run_objective(arguments: ObjectiveArgs) -> Result<String, CliError> {
     render_objective_output(output, arguments.json)
 }
 
-fn open_store(config_path: &PathBuf) -> Result<MaicieStore, CliError> {
+fn open_store(config_path: &PathBuf, migrate: bool) -> Result<MaicieStore, CliError> {
     let config = MaicieConfig::load(config_path).map_err(CliError::Configuration)?;
-    open_store_with_reconciliation(&config, BridgetClientLimits::default())
+    open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)
         .map(|opened| opened.store)
 }
 
@@ -321,14 +349,24 @@ struct ReconciledStore {
     coordination: CoordinationReconcileReport,
 }
 
+fn open_maicie_store(path: &std::path::Path, migrate: bool) -> Result<MaicieStore, CliError> {
+    if migrate {
+        MaicieStore::open_and_migrate(path)
+    } else {
+        MaicieStore::open(path)
+    }
+    .map_err(CliError::Store)
+}
+
 /// Toute commande qui ouvre la base rejoue d'abord les outboxes pendantes dans
 /// une fenêtre I/O bornée. L'indisponibilité Bridget laisse la ligne durable
 /// pending ; les erreurs de contrat restent explicites au CLI.
 fn open_store_with_reconciliation(
     config: &MaicieConfig,
     limits: BridgetClientLimits,
+    migrate: bool,
 ) -> Result<ReconciledStore, CliError> {
-    let mut store = MaicieStore::open(&config.database_path).map_err(CliError::Store)?;
+    let mut store = open_maicie_store(&config.database_path, migrate)?;
     reconcile_pending(&mut store, config, limits)?;
     reconcile_activation_startup_at(&mut store, &config.bridget_socket, unix_now()?)
         .map_err(CliError::Reconcile)?;
@@ -359,10 +397,10 @@ fn reconcile_pending(
         .map_err(CliError::Reconcile)
 }
 
-fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
+fn run_delegate(arguments: DelegateArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
     let limits = BridgetClientLimits::default();
-    let mut store = open_store_with_reconciliation(&config, limits)?.store;
+    let mut store = open_store_with_reconciliation(&config, limits, migrate)?.store;
     let client =
         BridgetClient::connect_with_limits(&config.bridget_socket, store.issuer_scope(), limits)
             .map_err(CliError::Bridget)?;
@@ -419,9 +457,10 @@ fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
 /// Expose le consentement local US4 sans jamais lancer de processus. La
 /// proposition ne fait qu'écrire l'approbation ; l'approbation ne produit que
 /// l'outbox, ensuite reprise par le protocole public Bridget.
-fn run_profile(arguments: ProfileArgs) -> Result<String, CliError> {
+fn run_profile(arguments: ProfileArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let mut store = open_store_with_reconciliation(&config, BridgetClientLimits::default())?.store;
+    let mut store =
+        open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)?.store;
     let now = unix_now()?;
     match arguments.action {
         ProfileAction::Propose {
@@ -674,6 +713,13 @@ enum Command {
     Profile(ProfileArgs),
     Registre(RegistreArgs),
     Plage(PlageArgs),
+    /// Consentement explicite : applique les migrations de schéma.
+    Migrate(MigrateArgs),
+}
+
+#[derive(Debug)]
+struct MigrateArgs {
+    config: PathBuf,
 }
 
 #[derive(Debug)]
@@ -799,8 +845,35 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
         "profile" => parse_profile(tail).map(Command::Profile),
         "registre" => parse_registre(tail).map(Command::Registre),
         "plage" => parse_plage(tail).map(Command::Plage),
-        _ => Err(CliError::Usage("commande inconnue : delegate attendu")),
+        "migrate" => parse_migrate(tail).map(Command::Migrate),
+        _ => Err(CliError::Usage(
+            "commande inconnue : delegate, status, objective, profile, registre, plage ou migrate",
+        )),
     }
+}
+
+fn parse_migrate(arguments: &[String]) -> Result<MigrateArgs, CliError> {
+    let mut config = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--config" => {
+                set_once_path(&mut config, next_value(arguments, &mut index, "--config")?)?
+            }
+            _ => return Err(CliError::Usage("option migrate inconnue")),
+        }
+        index += 1;
+    }
+    Ok(MigrateArgs {
+        config: config.ok_or(CliError::Usage("--config est obligatoire"))?,
+    })
+}
+
+fn run_migrate(arguments: MigrateArgs) -> Result<String, CliError> {
+    let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let store = MaicieStore::open_and_migrate(&config.database_path).map_err(CliError::Store)?;
+    let version = store.schema_version().map_err(CliError::Store)?;
+    Ok(format!("schéma migré vers {version}"))
 }
 
 fn parse_plage(arguments: &[String]) -> Result<PlageArgs, CliError> {
@@ -863,9 +936,9 @@ fn parse_plage(arguments: &[String]) -> Result<PlageArgs, CliError> {
     Ok(PlageArgs { config, action })
 }
 
-fn run_plage(arguments: PlageArgs) -> Result<String, CliError> {
+fn run_plage(arguments: PlageArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let mut store = MaicieStore::open(&config.database_path).map_err(CliError::Store)?;
+    let mut store = open_maicie_store(&config.database_path, migrate)?;
     match arguments.action {
         PlageAction::Reserve {
             resource,
@@ -1093,12 +1166,12 @@ fn parse_source_kind(value: &str) -> Result<catalogue::MissionSourceKind, CliErr
     }
 }
 
-fn run_registre(arguments: RegistreArgs) -> Result<String, CliError> {
+fn run_registre(arguments: RegistreArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
     let catalogue_path = config.catalogue_path.ok_or(CliError::Usage(
         "catalogue_path absent de la configuration : registre exige un journal déclaré",
     ))?;
-    let store = MaicieStore::open(&config.database_path).map_err(CliError::Store)?;
+    let store = open_maicie_store(&config.database_path, migrate)?;
     let mut journal = CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
     // T1710 : réconciliation idempotente au fil des commandes catalogue — jamais
     // en boucle résidente. Une clôture durable manquée est rattrapée ici.
@@ -2309,7 +2382,7 @@ impl fmt::Display for CliError {
 mod tests {
     use super::{
         Command, DelegateError, DelegateOutput, RegistreAction, RegistreArgs, candidates_from,
-        delegate_error_for_cli, parse_command, sanitize_terminal,
+        delegate_error_for_cli, parse_command, peel_migrate_flag, sanitize_terminal,
     };
     use maicie::bridget_client::AgentInfo;
     use maicie::config::{DurationClasses, MaicieConfig, ProfileConfig};
@@ -2543,5 +2616,26 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn parse_migrate_exige_config() {
+        assert!(parse_command(&["migrate".to_string()]).is_err());
+        let command = parse_command(&[
+            "migrate".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(command, Command::Migrate(_)));
+    }
+
+    #[test]
+    fn peel_migrate_flag_accepte_une_seule_occurrence() {
+        let (migrate, rest) =
+            peel_migrate_flag(&["--migrate".to_string(), "status".to_string()]).unwrap();
+        assert!(migrate);
+        assert_eq!(rest, vec!["status".to_string()]);
+        assert!(peel_migrate_flag(&["--migrate".to_string(), "--migrate".to_string()]).is_err());
     }
 }
