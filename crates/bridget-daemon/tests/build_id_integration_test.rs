@@ -59,28 +59,76 @@ fn copy_binary(source: &Path, destination: &Path) {
     fs::set_permissions(destination, permissions).expect("rendre le binaire exécutable");
 }
 
-fn start_daemon(binary: &Path, home: &Path) -> Child {
-    let child = Command::new(binary)
-        .arg("daemon")
-        .env_clear()
-        .env("HOME", home)
-        .env("PATH", env::var("PATH").unwrap_or_default())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("lancer le daemon réel");
+/// Possède le daemon de couture. Créée avant le spawn : un échec d'attente
+/// socket ne laisse pas l'enfant sous PID 1. `Drop` ne panique jamais.
+struct DaemonGuard {
+    child: Option<Child>,
+}
 
-    let socket = home.join(".cache/bridget/bridget.sock");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while UnixStream::connect(&socket).is_err() {
-        assert!(
-            Instant::now() < deadline,
-            "daemon réel non joignable: {socket:?}"
+impl DaemonGuard {
+    fn start(binary: &Path, home: &Path) -> Self {
+        let mut guard = Self { child: None };
+        guard.child = Some(
+            Command::new(binary)
+                .arg("daemon")
+                .env_clear()
+                .env("HOME", home)
+                .env("PATH", env::var("PATH").unwrap_or_default())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("lancer le daemon réel"),
         );
-        thread::sleep(Duration::from_millis(10));
+
+        let socket = home.join(".cache/bridget/bridget.sock");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while UnixStream::connect(&socket).is_err() {
+            assert!(
+                Instant::now() < deadline,
+                "daemon réel non joignable: {socket:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        guard
     }
-    child
+
+    fn stop(mut self) {
+        let stopped = stop_daemon_child_best_effort(self.child.as_mut());
+        if stopped {
+            let _ = self.child.take();
+            return;
+        }
+        panic!("le daemon de couture n'a pas terminé après SIGTERM");
+    }
+}
+
+impl Drop for DaemonGuard {
+    fn drop(&mut self) {
+        let _ = stop_daemon_child_best_effort(self.child.as_mut());
+    }
+}
+
+fn stop_daemon_child_best_effort(child: Option<&mut Child>) -> bool {
+    let Some(child) = child else {
+        return true;
+    };
+    match child.try_wait() {
+        Ok(Some(_)) => return true,
+        Ok(None) => {}
+        Err(_) => {}
+    }
+    let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(_) => break,
+        }
+    }
+    let _ = child.kill();
+    child.wait().is_ok()
 }
 
 fn status(binary: &Path, home: &Path) -> std::process::Output {
@@ -106,7 +154,7 @@ fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
     let daemon_binary = root.join("bridget-daemon");
     copy_binary(&compiled, &daemon_binary);
 
-    let mut daemon = start_daemon(&daemon_binary, &home);
+    let daemon = DaemonGuard::start(&daemon_binary, &home);
     let same_build = status(&daemon_binary, &home);
     assert!(same_build.status.success());
     assert!(
@@ -136,7 +184,6 @@ fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
     );
     assert_eq!(String::from_utf8_lossy(&different_build.stderr), expected);
 
-    daemon.kill().expect("arrêter le daemon de test");
-    daemon.wait().expect("attendre le daemon de test");
+    daemon.stop();
     fs::remove_dir_all(root).expect("nettoyer le test de couture");
 }

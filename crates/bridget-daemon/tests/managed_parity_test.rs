@@ -7,6 +7,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -515,13 +516,21 @@ fn write_cached_npx_fixture(root: &Path) {
     fs::set_permissions(&registry_path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
+/// Possède le daemon de parité. La garde existe avant le spawn : un échec
+/// d'amorçage ne laisse jamais l'enfant sous PID 1. `Drop` ne panique jamais.
 struct DaemonProcess {
-    child: Child,
+    child: Option<Child>,
     socket: PathBuf,
 }
 
 impl DaemonProcess {
     fn start(root: &Path, billing_key: bool, single_turn: bool) -> Self {
+        // Garde créée avant le spawn : le chemin d'erreur précoce (assert prêt,
+        // panique injectée) libère encore le processus via Drop.
+        let mut process = Self {
+            child: None,
+            socket: root.join(".cache/bridget/bridget.sock"),
+        };
         let binary = env!("CARGO_BIN_EXE_bridget");
         let mut command = Command::new(binary);
         command
@@ -540,12 +549,11 @@ impl DaemonProcess {
         if single_turn {
             command.env("PARITY_SINGLE_TURN", "1");
         }
-        let child = command.spawn().unwrap();
-        let socket = root.join(".cache/bridget/bridget.sock");
+        process.child = Some(command.spawn().unwrap());
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut accepting = false;
         while Instant::now() < deadline {
-            if UnixStream::connect(&socket).is_ok() {
+            if UnixStream::connect(&process.socket).is_ok() {
                 accepting = true;
                 break;
             }
@@ -555,31 +563,129 @@ impl DaemonProcess {
             accepting,
             "le daemon de parité n'accepte pas encore les connexions"
         );
-        Self { child, socket }
+        process
     }
 
     fn stop(mut self) {
-        unsafe {
-            libc::kill(self.child.id() as i32, libc::SIGTERM);
+        let stopped = stop_daemon_child_best_effort(self.child.as_mut());
+        if stopped {
+            let _ = self.child.take();
+            return;
         }
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            if self.child.try_wait().unwrap().is_some() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // L'enfant reste dans Option pour que Drop retente sans paniquer pendant
+        // le dépliage ; l'assertion explicite reste sur le chemin stop() heureux.
         panic!("le daemon de parité n'a pas terminé après SIGTERM");
     }
 
     fn kill(mut self) {
-        unsafe {
-            libc::kill(self.child.id() as i32, libc::SIGKILL);
+        if let Some(mut child) = self.child.take() {
+            let _ = unsafe { libc::kill(child.id() as i32, libc::SIGKILL) };
+            let _ = child.wait();
         }
-        let _ = self.child.wait();
     }
+}
+
+impl Drop for DaemonProcess {
+    fn drop(&mut self) {
+        let _ = stop_daemon_child_best_effort(self.child.as_mut());
+    }
+}
+
+/// Arrêt best-effort : jamais de panique (y compris pendant un dépliage).
+fn stop_daemon_child_best_effort(child: Option<&mut Child>) -> bool {
+    let Some(child) = child else {
+        return true;
+    };
+    match child.try_wait() {
+        Ok(Some(_)) => return true,
+        Ok(None) => {}
+        Err(_) => {}
+    }
+    let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(_) => break,
+        }
+    }
+    let _ = child.kill();
+    child.wait().is_ok()
+}
+
+/// Compte les daemons de harnais dont le HOME matche `bg909-` ou `bg-{pid}-{hex}`.
+fn harness_daemon_home_count() -> usize {
+    let output = Command::new("/bin/ps")
+        .args(["-axo", "pid=,command="])
+        .output()
+        .expect("ps pour l'oracle de non-fuite");
+    assert!(output.status.success(), "ps indisponible pour l'oracle");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let (pid, command) = line.split_once(char::is_whitespace)?;
+            let command = command.trim_start();
+            let mut parts = command.split_whitespace();
+            let binary = parts.next()?;
+            let argv1 = parts.next()?;
+            if !binary.contains("bridget") || argv1 != "daemon" || parts.next().is_some() {
+                return None;
+            }
+            Some(pid.trim())
+        })
+        .filter(|pid| daemon_home_matches_harness_prefix(pid))
+        .count()
+}
+
+fn daemon_home_matches_harness_prefix(pid: &str) -> bool {
+    let output = Command::new("lsof").args(["-p", pid, "-Fn"]).output();
+    let Ok(output) = output else {
+        return false;
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix('n'))
+        .any(path_is_harness_daemon_home)
+}
+
+fn path_is_harness_daemon_home(path: &str) -> bool {
+    // Borné au PID du binaire de test : un compteur global croise les orphelins
+    // des autres agents et rend l'oracle flaky (observé : 8→7 pendant un run).
+    let mine = std::process::id().to_string();
+    let bg909_marker = format!("-{mine}-");
+    path.split('/').any(|component| {
+        if let Some(rest) = component.strip_prefix("bg909-") {
+            return rest.contains(&bg909_marker) || rest.ends_with(&format!("-{mine}"));
+        }
+        let Some(rest) = component.strip_prefix("bg-") else {
+            return false;
+        };
+        let mut parts = rest.splitn(2, '-');
+        let Some(process_id) = parts.next() else {
+            return false;
+        };
+        let Some(nonce) = parts.next() else {
+            return false;
+        };
+        process_id == mine && !nonce.is_empty() && nonce.chars().all(|c| c.is_ascii_hexdigit())
+    })
+}
+
+fn assert_harness_daemon_home_count(expected: usize) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if harness_daemon_home_count() == expected {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        harness_daemon_home_count(),
+        expected,
+        "le harnais a laissé un daemon orphelin (préfixes bg909-/bg-)"
+    );
 }
 
 struct CutProxy {
@@ -1721,4 +1827,52 @@ fn sc005_sc006_persistance_arrets_cooperatifs_et_reconciliation_sigkill() {
     assert!(Instant::now() < deadline, "timeout global SC-005/SC-006");
     daemon.stop();
     fs::remove_dir_all(root).unwrap();
+}
+
+/// La branche forcée traverse la même garde que le happy-path. Elle verrouille
+/// la fuite qui laissait des `bridget daemon` sous PID 1 après panique.
+#[test]
+fn daemon_process_nettoie_apres_une_panique_injectee() {
+    let _serial = MANAGED_BENCH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let before = harness_daemon_home_count();
+    let root_slot = Mutex::new(None::<PathBuf>);
+    let mid = AtomicUsize::new(usize::MAX);
+    let failed = catch_unwind(AssertUnwindSafe(|| {
+        let root = test_root("drop-oracle");
+        fs::create_dir_all(&root).unwrap();
+        *root_slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(root.clone());
+        let _daemon = DaemonProcess::start(&root, false, false);
+        // Premier temps : le spawn doit apparaître au compteur (sinon l'égalité
+        // avant/après ne prouverait rien).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut seen = harness_daemon_home_count();
+        while seen != before + 1 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+            seen = harness_daemon_home_count();
+        }
+        mid.store(seen, Ordering::SeqCst);
+        panic!("échec injecté après le spawn : la garde doit nettoyer");
+    }));
+    assert!(
+        failed.is_err(),
+        "la branche d'échec doit réellement paniquer"
+    );
+    assert_eq!(
+        mid.load(Ordering::SeqCst),
+        before + 1,
+        "premier temps : le daemon spawné doit être compté"
+    );
+    // Second temps : après Drop (dépliage), retour au compteur initial.
+    assert_harness_daemon_home_count(before);
+    if let Some(root) = root_slot
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+    {
+        let _ = fs::remove_dir_all(root);
+    }
 }
