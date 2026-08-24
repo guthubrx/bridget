@@ -126,6 +126,9 @@ struct Presence {
     mode: Option<PresenceMode>,
     /// Localisation tmux attestée au format `session:window.pane`.
     location: Option<String>,
+    /// Journal append-only attesté par le pilote vivant. Il est réinitialisé
+    /// à chaque Register : un mode de présence ne prouve jamais un journal.
+    journal_available: bool,
     os: String,
     state: String,
     last_seen: Instant,
@@ -904,9 +907,9 @@ fn attach_refusal_for_subscription(
         .conn_instances
         .get(&registered.connection_id)
         .and_then(|instance_id| state.presences.get(instance_id));
-    if !presence.is_some_and(|presence| presence.mode == Some(PresenceMode::Acp)) {
+    if !presence.is_some_and(|presence| presence.journal_available) {
         return Err(AttachSubscriptionRefusal {
-            reason: AttachRefusal::AgentNotAcp,
+            reason: AttachRefusal::JournalUnavailable,
             mode: presence.and_then(|presence| presence.mode),
             location: presence.and_then(|presence| presence.location.clone()),
         });
@@ -2889,6 +2892,7 @@ fn handle_register(
                         transport,
                         mode,
                         location,
+                        journal_available: false,
                         os,
                         state: if turn_in_progress {
                             "busy"
@@ -5017,6 +5021,24 @@ fn handle_wrapper_message(
             Some(response)
         }
 
+        WrapperToDaemon::JournalReady => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
+                return Some(DaemonToWrapper::Nack {
+                    id: "journal-ready".to_string(),
+                    reason: "journal annoncé avant l'enregistrement".to_string(),
+                });
+            };
+            let Some(presence) = st.presences.get_mut(&instance_id) else {
+                return Some(DaemonToWrapper::Nack {
+                    id: "journal-ready".to_string(),
+                    reason: "présence introuvable pour le journal annoncé".to_string(),
+                });
+            };
+            presence.journal_available = true;
+            None
+        }
+
         WrapperToDaemon::Unregister => {
             let (controls, views) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -5759,6 +5781,7 @@ mod presence_tests {
                 transport: "ssh-unix".to_string(),
                 mode: None,
                 location: None,
+                journal_available: false,
                 os: "Linux".to_string(),
                 state: "connected".to_string(),
                 last_seen: Instant::now(),
@@ -5835,6 +5858,7 @@ mod presence_tests {
                 transport: "acp".to_string(),
                 mode: Some(PresenceMode::Acp),
                 location: None,
+                journal_available: true,
                 os: "macOS".to_string(),
                 state: "connected".to_string(),
                 last_seen: Instant::now(),
@@ -7788,12 +7812,13 @@ mod presence_tests {
     }
 
     #[test]
-    fn abonnement_attach_refuse_un_wrapper_tmux_malgre_son_type() {
+    fn abonnement_attach_refuse_un_pilote_sans_journal_malgre_son_mode() {
         let (mut state, config) = state_with_registered_agent("attach-tmux");
         let presence = state.presences.get_mut("instance-1").unwrap();
         presence.transport = "unix".to_string();
         presence.mode = Some(PresenceMode::Tmux);
         presence.location = Some("bridget:1.2".to_string());
+        presence.journal_available = false;
         let shared = Arc::new(Mutex::new(state));
         assert!(matches!(
             handle_wrapper_message(
@@ -7817,7 +7842,7 @@ mod presence_tests {
                 &shared,
             ),
             Some(DaemonToWrapper::AttachRejected {
-                reason: AttachRefusal::AgentNotAcp,
+                reason: AttachRefusal::JournalUnavailable,
                 ..
             })
         ));
@@ -7885,11 +7910,11 @@ mod presence_tests {
         assert!(info("cli-agent").location.is_none());
 
         let tmux_refusal = attach_refusal_for_subscription(&state, "tmux-agent").unwrap_err();
-        assert_eq!(tmux_refusal.reason, AttachRefusal::AgentNotAcp);
+        assert_eq!(tmux_refusal.reason, AttachRefusal::JournalUnavailable);
         assert_eq!(tmux_refusal.mode, Some(PresenceMode::Tmux));
         assert_eq!(tmux_refusal.location.as_deref(), Some("bridget:3.1"));
         let cli_refusal = attach_refusal_for_subscription(&state, "cli-agent").unwrap_err();
-        assert_eq!(cli_refusal.reason, AttachRefusal::AgentNotAcp);
+        assert_eq!(cli_refusal.reason, AttachRefusal::JournalUnavailable);
         assert_eq!(cli_refusal.mode, Some(PresenceMode::Cli));
         assert!(cli_refusal.location.is_none());
 
@@ -7913,9 +7938,53 @@ mod presence_tests {
             DaemonToWrapper::Registered { .. }
         ));
         let legacy_refusal = attach_refusal_for_subscription(&state, "legacy-agent").unwrap_err();
-        assert_eq!(legacy_refusal.reason, AttachRefusal::AgentNotAcp);
+        assert_eq!(legacy_refusal.reason, AttachRefusal::JournalUnavailable);
         assert!(legacy_refusal.mode.is_none());
         assert!(legacy_refusal.location.is_none());
+
+        // Le journal, et non le mode, est le gate attach. Une fois attesté
+        // sur tmux, le refus progresse jusqu'à la disponibilité réelle du
+        // writer : la barrière de protocole est donc franchie sans inférence.
+        state
+            .presences
+            .get_mut("tmux-instance")
+            .unwrap()
+            .journal_available = true;
+        assert_eq!(
+            attach_refusal_for_subscription(&state, "tmux-agent")
+                .unwrap_err()
+                .reason,
+            AttachRefusal::WrapperUnavailable
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn journal_ready_atteste_le_gate_attach_apres_register() {
+        let (mut state, config) = state_with_registered_agent("attach-journal-ready");
+        state
+            .presences
+            .get_mut("instance-1")
+            .unwrap()
+            .journal_available = false;
+        let shared = Arc::new(Mutex::new(state));
+
+        assert_eq!(
+            attach_refusal_for_subscription(&shared.lock().unwrap(), "agent-2")
+                .unwrap_err()
+                .reason,
+            AttachRefusal::JournalUnavailable
+        );
+        assert!(handle_wrapper_message("conn-1", WrapperToDaemon::JournalReady, &shared).is_none());
+        assert!(
+            shared
+                .lock()
+                .unwrap()
+                .presences
+                .get("instance-1")
+                .unwrap()
+                .journal_available
+        );
         let _ = std::fs::remove_file(config.db_path);
     }
 
@@ -8100,6 +8169,10 @@ mod presence_tests {
         assert_eq!(agent.domain.as_deref(), Some("bridget"));
 
         let shared = Arc::new(Mutex::new(state));
+        assert!(
+            handle_wrapper_message("claude-managed", WrapperToDaemon::JournalReady, &shared,)
+                .is_none()
+        );
         assert!(matches!(
             handle_wrapper_message(
                 "attach-claude-managed",

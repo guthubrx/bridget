@@ -10,9 +10,9 @@ use bridget_transport::journal::{
 };
 use bridget_transport::protocol::{PresenceMode, decode, encode};
 use bridget_transport::{
-    AcpEvent, AcpOptions, AcpTransport, AttachRefusal, AttachWindow, DaemonToWrapper,
-    MAX_ATTACH_FRAGMENT_BYTES, MAX_ATTACH_SERIALIZED_FRAME_BYTES, TmuxTransport, Transport,
-    WrapperToDaemon,
+    AcpOptions, AcpTransport, AttachRefusal, AttachWindow, DaemonToWrapper,
+    MAX_ATTACH_FRAGMENT_BYTES, MAX_ATTACH_SERIALIZED_FRAME_BYTES, ManagedEvent, ManagedEventKind,
+    ManagedSession, TmuxTransport, Transport, WrapperToDaemon,
 };
 use log::{debug, error, info, warn};
 use std::collections::{BTreeMap, HashSet, VecDeque};
@@ -2427,7 +2427,7 @@ fn launch_acp_with_status(
         permissions: definition.permissions.clone(),
         notify_timeout_secs: definition.notify_timeout_secs,
     };
-    let mut transport = if managed_reporter.is_some() {
+    let mut transport: Box<dyn ManagedSession> = Box::new(if managed_reporter.is_some() {
         AcpTransport::spawn_inheriting_stderr_with_environment_and_mcp(
             options,
             &mcp_environment,
@@ -2435,7 +2435,7 @@ fn launch_acp_with_status(
         )
     } else {
         AcpTransport::spawn_with_environment_and_mcp(options, &mcp_environment, mcp_servers)
-    }?;
+    }?);
     let marker_directory = socket.parent().unwrap().join("agent-pids");
     let adapter_pid = transport.process_id();
     crate::mcp_identity::write_marker(
@@ -2446,11 +2446,12 @@ fn launch_acp_with_status(
         &name_state_path,
     )?;
     let live_feed = JournalLiveFeed::default();
-    transport.enable_journal_with_live_feed(
-        home.join(".cache/bridget/sessions"),
+    transport.activate_journal(
+        &home.join(".cache/bridget/sessions"),
         &my_name,
         Some(live_feed.clone()),
     )?;
+    send_wrapper_message(&writer, WrapperToDaemon::JournalReady);
     let journal_directory = home.join(".cache/bridget/sessions").join(&my_name);
     let relay_writer = writer.clone();
     let mut relay = AttachRelayWorker::start(
@@ -2465,19 +2466,19 @@ fn launch_acp_with_status(
     loop {
         let events = transport.drain_events();
         let journal_failed =
-            forward_acp_events(&writer, &my_name, events, &mut idempotent_deliveries);
+            forward_managed_events(&writer, &my_name, events, &mut idempotent_deliveries);
         if journal_failed {
-            transport.shutdown();
+            transport.stop();
             break;
         }
         let mut line = String::new();
         match reader.read_line(&mut line) {
             Ok(0) => {
                 relay.reset_generation();
-                let Some((new_reader, registered_name)) = reconnect_acp(
+                let Some((new_reader, registered_name)) = reconnect_managed_session(
                     socket,
                     &writer,
-                    &transport,
+                    transport.as_ref(),
                     agent_type,
                     &name_state_path,
                     &host,
@@ -2576,10 +2577,10 @@ fn launch_acp_with_status(
             Err(error) => {
                 warn!("connexion daemon ACP perdue : {error}");
                 relay.reset_generation();
-                let Some((new_reader, registered_name)) = reconnect_acp(
+                let Some((new_reader, registered_name)) = reconnect_managed_session(
                     socket,
                     &writer,
-                    &transport,
+                    transport.as_ref(),
                     agent_type,
                     &name_state_path,
                     &host,
@@ -2599,11 +2600,11 @@ fn launch_acp_with_status(
         }
     }
     relay.shutdown();
-    transport.shutdown();
+    transport.stop();
     // L'EOF peut fermer le transport entre deux itérations : vider une dernière
     // fois les événements terminaux avant Unregister afin que le daemon voie
     // chaque DeliveryRejected (tour actif comme file restante).
-    let _ = forward_acp_events(
+    let _ = forward_managed_events(
         &writer,
         &my_name,
         transport.drain_events(),
@@ -2787,10 +2788,10 @@ fn send_wrapper_message(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn reconnect_acp(
+fn reconnect_managed_session(
     socket: &std::path::Path,
     writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
-    transport: &AcpTransport,
+    transport: &dyn ManagedSession,
     agent_type: &str,
     name_state_path: &std::path::Path,
     host: &str,
@@ -2803,10 +2804,7 @@ fn reconnect_acp(
         thread::sleep(reconnect_delay(attempts));
         attempts = attempts.saturating_add(1);
         let wanted_name = resolve_current_name(name_state_path, fallback_name);
-        let busy = matches!(
-            transport.state(),
-            bridget_transport::TurnState::InProgress { .. }
-        );
+        let busy = transport.is_busy();
         match connect_and_register_at(
             socket,
             agent_type,
@@ -2822,6 +2820,10 @@ fn reconnect_acp(
         ) {
             Ok((reader, new_writer, registered_name)) if registered_name == wanted_name => {
                 *writer.lock().unwrap_or_else(|error| error.into_inner()) = Some(new_writer);
+                // Register réinitialise l'attestation au niveau du daemon : le
+                // même journal local reste actif, il doit donc être annoncé de
+                // nouveau sur la nouvelle connexion.
+                send_wrapper_message(writer, WrapperToDaemon::JournalReady);
                 return Some((reader, registered_name));
             }
             Ok((_, _, registered_name)) => warn!(
@@ -2837,19 +2839,19 @@ fn reconnect_acp(
     None
 }
 
-fn forward_acp_events(
+fn forward_managed_events(
     writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
     my_name: &str,
-    events: Vec<AcpEvent>,
+    events: Vec<ManagedEvent>,
     idempotent_deliveries: &mut IdempotentDeliveryTracker,
 ) -> bool {
     let mut journal_failed = false;
     for event in events {
-        match event {
-            AcpEvent::TurnStarted { .. } => {
+        match event.kind {
+            ManagedEventKind::TurnStarted { .. } => {
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: true })
             }
-            AcpEvent::TurnFinished {
+            ManagedEventKind::TurnFinished {
                 message,
                 response,
                 stop_reason,
@@ -2878,7 +2880,7 @@ fn forward_acp_events(
                     );
                 }
             }
-            AcpEvent::DeliveryRejected { message_id, reason } => {
+            ManagedEventKind::DeliveryRejected { message_id, reason } => {
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
                 if let Some(report) = idempotent_deliveries.injection_rejected(&message_id) {
                     send_wrapper_message(writer, report);
@@ -2891,18 +2893,18 @@ fn forward_acp_events(
                     },
                 );
             }
-            AcpEvent::JournalFailed { detail } => {
+            ManagedEventKind::JournalFailed { detail } => {
                 journal_failed = true;
-                warn!("arrêt du transport ACP : {detail}");
+                warn!("arrêt de la session gérée : {detail}");
             }
-            AcpEvent::PromptDispatched { message_id } => {
+            ManagedEventKind::PromptDispatched { message_id } => {
                 if let Some(report) =
                     idempotent_deliveries.prompt_dispatched(&message_id, unix_now_secs())
                 {
                     send_wrapper_message(writer, report);
                 }
             }
-            AcpEvent::Update { .. } | AcpEvent::Error { .. } => {}
+            ManagedEventKind::Update { .. } | ManagedEventKind::Error { .. } => {}
         }
     }
     journal_failed
@@ -3039,10 +3041,10 @@ mod prompt_tests {
 }
 
 #[cfg(test)]
-fn journal_failure_requires_shutdown(events: &[AcpEvent]) -> bool {
+fn journal_failure_requires_shutdown(events: &[ManagedEvent]) -> bool {
     events
         .iter()
-        .any(|event| matches!(event, AcpEvent::JournalFailed { .. }))
+        .any(|event| matches!(event.kind, ManagedEventKind::JournalFailed { .. }))
 }
 
 #[cfg(test)]
@@ -3515,13 +3517,19 @@ mod reconnect_tests {
 
     #[test]
     fn journal_failure_requires_an_immediate_transport_shutdown() {
-        assert!(journal_failure_requires_shutdown(&[
-            AcpEvent::JournalFailed {
+        assert!(journal_failure_requires_shutdown(&[ManagedEvent {
+            source: bridget_transport::ManagedEventSource::Acp,
+            raw: "journal ACP saturé".as_bytes().to_vec(),
+            kind: ManagedEventKind::JournalFailed {
                 detail: "journal ACP saturé".to_string(),
-            }
-        ]));
-        assert!(!journal_failure_requires_shutdown(&[AcpEvent::Error {
-            detail: "diagnostic non terminal".to_string(),
+            },
+        }]));
+        assert!(!journal_failure_requires_shutdown(&[ManagedEvent {
+            source: bridget_transport::ManagedEventSource::Acp,
+            raw: b"diagnostic non terminal".to_vec(),
+            kind: ManagedEventKind::Error {
+                detail: "diagnostic non terminal".to_string(),
+            },
         }]));
     }
 

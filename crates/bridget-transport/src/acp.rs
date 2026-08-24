@@ -2,6 +2,7 @@
 //! worker FIFO. Le lecteur est l'unique propriétaire du flux de l'adaptateur.
 
 use crate::journal::{JournalLiveFeed, JournalWriter};
+use crate::managed_session::{ManagedEvent, ManagedEventKind, ManagedEventSource, ManagedSession};
 use crate::transport::{Transport, TransportError};
 use bridget_core::BridgetMessage;
 use serde_json::{Value, json};
@@ -554,6 +555,109 @@ impl Transport for AcpTransport {
     fn connection_id(&self) -> &str {
         &self.connection_id
     }
+}
+
+impl ManagedSession for AcpTransport {
+    fn process_id(&self) -> u32 {
+        AcpTransport::process_id(self)
+    }
+
+    fn activate_journal(
+        &self,
+        root: &Path,
+        agent: &str,
+        live_feed: Option<JournalLiveFeed>,
+    ) -> std::io::Result<()> {
+        AcpTransport::enable_journal_with_live_feed(self, root, agent, live_feed)
+    }
+
+    fn drain_events(&self) -> Vec<ManagedEvent> {
+        AcpTransport::drain_events(self)
+            .into_iter()
+            .map(ManagedEvent::from)
+            .collect()
+    }
+
+    fn cancel_delivery(&self, message_id: &str, reason: &str) -> bool {
+        AcpTransport::cancel_delivery(self, message_id, reason)
+    }
+
+    fn stop(&self) {
+        AcpTransport::shutdown(self);
+    }
+
+    fn is_busy(&self) -> bool {
+        matches!(self.state(), TurnState::InProgress { .. })
+    }
+}
+
+impl From<AcpEvent> for ManagedEvent {
+    fn from(event: AcpEvent) -> Self {
+        let raw = acp_event_bytes(&event);
+        let kind = match event {
+            AcpEvent::TurnStarted { message_id } => ManagedEventKind::TurnStarted { message_id },
+            AcpEvent::PromptDispatched { message_id } => {
+                ManagedEventKind::PromptDispatched { message_id }
+            }
+            AcpEvent::TurnFinished {
+                message,
+                response,
+                stop_reason,
+            } => ManagedEventKind::TurnFinished {
+                message,
+                response,
+                stop_reason,
+            },
+            AcpEvent::DeliveryRejected { message_id, reason } => {
+                ManagedEventKind::DeliveryRejected { message_id, reason }
+            }
+            AcpEvent::Update { detail } => ManagedEventKind::Update { detail },
+            AcpEvent::Error { detail } => ManagedEventKind::Error { detail },
+            AcpEvent::JournalFailed { detail } => ManagedEventKind::JournalFailed { detail },
+        };
+        ManagedEvent {
+            source: ManagedEventSource::Acp,
+            raw,
+            kind,
+        }
+    }
+}
+
+/// ACP produit la représentation canonique de son propre événement avant la
+/// frontière du wrapper. Ces bytes restent attachés à leur source plutôt que
+/// réduits à un enum de métier du daemon.
+fn acp_event_bytes(event: &AcpEvent) -> Vec<u8> {
+    let value = match event {
+        AcpEvent::TurnStarted { message_id } => json!({
+            "kind": "turn_started",
+            "message_id": message_id,
+        }),
+        AcpEvent::PromptDispatched { message_id } => json!({
+            "kind": "prompt_dispatched",
+            "message_id": message_id,
+        }),
+        AcpEvent::TurnFinished {
+            message,
+            response,
+            stop_reason,
+        } => json!({
+            "kind": "turn_finished",
+            "message": message,
+            "response": response,
+            "stop_reason": stop_reason,
+        }),
+        AcpEvent::DeliveryRejected { message_id, reason } => json!({
+            "kind": "delivery_rejected",
+            "message_id": message_id,
+            "reason": reason,
+        }),
+        AcpEvent::Update { detail } => json!({ "kind": "update", "detail": detail }),
+        AcpEvent::Error { detail } => json!({ "kind": "error", "detail": detail }),
+        AcpEvent::JournalFailed { detail } => {
+            json!({ "kind": "journal_failed", "detail": detail })
+        }
+    };
+    serde_json::to_vec(&value).expect("canon interne ACP sérialisable")
 }
 
 #[cfg(test)]
@@ -1478,6 +1582,22 @@ mod tests {
         let mut message = BridgetMessage::new("alice", "bob", id);
         message.id = id.to_string();
         message
+    }
+
+    #[test]
+    fn evenement_gere_conserve_la_source_et_les_octets_du_pilote() {
+        let event = ManagedEvent::from(AcpEvent::Update {
+            detail: "octets source".to_string(),
+        });
+        assert_eq!(event.source, ManagedEventSource::Acp);
+        assert_eq!(
+            event.raw,
+            br#"{"detail":"octets source","kind":"update"}"#.to_vec()
+        );
+        assert!(matches!(
+            event.kind,
+            ManagedEventKind::Update { detail } if detail == "octets source"
+        ));
     }
 
     #[test]
