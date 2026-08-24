@@ -1781,20 +1781,27 @@ impl DaemonState {
             self.recovery_commands.contains(&record.lease.command_id)
                 && !live_names.contains(&record.lease.name)
         }) {
-            let (model, effort) = self
+            let managed_definition = self
                 .fleet
-                .resolved_definition_for_command(&record.lease.command_id)
+                .resolved_definition_for_command(&record.lease.command_id);
+            let (model, effort) = managed_definition
                 .as_ref()
                 .and_then(definition_runtime)
                 .map(|(model, effort)| (Some(model), effort))
                 .unwrap_or((None, None));
+            // Même dérivation que handle_register : transport et mode viennent
+            // de la définition figée, jamais d'un amalgame unix+acp.
+            let (transport, mode) = managed_definition
+                .as_ref()
+                .map(definition_presence_fields)
+                .unwrap_or_else(|| ("unix".to_string(), None));
             agents.push(bridget_transport::protocol::AgentInfo {
                 name: record.lease.name.clone(),
                 agent_type: record.agent_type.clone(),
                 connection_id: String::new(),
                 host: "local".to_string(),
-                transport: "unix".to_string(),
-                mode: Some(PresenceMode::Acp),
+                transport,
+                mode,
                 location: None,
                 os: std::env::consts::OS.to_string(),
                 state: "recovering".to_string(),
@@ -2870,6 +2877,18 @@ fn definition_presence_mode(definition: &ResolvedAgentDefinition) -> Option<Pres
     }
 }
 
+/// Transport et mode affichés pour un géré : toujours `definition.protocol`,
+/// jamais un canal inventé. Partagé entre `handle_register` et la projection
+/// `recovering` de `who`.
+fn definition_presence_fields(
+    definition: &ResolvedAgentDefinition,
+) -> (String, Option<PresenceMode>) {
+    (
+        definition.protocol.clone(),
+        definition_presence_mode(definition),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_register(
     conn_id: &str,
@@ -2956,12 +2975,13 @@ fn handle_register(
                     .as_ref()
                     .and_then(definition_runtime)
                     .map(|(model, effort)| (Some(model), effort));
-                let managed_mode = managed_definition
-                    .as_ref()
-                    .and_then(definition_presence_mode);
-                let managed_transport = managed_definition
-                    .as_ref()
-                    .map(|definition| definition.protocol.clone());
+                let (managed_transport, managed_mode) = match managed_definition.as_ref() {
+                    Some(definition) => {
+                        let (transport, mode) = definition_presence_fields(definition);
+                        (Some(transport), mode)
+                    }
+                    None => (None, None),
+                };
                 // Un géré tient son runtime de la définition figée. Une
                 // reconnexion interactive conserve, elle, la dernière sonde.
                 let (model, effort) = managed_runtime.unwrap_or_else(|| {
@@ -6423,6 +6443,48 @@ mod presence_tests {
         .unwrap()
     }
 
+    fn recovery_native_codex_definition() -> bridget_transport::ResolvedAgentDefinition {
+        // Même protocole et même matrice qu'un Codex natif, mais `/bin/sh`
+        // pour que la reprise passe les gardes de commande. Sans
+        // `execution_paths`, la préparation refuse le protocole et l'oracle
+        // ne verrait jamais `who recovering`.
+        AgentRegistry::from_json(
+            r#"{"agents":{"fixture":{"command":"/bin/sh","args":["-c","model=\"gpt-5.6-terra\"","app-server"],"protocol":"codex_app_server","forbidden_env":[],"pass_env":[],"capabilities":{"execution_paths":["codex_app_server"],"models":{"gpt-5.6-terra":{}}}}}}"#,
+            "/tmp/recovery-native-codex-definition.json",
+        )
+        .unwrap()
+        .resolved_definition("fixture")
+        .unwrap()
+    }
+
+    fn persist_connected_fixture_with_definition(
+        state: &DaemonState,
+        name: &str,
+        command_id: &str,
+        now: i64,
+        definition: &bridget_transport::ResolvedAgentDefinition,
+    ) -> SpawnLease {
+        let order = FleetSpawnOrder {
+            agent_type: "fixture".to_string(),
+            requested_name: Some(name.to_string()),
+            cwd: PathBuf::from("/tmp"),
+            persistent: true,
+            command_id: command_id.to_string(),
+            issued_at: now,
+            deadline_at: now + 60,
+        };
+        let lease = match state.fleet.request_spawn(&order, now).unwrap() {
+            crate::fleet::SpawnSubmission::Start(lease) => lease,
+            other => panic!("réservation persistante attendue: {other:?}"),
+        };
+        state.fleet.mark_starting(&lease, now, definition).unwrap();
+        state
+            .fleet
+            .register_connected(&lease, &lease.instance_id, now + 1)
+            .unwrap();
+        lease
+    }
+
     fn recovery_daemon_config(root: &std::path::Path) -> DaemonConfig {
         let cache = root.join(".cache/bridget");
         DaemonConfig {
@@ -6498,26 +6560,13 @@ mod presence_tests {
         command_id: &str,
         now: i64,
     ) -> SpawnLease {
-        let order = FleetSpawnOrder {
-            agent_type: "fixture".to_string(),
-            requested_name: Some(name.to_string()),
-            cwd: PathBuf::from("/tmp"),
-            persistent: true,
-            command_id: command_id.to_string(),
-            issued_at: now,
-            deadline_at: now + 60,
-        };
-        let lease = match state.fleet.request_spawn(&order, now).unwrap() {
-            crate::fleet::SpawnSubmission::Start(lease) => lease,
-            other => panic!("réservation persistante attendue: {other:?}"),
-        };
-        let definition = recovery_fixture_definition();
-        state.fleet.mark_starting(&lease, now, &definition).unwrap();
-        state
-            .fleet
-            .register_connected(&lease, &lease.instance_id, now + 1)
-            .unwrap();
-        lease
+        persist_connected_fixture_with_definition(
+            state,
+            name,
+            command_id,
+            now,
+            &recovery_fixture_definition(),
+        )
     }
 
     #[test]
@@ -6539,7 +6588,47 @@ mod presence_tests {
         assert!(recoveries[0].0.lease.generation > previous.generation);
         assert!(reopened.recovering);
         assert_eq!(reopened.recovery_commands.len(), 1);
-        assert_eq!(reopened.agent_infos()[0].state, "recovering");
+        let info = &reopened.agent_infos()[0];
+        assert_eq!(info.state, "recovering");
+        assert_eq!(info.transport, "acp");
+        assert_eq!(info.mode, Some(PresenceMode::Acp));
+        drop(reopened);
+        let _ = std::fs::remove_file(config.socket_path);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reprise_natif_codex_affiche_protocole_fige_pas_unix_acp() {
+        let root = PathBuf::from(format!(
+            "/tmp/bg-recovering-native-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let (state, config) = recovery_fixture_state(&root);
+        let now = unix_timestamp();
+        persist_connected_fixture_with_definition(
+            &state,
+            "coder-natif",
+            "initial-coder-natif",
+            now,
+            &recovery_native_codex_definition(),
+        );
+        drop(state);
+
+        let (mut reopened, _) = recovery_fixture_state(&root);
+        let recoveries = reserve_managed_recoveries(&mut reopened, now + 2).unwrap();
+        assert_eq!(recoveries.len(), 1);
+        let info = &reopened.agent_infos()[0];
+        assert_eq!(info.state, "recovering");
+        assert_eq!(
+            info.transport, "codex_app_server",
+            "who recovering doit exposer le protocole figé, pas unix"
+        );
+        assert_eq!(
+            info.mode,
+            Some(PresenceMode::Cli),
+            "who recovering doit exposer MODE=cli, pas acp"
+        );
         drop(reopened);
         let _ = std::fs::remove_file(config.socket_path);
         std::fs::remove_dir_all(root).unwrap();
