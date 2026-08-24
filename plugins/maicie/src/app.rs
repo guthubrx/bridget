@@ -405,6 +405,10 @@ pub fn record_guichet_lifecycle_event(
 
 /// Applique un rappel cursé seulement après la frontière SnapshotCaughtUp.
 /// Le curseur, la décision F29 et ses outboxes partagent le même commit.
+///
+/// Un `reminder_sent` pour une demande inconnue du greffe (hors F29) est
+/// journalisé puis sauté : le curseur avance, aucune délégation n'est inventée.
+/// Même doctrine que [`record_guichet_lifecycle_event`] face à `NotFound`.
 pub fn apply_attested_coordination_event(
     store: &mut MaicieStore,
     canonical_bytes: &[u8],
@@ -415,9 +419,25 @@ pub fn apply_attested_coordination_event(
             .map_err(|_| {
                 GuichetError::InvalidEnvelope("trame de coordination invalide".to_string())
             })?;
-    let context = store
-        .reassignment_request_context(event.request_id())
-        .map_err(guichet_store_error)?;
+    let context = match store.reassignment_request_context(event.request_id()) {
+        Ok(context) => context,
+        // Bridget peut pousser des rappels pour des conversations hors Maicie
+        // (ex. agent → référent). Les traiter comme F29 empoisonne toute commande.
+        Err(StoreError::NotFound(reason)) => {
+            eprintln!(
+                "avertissement: reminder_sent ignoré — demande suivie F29 inconnue \
+                 (request_id={}, event_id={}, cursor={}): {reason}",
+                event.request_id(),
+                event.event_id(),
+                event.cursor(),
+            );
+            store
+                .acknowledge_untracked_coordination_event(&event)
+                .map_err(guichet_store_error)?;
+            return Ok(());
+        }
+        Err(error) => return Err(guichet_store_error(error)),
+    };
     if context.participant != event.recipient() {
         return Err(GuichetError::InvalidEnvelope(
             "destinataire du rappel et demande suivie divergents".to_string(),
