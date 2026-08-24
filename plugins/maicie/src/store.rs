@@ -13,8 +13,8 @@ use crate::domain::guichet::{
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
     DomainError, EtatActivationOutbox, EtatDecision, EtatDelegation, EtatObjectif,
-    EtatOutboxDelegation, EtatRequeteGuichet, IssueGreffe, ObjectifCoordonne, OperationGuichet,
-    ReceptionGreffe, RecuCorrelation, TypeDecision,
+    EtatOutboxDelegation, EtatRequeteGuichet, IssueGreffe, LienArbitrage, ObjectifCoordonne,
+    OperationGuichet, ReceptionGreffe, RecuCorrelation, TypeDecision,
 };
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
@@ -678,6 +678,50 @@ impl MaicieStore {
             })
         })
         .collect()
+    }
+
+    /// Relit exclusivement les liens d'arbitrage déclarés à la création des
+    /// délégations.
+    ///
+    /// Le document canonique de la délégation reste l'unique autorité : cette
+    /// projection ne rapproche ni titres, ni textes, ni identifiants voisins.
+    /// Une délégation sans `constat_id` ne produit donc aucune ligne.
+    pub fn delegation_arbitration_links(&self) -> Result<Vec<LienArbitrage>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT id, objective_id, state, payload_json
+                 FROM delegations ORDER BY id",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                ))
+            })
+            .map_err(StoreError::Sql)?;
+        let mut links = Vec::new();
+        for row in rows {
+            let (id, objective_id, state, payload) = row.map_err(StoreError::Sql)?;
+            let delegation: Delegation =
+                serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+            if delegation.id.to_string() != id
+                || delegation.objectif_id.to_string() != objective_id
+                || delegation.etat != parse_delegation_state(&state)?
+            {
+                return Err(StoreError::Corrupt(
+                    "délégation d'arbitrage et index SQLite divergents",
+                ));
+            }
+            if let Some(link) = delegation.lien_arbitrage().map_err(StoreError::Domain)? {
+                links.push(link);
+            }
+        }
+        Ok(links)
     }
 
     /// Persiste les octets exacts d'une projection consultative. Une relève
@@ -2738,6 +2782,7 @@ fn load_or_create_issuer_scope(connection: &mut Connection) -> Result<String, St
 }
 
 fn insert_prepared(tx: &Transaction<'_>, prepared: &PreparedDelegation) -> Result<(), StoreError> {
+    prepared.delegation.verifier().map_err(StoreError::Domain)?;
     upsert_objective(tx, &prepared.objective)?;
     let delegation_json = serde_json::to_vec(&prepared.delegation).map_err(StoreError::Json)?;
     tx.execute(

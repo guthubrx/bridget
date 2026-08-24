@@ -678,8 +678,8 @@ impl CatalogueJournal {
     ///
     /// Une clôture sans lien correspondant est ignorée (pas de transition
     /// inventée). Un lien sans clôture reste ouvert. Le rejeu des mêmes faits
-    /// est un no-op. Cette API est pure côté journal : la lecture des liens et
-    /// des états durables (store) reste hors périmètre jusqu'à T1708/T1710.
+    /// est un no-op. La lecture des liens et des états durables passe par
+    /// `app::reconcile_catalogue_from_store` (store → journal).
     pub fn reconcile_attested_closures(
         &mut self,
         links: &[ArbitrationLink],
@@ -1753,27 +1753,33 @@ mod tests {
 
         // Sans lien : clôture orpheline n'écrit rien.
         let orphan = journal
-            .reconcile_attested_closures(&[], &[closure.clone()])
+            .reconcile_attested_closures(&[], std::slice::from_ref(&closure))
             .unwrap();
         assert_eq!(orphan.appended, 0);
         assert_eq!(journal.read_entries().unwrap().len(), 1);
 
         // Sans clôture : le lien seul n'écrit rien.
         let waiting = journal
-            .reconcile_attested_closures(&[link.clone()], &[])
+            .reconcile_attested_closures(std::slice::from_ref(&link), &[])
             .unwrap();
         assert_eq!(waiting.appended, 0);
 
         // Lien + clôture → une transition.
         let first = journal
-            .reconcile_attested_closures(&[link.clone()], &[closure.clone()])
+            .reconcile_attested_closures(
+                std::slice::from_ref(&link),
+                std::slice::from_ref(&closure),
+            )
             .unwrap();
         assert_eq!(first.appended, 1);
         assert_eq!(first.skipped, 0);
 
         // Rejeu → no-op (SC-1703).
         let replay = journal
-            .reconcile_attested_closures(&[link.clone()], &[closure.clone()])
+            .reconcile_attested_closures(
+                std::slice::from_ref(&link),
+                std::slice::from_ref(&closure),
+            )
             .unwrap();
         assert_eq!(replay.appended, 0);
         assert_eq!(replay.skipped, 1);

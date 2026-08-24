@@ -755,6 +755,7 @@ fn fixture(issuer_scope: &str) -> PreparedDelegation {
     let delegation = Delegation {
         id: uuid(DELEGATION_ID),
         objectif_id: objective.id,
+        constat_id: None,
         participant: "prospective".to_string(),
         instruction: String::from_utf8(BODY.to_vec()).unwrap(),
         duree: ClasseDuree::Normale,

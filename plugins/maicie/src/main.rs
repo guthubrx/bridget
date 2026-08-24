@@ -7,11 +7,11 @@
 
 use maicie::MAICIE_IDENTITY;
 use maicie::app::{
-    DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, LocalProfileApproval,
-    ObjectiveError, ProfileActivationError, ProfileActivationProposalRequest, add_participant,
-    approve_profile_activation, close, delegate, delegated_participants,
-    propose_profile_activation, remove_participant, status, stored_profile_activation_proposal,
-    summarize,
+    CatalogueReconcileError, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate,
+    LocalProfileApproval, ObjectiveError, ProfileActivationError, ProfileActivationProposalRequest,
+    add_participant, approve_profile_activation, close, delegate, delegated_participants,
+    propose_profile_activation, reconcile_catalogue_from_store, remove_participant, status,
+    stored_profile_activation_proposal, summarize,
 };
 use maicie::bridget_client::{
     AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits,
@@ -350,6 +350,7 @@ fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
         // demander une réponse Bridget serait refusé avant livraison. La
         // corrélation de réponse attend T015b/Subscribe, sans la simuler ici.
         reply: false,
+        constat_id: arguments.constat_id.as_deref(),
         idempotency_key: &idempotency_key,
         now,
         retry_until,
@@ -668,6 +669,7 @@ struct DelegateArgs {
     target: Option<String>,
     required_tags: Vec<String>,
     duration: ClasseDuree,
+    constat_id: Option<String>,
     idempotency_key: Option<String>,
     json: bool,
 }
@@ -930,10 +932,13 @@ fn run_registre(arguments: RegistreArgs) -> Result<String, CliError> {
     let catalogue_path = config.catalogue_path.ok_or(CliError::Usage(
         "catalogue_path absent de la configuration : registre exige un journal déclaré",
     ))?;
+    let store = MaicieStore::open(&config.database_path).map_err(CliError::Store)?;
+    let mut journal = CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
+    // T1710 : réconciliation idempotente au fil des commandes catalogue — jamais
+    // en boucle résidente. Une clôture durable manquée est rattrapée ici.
+    reconcile_catalogue_from_store(&store, &mut journal).map_err(CliError::CatalogueReconcile)?;
     match arguments.action {
         RegistreAction::List { attente } => {
-            let mut journal =
-                CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
             let parsed = journal.read_journal().map_err(CliError::Catalogue)?;
             if let Some(warning) = parsed.torn_tail_warning {
                 eprintln!("avertissement: {warning}");
@@ -948,8 +953,6 @@ fn run_registre(arguments: RegistreArgs) -> Result<String, CliError> {
                     "registre add n'accepte qu'une ligne kind=add fermée",
                 ));
             };
-            let mut journal =
-                CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
             let outcome = journal.append_add(add).map_err(CliError::Catalogue)?;
             Ok(match outcome {
                 AppendOutcome::Appended => "registre add: appended".to_string(),
@@ -957,8 +960,6 @@ fn run_registre(arguments: RegistreArgs) -> Result<String, CliError> {
             })
         }
         RegistreAction::Migrer { depuis } => {
-            let mut journal =
-                CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
             let report = journal
                 .migrate_prose_file(&depuis)
                 .map_err(CliError::Catalogue)?;
@@ -992,8 +993,6 @@ fn run_registre(arguments: RegistreArgs) -> Result<String, CliError> {
                     None
                 },
             };
-            let mut journal =
-                CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
             let outcome = journal
                 .qualify_pending(&pending_id, severity, mission_source, date)
                 .map_err(CliError::Catalogue)?;
@@ -1014,8 +1013,6 @@ fn run_registre(arguments: RegistreArgs) -> Result<String, CliError> {
                 date,
                 text,
             };
-            let mut journal =
-                CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
             let (transcription, outcome) = journal
                 .consign_observed_fact(&fact)
                 .map_err(CliError::Catalogue)?;
@@ -1294,6 +1291,7 @@ fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
     let mut goal = None;
     let mut target = None;
     let mut duration = ClasseDuree::Normale;
+    let mut constat_id = None;
     let mut idempotency_key = None;
     let mut required_tags = Vec::new();
     let mut json = false;
@@ -1317,6 +1315,11 @@ fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
             "--duration" => {
                 duration = parse_duration(next_value(arguments, &mut index, "--duration")?)?;
             }
+            "--constat-id" => set_once_string(
+                &mut constat_id,
+                next_value(arguments, &mut index, "--constat-id")?,
+                "constat-id",
+            )?,
             "--idempotency-key" => set_once_string(
                 &mut idempotency_key,
                 next_value(arguments, &mut index, "--idempotency-key")?,
@@ -1341,6 +1344,7 @@ fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
         target,
         required_tags,
         duration,
+        constat_id,
         idempotency_key,
         json,
     })
@@ -1827,6 +1831,7 @@ enum CliError {
     Usage(&'static str),
     Configuration(ConfigError),
     Catalogue(CatalogueError),
+    CatalogueReconcile(CatalogueReconcileError),
     Bridget(BridgetClientError),
     Delegate(DelegateError),
     TargetUnknownBridget(String),
@@ -1847,10 +1852,14 @@ impl CliError {
             Self::Usage(_) => EXIT_USAGE,
             Self::Configuration(_) | Self::Catalogue(_) => EXIT_CONFIGURATION,
             Self::Bridget(_) => EXIT_BRIDGET,
-            Self::Delegate(DelegateError::Store(_)) | Self::Store(_) => EXIT_STORE,
+            Self::Delegate(DelegateError::Store(_))
+            | Self::Store(_)
+            | Self::CatalogueReconcile(CatalogueReconcileError::Store(_)) => EXIT_STORE,
             Self::Reconcile(ReconcileError::Store(_)) => EXIT_STORE,
             Self::Objective(ObjectiveError::Store(_)) => EXIT_STORE,
             Self::ProfileActivation(ProfileActivationError::Store(_)) => EXIT_STORE,
+            Self::CatalogueReconcile(CatalogueReconcileError::Catalogue(_)) => EXIT_CONFIGURATION,
+            Self::CatalogueReconcile(_) => EXIT_CONFIGURATION,
             Self::Reconcile(_) => EXIT_BRIDGET,
             Self::Delegate(_) => EXIT_DELEGATE,
             Self::TargetUnknownBridget(_) | Self::TargetMissingMaicieProfile { .. } => {
@@ -1866,6 +1875,9 @@ impl CliError {
             Self::Usage(_) => "usage",
             Self::Configuration(_) => "configuration",
             Self::Catalogue(_) => "catalogue",
+            Self::CatalogueReconcile(CatalogueReconcileError::Store(_)) => "store",
+            Self::CatalogueReconcile(CatalogueReconcileError::Catalogue(_)) => "catalogue",
+            Self::CatalogueReconcile(_) => "catalogue_reconcile",
             Self::Bridget(_) => "bridget",
             Self::Delegate(DelegateError::EnvelopeMismatch) => "envelope_mismatch",
             Self::Delegate(DelegateError::TargetUnavailable(_)) => "target_unavailable",
@@ -1895,6 +1907,7 @@ impl fmt::Display for CliError {
             Self::Usage(detail) => write!(formatter, "usage invalide : {detail}"),
             Self::Configuration(error) => error.fmt(formatter),
             Self::Catalogue(error) => error.fmt(formatter),
+            Self::CatalogueReconcile(error) => error.fmt(formatter),
             Self::Bridget(error) => error.fmt(formatter),
             Self::Delegate(error) => error.fmt(formatter),
             Self::TargetUnknownBridget(target) => write!(

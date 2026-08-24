@@ -183,6 +183,7 @@ fn prepared(issuer_scope: &str) -> PreparedDelegation {
     let delegation = Delegation {
         id: uuid(DELEGATION_ID),
         objectif_id: objective.id,
+        constat_id: None,
         participant: "prospective".to_string(),
         instruction: "Vérifie une issue".to_string(),
         duree: ClasseDuree::Normale,

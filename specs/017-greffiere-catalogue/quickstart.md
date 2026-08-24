@@ -45,14 +45,14 @@ Le pied de page de `registre list` est toujours `N/M/K/P` :
 `N` ouverts, `M` récurrents, `K` gates ratés déclarés, `P` en attente de
 qualification.
 
-## Réconciliation des clôtures (noyau journal)
+## Réconciliation des clôtures
 
 La transition `open → delivered` n'existe que pour un couple déclaré
-`(constat_id, objective_id)` et une clôture d'objectif **attestée**. L'API
-journal `reconcile_attested_closures` consomme ces faits ; le raccord store
-(T1708) et le déclenchement aux commandes catalogue (T1710) restent à câbler
-hors des fichiers encore occupés par la 016. Aucune boucle résidente, aucun
-polling : la réconciliation ne tourne qu'au fil d'une commande.
+`(constat_id, objective_id)` (délégation `pour_constat` / store) et une clôture
+d'objectif **attestée** (`EtatObjectif::Clos`). Chaque commande `registre`
+appelle `reconcile_catalogue_from_store` avant son action : une clôture durable
+manquée est rattrapée à l'ouverture/consultation, sans boucle résidente ni
+polling. Une délégation ordinaire ou une clôture sans lien n'écrit rien.
 
 ## Rituel agent
 
