@@ -223,9 +223,17 @@ bridget guichet deposer delivery-report \
   et ce cas-là est encore FATAL pour Maicie, dette connue.
 - `--hash` fait exactement 64 caractères hexadécimaux.
 
-Le référent doit transmettre `objective_id` et `delegation_id` dans le
-mandat : Maicie les rend à chaque délégation. Sans eux, la consigne de dépôt
-est inapplicable — elle l'est restée plusieurs heures faute de cette ligne.
+Le référent doit transmettre **TROIS** identifiants dans le mandat, pas deux :
+`objective_id`, `delegation_id` ET le `message_id` de la délégation. Maicie
+rend les trois dans le même retour au moment du `delegate`. Sans les trois,
+la consigne de dépôt est inapplicable — elle l'est restée plusieurs heures
+d'abord faute de les transmettre du tout, puis faute d'en transmettre le
+troisième. Deux agents l'ont signalé, sous deux angles différents.
+
+Corollaire : un mandat envoyé par simple message, sans passer par
+`maicie delegate`, ne crée aucun objectif — donc aucun dépôt n'est possible.
+Toute mission dont on attend un rapport doit être déléguée, pas seulement
+écrite.
 
 **Idempotence.** Le dépôt porte une clé ; rejouer le même dépôt à
 l'identique ne crée pas de doublon. En cas de doute sur un envoi perdu,
