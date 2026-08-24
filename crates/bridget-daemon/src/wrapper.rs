@@ -16,6 +16,7 @@ use bridget_transport::{
 };
 use log::{debug, error, info, warn};
 use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -2625,10 +2626,21 @@ fn launch_acp_with_status(
         .as_deref()
         .and_then(effective_domain)
         .or_else(derive_domain);
-    let mcp_environment = vec![(
-        "BRIDGET_AGENT_INSTANCE_ID".into(),
-        instance_id.clone().into(),
-    )];
+    let name_state_path = explicit_name.map(|name| {
+        socket
+            .parent()
+            .unwrap_or(socket)
+            .join("agent-names")
+            .join(format!("active-{name}"))
+    });
+    if let Some(path) = name_state_path.as_ref() {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, explicit_name.unwrap_or_default())?;
+    }
+    let mcp_environment =
+        managed_adapter_environment(&instance_id, explicit_name, name_state_path.as_deref());
     let mcp_servers = definition
         .mcp
         .acp_session
@@ -2636,11 +2648,19 @@ fn launch_acp_with_status(
         .transpose()?
         .into_iter()
         .collect();
+    let mut native_args = definition.args.clone();
+    let ephemeral_mcp_config = apply_managed_mcp(
+        definition.protocol.as_str(),
+        definition.mcp.interactive.as_str(),
+        &mut native_args,
+        &instance_id,
+        socket,
+    )?;
     let mut transport: Box<dyn ManagedSession> = match definition.protocol.as_str() {
         "acp" => {
             let options = AcpOptions {
                 command: definition.command.clone(),
-                args: definition.args.clone(),
+                args: native_args,
                 queue_capacity: definition.queue_capacity,
                 permissions: definition.permissions.clone(),
                 notify_timeout_secs: definition.notify_timeout_secs,
@@ -2664,19 +2684,11 @@ fn launch_acp_with_status(
         "claude_stream_json" => {
             let options = ClaudeStreamJsonOptions {
                 command: definition.command.clone(),
-                args: definition.args.clone(),
+                args: native_args,
                 queue_capacity: definition.queue_capacity,
                 notify_timeout_secs: definition.notify_timeout_secs,
             };
-            let environment = mcp_environment
-                .iter()
-                .map(|(key, value)| {
-                    (
-                        key.to_string_lossy().into_owned(),
-                        value.to_string_lossy().into_owned(),
-                    )
-                })
-                .collect::<Vec<_>>();
+            let environment = string_environment(&mcp_environment);
             if managed_reporter.is_some() {
                 Box::new(
                     ClaudeStreamJsonTransport::spawn_inheriting_stderr_with_environment(
@@ -2695,20 +2707,12 @@ fn launch_acp_with_status(
         "codex_app_server" => {
             let options = CodexAppServerOptions {
                 command: definition.command.clone(),
-                args: definition.args.clone(),
+                args: native_args,
                 queue_capacity: definition.queue_capacity,
                 notify_timeout_secs: definition.notify_timeout_secs,
                 model: codex_model_from_args(&definition.args),
             };
-            let environment = mcp_environment
-                .iter()
-                .map(|(key, value)| {
-                    (
-                        key.to_string_lossy().into_owned(),
-                        value.to_string_lossy().into_owned(),
-                    )
-                })
-                .collect::<Vec<_>>();
+            let environment = string_environment(&mcp_environment);
             if managed_reporter.is_some() {
                 Box::new(
                     CodexAppServerTransport::spawn_inheriting_stderr_with_environment(
@@ -2726,6 +2730,7 @@ fn launch_acp_with_status(
         }
         _ => unreachable!("protocole validé avant le lancement"),
     };
+    let _keep_mcp_config = ephemeral_mcp_config;
     let descriptor = transport.descriptor();
     let (mut reader, initial_writer, mut my_name) = match connect_and_register_at(
         socket,
@@ -2963,6 +2968,87 @@ fn billing_guard_error(variable: &str) -> String {
         "variable d'environnement refusée pour l'équipier ACP : {variable} \
          (utilisez BRIDGET_ALLOW_API_KEY=1 uniquement si vous acceptez la facturation API)"
     )
+}
+
+fn managed_adapter_environment(
+    instance_id: &str,
+    explicit_name: Option<&str>,
+    name_state_path: Option<&Path>,
+) -> Vec<(OsString, OsString)> {
+    let mut environment = vec![(
+        OsString::from("BRIDGET_AGENT_INSTANCE_ID"),
+        OsString::from(instance_id),
+    )];
+    if let Some(name) = explicit_name.filter(|value| !value.is_empty()) {
+        environment.push((OsString::from("BRIDGET_AGENT_NAME"), OsString::from(name)));
+    }
+    if let Some(path) = name_state_path {
+        environment.push((
+            OsString::from("BRIDGET_AGENT_NAME_FILE"),
+            OsString::from(path.as_os_str()),
+        ));
+    }
+    if let Some(path) = path_with_current_exe_dir() {
+        environment.push((OsString::from("PATH"), OsString::from(path)));
+    }
+    environment
+}
+
+fn path_with_current_exe_dir() -> Option<String> {
+    let directory = std::env::current_exe()
+        .ok()?
+        .parent()?
+        .to_string_lossy()
+        .into_owned();
+    let existing = std::env::var("PATH").unwrap_or_default();
+    if existing.split(':').any(|entry| entry == directory) {
+        return Some(existing);
+    }
+    if existing.is_empty() {
+        Some(directory)
+    } else {
+        Some(format!("{directory}:{existing}"))
+    }
+}
+
+fn string_environment(environment: &[(OsString, OsString)]) -> Vec<(String, String)> {
+    environment
+        .iter()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.to_string_lossy().into_owned(),
+            )
+        })
+        .collect()
+}
+
+fn apply_managed_mcp(
+    protocol: &str,
+    interactive: &str,
+    args: &mut Vec<String>,
+    instance_id: &str,
+    socket: &Path,
+) -> Result<Option<EphemeralMcpConfig>, Box<dyn std::error::Error>> {
+    match (protocol, interactive) {
+        ("claude_stream_json", "claude") => {
+            let directory = socket.parent().ok_or("répertoire socket Bridget absent")?;
+            let config =
+                claude_mcp_config_in(directory, &interactive_mcp_server_entry()?, instance_id)?;
+            args.extend([
+                "--strict-mcp-config".to_string(),
+                "--mcp-config".to_string(),
+                config.path().display().to_string(),
+            ]);
+            Ok(Some(config))
+        }
+        ("codex_app_server", "codex") => {
+            args.insert(0, "-c".to_string());
+            args.insert(1, codex_mcp_override(&interactive_mcp_server_entry()?)?);
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
 }
 
 fn mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
@@ -3989,6 +4075,80 @@ mod reconnect_tests {
         drop(config);
 
         assert_eq!(user_config_snapshot(&root), before);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spawn_gere_injecte_mcp_identite_et_path() {
+        let root = mcp_test_root("gere-equip");
+        let socket = root.join("bridget.sock");
+        let name_file = root.join("agent-names").join("active-fable-reviewer");
+        let env =
+            managed_adapter_environment("instance-1", Some("fable-reviewer"), Some(&name_file));
+        let pairs: Vec<(String, String)> = string_environment(&env);
+        assert_eq!(
+            pairs
+                .iter()
+                .find(|(key, _)| key == "BRIDGET_AGENT_NAME")
+                .map(|(_, value)| value.as_str()),
+            Some("fable-reviewer")
+        );
+        assert_eq!(
+            pairs
+                .iter()
+                .find(|(key, _)| key == "BRIDGET_AGENT_NAME_FILE")
+                .map(|(_, value)| value.as_str()),
+            Some(name_file.to_str().unwrap())
+        );
+        let path = pairs
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .map(|(_, value)| value.as_str())
+            .unwrap();
+        let directory = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(path.split(':').any(|entry| entry == directory), "{path}");
+
+        let mut claude_args = vec!["--model".to_string(), "claude-opus-5".to_string()];
+        let config = apply_managed_mcp(
+            "claude_stream_json",
+            "claude",
+            &mut claude_args,
+            "instance-1",
+            &socket,
+        )
+        .unwrap()
+        .expect("config MCP Claude");
+        assert!(
+            claude_args
+                .iter()
+                .any(|argument| argument == "--mcp-config")
+        );
+        assert!(
+            claude_args
+                .iter()
+                .any(|argument| argument == "--strict-mcp-config")
+        );
+        assert!(config.path().exists());
+
+        let mut none_args = Vec::new();
+        assert!(
+            apply_managed_mcp("claude_stream_json", "none", &mut none_args, "x", &socket)
+                .unwrap()
+                .is_none()
+        );
+        assert!(none_args.is_empty());
+
+        let unnamed = string_environment(&managed_adapter_environment("instance-1", None, None));
+        assert!(
+            unnamed.iter().all(|(key, _)| key != "BRIDGET_AGENT_NAME"),
+            "{unnamed:?}"
+        );
+        drop(config);
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -740,15 +740,25 @@ fn cmd_rename(args: &[String]) {
 }
 
 fn current_agent_name() -> String {
-    if let Ok(path) = std::env::var("BRIDGET_AGENT_NAME_FILE")
-        && let Ok(name) = std::fs::read_to_string(path)
-    {
-        let name = name.trim();
-        if !name.is_empty() {
-            return name.to_string();
-        }
+    let file_name = std::env::var("BRIDGET_AGENT_NAME_FILE")
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok());
+    resolve_cli_agent_name(
+        file_name.as_deref(),
+        std::env::var("BRIDGET_AGENT_NAME").ok().as_deref(),
+    )
+}
+
+/// Repli binaire : le nom vient du fichier puis de l'env. Sans les deux, on
+/// n'invente pas d'identité d'équipier — le daemon conserve `cli-send-<pid>`.
+fn resolve_cli_agent_name(file_name: Option<&str>, env_name: Option<&str>) -> String {
+    if let Some(name) = file_name.map(str::trim).filter(|name| !name.is_empty()) {
+        return name.to_string();
     }
-    std::env::var("BRIDGET_AGENT_NAME").unwrap_or_else(|_| "human".to_string())
+    if let Some(name) = env_name.map(str::trim).filter(|name| !name.is_empty()) {
+        return name.to_string();
+    }
+    "human".to_string()
 }
 
 fn cmd_daemon() {
@@ -2685,6 +2695,24 @@ mod hook_tests {
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
     use std::thread;
+
+    #[test]
+    fn repli_cli_prend_le_nom_dans_l_environnement() {
+        assert_eq!(
+            resolve_cli_agent_name(None, Some("fable-reviewer")),
+            "fable-reviewer"
+        );
+        assert_eq!(
+            resolve_cli_agent_name(Some("  "), Some("codex-1")),
+            "codex-1"
+        );
+        assert_eq!(
+            resolve_cli_agent_name(Some("renamed"), Some("old")),
+            "renamed"
+        );
+        assert_eq!(resolve_cli_agent_name(None, None), "human");
+        assert_eq!(resolve_cli_agent_name(None, Some("")), "human");
+    }
 
     #[test]
     fn refus_type_inconnu_explique_l_instantane_du_daemon() {

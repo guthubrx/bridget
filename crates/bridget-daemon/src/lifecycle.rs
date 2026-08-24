@@ -239,6 +239,9 @@ pub fn build_environment(
     }
     env.entry("PATH".to_string())
         .or_insert_with(|| OsString::from(FALLBACK_PATH));
+    if let Some(path) = env.get("PATH").cloned() {
+        env.insert("PATH".to_string(), prepend_current_exe_dir(&path));
+    }
     env.entry("TMPDIR".to_string())
         .or_insert_with(|| OsString::from("/tmp"));
     for name in &definition.pass_env {
@@ -247,6 +250,25 @@ pub fn build_environment(
         }
     }
     Ok(env)
+}
+
+fn prepend_current_exe_dir(path: &OsString) -> OsString {
+    let Some(directory) = std::env::current_exe()
+        .ok()
+        .as_deref()
+        .and_then(Path::parent)
+        .map(|parent| parent.to_string_lossy().into_owned())
+    else {
+        return path.clone();
+    };
+    let existing = path.to_string_lossy();
+    if existing.split(':').any(|entry| entry == directory) {
+        return path.clone();
+    }
+    if existing.is_empty() {
+        return OsString::from(directory);
+    }
+    OsString::from(format!("{directory}:{existing}"))
 }
 
 fn command_exists(command: &str, env: &SourceEnvironment) -> bool {
@@ -447,6 +469,17 @@ mod tests {
         let env = build_environment(&definition, &source).unwrap();
         assert_eq!(env.get("SPECIAL_AUTH"), Some(&OsString::from("présent")));
         assert!(!env.contains_key("SECRET_INATTENDU"));
+        let directory = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let path = env.get("PATH").unwrap().to_string_lossy();
+        assert!(
+            path.split(':').any(|entry| entry == directory),
+            "PATH géré sans le répertoire du binaire courant: {path}"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

@@ -37,6 +37,8 @@ fn write_tool_fixture(root: &Path) -> PathBuf {
 # (permissions bloquées). Avec bypass, écrit un fichier puis le relit.
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 printf '%s\n' "$@" > "$root/claude-argv.txt"
+printf '%s\n' "$BRIDGET_AGENT_NAME" > "$root/claude-name.txt"
+printf '%s\n' "$PATH" > "$root/claude-path.txt"
 has_skip=0
 has_mode=0
 for arg in "$@"; do
@@ -64,7 +66,7 @@ done
     adapter
 }
 
-fn registry_json(adapter: &Path, with_bypass: bool) -> String {
+fn registry_json(adapter: &Path, with_bypass: bool, mcp_interactive: &str) -> String {
     let mut args = vec!["--model".to_string(), "claude-opus-5".to_string()];
     if with_bypass {
         args.extend([
@@ -82,6 +84,7 @@ fn registry_json(adapter: &Path, with_bypass: bool) -> String {
                 "permissions": "allow",
                 "queue_capacity": 2,
                 "notify_timeout_secs": 2,
+                "mcp": { "interactive": mcp_interactive },
                 "capabilities": {
                     "execution_paths": ["claude_stream_json"],
                     "models": { "claude-opus-5": { "efforts": [] } }
@@ -93,13 +96,20 @@ fn registry_json(adapter: &Path, with_bypass: bool) -> String {
 }
 
 fn run_mission(with_bypass: bool) -> (PathBuf, Result<(String, bool), String>) {
+    run_mission_with(with_bypass, "none")
+}
+
+fn run_mission_with(
+    with_bypass: bool,
+    mcp_interactive: &str,
+) -> (PathBuf, Result<(String, bool), String>) {
     let root = test_root(if with_bypass { "bypass" } else { "sans" });
     let socket = root.join(".cache/bridget/bridget.sock");
     let registry_path = root.join(".config/bridget/agents.json");
     fs::create_dir_all(socket.parent().unwrap()).unwrap();
     fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
     let adapter = write_tool_fixture(&root);
-    let registry_json = registry_json(&adapter, with_bypass);
+    let registry_json = registry_json(&adapter, with_bypass, mcp_interactive);
     fs::write(&registry_path, &registry_json).unwrap();
     fs::set_permissions(&registry_path, fs::Permissions::from_mode(0o600)).unwrap();
 
@@ -233,6 +243,32 @@ fn claude_gere_avec_bypass_ecrit_et_relit_un_fichier() {
         "argv sans skip: {argv}"
     );
     assert!(argv.contains("bypassPermissions"), "argv sans mode: {argv}");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn claude_gere_recoit_mcp_identite_et_path() {
+    let (root, outcome) = run_mission_with(true, "claude");
+    outcome.expect("mission équipée");
+    let argv = fs::read_to_string(root.join("claude-argv.txt")).unwrap();
+    assert!(argv.contains("--mcp-config"), "argv sans MCP: {argv}");
+    assert!(
+        argv.contains("--strict-mcp-config"),
+        "argv sans MCP strict: {argv}"
+    );
+    let name = fs::read_to_string(root.join("claude-name.txt")).unwrap();
+    assert_eq!(name.trim(), "claude-outil-1");
+    let path = fs::read_to_string(root.join("claude-path.txt")).unwrap();
+    let directory = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        path.split(':').any(|entry| entry == directory),
+        "PATH enfant sans binaire courant: {path}"
+    );
     let _ = fs::remove_dir_all(root);
 }
 
