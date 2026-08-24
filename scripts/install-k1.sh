@@ -93,7 +93,9 @@ LAUNCHD_DIR="${HOME}/Library/LaunchAgents"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 
 BRIDGET_SOCKET="${CACHE_DIR}/bridget.sock"
-MAICIE_DB_PATH="${CACHE_DIR}/maicie.sqlite3"
+# Répertoire privé 0700 exigé par MaicieStore (pas ~/.cache/bridget partagé).
+MAICIE_STATE_DIR="${CACHE_DIR}/maicie-state"
+MAICIE_DB_PATH="${MAICIE_STATE_DIR}/maicie.sqlite3"
 DEFAULT_CATALOGUE_PATH="${CACHE_DIR}/catalogue.jsonl"
 CATALOGUE_PATH="${CATALOGUE_PATH:-$DEFAULT_CATALOGUE_PATH}"
 
@@ -147,6 +149,8 @@ may_write() {
 ensure_dirs() {
   mkdir -p "$INSTALL_DIR" "$CONFIG_DIR_BRIDGET" "$CONFIG_DIR_MAICIE" \
     "$CACHE_DIR" "$SHARE_DIR"
+  mkdir -p -m 0700 "$MAICIE_STATE_DIR"
+  chmod 0700 "$MAICIE_STATE_DIR" 2>/dev/null || true
   case "$SERVICE_BACKEND" in
     launchd) mkdir -p "$LAUNCHD_DIR" ;;
     systemd) mkdir -p "$SYSTEMD_USER_DIR" ;;
@@ -257,6 +261,10 @@ data = {
             "notify_timeout_secs": 2,
             "pass_env": [],
             "forbidden_env": [],
+            "capabilities": {
+                "execution_paths": ["claude_stream_json"],
+                "models": {},
+            },
         }
     }
 }
@@ -280,7 +288,9 @@ write_maicie_config() {
     log "remplacement explicite (--force): config maicie ($MAICIE_CONFIG)"
     TOUCHED=$((TOUCHED + 1))
   fi
-  mkdir -p "$(dirname "$MAICIE_DB_PATH")" "$(dirname "$CATALOGUE_PATH")"
+  mkdir -p "$(dirname "$CATALOGUE_PATH")"
+  mkdir -p -m 0700 "$MAICIE_STATE_DIR"
+  chmod 0700 "$MAICIE_STATE_DIR"
   if [[ ! -e "$CATALOGUE_PATH" ]]; then
     : >"$CATALOGUE_PATH"
     created "catalogue vide ($CATALOGUE_PATH)"
@@ -303,7 +313,7 @@ write_maicie_config() {
 }
 JSON
   chmod 0600 "$MAICIE_CONFIG"
-  created "config maicie ($MAICIE_CONFIG) mode 0600, profiles=[]"
+  created "config maicie ($MAICIE_CONFIG) mode 0600, profiles=[], state_dir 0700"
 }
 
 write_maicie_suivi() {
@@ -470,7 +480,12 @@ activate_services() {
     systemd)
       log "activer services systemd --user"
       systemctl --user daemon-reload
-      systemctl --user enable --now bridget-daemon.service
+      # Relire le registre agents.json : restart si déjà actif.
+      if systemctl --user is-active --quiet bridget-daemon.service; then
+        systemctl --user restart bridget-daemon.service
+      else
+        systemctl --user enable --now bridget-daemon.service
+      fi
       systemctl --user enable --now bridget-maicie-releve.timer
       # Relève immédiate une fois (oneshot), sans attendre le timer.
       systemctl --user start bridget-maicie-releve.service 2>/dev/null || true
