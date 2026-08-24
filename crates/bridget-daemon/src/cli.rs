@@ -648,6 +648,13 @@ fn display_spawn_refusal(reason: &SpawnRefusal) -> String {
         SpawnRefusal::CommandMissing { command, registry } => {
             format!("commande '{command}' introuvable (registre {registry})")
         }
+        SpawnRefusal::UnsupportedCapability {
+            agent_type,
+            model,
+            capability,
+        } => format!(
+            "lancement refusé pour le type '{agent_type}', modèle '{model}': capacité manquante {capability}"
+        ),
         SpawnRefusal::BillingGuard { variable } => {
             format!("variable de facturation interdite présente: {variable}")
         }
@@ -2658,6 +2665,18 @@ mod hook_tests {
     }
 
     #[test]
+    fn refus_capacite_nomme_type_modele_et_capacite_absente() {
+        assert_eq!(
+            display_spawn_refusal(&SpawnRefusal::UnsupportedCapability {
+                agent_type: "codex".to_string(),
+                model: "gpt-5.6-terra".to_string(),
+                capability: "modèle pris en charge par l'adaptateur".to_string(),
+            }),
+            "lancement refusé pour le type 'codex', modèle 'gpt-5.6-terra': capacité manquante modèle pris en charge par l'adaptateur"
+        );
+    }
+
+    #[test]
     fn rendu_ledger_cli_reste_octet_pour_octet_stable() {
         let entries = vec![
             LedgerMessage {
@@ -3021,6 +3040,7 @@ mod hook_tests {
                                 interactive: "none".to_string(),
                                 acp_session: false,
                             },
+                            capabilities: bridget_transport::AdapterCapabilities::default(),
                             digest: "fixture-digest".to_string(),
                         }),
                     })

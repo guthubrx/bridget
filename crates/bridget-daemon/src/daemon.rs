@@ -374,7 +374,7 @@ enum ManagedSupervisorEvent {
     Connected {
         lease: SpawnLease,
         conn_id: String,
-        definition: bridget_transport::ResolvedAgentDefinition,
+        definition: Box<bridget_transport::ResolvedAgentDefinition>,
     },
     Failed {
         lease: SpawnLease,
@@ -1357,7 +1357,7 @@ fn poll_managed_processes(
                     let _ = events.send(ManagedSupervisorEvent::Connected {
                         lease: process.prepared.lease.clone(),
                         conn_id,
-                        definition: (*process.prepared.resolved_definition).clone(),
+                        definition: Box::new((*process.prepared.resolved_definition).clone()),
                     });
                 }
                 Err(error) => {
@@ -1403,7 +1403,7 @@ fn drain_managed_events(
                                 DaemonToWrapper::SpawnAccepted {
                                     command_id: lease.command_id.clone(),
                                     name: lease.name.clone(),
-                                    definition: Some(definition.clone()),
+                                    definition: Some((*definition).clone()),
                                 },
                                 &mut controls,
                             );
@@ -2694,36 +2694,7 @@ fn guichet_lifecycle_response(event: GuichetLifecycleEvent) -> DaemonToWrapper {
 /// Les champs du message `Register` restent dépliés ici pour refléter le
 /// protocole de transport ; les regrouper imposerait un refactor hors scope.
 fn definition_runtime(definition: &ResolvedAgentDefinition) -> Option<(String, Option<String>)> {
-    let mut model = None;
-    let mut effort = None;
-    let mut index = 0;
-    while index < definition.args.len() {
-        let argument = &definition.args[index];
-        if matches!(argument.as_str(), "--model" | "--effort" | "--effort-level") {
-            if let Some(value) = definition.args.get(index + 1) {
-                let value = unquote_definition_value(value);
-                if argument == "--model" {
-                    model = Some(value);
-                } else {
-                    effort = Some(value);
-                }
-            }
-            index += 2;
-            continue;
-        }
-        if let Some(value) = definition_assignment(argument, "model") {
-            model = Some(unquote_definition_value(value));
-        }
-        if let Some(value) = definition_assignment(argument, "model_reasoning_effort")
-            .or_else(|| definition_assignment(argument, "effort"))
-        {
-            effort = Some(unquote_definition_value(value));
-        }
-        index += 1;
-    }
-    let model = model.filter(|value| validate_runtime_value(value).is_ok())?;
-    let effort = effort.filter(|value| validate_runtime_value(value).is_ok());
-    Some((model, effort))
+    crate::registry::runtime_model_and_effort(&definition.args)
 }
 
 /// Le mode d'un équipier géré vient de sa définition figée, pas de son type
@@ -2734,24 +2705,6 @@ fn definition_presence_mode(definition: &ResolvedAgentDefinition) -> Option<Pres
         "claude_stream_json" => Some(PresenceMode::Cli),
         "tmux" => Some(PresenceMode::Tmux),
         _ => None,
-    }
-}
-
-fn definition_assignment<'a>(argument: &'a str, key: &str) -> Option<&'a str> {
-    argument
-        .strip_prefix(key)
-        .and_then(|suffix| suffix.strip_prefix('='))
-}
-
-fn unquote_definition_value(value: &str) -> String {
-    let value = value.trim();
-    if value.len() >= 2
-        && ((value.starts_with('"') && value.ends_with('"'))
-            || (value.starts_with('\'') && value.ends_with('\'')))
-    {
-        value[1..value.len() - 1].to_string()
-    } else {
-        value.to_string()
     }
 }
 
@@ -10228,6 +10181,7 @@ mod presence_tests {
                     interactive: "none".to_string(),
                     acp_session: false,
                 },
+                capabilities: bridget_transport::AdapterCapabilities::default(),
                 digest: "fixture-digest".to_string(),
             }),
             cwd: process_root.clone(),

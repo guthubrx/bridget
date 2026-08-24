@@ -108,6 +108,11 @@ by the adapter’s embedded version. Bridget refuses API keys declared in
 `BRIDGET_ALLOW_API_KEY=1` is an explicit override to use only when API billing
 is intended.
 
+Each launched type also declares `capabilities`: `execution_paths`, followed
+by the exact supported models and effort labels. The matrix is part of the
+frozen definition and its digest: an absent model, effort, or path is rejected
+before a process exists, without querying the pilot at startup.
+
 Gemini remains declarative, but individual accounts are not supported as of
 2026-08-22: Google requires migration to Antigravity. Existing tmux agents,
 started without `--equipier`, keep their `💬` behaviour.

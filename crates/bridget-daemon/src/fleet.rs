@@ -961,6 +961,7 @@ mod tests {
                 interactive: "none".to_string(),
                 acp_session: false,
             },
+            capabilities: bridget_transport::AdapterCapabilities::default(),
             digest: "fixture-digest".to_string(),
         }
     }

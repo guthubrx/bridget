@@ -11,6 +11,7 @@ use crate::fleet::{
 use crate::idempotency::SpawnCommandIssue;
 use crate::registry::{
     AgentDefinition, AgentRegistry, allow_api_key_value, forbidden_environment_variable,
+    validate_launch_capabilities,
 };
 use bridget_transport::{ResolvedAgentDefinition, SpawnRefusal};
 use std::collections::BTreeMap;
@@ -65,6 +66,16 @@ pub fn submit_spawn(
 ) -> Result<SpawnDecision, FleetError> {
     if recovering && !supervisor.knows_command(&order.command_id) {
         return Ok(SpawnDecision::Rejected(SpawnRefusal::DaemonRecovering));
+    }
+    // Une capacité absente est une propriété du registre déclaratif, pas une
+    // issue de la saga. Pour une commande neuve, elle est donc refusée avant
+    // toute réservation durable et, a fortiori, avant toute création de
+    // processus. Une commande connue conserve son rejeu figé ci-dessous.
+    if !supervisor.knows_command(&order.command_id)
+        && let Ok(definition) = registry.get(&order.agent_type)
+        && let Err(reason) = validate_launch_capabilities(&order.agent_type, definition)
+    {
+        return Ok(SpawnDecision::Rejected(reason));
     }
     match supervisor.request_spawn(order, now)? {
         SpawnSubmission::Start(lease) => {
@@ -150,6 +161,7 @@ fn prepare_spawn_parts(
             known_types: registry.known_types(),
             registry: registry.source().display().to_string(),
         })?;
+    validate_launch_capabilities(agent_type, definition)?;
     if let Some(variable) = forbidden_environment_variable(
         definition,
         allow_api_key_value(
@@ -244,6 +256,7 @@ fn refusal_record(reason: &SpawnRefusal) -> (&'static str, String) {
     let category = match reason {
         SpawnRefusal::UnknownType { .. } => "unknown_type",
         SpawnRefusal::CommandMissing { .. } => "command_missing",
+        SpawnRefusal::UnsupportedCapability { .. } => "unsupported_capability",
         SpawnRefusal::BillingGuard { .. } => "billing_guard",
         SpawnRefusal::NameActive => "name_active",
         SpawnRefusal::EnvUnfit { .. } => "env_unfit",
@@ -288,6 +301,8 @@ fn decision_from_issue(issue: SpawnCommandIssue, quota: usize) -> SpawnDecision 
                     command: reason,
                     registry: "registre de l'issue initiale".to_string(),
                 },
+                "unsupported_capability" => serde_json::from_str(&reason)
+                    .unwrap_or(SpawnRefusal::NegotiationFailed { detail: reason }),
                 "billing_guard" => SpawnRefusal::BillingGuard { variable: reason },
                 "name_active" => SpawnRefusal::NameActive,
                 "env_unfit" => SpawnRefusal::EnvUnfit { detail: reason },
@@ -353,6 +368,26 @@ mod tests {
         .unwrap()
     }
 
+    fn registry_with_capabilities(args: &[&str], capabilities: serde_json::Value) -> AgentRegistry {
+        AgentRegistry::from_json(
+            &serde_json::json!({
+                "agents": {
+                    "fixture": {
+                        "command": "/bin/sh",
+                        "args": args,
+                        "protocol": "acp",
+                        "forbidden_env": [],
+                        "pass_env": ["SPECIAL_AUTH"],
+                        "capabilities": capabilities
+                    }
+                }
+            })
+            .to_string(),
+            "/tmp/t905-capabilities.json",
+        )
+        .unwrap()
+    }
+
     fn source(home: &Path) -> SourceEnvironment {
         BTreeMap::from([
             ("HOME".to_string(), home.as_os_str().to_owned()),
@@ -404,9 +439,29 @@ mod tests {
         let root = root("claude-stream-json");
         fs::create_dir_all(&root).unwrap();
         let supervisor = supervisor(&root, 1);
+        let registry = AgentRegistry::from_json(
+            &serde_json::json!({
+                "agents": {
+                    "fixture": {
+                        "command": "/bin/sh",
+                        "args": ["--model", "claude-opus-5"],
+                        "protocol": "claude_stream_json",
+                        "forbidden_env": [],
+                        "pass_env": ["SPECIAL_AUTH"],
+                        "capabilities": {
+                            "execution_paths": ["claude_stream_json"],
+                            "models": {"claude-opus-5": {"efforts": []}}
+                        }
+                    }
+                }
+            })
+            .to_string(),
+            "/tmp/t905-claude-native.json",
+        )
+        .unwrap();
         let decision = submit_spawn(
             &supervisor,
-            &registry("/bin/sh", "claude_stream_json", &[]),
+            &registry,
             &source(&root),
             &order(&root, "claude-native", "claude-agent"),
             NOW,
@@ -414,6 +469,82 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(decision, SpawnDecision::Ready(_)));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn capacite_absente_refuse_avant_reservation_et_sans_processus() {
+        let root = root("capability-preflight");
+        fs::create_dir_all(&root).unwrap();
+        let supervisor = supervisor(&root, 1);
+        let registry = registry_with_capabilities(
+            &["--model", "gpt-5.6-terra"],
+            serde_json::json!({
+                "execution_paths": ["acp"],
+                "models": {"gpt-5.5": {"efforts": ["low"]}}
+            }),
+        );
+        let order = order(&root, "command-unsupported-model", "never-started");
+        let refusal = rejection(
+            submit_spawn(&supervisor, &registry, &source(&root), &order, NOW, false).unwrap(),
+        );
+        assert_eq!(
+            refusal,
+            SpawnRefusal::UnsupportedCapability {
+                agent_type: "fixture".to_string(),
+                model: "gpt-5.6-terra".to_string(),
+                capability: "modèle pris en charge par l'adaptateur".to_string(),
+            }
+        );
+        assert!(!supervisor.knows_command(&order.command_id));
+        assert_eq!(supervisor.active_count(), 0);
+        // Mutation discriminante : déplacer la garde après request_spawn rend
+        // cette commande connue et transformerait ce refus sans processus en
+        // état durable résiduel.
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn effort_non_declare_est_refuse_et_reprise_revalidee_sur_definition_figee() {
+        let root = root("capability-effort");
+        fs::create_dir_all(&root).unwrap();
+        let registry = registry_with_capabilities(
+            &["model=gpt-5.6-terra", "effort=high"],
+            serde_json::json!({
+                "execution_paths": ["acp"],
+                "models": {"gpt-5.6-terra": {"efforts": ["low"]}}
+            }),
+        );
+        let supervisor = supervisor(&root, 1);
+        let request = order(&root, "command-unsupported-effort", "never-started");
+        assert!(matches!(
+            rejection(
+                submit_spawn(&supervisor, &registry, &source(&root), &request, NOW, false)
+                    .unwrap()
+            ),
+            SpawnRefusal::UnsupportedCapability { ref capability, .. }
+                if capability == "effort 'high' accepté par le modèle"
+        ));
+
+        let resolved = registry.resolved_definition("fixture").unwrap();
+        let candidate = RecoveryCandidate {
+            lease: SpawnLease {
+                command_id: "recovery-unsupported-effort".to_string(),
+                name: "never-started".to_string(),
+                instance_id: "instance-recovery".to_string(),
+                generation: 1,
+                deadline_at: NOW + 10,
+                persistent: true,
+            },
+            agent_type: "fixture".to_string(),
+            cwd: root.clone(),
+            resolved_definition: Some(resolved),
+        };
+        assert!(matches!(
+            prepare_recovery(&source(&root), candidate),
+            Err(SpawnRefusal::UnsupportedCapability { ref capability, .. })
+                if capability == "effort 'high' accepté par le modèle"
+        ));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -457,8 +588,10 @@ mod tests {
             ("cwd", SpawnRefusal::CwdGone),
             (
                 "negotiation",
-                SpawnRefusal::NegotiationFailed {
-                    detail: "le protocole 'tmux' n'est pas ACP".to_string(),
+                SpawnRefusal::UnsupportedCapability {
+                    agent_type: "fixture".to_string(),
+                    model: "<non déclaré>".to_string(),
+                    capability: "chemin d'exécution 'tmux'".to_string(),
                 },
             ),
             ("timeout", SpawnRefusal::SpawnTimeout),
