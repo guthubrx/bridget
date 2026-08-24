@@ -4178,19 +4178,20 @@ mod reconnect_tests {
 
     #[test]
     fn le_domaine_surcharge_prime_sur_le_derive() {
-        let path = domain_state_path("agent-de-test-domaine");
+        // Même remède que les bases SQLite : le composant d'agent est la
+        // source d'unicité du fichier `agent-domains/`. Un nom figé collisionne
+        // dès que deux tests du binaire écrivent le même chemin.
+        let agent = format!("agent-de-test-domaine-{}", uuid::Uuid::new_v4());
+        let path = domain_state_path(&agent);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(&path, "revue-croisee\n").unwrap();
-        assert_eq!(
-            effective_domain("agent-de-test-domaine").as_deref(),
-            Some("revue-croisee")
-        );
+        assert_eq!(effective_domain(&agent).as_deref(), Some("revue-croisee"));
 
         // Sans trace disque, on retombe sur le domaine dérivé.
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(effective_domain("agent-de-test-domaine"), derive_domain());
+        assert_eq!(effective_domain(&agent), derive_domain());
     }
 
     #[test]
