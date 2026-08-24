@@ -206,6 +206,23 @@ deux échecs successifs pour un même agent.)*
   complète verte ne dit donc rien de leur état. Ils doivent être lancés
   explicitement, y compris APRÈS un merge — c'est en ne le faisant pas que la
   régression du gate fondateur est passée sur `main` le 24/08.
+- **Comptes REPRODUITS, jamais un seul passage.** Sur un banc dont la
+  stabilité n'est pas établie, un compte unique n'atteste rien : annoncer le
+  NOMBRE de passages et le taux de rouges. *(Mesuré le 2026-08-24 : `cargo
+  test -p maicie` rend 264/0 sept fois sur dix et 263/1 trois fois sur dix,
+  toujours sur le même test à échéance absolue, vert en tir ciblé 5/5 —
+  l'auteur et un relecteur avaient tous deux annoncé « 264/0 » sur un
+  passage unique et bâti leurs conclusions dessus.)* Corollaire du même
+  incident : un rouge intermittent se qualifie par un TAUX mesuré des deux
+  côtés (lot et base), jamais par une impression.
+- **Une ABSENCE se vérifie dans la durée, jamais à l'instant.** Le ledger a
+  une latence d'inscription qui a atteint 8 minutes sous la charge du
+  2026-08-24 ; `outcome_unknown` est rendu immédiatement et n'en dit rien.
+  *(Deux relecteurs et le référent ont conclu à un « canal latéral muet »
+  puis se sont rétractés : les messages étaient en route. Un constat
+  Bloquant a été gravé à tort et rectifié.)* Avant de déclarer une perte :
+  relire le ledger plus tard, et chercher une contre-preuve (un autre
+  échange du même type qui, lui, est passé).
 - **Un rouge n'est jamais requalifié en « instable » sans preuve.** Trois tests
   ont échoué de façon intermittente cette nuit ; deux cachaient un vrai défaut.
   La preuve d'instabilité est un taux mesuré, pas une impression.
