@@ -206,3 +206,50 @@ indépendamment** (formule de relec4, reprise par relec2 contre lui-même) :
 « nous avons pris un tirage pour une mesure PARCE QU'IL CONFIRMAIT LE COMPTE
 DE L'AUTEUR ». Un compte de tests qui tombe juste sur l'annonce de l'auteur
 doit être rejoué, pas célébré.
+
+## Troisième motif de BLOCKED : un doublon de MANDAT, prouvé
+
+Trouvé par relec1 APRÈS son verdict, sur la consigne du référent « trouve ce
+que personne n'a tenté » — donc une trouvaille imputable à la relance, pas au
+tour initial. Tout le collège avait vérifié « zéro doublon » au niveau de la
+TABLE `routine_occurrences` (clé primaire, insert direct rendant Conflict).
+**Personne n'avait compté l'objet qui a un effet réel : la DÉLÉGATION.**
+
+`delegate()` (routines.rs:337) s'exécute AVANT `insert_occurrence()` (:358),
+sans transaction commune. Entre les deux, un mandat est parti et rien ne
+l'atteste. Banc monté, crash simulé dans la fenêtre, reprise deux minutes
+plus tard (période minimale 60 s) :
+
+- mandat initial émis (bucket N), délégations en base = 1
+- à la reprise, le bucket N est marqué `sautee / horloge_arretee`,
+  `delegation_id = None`
+- une nouvelle occurrence s'ouvre au bucket N+2 avec un SECOND mandat
+- **délégations en base au total = 2**
+- CONTRÔLE POSITIF, même scénario sans le crash : 1 délégation, 0 nouvelle
+  occurrence. La fenêtre est la seule cause.
+
+Trois conséquences, toutes vérifiées : (1) **deux mandats pour un tour de
+routine** — un agent reçoit deux fois la même mission, ou deux agents la
+reçoivent ; l'invariant central « rejeu = zéro doublon » est faux au seul
+niveau qui compte. (2) **L'occurrence ment activement** : elle dit `sautee /
+horloge_arretee` alors qu'une délégation existe et vit — corrobore relec3 sur
+la fausseté du motif, par une cause qu'il n'avait pas. (3) **Le mandat
+devient orphelin** : aucune occurrence ne le référence, il est invisible au
+`routine show`, et `open_occurrence_for_routine` ne le voit pas — c'est ce
+qui CONTOURNE l'invariant « occurrence vivante diffère la suivante ».
+L'invariant tient dans le test et se fait déborder en production par un
+chemin qu'aucun oracle n'exerce. Aggravant : le battement s'exécute à chaque
+commande maicie, et il y a eu deux pannes totales de Maicie cette nuit — la
+fenêtre n'est pas théorique.
+
+Remède suggéré (le moins invasif des trois proposés) : au moment de marquer
+un bucket `sautee`, vérifier d'abord qu'aucune délégation ne porte la clé
+`routine:{id}:{bucket}` — si elle existe, l'occurrence doit être `ouverte` et
+adopter le mandat existant, jamais `sautee`. Banc conservé pour l'auteur,
+rouge par construction, avec son contrôle positif.
+
+À noter pour la mesure du dispositif : relec1 a d'abord soupçonné que le
+rejeu cassait l'idempotence de délégation (les horodatages dans la requête),
+l'a VÉRIFIÉ et RÉFUTÉ lui-même (`canonical_request_bytes` ne sérialise aucun
+horodatage), puis a trouvé le vrai chemin. « Ma lentille voulait le contraire,
+et c'est le moment où il faut vérifier une fois de plus. »
