@@ -385,6 +385,7 @@ impl Fixture {
                 required_tags: &[],
                 duration: ClasseDuree::Normale,
                 reply: false,
+                constat_id: None,
                 idempotency_key: "status-sources",
                 now: 100,
                 retry_until: 150,

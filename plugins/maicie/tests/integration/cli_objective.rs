@@ -255,6 +255,7 @@ impl Fixture {
             required_tags: &[],
             duration: ClasseDuree::Normale,
             reply: true,
+            constat_id: None,
             idempotency_key: "cli-objective-seed",
             now: 100,
             retry_until: 150,

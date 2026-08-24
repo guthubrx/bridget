@@ -223,6 +223,13 @@ pub struct RecuCorrelation {
 pub struct Delegation {
     pub id: Uuid,
     pub objectif_id: Uuid,
+    /// Identifiant exact du constat ayant motivé cette délégation.
+    ///
+    /// Le champ est absent des délégations ordinaires et des données
+    /// historiques. Lorsqu'il est présent, il naît avec la délégation : il ne
+    /// peut jamais être ajouté a posteriori ni reconstruit depuis un texte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constat_id: Option<String>,
     pub participant: String,
     pub instruction: String,
     pub duree: ClasseDuree,
@@ -250,12 +257,52 @@ impl Delegation {
         Ok(Self {
             id: Uuid::new_v4(),
             objectif_id,
+            constat_id: None,
             participant,
             instruction,
             duree,
             etat: EtatDelegation::Creee,
             raison,
         })
+    }
+
+    /// Lie la délégation en cours de construction à un constat exact.
+    ///
+    /// Cette méthode consomme `self` afin que l'appelant construise le fait
+    /// avant la transaction de création. Le store n'expose aucune primitive
+    /// permettant de greffer ce lien sur une délégation déjà persistée.
+    pub fn pour_constat(mut self, constat_id: impl Into<String>) -> Result<Self, DomainError> {
+        let constat_id = constat_id.into();
+        validate_constat_id(&constat_id)?;
+        if self.constat_id.is_some() {
+            return Err(DomainError::TransitionInterdite);
+        }
+        self.constat_id = Some(constat_id);
+        Ok(self)
+    }
+
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        if self.participant.trim().is_empty()
+            || self.instruction.trim().is_empty()
+            || self.raison.trim().is_empty()
+        {
+            return Err(DomainError::DonneeInvalide("délégation incomplète"));
+        }
+        if let Some(constat_id) = &self.constat_id {
+            validate_constat_id(constat_id)?;
+        }
+        Ok(())
+    }
+
+    /// Projette le fait durable sans inventer de lien pour une délégation
+    /// historique ou ordinaire.
+    pub fn lien_arbitrage(&self) -> Result<Option<LienArbitrage>, DomainError> {
+        self.verifier()?;
+        Ok(self.constat_id.as_ref().map(|constat_id| LienArbitrage {
+            constat_id: constat_id.clone(),
+            objectif_id: self.objectif_id,
+            delegation_id: self.id,
+        }))
     }
 
     pub fn transition(&mut self, next: EtatDelegation) -> Result<(), DomainError> {
@@ -280,6 +327,27 @@ impl Delegation {
         self.etat = EtatDelegation::Annulee;
         Ok(())
     }
+}
+
+/// Fait durable reliant un constat au seul objectif porté par sa délégation.
+///
+/// Il s'agit d'une projection du document canonique [`Delegation`], jamais
+/// d'une deuxième source de vérité ni d'une corrélation calculée.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LienArbitrage {
+    pub constat_id: String,
+    pub objectif_id: Uuid,
+    pub delegation_id: Uuid,
+}
+
+fn validate_constat_id(constat_id: &str) -> Result<(), DomainError> {
+    if constat_id.is_empty()
+        || constat_id.trim() != constat_id
+        || constat_id.chars().any(char::is_control)
+    {
+        return Err(DomainError::DonneeInvalide("constat_id invalide"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

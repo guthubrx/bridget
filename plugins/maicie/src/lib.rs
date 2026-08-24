@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod bridget_client;
+pub mod catalogue;
 pub mod config;
 pub mod domain;
 pub mod outbox;

@@ -196,6 +196,78 @@ fn refuse_deux_profils_distincts_pour_le_meme_agent_runtime() {
     assert!(error.to_string().contains("nom d'agent duplique"));
 }
 
+#[test]
+fn accepte_un_catalogue_path_absolu_declare_sans_en_inventer_un() {
+    let catalogue = std::env::temp_dir().join(format!(
+        "maicie-declared-catalogue-{}-{}.jsonl",
+        std::process::id(),
+        NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::write(&catalogue, "").unwrap();
+    let body = VALID_CONFIG.replace(
+        "\"profiles\": [{",
+        &format!(
+            "\"catalogue_path\": \"{}\",\n  \"profiles\": [{{",
+            catalogue.display()
+        ),
+    );
+    let fixture = Fixture::new("catalogue-ok", &body);
+    let config = MaicieConfig::load(&fixture.path).unwrap();
+    assert_eq!(config.catalogue_path.as_deref(), Some(catalogue.as_path()));
+    let _ = fs::remove_file(&catalogue);
+
+    let without = Fixture::new("catalogue-absent", VALID_CONFIG);
+    assert_eq!(
+        MaicieConfig::load(&without.path).unwrap().catalogue_path,
+        None
+    );
+}
+
+#[test]
+fn refuse_catalogue_path_vers_tasks_md_ou_symlink() {
+    let root = std::env::temp_dir().join(format!(
+        "maicie-config-cat-bad-{}",
+        NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let tasks = root.join("tasks.md");
+    fs::write(&tasks, "x").unwrap();
+    let body_tasks = VALID_CONFIG.replace(
+        "\"profiles\": [{",
+        &format!(
+            "\"catalogue_path\": \"{}\",\n  \"profiles\": [{{",
+            tasks.display()
+        ),
+    );
+    let fixture_tasks = Fixture::new("catalogue-tasks", &body_tasks);
+    let err_tasks = MaicieConfig::load(&fixture_tasks.path).unwrap_err();
+    assert!(
+        err_tasks.to_string().contains("catalogue_path")
+            || err_tasks.to_string().contains("artefact"),
+        "{err_tasks}"
+    );
+
+    let real = root.join("real.jsonl");
+    fs::write(&real, "").unwrap();
+    let link = root.join("link.jsonl");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let body_link = VALID_CONFIG.replace(
+        "\"profiles\": [{",
+        &format!(
+            "\"catalogue_path\": \"{}\",\n  \"profiles\": [{{",
+            link.display()
+        ),
+    );
+    let fixture_link = Fixture::new("catalogue-link", &body_link);
+    let err_link = MaicieConfig::load(&fixture_link.path).unwrap_err();
+    assert!(
+        err_link.to_string().contains("symlink") || err_link.to_string().contains("catalogue_path"),
+        "{err_link}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
 struct Fixture {
     path: PathBuf,
 }

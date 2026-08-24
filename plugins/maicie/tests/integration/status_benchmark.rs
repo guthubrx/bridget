@@ -329,6 +329,7 @@ impl BenchmarkFixture {
                     required_tags: &[],
                     duration: ClasseDuree::Normale,
                     reply: false,
+                    constat_id: None,
                     idempotency_key: &key,
                     now: 100,
                     retry_until: 150,

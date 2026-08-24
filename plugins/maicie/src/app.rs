@@ -5,6 +5,9 @@
 //! d'écrire l'agrégat objectif/délégation/outbox dans le store privé.
 
 use crate::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
+use crate::catalogue::{
+    ArbitrationLink, AttestedClosure, CatalogueError, CatalogueJournal, ReconcileReport,
+};
 use crate::config::DurationClasses;
 use crate::domain::guichet::{
     GuichetDomainError, ProjectionCoordinationState, ProjectionDurationClass, ProjectionFreshness,
@@ -414,6 +417,9 @@ pub struct DelegateRequest<'a> {
     pub required_tags: &'a [String],
     pub duration: ClasseDuree,
     pub reply: bool,
+    /// Identifiant exact du constat motivant cette délégation, s'il est déclaré
+    /// à la construction. Absent : délégation ordinaire sans lien d'arbitrage.
+    pub constat_id: Option<&'a str>,
     /// Clé opaque fournie par le client. Elle est l'identité durable de la
     /// commande : un rejeu avec les mêmes octets canoniques rend les mêmes IDs.
     pub idempotency_key: &'a str,
@@ -871,6 +877,10 @@ pub fn delegate(
         request.duration,
         reason,
     )
+    .and_then(|delegation| match request.constat_id {
+        Some(constat_id) => delegation.pour_constat(constat_id),
+        None => Ok(delegation),
+    })
     .map_err(|_| DelegateError::Invalid("délégation invalide"))?;
     let body_bytes = request.goal.as_bytes().to_vec();
     let outbox = OutboxDelegation {
@@ -925,6 +935,8 @@ struct CanonicalDelegateRequest<'a> {
     required_tags: Vec<&'a str>,
     duration: &'static str,
     reply: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    constat_id: Option<&'a str>,
 }
 
 fn canonical_request_bytes(request: &DelegateRequest<'_>) -> Result<Vec<u8>, DelegateError> {
@@ -952,8 +964,111 @@ fn canonical_request_bytes(request: &DelegateRequest<'_>) -> Result<Vec<u8>, Del
         required_tags,
         duration: duration_name(request.duration),
         reply: request.reply,
+        constat_id: request.constat_id,
     })
     .map_err(|_| DelegateError::Invalid("commande delegate non sérialisable"))
+}
+
+/// Réconcilie le journal catalogue contre les faits durables du store.
+///
+/// Lit uniquement `delegation_arbitration_links()` et les objectifs `Clos` :
+/// aucune horloge locale, aucune homonymie, aucune invention de lien. Une
+/// délégation ordinaire ou une clôture sans lien n'écrit rien.
+pub fn reconcile_catalogue_from_store(
+    store: &MaicieStore,
+    journal: &mut CatalogueJournal,
+) -> Result<ReconcileReport, CatalogueReconcileError> {
+    let links = store
+        .delegation_arbitration_links()
+        .map_err(CatalogueReconcileError::Store)?
+        .into_iter()
+        .map(|link| ArbitrationLink {
+            constat_id: link.constat_id,
+            objective_id: link.objectif_id.to_string(),
+        })
+        .collect::<Vec<_>>();
+    let closures = attested_closures_from_store(store)?;
+    journal
+        .reconcile_attested_closures(&links, &closures)
+        .map_err(CatalogueReconcileError::Catalogue)
+}
+
+fn attested_closures_from_store(
+    store: &MaicieStore,
+) -> Result<Vec<AttestedClosure>, CatalogueReconcileError> {
+    let mut closures = Vec::new();
+    for snapshot in store
+        .objective_snapshots(None)
+        .map_err(CatalogueReconcileError::Store)?
+    {
+        if snapshot.objective.etat != EtatObjectif::Clos {
+            continue;
+        }
+        closures.push(AttestedClosure {
+            objective_id: snapshot.objective.id.to_string(),
+            observed_at: unix_secs_to_rfc3339_z(snapshot.objective.mis_a_jour_at).ok_or(
+                CatalogueReconcileError::Invalid("horodatage de clôture hors borne"),
+            )?,
+        });
+    }
+    Ok(closures)
+}
+
+/// Erreurs fermées du raccord store → journal pour les clôtures attestées.
+#[derive(Debug)]
+pub enum CatalogueReconcileError {
+    Store(StoreError),
+    Catalogue(CatalogueError),
+    Invalid(&'static str),
+}
+
+impl fmt::Display for CatalogueReconcileError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Store(error) => write!(formatter, "réconciliation catalogue : {error}"),
+            Self::Catalogue(error) => write!(formatter, "réconciliation catalogue : {error}"),
+            Self::Invalid(reason) => write!(formatter, "réconciliation catalogue : {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for CatalogueReconcileError {}
+
+/// Convertit un horodatage Unix durable (secondes) en RFC 3339 UTC (`…Z`).
+///
+/// Le journal n'accepte que des horodatages à fuseau explicite ; le store
+/// conserve des secondes Unix. La conversion est pure et déterministe.
+pub fn unix_secs_to_rfc3339_z(secs: i64) -> Option<String> {
+    if secs < 0 {
+        return None;
+    }
+    let days = secs / 86_400;
+    let tod = (secs % 86_400) as u32;
+    let hour = tod / 3_600;
+    let minute = (tod % 3_600) / 60;
+    let second = tod % 60;
+    let (year, month, day) = civil_from_days_since_unix_epoch(days);
+    if !(1..=9999).contains(&year) {
+        return None;
+    }
+    Some(format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"
+    ))
+}
+
+/// Algorithme civil de Howard Hinnant : jours depuis 1970-01-01 → (Y, M, D).
+fn civil_from_days_since_unix_epoch(days: i64) -> (i32, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y as i32, m as u32, d as u32)
 }
 
 fn duration_name(duration: ClasseDuree) -> &'static str {

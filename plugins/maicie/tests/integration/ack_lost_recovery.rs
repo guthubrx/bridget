@@ -885,6 +885,7 @@ fn fixture_with_body(
     let delegation = Delegation {
         id: uuid(DELEGATION_ID),
         objectif_id: objective.id,
+        constat_id: None,
         participant: "prospective".to_string(),
         instruction: body.clone(),
         duree: ClasseDuree::Normale,

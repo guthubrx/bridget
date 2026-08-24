@@ -37,6 +37,7 @@ fn seed(database: &Path) -> maicie::app::DelegationCreated {
         required_tags: &[],
         duration: ClasseDuree::Normale,
         reply: true,
+        constat_id: None,
         idempotency_key: "guichet-projection-seed",
         now: 900,
         retry_until: 1_100,

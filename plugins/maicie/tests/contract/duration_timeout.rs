@@ -49,6 +49,7 @@ fn les_trois_classes_produisent_le_timeout_et_l_echeance_contractuelle_persistes
             required_tags: &[],
             duration,
             reply: false,
+            constat_id: None,
             idempotency_key: match index {
                 0 => "duration-short",
                 1 => "duration-normal",

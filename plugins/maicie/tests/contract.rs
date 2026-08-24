@@ -1,6 +1,9 @@
 #[path = "contract/domain.rs"]
 mod domain;
 
+#[path = "contract/catalogue.rs"]
+mod catalogue;
+
 #[path = "contract/delegate.rs"]
 mod delegate;
 #[path = "contract/domain_json.rs"]

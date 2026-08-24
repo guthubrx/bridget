@@ -7,15 +7,16 @@
 
 use maicie::MAICIE_IDENTITY;
 use maicie::app::{
-    DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, LocalProfileApproval,
-    ObjectiveError, ProfileActivationError, ProfileActivationProposalRequest, add_participant,
-    approve_profile_activation, close, delegate, delegated_participants,
-    propose_profile_activation, remove_participant, status, stored_profile_activation_proposal,
-    summarize,
+    CatalogueReconcileError, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate,
+    LocalProfileApproval, ObjectiveError, ProfileActivationError, ProfileActivationProposalRequest,
+    add_participant, approve_profile_activation, close, delegate, delegated_participants,
+    propose_profile_activation, reconcile_catalogue_from_store, remove_participant, status,
+    stored_profile_activation_proposal, summarize,
 };
 use maicie::bridget_client::{
     AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits,
 };
+use maicie::catalogue::{self, AppendOutcome, CatalogueEntry, CatalogueError, CatalogueJournal};
 use maicie::config::{ConfigError, MaicieConfig};
 use maicie::domain::{
     ClasseDuree, DecisionCoordination, Delegation, EtatFlux, ObjectifCoordonne, SourceSnapshot,
@@ -67,6 +68,7 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
         Command::Status(status_args) => run_status(status_args),
         Command::Objective(objective_args) => run_objective(objective_args),
         Command::Profile(profile_args) => run_profile(profile_args),
+        Command::Registre(registre_args) => run_registre(registre_args),
     }
 }
 
@@ -348,6 +350,7 @@ fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
         // demander une réponse Bridget serait refusé avant livraison. La
         // corrélation de réponse attend T015b/Subscribe, sans la simuler ici.
         reply: false,
+        constat_id: arguments.constat_id.as_deref(),
         idempotency_key: &idempotency_key,
         now,
         retry_until,
@@ -621,6 +624,42 @@ enum Command {
     Status(StatusArgs),
     Objective(ObjectiveArgs),
     Profile(ProfileArgs),
+    Registre(RegistreArgs),
+}
+
+#[derive(Debug)]
+struct RegistreArgs {
+    config: PathBuf,
+    action: RegistreAction,
+}
+
+#[derive(Debug)]
+enum RegistreAction {
+    /// Vue humaine d'autorité : projection pure, aucune écriture.
+    List {
+        /// Affiche aussi les entrées encore en attente de qualification.
+        attente: bool,
+    },
+    /// Append d'une ligne JSON fermée `add` (idempotent aux octets identiques).
+    Add { line: String },
+    /// Migration d'un corpus prose intermédiaire vers `pending_qualification`.
+    Migrer { depuis: PathBuf },
+    /// Qualification humaine : append d'un `add` au texte verbatim du pending.
+    Qualifier {
+        pending_id: String,
+        severity: catalogue::Severity,
+        source_kind: catalogue::MissionSourceKind,
+        source_id: String,
+        source_failed: bool,
+        date: String,
+    },
+    /// Transcription FR-1711 : sévérité dérivée si fait couvert, sinon pending.
+    Consign {
+        fait: String,
+        source_id: String,
+        date: String,
+        text: String,
+    },
 }
 
 #[derive(Debug)]
@@ -630,6 +669,7 @@ struct DelegateArgs {
     target: Option<String>,
     required_tags: Vec<String>,
     duration: ClasseDuree,
+    constat_id: Option<String>,
     idempotency_key: Option<String>,
     json: bool,
 }
@@ -690,7 +730,311 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
         "status" => parse_status(tail).map(Command::Status),
         "objective" => parse_objective(tail).map(Command::Objective),
         "profile" => parse_profile(tail).map(Command::Profile),
+        "registre" => parse_registre(tail).map(Command::Registre),
         _ => Err(CliError::Usage("commande inconnue : delegate attendu")),
+    }
+}
+
+fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
+    let Some((verb, tail)) = arguments.split_first() else {
+        return Err(CliError::Usage(
+            "action registre obligatoire : list, add, migrer, qualifier ou consign",
+        ));
+    };
+    let mut config = None;
+    let mut line = None;
+    let mut depuis = None;
+    let mut pending_id = None;
+    let mut severity = None;
+    let mut source_kind = None;
+    let mut source_id = None;
+    let mut date = None;
+    let mut attente = false;
+    let mut source_failed = false;
+    let mut fait = None;
+    let mut text = None;
+    let mut index = 0;
+    while index < tail.len() {
+        match tail[index].as_str() {
+            "--config" => set_once_path(&mut config, next_value(tail, &mut index, "--config")?)?,
+            "--line" => {
+                set_once_string(&mut line, next_value(tail, &mut index, "--line")?, "line")?
+            }
+            "--depuis" => set_once_path(&mut depuis, next_value(tail, &mut index, "--depuis")?)?,
+            "--pending" => set_once_string(
+                &mut pending_id,
+                next_value(tail, &mut index, "--pending")?,
+                "pending",
+            )?,
+            "--severity" => set_once_string(
+                &mut severity,
+                next_value(tail, &mut index, "--severity")?,
+                "severity",
+            )?,
+            "--source-kind" => set_once_string(
+                &mut source_kind,
+                next_value(tail, &mut index, "--source-kind")?,
+                "source-kind",
+            )?,
+            "--source-id" => set_once_string(
+                &mut source_id,
+                next_value(tail, &mut index, "--source-id")?,
+                "source-id",
+            )?,
+            "--date" => {
+                set_once_string(&mut date, next_value(tail, &mut index, "--date")?, "date")?
+            }
+            "--fait" => {
+                set_once_string(&mut fait, next_value(tail, &mut index, "--fait")?, "fait")?
+            }
+            "--text" => {
+                set_once_string(&mut text, next_value(tail, &mut index, "--text")?, "text")?
+            }
+            "--attente" => {
+                if attente {
+                    return Err(CliError::Usage("option --attente dupliquée"));
+                }
+                attente = true;
+            }
+            "--source-failed" => {
+                if source_failed {
+                    return Err(CliError::Usage("option --source-failed dupliquée"));
+                }
+                source_failed = true;
+            }
+            _ => return Err(CliError::Usage("option registre inconnue")),
+        }
+        index += 1;
+    }
+    let config = config.ok_or(CliError::Usage("--config est obligatoire"))?;
+    let action = match verb.as_str() {
+        "list" => {
+            if line.is_some()
+                || depuis.is_some()
+                || pending_id.is_some()
+                || fait.is_some()
+                || text.is_some()
+            {
+                return Err(CliError::Usage(
+                    "registre list n'accepte que --config et --attente",
+                ));
+            }
+            RegistreAction::List { attente }
+        }
+        "add" => {
+            if depuis.is_some() || attente || pending_id.is_some() || fait.is_some() {
+                return Err(CliError::Usage("options incompatibles avec registre add"));
+            }
+            RegistreAction::Add {
+                line: line.ok_or(CliError::Usage("--line est obligatoire pour registre add"))?,
+            }
+        }
+        "migrer" => {
+            if line.is_some() || attente || pending_id.is_some() || fait.is_some() {
+                return Err(CliError::Usage(
+                    "options incompatibles avec registre migrer",
+                ));
+            }
+            RegistreAction::Migrer {
+                depuis: depuis.ok_or(CliError::Usage(
+                    "--depuis est obligatoire pour registre migrer",
+                ))?,
+            }
+        }
+        "qualifier" => {
+            if line.is_some() || depuis.is_some() || attente || fait.is_some() {
+                return Err(CliError::Usage(
+                    "options incompatibles avec registre qualifier",
+                ));
+            }
+            let severity = parse_severity(&severity.ok_or(CliError::Usage(
+                "--severity est obligatoire pour registre qualifier",
+            ))?)?;
+            let source_kind = parse_source_kind(&source_kind.ok_or(CliError::Usage(
+                "--source-kind est obligatoire pour registre qualifier",
+            ))?)?;
+            RegistreAction::Qualifier {
+                pending_id: pending_id.ok_or(CliError::Usage(
+                    "--pending est obligatoire pour registre qualifier",
+                ))?,
+                severity,
+                source_kind,
+                source_id: source_id.ok_or(CliError::Usage(
+                    "--source-id est obligatoire pour registre qualifier",
+                ))?,
+                source_failed,
+                date: date.ok_or(CliError::Usage(
+                    "--date est obligatoire pour registre qualifier",
+                ))?,
+            }
+        }
+        "consign" => {
+            if line.is_some()
+                || depuis.is_some()
+                || attente
+                || pending_id.is_some()
+                || severity.is_some()
+                || source_kind.is_some()
+                || source_failed
+            {
+                return Err(CliError::Usage(
+                    "registre consign : pas de --severity (dérivée ou absente) ; options --fait --source-id --date --text",
+                ));
+            }
+            RegistreAction::Consign {
+                fait: fait.ok_or(CliError::Usage(
+                    "--fait est obligatoire pour registre consign",
+                ))?,
+                source_id: source_id.ok_or(CliError::Usage(
+                    "--source-id est obligatoire pour registre consign",
+                ))?,
+                date: date.ok_or(CliError::Usage(
+                    "--date est obligatoire pour registre consign",
+                ))?,
+                text: text.ok_or(CliError::Usage(
+                    "--text est obligatoire pour registre consign",
+                ))?,
+            }
+        }
+        _ => {
+            return Err(CliError::Usage(
+                "action registre inconnue : list, add, migrer, qualifier ou consign",
+            ));
+        }
+    };
+    Ok(RegistreArgs { config, action })
+}
+
+fn parse_severity(value: &str) -> Result<catalogue::Severity, CliError> {
+    match value {
+        "blocker" => Ok(catalogue::Severity::Blocker),
+        "major" => Ok(catalogue::Severity::Major),
+        "minor" => Ok(catalogue::Severity::Minor),
+        "info" => Ok(catalogue::Severity::Info),
+        _ => Err(CliError::Usage("severity : blocker, major, minor ou info")),
+    }
+}
+
+fn parse_source_kind(value: &str) -> Result<catalogue::MissionSourceKind, CliError> {
+    match value {
+        "mission" => Ok(catalogue::MissionSourceKind::Mission),
+        "incident" => Ok(catalogue::MissionSourceKind::Incident),
+        "review" => Ok(catalogue::MissionSourceKind::Review),
+        "gate" => Ok(catalogue::MissionSourceKind::Gate),
+        _ => Err(CliError::Usage(
+            "source-kind : mission, incident, review ou gate",
+        )),
+    }
+}
+
+fn run_registre(arguments: RegistreArgs) -> Result<String, CliError> {
+    let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let catalogue_path = config.catalogue_path.ok_or(CliError::Usage(
+        "catalogue_path absent de la configuration : registre exige un journal déclaré",
+    ))?;
+    let store = MaicieStore::open(&config.database_path).map_err(CliError::Store)?;
+    let mut journal = CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
+    // T1710 : réconciliation idempotente au fil des commandes catalogue — jamais
+    // en boucle résidente. Une clôture durable manquée est rattrapée ici.
+    reconcile_catalogue_from_store(&store, &mut journal).map_err(CliError::CatalogueReconcile)?;
+    match arguments.action {
+        RegistreAction::List { attente } => {
+            let parsed = journal.read_journal().map_err(CliError::Catalogue)?;
+            if let Some(warning) = parsed.torn_tail_warning {
+                eprintln!("avertissement: {warning}");
+            }
+            let view = catalogue::project_registre(&parsed.entries);
+            Ok(catalogue::render_registre_list_with_attente(&view, attente))
+        }
+        RegistreAction::Add { line } => {
+            let entry = catalogue::parse_closed_line(line.trim()).map_err(CliError::Catalogue)?;
+            let CatalogueEntry::Add(add) = entry else {
+                return Err(CliError::Usage(
+                    "registre add n'accepte qu'une ligne kind=add fermée",
+                ));
+            };
+            let outcome = journal.append_add(add).map_err(CliError::Catalogue)?;
+            Ok(match outcome {
+                AppendOutcome::Appended => "registre add: appended".to_string(),
+                AppendOutcome::IdempotentNoop => "registre add: idempotent_noop".to_string(),
+            })
+        }
+        RegistreAction::Migrer { depuis } => {
+            let report = journal
+                .migrate_prose_file(&depuis)
+                .map_err(CliError::Catalogue)?;
+            Ok(format!(
+                "registre migrer: {} lues, {} appended, {} skipped",
+                report.read, report.appended, report.skipped
+            ))
+        }
+        RegistreAction::Qualifier {
+            pending_id,
+            severity,
+            source_kind,
+            source_id,
+            source_failed,
+            date,
+        } => {
+            let mission_source = catalogue::MissionSource {
+                kind: source_kind,
+                id: source_id,
+                failed: if matches!(source_kind, catalogue::MissionSourceKind::Gate) {
+                    if source_failed {
+                        Some(true)
+                    } else {
+                        return Err(CliError::Usage("une source gate exige --source-failed"));
+                    }
+                } else if source_failed {
+                    return Err(CliError::Usage(
+                        "--source-failed n'est admis que pour source-kind=gate",
+                    ));
+                } else {
+                    None
+                },
+            };
+            let outcome = journal
+                .qualify_pending(&pending_id, severity, mission_source, date)
+                .map_err(CliError::Catalogue)?;
+            Ok(match outcome {
+                AppendOutcome::Appended => "registre qualifier: appended".to_string(),
+                AppendOutcome::IdempotentNoop => "registre qualifier: idempotent_noop".to_string(),
+            })
+        }
+        RegistreAction::Consign {
+            fait,
+            source_id,
+            date,
+            text,
+        } => {
+            let fact = catalogue::ObservedFact {
+                kind: fait,
+                source_id,
+                date,
+                text,
+            };
+            let (transcription, outcome) = journal
+                .consign_observed_fact(&fact)
+                .map_err(CliError::Catalogue)?;
+            let kind = match &transcription {
+                catalogue::TranscriptionOutcome::CoveredAdd(add) => {
+                    let severity = match add.severity {
+                        catalogue::Severity::Blocker => "blocker",
+                        catalogue::Severity::Major => "major",
+                        catalogue::Severity::Minor => "minor",
+                        catalogue::Severity::Info => "info",
+                    };
+                    format!("add/{severity}")
+                }
+                catalogue::TranscriptionOutcome::Pending(_) => "pending_qualification".to_string(),
+            };
+            Ok(match outcome {
+                AppendOutcome::Appended => format!("registre consign: appended ({kind})"),
+                AppendOutcome::IdempotentNoop => {
+                    format!("registre consign: idempotent_noop ({kind})")
+                }
+            })
+        }
     }
 }
 
@@ -947,6 +1291,7 @@ fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
     let mut goal = None;
     let mut target = None;
     let mut duration = ClasseDuree::Normale;
+    let mut constat_id = None;
     let mut idempotency_key = None;
     let mut required_tags = Vec::new();
     let mut json = false;
@@ -970,6 +1315,11 @@ fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
             "--duration" => {
                 duration = parse_duration(next_value(arguments, &mut index, "--duration")?)?;
             }
+            "--constat-id" => set_once_string(
+                &mut constat_id,
+                next_value(arguments, &mut index, "--constat-id")?,
+                "constat-id",
+            )?,
             "--idempotency-key" => set_once_string(
                 &mut idempotency_key,
                 next_value(arguments, &mut index, "--idempotency-key")?,
@@ -994,6 +1344,7 @@ fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
         target,
         required_tags,
         duration,
+        constat_id,
         idempotency_key,
         json,
     })
@@ -1479,6 +1830,8 @@ fn flux_name(state: EtatFlux) -> &'static str {
 enum CliError {
     Usage(&'static str),
     Configuration(ConfigError),
+    Catalogue(CatalogueError),
+    CatalogueReconcile(CatalogueReconcileError),
     Bridget(BridgetClientError),
     Delegate(DelegateError),
     TargetUnknownBridget(String),
@@ -1497,12 +1850,16 @@ impl CliError {
     fn exit_code(&self) -> u8 {
         match self {
             Self::Usage(_) => EXIT_USAGE,
-            Self::Configuration(_) => EXIT_CONFIGURATION,
+            Self::Configuration(_) | Self::Catalogue(_) => EXIT_CONFIGURATION,
             Self::Bridget(_) => EXIT_BRIDGET,
-            Self::Delegate(DelegateError::Store(_)) | Self::Store(_) => EXIT_STORE,
+            Self::Delegate(DelegateError::Store(_))
+            | Self::Store(_)
+            | Self::CatalogueReconcile(CatalogueReconcileError::Store(_)) => EXIT_STORE,
             Self::Reconcile(ReconcileError::Store(_)) => EXIT_STORE,
             Self::Objective(ObjectiveError::Store(_)) => EXIT_STORE,
             Self::ProfileActivation(ProfileActivationError::Store(_)) => EXIT_STORE,
+            Self::CatalogueReconcile(CatalogueReconcileError::Catalogue(_)) => EXIT_CONFIGURATION,
+            Self::CatalogueReconcile(_) => EXIT_CONFIGURATION,
             Self::Reconcile(_) => EXIT_BRIDGET,
             Self::Delegate(_) => EXIT_DELEGATE,
             Self::TargetUnknownBridget(_) | Self::TargetMissingMaicieProfile { .. } => {
@@ -1517,6 +1874,10 @@ impl CliError {
         match self {
             Self::Usage(_) => "usage",
             Self::Configuration(_) => "configuration",
+            Self::Catalogue(_) => "catalogue",
+            Self::CatalogueReconcile(CatalogueReconcileError::Store(_)) => "store",
+            Self::CatalogueReconcile(CatalogueReconcileError::Catalogue(_)) => "catalogue",
+            Self::CatalogueReconcile(_) => "catalogue_reconcile",
             Self::Bridget(_) => "bridget",
             Self::Delegate(DelegateError::EnvelopeMismatch) => "envelope_mismatch",
             Self::Delegate(DelegateError::TargetUnavailable(_)) => "target_unavailable",
@@ -1545,6 +1906,8 @@ impl fmt::Display for CliError {
         match self {
             Self::Usage(detail) => write!(formatter, "usage invalide : {detail}"),
             Self::Configuration(error) => error.fmt(formatter),
+            Self::Catalogue(error) => error.fmt(formatter),
+            Self::CatalogueReconcile(error) => error.fmt(formatter),
             Self::Bridget(error) => error.fmt(formatter),
             Self::Delegate(error) => error.fmt(formatter),
             Self::TargetUnknownBridget(target) => write!(
@@ -1574,8 +1937,8 @@ impl fmt::Display for CliError {
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, DelegateError, DelegateOutput, candidates_from, delegate_error_for_cli,
-        parse_command, sanitize_terminal,
+        Command, DelegateError, DelegateOutput, RegistreAction, RegistreArgs, candidates_from,
+        delegate_error_for_cli, parse_command, sanitize_terminal,
     };
     use maicie::bridget_client::AgentInfo;
     use maicie::config::{DurationClasses, MaicieConfig, ProfileConfig};
@@ -1622,6 +1985,7 @@ mod tests {
                 long_secs: 90,
             },
             status_capture_budget_ms: None,
+            catalogue_path: None,
             profiles: vec![ProfileConfig {
                 id: "code-review".to_string(),
                 agent_name: Some("coderBridget".to_string()),
@@ -1701,5 +2065,95 @@ mod tests {
             error.to_string(),
             "agent Bridget connecté mais sans profil Maicie : cursorbridget; ajoutez un profil dans /tmp/maicie.json avec \"agent_name\": \"cursorbridget\""
         );
+    }
+
+    #[test]
+    fn registre_list_et_add_passent_par_la_commande_mince() {
+        let list = parse_command(&[
+            "registre".to_string(),
+            "list".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            list,
+            Command::Registre(RegistreArgs {
+                action: RegistreAction::List { attente: false },
+                ..
+            })
+        ));
+        let add = parse_command(&[
+            "registre".to_string(),
+            "add".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+            "--line".to_string(),
+            r#"{"v":1,"kind":"add","id":"c1","date":"2026-08-24T04:00:00+02:00","mission_source":{"kind":"incident","id":"i1"},"severity":"info","text":"x"}"#.to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            add,
+            Command::Registre(RegistreArgs {
+                action: RegistreAction::Add { .. },
+                ..
+            })
+        ));
+        assert!(parse_command(&["registre".to_string(), "list".to_string()]).is_err());
+        let migrer = parse_command(&[
+            "registre".to_string(),
+            "migrer".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+            "--depuis".to_string(),
+            "/tmp/prose.jsonl".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            migrer,
+            Command::Registre(RegistreArgs {
+                action: RegistreAction::Migrer { .. },
+                ..
+            })
+        ));
+        let attente = parse_command(&[
+            "registre".to_string(),
+            "list".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+            "--attente".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            attente,
+            Command::Registre(RegistreArgs {
+                action: RegistreAction::List { attente: true },
+                ..
+            })
+        ));
+        let qualifier = parse_command(&[
+            "registre".to_string(),
+            "qualifier".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+            "--pending".to_string(),
+            "pending:doc#1".to_string(),
+            "--severity".to_string(),
+            "major".to_string(),
+            "--source-kind".to_string(),
+            "incident".to_string(),
+            "--source-id".to_string(),
+            "i1".to_string(),
+            "--date".to_string(),
+            "2026-08-24T06:00:00+02:00".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            qualifier,
+            Command::Registre(RegistreArgs {
+                action: RegistreAction::Qualifier { .. },
+                ..
+            })
+        ));
     }
 }

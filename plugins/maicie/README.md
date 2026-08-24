@@ -190,3 +190,23 @@ Les scénarios de validation sont décrits dans
 `/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/specs/011-maicie-orchestration/quickstart.md`
 et, pour le guichet 015, dans
 `/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/specs/015-guichet-maicie/quickstart.md`.
+
+## Journal du dû (greffière, session 017)
+
+Le catalogue v1 est un journal append-only déclaré par `catalogue_path` dans
+la configuration. `registre list` en est la seule vue humaine d'autorité.
+
+- **Migration** : `registre migrer --depuis <prose.jsonl>` conserve chaque
+  texte verbatim en `pending_qualification` ; aucune sévérité ni source n'est
+  inventée.
+- **Qualification** : humaine uniquement (`registre qualifier`), champs fermés
+  déclarés.
+- **Interdits** : écriture vers plans/tasks/issues hôtes ; message libre depuis
+  le catalogue ; score, déduplication automatique, état `planned`, runtime
+  résident, adaptateur hôte.
+- **Limite v1** : la transition `open → delivered` exige un lien d'arbitrage
+  `(constat_id, objective_id)` posé à la délégation et une clôture d'objectif
+  attestée ; chaque commande `registre` réconcilie ces faits depuis le store,
+  sans boucle résidente ni polling.
+
+Guide opératoire : `specs/017-greffiere-catalogue/quickstart.md`.
