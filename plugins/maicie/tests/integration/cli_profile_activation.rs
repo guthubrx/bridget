@@ -13,6 +13,11 @@ fn profile_propose_puis_approve_expose_le_consentement_local_et_l_outbox() {
     let fixture = Fixture::new();
     let objective_id = Uuid::new_v4().to_string();
 
+    // Mutation : un cwd partagé (/tmp/maicie-profile-cli) ferait coller deux
+    // exécutions parallèles sur le même répertoire — l'unicité sous fixture.root
+    // isole l'effet de bord.
+    let cwd = fixture.root.join("agent-cwd");
+    fs::create_dir_all(&cwd).unwrap();
     let proposed = fixture.run(&[
         "profile",
         "propose",
@@ -23,7 +28,7 @@ fn profile_propose_puis_approve_expose_le_consentement_local_et_l_outbox() {
         "--context-scope",
         "objective:review",
         "--cwd",
-        "/tmp/maicie-profile-cli",
+        cwd.to_str().unwrap(),
         "--persistent",
         "--reason",
         "profil absent compatible",

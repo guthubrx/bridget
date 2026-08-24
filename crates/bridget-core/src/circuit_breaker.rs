@@ -33,8 +33,23 @@ impl CircuitBreaker {
     /// Vérifie si un nouvel échange serait autorisé SANS l'enregistrer.
     /// Retourne false si le disjoncteur est déclenché.
     pub fn check(&self, from: &str, to: &str) -> bool {
+        self.check_at(from, to, Instant::now())
+    }
+
+    /// Enregistre un échange dans la fenêtre glissante.
+    /// À appeler APRÈS avoir vérifié avec check().
+    pub fn record(&mut self, from: &str, to: &str) {
+        self.record_at(from, to, Instant::now())
+    }
+
+    /// Retourne le nombre d'échanges récents pour une conversation.
+    pub fn count(&self, from: &str, to: &str) -> usize {
+        self.count_at(from, to, Instant::now())
+    }
+
+    /// Variante à horloge injectée : sert aux oracles déterministes.
+    pub fn check_at(&self, from: &str, to: &str, now: Instant) -> bool {
         let key = conv_key(from, to);
-        let now = Instant::now();
         let cutoff = now - self.window;
 
         match self.history.get(&key) {
@@ -46,11 +61,9 @@ impl CircuitBreaker {
         }
     }
 
-    /// Enregistre un échange dans la fenêtre glissante.
-    /// À appeler APRÈS avoir vérifié avec check().
-    pub fn record(&mut self, from: &str, to: &str) {
+    /// Enregistre un échange à un instant donné (tests et horloge contrôlée).
+    pub fn record_at(&mut self, from: &str, to: &str, now: Instant) {
         let key = conv_key(from, to);
-        let now = Instant::now();
         let cutoff = now - self.window;
 
         let entries = self.history.entry(key).or_default();
@@ -66,10 +79,8 @@ impl CircuitBreaker {
         }
     }
 
-    /// Retourne le nombre d'échanges récents pour une conversation.
-    pub fn count(&self, from: &str, to: &str) -> usize {
+    pub fn count_at(&self, from: &str, to: &str, now: Instant) -> usize {
         let key = conv_key(from, to);
-        let now = Instant::now();
         let cutoff = now - self.window;
         match self.history.get(&key) {
             None => 0,
@@ -125,11 +136,15 @@ mod tests {
 
     #[test]
     fn test_window_expiry() {
-        let mut cb = CircuitBreaker::new(1, 2); // fenêtre 1 seconde
-        cb.record("a", "b");
-        cb.record("a", "b");
-        assert!(!cb.check("a", "b"));
-        std::thread::sleep(Duration::from_millis(1100));
-        assert!(cb.check("a", "b")); // fenêtre expirée
+        // Mutation : retirer le filtre `> cutoff` (ou le nettoyage) laisse le
+        // disjoncteur fermé après l'avancée d'horloge — ce test échoue alors.
+        let mut cb = CircuitBreaker::new(1, 2);
+        let t0 = Instant::now();
+        cb.record_at("a", "b", t0);
+        cb.record_at("a", "b", t0);
+        assert!(!cb.check_at("a", "b", t0));
+        let after_window = t0 + Duration::from_secs(1) + Duration::from_millis(1);
+        assert!(cb.check_at("a", "b", after_window));
+        assert_eq!(cb.count_at("a", "b", after_window), 0);
     }
 }
