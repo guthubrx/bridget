@@ -287,6 +287,14 @@ pub struct OpenConstatView {
     pub mission_source: MissionSource,
 }
 
+/// Entrée encore en attente de qualification humaine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingView {
+    pub id: String,
+    pub provenance_id: String,
+    pub text: String,
+}
+
 /// Pied de page déterministe N/M/K/P.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegistreFooter {
@@ -300,6 +308,8 @@ pub struct RegistreFooter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistreView {
     pub ouverts: Vec<OpenConstatView>,
+    /// Pendings non encore qualifiés (aucun `add` de même `id`).
+    pub attente: Vec<PendingView>,
     pub footer: RegistreFooter,
 }
 
@@ -410,6 +420,48 @@ impl CatalogueJournal {
             appended,
             skipped,
         })
+    }
+
+    /// Qualifie une entrée `pending_qualification` en appendant un `add`.
+    ///
+    /// Le texte est recopié VERBATIM depuis le pending ; la sévérité et la
+    /// source sont fournies par l'humain. Ce n'est pas une `transition`
+    /// (réservée à open→delivered) : la conception gelée ne connaît que
+    /// `add` pour un constat complet. La ligne pending reste au journal
+    /// (append-only) ; la projection cesse de la compter dans P dès qu'un
+    /// `add` de même `id` existe.
+    pub fn qualify_pending(
+        &mut self,
+        pending_id: &str,
+        severity: Severity,
+        mission_source: MissionSource,
+        date: String,
+    ) -> Result<AppendOutcome, CatalogueError> {
+        let existing = self.read_entries()?;
+        let pending = existing
+            .iter()
+            .find_map(|entry| match entry {
+                CatalogueEntry::PendingQualification(pending) if pending.id == pending_id => {
+                    Some(pending.clone())
+                }
+                _ => None,
+            })
+            .ok_or_else(|| CatalogueError::ReferenceInconnue {
+                field: "pending_id",
+                id: pending_id.to_string(),
+            })?;
+        let add = AddEntry {
+            v: CATALOGUE_VERSION,
+            kind: AddKind::Add,
+            id: pending.id.clone(),
+            date,
+            mission_source,
+            severity,
+            recurrence_of: None,
+            text: pending.text.clone(),
+        };
+        validate_add_shape(&add)?;
+        self.append_entry_with_existing(CatalogueEntry::Add(add), &existing)
     }
 
     fn append_pending_dedup_provenance(
@@ -873,8 +925,8 @@ pub fn parse_prose_corpus(bytes: &[u8]) -> Result<Vec<ProseMigrationRecord>, Cat
 /// Réduit le journal en vue déterministe (aucune écriture).
 pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
     let mut delivered: BTreeSet<String> = BTreeSet::new();
-    let mut pending = 0usize;
     let mut adds: BTreeMap<String, &AddEntry> = BTreeMap::new();
+    let mut pendings: BTreeMap<String, &PendingQualificationEntry> = BTreeMap::new();
 
     for entry in entries {
         match entry {
@@ -884,8 +936,8 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
             CatalogueEntry::Transition(transition) => {
                 delivered.insert(transition.constat_id.clone());
             }
-            CatalogueEntry::PendingQualification(_) => {
-                pending += 1;
+            CatalogueEntry::PendingQualification(pending) => {
+                pendings.insert(pending.id.clone(), pending);
             }
         }
     }
@@ -906,6 +958,21 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
 
     ouverts.sort_by(compare_open_constats);
 
+    let mut attente: Vec<PendingView> = pendings
+        .values()
+        .filter(|pending| !adds.contains_key(&pending.id))
+        .map(|pending| PendingView {
+            id: pending.id.clone(),
+            provenance_id: pending.provenance_id.clone(),
+            text: pending.text.clone(),
+        })
+        .collect();
+    attente.sort_by(|left, right| {
+        left.provenance_id
+            .cmp(&right.provenance_id)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
     let recurrents = ouverts
         .iter()
         .filter(|item| item.recurrence_of.is_some())
@@ -915,9 +982,13 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
         ouverts: ouverts.len(),
         recurrents,
         gates_rates,
-        pending_qualification: pending,
+        pending_qualification: attente.len(),
     };
-    RegistreView { ouverts, footer }
+    RegistreView {
+        ouverts,
+        attente,
+        footer,
+    }
 }
 
 fn compare_open_constats(left: &OpenConstatView, right: &OpenConstatView) -> Ordering {
@@ -935,8 +1006,14 @@ fn compare_open_constats(left: &OpenConstatView, right: &OpenConstatView) -> Ord
         .then_with(|| left.id.cmp(&right.id))
 }
 
-/// Rend la vue humaine d'autorité (SC-1704).
+/// Rend la vue humaine d'autorité (SC-1704) : constats ouverts + pied.
 pub fn render_registre_list(view: &RegistreView) -> String {
+    render_registre_list_with_attente(view, false)
+}
+
+/// Même vue, avec la section des entrées encore en attente de qualification
+/// (id, provenance, texte verbatim). Drapeau CLI `--attente`.
+pub fn render_registre_list_with_attente(view: &RegistreView, show_attente: bool) -> String {
     let mut out = String::new();
     out.push_str("registre list\n");
     if view.ouverts.is_empty() {
@@ -963,6 +1040,21 @@ pub fn render_registre_list(view: &RegistreView) -> String {
                 source_id = item.mission_source.id,
                 text = item.text,
             ));
+        }
+    }
+    if show_attente {
+        out.push_str("--- en attente de qualification ---\n");
+        if view.attente.is_empty() {
+            out.push_str("(aucune entrée en attente)\n");
+        } else {
+            for item in &view.attente {
+                out.push_str(&format!(
+                    "- id={id} provenance={provenance}\n  {text}\n",
+                    id = item.id,
+                    provenance = item.provenance_id,
+                    text = item.text,
+                ));
+            }
         }
     }
     out.push_str(&format!(
@@ -1187,6 +1279,67 @@ mod tests {
         let before = journal.read_entries().unwrap().len();
         assert!(journal.migrate_prose_file(&prose_path).is_err());
         assert_eq!(journal.read_entries().unwrap().len(), before);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn qualifier_append_add_verbatim_et_retire_de_p() {
+        let root =
+            std::env::temp_dir().join(format!("maicie-catalogue-qualif-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("catalogue.jsonl");
+        let mut journal = CatalogueJournal::open(&path).unwrap();
+        journal
+            .append_pending(PendingQualificationEntry {
+                v: 1,
+                kind: PendingKind::PendingQualification,
+                id: "pending:doc#1".into(),
+                provenance_id: "doc#1".into(),
+                text: "texte historique immuable".into(),
+            })
+            .unwrap();
+        let before = project_registre(&journal.read_entries().unwrap());
+        assert_eq!(before.footer.pending_qualification, 1);
+        assert_eq!(before.attente[0].text, "texte historique immuable");
+
+        let outcome = journal
+            .qualify_pending(
+                "pending:doc#1",
+                Severity::Major,
+                MissionSource {
+                    kind: MissionSourceKind::Incident,
+                    id: "i-1".into(),
+                    failed: None,
+                },
+                "2026-08-24T06:15:00+02:00".into(),
+            )
+            .unwrap();
+        assert_eq!(outcome, AppendOutcome::Appended);
+        assert_eq!(
+            journal
+                .qualify_pending(
+                    "pending:doc#1",
+                    Severity::Major,
+                    MissionSource {
+                        kind: MissionSourceKind::Incident,
+                        id: "i-1".into(),
+                        failed: None,
+                    },
+                    "2026-08-24T06:15:00+02:00".into(),
+                )
+                .unwrap(),
+            AppendOutcome::IdempotentNoop
+        );
+
+        let after = project_registre(&journal.read_entries().unwrap());
+        assert_eq!(after.footer.pending_qualification, 0);
+        assert_eq!(after.footer.ouverts, 1);
+        assert_eq!(after.ouverts[0].text, "texte historique immuable");
+        assert_eq!(after.ouverts[0].severity, Severity::Major);
+        // La ligne pending reste au journal (append-only).
+        assert_eq!(journal.read_entries().unwrap().len(), 2);
+        let rendered = render_registre_list_with_attente(&after, true);
+        assert!(rendered.contains("(aucune entrée en attente)"));
         let _ = fs::remove_dir_all(&root);
     }
 }
