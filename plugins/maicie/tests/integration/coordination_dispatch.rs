@@ -1,4 +1,10 @@
 use maicie::bridget_client::BridgetClientLimits;
+use maicie::domain::{
+    AttenteNotification, ClasseDuree, DefinitionCoordination, Delegation, EtatOutboxDelegation,
+    FaitAppartenanceRepli, ModeObjectif, ObjectifCoordonne, OutboxDelegation,
+    PolitiqueReassignation, TypeEvenementAttendu,
+};
+use maicie::outbox::{PreparedDelegation, stable_body_hash};
 use maicie::reconcile::{
     NotificationReconcileAction, NotificationReconcilePhase,
     reconcile_notification_startup_observed_with_limits,
@@ -88,6 +94,82 @@ fn notification_rejoue_les_octets_durables_et_ne_les_emet_qu_une_fois() {
     )
     .expect("aucune boîte terminale ne doit être réémise");
     assert!(second.actions.is_empty());
+}
+
+#[test]
+fn cloture_reelle_emet_exactement_trois_notifications_et_jamais_six() {
+    let fixture = Fixture::new("three-notifications");
+    let mut store = MaicieStore::open(&fixture.database_path).expect("store ouvert");
+    let objective_id = seed_closure_with_recipients(&mut store, 3);
+    store
+        .close_objective(objective_id, "clôture attestée", ISSUED_AT)
+        .expect("clôture transactionnelle");
+    let expected = store
+        .pending_notification_outboxes()
+        .expect("trois boîtes durables")
+        .into_iter()
+        .map(|outbox| {
+            (
+                outbox.message_id,
+                replay_frame(&outbox.message_bytes, outbox.message_id, outbox.issued_at),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(expected.len(), 3, "T1607 crée une boîte par destinataire");
+
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let mut received = std::collections::BTreeMap::new();
+        for _ in 0..3 {
+            let (stream, _) = listener.accept().expect("connexion notification attendue");
+            let (mut reader, mut writer) = split(stream);
+            complete_client_handshake(&mut reader, &mut writer);
+            let mut actual = Vec::new();
+            reader
+                .read_until(b'\n', &mut actual)
+                .expect("notification lue");
+            let request: serde_json::Value = serde_json::from_slice(&actual).expect("JSON replay");
+            let message_id =
+                Uuid::parse_str(request["message_id"].as_str().expect("message_id filaire"))
+                    .expect("UUID filaire");
+            received.insert(message_id, actual);
+            write_accepted(&mut writer, message_id);
+        }
+        received
+    });
+
+    let report = reconcile_notification_startup_with_limits(
+        &mut store,
+        fixture.socket_path(),
+        limits(Duration::from_secs(2)),
+    )
+    .expect("dispatch de clôture");
+    let received = server.join().expect("serveur de clôture");
+    assert_eq!(
+        received, expected,
+        "chaque notification conserve ses octets exacts"
+    );
+    assert_eq!(report.actions.len(), 3);
+    assert!(
+        store
+            .pending_notification_outboxes()
+            .expect("boîtes relues")
+            .is_empty()
+    );
+
+    // Mutation discriminante : si Accepted ne rendait pas l'outbox terminale,
+    // ce second passage tenterait une quatrième connexion vers le listener
+    // fermé et ne pourrait donc pas rester vert par simple équivalence JSON.
+    let second = reconcile_notification_startup_with_limits(
+        &mut store,
+        fixture.socket_path(),
+        limits(Duration::from_millis(80)),
+    )
+    .expect("aucune notification terminale ne doit repartir");
+    assert!(
+        second.actions.is_empty(),
+        "trois acceptations ne deviennent jamais six"
+    );
 }
 
 #[test]
@@ -508,6 +590,85 @@ fn block_at_barrier(path: &PathBuf, phase: &str) {
     stream.flush().expect("jalon enfant flush");
     let mut release = [0_u8; 1];
     let _ = stream.read(&mut release);
+}
+
+fn seed_closure_with_recipients(store: &mut MaicieStore, recipients: usize) -> Uuid {
+    let objective =
+        ObjectifCoordonne::nouveau("clôture à notifier", ModeObjectif::Delegue, ISSUED_AT - 10)
+            .expect("objectif fixture");
+    let delegation = create_delegation(store, &objective, "alice");
+    create_delegation(store, &objective, "bob");
+    let definition = DefinitionCoordination {
+        objectif_id: objective.id,
+        dependencies: Vec::new(),
+        policies: vec![PolitiqueReassignation {
+            delegation_id: delegation,
+            objectif_id: objective.id,
+            classe: ClasseDuree::Normale,
+            version: 1,
+            seuil_relances: 2,
+            max_reemissions: 2,
+            chaine_repli: vec![FaitAppartenanceRepli {
+                objectif_id: objective.id,
+                participant_id: "bob".to_string(),
+                membership_version: 1,
+                est_pilote: false,
+            }],
+        }],
+        attentes: (0..recipients)
+            .map(|index| AttenteNotification {
+                attente_id: Uuid::new_v4(),
+                objectif_id: objective.id,
+                delegation_id: None,
+                kind: TypeEvenementAttendu::ClotureObjectif,
+                recipient: format!("recipient-{index}"),
+                policy_version: 1,
+            })
+            .collect(),
+    };
+    store
+        .register_coordination_snapshot(&definition)
+        .expect("définition de clôture");
+    objective.id
+}
+
+fn create_delegation(store: &mut MaicieStore, objective: &ObjectifCoordonne, target: &str) -> Uuid {
+    let delegation = Delegation::nouvelle(
+        objective.id,
+        target,
+        "instruction de fixture",
+        ClasseDuree::Normale,
+        "raison de fixture",
+    )
+    .expect("délégation fixture");
+    let body = b"fixture".to_vec();
+    let outbox = OutboxDelegation {
+        message_id: Uuid::new_v4(),
+        delegation_id: delegation.id,
+        target: target.to_string(),
+        body_hash: stable_body_hash(&body),
+        body_bytes: body,
+        reply: true,
+        timeout_secs: 60,
+        deadline_contractuelle: ISSUED_AT + 60,
+        etat: EtatOutboxDelegation::Prepared,
+        attempted_at: None,
+        retry_until: ISSUED_AT + 30,
+        dedup_retained_until: ISSUED_AT + 300,
+    };
+    let prepared = PreparedDelegation::new(
+        objective.clone(),
+        delegation.clone(),
+        outbox,
+        store.issuer_scope(),
+        ISSUED_AT,
+        64 * 1024,
+    )
+    .expect("outbox fixture");
+    store
+        .create_prepared_delegation(&prepared)
+        .expect("délégation persistée");
+    delegation.id
 }
 
 struct Fixture {
