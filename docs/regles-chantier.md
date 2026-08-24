@@ -128,12 +128,17 @@ Cette séparation est voulue, ce n'est pas un défaut à contourner : être
 joignable et être autorisé à recevoir du travail sont deux décisions
 distinctes. Un agent peut légitimement être connecté sans être employable.
 
-3. **Première mission = calibrage**, jamais un couloir. Une tâche réelle,
+3. **Enseigner le guichet dès le premier mandat.** Le nouvel agent doit
+   savoir que Maicie n'est pas joignable en direct et que son absence de
+   l'annuaire est nominale, sinon il conclura à une panne — trois agents
+   l'ont fait la même nuit. Voir la section « Rapporter à Maicie : le
+   guichet ». À écrire dans le mandat de calibrage, pas plus tard.
+4. **Première mission = calibrage**, jamais un couloir. Une tâche réelle,
    bornée, en lecture seule, dont on connaît déjà la réponse ou dont on peut
    vérifier le résultat sur pièces. On y exige la ligne `MODELE:` en tête,
    et on y énonce les deux règles maison : aucune modification sans mandat,
    et livraison par `bridget send` explicite.
-4. **Clés API interdites** dans la déclaration du type : `forbidden_env` liste
+5. **Clés API interdites** dans la déclaration du type : `forbidden_env` liste
    les variables à refuser. L'authentification passe par l'abonnement.
 
 *(Incident fondateur : arrivée de `cursorbridget` le 2026-08-24 — spawn refusé
