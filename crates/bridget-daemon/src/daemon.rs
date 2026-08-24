@@ -3238,6 +3238,84 @@ fn handle_rate_limit(
     }
 }
 
+/// Enregistre un échantillon de consommation dans le ledger horodaté.
+/// L'agent doit être présent (géré vivant) ; sans source côté pilote, aucun
+/// message n'arrive ici — le greffe rendra « inconnu », jamais zéro.
+fn handle_usage(
+    agent: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_input_tokens: u64,
+    cache_read_input_tokens: u64,
+    source: bridget_transport::protocol::UsageSource,
+    state: &mut DaemonState,
+) -> DaemonToWrapper {
+    let observed_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    if observed_at <= 0 {
+        return DaemonToWrapper::Nack {
+            id: "usage".to_string(),
+            reason: "horloge indisponible".to_string(),
+        };
+    }
+    if presence_of_agent(state, agent).is_none() {
+        return DaemonToWrapper::Nack {
+            id: "usage".to_string(),
+            reason: format!("agent introuvable: {agent}"),
+        };
+    }
+    if let Err(error) = state.store.record_usage_sample(
+        agent,
+        observed_at,
+        input_tokens,
+        output_tokens,
+        cache_creation_input_tokens,
+        cache_read_input_tokens,
+        &source.to_string(),
+    ) {
+        return DaemonToWrapper::Nack {
+            id: "usage".to_string(),
+            reason: format!("ledger usage: {error}"),
+        };
+    }
+    if let Some(presence) = presence_of_agent(state, agent) {
+        presence.last_seen = Instant::now();
+        log::debug!("usage de '{}' enregistré par {}", presence.name, source);
+    }
+    DaemonToWrapper::Ack {
+        id: "usage".to_string(),
+    }
+}
+
+fn handle_usage_window(
+    agent: &str,
+    from_secs: i64,
+    to_secs: i64,
+    state: &DaemonState,
+) -> DaemonToWrapper {
+    if agent.trim().is_empty() || from_secs <= 0 || to_secs < from_secs {
+        return DaemonToWrapper::Nack {
+            id: "usage-window".to_string(),
+            reason: "fenêtre d'usage invalide".to_string(),
+        };
+    }
+    match state
+        .store
+        .aggregate_usage_window(agent, from_secs, to_secs)
+    {
+        Ok(aggregate) => DaemonToWrapper::UsageWindowResult {
+            agent: agent.to_string(),
+            aggregate,
+        },
+        Err(error) => DaemonToWrapper::Nack {
+            id: "usage-window".to_string(),
+            reason: format!("lecture usage: {error}"),
+        },
+    }
+}
+
 /// Décide si un rappel d'escalade doit être délivré.
 ///
 /// Un destinataire qui refuse d'être dérangé ne reçoit ni le rappel discret ni
@@ -5676,6 +5754,35 @@ fn handle_wrapper_message(
             Some(handle_rate_limit(
                 &agent, window, status, resets_at, source, &mut st,
             ))
+        }
+
+        WrapperToDaemon::Usage {
+            agent,
+            input_tokens,
+            output_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
+            source,
+        } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            Some(handle_usage(
+                &agent,
+                input_tokens,
+                output_tokens,
+                cache_creation_input_tokens,
+                cache_read_input_tokens,
+                source,
+                &mut st,
+            ))
+        }
+
+        WrapperToDaemon::UsageWindow {
+            agent,
+            from_secs,
+            to_secs,
+        } => {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            Some(handle_usage_window(&agent, from_secs, to_secs, &st))
         }
 
         WrapperToDaemon::Domain { agent, domain } => {
@@ -9543,6 +9650,45 @@ mod presence_tests {
         assert!(matches!(match_ack, DaemonToWrapper::Ack { .. }));
         let aligned = state.agent_infos().pop().unwrap();
         assert!(aligned.model_mismatch.is_none());
+
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    #[test]
+    fn usage_atteste_s_agrege_et_sans_source_reste_inconnu() {
+        use bridget_transport::protocol::UsageSource;
+        let (mut state, config) = state_with_registered_agent("usage-atteste");
+
+        let ack = handle_usage(
+            "agent-2",
+            2,
+            175,
+            40_804,
+            13_907,
+            UsageSource::ClaudeStreamJson,
+            &mut state,
+        );
+        assert!(matches!(ack, DaemonToWrapper::Ack { .. }));
+        let window = handle_usage_window("agent-2", 1, i64::MAX, &state);
+        match window {
+            DaemonToWrapper::UsageWindowResult {
+                aggregate: Some(aggregate),
+                ..
+            } => {
+                assert_eq!(aggregate.turns, 1);
+                assert_eq!(aggregate.facturable_tokens, 40_981);
+                assert_eq!(aggregate.cache_read_input_tokens, 13_907);
+            }
+            other => panic!("agrégat attesté attendu, reçu {other:?}"),
+        }
+        let unknown = handle_usage_window("tmux-sans-sonde", 1, i64::MAX, &state);
+        assert!(matches!(
+            unknown,
+            DaemonToWrapper::UsageWindowResult {
+                aggregate: None,
+                ..
+            }
+        ));
 
         let _ = std::fs::remove_file(&config.db_path);
     }

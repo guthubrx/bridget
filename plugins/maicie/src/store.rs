@@ -12,7 +12,7 @@ use crate::domain::guichet::{
     refusal_reply_bytes,
 };
 use crate::domain::{
-    ActivationOutbox, ApprobationActivation, AttenteNotification, ClasseDuree,
+    ActivationOutbox, ApprobationActivation, AttenteNotification, ClasseDuree, CoutMissionAgent,
     DEPENDENCY_POLICY_VERSION, DecisionCoordination, DecisionCoordinationActive,
     DefinitionCoordination, Delegation, DependanceDelegation, DomainError, EffetDemandeSuivie,
     EntreeReductionCoordination, EpisodeRelance, EtatActivationOutbox, EtatDecision,
@@ -45,7 +45,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -123,6 +123,8 @@ pub struct ObjectiveSnapshot {
     pub decisions: Vec<DecisionCoordination>,
     /// Registre local de remise, distinct de toute observation ACP live.
     pub remises_locales: Vec<RemiseLocale>,
+    /// Coûts portés à la clôture. Vide tant que l'objectif n'est pas clos.
+    pub costs: Vec<CoutMissionAgent>,
 }
 
 /// Définition 016 et faits initiaux relus depuis le registre, sans aucune
@@ -1388,14 +1390,145 @@ impl MaicieStore {
             let delegations = self.delegations_for(objective.id)?;
             let decisions = self.decisions_for(objective.id)?;
             let remises_locales = self.remises_locales_for(objective.id)?;
+            let costs = self.mission_costs(objective.id)?;
             Ok(ObjectiveSnapshot {
                 objective,
                 delegations,
                 decisions,
                 remises_locales,
+                costs,
             })
         })
         .collect()
+    }
+
+    /// Fenêtres de délégation : agent → premier `issued_at` d'outbox, sinon
+    /// création de l'objectif. Sert à interroger le ledger Bridget sans
+    /// inventer de tokens.
+    pub fn delegation_cost_windows(
+        &self,
+        objective_id: Uuid,
+    ) -> Result<Vec<(String, i64)>, StoreError> {
+        let objective = self
+            .objective_snapshots(Some(objective_id))?
+            .into_iter()
+            .next()
+            .ok_or(StoreError::NotFound("objectif absent"))?
+            .objective;
+        let mut windows: BTreeMap<String, i64> = BTreeMap::new();
+        for delegation in self.delegations_for(objective_id)? {
+            windows
+                .entry(delegation.participant)
+                .or_insert(objective.cree_at.max(1));
+        }
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT target, MIN(issued_at) FROM delegation_outbox
+                 WHERE objective_id = ?1 GROUP BY target",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([objective_id.to_string()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(StoreError::Sql)?;
+        for row in rows {
+            let (target, issued_at) = row.map_err(StoreError::Sql)?;
+            if issued_at > 0 {
+                windows.insert(target, issued_at);
+            }
+        }
+        Ok(windows.into_iter().collect())
+    }
+
+    /// Coûts portés par un objectif clos. Vide tant que l'objectif n'est pas
+    /// clôturé : le greffe n'anticipe jamais une consommation.
+    pub fn mission_costs(
+        &self,
+        objective_id: Uuid,
+    ) -> Result<Vec<CoutMissionAgent>, StoreError> {
+        self.query_mission_costs(Some(objective_id))
+    }
+
+    /// Tous les coûts de missions closes, pour `registre list`.
+    pub fn all_mission_costs(&self) -> Result<Vec<CoutMissionAgent>, StoreError> {
+        self.query_mission_costs(None)
+    }
+
+    fn query_mission_costs(
+        &self,
+        objective_id: Option<Uuid>,
+    ) -> Result<Vec<CoutMissionAgent>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT objective_id, agent, from_secs, to_secs, attested,
+                        turns, input_tokens, output_tokens,
+                        cache_creation_input_tokens, cache_read_input_tokens,
+                        facturable_tokens
+                 FROM objective_costs
+                 WHERE (?1 IS NULL OR objective_id = ?1)
+                 ORDER BY objective_id, agent",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([objective_id.map(|id| id.to_string())], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, Option<i64>>(8)?,
+                    row.get::<_, Option<i64>>(9)?,
+                    row.get::<_, Option<i64>>(10)?,
+                ))
+            })
+            .map_err(StoreError::Sql)?;
+        let mut costs = Vec::new();
+        for row in rows {
+            let (
+                _objective_id,
+                agent,
+                from_secs,
+                to_secs,
+                attested,
+                turns,
+                input_tokens,
+                output_tokens,
+                cache_creation,
+                cache_read,
+                facturable,
+            ) = row.map_err(StoreError::Sql)?;
+            let attested = attested == 1;
+            if attested
+                && (turns.is_none()
+                    || input_tokens.is_none()
+                    || output_tokens.is_none()
+                    || cache_creation.is_none()
+                    || cache_read.is_none()
+                    || facturable.is_none())
+            {
+                return Err(StoreError::Corrupt("coût attesté incomplet"));
+            }
+            costs.push(CoutMissionAgent {
+                agent,
+                from_secs,
+                to_secs,
+                attested,
+                turns: turns.map(|value| value as u64),
+                input_tokens: input_tokens.map(|value| value as u64),
+                output_tokens: output_tokens.map(|value| value as u64),
+                cache_creation_input_tokens: cache_creation.map(|value| value as u64),
+                cache_read_input_tokens: cache_read.map(|value| value as u64),
+                facturable_tokens: facturable.map(|value| value as u64),
+            });
+        }
+        Ok(costs)
     }
 
     /// Relit exclusivement les liens d'arbitrage déclarés à la création des
@@ -1871,6 +2004,33 @@ impl MaicieStore {
         objective_id: Uuid,
         reason: &str,
         now: i64,
+        observer: F,
+    ) -> Result<DecisionCoordination, StoreError>
+    where
+        F: FnMut(ObjectiveClosureCommitPhase) -> Result<(), StoreError>,
+    {
+        self.close_objective_observed_with_costs(objective_id, reason, now, None, observer)
+    }
+
+    /// Clôture en portant les coûts attestés (ou inconnus) dans la même
+    /// transaction. Un agent absent des faits runtime reste `inconnu`.
+    pub fn close_objective_with_costs(
+        &mut self,
+        objective_id: Uuid,
+        reason: &str,
+        now: i64,
+        costs: Vec<CoutMissionAgent>,
+    ) -> Result<DecisionCoordination, StoreError> {
+        self.close_objective_observed_with_costs(objective_id, reason, now, Some(costs), |_| Ok(()))
+    }
+
+    #[doc(hidden)]
+    pub fn close_objective_observed_with_costs<F>(
+        &mut self,
+        objective_id: Uuid,
+        reason: &str,
+        now: i64,
+        costs: Option<Vec<CoutMissionAgent>>,
         mut observer: F,
     ) -> Result<DecisionCoordination, StoreError>
     where
@@ -1915,6 +2075,7 @@ impl MaicieStore {
             expected_state,
             &decision,
             now,
+            costs.as_deref(),
             &mut observer,
         )?;
         observer(ObjectiveClosureCommitPhase::BeforeCommit)?;
@@ -5227,6 +5388,7 @@ fn persist_objective_closure<F>(
     expected_state: EtatObjectif,
     decision: &DecisionCoordination,
     issued_at: i64,
+    costs: Option<&[CoutMissionAgent]>,
     observer: &mut F,
 ) -> Result<(), StoreError>
 where
@@ -5277,10 +5439,98 @@ where
     for outbox in objective_closure_outboxes(tx, objective.id, decision, issued_at)? {
         insert_notification_outbox(tx, &outbox)?;
     }
+    persist_objective_costs(tx, objective, issued_at, costs)?;
     // F37 : déblocage OBJECTIF→OBJECTIF dans la même transaction que 016.
     // Aucun dépendant → zéro écriture supplémentaire (oracle silencieux).
     release_waiting_dependents_on_prerequisite_closure(tx, objective.id, decision, issued_at)?;
     observer(ObjectiveClosureCommitPhase::AfterOutboxes)
+}
+
+fn persist_objective_costs(
+    tx: &Transaction<'_>,
+    objective: &ObjectifCoordonne,
+    closed_at: i64,
+    overrides: Option<&[CoutMissionAgent]>,
+) -> Result<(), StoreError> {
+    let mut windows: BTreeMap<String, i64> = BTreeMap::new();
+    let mut statement = tx
+        .prepare(
+            "SELECT payload_json FROM delegations WHERE objective_id = ?1 ORDER BY id",
+        )
+        .map_err(StoreError::Sql)?;
+    let rows = statement
+        .query_map([objective.id.to_string()], |row| row.get::<_, Vec<u8>>(0))
+        .map_err(StoreError::Sql)?;
+    for row in rows {
+        let payload = row.map_err(StoreError::Sql)?;
+        let delegation: Delegation =
+            serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        windows
+            .entry(delegation.participant)
+            .or_insert(objective.cree_at.max(1));
+    }
+    let mut outbox = tx
+        .prepare(
+            "SELECT target, MIN(issued_at) FROM delegation_outbox
+             WHERE objective_id = ?1 GROUP BY target",
+        )
+        .map_err(StoreError::Sql)?;
+    let outbox_rows = outbox
+        .query_map([objective.id.to_string()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(StoreError::Sql)?;
+    for row in outbox_rows {
+        let (target, issued_at) = row.map_err(StoreError::Sql)?;
+        if issued_at > 0 {
+            windows.insert(target, issued_at);
+        }
+    }
+    let mut costs: BTreeMap<String, CoutMissionAgent> = windows
+        .into_iter()
+        .map(|(agent, from_secs)| {
+            let from_secs = if from_secs > 0 {
+                from_secs
+            } else {
+                objective.cree_at.max(1)
+            };
+            let to_secs = closed_at.max(from_secs);
+            (agent.clone(), CoutMissionAgent::unknown(agent, from_secs, to_secs))
+        })
+        .collect();
+    if let Some(overrides) = overrides {
+        for cost in overrides {
+            if let Some(slot) = costs.get_mut(&cost.agent) {
+                *slot = cost.clone();
+            }
+        }
+    }
+    for cost in costs.values() {
+        let attested = i64::from(cost.attested);
+        tx.execute(
+            "INSERT INTO objective_costs (
+                 objective_id, agent, from_secs, to_secs, attested,
+                 turns, input_tokens, output_tokens,
+                 cache_creation_input_tokens, cache_read_input_tokens,
+                 facturable_tokens
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                objective.id.to_string(),
+                cost.agent,
+                cost.from_secs,
+                cost.to_secs,
+                attested,
+                cost.turns.map(|value| value as i64),
+                cost.input_tokens.map(|value| value as i64),
+                cost.output_tokens.map(|value| value as i64),
+                cost.cache_creation_input_tokens.map(|value| value as i64),
+                cost.cache_read_input_tokens.map(|value| value as i64),
+                cost.facturable_tokens.map(|value| value as i64),
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    }
+    Ok(())
 }
 
 fn objective_closure_outboxes(
@@ -6361,6 +6611,25 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
              FROM delegate_idempotency_v11 i
              JOIN delegation_outbox o ON o.message_id = i.message_id;
              DROP TABLE delegate_idempotency_v11;",
+        )
+        .map_err(StoreError::Sql)?;
+    }
+    if current_version < 13 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS objective_costs (
+                 objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 agent TEXT NOT NULL,
+                 from_secs INTEGER NOT NULL CHECK(from_secs > 0),
+                 to_secs INTEGER NOT NULL CHECK(to_secs >= from_secs),
+                 attested INTEGER NOT NULL CHECK(attested IN (0, 1)),
+                 turns INTEGER,
+                 input_tokens INTEGER,
+                 output_tokens INTEGER,
+                 cache_creation_input_tokens INTEGER,
+                 cache_read_input_tokens INTEGER,
+                 facturable_tokens INTEGER,
+                 PRIMARY KEY (objective_id, agent)
+             );",
         )
         .map_err(StoreError::Sql)?;
     }
