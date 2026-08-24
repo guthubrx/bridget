@@ -834,6 +834,8 @@ struct JournalRenderRecord {
     text: Option<String>,
     permission_status: Option<&'static str>,
     terminal: bool,
+    /// `prompt_dispatched` sans corps : accusé transport, pas un message.
+    ack_only: bool,
     rendered: String,
 }
 
@@ -862,6 +864,12 @@ fn journal_render_record(bytes: &[u8], agent: &str) -> Option<JournalRenderRecor
             .unwrap_or("")
             .to_string()
     });
+    let ack_only = event == "prompt_dispatched"
+        && payload
+            .get("body")
+            .and_then(serde_json::Value::as_str)
+            .filter(|body| !body.is_empty())
+            .is_none();
     Some(JournalRenderRecord {
         key,
         event,
@@ -872,6 +880,7 @@ fn journal_render_record(bytes: &[u8], agent: &str) -> Option<JournalRenderRecor
             .get("terminal")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
+        ack_only,
         rendered: render_journal_event(bytes, agent),
     })
 }
@@ -1128,8 +1137,16 @@ impl BlockRenderer {
         let starts_block = self.current.as_ref().map(|block| &block.key) != Some(&key);
         if starts_block {
             self.flush_incomplete(input, output);
-            let header = if record.event == "turn_start" {
+            let header = if record.event == "turn_start"
+                || (record.event == "prompt_dispatched" && !record.ack_only)
+            {
+                // `prompt_dispatched` riche (from/body) peut ouvrir un tour si le
+                // journal partiel a sauté `turn_start`.
                 record.rendered.clone()
+            } else if record.event == "prompt_dispatched" {
+                // Accusé vide orphelin : pas de faux « tour repris ».
+                self.emit_standalone(&record.rendered, input, output);
+                return;
             } else {
                 format!("{} [tour repris en cours]", record.timestamp)
             };
@@ -1137,6 +1154,14 @@ impl BlockRenderer {
         }
         if record.event == "turn_start" {
             if live {
+                self.redraw(input, output);
+            }
+            return;
+        }
+        // Accusé de livraison sous un tour déjà ouvert : corps déjà affiché.
+        // Orphelin riche : le header vient d'être posé — redessiner comme turn_start.
+        if record.event == "prompt_dispatched" {
+            if live && !record.ack_only {
                 self.redraw(input, output);
             }
             return;
@@ -1760,20 +1785,11 @@ fn render_journal_event(bytes: &[u8], agent: &str) -> String {
         .unwrap_or("inconnu");
     let payload = value.get("payload").unwrap_or(&serde_json::Value::Null);
     let (label, content) = match event {
-        "turn_start" => (
-            format!(
-                "{} →",
-                payload
-                    .get("from")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("humain")
-            ),
-            payload
-                .get("body")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("message sans corps")
-                .to_string(),
-        ),
+        "turn_start" => inbound_message_parts(payload),
+        // Même forme que `turn_start` quand le pilote a consignés from/body ;
+        // payload vide (journaux réels Codex/Claude) → accusé lisible, pas un
+        // « non pris en charge ».
+        "prompt_dispatched" => prompt_dispatched_parts(payload),
         "update" if payload.get("kind").and_then(serde_json::Value::as_str) == Some("text") => (
             format!("{agent} →"),
             payload
@@ -1821,6 +1837,9 @@ fn render_journal_event(bytes: &[u8], agent: &str) -> String {
                 .unwrap_or("erreur sans motif")
                 .to_string(),
         ),
+        // Laissé volontairement brut : tout autre `event` (et tout `update` dont
+        // le `kind` n'est ni text ni tool_call). Aucun autre type n'apparaît
+        // aujourd'hui dans les journaux de production.
         _ => (
             format!("[événement] {event}"),
             "payload v1 non pris en charge".to_string(),
@@ -1828,6 +1847,34 @@ fn render_journal_event(bytes: &[u8], agent: &str) -> String {
     };
 
     render_prefixed(&format!("{timestamp} {label}"), &content)
+}
+
+fn inbound_message_parts(payload: &serde_json::Value) -> (String, String) {
+    (
+        format!(
+            "{} →",
+            payload
+                .get("from")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("humain")
+        ),
+        payload
+            .get("body")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("message sans corps")
+            .to_string(),
+    )
+}
+
+fn prompt_dispatched_parts(payload: &serde_json::Value) -> (String, String) {
+    let body = payload
+        .get("body")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty());
+    match body {
+        Some(_) => inbound_message_parts(payload),
+        None => ("[livré]".to_string(), "prompt accepté".to_string()),
+    }
 }
 
 fn permission_summary(payload: &serde_json::Value) -> String {
@@ -3956,6 +4003,51 @@ mod tests {
             render_journal_event(error.trim_end().as_bytes(), "codex-1"),
             format!("{error_time} [erreur] équipier arrêté")
         );
+    }
+
+    #[test]
+    fn rend_prompt_dispatched_v1_riche_comme_un_message_humain() {
+        // Forme v1 réelle attendue après enrichissement des pilotes (from+body),
+        // alignée sur le style `turn_start` déjà lisible pour les mandats.
+        let line = journal_record(
+            42,
+            "prompt_dispatched",
+            json!({"from": "humain", "body": "salut"}),
+        );
+        let stamp = short_timestamp(Some("2026-08-23T09:07:00Z"));
+        assert_eq!(
+            render_journal_event(&line, "coder2"),
+            format!("{stamp} humain → salut")
+        );
+    }
+
+    #[test]
+    fn rend_prompt_dispatched_payload_vide_comme_accuse_lisible() {
+        // Journaux Codex/Claude observés le 2026-08-24 : payload {}.
+        let line = r#"{"v":1,"seq":5845,"ts":"2026-08-24T12:00:43Z","session_id":"s","event":"prompt_dispatched","message_id":"5f793b236d094","payload":{}}"#;
+        let rendered = render_journal_event(line.as_bytes(), "coder2");
+        let stamp = short_timestamp(Some("2026-08-24T12:00:43Z"));
+        assert_eq!(rendered, format!("{stamp} [livré] prompt accepté"));
+        assert!(!rendered.contains("non pris en charge"));
+    }
+
+    #[test]
+    fn payload_v1_inconnu_reste_honnete_sans_crash() {
+        let line = r#"{"v":1,"seq":1,"ts":"2026-08-24T12:00:00Z","session_id":"s","event":"vendor_future","message_id":"m","payload":{"x":1}}"#;
+        let rendered = render_journal_event(line.as_bytes(), "coder2");
+        let stamp = short_timestamp(Some("2026-08-24T12:00:00Z"));
+        assert_eq!(
+            rendered,
+            format!("{stamp} [événement] vendor_future payload v1 non pris en charge")
+        );
+    }
+
+    #[test]
+    fn update_kind_inconnu_reste_brut_volontairement() {
+        let line = r#"{"v":1,"seq":1,"ts":"2026-08-24T12:00:00Z","session_id":"s","event":"update","message_id":"m","payload":{"kind":"thinking","content":"..."}}"#;
+        let rendered = render_journal_event(line.as_bytes(), "coder2");
+        assert!(rendered.contains("[événement] update"));
+        assert!(rendered.contains("payload v1 non pris en charge"));
     }
 
     #[test]

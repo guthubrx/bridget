@@ -455,7 +455,15 @@ fn spawn_worker(
                             message_id: message.id.clone(),
                         },
                     );
-                    let _ = record(&journal, "prompt_dispatched", Some(&message.id), json!({}));
+                    let _ = record(
+                        &journal,
+                        "prompt_dispatched",
+                        Some(&message.id),
+                        json!({
+                            "from": &message.from,
+                            "body": &message.body,
+                        }),
+                    );
                     let deadline = message
                         .deadline_at
                         .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds))

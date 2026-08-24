@@ -556,7 +556,10 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                         &worker.journal,
                         "prompt_dispatched",
                         Some(&message.id),
-                        json!({}),
+                        json!({
+                            "from": &message.from,
+                            "body": &message.body,
+                        }),
                     );
                     wait_for_turn(&worker, &message, &turn_id, &cancel, started)
                 }
