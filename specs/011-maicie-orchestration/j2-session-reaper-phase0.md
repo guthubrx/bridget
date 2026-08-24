@@ -70,6 +70,10 @@ Le doute profite **toujours** au processus.
 | G6 | Métadonnée d'âge / last_seen illisible |
 | G7 | Déjà `stopped` |
 | G8 | Hors préfixe / hors inventaire connu → `incertain`, jamais kill |
+| G9 | `managed-wrapper` encore rattaché au daemon (classe B) — tuer le
+  parent tuerait l'enfant. Signaux : `ppid == pid` du daemon **ou**
+  cmdline qui cite le HOME harnais (après réadoption par PID 1, le ppid
+  ment ; le home reste). Doute sur la filiation → pas d'éligibilité. |
 
 ## Trou à instruire — signal de travail de fond
 

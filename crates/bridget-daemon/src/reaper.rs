@@ -316,6 +316,35 @@ pub fn classify_test_daemon(
         guards.push(format!("G_parent_vivant_ppid={}", process.ppid));
     }
 
+    // G9 — managed-wrapper encore rattaché à ce daemon : tuer le parent le
+    // tuerait aussi. Deux signaux, le doute élargit la garde (jamais l'inverse) :
+    // (1) ppid == pid du daemon ; (2) cmdline qui cite le HOME harnais — car
+    // après réadoption par PID 1 la filiation ppid disparaît, mais le home reste.
+    let descendant_pids: Vec<u32> = world
+        .processes
+        .iter()
+        .filter(|child| {
+            if !command_is_managed_wrapper(&child.command) {
+                return false;
+            }
+            if child.ppid == process.pid {
+                return true;
+            }
+            home.is_some_and(|h| process_mentions_path(&child.command, h))
+        })
+        .map(|child| child.pid)
+        .collect();
+    if !descendant_pids.is_empty() {
+        guards.push(format!(
+            "G9_descendant_managed_wrapper_vivant={}",
+            descendant_pids
+                .iter()
+                .map(|pid| pid.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+    }
+
     let would = match &home_str {
         Some(h) => format!(
             "SIGTERM pid={} puis rmdir best-effort {h} (JAMAIS exécuté en phase observer)",
@@ -1064,6 +1093,116 @@ mod tests {
         assert_eq!(report.verdict, Verdict::Eligible);
         assert!(report.would_have_done.contains("SIGTERM"));
         assert!(!report.would_have_done.contains("aucune"));
+    }
+
+    #[test]
+    fn harness_daemon_with_living_descendant_is_not_eligible() {
+        // Cas réel 32465→35839 : parent éligible sans G9 aurait tué l'enfant.
+        let mut world = world_at(1_700_000_000);
+        world.min_age_secs = 60;
+        let home = PathBuf::from("/tmp/bg909-matrix-0-32462-0fe0a6d0");
+        let parent = ProcessSnapshot {
+            pid: 32465,
+            ppid: 1,
+            age_secs: 7200,
+            command: "/tmp/x/bridget daemon".into(),
+        };
+        world.processes = vec![
+            parent.clone(),
+            ProcessSnapshot {
+                pid: 35839,
+                ppid: 32465,
+                age_secs: 7000,
+                command: format!(
+                    "/tmp/x/bridget managed-wrapper parity parity-managed-0 {}/parity-acp.py",
+                    home.display()
+                ),
+            },
+        ];
+        let report = classify_test_daemon(&parent, Some(&home), &world);
+        assert_eq!(report.verdict, Verdict::Protege);
+        assert!(
+            report
+                .guards_triggered
+                .iter()
+                .any(|g| g.starts_with("G9_descendant_managed_wrapper_vivant="))
+        );
+        assert!(report.would_have_done.contains("aucune"));
+    }
+
+    #[test]
+    fn harness_daemon_becomes_eligible_when_descendant_gone() {
+        // Sans le second oracle, G9 pourrait bloquer tout le monde à jamais.
+        let mut world = world_at(1_700_000_000);
+        world.min_age_secs = 60;
+        let home = PathBuf::from("/tmp/bg909-matrix-1-54665-0ad2889e");
+        let parent = ProcessSnapshot {
+            pid: 64298,
+            ppid: 1,
+            age_secs: 7200,
+            command: "/tmp/x/bridget daemon".into(),
+        };
+        world.processes = vec![
+            parent.clone(),
+            ProcessSnapshot {
+                pid: 67637,
+                ppid: 64298,
+                age_secs: 7000,
+                command: format!(
+                    "/tmp/x/bridget managed-wrapper parity parity-managed-1 {}/parity-acp.py",
+                    home.display()
+                ),
+            },
+        ];
+        let with_child = classify_test_daemon(&parent, Some(&home), &world);
+        assert_eq!(with_child.verdict, Verdict::Protege);
+
+        world.processes.retain(|p| p.pid != 67637);
+        let without_child = classify_test_daemon(&parent, Some(&home), &world);
+        assert_eq!(without_child.verdict, Verdict::Eligible);
+        assert!(
+            !without_child
+                .guards_triggered
+                .iter()
+                .any(|g| g.starts_with("G9_"))
+        );
+        assert!(without_child.would_have_done.contains("SIGTERM"));
+        assert!(!without_child.would_have_done.contains("aucune"));
+    }
+
+    #[test]
+    fn harness_daemon_protected_by_reparented_wrapper_sharing_home() {
+        // Après réadoption (ppid=1), la filiation ppid disparaît ; le HOME
+        // partagé reste un signal honnête — doute → pas d'éligibilité.
+        let mut world = world_at(1_700_000_000);
+        world.min_age_secs = 60;
+        let home = PathBuf::from("/tmp/bg909-matrix-0-reparent");
+        let parent = ProcessSnapshot {
+            pid: 100,
+            ppid: 1,
+            age_secs: 7200,
+            command: "/tmp/x/bridget daemon".into(),
+        };
+        world.processes = vec![
+            parent.clone(),
+            ProcessSnapshot {
+                pid: 200,
+                ppid: 1,
+                age_secs: 7000,
+                command: format!(
+                    "/tmp/x/bridget managed-wrapper parity parity-managed-0 {}/parity-acp.py",
+                    home.display()
+                ),
+            },
+        ];
+        let report = classify_test_daemon(&parent, Some(&home), &world);
+        assert_eq!(report.verdict, Verdict::Protege);
+        assert!(
+            report
+                .guards_triggered
+                .iter()
+                .any(|g| g.contains("G9_descendant_managed_wrapper_vivant=200"))
+        );
     }
 
     #[test]
