@@ -4,6 +4,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ronde="${root_dir}/scripts/bridget-ronde.py"
 installer="${root_dir}/scripts/install-bridget-ronde.sh"
+system_python="/usr/bin/python3"
 fixture_root="$(mktemp -d -t bridget-ronde-test.XXXXXX)"
 writer_pid=""
 cleanup() {
@@ -38,7 +39,7 @@ config="${fixture_root}/maicie.json"
 database="${fixture_root}/maicie.sqlite3"
 # Ce processus garde une vraie base WAL ouverte : l'oracle vérifie les
 # sidecars de la SOURCE, pas ceux de la copie temporaire de la ronde.
-python3 - "$config" "$database" "${fixture_root}/writer-ready" "${fixture_root}/writer-release" <<'PY' &
+"$system_python" - "$config" "$database" "${fixture_root}/writer-ready" "${fixture_root}/writer-release" <<'PY' &
 import json, pathlib, sqlite3, sys, time
 config, database, ready, release = map(pathlib.Path, sys.argv[1:])
 db = sqlite3.connect(database)
@@ -63,7 +64,7 @@ writer_pid=$!
 for _ in $(seq 1 100); do [[ -f "${fixture_root}/writer-ready" ]] && break; sleep 0.01; done
 [[ -f "${fixture_root}/writer-ready" ]]
 
-sidecars_before="$(python3 - "$database" <<'PY'
+sidecars_before="$("$system_python" - "$database" <<'PY'
 import json, os, sys
 database = sys.argv[1]
 print(json.dumps({suffix: [os.stat(database + suffix).st_size, os.stat(database + suffix).st_mtime_ns] for suffix in ('-wal', '-shm')}))
@@ -72,10 +73,10 @@ PY
 
 report_dir="${fixture_root}/reports"
 command_log="${fixture_root}/commands.log"
-output="$(RONDE_COMMAND_LOG="$command_log" python3 "$ronde" --bridget-bin "$fake_bridget" --maicie-bin "$fake_maicie" --config "$config" --now 100 --report-dir "$report_dir")"
+output="$(RONDE_COMMAND_LOG="$command_log" "$system_python" "$ronde" --bridget-bin "$fake_bridget" --maicie-bin "$fake_maicie" --config "$config" --now 100 --report-dir "$report_dir")"
 grep -q 'Constat seulement : aucune décision ni aucun envoi.' <<<"$output"
 json="$(tail -n 1 <<<"$output")"
-python3 - "$json" <<'PY'
+"$system_python" - "$json" <<'PY'
 import json, sys
 report = json.loads(sys.argv[1])
 assert report["decision"] == "none" and report["delivery"] == "none"
@@ -86,7 +87,7 @@ assert report["registry"]["view"] == "REGISTRE\nopen=1\n"
 PY
 [[ -f "${report_dir}/ronde-1970-01-01T00-01-40Z.txt" ]]
 [[ -f "${report_dir}/ronde-1970-01-01T00-01-40Z.json" ]]
-sidecars_after="$(python3 - "$database" <<'PY'
+sidecars_after="$("$system_python" - "$database" <<'PY'
 import json, os, sys
 database = sys.argv[1]
 print(json.dumps({suffix: [os.stat(database + suffix).st_size, os.stat(database + suffix).st_mtime_ns] for suffix in ('-wal', '-shm')}))
@@ -116,8 +117,8 @@ if assert_passive_log "$command_log"; then
   exit 1
 fi
 
-degraded="$(RONDE_COMMAND_LOG="$command_log" python3 "$ronde" --json --bridget-bin "$fake_bridget" --maicie-bin "$fake_maicie" --config "${fixture_root}/missing.json" --now 100)"
-python3 - "$degraded" <<'PY'
+degraded="$(RONDE_COMMAND_LOG="$command_log" "$system_python" "$ronde" --json --bridget-bin "$fake_bridget" --maicie-bin "$fake_maicie" --config "${fixture_root}/missing.json" --now 100)"
+"$system_python" - "$degraded" <<'PY'
 import json, sys
 report = json.loads(sys.argv[1])
 assert report["maicie"]["state"] == "unavailable"

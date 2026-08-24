@@ -109,8 +109,11 @@ def read_maicie_read_only(config_path: str) -> tuple[dict[str, Any] | None, str 
 
 
 def report(options: argparse.Namespace) -> tuple[str, dict[str, Any]]:
-    now = options.now if options.now is not None else int(dt.datetime.now(dt.UTC).timestamp())
-    observed_at = dt.datetime.fromtimestamp(now, dt.UTC).isoformat().replace("+00:00", "Z")
+    # `datetime.UTC` n'existe qu'à partir de Python 3.11 ; l'unité launchd
+    # utilise le Python système de macOS (3.9 à ce jour).
+    utc = dt.timezone.utc
+    now = options.now if options.now is not None else int(dt.datetime.now(utc).timestamp())
+    observed_at = dt.datetime.fromtimestamp(now, utc).isoformat().replace("+00:00", "Z")
     excluded = {item.strip() for item in options.exclude.split(",") if item.strip()}
     agents_raw, agents_error = run_json([options.bridget_bin, "agents", "--json"])
     requests_raw, requests_error = run_json([options.bridget_bin, "requests", "--all", "--json"])
