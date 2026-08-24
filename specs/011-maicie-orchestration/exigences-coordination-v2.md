@@ -513,3 +513,23 @@ plus vite ; le coût net est un report, pas une perte.
   déclarés morts pour une mauvaise raison, un motif de clôture erroné au
   greffe, et une mission relancée à l'identique qui ne pouvait que
   réechouer.
+- **La livraison d'un agent géré ne remonte pas — défaut mesuré, nuit du
+  24/08.** fable-reviewer a rendu son verdict APPROVE à 04h06. Je ne l'ai
+  jamais reçu. Sa mission est restée ouverte au greffe, je lui ai envoyé un
+  point d'étape inutile à 04h18 — auquel il a répondu, agacé à juste titre,
+  « le verdict est déjà rendu, il est dans ma réponse précédente » — et je
+  n'ai récupéré le texte qu'à 04h31 en lisant `bridget attach`. Vingt-cinq
+  minutes de dû fantôme sur une pièce bloquante du merge, et une relance
+  pour rien. CAUSE : la réponse ACP de fin de tour d'un agent géré n'est pas
+  convertie en message Bridget vers le demandeur. L'agent a la conviction
+  sincère d'avoir livré ; le demandeur n'a rien ; le journal, lui, a tout.
+  C'est le faux-dû dans son sens le plus coûteux — non pas un dû inventé,
+  mais un dû SOLDÉ qui reste ouvert, invisible des deux côtés. À trancher :
+  soit le wrapper émet automatiquement la réponse finale comme message au
+  demandeur de la mission, soit le mandat impose un `bridget send` explicite
+  (contournement appliqué immédiatement, écrit dans les mandats). La
+  première voie est la bonne : compter sur la discipline d'un agent pour
+  fermer une boucle que le transport peut fermer lui-même, c'est déplacer la
+  charge au mauvais endroit. Lien direct avec 017 (la greffière ne peut pas
+  qualifier ce qu'elle ne voit pas) et avec la GUI (une vue unifiée doit
+  montrer le journal, pas seulement les messages).
