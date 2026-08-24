@@ -223,8 +223,11 @@ pub enum PendingKind {
 }
 
 /// Ligne fermée du journal.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
+///
+/// Pas de `Deserialize` : la lecture passe exclusivement par le dispatch fermé
+/// `parse_closed_line` (kind explicite). Un `#[serde(untagged)]` ici serait
+/// du code mort et un chemin de contournement trompeur.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CatalogueEntry {
     Add(AddEntry),
     Transition(TransitionEntry),
@@ -351,6 +354,11 @@ impl CatalogueJournal {
 
     /// Lit toutes les lignes JSON fermées, dans l'ordre physique.
     pub fn read_entries(&mut self) -> Result<Vec<CatalogueEntry>, CatalogueError> {
+        Ok(self.read_journal()?.entries)
+    }
+
+    /// Lit le journal et remonte un éventuel avertissement de queue arrachée.
+    pub fn read_journal(&mut self) -> Result<ParsedJournal, CatalogueError> {
         self.file.seek(SeekFrom::Start(0))?;
         let mut bytes = Vec::new();
         self.file.read_to_end(&mut bytes)?;
@@ -510,8 +518,12 @@ impl CatalogueJournal {
             };
             return Err(CatalogueError::IdempotenceConflict { id });
         }
-        self.file.write_all(line.as_bytes())?;
-        self.file.write_all(b"\n")?;
+        // Un seul write : ligne + LF. O_APPEND n'est atomique que pour un
+        // appel sous la taille de tampon ; deux appels exposeraient une
+        // fenêtre où le journal se termine sans terminateur.
+        let mut record = line;
+        record.push('\n');
+        self.file.write_all(record.as_bytes())?;
         self.file.flush()?;
         self.file.sync_data()?;
         Ok(AppendOutcome::Appended)
@@ -613,25 +625,95 @@ fn refuse_if_symlink(path: &Path) -> Result<(), CatalogueError> {
     Ok(())
 }
 
+/// Résultat d'une lecture de journal : entrées valides et éventuelle queue
+/// arrachée (crash entre octets de ligne et LF).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedJournal {
+    pub entries: Vec<CatalogueEntry>,
+    /// Présent si le fichier se termine par une ligne sans LF et invalide :
+    /// la ligne est ignorée, le reste du journal reste lisible.
+    pub torn_tail_warning: Option<String>,
+}
+
 /// Parse un journal entier (en-tête Markdown éventuel ignoré hors lignes JSON).
-pub fn parse_journal_bytes(bytes: &[u8]) -> Result<Vec<CatalogueEntry>, CatalogueError> {
-    let mut entries = Vec::new();
-    for (index, raw) in BufReader::new(bytes).lines().enumerate() {
-        let line = raw?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("<!--") {
-            continue;
-        }
-        if !trimmed.starts_with('{') {
-            return Err(CatalogueError::Format(format!(
-                "ligne {}: prose hors format fermé refusée",
-                index + 1
-            )));
-        }
-        let entry = parse_closed_line(trimmed)?;
-        entries.push(entry);
+///
+/// Une ligne invalide au milieu (terminée par LF) refuse le journal. Une
+/// dernière ligne sans terminateur et invalide est seulement signalée : c'est
+/// une écriture arrachée, pas une corruption du corpus déjà scellé.
+pub fn parse_journal_bytes(bytes: &[u8]) -> Result<ParsedJournal, CatalogueError> {
+    let text = std::str::from_utf8(bytes).map_err(|source| {
+        CatalogueError::Format(format!("journal non UTF-8: {source}"))
+    })?;
+    let ends_with_lf = text.ends_with('\n');
+    let mut parts: Vec<&str> = text.split('\n').collect();
+    if ends_with_lf {
+        // `split` laisse un dernier segment vide après le LF final.
+        let _ = parts.pop();
     }
-    Ok(entries)
+    let (complete_lines, torn_tail) = if ends_with_lf || parts.is_empty() {
+        (parts.as_slice(), None)
+    } else {
+        let (tail, rest) = parts.split_last().expect("parts non vide");
+        (rest, Some(*tail))
+    };
+
+    let mut entries = Vec::new();
+    for (index, line) in complete_lines.iter().enumerate() {
+        push_journal_line(line, index + 1, &mut entries)?;
+    }
+
+    let mut torn_tail_warning = None;
+    if let Some(tail) = torn_tail {
+        let trimmed = tail.trim();
+        if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("<!--") {
+            match try_parse_journal_line(trimmed) {
+                Ok(entry) => entries.push(entry),
+                Err(_) => {
+                    torn_tail_warning = Some(format!(
+                        "ligne finale arrachée ignorée (sans terminateur LF) : {trimmed}"
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(ParsedJournal {
+        entries,
+        torn_tail_warning,
+    })
+}
+
+fn push_journal_line(
+    line: &str,
+    line_number: usize,
+    entries: &mut Vec<CatalogueEntry>,
+) -> Result<(), CatalogueError> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("<!--") {
+        return Ok(());
+    }
+    if !trimmed.starts_with('{') {
+        return Err(CatalogueError::Format(format!(
+            "ligne {line_number}: prose hors format fermé refusée"
+        )));
+    }
+    let entry = parse_closed_line(trimmed).map_err(|error| match error {
+        CatalogueError::Format(reason) => {
+            CatalogueError::Format(format!("ligne {line_number}: {reason}"))
+        }
+        other => other,
+    })?;
+    entries.push(entry);
+    Ok(())
+}
+
+fn try_parse_journal_line(trimmed: &str) -> Result<CatalogueEntry, CatalogueError> {
+    if !trimmed.starts_with('{') {
+        return Err(CatalogueError::Format(
+            "prose hors format fermé refusée".into(),
+        ));
+    }
+    parse_closed_line(trimmed)
 }
 
 /// Parse une ligne JSON fermée ; type/champ inconnu → refus.
@@ -1340,6 +1422,70 @@ mod tests {
         assert_eq!(journal.read_entries().unwrap().len(), 2);
         let rendered = render_registre_list_with_attente(&after, true);
         assert!(rendered.contains("(aucune entrée en attente)"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn derniere_ligne_arrachee_laisse_les_precedentes_lisibles() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-catalogue-torn-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("catalogue.jsonl");
+        {
+            let mut journal = CatalogueJournal::open(&path).unwrap();
+            journal
+                .append_add(sample_add("kept-1", Severity::Info, "2026-08-24T06:00:00Z"))
+                .unwrap();
+            journal
+                .append_add(sample_add("kept-2", Severity::Minor, "2026-08-24T06:01:00Z"))
+                .unwrap();
+            journal
+                .append_add(sample_add("torn", Severity::Major, "2026-08-24T06:02:00Z"))
+                .unwrap();
+        }
+        let intact = fs::read(&path).unwrap();
+        assert!(
+            intact.ends_with(b"\n"),
+            "l'append doit terminer chaque enregistrement par un seul write LF"
+        );
+        let text = String::from_utf8(intact).unwrap();
+        let without_final_lf = text.trim_end_matches('\n');
+        let last_start = without_final_lf.rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let cut = last_start + (without_final_lf.len() - last_start) / 2;
+        assert!(cut > last_start, "la troncature doit couper au milieu de la dernière ligne");
+        fs::write(&path, &without_final_lf.as_bytes()[..cut]).unwrap();
+
+        let parsed = parse_journal_bytes(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(parsed.entries.len(), 2, "les N-1 premières restent lisibles");
+        let ids: BTreeSet<_> = parsed
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                CatalogueEntry::Add(add) => Some(add.id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, BTreeSet::from(["kept-1", "kept-2"]));
+        let warning = parsed
+            .torn_tail_warning
+            .expect("la queue arrachée doit être signalée");
+        assert!(warning.contains("ligne finale arrachée"));
+
+        // Une ligne invalide au milieu reste une erreur franche.
+        let mut middle_corrupt = String::new();
+        middle_corrupt.push_str(
+            r#"{"v":1,"kind":"add","id":"a","date":"2026-08-24T06:00:00Z","mission_source":{"kind":"incident","id":"i"},"severity":"info","text":"ok"}"#,
+        );
+        middle_corrupt.push('\n');
+        middle_corrupt.push_str("{not-json\n");
+        middle_corrupt.push_str(
+            r#"{"v":1,"kind":"add","id":"b","date":"2026-08-24T06:01:00Z","mission_source":{"kind":"incident","id":"i"},"severity":"info","text":"ok"}"#,
+        );
+        middle_corrupt.push('\n');
+        let err = parse_journal_bytes(middle_corrupt.as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("ligne 2"));
         let _ = fs::remove_dir_all(&root);
     }
 }

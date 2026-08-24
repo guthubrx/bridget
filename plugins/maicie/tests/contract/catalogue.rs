@@ -109,7 +109,7 @@ fn corpus_v1_valide_est_lisible_et_les_mutations_refusent_sans_append() {
         "\n",
     );
     let _ = valid; // fixture figée pour revue humaine / golden futur
-    let entries = parse_journal_bytes(ordered.as_bytes()).unwrap();
+    let entries = parse_journal_bytes(ordered.as_bytes()).unwrap().entries;
     assert_eq!(entries.len(), 5);
     let view = project_registre(&entries);
     assert_eq!(view.footer.ouverts, 2);

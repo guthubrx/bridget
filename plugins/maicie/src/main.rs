@@ -886,8 +886,11 @@ fn run_registre(arguments: RegistreArgs) -> Result<String, CliError> {
         RegistreAction::List { attente } => {
             let mut journal =
                 CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
-            let entries = journal.read_entries().map_err(CliError::Catalogue)?;
-            let view = catalogue::project_registre(&entries);
+            let parsed = journal.read_journal().map_err(CliError::Catalogue)?;
+            if let Some(warning) = parsed.torn_tail_warning {
+                eprintln!("avertissement: {warning}");
+            }
+            let view = catalogue::project_registre(&parsed.entries);
             Ok(catalogue::render_registre_list_with_attente(&view, attente))
         }
         RegistreAction::Add { line } => {
