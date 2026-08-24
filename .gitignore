@@ -15,4 +15,5 @@
 AUDIT_RAPPORT.md
 *.bak
 *.bak-*
+__pycache__/
 .DS_Store
