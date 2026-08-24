@@ -44,6 +44,12 @@ l'incident.
     répare pas hors scope non plus.
 12. **Valider sur un arbre contaminé par le WIP d'autrui ne prouve rien** —
     vérifier `git status` avant d'attribuer un rouge à son propre diff.
+12b. **`cargo check --workspace` ne compile PAS les fichiers de tests.** Un
+    lot peut être « check vert + tests ciblés verts » avec quatre suites
+    d'intégration qui ne compilent plus. Gate minimal avant livraison :
+    `cargo test --workspace --no-run` (ou `-p <crate>` du lot). *(Incident :
+    F36/F37 BLOCKED en revue, 2026-08-24 — et ses oracles de schéma périmés
+    mentaient dans le sens permissif.)*
 
 **Gate de formatage obligatoire avant commit.** Exécuter `cargo fmt --all
 --check` avec la toolchain de référence `rust-toolchain.toml` (Rust 1.92.0,
