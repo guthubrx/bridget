@@ -68,3 +68,22 @@ La fenêtre A portait 5 h 30 de panne (22h27→03h57). Mesure suivante planifié
 le 25/08 à 12h03 (fenêtre C, coordination AUTONOME attendue en service) —
 hypothèse : les ratios du référent baissent, les relances et transcriptions
 étant reprises par Maicie.
+
+### Raffinement du 24/08 (analyse livrée après clôture, intégrée)
+
+Corrections à retenir sur la mesure de midi :
+- **Le surcroît de lignes de A est de la DOC, pas du code** : production
+  A +27 629 contre B +34 467 — la fenêtre Maicie a écrit MOINS de code de
+  production et TROIS FOIS plus de documentation (+36 778 contre +8 997).
+  Le « +33 % de lignes » brut était trompeur.
+- Panne mesurée au trou de commits : 5,50 h exactement (22:27:57→03:57:56).
+- Tokens « facturables » (entrée+sortie+création de cache, hors lecture) :
+  A ≈ 21,2 M, B ≈ 15,9 M. **Par fusion : 0,68 M contre 1,45 M — le ÷2 du
+  coût par livraison intégrée est confirmé par la seconde méthode.**
+- Taux de réponse des demandes : 78 % (A) contre 36 % (B) — la coordination
+  répond, l'avant laissait mourir 6 demandes sur 10 en timeout.
+- Le « ×139 missions » est un artefact de naissance d'outil (première
+  délégation à 11:55, 4 min avant la frontière) — à ne plus citer comme
+  rendement.
+- Tri de sessions fiable = par `cwd` et branche, JAMAIS par mots-clés
+  (la liste d'outils injectée contient h3/horizon/ltx partout).
