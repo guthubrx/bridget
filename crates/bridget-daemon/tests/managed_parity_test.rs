@@ -799,6 +799,7 @@ impl Peer {
             instance_id: Some(format!("instance-{name}")),
             domain: None,
             turn_in_progress: false,
+            journal_available: None,
         });
         match peer.recv() {
             DaemonToWrapper::Registered { name: assigned } => peer.name = assigned,

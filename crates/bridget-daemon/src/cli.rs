@@ -1274,6 +1274,7 @@ fn send_control_to_daemon_at(
         instance_id: None,
         domain: None,
         turn_in_progress: false,
+        journal_available: None,
     };
     let reg_json = encode(&reg).map_err(|e| e.to_string())?;
     writeln!(writer, "{}", reg_json).map_err(|e| e.to_string())?;
@@ -1416,6 +1417,7 @@ fn send_rename_to_daemon(current_name: &str, name: &str) -> Result<DaemonToWrapp
         instance_id: None,
         domain: None,
         turn_in_progress: false,
+        journal_available: None,
     };
     writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
@@ -1468,6 +1470,7 @@ fn send_runtime_to_daemon(
         instance_id: None,
         domain: None,
         turn_in_progress: false,
+        journal_available: None,
     };
     writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;

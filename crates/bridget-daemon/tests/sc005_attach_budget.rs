@@ -228,6 +228,7 @@ fn connect_sender(socket: &Path) -> (BufWriter<UnixStream>, BufReader<UnixStream
             instance_id: Some(format!("sender-{}", uuid::Uuid::new_v4())),
             domain: None,
             turn_in_progress: false,
+            journal_available: None,
         },
     );
     assert!(matches!(

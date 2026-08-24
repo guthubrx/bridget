@@ -2767,6 +2767,7 @@ fn handle_register(
     instance_id: Option<String>,
     domain: Option<String>,
     turn_in_progress: bool,
+    journal_available: Option<bool>,
     state: &mut DaemonState,
 ) -> DaemonToWrapper {
     log::debug!(
@@ -2904,6 +2905,18 @@ fn handle_register(
                 state
                     .conn_instances
                     .insert(conn_id.to_string(), instance_id.clone());
+                // Les wrappers récents réinitialisent explicitement ce fait à
+                // `false` puis annoncent `JournalReady`. Les binaires
+                // historiques ne portent pas ce champ, mais leur chemin ACP
+                // n'atteint la boucle qu'après activation du journal : les
+                // conserver attachables évite de les casser lors d'un
+                // redémarrage progressif du daemon.
+                let journal_available = journal_available.unwrap_or_else(|| {
+                    previous
+                        .as_ref()
+                        .is_some_and(|presence| presence.journal_available)
+                        || transport == "acp"
+                });
                 state.presences.insert(
                     instance_id.clone(),
                     Presence {
@@ -2913,7 +2926,7 @@ fn handle_register(
                         transport,
                         mode,
                         location,
-                        journal_available: false,
+                        journal_available,
                         os,
                         state: if turn_in_progress {
                             "busy"
@@ -5001,6 +5014,7 @@ fn handle_wrapper_message(
             instance_id,
             domain,
             turn_in_progress,
+            journal_available,
         } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             if instance_id
@@ -5025,6 +5039,7 @@ fn handle_wrapper_message(
                 instance_id,
                 domain,
                 turn_in_progress,
+                journal_available,
                 &mut st,
             );
             if let (Some(instance_id), DaemonToWrapper::Registered { name: final_name }) =
@@ -5530,6 +5545,7 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
         instance_id: None,
         domain: None,
         turn_in_progress: false,
+        journal_available: None,
     };
     let reg_json = match encode(&reg) {
         Ok(j) => j,
@@ -6143,6 +6159,7 @@ mod presence_tests {
                     instance_id: None,
                     domain: None,
                     turn_in_progress: false,
+                    journal_available: None,
                 },
                 &shared,
             ),
@@ -6162,6 +6179,7 @@ mod presence_tests {
                     instance_id: Some(lease.instance_id.clone()),
                     domain: None,
                     turn_in_progress: false,
+                    journal_available: None,
                 },
                 &shared,
             ),
@@ -6665,6 +6683,7 @@ mod presence_tests {
                     instance_id: None,
                     domain: None,
                     turn_in_progress: false,
+                    journal_available: None,
                 },
                 &shared,
             ),
@@ -7196,6 +7215,7 @@ mod presence_tests {
                     instance_id: None,
                     domain: None,
                     turn_in_progress: false,
+                    journal_available: None,
                 },
                 &shared,
             ),
@@ -7916,6 +7936,7 @@ mod presence_tests {
                     Some(instance_id.to_string()),
                     None,
                     false,
+                    None,
                     &mut state,
                 ),
                 DaemonToWrapper::Registered { .. }
@@ -7939,8 +7960,10 @@ mod presence_tests {
         assert_eq!(cli_refusal.mode, Some(PresenceMode::Cli));
         assert!(cli_refusal.location.is_none());
 
-        // Une présence historique annoncée avec l'ancien transport `acp`
-        // demeure inconnue et ne devient jamais attachable par élimination.
+        // Un wrapper historique ne porte pas JournalReady mais son lancement
+        // ACP n'atteint cette boucle qu'après activation du journal. Le
+        // daemon neuf le laisse donc franchir le gate, sans exiger un
+        // redémarrage atomique de tous les wrappers vivants.
         assert!(matches!(
             handle_register(
                 "legacy-conn",
@@ -7954,14 +7977,42 @@ mod presence_tests {
                 Some("legacy-instance".to_string()),
                 None,
                 false,
+                None,
                 &mut state,
             ),
             DaemonToWrapper::Registered { .. }
         ));
         let legacy_refusal = attach_refusal_for_subscription(&state, "legacy-agent").unwrap_err();
-        assert_eq!(legacy_refusal.reason, AttachRefusal::JournalUnavailable);
+        assert_eq!(legacy_refusal.reason, AttachRefusal::WrapperUnavailable);
         assert!(legacy_refusal.mode.is_none());
         assert!(legacy_refusal.location.is_none());
+
+        // Mutation discriminante de la transition : un wrapper nouveau
+        // annonce explicitement `false` avant JournalReady et reste refusé.
+        assert!(matches!(
+            handle_register(
+                "modern-conn",
+                "fixture".to_string(),
+                Some("modern-agent".to_string()),
+                Some("local".to_string()),
+                Some("acp".to_string()),
+                Some(PresenceMode::Acp),
+                None,
+                Some("test".to_string()),
+                Some("modern-instance".to_string()),
+                None,
+                false,
+                Some(false),
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        assert_eq!(
+            attach_refusal_for_subscription(&state, "modern-agent")
+                .unwrap_err()
+                .reason,
+            AttachRefusal::JournalUnavailable
+        );
 
         // Le journal, et non le mode, est le gate attach. Une fois attesté
         // sur tmux, le refus progresse jusqu'à la disponibilité réelle du
@@ -8010,6 +8061,75 @@ mod presence_tests {
     }
 
     #[test]
+    fn wrapper_acp_historique_garde_son_journal_apres_reconnexion_vers_daemon_neuf() {
+        let (mut state, config) = state_with_registered_agent("legacy-journal-reconnect");
+        assert!(matches!(
+            handle_register(
+                "legacy-wrapper",
+                "codex".to_string(),
+                Some("legacy-journal".to_string()),
+                Some("local".to_string()),
+                Some("acp".to_string()),
+                None,
+                None,
+                Some("test".to_string()),
+                Some("legacy-journal-instance".to_string()),
+                None,
+                false,
+                None,
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        assert!(
+            state
+                .presences
+                .get("legacy-journal-instance")
+                .expect("présence historique")
+                .journal_available,
+            "mutation discriminante : sans la compatibilité de version, le gate retombe à faux"
+        );
+        assert_eq!(
+            attach_refusal_for_subscription(&state, "legacy-journal")
+                .unwrap_err()
+                .reason,
+            AttachRefusal::WrapperUnavailable
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn wrapper_recentre_reste_non_attachable_jusqu_a_journal_ready() {
+        let (mut state, config) = state_with_registered_agent("modern-journal-register");
+        assert!(matches!(
+            handle_register(
+                "modern-wrapper",
+                "codex".to_string(),
+                Some("modern-journal".to_string()),
+                Some("local".to_string()),
+                Some("acp".to_string()),
+                Some(PresenceMode::Acp),
+                None,
+                Some("test".to_string()),
+                Some("modern-journal-instance".to_string()),
+                None,
+                false,
+                Some(false),
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        assert_eq!(
+            attach_refusal_for_subscription(&state, "modern-journal")
+                .unwrap_err()
+                .reason,
+            AttachRefusal::JournalUnavailable,
+            "mutation discriminante : confondre l'absence historique et false réintroduirait le gate ACP"
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
     fn enregistrement_auxiliaire_mcp_ne_revendique_pas_la_presence_du_wrapper_vivant() {
         let (mut state, config) = state_with_registered_agent("presence-mcp-fusion");
         let rich = state.presences.get_mut("instance-1").unwrap();
@@ -8031,6 +8151,7 @@ mod presence_tests {
                 Some("instance-1".to_string()),
                 None,
                 false,
+                None,
                 &mut state,
             ),
             DaemonToWrapper::Registered { .. }
@@ -8106,6 +8227,7 @@ mod presence_tests {
                 Some(instance_id.clone()),
                 None,
                 false,
+                None,
                 &mut state,
             ),
             DaemonToWrapper::Registered { .. }
@@ -8192,6 +8314,7 @@ mod presence_tests {
                 Some("instance-claude-managed".to_string()),
                 Some("bridget".to_string()),
                 false,
+                None,
                 &mut state,
             ),
             DaemonToWrapper::Registered { ref name } if name == "claude-managed"
@@ -8973,6 +9096,7 @@ mod presence_tests {
             Some("instance-1".to_string()),
             Some("bridget".to_string()),
             false,
+            None,
             &mut state,
         );
         assert!(matches!(response, DaemonToWrapper::Registered { .. }));
@@ -9114,6 +9238,7 @@ mod presence_tests {
             Some("instance-1".to_string()),
             None,
             true,
+            None,
             &mut state,
         );
         assert!(matches!(response, DaemonToWrapper::Registered { .. }));

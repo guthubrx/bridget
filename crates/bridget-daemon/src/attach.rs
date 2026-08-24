@@ -2182,6 +2182,7 @@ fn list_attachable_agents(socket_path: &Path) -> Vec<String> {
         instance_id: None,
         domain: None,
         turn_in_progress: false,
+        journal_available: None,
     };
     if write_plain_message(&mut writer, &register).is_err() {
         return Vec::new();

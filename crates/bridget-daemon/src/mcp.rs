@@ -788,6 +788,7 @@ fn registered_connection(socket: &Path) -> Result<DaemonConnection, ToolError> {
         instance_id: None,
         domain: None,
         turn_in_progress: false,
+        journal_available: None,
     };
     match connection.exchange(&registration)? {
         DaemonToWrapper::Registered { .. } => Ok(connection),

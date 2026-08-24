@@ -10,8 +10,11 @@ pub mod protocol;
 pub mod tmux;
 pub mod transport;
 
-pub use acp::{AcpEvent, AcpOptions, AcpTransport, TurnState};
-pub use managed_session::{ManagedEvent, ManagedEventKind, ManagedEventSource, ManagedSession};
+pub use acp::{AcpEvent, AcpEventQueue, AcpOptions, AcpTransport, TurnState};
+pub use managed_session::{
+    ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource, ManagedSession,
+    ManagedSessionDescriptor, ManagedTerminal,
+};
 pub use protocol::{
     AttachRefusal, AttachWindow, ConnectionRole, DaemonToWrapper, MAX_ATTACH_FRAGMENT_BYTES,
     MAX_ATTACH_SERIALIZED_FRAME_BYTES, ResolvedAgentDefinition, ResolvedMcpDefinition,
