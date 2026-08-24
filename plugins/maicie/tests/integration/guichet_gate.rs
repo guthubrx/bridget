@@ -717,7 +717,10 @@ fn g1504_nettoie_le_groupe_apres_un_echec_injecte() {
         .unwrap();
     let before = managed_g1504_process_count();
     let failed = catch_unwind(AssertUnwindSafe(|| run_g1504(true)));
-    assert!(failed.is_err(), "la branche d'échec doit réellement paniquer");
+    assert!(
+        failed.is_err(),
+        "la branche d'échec doit réellement paniquer"
+    );
     assert_managed_g1504_process_count(before);
 }
 
