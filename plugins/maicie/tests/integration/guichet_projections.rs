@@ -311,7 +311,10 @@ fn delegation_absente_devient_un_rejet_atteste_rejouable() {
         1,
     );
     let first = process_guichet_claim(&mut store, &claim, "response-refused", 1_010).unwrap();
-    assert_eq!(first.refusal_reason, Some(maicie::domain::MotifRefusGreffe::DelegationAbsente));
+    assert_eq!(
+        first.refusal_reason,
+        Some(maicie::domain::MotifRefusGreffe::DelegationAbsente)
+    );
     let value: Value = serde_json::from_slice(&first.reply_bytes).unwrap();
     assert_eq!(value["outcome"], "refused");
     assert_eq!(value["payload"]["reason"], "delegation_missing");
@@ -321,7 +324,11 @@ fn delegation_absente_devient_un_rejet_atteste_rejouable() {
     drop(store);
     let connection = Connection::open(&database).unwrap();
     let receipts: i64 = connection
-        .query_row("SELECT COUNT(*) FROM guichet_refusal_receptions", [], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM guichet_refusal_receptions",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(receipts, 1);
     fs::remove_dir_all(root).unwrap();
@@ -335,12 +342,24 @@ fn enveloppe_divergente_devient_un_rejet_sans_mutation_du_recu_initial() {
     let database = root.join("maicie.sqlite3");
     let created = seed(&database);
     let mut store = MaicieStore::open(&database).unwrap();
-    let first_claim = query_claim("deadline_question", "request-shared", created.delegation_id, 1);
-    let accepted = process_guichet_claim(&mut store, &first_claim, "response-accepted", 1_010).unwrap();
+    let first_claim = query_claim(
+        "deadline_question",
+        "request-shared",
+        created.delegation_id,
+        1,
+    );
+    let accepted =
+        process_guichet_claim(&mut store, &first_claim, "response-accepted", 1_010).unwrap();
     let divergent = query_claim("deadline_question", "request-shared", Uuid::new_v4(), 1);
     let refused = process_guichet_claim(&mut store, &divergent, "response-refused", 1_020).unwrap();
-    assert_eq!(refused.refusal_reason, Some(maicie::domain::MotifRefusGreffe::EnveloppeDivergente));
-    assert_eq!(serde_json::from_slice::<Value>(&refused.reply_bytes).unwrap()["payload"]["reason"], "envelope_mismatch");
+    assert_eq!(
+        refused.refusal_reason,
+        Some(maicie::domain::MotifRefusGreffe::EnveloppeDivergente)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&refused.reply_bytes).unwrap()["payload"]["reason"],
+        "envelope_mismatch"
+    );
     let replay = process_guichet_claim(&mut store, &divergent, "ignored", 1_030).unwrap();
     assert!(replay.replayed);
     assert_eq!(replay.reply_bytes, refused.reply_bytes);
@@ -355,7 +374,11 @@ fn enveloppe_divergente_devient_un_rejet_sans_mutation_du_recu_initial() {
         .unwrap();
     assert_eq!(original, accepted.reply_bytes);
     let refusals: i64 = connection
-        .query_row("SELECT COUNT(*) FROM guichet_refusal_receptions", [], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM guichet_refusal_receptions",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(refusals, 1);
     fs::remove_dir_all(root).unwrap();

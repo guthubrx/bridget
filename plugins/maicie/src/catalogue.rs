@@ -881,9 +881,8 @@ pub struct ParsedJournal {
 /// dernière ligne sans terminateur et invalide est seulement signalée : c'est
 /// une écriture arrachée, pas une corruption du corpus déjà scellé.
 pub fn parse_journal_bytes(bytes: &[u8]) -> Result<ParsedJournal, CatalogueError> {
-    let text = std::str::from_utf8(bytes).map_err(|source| {
-        CatalogueError::Format(format!("journal non UTF-8: {source}"))
-    })?;
+    let text = std::str::from_utf8(bytes)
+        .map_err(|source| CatalogueError::Format(format!("journal non UTF-8: {source}")))?;
     let ends_with_lf = text.ends_with('\n');
     let mut parts: Vec<&str> = text.split('\n').collect();
     if ends_with_lf {
@@ -1667,10 +1666,8 @@ mod tests {
 
     #[test]
     fn derniere_ligne_arrachee_laisse_les_precedentes_lisibles() {
-        let root = std::env::temp_dir().join(format!(
-            "maicie-catalogue-torn-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("maicie-catalogue-torn-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let path = root.join("catalogue.jsonl");
         {
@@ -1679,7 +1676,11 @@ mod tests {
                 .append_add(sample_add("kept-1", Severity::Info, "2026-08-24T06:00:00Z"))
                 .unwrap();
             journal
-                .append_add(sample_add("kept-2", Severity::Minor, "2026-08-24T06:01:00Z"))
+                .append_add(sample_add(
+                    "kept-2",
+                    Severity::Minor,
+                    "2026-08-24T06:01:00Z",
+                ))
                 .unwrap();
             journal
                 .append_add(sample_add("torn", Severity::Major, "2026-08-24T06:02:00Z"))
@@ -1694,11 +1695,18 @@ mod tests {
         let without_final_lf = text.trim_end_matches('\n');
         let last_start = without_final_lf.rfind('\n').map(|i| i + 1).unwrap_or(0);
         let cut = last_start + (without_final_lf.len() - last_start) / 2;
-        assert!(cut > last_start, "la troncature doit couper au milieu de la dernière ligne");
+        assert!(
+            cut > last_start,
+            "la troncature doit couper au milieu de la dernière ligne"
+        );
         fs::write(&path, &without_final_lf.as_bytes()[..cut]).unwrap();
 
         let parsed = parse_journal_bytes(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(parsed.entries.len(), 2, "les N-1 premières restent lisibles");
+        assert_eq!(
+            parsed.entries.len(),
+            2,
+            "les N-1 premières restent lisibles"
+        );
         let ids: BTreeSet<_> = parsed
             .entries
             .iter()
@@ -1739,7 +1747,11 @@ mod tests {
         let path = root.join("catalogue.jsonl");
         let mut journal = CatalogueJournal::open(&path).unwrap();
         journal
-            .append_add(sample_add("c-open", Severity::Major, "2026-08-24T06:00:00Z"))
+            .append_add(sample_add(
+                "c-open",
+                Severity::Major,
+                "2026-08-24T06:00:00Z",
+            ))
             .unwrap();
 
         let link = ArbitrationLink {

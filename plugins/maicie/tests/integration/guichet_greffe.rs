@@ -1,6 +1,6 @@
 use maicie::app::{
-    DelegateRequest, DelegateResult, DelegationCandidate, GuichetProcessResult,
-    delegate, process_guichet_claim, record_guichet_lifecycle_event,
+    DelegateRequest, DelegateResult, DelegationCandidate, GuichetProcessResult, delegate,
+    process_guichet_claim, record_guichet_lifecycle_event,
 };
 use maicie::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use maicie::config::DurationClasses;
@@ -171,7 +171,11 @@ fn rapport_puis_answered_rejoue_les_memes_octets_sans_seconde_decision() {
     assert_single_graft(&database, created.objective_id);
     let connection = Connection::open(&database).unwrap();
     let refusals: i64 = connection
-        .query_row("SELECT COUNT(*) FROM guichet_refusal_receptions", [], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM guichet_refusal_receptions",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(refusals, 1);
     fs::remove_dir_all(root).unwrap();
@@ -204,10 +208,16 @@ fn rapport_aux_relations_incoherentes_devient_un_rejet_atteste() {
     drop(store);
     let connection = Connection::open(&database).unwrap();
     let decisions: i64 = connection
-        .query_row("SELECT COUNT(*) FROM coordination_decisions", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM coordination_decisions", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     let refusals: i64 = connection
-        .query_row("SELECT COUNT(*) FROM guichet_refusal_receptions", [], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM guichet_refusal_receptions",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!((decisions, refusals), (0, 1));
     fs::remove_dir_all(root).unwrap();
@@ -379,7 +389,7 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
     drop(connection);
 
     let mut store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 8);
+    assert_eq!(store.schema_version().unwrap(), 11);
     assert_eq!(
         store
             .objective_snapshots(Some(created.objective_id))
@@ -394,7 +404,7 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
     // Une seconde ouverture d'une base déjà v7 est la vraie preuve
     // d'idempotence : la migration ne doit ni recréer, ni vider les tables.
     let mut reopened = MaicieStore::open(&database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 8);
+    assert_eq!(reopened.schema_version().unwrap(), 11);
     let replay = process_guichet_claim(&mut reopened, &claim, "ignored", 1_020).unwrap();
     assert!(replay.replayed);
     assert_eq!(replay.reply_bytes, first.reply_bytes);

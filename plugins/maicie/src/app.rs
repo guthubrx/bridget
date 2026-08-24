@@ -8,7 +8,7 @@ use crate::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use crate::catalogue::{
     ArbitrationLink, AttestedClosure, CatalogueError, CatalogueJournal, ReconcileReport,
 };
-use crate::config::DurationClasses;
+use crate::config::{CoordinationPoliciesConfig, DurationClasses};
 use crate::domain::guichet::{
     GuichetDomainError, ProjectionCoordinationState, ProjectionDurationClass, ProjectionFreshness,
     ProjectionLocalDelivery, ProjectionLocalDeliveryState, ProjectionReply,
@@ -16,15 +16,19 @@ use crate::domain::guichet::{
     parse_claim, parse_lifecycle_event,
 };
 use crate::domain::{
-    ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
-    EtatDecision, EtatFlux, EtatObjectif, EtatOutboxDelegation, ModeObjectif, ObjectifCoordonne,
-    MotifRefusGreffe, OutboxDelegation, SnapshotTransport, SourceSnapshot, TypeDecision,
+    ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination,
+    DefinitionCoordination, Delegation, EntreeReductionCoordination, EtatDecision, EtatFlux,
+    EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination,
+    FaitAppartenanceRepli, FaitReassignation, FraicheurCoordination, ModeObjectif,
+    MotifRefusGreffe, ObjectifCoordonne, OutboxDelegation, PolitiqueReassignation,
+    SnapshotTransport, SourceSnapshot, TypeDecision, TypeFaitReassignation,
 };
 use crate::outbox::{PreparedDelegation, stable_body_hash};
 pub use crate::store::GuichetLifecycleResult;
 use crate::store::{
-    ActivationApprovalRequest, DelegateReservation, GuichetProjectionFacts, MaicieStore,
-    ObjectiveSnapshot, StoreError, StoredDelegateResult, StoredGuichetReply,
+    ActivationApprovalRequest, CoordinationCommitPhase, DelegateReservation,
+    GuichetProjectionFacts, MaicieStore, ObjectiveSnapshot, StoreError, StoredDelegateResult,
+    StoredGuichetReply,
 };
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -211,8 +215,8 @@ fn process_mission_status_canonical(
     let RequeteGuichet::MissionStatus { delegation_id } = canonical.request else {
         return Err(StoreError::Invalid("projection mission_status incohérente"));
     };
-    let stored = store
-        .persist_guichet_projection(claim, canonical, response_message_id, now, |facts| {
+    let stored =
+        store.persist_guichet_projection(claim, canonical, response_message_id, now, |facts| {
             let (transport_observation, freshness) = transport_projection(facts, transport)?;
             Ok(ProjectionReply::MissionStatus {
                 delegation_id: delegation_id.to_string(),
@@ -222,8 +226,7 @@ fn process_mission_status_canonical(
                 transport_observation,
                 freshness,
             })
-        })
-        ?;
+        })?;
     Ok(stored)
 }
 
@@ -235,17 +238,18 @@ fn process_deadline_question_canonical(
     now: i64,
 ) -> Result<StoredGuichetReply, StoreError> {
     let RequeteGuichet::DeadlineQuestion { delegation_id } = canonical.request else {
-        return Err(StoreError::Invalid("projection deadline_question incohérente"));
+        return Err(StoreError::Invalid(
+            "projection deadline_question incohérente",
+        ));
     };
-    let stored = store
-        .persist_guichet_projection(claim, canonical, response_message_id, now, |facts| {
+    let stored =
+        store.persist_guichet_projection(claim, canonical, response_message_id, now, |facts| {
             Ok(ProjectionReply::DeadlineQuestion {
                 delegation_id: delegation_id.to_string(),
                 duration_class: duration_projection(facts.delegation.duree),
                 deadline_at: facts.deadline_at,
             })
-        })
-        ?;
+        })?;
     Ok(stored)
 }
 
@@ -372,9 +376,70 @@ pub fn record_guichet_lifecycle_event(
     event: &GuichetLifecycleEvent,
 ) -> Result<GuichetLifecycleResult, GuichetError> {
     let event = parse_lifecycle_event(event).map_err(guichet_domain_error)?;
-    store
+    let result = store
         .record_guichet_lifecycle_event(&event)
-        .map_err(guichet_store_error)
+        .map_err(guichet_store_error)?;
+    let kind = match event.state {
+        EtatRequeteGuichet::Answered => TypeFaitReassignation::Answered,
+        EtatRequeteGuichet::Cancelled => TypeFaitReassignation::AnnulationAdministrative,
+        EtatRequeteGuichet::TimedOut => TypeFaitReassignation::TimedOut,
+    };
+    let fact = FaitReassignation {
+        event_id: event.event_id.clone(),
+        request_id: event.request_id.clone(),
+        kind,
+        observed_at: event.observed_at,
+        freshness: FraicheurCoordination::Fresh,
+        delivery_hash: None,
+    };
+    match store.apply_reassignment_fact(fact) {
+        Ok(_) => {}
+        // Tous les terminaux du guichet ne décrivent pas une demande suivie
+        // F29. Leur fait reste durable sans qu'une délégation soit inventée.
+        Err(StoreError::NotFound(_)) => {}
+        Err(error) => return Err(guichet_store_error(error)),
+    }
+    Ok(result)
+}
+
+/// Applique un rappel cursé seulement après la frontière SnapshotCaughtUp.
+/// Le curseur, la décision F29 et ses outboxes partagent le même commit.
+pub fn apply_attested_coordination_event(
+    store: &mut MaicieStore,
+    canonical_bytes: &[u8],
+    observer: impl FnMut(CoordinationCommitPhase) -> Result<(), StoreError>,
+) -> Result<(), GuichetError> {
+    let event =
+        EvenementCoordination::depuis_trame_attestee(canonical_bytes, FraicheurCoordination::Fresh)
+            .map_err(|_| {
+                GuichetError::InvalidEnvelope("trame de coordination invalide".to_string())
+            })?;
+    let context = store
+        .reassignment_request_context(event.request_id())
+        .map_err(guichet_store_error)?;
+    if context.participant != event.recipient() {
+        return Err(GuichetError::InvalidEnvelope(
+            "destinataire du rappel et demande suivie divergents".to_string(),
+        ));
+    }
+    let fact = FaitReassignation {
+        event_id: event.event_id().to_string(),
+        request_id: event.request_id().to_string(),
+        kind: TypeFaitReassignation::ReminderSent,
+        observed_at: event.observed_at(),
+        freshness: FraicheurCoordination::Fresh,
+        delivery_hash: None,
+    };
+    let input = EntreeReductionCoordination::EvenementAtteste {
+        objectif_id: context.objectif_id,
+        delegation_id: context.delegation_id,
+        generation: context.generation,
+        evenement: event,
+    };
+    store
+        .apply_attested_coordination_and_reassignment(&input, fact, observer)
+        .map_err(guichet_store_error)?;
+    Ok(())
 }
 
 fn guichet_domain_error(error: GuichetDomainError) -> GuichetError {
@@ -955,6 +1020,51 @@ pub fn delegate(
             Ok(DelegateResult::Created(created_from_stored(stored, true)))
         }
     }
+}
+
+/// Fige la politique configurée après la création durable de la délégation et
+/// avant son dispatch. Une définition déjà présente gagne : un rejeu ne relit
+/// jamais une configuration modifiée pour réinterpréter l'historique.
+pub fn pin_coordination_policy(
+    store: &mut MaicieStore,
+    policies: &CoordinationPoliciesConfig,
+    created: &DelegationCreated,
+) -> Result<(), DelegateError> {
+    if store
+        .coordination_snapshot(created.objective_id)
+        .map_err(store_error)?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    let configured = policies.for_duration(created.duration);
+    let policy = PolitiqueReassignation {
+        delegation_id: created.delegation_id,
+        objectif_id: created.objective_id,
+        classe: created.duration,
+        version: configured.version,
+        seuil_relances: configured.reminder_threshold,
+        max_reemissions: configured.max_reemissions,
+        chaine_repli: configured
+            .fallback_chain
+            .iter()
+            .map(|candidate| FaitAppartenanceRepli {
+                objectif_id: created.objective_id,
+                participant_id: candidate.participant_id.clone(),
+                membership_version: candidate.membership_version,
+                est_pilote: false,
+            })
+            .collect(),
+    };
+    store
+        .register_coordination_snapshot(&DefinitionCoordination {
+            objectif_id: created.objective_id,
+            dependencies: Vec::new(),
+            policies: vec![policy],
+            attentes: Vec::new(),
+        })
+        .map_err(store_error)
 }
 
 #[derive(Serialize)]

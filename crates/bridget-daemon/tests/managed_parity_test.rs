@@ -2,7 +2,7 @@ use bridget_core::BridgetMessage;
 use bridget_daemon::managed_process::{ManagedMarkerStore, group_exists};
 use bridget_transport::protocol::{AgentInfo, AttachWindow, ConnectionRole, decode, encode};
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -63,8 +63,11 @@ for line in sys.stdin:
     elif method == "session/new":
         print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"sessionId":"parity-session"}}), flush=True)
     elif method == "session/prompt":
-        turn += 1
         prompt = request["params"]["prompt"][0]["text"]
+        if "Carte de reprise Bridget (faits durables, aucune mémoire reconstruite)." in prompt:
+            print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"end_turn"}}), flush=True)
+            continue
+        turn += 1
         if "QUEUE-SLOW" in prompt:
             time.sleep(2.2)
         update = {
@@ -1192,15 +1195,31 @@ fn collect_journal(socket: &Path, agent: &str) -> Vec<String> {
         }
     }
     assert!(caught_up, "SnapshotCaughtUp absent");
-    assert_eq!(
-        complete.len(),
-        MATRIX_EXPECTED_TURNS * 3,
-        "la fixture doit produire trois événements par tour"
-    );
-    complete
+    let bootstrap_message_ids = complete
+        .values()
+        .filter_map(|bytes| {
+            let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+            (value["event"] == "turn_start" && value["payload"]["from"] == "bridget-reprise")
+                .then(|| value["message_id"].as_str().map(str::to_string))
+                .flatten()
+        })
+        .collect::<BTreeSet<_>>();
+    let entries = complete
         .into_values()
+        .filter(|bytes| {
+            let value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+            !value["message_id"]
+                .as_str()
+                .is_some_and(|message_id| bootstrap_message_ids.contains(message_id))
+        })
         .map(|bytes| normalized_entry(&bytes))
-        .collect()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entries.len(),
+        MATRIX_EXPECTED_TURNS * 3,
+        "la fixture doit produire trois événements par tour métier, hors carte de reprise"
+    );
+    entries
 }
 
 fn run_corpus(socket: &Path, agent: &str, run: usize, proxy: &CutProxy) -> ModeObservables {

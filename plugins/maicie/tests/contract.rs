@@ -1,3 +1,5 @@
+#[path = "contract/coordination_domain.rs"]
+mod coordination_domain;
 #[path = "contract/domain.rs"]
 mod domain;
 

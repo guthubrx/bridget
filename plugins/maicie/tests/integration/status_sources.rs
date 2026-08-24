@@ -62,6 +62,7 @@ fn status_capture_des_faits_acp_ephemeres_sans_etat_metier_invente() {
         "selected"
     );
     assert_eq!(value["freshness"]["state"], "fresh");
+    assert_eq!(value["coordination_freshness"]["state"], "fresh");
     // Les états JSON ci-dessus sont l'oracle. Un grep anti-libellé (« bloqu »,
     // « en_attente ») casserait à la première reformulation sans changer le
     // comportement — retiré volontairement.
@@ -88,6 +89,10 @@ fn status_sans_budget_ne_fabrique_ni_fraicheur_ni_capture() {
     assert_eq!(value["availability_state"], "unavailable");
     assert_eq!(value["availability_reason"], "budget_capture_non_configure");
     assert_eq!(value["freshness"]["reason"], "budget_capture_non_configure");
+    assert_eq!(
+        value["coordination_freshness"]["state"], "unavailable",
+        "la relève Bridget indisponible reste une observation distincte des faits locaux"
+    );
     assert!(value["runtime"].as_array().unwrap().is_empty());
 
     let plain = Command::new(env!("CARGO_BIN_EXE_maicie"))
@@ -156,6 +161,7 @@ fn serve_status(socket: &std::path::Path, ready: mpsc::Sender<()>) {
     let listener = UnixListener::bind(socket).unwrap();
     ready.send(()).unwrap();
     accept_empty_guichet(&listener);
+    accept_empty_coordination(&listener);
     let (stream, _) = listener.accept().unwrap();
     let (mut reader, mut writer) = split(stream);
     assert_eq!(
@@ -225,6 +231,7 @@ fn serve_status_until_timeout(socket: &std::path::Path, ready: mpsc::Sender<()>)
     let listener = UnixListener::bind(socket).unwrap();
     ready.send(()).unwrap();
     accept_empty_guichet(&listener);
+    accept_empty_coordination(&listener);
     accept_status_client(&listener);
     let (stream, _) = listener.accept().unwrap();
     let (mut reader, mut writer) = split(stream);
@@ -284,6 +291,34 @@ fn accept_empty_guichet(listener: &UnixListener) {
         json!({"type":"guichet_claim_next","v":1})
     );
     write_json(&mut writer, json!({"type":"guichet_empty","v":1}));
+}
+
+fn accept_empty_coordination(listener: &UnixListener) {
+    let (stream, _) = listener.accept().unwrap();
+    let (mut reader, mut writer) = split(stream);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"RoleHandshake","role":"service"})
+    );
+    write_json(&mut writer, json!({"type":"RoleAccepted","role":"service"}));
+    let hello = read_json(&mut reader);
+    assert_eq!(
+        hello["capabilities"],
+        json!(["maicie_guichet", "coordination_events_v2"])
+    );
+    write_json(
+        &mut writer,
+        json!({
+            "type":"ServiceWelcome","version":1,"horizon_secs":3600,
+            "issued_at_tolerance_secs":30,
+            "capabilities":["maicie_guichet","coordination_events_v2"]
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["type"], "coordination_subscribe");
+    write_json(
+        &mut writer,
+        json!({"type":"coordination_snapshot_caught_up","v":2}),
+    );
 }
 
 fn accept_status_client(listener: &UnixListener) {

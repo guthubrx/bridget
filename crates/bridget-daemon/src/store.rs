@@ -1,7 +1,8 @@
 //! Persistance SQLite — ledger, compteurs disjoncteur, historique.
 
 use bridget_transport::protocol::{
-    GuichetLifecycleState, GuichetOutcome, ServiceRequestOperation, ServiceRequestPayload,
+    CoordinationEventKind, GuichetLifecycleState, GuichetOutcome, ServiceRequestOperation,
+    ServiceRequestPayload,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use std::path::Path;
@@ -82,6 +83,33 @@ pub struct GuichetLifecycleEvent {
     pub observed_at: i64,
     pub in_reply_to: Option<String>,
     pub response_message_id: Option<String>,
+}
+
+/// Fait de coordination v1 durable, produit par le transport après une
+/// relance réellement écrite. Il reste séparé des terminaux 015 : plusieurs
+/// relances peuvent appartenir à une même demande suivie.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuichetCoordinationEvent {
+    /// Curseur alloué par SQLite, stable même si deux rappels ont le même
+    /// instant. Il est l'autorité de reprise publique de T1604.
+    pub cursor: u64,
+    pub event_id: String,
+    pub request_id: String,
+    pub kind: CoordinationEventKind,
+    pub reminder_message_id: String,
+    pub recipient: String,
+    pub generation: u64,
+    pub observed_at: i64,
+}
+
+/// Résultat brut de la relève cursée. Une lacune reste séparée de l'erreur de
+/// lecture : le daemon la rendra respectivement `coordination_gap` ou
+/// `coordination_unavailable` sans jamais l'aplatir en fait métier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuichetCoordinationReplay {
+    pub events: Vec<GuichetCoordinationEvent>,
+    pub through_cursor: Option<u64>,
+    pub gap: Option<(u64, u64)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,7 +207,42 @@ impl Store {
                 response_message_id TEXT,
                 PRIMARY KEY (issuer_scope, request_id)
             );
+            CREATE TABLE IF NOT EXISTS guichet_coordination_events (
+                cursor INTEGER,
+                event_id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('reminder_sent')),
+                reminder_message_id TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK (generation > 0),
+                observed_at INTEGER NOT NULL,
+                UNIQUE (request_id, generation)
+            );
             ",
+        )
+        .map_err(StoreError::Sqlite)?;
+        // Les bases créées par T1603 n'avaient pas de curseur public. SQLite
+        // ne sait pas ajouter une colonne NOT NULL sans valeur : on remplit
+        // donc une fois depuis son identifiant physique, dans l'ordre durable.
+        let _ = conn.execute(
+            "ALTER TABLE guichet_coordination_events ADD COLUMN cursor INTEGER",
+            [],
+        );
+        conn.execute(
+            "UPDATE guichet_coordination_events SET cursor = rowid WHERE cursor IS NULL",
+            [],
+        )
+        .map_err(StoreError::Sqlite)?;
+        conn.execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_guichet_coordination_cursor
+                 ON guichet_coordination_events(cursor);
+             CREATE TABLE IF NOT EXISTS guichet_coordination_stream_state (
+                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                 high_watermark INTEGER NOT NULL CHECK (high_watermark >= 0)
+             );
+             INSERT OR IGNORE INTO guichet_coordination_stream_state
+                 (singleton, high_watermark)
+             SELECT 1, COALESCE(MAX(cursor), 0) FROM guichet_coordination_events;",
         )
         .map_err(StoreError::Sqlite)?;
         Ok(())
@@ -634,6 +697,170 @@ impl Store {
             .map_err(StoreError::Sqlite)
     }
 
+    /// Atteste une relance après son écriture transport. La clé
+    /// `(request_id, generation)` empêche qu'un même palier soit exposé deux
+    /// fois après un rejeu local ; les clients relisent ensuite les mêmes
+    /// bytes via l'`event_id` durable.
+    pub fn record_reminder_sent(
+        &mut self,
+        request_id: &str,
+        reminder_message_id: &str,
+        recipient: &str,
+        generation: u64,
+        observed_at: i64,
+    ) -> Result<GuichetCoordinationEvent, StoreError> {
+        if request_id.is_empty()
+            || reminder_message_id.is_empty()
+            || recipient.is_empty()
+            || generation == 0
+        {
+            return Err(StoreError::Invariant("rappel de coordination incomplet"));
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+        let existing = tx
+            .query_row(
+                "SELECT cursor, event_id, request_id, kind, reminder_message_id, recipient,
+                        generation, observed_at
+                 FROM guichet_coordination_events
+                 WHERE request_id = ?1 AND generation = ?2",
+                params![request_id, generation as i64],
+                coordination_event_from_row,
+            )
+            .optional()
+            .map_err(StoreError::Sqlite)?;
+        if let Some(event) = existing {
+            tx.commit().map_err(StoreError::Sqlite)?;
+            return Ok(event);
+        }
+        tx.execute(
+            "UPDATE guichet_coordination_stream_state
+             SET high_watermark = high_watermark + 1 WHERE singleton = 1",
+            [],
+        )
+        .map_err(StoreError::Sqlite)?;
+        let cursor = tx
+            .query_row(
+                "SELECT high_watermark FROM guichet_coordination_stream_state WHERE singleton = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(StoreError::Sqlite)? as u64;
+        let event = GuichetCoordinationEvent {
+            cursor,
+            event_id: format!("evt-{}", Uuid::new_v4()),
+            request_id: request_id.to_string(),
+            kind: CoordinationEventKind::ReminderSent,
+            reminder_message_id: reminder_message_id.to_string(),
+            recipient: recipient.to_string(),
+            generation,
+            observed_at,
+        };
+        tx.execute(
+            "INSERT INTO guichet_coordination_events
+                 (cursor, event_id, request_id, kind, reminder_message_id, recipient,
+                  generation, observed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                event.cursor as i64,
+                event.event_id,
+                event.request_id,
+                coordination_event_kind_name(event.kind),
+                event.reminder_message_id,
+                event.recipient,
+                event.generation as i64,
+                event.observed_at,
+            ],
+        )
+        .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+        Ok(event)
+    }
+
+    /// Relève historique v1, conservée pour les clients qui n'ont pas négocié
+    /// la relève cursée T1604.
+    pub fn guichet_coordination_events(&self) -> Result<Vec<GuichetCoordinationEvent>, StoreError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT cursor, event_id, request_id, kind, reminder_message_id, recipient,
+                        generation, observed_at
+                 FROM guichet_coordination_events
+                 ORDER BY observed_at ASC, event_id ASC",
+            )
+            .map_err(StoreError::Sqlite)?;
+        statement
+            .query_map([], coordination_event_from_row)
+            .map_err(StoreError::Sqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Sqlite)
+    }
+
+    /// Relève bornée à partir d'un curseur public. Le watermark est monotone
+    /// et persistant : une disparition d'octet entre deux curseurs devient une
+    /// lacune attestée, jamais un `SnapshotCaughtUp` optimiste.
+    pub fn guichet_coordination_events_after(
+        &self,
+        after_cursor: Option<u64>,
+    ) -> Result<GuichetCoordinationReplay, StoreError> {
+        let high_watermark = self
+            .conn
+            .query_row(
+                "SELECT high_watermark FROM guichet_coordination_stream_state WHERE singleton = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(StoreError::Sqlite)? as u64;
+        let after = after_cursor.unwrap_or(0);
+        if after > high_watermark {
+            return Ok(GuichetCoordinationReplay {
+                events: Vec::new(),
+                through_cursor: None,
+                gap: Some((high_watermark.saturating_add(1), after)),
+            });
+        }
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT cursor, event_id, request_id, kind, reminder_message_id, recipient,
+                        generation, observed_at
+                 FROM guichet_coordination_events
+                 WHERE cursor > ?1
+                 ORDER BY cursor ASC",
+            )
+            .map_err(StoreError::Sqlite)?;
+        let events = statement
+            .query_map(params![after as i64], coordination_event_from_row)
+            .map_err(StoreError::Sqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Sqlite)?;
+        let mut expected = after.saturating_add(1);
+        for event in &events {
+            if event.cursor != expected {
+                return Ok(GuichetCoordinationReplay {
+                    events: Vec::new(),
+                    through_cursor: None,
+                    gap: Some((expected, event.cursor.saturating_sub(1))),
+                });
+            }
+            expected = expected.saturating_add(1);
+        }
+        if expected <= high_watermark {
+            return Ok(GuichetCoordinationReplay {
+                events: Vec::new(),
+                through_cursor: None,
+                gap: Some((expected, high_watermark)),
+            });
+        }
+        Ok(GuichetCoordinationReplay {
+            through_cursor: events.last().map(|event| event.cursor).or(after_cursor),
+            events,
+            gap: None,
+        })
+    }
+
     /// La disparition d'une connexion ne laisse jamais son droit de claim
     /// actif : la prochaine relève récupère le même dépôt et une génération neuve.
     pub fn release_guichet_claims(&mut self, owner: &str) -> Result<(), StoreError> {
@@ -959,6 +1186,31 @@ fn lifecycle_state_name(state: GuichetLifecycleState) -> &'static str {
         GuichetLifecycleState::Answered => "answered",
         GuichetLifecycleState::Cancelled => "cancelled",
         GuichetLifecycleState::TimedOut => "timed_out",
+    }
+}
+
+fn coordination_event_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<GuichetCoordinationEvent> {
+    let kind = match row.get::<_, String>(3)?.as_str() {
+        "reminder_sent" => CoordinationEventKind::ReminderSent,
+        _ => return Err(rusqlite::Error::InvalidQuery),
+    };
+    Ok(GuichetCoordinationEvent {
+        cursor: row.get::<_, i64>(0)? as u64,
+        event_id: row.get(1)?,
+        request_id: row.get(2)?,
+        kind,
+        reminder_message_id: row.get(4)?,
+        recipient: row.get(5)?,
+        generation: row.get::<_, i64>(6)? as u64,
+        observed_at: row.get(7)?,
+    })
+}
+
+fn coordination_event_kind_name(kind: CoordinationEventKind) -> &'static str {
+    match kind {
+        CoordinationEventKind::ReminderSent => "reminder_sent",
     }
 }
 

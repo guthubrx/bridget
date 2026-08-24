@@ -50,6 +50,14 @@ impl PresenceMode {
 pub const CLIENT_CONTRACT_VERSION: u16 = 1;
 /// Version du contrat de service du guichet Maicie.
 pub const SERVICE_CONTRACT_VERSION: u16 = 1;
+/// Version de l'extension de faits attestés pour la coordination active.
+///
+/// Elle reste une capacité négociée du contrat de service v1 : les clients 015
+/// qui ne la demandent pas ne reçoivent aucune trame 016.
+pub const COORDINATION_EVENTS_VERSION: u16 = 1;
+/// Version de la relève cursée de coordination. Elle complète, sans modifier,
+/// l'émission historique v1.
+pub const COORDINATION_STREAM_VERSION: u16 = 2;
 
 /// Capacité optionnelle du client idempotent. L'énumération fermée évite une
 /// dégradation silencieuse lorsqu'un client demande une capacité inconnue.
@@ -65,6 +73,10 @@ pub enum ClientCapability {
 #[serde(rename_all = "snake_case")]
 pub enum ServiceCapability {
     MaicieGuichet,
+    CoordinationEventsV1,
+    /// Relève bornée et cursée des faits 016. La v1 reste disponible pour les
+    /// consommateurs qui n'ont besoin que du rejeu initial historique.
+    CoordinationEventsV2,
 }
 
 /// Refus structurés de la frontière réservée aux services.
@@ -145,6 +157,17 @@ pub enum GuichetLifecycleState {
     Answered,
     Cancelled,
     TimedOut,
+}
+
+/// Fait de coordination transport attesté exclusivement par Bridget.
+///
+/// Cette énumération est volontairement fermée : Maicie ne déduit jamais une
+/// relance d'un texte ou d'une échéance locale, et une valeur future exige une
+/// capacité/version explicitement négociée.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoordinationEventKind {
+    ReminderSent,
 }
 
 /// Charge canonique d'une réponse Maicie. L'ordre de déclaration est l'ordre
@@ -465,6 +488,15 @@ pub enum WrapperToDaemon {
         service: String,
         issuer_scope: String,
         capabilities: Vec<ServiceCapability>,
+    },
+    /// Ouvre une relève bornée des faits de coordination v2. Le curseur est
+    /// opaque pour le consommateur : Bridget seul lui donne un ordre durable.
+    #[serde(rename = "coordination_subscribe")]
+    CoordinationSubscribe {
+        #[serde(rename = "v")]
+        version: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after_cursor: Option<u64>,
     },
     /// Dépôt durable produit par un wrapper enregistré vers le guichet Maicie.
     #[serde(rename = "service_request")]
@@ -903,6 +935,53 @@ pub enum DaemonToWrapper {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         response_message_id: Option<String>,
     },
+    /// Fait non terminal de coordination, envoyé seulement aux services ayant
+    /// négocié `coordination_events_v1` en plus de `maicie_guichet`.
+    #[serde(rename = "coordination_event")]
+    CoordinationEvent {
+        #[serde(rename = "v")]
+        version: u16,
+        event_id: String,
+        request_id: String,
+        kind: CoordinationEventKind,
+        reminder_message_id: String,
+        recipient: String,
+        generation: u64,
+        observed_at: i64,
+        /// Présent seulement sur la relève cursée v2. Le conserver dans
+        /// l'événement rend le rejeu exactement vérifiable par le client.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<u64>,
+    },
+    /// Frontière explicite entre le rejeu cursé et le suivi transport. Avant
+    /// cette trame, un consommateur ne peut jamais déclarer l'observation
+    /// fraîche.
+    #[serde(rename = "coordination_snapshot_caught_up")]
+    CoordinationSnapshotCaughtUp {
+        #[serde(rename = "v")]
+        version: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        through_cursor: Option<u64>,
+    },
+    /// Un curseur ne peut pas être repris sans trou attesté. Ce n'est pas un
+    /// fait métier et il reste visible jusqu'à une nouvelle relève complète.
+    #[serde(rename = "coordination_gap")]
+    CoordinationGap {
+        #[serde(rename = "v")]
+        version: u16,
+        from_cursor: u64,
+        to_cursor: u64,
+        reason: String,
+    },
+    /// Bridget ne peut pas lire la source durable de coordination. Cette
+    /// observation est distincte d'une lacune de curseur et ne vaut jamais
+    /// fraîcheur implicite.
+    #[serde(rename = "coordination_unavailable")]
+    CoordinationUnavailable {
+        #[serde(rename = "v")]
+        version: u16,
+        reason: String,
+    },
     /// Issue durable ou calculée d'un `SendIdempotent`.
     IdempotencyResult {
         operation_kind: String,
@@ -1168,6 +1247,12 @@ mod tests {
     const SERVICE_NEGOTIATION_FIXTURE: &str = include_str!(
         "../../../specs/015-guichet-maicie/contracts/fixtures/service-negotiation-v1.jsonl"
     );
+    const COORDINATION_EVENTS_FIXTURE: &str = include_str!(
+        "../../../specs/016-coordination-active/contracts/fixtures/coordination-events-v1.jsonl"
+    );
+    const COORDINATION_STREAM_FIXTURE: &str = include_str!(
+        "../../../specs/016-coordination-active/contracts/fixtures/coordination-stream-v2.jsonl"
+    );
 
     #[test]
     fn service_negotiation_v1_emploie_la_fixture_canonique_partagee() {
@@ -1199,6 +1284,72 @@ mod tests {
             rejected,
             DaemonToWrapper::ServiceRejected {
                 reason: ServiceRefusal::CapabilityRequired
+            }
+        ));
+    }
+
+    #[test]
+    fn coordination_stream_v2_emploie_la_fixture_canonique_fermee() {
+        let lines = COORDINATION_STREAM_FIXTURE.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 10);
+        for index in [0, 2, 4] {
+            let frame: WrapperToDaemon = decode(lines[index]).unwrap();
+            assert_eq!(encode(&frame).unwrap(), lines[index]);
+        }
+        for index in [1, 3, 5, 6, 7, 8, 9] {
+            let frame: DaemonToWrapper = decode(lines[index]).unwrap();
+            assert_eq!(encode(&frame).unwrap(), lines[index]);
+        }
+        assert!(matches!(
+            decode::<WrapperToDaemon>(lines[4]).unwrap(),
+            WrapperToDaemon::CoordinationSubscribe {
+                version: COORDINATION_STREAM_VERSION,
+                after_cursor: None,
+            }
+        ));
+        assert!(matches!(
+            decode::<DaemonToWrapper>(lines[7]).unwrap(),
+            DaemonToWrapper::CoordinationGap {
+                from_cursor: 2,
+                to_cursor: 3,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn coordination_events_v1_emploie_la_fixture_canonique_fermee() {
+        let lines = COORDINATION_EVENTS_FIXTURE.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 6, "négociation, fait attesté et refus");
+
+        let hello: WrapperToDaemon = decode(lines[2]).unwrap();
+        assert_eq!(encode(&hello).unwrap(), lines[2]);
+        assert!(matches!(
+            hello,
+            WrapperToDaemon::ServiceHello { capabilities, .. }
+                if capabilities == vec![
+                    ServiceCapability::MaicieGuichet,
+                    ServiceCapability::CoordinationEventsV1,
+                ]
+        ));
+
+        let fact: DaemonToWrapper = decode(lines[4]).unwrap();
+        assert_eq!(encode(&fact).unwrap(), lines[4]);
+        assert!(matches!(
+            fact,
+            DaemonToWrapper::CoordinationEvent {
+                kind: CoordinationEventKind::ReminderSent,
+                generation: 1,
+                observed_at: 1_787_500_003,
+                ..
+            }
+        ));
+
+        let rejected: DaemonToWrapper = decode(lines[5]).unwrap();
+        assert!(matches!(
+            rejected,
+            DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::InvalidEnvelope
             }
         ));
     }
@@ -1639,6 +1790,51 @@ mod tests {
             } if in_reply_to == "message-1" && response_message_id == "response-1"
         ));
         assert!(!lifecycle.allowed_for_attach());
+
+        let coordination = DaemonToWrapper::CoordinationEvent {
+            version: COORDINATION_EVENTS_VERSION,
+            event_id: "evt-reminder-1".to_string(),
+            request_id: "request-1".to_string(),
+            kind: CoordinationEventKind::ReminderSent,
+            reminder_message_id: "message-reminder-1".to_string(),
+            recipient: "codex-1".to_string(),
+            generation: 1,
+            observed_at: 1_787_500_003,
+            cursor: None,
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(&encode(&coordination).unwrap()).unwrap(),
+            DaemonToWrapper::CoordinationEvent {
+                version: COORDINATION_EVENTS_VERSION,
+                kind: CoordinationEventKind::ReminderSent,
+                generation: 1,
+                observed_at: 1_787_500_003,
+                ..
+            }
+        ));
+        assert!(!coordination.allowed_for_attach());
+
+        let hello_with_coordination = WrapperToDaemon::ServiceHello {
+            version: SERVICE_CONTRACT_VERSION,
+            service: "maicie".to_string(),
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+            capabilities: vec![
+                ServiceCapability::MaicieGuichet,
+                ServiceCapability::CoordinationEventsV1,
+            ],
+        };
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encode(&hello_with_coordination).unwrap()).unwrap(),
+            WrapperToDaemon::ServiceHello { capabilities, .. }
+                if capabilities == vec![
+                    ServiceCapability::MaicieGuichet,
+                    ServiceCapability::CoordinationEventsV1,
+                ]
+        ));
+        assert!(decode::<DaemonToWrapper>(
+            r#"{"type":"coordination_event","v":1,"event_id":"evt","request_id":"req","kind":"unknown_fact","reminder_message_id":"msg","recipient":"codex","generation":1,"observed_at":1}"#
+        )
+        .is_err());
     }
 
     #[test]

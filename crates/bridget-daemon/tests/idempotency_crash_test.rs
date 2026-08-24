@@ -364,6 +364,7 @@ fn register_recipient_as(socket: &Path, instance_id: &str) -> Client {
         os: Some("test".to_string()),
         instance_id: Some(instance_id.to_string()),
         domain: None,
+        journal_available: None,
         turn_in_progress: false,
     });
     assert!(matches!(

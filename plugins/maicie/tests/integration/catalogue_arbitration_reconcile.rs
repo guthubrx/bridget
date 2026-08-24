@@ -67,10 +67,7 @@ fn reconcile_depuis_store_produit_une_transition_unique_au_rejeu() {
         .collect();
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].constat_id, "c-open");
-    assert_eq!(
-        transitions[0].objective_id,
-        linked.objective.id.to_string()
-    );
+    assert_eq!(transitions[0].objective_id, linked.objective.id.to_string());
     assert_eq!(transitions[0].observed_at, "2024-08-24T00:00:00Z");
     assert_eq!(transitions[0].trigger, TransitionTrigger::ObjectiveClosed);
 

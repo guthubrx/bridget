@@ -1,5 +1,8 @@
-use maicie::app::{DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, delegate};
-use maicie::config::DurationClasses;
+use maicie::app::{
+    DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, delegate,
+    pin_coordination_policy,
+};
+use maicie::config::{CoordinationPoliciesConfig, DurationClasses, ReassignmentPolicyConfig};
 use maicie::domain::ClasseDuree;
 use maicie::store::MaicieStore;
 use std::fs;
@@ -71,6 +74,68 @@ fn cible_explicite_cree_objectif_delegation_et_outbox_atomiques() {
     assert_eq!(pending[0].timeout_secs, 90);
     drop(store);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn politique_configuree_est_figee_avant_dispatch_et_ignore_la_config_rechargee() {
+    let root = root("coordination-policy");
+    let database = root.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let candidates = vec![DelegationCandidate {
+        name: "prospective".to_string(),
+        tags: vec![],
+        available: true,
+        dnd: false,
+    }];
+    let DelegateResult::Created(created) = delegate(
+        &mut store,
+        durations(),
+        "maicie",
+        &candidates,
+        &request(Some("prospective"), &[], ClasseDuree::Normale),
+    )
+    .unwrap() else {
+        panic!("création attendue")
+    };
+    let initial_policies = policies(3, 2);
+    pin_coordination_policy(&mut store, &initial_policies, &created).unwrap();
+    let snapshot = store
+        .coordination_snapshot(created.objective_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.definition.policies[0].version, 3);
+    assert_eq!(snapshot.definition.policies[0].seuil_relances, 2);
+    assert_eq!(snapshot.definition.policies[0].max_reemissions, 2);
+
+    // Mutation : relire la configuration courante au rejeu rendrait ce test
+    // rouge en remplaçant la version épinglée par 99.
+    pin_coordination_policy(&mut store, &policies(99, 9), &created).unwrap();
+    assert_eq!(
+        store
+            .coordination_snapshot(created.objective_id)
+            .unwrap()
+            .unwrap()
+            .definition
+            .policies[0]
+            .version,
+        3
+    );
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn policies(version: u64, reminder_threshold: u32) -> CoordinationPoliciesConfig {
+    let policy = ReassignmentPolicyConfig {
+        version,
+        reminder_threshold,
+        max_reemissions: 2,
+        fallback_chain: Vec::new(),
+    };
+    CoordinationPoliciesConfig {
+        courte: policy.clone(),
+        normale: policy.clone(),
+        longue: policy,
+    }
 }
 
 #[test]

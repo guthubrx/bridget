@@ -61,6 +61,70 @@ fn accepte_un_budget_explicit_de_capture_status_sans_en_inventer_un() {
 }
 
 #[test]
+fn valide_les_politiques_de_reassignation_par_classe_avant_toute_io() {
+    let policies = r#"
+  "coordination_policies": {
+    "courte": {"version": 1, "reminder_threshold": 2, "max_reemissions": 1, "fallback_chain": []},
+    "normale": {"version": 2, "reminder_threshold": 3, "max_reemissions": 2, "fallback_chain": [{"participant_id":"bob","membership_version":4}]},
+    "longue": {"version": 3, "reminder_threshold": 4, "max_reemissions": 8, "fallback_chain": []}
+  },
+"#;
+    let fixture = Fixture::new(
+        "coordination-policies",
+        &VALID_CONFIG.replace(
+            "\"profiles\": [{",
+            &format!("{policies}  \"profiles\": [{{"),
+        ),
+    );
+    let config = MaicieConfig::load(&fixture.path).unwrap();
+    assert_eq!(
+        config.coordination_policies.unwrap().normale.fallback_chain[0].participant_id,
+        "bob"
+    );
+}
+
+#[test]
+fn refuse_les_bornes_et_le_pilote_des_politiques_avant_toute_io() {
+    let base = r#"
+  "coordination_policies": {
+    "courte": {"version": 1, "reminder_threshold": 1, "max_reemissions": 1, "fallback_chain": []},
+    "normale": {"version": 1, "reminder_threshold": 1, "max_reemissions": 1, "fallback_chain": []},
+    "longue": {"version": 1, "reminder_threshold": 1, "max_reemissions": 1, "fallback_chain": []}
+  },
+"#;
+    for (label, policies, expected) in [
+        (
+            "reemissions",
+            base.replacen("\"max_reemissions\": 1", "\"max_reemissions\": 9", 1),
+            "max_reemissions",
+        ),
+        (
+            "pilote",
+            base.replacen(
+                "\"fallback_chain\": []",
+                "\"fallback_chain\": [{\"participant_id\":\"maicie\",\"membership_version\":1}]",
+                1,
+            ),
+            "pilote Maicie",
+        ),
+    ] {
+        let fixture = Fixture::new(
+            label,
+            &VALID_CONFIG.replace(
+                "\"profiles\": [{",
+                &format!("{policies}  \"profiles\": [{{"),
+            ),
+        );
+        assert!(
+            MaicieConfig::load(&fixture.path)
+                .unwrap_err()
+                .to_string()
+                .contains(expected)
+        );
+    }
+}
+
+#[test]
 fn refuse_un_budget_status_nul_ou_hors_borne() {
     for (label, budget) in [("zero", "0"), ("large", "30001")] {
         let invalid = VALID_CONFIG.replace(
