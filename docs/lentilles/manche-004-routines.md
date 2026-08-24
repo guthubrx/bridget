@@ -253,3 +253,29 @@ rejeu cassait l'idempotence de délégation (les horodatages dans la requête),
 l'a VÉRIFIÉ et RÉFUTÉ lui-même (`canonical_request_bytes` ne sérialise aucun
 horodatage), puis a trouvé le vrai chemin. « Ma lentille voulait le contraire,
 et c'est le moment où il faut vérifier une fois de plus. »
+
+## Le dernier angle, clos À DÉCHARGE par la polarité à charge
+
+relec4 avait signalé que la concurrence de deux relèves simultanées n'était
+exercée par personne. relec3 l'a exercée — c'est de la charge : tenter ce que
+le lot déclare tenu. Banc : deux `evaluate_routines` sur la même base, chacun
+sa connexion (le cas réel de deux commandes maicie lancées ensemble), avec
+barrière de synchronisation pour forcer l'entrelacement, **20 tirages par
+scénario, pas un passage**.
+
+- **20/20 : une seule occurrence, un seul objectif créé. Zéro doublon.** La
+  clé (routine_id, bucket) résiste à l'attaque en concurrence réelle.
+- **20/20 : le tick perdant remonte `Conflict` et abandonne** — mais sur 3
+  routines actives, **0 tirage avec une routine non battue** : l'ordre
+  déterministe de `list_routines` fait que le gagnant couvre tout.
+- Non mesuré, déclaré : deux ticks avec des `now` différents (buckets
+  différents). Angle restant ouvert.
+- Subsiste, mineur : le conflit est avalé par `let _ = evaluate_routines` —
+  bénin ici puisque le travail est fait par l'autre tick, mais c'est la même
+  mécanique que les engloutissements silencieux ; renforce la condition
+  ferme « laisser une trace », pas les conditions dures.
+
+**Donnée pour la comparaison des bras** : c'est la DEUXIÈME charge que ce
+relecteur rend de lui-même (après le court-circuit, dont le mutant produit 5
+rouges — la promesse était réellement gardée). *La polarité à charge ne
+produit pas que des charges, à condition de mesurer avant de conclure.*
