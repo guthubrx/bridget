@@ -79,7 +79,7 @@ fn migration_v8_main_vers_v11_puis_seconde_ouverture_conservent_l_historique() {
     drop(connection);
 
     let store = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 13);
+    assert_eq!(store.schema_version().unwrap(), 14);
     assert_eq!(
         store.objective_snapshots(Some(objectif.id)).unwrap()[0].delegations[0].id,
         delegation
@@ -117,7 +117,7 @@ fn migration_v8_main_vers_v11_puis_seconde_ouverture_conservent_l_historique() {
     );
     drop(connection);
     let reopened = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 13);
+    assert_eq!(reopened.schema_version().unwrap(), 14);
     assert_eq!(
         reopened
             .objective_snapshots(Some(objectif.id))
@@ -177,7 +177,7 @@ fn migration_v9_refuse_de_rejouer_une_notification_sans_horodatage_atteste() {
     drop(connection);
 
     let store = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 13);
+    assert_eq!(store.schema_version().unwrap(), 14);
     assert!(matches!(
         store.pending_notification_outboxes(),
         Err(StoreError::Corrupt(

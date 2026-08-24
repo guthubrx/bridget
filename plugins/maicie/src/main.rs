@@ -33,7 +33,7 @@ use maicie::reconcile::{
     reconcile_startup_with_limits,
 };
 use maicie::runtime::{RuntimeNature, RuntimeObservation, RuntimeSignal, RuntimeSubscription};
-use maicie::store::{MaicieStore, ObjectiveSnapshot, StoreError};
+use maicie::store::{MaicieStore, ObjectiveSnapshot, ResourceRangeReservation, StoreError};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::env;
@@ -73,6 +73,7 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
         Command::Objective(objective_args) => run_objective(objective_args),
         Command::Profile(profile_args) => run_profile(profile_args),
         Command::Registre(registre_args) => run_registre(registre_args),
+        Command::Plage(plage_args) => run_plage(plage_args),
     }
 }
 
@@ -672,6 +673,22 @@ enum Command {
     Objective(ObjectiveArgs),
     Profile(ProfileArgs),
     Registre(RegistreArgs),
+    Plage(PlageArgs),
+}
+
+#[derive(Debug)]
+struct PlageArgs {
+    config: PathBuf,
+    action: PlageAction,
+}
+
+#[derive(Debug)]
+enum PlageAction {
+    Reserve {
+        resource: String,
+        objective_id: Uuid,
+    },
+    List,
 }
 
 #[derive(Debug)]
@@ -781,8 +798,107 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
         "objective" => parse_objective(tail).map(Command::Objective),
         "profile" => parse_profile(tail).map(Command::Profile),
         "registre" => parse_registre(tail).map(Command::Registre),
+        "plage" => parse_plage(tail).map(Command::Plage),
         _ => Err(CliError::Usage("commande inconnue : delegate attendu")),
     }
+}
+
+fn parse_plage(arguments: &[String]) -> Result<PlageArgs, CliError> {
+    let Some((verb, tail)) = arguments.split_first() else {
+        return Err(CliError::Usage(
+            "action plage obligatoire : reserve ou list",
+        ));
+    };
+    let mut config = None;
+    let mut resource = None;
+    let mut objective_id = None;
+    let mut index = 0;
+    while index < tail.len() {
+        match tail[index].as_str() {
+            "--config" => set_once_path(&mut config, next_value(tail, &mut index, "--config")?)?,
+            "--ressource" => set_once_string(
+                &mut resource,
+                next_value(tail, &mut index, "--ressource")?,
+                "ressource",
+            )?,
+            "--objective-id" => {
+                let raw = next_value(tail, &mut index, "--objective-id")?;
+                if objective_id.is_some() {
+                    return Err(CliError::Usage("option --objective-id dupliquée"));
+                }
+                objective_id = Some(
+                    Uuid::parse_str(raw).map_err(|_| CliError::Usage("--objective-id invalide"))?,
+                );
+            }
+            _ => return Err(CliError::Usage("option plage inconnue")),
+        }
+        index += 1;
+    }
+    let config = config.ok_or(CliError::Usage("--config est obligatoire"))?;
+    let action = match verb.as_str() {
+        "reserve" => {
+            let resource = resource.ok_or(CliError::Usage("--ressource est obligatoire"))?;
+            if resource.is_empty() {
+                return Err(CliError::Usage("--ressource ne peut pas être vide"));
+            }
+            let objective_id =
+                objective_id.ok_or(CliError::Usage("--objective-id est obligatoire"))?;
+            PlageAction::Reserve {
+                resource,
+                objective_id,
+            }
+        }
+        "list" => {
+            if resource.is_some() || objective_id.is_some() {
+                return Err(CliError::Usage(
+                    "list n'accepte ni --ressource ni --objective-id",
+                ));
+            }
+            PlageAction::List
+        }
+        _ => {
+            return Err(CliError::Usage("action plage inconnue : reserve ou list"));
+        }
+    };
+    Ok(PlageArgs { config, action })
+}
+
+fn run_plage(arguments: PlageArgs) -> Result<String, CliError> {
+    let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let mut store = MaicieStore::open(&config.database_path).map_err(CliError::Store)?;
+    match arguments.action {
+        PlageAction::Reserve {
+            resource,
+            objective_id,
+        } => {
+            let now = unix_now()?;
+            let reserved = store
+                .reserve_resource_range(&resource, objective_id, now)
+                .map_err(CliError::Store)?;
+            Ok(format!(
+                "plage réservée ressource={} objectif={} reserved_at={}",
+                reserved.resource, reserved.objective_id, reserved.reserved_at
+            ))
+        }
+        PlageAction::List => {
+            let rows = store.list_resource_ranges().map_err(CliError::Store)?;
+            Ok(render_plage_list(&rows))
+        }
+    }
+}
+
+fn render_plage_list(rows: &[ResourceRangeReservation]) -> String {
+    if rows.is_empty() {
+        return "plages=0".to_string();
+    }
+    let mut lines = vec![format!("plages={}", rows.len())];
+    for row in rows {
+        lines.push(format!(
+            "ressource={} objectif={} reserved_at={}",
+            row.resource, row.objective_id, row.reserved_at
+        ));
+    }
+    lines.join("\n")
 }
 
 fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
