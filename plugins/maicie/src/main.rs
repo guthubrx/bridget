@@ -361,7 +361,7 @@ fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
         &candidates,
         &request,
     )
-    .map_err(CliError::Delegate)?;
+    .map_err(|error| delegate_error_for_cli(error, &config.profiles, &agents, &arguments.config))?;
     // La transaction `delegate` est déjà commitée ici. T008 effectue ensuite
     // lookup puis replay des octets persistés, sans reconstruire le message.
     reconcile_pending(&mut store, &config, limits)?;
@@ -579,6 +579,33 @@ fn candidates_from(config: &MaicieConfig, agents: &[AgentInfo]) -> Vec<Delegatio
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| left.name.cmp(&right.name));
     candidates
+}
+
+/// Précise un refus de cible explicite avec les deux inscriptions distinctes.
+/// Cette projection CLI ne change pas la décision métier : les replays restent
+/// traités par `delegate` avant cette explication.
+fn delegate_error_for_cli(
+    error: DelegateError,
+    profiles: &[maicie::config::ProfileConfig],
+    agents: &[AgentInfo],
+    config_path: &std::path::Path,
+) -> CliError {
+    let DelegateError::TargetUnavailable(target) = error else {
+        return CliError::Delegate(error);
+    };
+    let Some(agent) = agents.iter().find(|agent| agent.name == target) else {
+        return CliError::TargetUnknownBridget(target);
+    };
+    let has_profile = profiles
+        .iter()
+        .any(|profile| profile.agent_name.as_deref().unwrap_or(&profile.id) == agent.name);
+    if agent.state == "connected" && !has_profile {
+        return CliError::TargetMissingMaicieProfile {
+            target,
+            config_path: config_path.to_path_buf(),
+        };
+    }
+    CliError::Delegate(DelegateError::TargetUnavailable(agent.name.clone()))
 }
 
 fn unix_now() -> Result<i64, CliError> {
@@ -1454,6 +1481,11 @@ enum CliError {
     Configuration(ConfigError),
     Bridget(BridgetClientError),
     Delegate(DelegateError),
+    TargetUnknownBridget(String),
+    TargetMissingMaicieProfile {
+        target: String,
+        config_path: PathBuf,
+    },
     Objective(ObjectiveError),
     Store(StoreError),
     Reconcile(ReconcileError),
@@ -1473,6 +1505,9 @@ impl CliError {
             Self::ProfileActivation(ProfileActivationError::Store(_)) => EXIT_STORE,
             Self::Reconcile(_) => EXIT_BRIDGET,
             Self::Delegate(_) => EXIT_DELEGATE,
+            Self::TargetUnknownBridget(_) | Self::TargetMissingMaicieProfile { .. } => {
+                EXIT_DELEGATE
+            }
             Self::Objective(_) => EXIT_DELEGATE,
             Self::Profile(_) | Self::ProfileActivation(_) => EXIT_DELEGATE,
         }
@@ -1485,6 +1520,8 @@ impl CliError {
             Self::Bridget(_) => "bridget",
             Self::Delegate(DelegateError::EnvelopeMismatch) => "envelope_mismatch",
             Self::Delegate(DelegateError::TargetUnavailable(_)) => "target_unavailable",
+            Self::TargetUnknownBridget(_) => "target_unknown_bridget",
+            Self::TargetMissingMaicieProfile { .. } => "target_missing_maicie_profile",
             Self::Delegate(DelegateError::Store(_)) | Self::Store(_) => "store",
             Self::Reconcile(ReconcileError::Store(_)) => "store",
             Self::Reconcile(_) => "bridget",
@@ -1510,6 +1547,21 @@ impl fmt::Display for CliError {
             Self::Configuration(error) => error.fmt(formatter),
             Self::Bridget(error) => error.fmt(formatter),
             Self::Delegate(error) => error.fmt(formatter),
+            Self::TargetUnknownBridget(target) => write!(
+                formatter,
+                "agent inconnu de Bridget : {}; vérifiez son inscription et sa connexion",
+                sanitize_terminal(target)
+            ),
+            Self::TargetMissingMaicieProfile {
+                target,
+                config_path,
+            } => write!(
+                formatter,
+                "agent Bridget connecté mais sans profil Maicie : {}; ajoutez un profil dans {} avec \"agent_name\": \"{}\"",
+                sanitize_terminal(target),
+                config_path.display(),
+                sanitize_terminal(target)
+            ),
             Self::Objective(error) => error.fmt(formatter),
             Self::Store(error) => error.fmt(formatter),
             Self::Reconcile(error) => error.fmt(formatter),
@@ -1521,7 +1573,10 @@ impl fmt::Display for CliError {
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, DelegateOutput, candidates_from, parse_command, sanitize_terminal};
+    use super::{
+        Command, DelegateError, DelegateOutput, candidates_from, delegate_error_for_cli,
+        parse_command, sanitize_terminal,
+    };
     use maicie::bridget_client::AgentInfo;
     use maicie::config::{DurationClasses, MaicieConfig, ProfileConfig};
     use std::path::PathBuf;
@@ -1600,5 +1655,51 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].name, "coderBridget");
         assert_eq!(candidates[0].tags, ["review"]);
+    }
+
+    #[test]
+    fn cible_absente_de_bridget_est_distinguee_d_un_profil_absent() {
+        let error = delegate_error_for_cli(
+            DelegateError::TargetUnavailable("cursorbridget".to_string()),
+            &[],
+            &[],
+            std::path::Path::new("/tmp/maicie.json"),
+        );
+
+        assert_eq!(error.code(), "target_unknown_bridget");
+        assert_eq!(
+            error.to_string(),
+            "agent inconnu de Bridget : cursorbridget; vérifiez son inscription et sa connexion"
+        );
+    }
+
+    #[test]
+    fn agent_connecte_sans_profil_indique_le_champ_a_ajouter() {
+        let agents = vec![AgentInfo {
+            name: "cursorbridget".to_string(),
+            agent_type: "cursor".to_string(),
+            connection_id: "conn-cursor".to_string(),
+            host: "local".to_string(),
+            transport: "acp".to_string(),
+            os: "macos".to_string(),
+            state: "connected".to_string(),
+            last_seen_secs: 0,
+            reconnect_count: 0,
+            domain: None,
+            model: None,
+            effort: None,
+        }];
+        let error = delegate_error_for_cli(
+            DelegateError::TargetUnavailable("cursorbridget".to_string()),
+            &[],
+            &agents,
+            std::path::Path::new("/tmp/maicie.json"),
+        );
+
+        assert_eq!(error.code(), "target_missing_maicie_profile");
+        assert_eq!(
+            error.to_string(),
+            "agent Bridget connecté mais sans profil Maicie : cursorbridget; ajoutez un profil dans /tmp/maicie.json avec \"agent_name\": \"cursorbridget\""
+        );
     }
 }

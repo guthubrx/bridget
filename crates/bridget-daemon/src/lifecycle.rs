@@ -145,7 +145,11 @@ fn prepare_spawn_parts(
 ) -> Result<PreparedSpawn, SpawnRefusal> {
     let definition = registry
         .get(agent_type)
-        .map_err(|_| SpawnRefusal::UnknownType)?;
+        .map_err(|_| SpawnRefusal::UnknownType {
+            requested_type: agent_type.to_string(),
+            known_types: registry.known_types(),
+            registry: registry.source().display().to_string(),
+        })?;
     if let Some(variable) = forbidden_environment_variable(
         definition,
         allow_api_key_value(
@@ -238,7 +242,7 @@ fn command_exists(command: &str, env: &SourceEnvironment) -> bool {
 
 fn refusal_record(reason: &SpawnRefusal) -> (&'static str, String) {
     let category = match reason {
-        SpawnRefusal::UnknownType => "unknown_type",
+        SpawnRefusal::UnknownType { .. } => "unknown_type",
         SpawnRefusal::CommandMissing { .. } => "command_missing",
         SpawnRefusal::BillingGuard { .. } => "billing_guard",
         SpawnRefusal::NameActive => "name_active",
@@ -275,7 +279,11 @@ fn decision_from_issue(issue: SpawnCommandIssue, quota: usize) -> SpawnDecision 
                 return SpawnDecision::Rejected(refusal);
             }
             let refusal = match category.as_str() {
-                "unknown_type" => SpawnRefusal::UnknownType,
+                "unknown_type" => SpawnRefusal::UnknownType {
+                    requested_type: String::new(),
+                    known_types: Vec::new(),
+                    registry: "registre de l'issue initiale".to_string(),
+                },
                 "command_missing" => SpawnRefusal::CommandMissing {
                     command: reason,
                     registry: "registre de l'issue initiale".to_string(),
@@ -396,7 +404,19 @@ mod tests {
         // Huit refus indépendants ; NameActive et QuotaExceeded nécessitent
         // une génération témoin active et sont exercés plus bas.
         for (label, expected) in [
-            ("unknown", SpawnRefusal::UnknownType),
+            (
+                "unknown",
+                SpawnRefusal::UnknownType {
+                    requested_type: "absent".to_string(),
+                    known_types: vec![
+                        "claude".to_string(),
+                        "codex".to_string(),
+                        "fixture".to_string(),
+                        "gemini".to_string(),
+                    ],
+                    registry: "/tmp/t905-agents.json".to_string(),
+                },
+            ),
             (
                 "missing",
                 SpawnRefusal::CommandMissing {

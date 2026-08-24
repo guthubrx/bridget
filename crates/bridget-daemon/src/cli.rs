@@ -581,7 +581,29 @@ fn validate_command_id(command_id: &str) -> Result<(), String> {
 
 fn display_spawn_refusal(reason: &SpawnRefusal) -> String {
     match reason {
-        SpawnRefusal::UnknownType => "type d'agent inconnu".to_string(),
+        SpawnRefusal::UnknownType {
+            requested_type,
+            known_types,
+            registry,
+        } => {
+            let requested = (!requested_type.is_empty())
+                .then_some(format!(" '{requested_type}'"))
+                .unwrap_or_default();
+            let types = if known_types.is_empty() {
+                "indisponibles (issue historique)".to_string()
+            } else {
+                known_types.join(", ")
+            };
+            let source = if registry.is_empty() {
+                "des agents"
+            } else {
+                registry.as_str()
+            };
+            format!(
+                "type d'agent inconnu{requested}. Types connus du daemon : {types}. \
+                 Le registre {source} est lu au démarrage du daemon ; après modification, relancez-le."
+            )
+        }
         SpawnRefusal::CommandMissing { command, registry } => {
             format!("commande '{command}' introuvable (registre {registry})")
         }
@@ -2327,6 +2349,21 @@ mod hook_tests {
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
     use std::thread;
+
+    #[test]
+    fn refus_type_inconnu_explique_l_instantane_du_daemon() {
+        let rendered = display_spawn_refusal(&SpawnRefusal::UnknownType {
+            requested_type: "cursor".to_string(),
+            known_types: vec!["claude".to_string(), "codex".to_string()],
+            registry: "/Users/test/.config/bridget/agents.json".to_string(),
+        });
+
+        assert_eq!(
+            rendered,
+            "type d'agent inconnu 'cursor'. Types connus du daemon : claude, codex. \
+             Le registre /Users/test/.config/bridget/agents.json est lu au démarrage du daemon ; après modification, relancez-le."
+        );
+    }
 
     #[test]
     fn rendu_ledger_cli_reste_octet_pour_octet_stable() {

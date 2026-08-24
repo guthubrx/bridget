@@ -171,6 +171,11 @@ impl AgentRegistry {
         &self.source
     }
 
+    /// Instantané ordonné des types effectivement chargés par le daemon.
+    pub fn known_types(&self) -> Vec<String> {
+        self.agents.keys().cloned().collect()
+    }
+
     /// Alias des lanceurs interactifs historiques. Cette table ne vaut pas
     /// autorisation : `type_for_command` consulte toujours le registre.
     pub fn interactive_alias(command: &str) -> Option<&'static str> {
