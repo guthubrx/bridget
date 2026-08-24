@@ -45,6 +45,13 @@ l'incident.
 12. **Valider sur un arbre contaminé par le WIP d'autrui ne prouve rien** —
     vérifier `git status` avant d'attribuer un rouge à son propre diff.
 
+**Gate de formatage obligatoire avant commit.** Exécuter `cargo fmt --all
+--check` avec la toolchain de référence `rust-toolchain.toml` (Rust 1.92.0,
+`rustfmt 1.8.0-stable`) et le `PATH` contenant `$HOME/.cargo/bin`. Sans ce
+`PATH`, la commande peut ne jamais s'exécuter tout en donnant l'illusion d'un
+contrôle vert. *(Incident : dette de 23 emplacements non détectée sur main,
+2026-08-24.)*
+
 ## Les reviews
 
 13. **Auteur ≠ relecteur, toujours.** Tout STOP est vérifié factuellement par
