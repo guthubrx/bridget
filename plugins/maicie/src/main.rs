@@ -1184,46 +1184,7 @@ fn confirm_local_routine_approval(
             "approbation routine = terminal interactif uniquement",
         ));
     }
-    let suite_label = match &routine.suite {
-        maicie::domain::SuiteObjective::Aucune => "aucune".to_string(),
-        maicie::domain::SuiteObjective::Objectif(id) => id.to_string(),
-    };
-    let depends = routine
-        .depends_on
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
-    let references = routine
-        .references
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
-    println!("Approbation locale de la routine");
-    println!("  id={}", routine_id);
-    // Six entrées scellées par template_hash — toutes visibles (B3 aggravé).
-    println!("  goal={}", sanitize_terminal(&routine.goal));
-    println!("  participant={}", routine.participant);
-    println!("  period_secs={}", routine.period_secs);
-    println!("  suite={}", suite_label);
-    println!(
-        "  depends_on={}",
-        if depends.is_empty() { "—" } else { &depends }
-    );
-    println!(
-        "  references={}",
-        if references.is_empty() {
-            "—"
-        } else {
-            &references
-        }
-    );
-    println!("  hash_stocke={}", hex_hash(&routine.template_hash));
-    println!(
-        "  hash_recalcule={} (depuis les six champs affichés)",
-        hex_hash(expected_hash)
-    );
+    print!("{}", format_routine_approval_screen(routine_id, routine, expected_hash));
     print!("Confirmer l'activation (oui) : ");
     io::stdout()
         .flush()
@@ -1236,6 +1197,59 @@ fn confirm_local_routine_approval(
         return Err(CliError::Usage("approbation routine refusée"));
     }
     Ok(())
+}
+
+/// Texte d'écran ADR 011 : les SIX champs scellés + les deux empreintes.
+/// Testable sans TTY (véracité de l'interface, pas seulement la garde).
+fn format_routine_approval_screen(
+    routine_id: Uuid,
+    routine: &maicie::routines::Routine,
+    expected_hash: &[u8],
+) -> String {
+    let suite_label = match &routine.suite {
+        maicie::domain::SuiteObjective::Aucune => "aucune".to_string(),
+        maicie::domain::SuiteObjective::Objectif(id) => id.to_string(),
+    };
+    let depends = if routine.depends_on.is_empty() {
+        "—".to_string()
+    } else {
+        routine
+            .depends_on
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let references = if routine.references.is_empty() {
+        "—".to_string()
+    } else {
+        routine
+            .references
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    format!(
+        "Approbation locale de la routine\n\
+           id={routine_id}\n\
+           goal={goal}\n\
+           participant={participant}\n\
+           period_secs={period}\n\
+           suite={suite}\n\
+           depends_on={depends}\n\
+           references={references}\n\
+           hash_stocke={stocke}\n\
+           hash_recalcule={recalc} (scellé sur goal,participant,period_secs,suite,depends_on,references — tous affichés ci-dessus)\n",
+        goal = sanitize_terminal(&routine.goal),
+        participant = routine.participant,
+        period = routine.period_secs,
+        suite = suite_label,
+        depends = depends,
+        references = references,
+        stocke = hex_hash(&routine.template_hash),
+        recalc = hex_hash(expected_hash),
+    )
 }
 
 fn hex_hash(bytes: &[u8]) -> String {
@@ -2750,11 +2764,63 @@ impl fmt::Display for CliError {
 mod tests {
     use super::{
         Command, DelegateError, DelegateOutput, RegistreAction, RegistreArgs, candidates_from,
-        delegate_error_for_cli, parse_command, peel_migrate_flag, sanitize_terminal,
+        delegate_error_for_cli, format_routine_approval_screen, parse_command, peel_migrate_flag,
+        sanitize_terminal,
     };
     use maicie::bridget_client::AgentInfo;
     use maicie::config::{DurationClasses, MaicieConfig, ProfileConfig};
+    use maicie::domain::SuiteObjective;
+    use maicie::routines::{EtatRoutine, Routine};
     use std::path::PathBuf;
+    use uuid::Uuid;
+
+    #[test]
+    fn ecran_approbation_routine_affiche_les_six_champs_scelles() {
+        let id = Uuid::new_v4();
+        let dep = Uuid::new_v4();
+        let reference = Uuid::new_v4();
+        let suite_obj = Uuid::new_v4();
+        let hash = vec![0xab_u8, 0xcd];
+        let routine = Routine {
+            id,
+            goal: "ronde".into(),
+            participant: "prospective".into(),
+            period_secs: 60,
+            suite: SuiteObjective::Objectif(suite_obj),
+            depends_on: vec![dep],
+            references: vec![reference],
+            template_hash: hash.clone(),
+            state: EtatRoutine::Proposed,
+            proposed_at: 1,
+            approved_at: None,
+            paused_at: None,
+            last_bucket: None,
+        };
+        let screen = format_routine_approval_screen(id, &routine, &hash);
+        for key in [
+            "goal=",
+            "participant=",
+            "period_secs=",
+            "suite=",
+            "depends_on=",
+            "references=",
+        ] {
+            assert!(screen.contains(key), "écran doit montrer {key}");
+        }
+        assert!(screen.contains(&dep.to_string()));
+        assert!(screen.contains(&reference.to_string()));
+        assert!(screen.contains(&suite_obj.to_string()));
+        assert!(
+            screen.contains(
+                "scellé sur goal,participant,period_secs,suite,depends_on,references — tous affichés ci-dessus"
+            ),
+            "libellé hash ne doit pas mentir sur les champs sources"
+        );
+        assert!(
+            !screen.contains("depuis les champs affichés"),
+            "ancien libellé ambigu interdit"
+        );
+    }
 
     #[test]
     fn delegate_exige_les_options_structurantes() {

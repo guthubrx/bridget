@@ -5,7 +5,7 @@
 //!
 //! Motifs d'occurrence `sautee` (fermés) :
 //! - `horloge_arretee` — buckets échus pendant une indisponibilité du tick
-//! - `rattrapage_borne` — trou tronqué au-delà de [`MAX_CATCHUP_BUCKETS`]
+//! - `rattrapage_borne:<N>` — trou tronqué ; N = buckets effacés sans ligne
 
 use crate::app::{DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, delegate};
 use crate::config::DurationClasses;
@@ -19,7 +19,7 @@ use uuid::Uuid;
 pub const MIN_PERIOD_SECS: i64 = 60;
 
 /// Nombre max de buckets rattrapés par tick (hors bucket courant).
-/// Au-delà : une sautee `rattrapage_borne` puis traitement des `MAX` derniers.
+/// Au-delà : une sautee `rattrapage_borne:<skipped>` puis traitement des `MAX` derniers.
 /// Mesure manche 4 : 30 j / 60 s → 43 201 inserts / 5,8 s sans borne.
 pub const MAX_CATCHUP_BUCKETS: i64 = 64;
 
@@ -299,7 +299,10 @@ pub fn evaluate_routines(
         let gap = current - after;
         if gap > MAX_CATCHUP_BUCKETS {
             // Sentinel unique pour le trou tronqué, puis au plus MAX buckets.
+            // skipped = buckets effacés sans ligne individuelle (mesure manche 4 :
+            // 30 j / 60 s → 43 135 disparus — la sentinelle DOIT porter ce compte).
             let truncated_end = current - MAX_CATCHUP_BUCKETS;
+            let skipped = (truncated_end - after - 1).max(0);
             if store
                 .load_occurrence(routine.id, truncated_end)
                 .map_err(routine_store_error)?
@@ -309,7 +312,7 @@ pub fn evaluate_routines(
                     routine_id: routine.id,
                     bucket: truncated_end,
                     state: EtatOccurrence::Sautee,
-                    reason: Some("rattrapage_borne".to_string()),
+                    reason: Some(format!("rattrapage_borne:{skipped}")),
                     objective_id: None,
                     delegation_id: None,
                     created_at: now,

@@ -4,7 +4,7 @@
 //! - rejeu → zéro doublon sous (routine_id, bucket)
 //! - garde hash : gabarit altéré refusé
 //! - pause/resume : pas de rattrapage des buckets de pause
-//! - rattrapage borné : sentinel `rattrapage_borne`
+//! - rattrapage borné : sentinel `rattrapage_borne:<N>` (N = buckets effacés)
 
 use maicie::app::DelegationCandidate;
 use maicie::config::DurationClasses;
@@ -388,9 +388,28 @@ fn rattrapage_au_dela_de_la_borne_pose_une_sentinelle() {
     .expect("evaluate");
     let borne: Vec<_> = produced
         .iter()
-        .filter(|occ| occ.reason.as_deref() == Some("rattrapage_borne"))
+        .filter(|occ| {
+            occ.reason
+                .as_deref()
+                .is_some_and(|r| r.starts_with("rattrapage_borne:"))
+        })
         .collect();
     assert_eq!(borne.len(), 1, "une seule sentinelle de troncature");
+    let skipped: i64 = borne[0]
+        .reason
+        .as_deref()
+        .and_then(|r| r.strip_prefix("rattrapage_borne:"))
+        .and_then(|n| n.parse().ok())
+        .expect("sentinelle doit porter le compte");
+    // skipped = gap - MAX_CATCHUP_BUCKETS - 1 (sentinelle + MAX derniers traités).
+    let current = bucket_for(later, period);
+    let after_approve = bucket_for(t0, period).saturating_sub(1);
+    let gap_initial = current - after_approve;
+    let expected_skipped = (gap_initial - MAX_CATCHUP_BUCKETS - 1).max(0);
+    assert_eq!(
+        skipped, expected_skipped,
+        "sentinelle doit chiffrer le trou effacé (gap={gap_initial})"
+    );
     assert!(
         produced.len() as i64 <= MAX_CATCHUP_BUCKETS + 1,
         "tick borné : {} occurrences (max {})",
