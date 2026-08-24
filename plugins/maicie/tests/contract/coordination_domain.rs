@@ -1,7 +1,10 @@
 use maicie::domain::{
-    ClasseDuree, DefinitionCoordination, DependanceDelegation, DomainError, EvenementCoordination,
-    FaitAppartenanceRepli, FraicheurCoordination, MAX_COORDINATION_EDGES, MAX_COORDINATION_NODES,
-    ModeQualificationDependance, PolitiqueReassignation,
+    ClasseDuree, DefinitionCoordination, DependanceDelegation, DomainError,
+    EntreeReductionCoordination, EtatGenerationDelegation, EvaluationCloture,
+    EvenementCoordination, FaitAppartenanceRepli, FraicheurCoordination, GenerationDelegation,
+    IssueClotureEvaluee, MAX_COORDINATION_EDGES, MAX_COORDINATION_NODES,
+    ModeQualificationDependance, PolitiqueReassignation, TransitionCoordinationActive,
+    TypeDecisionCoordinationActive, reduire_coordination,
 };
 use std::collections::BTreeSet;
 use uuid::Uuid;
@@ -40,6 +43,71 @@ fn la_frontiere_a_parse_le_dto_public_et_conserve_les_octets_attestes() {
     assert!(
         EvenementCoordination::depuis_trame_attestee(&mutated, FraicheurCoordination::Fresh)
             .is_err()
+    );
+}
+
+#[test]
+fn reducteur_repete_cent_fois_les_memes_octets_et_refuse_une_fraicheur_incomplete() {
+    let objectif_id = Uuid::new_v4();
+    let delegation_id = Uuid::new_v4();
+    let generation = generation(objectif_id, delegation_id, "codex-1");
+    let policy = policy(objectif_id, delegation_id, "bob");
+    let event = fixture_event(FraicheurCoordination::Fresh);
+    let input = EntreeReductionCoordination::EvenementAtteste {
+        objectif_id,
+        delegation_id,
+        evenement: event,
+    };
+    let expected =
+        serde_json::to_vec(&reduire_coordination(&generation, &policy, &input).unwrap()).unwrap();
+    for _ in 0..100 {
+        let replay = reduire_coordination(&generation, &policy, &input).unwrap();
+        assert_eq!(serde_json::to_vec(&replay).unwrap(), expected);
+        assert_eq!(replay.decision.kind, TypeDecisionCoordinationActive::Aucun);
+        assert_eq!(replay.transition, TransitionCoordinationActive::Aucune);
+    }
+
+    let incomplete = EntreeReductionCoordination::EvenementAtteste {
+        objectif_id,
+        delegation_id,
+        evenement: fixture_event(FraicheurCoordination::Gap),
+    };
+    assert_eq!(
+        reduire_coordination(&generation, &policy, &incomplete),
+        Err(DomainError::DonneeInvalide(
+            "observation de coordination incomplète"
+        ))
+    );
+}
+
+#[test]
+fn reducteur_est_le_seul_producteur_de_l_acte_de_cloture_evaluee() {
+    let objectif_id = Uuid::new_v4();
+    let delegation_id = Uuid::new_v4();
+    let generation = generation(objectif_id, delegation_id, "alice");
+    let policy = policy(objectif_id, delegation_id, "bob");
+    let input = EntreeReductionCoordination::ClotureEvaluee(EvaluationCloture {
+        event_id: "evaluation-1".to_string(),
+        objectif_id,
+        delegation_id,
+        generation: 1,
+        delivery_hash: "ab".repeat(32),
+        issue: IssueClotureEvaluee::LivraisonValidee,
+        evaluated_at: 1_787_500_100,
+    });
+    let first = reduire_coordination(&generation, &policy, &input).unwrap();
+    let second = reduire_coordination(&generation, &policy, &input).unwrap();
+    assert_eq!(first, second);
+    let TransitionCoordinationActive::ClotureEvaluee(act) = first.transition else {
+        panic!("acte de clôture attendu")
+    };
+    assert_eq!(act.objectif_id(), objectif_id);
+    assert_eq!(act.delegation_id(), delegation_id);
+    assert_eq!(act.generation(), 1);
+    assert_eq!(act.delivery_hash(), "ab".repeat(32));
+    assert_eq!(
+        act.issue_qualifiante(),
+        IssueClotureEvaluee::LivraisonValidee
     );
 }
 
@@ -164,4 +232,43 @@ fn membership(objectif_id: Uuid, participant_id: &str, est_pilote: bool) -> Fait
         membership_version: 1,
         est_pilote,
     }
+}
+
+fn generation(
+    objectif_id: Uuid,
+    delegation_id: Uuid,
+    participant_id: &str,
+) -> GenerationDelegation {
+    GenerationDelegation {
+        delegation_id,
+        objectif_id,
+        generation: 1,
+        participant_id: participant_id.to_string(),
+        etat: EtatGenerationDelegation::Ouverte,
+        generation_precedente: None,
+        trigger_event_id: None,
+    }
+}
+
+fn policy(objectif_id: Uuid, delegation_id: Uuid, fallback: &str) -> PolitiqueReassignation {
+    PolitiqueReassignation {
+        delegation_id,
+        objectif_id,
+        classe: ClasseDuree::Normale,
+        version: 1,
+        seuil_relances: 2,
+        max_reemissions: 2,
+        chaine_repli: vec![membership(objectif_id, fallback, false)],
+    }
+}
+
+fn fixture_event(freshness: FraicheurCoordination) -> EvenementCoordination {
+    const STREAM_A: &[u8] = include_bytes!(
+        "../../../../specs/016-coordination-active/contracts/fixtures/coordination-stream-v2.jsonl"
+    );
+    let event_bytes = STREAM_A
+        .split(|byte| *byte == b'\n')
+        .nth(5)
+        .expect("événement A dans le corpus gelé");
+    EvenementCoordination::depuis_trame_attestee(event_bytes, freshness).unwrap()
 }

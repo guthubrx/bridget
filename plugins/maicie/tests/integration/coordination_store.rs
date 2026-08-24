@@ -1,14 +1,19 @@
 use maicie::domain::{
     AttenteNotification, ClasseDuree, DefinitionCoordination, Delegation, DependanceDelegation,
-    EtatOutboxDelegation, FaitAppartenanceRepli, ModeObjectif, ModeQualificationDependance,
-    ObjectifCoordonne, OutboxDelegation, PolitiqueReassignation, TypeEvenementAttendu,
+    EntreeReductionCoordination, EtatGenerationDelegation, EtatOutboxDelegation, EvaluationCloture,
+    EvenementCoordination, FaitAppartenanceRepli, FraicheurCoordination, GenerationDelegation,
+    IssueClotureEvaluee, ModeObjectif, ModeQualificationDependance, ObjectifCoordonne,
+    OutboxDelegation, PolitiqueReassignation, TypeEvenementAttendu,
 };
 use maicie::outbox::{PreparedDelegation, stable_body_hash};
-use maicie::store::MaicieStore;
-use rusqlite::Connection;
+use maicie::store::{CoordinationCommitPhase, MaicieStore, StoreError};
+use rusqlite::{Connection, ErrorCode, params};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 use uuid::Uuid;
 
 const FRAME_LIMIT: usize = 256 * 1024;
@@ -196,6 +201,204 @@ fn politiques_invalides_sont_refusees_avant_toute_mutation_sqlite() {
     }
 }
 
+#[test]
+fn reduction_est_idempotente_et_l_acte_evalue_est_produit_dans_la_transaction() {
+    let fixture = Fixture::new("reduction-idempotente");
+    let (objectif_id, delegation_id) = seed_coordination(&fixture.database, "alice");
+    let input = evaluated_input(objectif_id, delegation_id, "evaluation-idempotente");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let first = store.apply_coordination_reduction(&input).unwrap();
+    let replay = store.apply_coordination_reduction(&input).unwrap();
+    assert!(!first.replayed);
+    assert!(replay.replayed);
+    assert_eq!(first.reduction, replay.reduction);
+    drop(store);
+
+    let connection = Connection::open(&fixture.database).unwrap();
+    assert_eq!(table_count(&connection, "active_coordination_decisions"), 1);
+    assert_eq!(table_count(&connection, "evaluated_closure_acts"), 1);
+    assert_eq!(table_count(&connection, "notification_outbox"), 0);
+}
+
+#[test]
+fn faute_entre_decision_transition_et_outboxes_annule_toutes_les_ecritures() {
+    for phase in [
+        CoordinationCommitPhase::AfterDecisionInsert,
+        CoordinationCommitPhase::AfterTransition,
+        CoordinationCommitPhase::AfterOutboxes,
+    ] {
+        let fixture = Fixture::new(&format!("rollback-{phase:?}"));
+        let (objectif_id, delegation_id) = seed_coordination(&fixture.database, "alice");
+        let input = evaluated_input(objectif_id, delegation_id, &format!("event-{phase:?}"));
+        let mut store = MaicieStore::open(&fixture.database).unwrap();
+        let result = store.apply_coordination_reduction_observed(&input, |observed| {
+            if observed == phase {
+                return Err(StoreError::Conflict("faute transactionnelle injectée"));
+            }
+            Ok(())
+        });
+        assert!(matches!(
+            result,
+            Err(StoreError::Conflict("faute transactionnelle injectée"))
+        ));
+        drop(store);
+
+        let connection = Connection::open(&fixture.database).unwrap();
+        for table in [
+            "coordination_events",
+            "active_coordination_decisions",
+            "evaluated_closure_acts",
+            "notification_outbox",
+        ] {
+            assert_eq!(
+                table_count(&connection, table),
+                0,
+                "écriture partielle visible dans {table} à {phase:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn deux_ecrivains_se_concurrencent_reellement_et_un_seul_commit_gagne() {
+    let fixture = Fixture::new("course-reelle");
+    let (objectif_id, delegation_id) = seed_coordination(&fixture.database, "codex-1");
+    let input = EntreeReductionCoordination::EvenementAtteste {
+        objectif_id,
+        delegation_id,
+        evenement: fixture_event(FraicheurCoordination::Fresh),
+    };
+    let mut first_store = MaicieStore::open(&fixture.database).unwrap();
+    let second_store = MaicieStore::open(&fixture.database).unwrap();
+    let first_input = input.clone();
+    let second_input = input.clone();
+    let (locked_tx, locked_rx) = mpsc::sync_channel(1);
+    let (release_tx, release_rx) = mpsc::sync_channel(1);
+    let first = thread::spawn(move || {
+        first_store.apply_coordination_reduction_observed(&first_input, |phase| {
+            if phase == CoordinationCommitPhase::AfterDecisionInsert {
+                locked_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            }
+            Ok(())
+        })
+    });
+    locked_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+
+    let (attempt_tx, attempt_rx) = mpsc::sync_channel(1);
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let second = thread::spawn(move || {
+        let mut second_store = second_store;
+        attempt_tx.send(()).unwrap();
+        result_tx
+            .send(second_store.apply_coordination_reduction(&second_input))
+            .unwrap();
+    });
+    attempt_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+
+    let locked_connection = Connection::open(&fixture.database).unwrap();
+    locked_connection.busy_timeout(Duration::ZERO).unwrap();
+    let busy = locked_connection.execute(
+        "UPDATE objectives SET state = state WHERE id = ?1",
+        [objectif_id.to_string()],
+    );
+    assert!(matches!(
+        busy,
+        Err(rusqlite::Error::SqliteFailure(error, _))
+            if error.code == ErrorCode::DatabaseBusy
+    ));
+    assert!(result_rx.recv_timeout(Duration::from_millis(100)).is_err());
+
+    release_tx.send(()).unwrap();
+    let first_result = first.join().unwrap().unwrap();
+    let second_result = result_rx
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap()
+        .unwrap();
+    second.join().unwrap();
+    assert_ne!(first_result.replayed, second_result.replayed);
+    assert_eq!(first_result.reduction, second_result.reduction);
+
+    let connection = Connection::open(&fixture.database).unwrap();
+    assert_eq!(table_count(&connection, "coordination_events"), 1);
+    assert_eq!(table_count(&connection, "active_coordination_decisions"), 1);
+}
+
+#[test]
+fn evenement_d_une_generation_inactive_est_refuse_avant_toute_decision() {
+    let fixture = Fixture::new("generation-obsolete");
+    let (objectif_id, delegation_id) = seed_coordination(&fixture.database, "codex-1");
+    let connection = Connection::open(&fixture.database).unwrap();
+    let payload: Vec<u8> = connection
+        .query_row(
+            "SELECT payload_json FROM delegation_generations
+             WHERE delegation_id = ?1 AND generation = 1",
+            [delegation_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut previous: GenerationDelegation = serde_json::from_slice(&payload).unwrap();
+    previous.etat = EtatGenerationDelegation::Reassignee;
+    let mut active = previous.clone();
+    active.generation = 2;
+    active.etat = EtatGenerationDelegation::Ouverte;
+    active.generation_precedente = Some(1);
+    active.trigger_event_id = Some("generation-2".to_string());
+    connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+    connection
+        .execute(
+            "UPDATE delegation_generations SET state='reassignee', payload_json=?1
+             WHERE delegation_id=?2 AND generation=1",
+            params![
+                serde_json::to_vec(&previous).unwrap(),
+                delegation_id.to_string()
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO delegation_generations(
+                 delegation_id,objective_id,generation,participant_id,state,payload_json
+             ) VALUES (?1,?2,2,?3,'ouverte',?4)",
+            params![
+                delegation_id.to_string(),
+                objectif_id.to_string(),
+                active.participant_id,
+                serde_json::to_vec(&active).unwrap(),
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE delegation_lineages SET active_generation=2, payload_json=?1
+             WHERE delegation_id=?2",
+            params![
+                serde_json::to_vec(&maicie::domain::LigneeDelegation {
+                    delegation_id,
+                    objectif_id,
+                    generation_active: 2,
+                })
+                .unwrap(),
+                delegation_id.to_string(),
+            ],
+        )
+        .unwrap();
+    connection.execute_batch("COMMIT").unwrap();
+    drop(connection);
+
+    let input = EntreeReductionCoordination::EvenementAtteste {
+        objectif_id,
+        delegation_id,
+        evenement: fixture_event(FraicheurCoordination::Fresh),
+    };
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    assert!(store.apply_coordination_reduction(&input).is_err());
+    drop(store);
+    let connection = Connection::open(&fixture.database).unwrap();
+    assert_eq!(table_count(&connection, "coordination_events"), 0);
+    assert_eq!(table_count(&connection, "active_coordination_decisions"), 0);
+}
+
 fn definition(
     objectif_id: Uuid,
     delegation_id: Uuid,
@@ -228,6 +431,51 @@ fn definition(
             policy_version: 1,
         }],
     }
+}
+
+fn seed_coordination(database: &PathBuf, participant: &str) -> (Uuid, Uuid) {
+    let mut store = MaicieStore::open(database).unwrap();
+    let objective = ObjectifCoordonne::nouveau("réducteur", ModeObjectif::Delegue, 1).unwrap();
+    let source = create_delegation(&mut store, &objective, participant);
+    create_delegation(&mut store, &objective, "bob");
+    let snapshot = definition(objective.id, source, vec![], "bob");
+    store.register_coordination_snapshot(&snapshot).unwrap();
+    (objective.id, source)
+}
+
+fn evaluated_input(
+    objectif_id: Uuid,
+    delegation_id: Uuid,
+    event_id: &str,
+) -> EntreeReductionCoordination {
+    EntreeReductionCoordination::ClotureEvaluee(EvaluationCloture {
+        event_id: event_id.to_string(),
+        objectif_id,
+        delegation_id,
+        generation: 1,
+        delivery_hash: "cd".repeat(32),
+        issue: IssueClotureEvaluee::LivraisonValidee,
+        evaluated_at: 1_787_500_100,
+    })
+}
+
+fn fixture_event(freshness: FraicheurCoordination) -> EvenementCoordination {
+    const STREAM_A: &[u8] = include_bytes!(
+        "../../../../specs/016-coordination-active/contracts/fixtures/coordination-stream-v2.jsonl"
+    );
+    let event_bytes = STREAM_A
+        .split(|byte| *byte == b'\n')
+        .nth(5)
+        .expect("événement A dans le corpus gelé");
+    EvenementCoordination::depuis_trame_attestee(event_bytes, freshness).unwrap()
+}
+
+fn table_count(connection: &Connection, table: &str) -> i64 {
+    connection
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
 }
 
 fn edge(objectif_id: Uuid, prerequis_id: Uuid, dependant_id: Uuid) -> DependanceDelegation {

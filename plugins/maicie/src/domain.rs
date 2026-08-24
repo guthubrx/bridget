@@ -7,6 +7,7 @@ use bridget_transport::protocol::{
     COORDINATION_STREAM_VERSION, CoordinationEventKind, DaemonToWrapper,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
@@ -328,37 +329,83 @@ impl DependanceDelegation {
     }
 }
 
-/// Preuve évaluée créée en amont de la session 016. Le registre 016 la
-/// conserve et la consomme, mais ne la fabrique jamais depuis un texte ou un
-/// événement de cycle.
+/// Issue fermée d'une évaluation locale. Un libellé humain n'est jamais une
+/// entrée du réducteur et ne peut donc pas qualifier une arête stricte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueClotureEvaluee {
+    LivraisonValidee,
+}
+
+/// Fait structuré présenté au réducteur pour produire l'acte durable. Le fait
+/// porte l'instant attesté ; le réducteur ne consulte jamais l'horloge.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ActeClotureEvaluee {
-    pub acte_id: Uuid,
+pub struct EvaluationCloture {
+    pub event_id: String,
     pub objectif_id: Uuid,
     pub delegation_id: Uuid,
     pub generation: u64,
     pub delivery_hash: String,
-    pub issue_qualifiante: String,
+    pub issue: IssueClotureEvaluee,
     pub evaluated_at: i64,
+}
+
+impl EvaluationCloture {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        if self.event_id.trim().is_empty() {
+            return Err(DomainError::DonneeInvalide(
+                "évaluation sans identifiant d'événement",
+            ));
+        }
+        verifier_preuve_livraison(self.generation, &self.delivery_hash, self.evaluated_at)
+    }
+}
+
+/// Preuve évaluée produite uniquement par le réducteur 016 depuis une
+/// `EvaluationCloture` structurée. Ses champs privés empêchent qu'un appelant
+/// fabrique l'autorité stricte à côté du réducteur.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActeClotureEvaluee {
+    acte_id: Uuid,
+    objectif_id: Uuid,
+    delegation_id: Uuid,
+    generation: u64,
+    delivery_hash: String,
+    issue_qualifiante: IssueClotureEvaluee,
+    evaluated_at: i64,
 }
 
 impl ActeClotureEvaluee {
     pub fn verifier(&self) -> Result<(), DomainError> {
-        let hash_valide = self.delivery_hash.len() == 64
-            && self
-                .delivery_hash
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit());
-        if self.generation == 0
-            || !hash_valide
-            || self.issue_qualifiante.trim().is_empty()
-            || self.evaluated_at <= 0
-        {
-            return Err(DomainError::DonneeInvalide(
-                "acte de clôture évaluée invalide",
-            ));
-        }
-        Ok(())
+        verifier_preuve_livraison(self.generation, &self.delivery_hash, self.evaluated_at)
+    }
+
+    pub fn acte_id(&self) -> Uuid {
+        self.acte_id
+    }
+
+    pub fn objectif_id(&self) -> Uuid {
+        self.objectif_id
+    }
+
+    pub fn delegation_id(&self) -> Uuid {
+        self.delegation_id
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn delivery_hash(&self) -> &str {
+        &self.delivery_hash
+    }
+
+    pub fn issue_qualifiante(&self) -> IssueClotureEvaluee {
+        self.issue_qualifiante
+    }
+
+    pub fn evaluated_at(&self) -> i64 {
+        self.evaluated_at
     }
 }
 
@@ -576,6 +623,23 @@ pub enum EtatNotificationOutbox {
     Rejected,
 }
 
+impl EtatNotificationOutbox {
+    pub fn transition_vers(self, next: Self) -> Result<(), DomainError> {
+        let allowed = matches!(
+            (self, next),
+            (
+                Self::Prepared,
+                Self::OutcomeUnknown | Self::Accepted | Self::Rejected
+            ) | (Self::OutcomeUnknown, Self::Accepted | Self::Rejected)
+        );
+        if allowed {
+            Ok(())
+        } else {
+            Err(DomainError::TransitionInterdite)
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotificationOutbox {
     pub message_id: Uuid,
@@ -605,31 +669,206 @@ impl NotificationOutbox {
     }
 
     pub fn transition(&mut self, next: EtatNotificationOutbox) -> Result<(), DomainError> {
-        let allowed = matches!(
-            (self.etat, next),
-            (
-                EtatNotificationOutbox::Prepared,
-                EtatNotificationOutbox::OutcomeUnknown
-            ) | (
-                EtatNotificationOutbox::Prepared,
-                EtatNotificationOutbox::Accepted
-            ) | (
-                EtatNotificationOutbox::Prepared,
-                EtatNotificationOutbox::Rejected
-            ) | (
-                EtatNotificationOutbox::OutcomeUnknown,
-                EtatNotificationOutbox::Accepted
-            ) | (
-                EtatNotificationOutbox::OutcomeUnknown,
-                EtatNotificationOutbox::Rejected
-            )
-        );
-        if !allowed {
-            return Err(DomainError::TransitionInterdite);
-        }
+        self.etat.transition_vers(next)?;
         self.etat = next;
         Ok(())
     }
+}
+
+/// Entrées fermées du réducteur. La variante transport conserve les octets
+/// attestés ; la variante d'évaluation ne contient que des faits structurés.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntreeReductionCoordination {
+    EvenementAtteste {
+        objectif_id: Uuid,
+        delegation_id: Uuid,
+        evenement: EvenementCoordination,
+    },
+    ClotureEvaluee(EvaluationCloture),
+}
+
+impl EntreeReductionCoordination {
+    pub fn objectif_id(&self) -> Uuid {
+        match self {
+            Self::EvenementAtteste { objectif_id, .. } => *objectif_id,
+            Self::ClotureEvaluee(evaluation) => evaluation.objectif_id,
+        }
+    }
+
+    pub fn delegation_id(&self) -> Uuid {
+        match self {
+            Self::EvenementAtteste { delegation_id, .. } => *delegation_id,
+            Self::ClotureEvaluee(evaluation) => evaluation.delegation_id,
+        }
+    }
+
+    pub fn generation(&self) -> u64 {
+        match self {
+            Self::EvenementAtteste { evenement, .. } => evenement.generation(),
+            Self::ClotureEvaluee(evaluation) => evaluation.generation,
+        }
+    }
+
+    pub fn event_id(&self) -> &str {
+        match self {
+            Self::EvenementAtteste { evenement, .. } => evenement.event_id(),
+            Self::ClotureEvaluee(evaluation) => &evaluation.event_id,
+        }
+    }
+
+    pub fn evenement_atteste(&self) -> Option<&EvenementCoordination> {
+        match self {
+            Self::EvenementAtteste { evenement, .. } => Some(evenement),
+            Self::ClotureEvaluee(_) => None,
+        }
+    }
+}
+
+/// Transition fermée produite par le réducteur. Les prochaines politiques
+/// étendront la variante génération sans changer la couture transactionnelle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum TransitionCoordinationActive {
+    Aucune,
+    Generation(GenerationDelegation),
+    ClotureEvaluee(ActeClotureEvaluee),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReductionCoordinationActive {
+    pub decision: DecisionCoordinationActive,
+    pub transition: TransitionCoordinationActive,
+    pub outboxes: Vec<NotificationOutbox>,
+}
+
+/// Réducteur pur commun aux politiques 016. Il n'accède qu'aux faits fournis,
+/// refuse toute observation incomplète et dérive des identifiants stables de
+/// champs structurés — jamais d'un texte rendu.
+pub fn reduire_coordination(
+    generation: &GenerationDelegation,
+    politique: &PolitiqueReassignation,
+    entree: &EntreeReductionCoordination,
+) -> Result<ReductionCoordinationActive, DomainError> {
+    generation.verifier()?;
+    if !generation.etat.est_active()
+        || generation.objectif_id != entree.objectif_id()
+        || generation.delegation_id != entree.delegation_id()
+        || generation.generation != entree.generation()
+        || politique.objectif_id != generation.objectif_id
+        || politique.delegation_id != generation.delegation_id
+        || politique.version == 0
+    {
+        return Err(DomainError::DonneeInvalide(
+            "snapshot, génération, politique et événement divergents",
+        ));
+    }
+
+    let decision_id = identifiant_deterministe(
+        b"decision-coordination-v1",
+        &[
+            generation.objectif_id.as_bytes(),
+            generation.delegation_id.as_bytes(),
+            &generation.generation.to_be_bytes(),
+            entree.event_id().as_bytes(),
+            &politique.version.to_be_bytes(),
+        ],
+    );
+    let (kind, motif, transition) = match entree {
+        EntreeReductionCoordination::EvenementAtteste { evenement, .. } => {
+            if evenement.freshness() != FraicheurCoordination::Fresh {
+                return Err(DomainError::DonneeInvalide(
+                    "observation de coordination incomplète",
+                ));
+            }
+            if evenement.recipient() != generation.participant_id {
+                return Err(DomainError::DonneeInvalide(
+                    "destinataire attesté et génération divergents",
+                ));
+            }
+            match evenement.kind() {
+                CoordinationEventKind::ReminderSent => (
+                    TypeDecisionCoordinationActive::Aucun,
+                    "reminder_sent_atteste".to_string(),
+                    TransitionCoordinationActive::Aucune,
+                ),
+            }
+        }
+        EntreeReductionCoordination::ClotureEvaluee(evaluation) => {
+            evaluation.verifier()?;
+            let acte = ActeClotureEvaluee {
+                acte_id: identifiant_deterministe(
+                    b"acte-cloture-evaluee-v1",
+                    &[
+                        evaluation.objectif_id.as_bytes(),
+                        evaluation.delegation_id.as_bytes(),
+                        &evaluation.generation.to_be_bytes(),
+                        evaluation.event_id.as_bytes(),
+                    ],
+                ),
+                objectif_id: evaluation.objectif_id,
+                delegation_id: evaluation.delegation_id,
+                generation: evaluation.generation,
+                delivery_hash: evaluation.delivery_hash.clone(),
+                issue_qualifiante: evaluation.issue,
+                evaluated_at: evaluation.evaluated_at,
+            };
+            acte.verifier()?;
+            (
+                TypeDecisionCoordinationActive::Aucun,
+                "cloture_evaluee_attestee".to_string(),
+                TransitionCoordinationActive::ClotureEvaluee(acte),
+            )
+        }
+    };
+    let decision = DecisionCoordinationActive {
+        decision_id,
+        objectif_id: generation.objectif_id,
+        delegation_id: generation.delegation_id,
+        generation: generation.generation,
+        event_id: entree.event_id().to_string(),
+        policy_version: politique.version,
+        kind,
+        motif,
+    };
+    decision.verifier()?;
+    Ok(ReductionCoordinationActive {
+        decision,
+        transition,
+        outboxes: Vec::new(),
+    })
+}
+
+fn verifier_preuve_livraison(
+    generation: u64,
+    delivery_hash: &str,
+    evaluated_at: i64,
+) -> Result<(), DomainError> {
+    let hash_valide = delivery_hash.len() == 64
+        && delivery_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase());
+    if generation == 0 || !hash_valide || evaluated_at <= 0 {
+        return Err(DomainError::DonneeInvalide(
+            "acte de clôture évaluée invalide",
+        ));
+    }
+    Ok(())
+}
+
+fn identifiant_deterministe(namespace: &[u8], fields: &[&[u8]]) -> Uuid {
+    let mut digest = Sha256::new();
+    digest.update((namespace.len() as u64).to_be_bytes());
+    digest.update(namespace);
+    for field in fields {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field);
+    }
+    let bytes = digest.finalize();
+    let mut uuid = [0_u8; 16];
+    uuid.copy_from_slice(&bytes[..16]);
+    uuid[6] = (uuid[6] & 0x0f) | 0x50;
+    uuid[8] = (uuid[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(uuid)
 }
 
 /// Définition immuable enregistrée avant toute I/O. Le store complète chaque
