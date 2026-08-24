@@ -374,13 +374,20 @@ binary fallback:
 bridget send --to agent-1 --in-reply-to fa09fa7800694 "Review completed"
 ```
 
-Linked replies use the same idempotent contract as `bridget_send`. The command
-prints its `id` and `issued_at`; replay the exact body with both values to read
-the real outcome of a delivery still in flight, or to settle an
-`outcome_unknown`. A nominal first send is not an incident: the daemon answers
-before the recipient has acknowledged, so it reports `DÉPÔT: en vol` (MCP tool:
-`status: "in_flight"`). The stable issuer scope is derived from the current
-Bridget instance, so the retry remains valid after a rename:
+Linked replies use the same idempotent contract as `bridget_send`. A nominal
+first send is not an incident: the daemon answers before the recipient has
+acknowledged, so it reports `DÉPÔT: in_flight (remise en vol)` — the MCP tool
+returns the same status, `"in_flight"`. Both surfaces name the same status, so
+there is nothing to translate between them. `outcome_unknown` is reserved for an
+outcome that is genuinely undetermined.
+
+`in_flight` requires **no action**: it is a successful deposit. To read the real
+outcome of a send that is not yet settled, replay it identically — **same `id`,
+same `issued_at`, same body**. That is a lookup, never a second emission, and it
+returns `accepted` once the recipient's acknowledgement is settled; it never
+duplicates. Changing the body would make it a different envelope, which the
+daemon rejects with `envelope_mismatch`. The stable issuer scope is derived from
+the current Bridget instance, so the retry remains valid after a rename:
 
 ```bash
 bridget send --to agent-1 --in-reply-to fa09fa7800694 \

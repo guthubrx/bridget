@@ -221,9 +221,18 @@ le sort d'un envoi non encore consolidé. Sa portée stable vient de l'instance
 Bridget courante, comme pour l'outil MCP.
 
 Le premier résultat d'un envoi nominal n'est pas un incident : le daemon répond
-avant que le destinataire ait accusé, donc il annonce `DÉPÔT: en vol` (outil
-MCP : `status: "in_flight"`), avec l'identifiant de remise qui l'atteste. Le
-sort n'est déclaré `outcome_unknown` que lorsqu'il est réellement indéterminé.
+avant que le destinataire ait accusé, donc il annonce
+`DÉPÔT: in_flight (remise en vol)` — l'outil MCP rend le même statut,
+`"in_flight"` — avec l'identifiant de remise qui l'atteste. Le sort n'est
+déclaré `outcome_unknown` que lorsqu'il est réellement indéterminé. Les deux
+surfaces nomment le même statut, il n'y a donc rien à traduire de l'une à
+l'autre.
+
+`in_flight` n'appelle **aucune action** : c'est un succès de dépôt. Pour lire le
+sort d'un envoi non encore consolidé, rejouez à l'identique — **même `id`, même
+`issued_at`, même corps** : c'est une consultation, jamais une seconde émission,
+et elle rend `accepted` une fois l'accusé du destinataire consolidé. Ce rejeu ne
+duplique jamais.
 
 Cette garantie est disponible sur le protocole local et la CLI.
 
@@ -514,9 +523,12 @@ bridget send --to agent-1 --in-reply-to fa09fa7800694 "Relecture terminée"
 La demande est marquée `answered` dans la même transition transactionnelle que
 les autres réponses liées ; ses rappels cessent. `bridget reply` reprend
 automatiquement l'identifiant de la dernière demande reçue, ou accepte le même
-flag pour lever une ambiguïté. Pour lire le sort réel d'un dépôt encore en vol —
-ou lever un `outcome_unknown` —, rejouez exactement le même corps avec les
-valeurs affichées ; c'est une consultation, jamais une seconde émission :
+flag pour lever une ambiguïté. Pour lire le sort réel d'un dépôt `in_flight` —
+ou lever un `outcome_unknown` —, rejouez à l'identique : **même `id`, même
+`issued_at`, même corps**, c'est-à-dire le corps exact et les deux valeurs
+affichées. C'est une consultation, jamais une seconde émission ; changer le
+corps ferait de ce rejeu une autre enveloppe, que le daemon refuserait en
+`envelope_mismatch` :
 
 ```bash
 bridget send --to agent-1 --in-reply-to fa09fa7800694 \
