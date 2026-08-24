@@ -66,6 +66,11 @@ def read_maicie_read_only(config_path: str) -> tuple[dict[str, Any] | None, str 
     `mode=ro` peut créer/toucher ses sidecars : la base et son WAL sont donc
     copiés dans un répertoire jetable avant toute ouverture SQLite. Le lecteur
     ne peut ainsi écrire que dans cette copie non autoritaire.
+
+    Compteur exposé : `objectives_to_evaluate` = lignes de `objectives` dont
+    `state = 'a_evaluer'`. Ce n'est PAS le nombre de délégations `a_evaluer`
+    (celles-ci se lisent via `maicie status --json` / greffe). Le résumé texte
+    reprend le même sens sous la clé `objectifs_a_evaluer`.
     """
     try:
         with open(config_path, encoding="utf-8") as stream:
@@ -104,6 +109,9 @@ def read_maicie_read_only(config_path: str) -> tuple[dict[str, Any] | None, str 
         "objectives_to_evaluate": [
             {"objective_id": objective_id, "state": state} for objective_id, state in objectives
         ],
+        "objectives_to_evaluate_means": (
+            "count of objectives.state=a_evaluer ; not delegation a_evaluer rows"
+        ),
         "active_participants": sorted(active),
     }, None
 
@@ -128,7 +136,12 @@ def report(options: argparse.Namespace) -> tuple[str, dict[str, Any]]:
     else:
         evaluate = maicie_raw["objectives_to_evaluate"]
         active = set(maicie_raw["active_participants"])
-        result["maicie"] = {"state": "available", "objectives_to_evaluate": evaluate, "active_participants": sorted(active)}
+        result["maicie"] = {
+            "state": "available",
+            "objectives_to_evaluate": evaluate,
+            "objectives_to_evaluate_means": maicie_raw["objectives_to_evaluate_means"],
+            "active_participants": sorted(active),
+        }
 
     if agents_error or not isinstance(agents_raw, list):
         result["agents"] = unavailable(agents_error or "annuaire Bridget invalide")
@@ -157,7 +170,13 @@ def report(options: argparse.Namespace) -> tuple[str, dict[str, Any]]:
         result["requests"] = {"state": "available", "open_count": len(requests_raw), "expired": expired}
     result["registry"] = unavailable(registry_error) if registry_error else {"state": "available", "view": registry_raw}
 
-    summary = (f"RONDE {observed_at} — agents={result['agents']['state']}, maicie={result['maicie']['state']}, demandes={result['requests']['state']}, registre={result['registry']['state']}; à_évaluer={len(evaluate)}, demandes_échues={len(result['requests'].get('expired', []))}. Constat seulement : aucune décision ni aucun envoi.")
+    summary = (
+        f"RONDE {observed_at} — agents={result['agents']['state']}, maicie={result['maicie']['state']}, "
+        f"demandes={result['requests']['state']}, registre={result['registry']['state']}; "
+        f"objectifs_a_evaluer={len(evaluate)} (objectifs.state=a_evaluer, pas les délégations), "
+        f"demandes_échues={len(result['requests'].get('expired', []))}. "
+        f"Constat seulement : aucune décision ni aucun envoi."
+    )
     return summary, result
 
 

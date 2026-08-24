@@ -49,7 +49,7 @@ use uuid::Uuid;
 
 /// Version courante du schéma SQLite. Les oracles de migration doivent lire
 /// cette constante — un littéral en dur meurt à chaque migration.
-pub const SCHEMA_VERSION: i64 = 15;
+pub const SCHEMA_VERSION: i64 = 16;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -6074,6 +6074,8 @@ where
     }
     // Politique 31 : libération des plages dans la même transaction que les notifications.
     release_resource_ranges_for_objective(tx, objective.id)?;
+    // Orphelines a_evaluer : solde des délégations ouvertes, même transaction.
+    settle_open_delegations_on_objective_closure(tx, objective.id)?;
     persist_objective_costs(tx, objective, issued_at, costs)?;
     // Routines : clôture d'occurrence liée dans la même transaction (manche 4).
     MaicieStore::terminate_occurrences_for_objective_tx(tx, objective.id)?;
@@ -6092,6 +6094,73 @@ fn release_resource_ranges_for_objective(
         [objective_id.to_string()],
     )
     .map_err(StoreError::Sql)?;
+    Ok(())
+}
+
+/// Solde toute délégation encore ouverte sur un objectif en cours de clôture.
+/// État cible : `soldee_par_cloture` — jamais `terminee` (pas de verdict inventé).
+fn settle_open_delegations_on_objective_closure(
+    tx: &Transaction<'_>,
+    objective_id: Uuid,
+) -> Result<(), StoreError> {
+    let mut statement = tx
+        .prepare(
+            "SELECT id, state, payload_json FROM delegations\n\
+             WHERE objective_id = ?1 ORDER BY id",
+        )
+        .map_err(StoreError::Sql)?;
+    let rows = statement
+        .query_map([objective_id.to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
+        })
+        .map_err(StoreError::Sql)?;
+    for row in rows {
+        let (id, state, payload) = row.map_err(StoreError::Sql)?;
+        let mut delegation: Delegation =
+            serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        if delegation.id.to_string() != id
+            || delegation.objectif_id != objective_id
+            || delegation.etat != parse_delegation_state(&state)?
+        {
+            return Err(StoreError::Corrupt("délégation et index SQLite divergents"));
+        }
+        let previous = delegation.etat;
+        match previous {
+            EtatDelegation::Terminee
+            | EtatDelegation::Annulee
+            | EtatDelegation::SoldeeParCloture => continue,
+            EtatDelegation::EnAttentePrerequis
+            | EtatDelegation::Creee
+            | EtatDelegation::AEvaluer => {
+                delegation
+                    .solder_par_cloture()
+                    .map_err(StoreError::Domain)?;
+            }
+        }
+        let next_json = serde_json::to_vec(&delegation).map_err(StoreError::Json)?;
+        let changed = tx
+            .execute(
+                "UPDATE delegations SET state = ?1, payload_json = ?2\n\
+                 WHERE id = ?3 AND state = ?4 AND payload_json = ?5",
+                params![
+                    delegation_state_name(delegation.etat),
+                    next_json,
+                    id,
+                    delegation_state_name(previous),
+                    payload,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict(
+                "délégation modifiée pendant la clôture",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -7348,6 +7417,10 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
         )
         .map_err(StoreError::Sql)?;
     }
+    // v16 : solde les délégations ouvertes sur objectifs déjà clos.
+    if current_version < 16 {
+        migrate_orphan_delegations_on_closed_objectives(&tx)?;
+    }
     for version in (current_version + 1)..=SCHEMA_VERSION {
         tx.execute(
             "INSERT OR IGNORE INTO schema_migrations(version, applied_at)\n\
@@ -7374,6 +7447,72 @@ fn database_has_user_schema(tx: &Transaction<'_>) -> Result<bool, StoreError> {
         )
         .map_err(StoreError::Sql)?;
     Ok(count > 0)
+}
+
+/// Migration v16 : solde les délégations ouvertes sur objectifs déjà clos.
+/// Même règle que `settle_open_delegations_on_objective_closure` — jamais
+/// `terminee` : l'état est `soldee_par_cloture`.
+fn migrate_orphan_delegations_on_closed_objectives(tx: &Transaction<'_>) -> Result<(), StoreError> {
+    let mut statement = tx
+        .prepare(
+            "SELECT d.id, d.objective_id, d.state, d.payload_json\n\
+             FROM delegations d\n\
+             JOIN objectives o ON o.id = d.objective_id\n\
+             WHERE o.state = 'clos'\n\
+               AND d.state IN ('creee', 'a_evaluer', 'en_attente_prerequis')\n\
+             ORDER BY d.id",
+        )
+        .map_err(StoreError::Sql)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+            ))
+        })
+        .map_err(StoreError::Sql)?;
+    let orphans: Vec<_> = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::Sql)?;
+    drop(statement);
+    for (id, objective_id, state, payload) in orphans {
+        let objective_uuid = Uuid::parse_str(&objective_id)
+            .map_err(|_| StoreError::Corrupt("objective_id de délégation invalide"))?;
+        let mut delegation: Delegation =
+            serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        if delegation.id.to_string() != id
+            || delegation.objectif_id != objective_uuid
+            || delegation.etat != parse_delegation_state(&state)?
+        {
+            return Err(StoreError::Corrupt("délégation et index SQLite divergents"));
+        }
+        let previous = delegation.etat;
+        delegation
+            .solder_par_cloture()
+            .map_err(StoreError::Domain)?;
+        let next_json = serde_json::to_vec(&delegation).map_err(StoreError::Json)?;
+        let changed = tx
+            .execute(
+                "UPDATE delegations SET state = ?1, payload_json = ?2\n\
+                 WHERE id = ?3 AND state = ?4 AND payload_json = ?5",
+                params![
+                    delegation_state_name(delegation.etat),
+                    next_json,
+                    id,
+                    delegation_state_name(previous),
+                    payload,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict(
+                "délégation orpheline non soldée à la migration",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn migrate_outbox_to_rejected_state(tx: &Transaction<'_>) -> Result<(), StoreError> {

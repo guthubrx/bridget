@@ -85,7 +85,7 @@ fn schema_v15_pose_les_tables_routines() {
     let root = root("schema");
     let database = root.join("maicie.sqlite3");
     let store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 15);
+    assert_eq!(store.schema_version().unwrap(), 16);
     drop(store);
     fs::remove_dir_all(root).unwrap();
 }

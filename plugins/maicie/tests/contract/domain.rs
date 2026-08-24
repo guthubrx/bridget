@@ -41,8 +41,33 @@ fn delegation_ne_termine_jamais_directement_apres_la_creation() {
         delegation.transition(EtatDelegation::Terminee),
         Err(DomainError::TransitionInterdite)
     );
+    assert_eq!(
+        delegation.transition(EtatDelegation::SoldeeParCloture),
+        Err(DomainError::TransitionInterdite)
+    );
     delegation.transition(EtatDelegation::AEvaluer).unwrap();
     delegation.transition(EtatDelegation::Terminee).unwrap();
+    assert_eq!(delegation.annuler(), Err(DomainError::TransitionInterdite));
+    assert_eq!(
+        delegation.solder_par_cloture(),
+        Err(DomainError::TransitionInterdite)
+    );
+}
+
+#[test]
+fn delegation_soldee_par_cloture_n_est_pas_un_verdict_evalue() {
+    let mut delegation = Delegation::nouvelle(
+        Uuid::new_v4(),
+        "prospective",
+        "vérifie les invariants",
+        ClasseDuree::Normale,
+        "cible explicite",
+    )
+    .unwrap();
+    delegation.transition(EtatDelegation::AEvaluer).unwrap();
+    delegation.solder_par_cloture().unwrap();
+    assert_eq!(delegation.etat, EtatDelegation::SoldeeParCloture);
+    assert_ne!(delegation.etat, EtatDelegation::Terminee);
     assert_eq!(delegation.annuler(), Err(DomainError::TransitionInterdite));
 }
 
@@ -65,6 +90,7 @@ fn all_est_garanti_par_match_exhaustif() {
         EtatDelegation::AEvaluer,
         EtatDelegation::Terminee,
         EtatDelegation::Annulee,
+        EtatDelegation::SoldeeParCloture,
     ];
     for etat in temoins {
         etat.assert_listed_in_all();
