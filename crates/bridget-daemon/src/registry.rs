@@ -16,7 +16,8 @@ const DEFAULT_NOTIFY_TIMEOUT_SECS: u64 = 600;
 // launchd démarre le daemon avec un PATH minimal : les pilotes embarqués ne
 // doivent pas dépendre de la configuration interactive de l'utilisateur.
 const NATIVE_CODEX_COMMAND: &str = "/opt/homebrew/bin/codex";
-const NATIVE_CLAUDE_COMMAND: &str = "/Users/moi/.local/bin/claude";
+/// Chemin absolu figé du CLI Claude (launchd / PATH minimal).
+pub const NATIVE_CLAUDE_COMMAND: &str = "/Users/moi/.local/bin/claude";
 const MAX_PASS_ENV_ENTRIES: usize = 64;
 const MAX_ENV_NAME_BYTES: usize = 128;
 const MAX_CAPABILITY_VALUE_CHARS: usize = 100;
@@ -268,13 +269,30 @@ fn legacy_capabilities_for(definition: &AgentDefinition) -> AdapterCapabilities 
 /// Paquets npm `@zed-industries/{codex,claude-code}-acp` : pont tiers figé
 /// retiré en G10 (ADR 010). L'ACP générique (`cursor-agent acp`, `gemini
 /// --acp`, fixtures ACP) reste autorisé.
-fn zed_bridge_token(token: &str) -> Option<&'static str> {
+///
+/// Normalise avant comparaison : basename du chemin + retrait du suffixe
+/// npm `@version`, pour couvrir aussi les chemins absolus vivants du projet
+/// (`/opt/homebrew/bin/codex-acp`, `./node_modules/.bin/…`, `codex-acp@0.16.0`).
+fn normalize_bridge_token(token: &str) -> String {
     let lowered = token.to_ascii_lowercase();
-    if lowered.contains("@zed-industries/codex-acp") || lowered == "codex-acp" {
+    let base = Path::new(&lowered)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(lowered.as_str());
+    match base.rfind('@').filter(|&index| index > 0) {
+        Some(index) => base[..index].to_string(),
+        None => base.to_string(),
+    }
+}
+
+fn zed_bridge_token(token: &str) -> Option<&'static str> {
+    let normalized = normalize_bridge_token(token);
+    let lowered = token.to_ascii_lowercase();
+    if normalized == "codex-acp" || lowered.contains("@zed-industries/codex-acp") {
         Some("@zed-industries/codex-acp")
-    } else if lowered.contains("@zed-industries/claude-code-acp")
-        || lowered == "claude-code-acp"
-        || lowered == "claude-acp"
+    } else if normalized == "claude-code-acp"
+        || normalized == "claude-acp"
+        || lowered.contains("@zed-industries/claude-code-acp")
     {
         Some("@zed-industries/claude-code-acp")
     } else {
@@ -1337,6 +1355,46 @@ mod tests {
             validate_launch_capabilities("legacy", definition),
             Err(SpawnRefusal::EnvUnfit { .. })
         ));
+    }
+
+    #[test]
+    fn pont_zed_refuse_les_quatre_formes_de_chemin_vivantes() {
+        // C1 revue G10 : basename + retrait @version — les formes qui
+        // échappaient à la comparaison naïve `== "codex-acp"`.
+        let forms = [
+            (
+                "/opt/homebrew/bin/codex-acp",
+                Vec::<&str>::new(),
+                "@zed-industries/codex-acp",
+            ),
+            (
+                "/Users/moi/.local/bin/claude-code-acp",
+                vec![],
+                "@zed-industries/claude-code-acp",
+            ),
+            (
+                "./node_modules/.bin/codex-acp",
+                vec![],
+                "@zed-industries/codex-acp",
+            ),
+            ("npx", vec!["codex-acp@0.16.0"], "@zed-industries/codex-acp"),
+        ];
+        for (command, args, package) in forms {
+            let args_json = serde_json::to_string(&args).unwrap();
+            let json = format!(
+                r#"{{"agents":{{"legacy":{{"command":"{command}","args":{args_json},"protocol":"acp"}}}}}}"#
+            );
+            let registry = AgentRegistry::from_json(&json, "/tmp/agents.json").unwrap();
+            let definition = registry.get("legacy").unwrap();
+            let refusal = reject_retired_zed_bridge(definition).unwrap_err();
+            assert!(
+                matches!(
+                    &refusal,
+                    SpawnRefusal::EnvUnfit { detail } if detail.contains(package)
+                ),
+                "forme non refusée: command={command} args={args:?} → {refusal:?}"
+            );
+        }
     }
 
     #[test]
