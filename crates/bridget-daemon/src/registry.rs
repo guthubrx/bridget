@@ -784,7 +784,16 @@ fn definition(
 fn native_claude_definition() -> AgentDefinition {
     AgentDefinition {
         command: NATIVE_CLAUDE_COMMAND.to_string(),
-        args: vec!["--model".to_string(), "claude-opus-5".to_string()],
+        // Même contrat que le wrapper interactif (wrapper.rs) : sans ces
+        // flags le flux stream-json émet des demandes d'outil auxquelles le
+        // pilote géré ne répond pas — tours clos, zéro outil.
+        args: vec![
+            "--model".to_string(),
+            "claude-opus-5".to_string(),
+            "--dangerously-skip-permissions".to_string(),
+            "--permission-mode".to_string(),
+            "bypassPermissions".to_string(),
+        ],
         protocol: "claude_stream_json".to_string(),
         forbidden_env: vec!["ANTHROPIC_API_KEY".to_string()],
         pass_env: [
@@ -925,7 +934,16 @@ mod tests {
         assert_eq!(claude.command, NATIVE_CLAUDE_COMMAND);
         assert!(Path::new(&claude.command).is_absolute());
         assert_eq!(claude.protocol, "claude_stream_json");
-        assert_eq!(claude.args, ["--model", "claude-opus-5"]);
+        assert_eq!(
+            claude.args,
+            [
+                "--model",
+                "claude-opus-5",
+                "--dangerously-skip-permissions",
+                "--permission-mode",
+                "bypassPermissions",
+            ]
+        );
         assert!(!claude.mcp.acp_session);
         assert_eq!(
             claude.capabilities.execution_paths,
@@ -939,6 +957,26 @@ mod tests {
             registry.get("gemini").unwrap().mcp.interactive,
             "unsupported"
         );
+    }
+
+    #[test]
+    fn bypass_permissions_change_le_digest_de_la_definition_claude() {
+        let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
+        let with_bypass = registry.resolved_definition("claude").unwrap();
+        let mut without = registry.get("claude").unwrap().clone();
+        without.args = vec!["--model".to_string(), "claude-opus-5".to_string()];
+        let old = resolved_definition(&without).unwrap();
+        assert_ne!(
+            with_bypass.digest, old.digest,
+            "ajouter les flags bypass doit changer le digest figé"
+        );
+        assert!(
+            with_bypass
+                .args
+                .iter()
+                .any(|a| a == "--dangerously-skip-permissions")
+        );
+        assert!(with_bypass.args.iter().any(|a| a == "bypassPermissions"));
     }
 
     #[test]
