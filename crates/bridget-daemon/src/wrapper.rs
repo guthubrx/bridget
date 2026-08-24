@@ -1602,9 +1602,7 @@ pub fn launch(
                                 Some(transport) => transport
                                     .deliver(message)
                                     .map_err(|error| error.to_string()),
-                                None => {
-                                    Err("aucun pane tmux pour la livraison idempotente".into())
-                                }
+                                None => Err("aucun pane tmux pour la livraison idempotente".into()),
                             }
                         },
                     );
@@ -3334,6 +3332,19 @@ fn forward_managed_events(
                     warn!("fait de limite ignoré : source ACP non autorisée")
                 }
             },
+            ManagedEventKind::ModelObserved { model } => match source {
+                bridget_transport::ManagedEventSource::ClaudeStreamJson
+                | bridget_transport::ManagedEventSource::CodexAppServer => send_wrapper_message(
+                    writer,
+                    WrapperToDaemon::ServedModel {
+                        agent: my_name.to_string(),
+                        model,
+                    },
+                ),
+                bridget_transport::ManagedEventSource::Acp => {
+                    warn!("modèle servi ignoré : source ACP non autorisée")
+                }
+            },
             ManagedEventKind::Update { .. } | ManagedEventKind::Error { .. } => {}
         }
     }
@@ -3744,6 +3755,37 @@ mod reconnect_tests {
                 resets_at: Some(1_787_572_200),
                 source: bridget_transport::protocol::RateLimitSource::ClaudeStreamJson,
             } if agent == "claude-1" && window == "five_hour" && status == "rejected"
+        ));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn modele_servi_claude_est_transmis_sans_decision() {
+        let root = mcp_test_root("served-model");
+        std::fs::create_dir_all(&root).unwrap();
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "instance-served").unwrap();
+        let event = ManagedEvent::source_line(
+            bridget_transport::ManagedEventSource::ClaudeStreamJson,
+            br#"{"type":"system","subtype":"init","model":"claude-opus-4-6"}"#.to_vec(),
+            ManagedEventKind::ModelObserved {
+                model: "claude-opus-4-6".to_string(),
+            },
+        );
+
+        assert!(!forward_managed_events(
+            &writer,
+            "claude-1",
+            vec![event],
+            &mut tracker
+        ));
+        let mut line = String::new();
+        BufReader::new(reader_stream).read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode(line.trim_end()).unwrap(),
+            WrapperToDaemon::ServedModel { agent, model }
+                if agent == "claude-1" && model == "claude-opus-4-6"
         ));
         std::fs::remove_dir_all(root).unwrap();
     }

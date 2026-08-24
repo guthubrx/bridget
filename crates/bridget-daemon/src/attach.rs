@@ -4183,6 +4183,7 @@ mod tests {
                 model: None,
                 effort: None,
                 rate_limit: None,
+                model_mismatch: None,
             };
         let attachable = attachable_agent_names(vec![
             agent("connected", "acp", Some(PresenceMode::Acp), "connected"),

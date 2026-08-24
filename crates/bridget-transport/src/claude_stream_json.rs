@@ -124,7 +124,15 @@ impl ClaudeStreamJsonTransport {
         let busy = Arc::new(AtomicBool::new(false));
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let journal = Arc::new(Mutex::new(None));
-        let reader_handle = spawn_reader(stdout, queue.clone(), events.clone(), alive.clone());
+        let pinned_model = pinned_model_from_args(&options.args);
+        let reader_handle = spawn_reader(
+            stdout,
+            queue.clone(),
+            events.clone(),
+            alive.clone(),
+            journal.clone(),
+            pinned_model,
+        );
         let worker_handle = spawn_worker(
             queue.clone(),
             writer.clone(),
@@ -518,6 +526,8 @@ fn spawn_reader(
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     events: Arc<Mutex<VecDeque<ManagedEvent>>>,
     alive: Arc<AtomicBool>,
+    journal: Journal,
+    pinned_model: Option<String>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
@@ -578,6 +588,9 @@ fn spawn_reader(
                 rate_limit_event(&value).unwrap_or_else(|| ManagedEventKind::Update {
                     detail: "événement Claude rate_limit_event incomplet".to_string(),
                 })
+            } else if let Some(served) = served_model_from_claude(&value) {
+                maybe_record_mismatch(&journal, pinned_model.as_deref(), &served);
+                ManagedEventKind::ModelObserved { model: served }
             } else {
                 ManagedEventKind::Update {
                     detail: format!("événement Claude: {kind}"),
@@ -598,6 +611,48 @@ fn spawn_reader(
 
 /// Extrait uniquement un fait complet du schéma `rate_limit_event` attesté par
 /// Claude. Une date absente reste `None` : aucune heure de retour n'est déduite.
+fn pinned_model_from_args(args: &[String]) -> Option<String> {
+    args.windows(2)
+        .find(|pair| pair[0] == "--model")
+        .map(|pair| {
+            pair[1]
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string()
+        })
+        .filter(|model| !model.is_empty())
+}
+
+/// Le modèle servi n'est lu que sur `system/init`. Un autre événement, même
+/// porteur d'un champ `model`, ne constitue pas un verdict.
+fn served_model_from_claude(value: &Value) -> Option<String> {
+    if value.get("type").and_then(Value::as_str) != Some("system") {
+        return None;
+    }
+    if value.get("subtype").and_then(Value::as_str) != Some("init") {
+        return None;
+    }
+    value
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
+}
+
+fn maybe_record_mismatch(journal: &Journal, pinned: Option<&str>, served: &str) {
+    let Some(pinned) = pinned.filter(|pinned| *pinned != served) else {
+        return;
+    };
+    let _ = record(
+        journal,
+        "model_mismatch",
+        None,
+        json!({ "pinned": pinned, "served": served }),
+    );
+}
+
 fn rate_limit_event(value: &Value) -> Option<ManagedEventKind> {
     let info = value.get("rate_limit_info")?;
     let window = info.get("rateLimitType")?.as_str()?.trim();
@@ -842,5 +897,155 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn init_annonce_un_modele_distinct_et_le_journalise() {
+        let event: Value =
+            serde_json::from_str(r#"{"type":"system","subtype":"init","model":"claude-opus-4-6"}"#)
+                .unwrap();
+        assert_eq!(
+            served_model_from_claude(&event).as_deref(),
+            Some("claude-opus-4-6")
+        );
+
+        let mut mismatch = options();
+        mismatch.args = vec![
+            "-c".to_string(),
+            concat!(
+                "while IFS= read -r line; do ",
+                "printf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-opus-4-6\"}'; ",
+                "printf '%s\\n' '{\"type\":\"result\",\"is_error\":false,\"terminal_reason\":\"completed\",\"result\":\"ok\"}'; ",
+                "done"
+            )
+            .to_string(),
+            "--model".to_string(),
+            "claude-opus-5".to_string(),
+        ];
+        let root = std::env::temp_dir().join(format!(
+            "bridget-claude-mismatch-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut transport = ClaudeStreamJsonTransport::spawn(mismatch).unwrap();
+        transport
+            .activate_journal(&root, "claude-mismatch", None)
+            .unwrap();
+        transport.deliver(&message("claude-gap")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut events = Vec::new();
+        while Instant::now() < deadline {
+            events.extend(transport.drain_events());
+            if events.iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::ModelObserved { ref model } if model == "claude-opus-4-6"
+                )
+            }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(events.iter().any(|event| {
+            matches!(
+                event.kind,
+                ManagedEventKind::ModelObserved { ref model } if model == "claude-opus-4-6"
+            )
+        }));
+        transport.stop();
+        let contents = fs::read_dir(root.join("claude-mismatch"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "jsonl"))
+            .map(|entry| fs::read_to_string(entry.path()).unwrap())
+            .collect::<String>();
+        assert!(
+            contents.contains("\"event\":\"model_mismatch\""),
+            "journal sans écart: {contents}"
+        );
+        assert!(contents.contains("claude-opus-5"));
+        assert!(contents.contains("claude-opus-4-6"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn flux_muet_ou_modele_identique_ne_produit_aucun_ecart() {
+        assert!(
+            served_model_from_claude(
+                &serde_json::from_str(
+                    r#"{"type":"system","subtype":"status","status":"requesting"}"#
+                )
+                .unwrap()
+            )
+            .is_none()
+        );
+        assert!(
+            served_model_from_claude(
+                &serde_json::from_str(r#"{"type":"system","subtype":"init"}"#).unwrap()
+            )
+            .is_none()
+        );
+
+        let mut matching = options();
+        matching.args = vec![
+            "-c".to_string(),
+            concat!(
+                "while IFS= read -r line; do ",
+                "printf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-opus-5\"}'; ",
+                "printf '%s\\n' '{\"type\":\"result\",\"is_error\":false,\"terminal_reason\":\"completed\",\"result\":\"ok\"}'; ",
+                "done"
+            )
+            .to_string(),
+            "--model".to_string(),
+            "claude-opus-5".to_string(),
+        ];
+        let root = std::env::temp_dir().join(format!(
+            "bridget-claude-match-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut transport = ClaudeStreamJsonTransport::spawn(matching).unwrap();
+        transport
+            .activate_journal(&root, "claude-match", None)
+            .unwrap();
+        transport.deliver(&message("claude-ok")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut events = Vec::new();
+        while Instant::now() < deadline {
+            events.extend(transport.drain_events());
+            if events
+                .iter()
+                .any(|event| matches!(event.kind, ManagedEventKind::ModelObserved { .. }))
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(events.iter().any(|event| {
+            matches!(
+                event.kind,
+                ManagedEventKind::ModelObserved { ref model } if model == "claude-opus-5"
+            )
+        }));
+        transport.stop();
+        let contents = fs::read_dir(root.join("claude-match"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "jsonl"))
+            .map(|entry| fs::read_to_string(entry.path()).unwrap())
+            .collect::<String>();
+        assert!(
+            !contents.contains("model_mismatch"),
+            "écart inventé: {contents}"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }

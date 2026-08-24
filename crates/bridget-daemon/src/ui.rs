@@ -90,7 +90,7 @@ const UI_PAGE: &str = r#"<!doctype html>
     agents.forEach((agent) => {
       row(agentsNode, [
         [unknown(agent.name, "nom"), !agent.name], [unknown(agent.state, "état"), !agent.state],
-        [unknown(agent.model, "modèle non observé"), !agent.model], [unknown(agent.mode, "mode"), !agent.mode],
+        [agent.model_mismatch ? `${agent.model_mismatch.served} ≠ ${agent.model_mismatch.pinned}` : unknown(agent.model, "modèle non observé"), !agent.model_mismatch && !agent.model], [unknown(agent.mode, "mode"), !agent.mode],
         [unknown(agent.location, "localisation non attestée"), !agent.location]
       ]);
       const option = document.createElement("option"); option.value = agent.name; option.textContent = agent.name; selector.appendChild(option);

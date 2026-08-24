@@ -720,6 +720,13 @@ pub enum WrapperToDaemon {
         effort: Option<String>,
         source: RuntimeSource,
     },
+    /// Rapporter le modèle réellement servi, tel qu'annoncé par le flux.
+    ///
+    /// Ce n'est pas une observation `Runtime` : aucune source fermée n'est
+    /// ajoutée. L'absence de ce message n'autorise aucun verdict d'écart.
+    /// Le daemon compare au modèle épinglé et n'en tire aucune décision
+    /// automatique — affichage et journal seulement.
+    ServedModel { agent: String, model: String },
     /// Rapporter un fait de limite attesté par le pilote d'un agent.
     ///
     /// L'absence de ce message ne permet aucune déduction : une limite inconnue
@@ -1217,6 +1224,11 @@ pub struct AgentInfo {
     /// présence ni le routage.
     #[serde(default)]
     pub rate_limit: Option<RateLimitFact>,
+    /// Écart entre le modèle épinglé de la définition et le modèle attesté
+    /// par le flux. Absent si le flux est muet ou si les deux étiquettes
+    /// coïncident. Informational seulement : aucun refus ni bascule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_mismatch: Option<ModelMismatchFact>,
 }
 
 /// Fait de limite exposé dans l'annuaire. Les chaînes fournisseur restent
@@ -1227,6 +1239,28 @@ pub struct RateLimitFact {
     pub status: String,
     #[serde(default)]
     pub resets_at: Option<i64>,
+}
+
+/// Écart attesté entre le modèle demandé et le modèle réellement servi.
+/// Les deux chaînes restent opaques : aucune aliasisation n'est inventée.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelMismatchFact {
+    pub pinned: String,
+    pub served: String,
+}
+
+impl ModelMismatchFact {
+    /// Produit un écart seulement si les deux étiquettes sont présentes et
+    /// distinctes. Un flux muet ou un épinglage absent ne produit rien.
+    pub fn observe(pinned: Option<&str>, served: Option<&str>) -> Option<Self> {
+        match (pinned, served) {
+            (Some(pinned), Some(served)) if pinned != served => Some(Self {
+                pinned: pinned.to_string(),
+                served: served.to_string(),
+            }),
+            _ => None,
+        }
+    }
 }
 
 fn unknown_os() -> String {
@@ -1617,6 +1651,33 @@ mod tests {
         assert!(info.model.is_none());
         assert!(info.effort.is_none());
         assert!(info.rate_limit.is_none());
+        assert!(info.model_mismatch.is_none());
+    }
+
+    #[test]
+    fn test_encode_decode_served_model() {
+        let message = WrapperToDaemon::ServedModel {
+            agent: "claude-1".to_string(),
+            model: "claude-opus-4-6".to_string(),
+        };
+        let encoded = encode(&message).unwrap();
+        assert!(encoded.contains("\"type\":\"ServedModel\""));
+        assert!(matches!(
+            decode(&encoded).unwrap(),
+            WrapperToDaemon::ServedModel { agent, model }
+                if agent == "claude-1" && model == "claude-opus-4-6"
+        ));
+    }
+
+    #[test]
+    fn model_mismatch_observe_exige_les_deux_etiquettes_distinctes() {
+        assert!(ModelMismatchFact::observe(None, Some("claude-opus-4-6")).is_none());
+        assert!(ModelMismatchFact::observe(Some("claude-opus-5"), None).is_none());
+        assert!(ModelMismatchFact::observe(Some("claude-opus-5"), Some("claude-opus-5")).is_none());
+        let gap = ModelMismatchFact::observe(Some("claude-opus-5"), Some("claude-opus-4-6"))
+            .expect("écart attesté");
+        assert_eq!(gap.pinned, "claude-opus-5");
+        assert_eq!(gap.served, "claude-opus-4-6");
     }
 
     #[test]
