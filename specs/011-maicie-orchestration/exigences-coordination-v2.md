@@ -457,3 +457,20 @@ plus vite ; le coût net est un report, pas une perte.
   là où un dû qui n'existe que dans sa tête meurt avec lui. Tant que le
   référent est le seul ordonnanceur, la capacité de l'équipe est plafonnée
   par SA disponibilité, pas par la sienne propre.
+- **Les agents cherchent Maicie à l'annuaire — 3 sur 3, nuit du 24/08.**
+  cxbridget (« Maicie n'est plus enregistrée dans l'annuaire »), prospective
+  (« destinataire maicie indisponible : unknown_recipient ») et, plus tôt,
+  la livraison T1512 (« Maicie était indisponible ») ont tous traité comme
+  une panne ce qui est le comportement voulu : Maicie n'est pas résidente,
+  elle n'existe à l'annuaire que pendant son exécution. Trois agents sur
+  trois ont fait la même erreur de raisonnement, indépendamment. C'est la
+  meilleure démonstration d'utilité qu'on pouvait espérer pour la 015 : ils
+  ont rencontré en conditions réelles, la nuit même, exactement la friction
+  que le guichet supprime — une demande qu'on ne peut pas déposer parce que
+  la destinataire ne tourne pas. Ils ne peuvent pas encore déposer parce que
+  la 015 n'est pas mergée ; le binaire de production n'a pas la
+  sous-commande. À faire au merge : apprendre aux agents `bridget guichet
+  deposer` plutôt que de constater une absence. Enseignement plus large :
+  un composant non résident sera systématiquement pris pour mort par ses
+  pairs tant que la voie de dépôt asynchrone ne leur est pas enseignée —
+  l'absence de canal se lit comme une panne.
