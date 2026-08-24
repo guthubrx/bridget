@@ -916,10 +916,7 @@ mod tests {
         assert_eq!(registry.get("gemini").unwrap().args, vec!["--acp"]);
         assert_eq!(codex.mcp.interactive, "codex");
         assert!(!codex.mcp.acp_session);
-        assert_eq!(
-            codex.capabilities.execution_paths,
-            vec!["codex_app_server"]
-        );
+        assert_eq!(codex.capabilities.execution_paths, vec!["codex_app_server"]);
         assert_eq!(
             codex.capabilities.models.get("gpt-5.6-terra"),
             Some(&ModelCapabilities::default())
@@ -981,7 +978,10 @@ mod tests {
         let second = registry.resolved_definition("codex").unwrap();
         assert_eq!(first, second);
         assert_eq!(first.command, NATIVE_CODEX_COMMAND);
-        assert_eq!(first.args, vec!["-c", "model=\"gpt-5.6-terra\"", "app-server"]);
+        assert_eq!(
+            first.args,
+            vec!["-c", "model=\"gpt-5.6-terra\"", "app-server"]
+        );
         assert_eq!(first.protocol, "codex_app_server");
         assert_eq!(first.forbidden_env, vec!["OPENAI_API_KEY", "CODEX_API_KEY"]);
         assert!(first.pass_env.contains(&"CODEX_HOME".to_string()));

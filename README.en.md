@@ -90,10 +90,10 @@ bridget send --to codex-1 "Review this file" --reply
 bridget who
 ```
 
-## ACP teammates
+## Managed teammates
 
-An ACP teammate receives deliveries directly through the Agent Client Protocol
-(ACP), without terminal text injection. Start one with `--equipier`:
+A managed teammate receives deliveries through its own driver, without
+terminal text injection. Start one with `--equipier`:
 
 ```bash
 bridget codex --equipier
@@ -101,10 +101,12 @@ bridget claude --equipier
 ```
 
 Types, commands and policies are declared in
-`~/.config/bridget/agents.json`. The Codex entry uses
-`@zed-industries/codex-acp@0.16.0` with the `-c model="gpt-5.5"` pin required
-by the adapter’s embedded version. Bridget refuses API keys declared in
-`forbidden_env` by default to retain subscription authentication;
+`~/.config/bridget/agents.json`. The Codex entry natively launches
+`/opt/homebrew/bin/codex app-server` with the pinned `gpt-5.6-terra` model;
+the Claude entry launches
+`/Users/moi/.local/bin/claude --model claude-opus-5`. Those absolute paths are
+available to the daemon started by launchd. Bridget refuses API keys declared
+in `forbidden_env` by default to retain subscription authentication;
 `BRIDGET_ALLOW_API_KEY=1` is an explicit override to use only when API billing
 is intended.
 
@@ -119,7 +121,7 @@ started without `--equipier`, keep their `💬` behaviour.
 
 ## Persistent teammates
 
-The daemon can own the lifecycle of an ACP teammate. The terminal issuing the
+The daemon can own the lifecycle of a managed teammate. The terminal issuing the
 order may then close without stopping that teammate:
 
 ```bash
@@ -262,7 +264,7 @@ already supplied.
 | `bridget discover` | alias for `who` |
 | `bridget status` | daemon health, paths, agent and message counts |
 | `bridget ledger` | last twenty recorded messages |
-| `bridget attach <teammate> [--today \| --date YYYY-MM-DD \| --from-seq N]` | opens an interactive view of an ACP teammate: history, live follow-up, and ordinary-message input |
+| `bridget attach <teammate> [--today \| --date YYYY-MM-DD \| --from-seq N]` | opens an interactive view of a teammate holding a journal: history, live follow-up, and ordinary-message input |
 | `bridget version` | binary version |
 | `bridget help` | inline help, summary of every command |
 

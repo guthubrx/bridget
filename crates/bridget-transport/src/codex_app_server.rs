@@ -16,6 +16,7 @@ use bridget_core::BridgetMessage;
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -98,7 +99,8 @@ impl CodexAppServerTransport {
                 "queue Codex de capacité nulle".to_string(),
             ));
         }
-        let mut child = Command::new(&options.command)
+        let mut command = Command::new(&options.command);
+        command
             .args(&options.args)
             .envs(environment.iter().cloned())
             .stdin(Stdio::piped())
@@ -108,10 +110,13 @@ impl CodexAppServerTransport {
             } else {
                 Stdio::null()
             })
-            .spawn()
-            .map_err(|error| {
-                TransportError::Io(format!("impossible de lancer codex app-server: {error}"))
-            })?;
+            // Le pilote et ses enfants sont une seule unité de vie. La
+            // fermeture d'un tour ne laisse donc jamais un sous-processus
+            // Codex tenir stdout ou le journal ouverts.
+            .process_group(0);
+        let mut child = command.spawn().map_err(|error| {
+            TransportError::Io(format!("impossible de lancer codex app-server: {error}"))
+        })?;
         let pid = child.id();
         let stdin = child
             .stdin
@@ -277,6 +282,7 @@ impl CodexAppServerTransport {
             return;
         }
         self.alive.store(false, Ordering::SeqCst);
+        self.observations.1.notify_all();
         let (queue, wake) = &*self.queue;
         let mut queue = queue.lock().unwrap_or_else(|poison| poison.into_inner());
         queue.closed = true;
@@ -296,7 +302,7 @@ impl CodexAppServerTransport {
             .child
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let _ = child.kill();
+        let _ = unsafe { libc::kill(-(child.id() as i32), libc::SIGTERM) };
         let _ = child.wait();
         drop(child);
         if let Some(handle) = self
@@ -580,6 +586,12 @@ fn wait_for_turn(
         .unwrap_or_else(|| started + worker.notify_timeout);
     let mut interrupted = false;
     loop {
+        if !worker.alive.load(Ordering::SeqCst) {
+            return ManagedEventKind::DeliveryRejected {
+                message_id: message.id.clone(),
+                reason: "stdout Codex fermé pendant le tour".to_string(),
+            };
+        }
         if !interrupted && cancel.try_recv().is_ok() {
             interrupted = true;
             let _ = request(
@@ -879,7 +891,7 @@ mod tests {
                 r#"started=0; saturated=0; while IFS= read -r line; do
                     printf '%s\n' "$line" >> "$BRIDGET_CODEX_TRACE"
                     case "$line" in
-                        *'"method":"initialize"'*) printf '%s\n' '{"id":1,"result":{"userAgent":"fake","codexHome":"/tmp","platformFamily":"unix","platformOs":"macos"}}' ;;
+                        *'"method":"initialize"'*) if [ -n "${BRIDGET_CODEX_CHILD_PID:-}" ]; then sleep 60 & printf '%s' "$!" > "$BRIDGET_CODEX_CHILD_PID"; fi; printf '%s\n' '{"id":1,"result":{"userAgent":"fake","codexHome":"/tmp","platformFamily":"unix","platformOs":"macos"}}' ;;
                         *'"method":"initialized"'*) started=1 ;;
                         *'"method":"thread/start"'*) printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-native"}}}' ;;
                         *'"method":"turn/start"'*)
@@ -1032,6 +1044,131 @@ mod tests {
             }
         )));
         transport.stop();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn eof_pendant_un_tour_reveille_le_worker_et_nettoie_le_groupe() {
+        let root = root("eof-turn");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        // L'ancien worker attendait jusqu'à l'échéance du tour : cette valeur
+        // rend le mutant visible sans faire dormir le test pendant une minute.
+        options.notify_timeout_secs = 60;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
+            ],
+            false,
+        )
+        .expect("session native");
+        transport.deliver(&message("eof-1")).expect("livraison");
+
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(2) {
+            let turns_started = fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .lines()
+                .filter(|line| line.contains("\"method\":\"turn/start\""))
+                .count();
+            if turns_started >= 2 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .lines()
+                .filter(|line| line.contains("\"method\":\"turn/start\""))
+                .count()
+                >= 2,
+            "le tour suspendu n'a jamais atteint wait_for_turn"
+        );
+        let adapter_pid = transport.process_id() as i32;
+
+        assert_eq!(unsafe { libc::kill(adapter_pid, libc::SIGTERM) }, 0);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut events = Vec::new();
+        while Instant::now() < deadline {
+            events.extend(transport.drain_events());
+            if events.iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::DeliveryRejected { ref message_id, ref reason }
+                        if message_id == "eof-1" && reason == "stdout Codex fermé pendant le tour"
+                )
+            }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            events.iter().any(|event| matches!(
+                event.kind,
+                ManagedEventKind::DeliveryRejected { ref message_id, ref reason }
+                    if message_id == "eof-1" && reason == "stdout Codex fermé pendant le tour"
+            )),
+            "EOF pendant le tour n'a pas terminé le worker: {events:?}"
+        );
+
+        transport.stop();
+        assert_eq!(unsafe { libc::kill(adapter_pid, 0) }, -1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stop_pendant_un_tour_termine_le_groupe_enfant() {
+        let root = root("stop-group");
+        let trace = root.join("trace.jsonl");
+        let child_pid_path = root.join("child.pid");
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            fake_options(&trace),
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
+                (
+                    "BRIDGET_CODEX_CHILD_PID".to_string(),
+                    child_pid_path.to_string_lossy().into_owned(),
+                ),
+            ],
+            false,
+        )
+        .expect("session native");
+        transport.deliver(&message("stop-1")).expect("livraison");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && !child_pid_path.is_file() {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let child_pid = fs::read_to_string(&child_pid_path)
+            .expect("descendant Codex")
+            .trim()
+            .parse::<i32>()
+            .expect("pid descendant");
+
+        let started = Instant::now();
+        transport.stop();
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "stop attend encore l'échéance du tour"
+        );
+        let reaped_deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < reaped_deadline && unsafe { libc::kill(child_pid, 0) } == 0 {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            unsafe { libc::kill(child_pid, 0) },
+            -1,
+            "le groupe enfant Codex survit au shutdown"
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

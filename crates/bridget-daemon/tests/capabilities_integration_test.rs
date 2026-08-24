@@ -138,6 +138,27 @@ fn write_registry(root: &Path, marker: &Path, supports_requested_model: bool) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
 
+fn write_missing_command_registry(root: &Path) {
+    let registry = serde_json::json!({
+        "agents": {
+            "fixture": {
+                "command": "/definitely/missing/bridget-native-pilot",
+                "args": ["--model", "gpt-5.6-terra", "--effort", "high"],
+                "protocol": "acp",
+                "forbidden_env": [],
+                "pass_env": [],
+                "capabilities": {
+                    "execution_paths": ["acp"],
+                    "models": {"gpt-5.6-terra": {"efforts": ["high"]}}
+                }
+            }
+        }
+    });
+    let path = root.join(".config/bridget/agents.json");
+    std::fs::write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
 fn spawn_order(command_id: &str) -> WrapperToDaemon {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -196,6 +217,50 @@ fn modele_non_declare_est_refuse_avant_processus_et_ordre_durable() {
     assert!(
         marker.exists(),
         "la matrice corrigée doit permettre le lancement"
+    );
+    drop(peer);
+    drop(daemon);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn commande_native_absente_est_refusee_sans_residu_puis_reparable_au_meme_id() {
+    let root = root();
+    let marker = root.join("adapter-ran");
+    write_missing_command_registry(&root);
+    let daemon = DaemonProcess::start(&root);
+    let command_id = "native-command-missing";
+    let mut peer = Peer::connect(&socket_path(&root));
+    peer.register();
+    peer.send(&spawn_order(command_id));
+    assert!(matches!(
+        peer.receive(),
+        DaemonToWrapper::SpawnRejected {
+            reason: SpawnRefusal::CommandMissing { command, .. },
+            ..
+        } if command == "/definitely/missing/bridget-native-pilot"
+    ));
+    assert!(
+        !marker.exists(),
+        "CommandMissing doit refuser avant tout processus enfant"
+    );
+    drop(peer);
+    drop(daemon);
+
+    // Mutation discriminante : persister ce refus empêcherait cette seconde
+    // phase de lancer le même command_id après correction du registre.
+    write_registry(&root, &marker, true);
+    let daemon = DaemonProcess::start(&root);
+    let mut peer = Peer::connect(&socket_path(&root));
+    peer.register();
+    peer.send(&spawn_order(command_id));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !marker.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        marker.exists(),
+        "le même command_id doit rester lançable après correction du registre"
     );
     drop(peer);
     drop(daemon);

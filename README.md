@@ -201,11 +201,10 @@ Lancez `bridget mcp` depuis un équipier Bridget pour exposer `bridget_send`,
 structurés sont également fournis en texte MCP ; le retry réutilise `id` et
 `issued_at` retournés par le premier envoi.
 
-## Équipiers ACP
+## Équipiers gérés
 
-Un équipier ACP reçoit les livraisons directement via l’Agent Client Protocol
-(ACP), sans injection de texte dans son terminal. Lancez-le avec
-`--equipier` :
+Un équipier géré reçoit les livraisons directement par son pilote, sans
+injection de texte dans son terminal. Lancez-le avec `--equipier` :
 
 ```bash
 /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget codex --equipier
@@ -213,10 +212,12 @@ Un équipier ACP reçoit les livraisons directement via l’Agent Client Protoco
 ```
 
 Les types, commandes et politiques sont déclarés dans
-`~/.config/bridget/agents.json`. L’entrée Codex utilise
-`@zed-industries/codex-acp@0.16.0` avec le pin `-c model="gpt-5.5"`, requis
-par la version embarquée de l’adaptateur. Bridget refuse par défaut les clés
-API déclarées dans `forbidden_env`, pour préserver l’authentification par
+`~/.config/bridget/agents.json`. L’entrée Codex lance nativement
+`/opt/homebrew/bin/codex app-server` avec le modèle épinglé
+`gpt-5.6-terra`; l’entrée Claude lance
+`/Users/moi/.local/bin/claude --model claude-opus-5`. Ces chemins absolus
+restent disponibles au daemon lancé par launchd. Bridget refuse par défaut les
+clés API déclarées dans `forbidden_env`, pour préserver l’authentification par
 abonnement ; `BRIDGET_ALLOW_API_KEY=1` est un contournement explicite à
 employer seulement si la facturation API est voulue.
 
@@ -231,7 +232,7 @@ existants, lancés sans `--equipier`, conservent leur comportement `💬`.
 
 ## Équipiers persistants
 
-Le daemon peut devenir propriétaire du cycle de vie d’un équipier ACP. Le
+Le daemon peut devenir propriétaire du cycle de vie d’un équipier géré. Le
 terminal qui donne l’ordre peut alors se fermer sans arrêter l’équipier :
 
 ```bash
@@ -374,7 +375,7 @@ répondre — sauf si un prompt est déjà fourni.
 | `bridget discover` | alias de `who` |
 | `bridget status` | santé du daemon, chemins, nombre d'agents et de messages |
 | `bridget ledger` | vingt derniers messages enregistrés |
-| `bridget attach <équipier> [--today \| --date AAAA-MM-JJ \| --from-seq N]` | ouvre une vue interactive d’un équipier ACP : historique, suivi en direct et saisie de messages ordinaires |
+| `bridget attach <équipier> [--today \| --date AAAA-MM-JJ \| --from-seq N]` | ouvre une vue interactive d’un équipier tenant un journal : historique, suivi en direct et saisie de messages ordinaires |
 | `bridget version` | version du binaire |
 | `bridget help` | aide en ligne, résumé de toutes les commandes |
 

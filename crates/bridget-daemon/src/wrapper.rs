@@ -12,9 +12,9 @@ use bridget_transport::protocol::{PresenceMode, decode, encode};
 use bridget_transport::{
     AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ClaudeStreamJsonOptions,
     ClaudeStreamJsonTransport, CodexAppServerOptions, CodexAppServerTransport, DaemonToWrapper,
-    MAX_ATTACH_FRAGMENT_BYTES,
-    MAX_ATTACH_SERIALIZED_FRAME_BYTES, ManagedEvent, ManagedEventKind, ManagedSession,
-    ManagedSessionDescriptor, ManagedTerminal, TmuxTransport, Transport, WrapperToDaemon,
+    MAX_ATTACH_FRAGMENT_BYTES, MAX_ATTACH_SERIALIZED_FRAME_BYTES, ManagedEvent, ManagedEventKind,
+    ManagedSession, ManagedSessionDescriptor, ManagedTerminal, TmuxTransport, Transport,
+    WrapperToDaemon,
 };
 use log::{debug, error, info, warn};
 use std::collections::{BTreeMap, HashSet, VecDeque};
