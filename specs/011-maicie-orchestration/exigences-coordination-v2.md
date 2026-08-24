@@ -5,6 +5,56 @@ tenue par le référent humain-agent. Chaque règle exécutée à la main ici es
 candidate à devenir un comportement produit de Maicie. Hors périmètre de la
 v1 (spec 011) — intrants pour les itérations suivantes.
 
+## Tableau de bord — mis à jour le 2026-08-24, 12h45
+
+Vue d'avancement des blocs. Détail et jurisprudence dans chaque bloc plus
+bas ; ce tableau ne remplace pas la lecture, il dit où on en est.
+
+**Bloc G — ponts natifs**
+- [x] G1 vocabulaire interne (ADR 010, couche `ManagedSession`)
+- [x] G2 pont Codex app-server prouvé (couture réelle terra)
+- [x] G3 types du protocole (schéma généré localement, 579 définitions)
+- [x] G4 parité d'observabilité Codex (`who`/`attach` ; TRANSPORT véridique)
+- [x] G5 pont Claude flux natif (spawn réel, opus-5 épinglé, PATH vide prouvé)
+- [x] G6 parité d'observabilité Claude (modèle, LIMITE : premier fait réel)
+- [x] G7 modèle véridique (définition figée affichée en permanence)
+- [ ] G8 quota anticipé — 🔄 Claude FAIT (L3) ; Codex en cours (coderBridget)
+- [ ] G9 coût par mission — 🔄 en cours (cursor4, = L4)
+- [ ] G10 retirer le pont Zed — 🔄 défaut codex basculé natif ; retrait du
+      code Zed restant à faire une fois la flotte stabilisée
+- [ ] G11 nommer le protocole — 🔄 TRANSPORT affiche codex_app_server /
+      claude_stream_json depuis 0a3872b ; vérification liée en cours (coder3)
+
+**Bloc J — outillage d'agents (rattrapage T3 Code)**
+- [x] J1 capacités déclarées par pilote et modèle (L1 : refus typé avant
+      processus, matrice + digest)
+- [x] J2 ramasseur de sessions abandonnées (reaper Phase 0 + garde G9)
+- [ ] J3 répertoire des sessions — ⬜ non commencé
+- [ ] J4 journaux par pilote — ⬜ non commencé (journal d'attache commun)
+
+**Bloc K — déployer ailleurs**
+- [x] K1 installateur bi-plateforme (macOS launchd + Linux systemd, rustup
+      sur place, idempotent, --verify-guichet ; prouvé Mac + cartae.app) —
+      🔄 rejeu au niveau du jour en cours sur cartae.app (coder2)
+- [x] K2 ronde portable (mergée, unité active, sidecars prouvés intacts)
+- [ ] K3 séparer projet/outil — ⬜ non commencé
+- [ ] K4 démarrage à froid documenté — ⬜ partiel (`bridget reprise` existe,
+      le guide écrit manque)
+
+**Bloc L — gains du natif et sort des tmux**
+- [x] L1 refuser au lieu de tuer (CommandMissing/UnsupportedCapability
+      avant processus, même command_id relançable)
+- [ ] L2 dégradation silencieuse détectée — ⬜ le flux la porte, aucun
+      détecteur ne compare demandé/servi
+- [x] L3 quota anticipé Claude (fenêtre/statut/resetsAt dans LIMITE, aucune
+      décision auto) — format compact 5h/7d en cours (coder4)
+- [ ] L4 coût par mission — 🔄 en cours (cursor4, ledger par fenêtre de
+      délégation, facturable séparé du cache_read)
+- [x] L5 voir qui travaille (état d'occupation des gérés dans who)
+- [x] BASCULE tmux→gérés FAITE le 24/08 12h25 (voir point d'étape bloc L) ;
+      extinction : cxbridget et prospective terminés, coderBridget en
+      dernière mission, référent reste tmux par nature
+
 ## Politiques de délégation observées (candidates à l'automatisation)
 
 1. **Tout événement attendu a un messager.** Un commit, une fin de banc, un
