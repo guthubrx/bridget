@@ -11,6 +11,7 @@ use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDae
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Fonction générique pour lancer un agent wrapper (M-001)
@@ -133,6 +134,7 @@ pub fn run() {
         "discover" => cmd_discover(),
         "status" => cmd_status(),
         "ledger" => cmd_ledger(),
+        "reprise" => cmd_reprise(&args[2..]),
         "version" | "--version" | "-v" => {
             println!("bridget {}", env!("CARGO_PKG_VERSION"));
         }
@@ -253,6 +255,7 @@ fn print_usage() {
            agents [--json]        Idem, format machine [--domain <D>]\n  \
            status                 Santé du daemon\n  \
            ledger                 Historique des messages\n  \
+           reprise [--write P]    Carte de reprise du référent\n  \
            version                Version\n  \
            help                   Cette aide\n\n\
          Options de send :\n  \
@@ -2259,6 +2262,88 @@ fn cell(value: Option<&str>) -> &str {
 
 fn cmd_discover() {
     cmd_who(&[]);
+}
+
+fn cmd_reprise(args: &[String]) {
+    let mut write_path: Option<PathBuf> = None;
+    let mut pin_path: Option<PathBuf> = None;
+    let mut repo_path: Option<PathBuf> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--write" => {
+                i += 1;
+                let Some(path) = args.get(i) else {
+                    eprintln!(
+                        "usage: bridget reprise [--write <chemin>] [--pin <chemin>] [--repo <chemin>]"
+                    );
+                    std::process::exit(2);
+                };
+                write_path = Some(PathBuf::from(path));
+            }
+            "--pin" => {
+                i += 1;
+                let Some(path) = args.get(i) else {
+                    eprintln!(
+                        "usage: bridget reprise [--write <chemin>] [--pin <chemin>] [--repo <chemin>]"
+                    );
+                    std::process::exit(2);
+                };
+                pin_path = Some(PathBuf::from(path));
+            }
+            "--repo" => {
+                i += 1;
+                let Some(path) = args.get(i) else {
+                    eprintln!(
+                        "usage: bridget reprise [--write <chemin>] [--pin <chemin>] [--repo <chemin>]"
+                    );
+                    std::process::exit(2);
+                };
+                repo_path = Some(PathBuf::from(path));
+            }
+            other => {
+                eprintln!("option reprise inconnue: {other}");
+                eprintln!(
+                    "usage: bridget reprise [--write <chemin>] [--pin <chemin>] [--repo <chemin>]"
+                );
+                std::process::exit(2);
+            }
+        }
+        i += 1;
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let repo = repo_path
+        .or_else(|| crate::reprise::discover_repo(&cwd))
+        .unwrap_or_else(|| cwd.clone());
+    let pin = pin_path.unwrap_or_else(|| repo.join(crate::reprise::DEFAULT_PIN_REL));
+    let pin_ref = pin.exists().then_some(pin.as_path());
+
+    let config = DaemonConfig::default();
+    let snapshot = crate::reprise::collect_snapshot(
+        &config,
+        &repo,
+        pin_ref,
+        None,
+        std::time::SystemTime::now(),
+    );
+    let card = crate::reprise::render_card(&snapshot);
+
+    match write_path {
+        Some(path) => {
+            let path = if path.as_os_str().is_empty() {
+                repo.join(crate::reprise::DEFAULT_GENERATED_REL)
+            } else {
+                path
+            };
+            if let Err(error) = crate::reprise::write_card(&path, &card) {
+                eprintln!("bridget reprise: {error}");
+                std::process::exit(1);
+            }
+            println!("carte écrite: {}", path.display());
+        }
+        None => print!("{card}"),
+    }
 }
 
 fn cmd_status() {

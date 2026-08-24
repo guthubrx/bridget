@@ -1,0 +1,17 @@
+# Pin manuel de la carte de reprise du référent.
+# Mettre à jour quand un couloir, un geste ou un piège de session change.
+# Si ce fichier n'est pas touché depuis plus d'une heure, `bridget reprise`
+# affiche le geste comme périmé.
+
+couloirs: []
+
+prochain:
+  geste: "mettre à jour ce pin au prochain basculement de chantier"
+  # proprietaire: referent
+
+pieges:
+  actifs_session:
+    - "Ne pas conclure que l'équipe est morte sans `bridget status` (chemins vivants)"
+
+# Chemin absolu optionnel ; sinon découverte de ~/.config/maicie/config.json
+# maicie_config: /Users/moi/.config/maicie/config.json

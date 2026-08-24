@@ -5605,7 +5605,7 @@ fn daemon_build_id(socket_path: &std::path::Path) -> Option<String> {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DaemonStatus {
     pub running: bool,
     pub agents: Vec<bridget_transport::protocol::AgentInfo>,
