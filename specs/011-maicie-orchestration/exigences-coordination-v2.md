@@ -914,3 +914,34 @@ les blocs G : ce sont des compléments, pas des prérequis.
   À INSTRUIRE : le timeout est-il configurable par mission ? Un mandat qui
   annonce sa durée attendue pourrait obtenir une fenêtre adaptée, au lieu de
   mourir silencieusement contre une valeur fixe.
+- **Deux branches peuvent fusionner SANS conflit et produire un système
+  cassé — démontré le 2026-08-24 sur le gate fondateur.** Le gate G1504
+  était rouge sur `main` depuis le merge de la 015. J'ai cru à une
+  régression et lancé une bissection ; l'agent a démontré que les DEUX
+  bornes étaient rouges et que la bissection était donc impossible — au lieu
+  de produire un coupable plausible. Bonne conduite : dire qu'on ne peut pas
+  conclure vaut mieux qu'une réponse fausse.
+  LA VRAIE CAUSE : côté `main`, un commit antérieur avait renommé un
+  libellé du CLI ; côté 015, l'oracle du gate cherche l'ANCIEN libellé par
+  `grep`. Fichiers différents, donc **aucun conflit textuel** : Git a
+  fusionné proprement deux moitiés incompatibles. Le contrat n'a pas changé,
+  le code est correct des deux côtés — c'est leur RENCONTRE qui est fausse.
+  MON ERREUR, à retenir : ma borne « connue bonne » était une illusion
+  d'optique. Le gate ne passait que parce que je pointais le binaire du
+  worktree 015, qui imprimait encore l'ancien libellé. Reconstruit depuis ses
+  sources, ce même commit est rouge. **Un gate doit toujours être joué avec
+  le binaire de la branche testée**, jamais avec celui d'un worktree voisin.
+  DEUX LEÇONS DE FOND. (1) Un oracle qui reconnaît un LIBELLÉ HUMAIN par
+  `grep` est fragile par construction : il casse à chaque reformulation de
+  message, sans qu'aucun comportement ne change. Préférer un signal stable —
+  code de sortie distinct, sortie structurée, état en base. (2) Le vrai
+  risque du travail en couloirs parallèles n'est pas le conflit d'édition,
+  que Git signale, mais le **désaccord sémantique**, qu'il ne voit pas. À
+  instruire : rejouer les gates des sessions voisines AVANT de merger, pas
+  seulement les siens.
+  PIÈGE ÉVITÉ DE JUSTESSE : le remède naïf aurait été de faire renvoyer
+  `Accepted` au premier envoi pour que le test passe. Cela aurait cassé le
+  contrat d'idempotence — accusé après transmission, réponse au retry — pour
+  satisfaire un oracle faux. L'agent l'a signalé de lui-même comme un piège
+  pour l'auteur du correctif. C'est exactement le genre de correction qui
+  fait disparaître un rouge et apparaître un bug.
