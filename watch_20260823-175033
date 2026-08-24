@@ -1,0 +1,10 @@
+Agents connectés :                                                                                                           
+  NOM             TYPE    HÔTE           OS     TRANSPORT  DOMAINE   MODÈLE         EFFORT  ÉTAT                             
+  bridget         claude  monordinateur  macOS  unix       bridget   —              —       connected                        
+  coderBridget    codex   monordinateur  macOS  unix       bridget   —              —       connected                        
+  cxbridget       codex   monordinateur  macOS  unix       bridget   —              —       connected                        
+  fable           claude  monordinateur  macOS  unix       30.infra  —              —       connected                        
+  fable-reviewer  claude  monordinateur  macOS  unix       —         —              —       connected                        
+  poucave         codex   monordinateur  macOS  unix       30.infra  —              —       connected                        
+  prospective     codex   monordinateur  macOS  unix       bridget   gpt-5.6-terra  high    connected                        
+  sol             codex   monordinateur  macOS  unix       moi       —              —       connected                        
