@@ -8916,7 +8916,7 @@ mod presence_tests {
         state.conn_instances.remove("conn-1");
         state.presences.clear();
         state.registry = AgentRegistry::from_json(
-            r#"{"agents":{"codex-terra":{"command":"npx","args":["codex-acp","-c","model=\"gpt-5.6-terra\"","-c","model_reasoning_effort=\"high\""],"protocol":"acp"}}}"#,
+            r#"{"agents":{"codex-terra":{"command":"fixture-acp","args":["-c","model=\"gpt-5.6-terra\"","-c","model_reasoning_effort=\"high\""],"protocol":"acp","capabilities":{"execution_paths":["acp"],"models":{"gpt-5.6-terra":{"efforts":["high"]}}}}}}"#,
             "/tmp/agents.json",
         )
         .unwrap();

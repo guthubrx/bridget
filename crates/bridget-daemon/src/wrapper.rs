@@ -2604,6 +2604,15 @@ fn launch_acp_with_status(
             format!("le type '{agent_type}' n'utilise pas une session gérée supportée").into(),
         );
     }
+    // Même garde que le spawn géré (lifecycle) : --equipier ne doit pas
+    // contourner le retrait G10 du pont Zed.
+    if let Err(refusal) = crate::registry::reject_retired_zed_bridge(definition) {
+        let detail = match refusal {
+            bridget_transport::SpawnRefusal::EnvUnfit { detail } => detail,
+            other => format!("{other:?}"),
+        };
+        return Err(detail.into());
+    }
     if let Some(variable) = crate::registry::forbidden_environment_variable(
         definition,
         crate::registry::allow_api_key_value(
@@ -4425,6 +4434,30 @@ mod reconnect_tests {
         ]);
         assert!(equipier);
         assert_eq!(remaining, vec!["resume", "session"]);
+    }
+
+    #[test]
+    fn equipier_refuse_le_pont_zed_avant_tout_processus() {
+        // C2 revue G10 : launch_acp_with_status (--equipier) partage la garde.
+        let registry = crate::registry::AgentRegistry::from_json(
+            r#"{"agents":{"legacy":{"command":"/opt/homebrew/bin/codex-acp","protocol":"acp"}}}"#,
+            "/tmp/agents.json",
+        )
+        .unwrap();
+        let error = launch_acp_with(
+            "legacy",
+            &[],
+            Some("legacy-zed"),
+            &registry,
+            std::path::Path::new("/tmp/bridget-g10-absent.sock"),
+            std::path::Path::new("/tmp"),
+        )
+        .expect_err("le pont Zed doit être refusé avant connexion daemon");
+        let message = error.to_string();
+        assert!(
+            message.contains("pont Zed") && message.contains("@zed-industries/codex-acp"),
+            "refus inattendu: {message}"
+        );
     }
 
     #[test]

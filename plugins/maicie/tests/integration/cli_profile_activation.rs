@@ -8,6 +8,10 @@ use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use uuid::Uuid;
 
+/// Miroir de `bridget_daemon::registry::NATIVE_CLAUDE_COMMAND` (maicie n'y
+/// dépend pas) — une seule copie dans ce fichier pour assert + fixture écrite.
+const NATIVE_CLAUDE_COMMAND: &str = "/Users/moi/.local/bin/claude";
+
 #[test]
 fn profile_propose_puis_approve_expose_le_consentement_local_et_l_outbox() {
     let fixture = Fixture::new();
@@ -41,7 +45,7 @@ fn profile_propose_puis_approve_expose_le_consentement_local_et_l_outbox() {
     );
     let proposed: Value = serde_json::from_slice(&proposed.stdout).unwrap();
     assert_eq!(proposed["kind"], "proposed");
-    assert_eq!(proposed["screen"]["command"], "claude-code-acp");
+    assert_eq!(proposed["screen"]["command"], NATIVE_CLAUDE_COMMAND);
     assert_eq!(
         proposed["screen"]["args"],
         json!(["--model", "claude-fable-5"])
@@ -135,15 +139,15 @@ impl Fixture {
         fs::write(
             &definition,
             serde_json::to_vec(&json!({
-                "command": "claude-code-acp",
+                "command": NATIVE_CLAUDE_COMMAND,
                 "args": ["--model", "claude-fable-5"],
-                "protocol": "acp",
+                "protocol": "claude_stream_json",
                 "forbidden_env": ["ANTHROPIC_API_KEY"],
                 "pass_env": ["HOME"],
                 "permissions": "allow",
                 "queue_capacity": 32,
                 "notify_timeout_secs": 60,
-                "mcp": {"interactive": "none", "acp_session": true},
+                "mcp": {"interactive": "none", "acp_session": false},
                 "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             }))
             .unwrap(),

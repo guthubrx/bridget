@@ -12,15 +12,15 @@
     "spawn_order_ref": "agents/claude-review"
   },
   "resolved_definition": {
-    "command": "claude-code-acp",
+    "command": "/Users/moi/.local/bin/claude",
     "args": ["--model", "claude-fable-5"],
-    "protocol": "acp",
+    "protocol": "claude_stream_json",
     "forbidden_env": ["ANTHROPIC_API_KEY"],
     "pass_env": ["HOME"],
     "permissions": "allow",
     "queue_capacity": 32,
     "notify_timeout_secs": 60,
-    "mcp": {"interactive": "none", "acp_session": true},
+    "mcp": {"interactive": "none", "acp_session": false},
     "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   }
 }
