@@ -129,6 +129,35 @@ envoi implicite. Le digest reçu dans `SpawnAccepted` est comparé au hash
 Le démarrage, la configuration et les limites détaillées sont documentés dans
 `/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/plugins/maicie/README.md`.
 
+### Ronde portable (lecture seule)
+
+La ronde constate mécaniquement l'annuaire Bridget, les demandes ouvertes et
+échues, les objectifs Maicie à évaluer et le registre. Elle n'affecte personne,
+n'envoie aucun message et n'écrit aucune donnée d'autorité : le référent reste
+seul décideur. Elle produit une ligne courte suivie d'un document JSON ; si
+Maicie est indisponible, les observations Bridget restent présentes et la
+partie Maicie est explicitement `unavailable`.
+
+```bash
+python3 /Users/moi/Nextcloud/10.Scripts/bridget/scripts/bridget-ronde.py \
+  --config /Users/moi/.config/maicie/config.json
+```
+
+Pour archiver les deux formats après chaque ronde et l'exécuter périodiquement
+dans le compte utilisateur, la pose est volontairement explicite. Elle crée une
+unité `launchd` sur macOS ou un service/timer `systemd --user` sur Linux ; aucun
+service n'est nécessaire pour lancer la commande à la main.
+
+```bash
+/Users/moi/Nextcloud/10.Scripts/bridget/scripts/install-bridget-ronde.sh \
+  --config /Users/moi/.config/maicie/config.json \
+  --report-dir /Users/moi/.cache/bridget/rondes
+```
+
+Les archives portent leur horodatage UTC et sont écrites en `.txt` et `.json`
+avec des permissions `0600`. Pour seulement poser l'unité sans l'activer,
+ajoutez `--skip-activate`.
+
 ### Guichet Maicie
 
 La session 015 ajoute un contrat de guichet pour rendre la cible de service

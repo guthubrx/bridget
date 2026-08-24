@@ -1,9 +1,10 @@
-.PHONY: build release test daemon install install-k1 uninstall clean
+.PHONY: build release test daemon install install-k1 install-ronde test-ronde uninstall clean
 
 BINARY = bridget
 INSTALL_DIR = $(HOME)/.local/bin
 LAUNCHD_PLIST = $(HOME)/Library/LaunchAgents/com.bridget.daemon.plist
 RELEASE_BIN = target/release/$(BINARY)
+MAICIE_CONFIG ?= $(HOME)/.config/maicie/config.json
 
 build:
 	cargo build
@@ -78,3 +79,13 @@ install-k1:
 		$(if $(SKIP_VERIFY),--skip-verify,) \
 		$(if $(VERIFY_DAEMON_ONLY),--verify-daemon-only,) \
 		$(if $(VERIFY_GUICHET),--verify-guichet,)
+
+install-ronde:
+	@scripts/install-bridget-ronde.sh --config $(MAICIE_CONFIG) \
+		$(if $(RONDE_REPORT_DIR),--report-dir $(RONDE_REPORT_DIR),) \
+		$(if $(RONDE_INTERVAL),--interval-seconds $(RONDE_INTERVAL),) \
+		$(if $(FORCE),--force,) \
+		$(if $(SKIP_ACTIVATE),--skip-activate,)
+
+test-ronde:
+	@scripts/test-bridget-ronde.sh
