@@ -268,6 +268,16 @@ pub fn resume_routine(
     Ok(routine)
 }
 
+/// Options d'évaluation. La production passe toujours [`EvaluateRoutinesOpts::default`]
+/// (jamais d'abandon après `delegate`). Les oracles de fenêtre crash injectent
+/// `abort_before_occurrence_insert` — pas de variable d'environnement.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EvaluateRoutinesOpts {
+    /// Après un `delegate` réussi : abandonner avant `insert_occurrence`
+    /// (simule un crash process dans la fenêtre delegate→occurrence).
+    pub abort_before_occurrence_insert: bool,
+}
+
 /// Évalue les routines actives à `now`. Matérialise au plus une occurrence
 /// ouverte par routine ; les buckets échus sans occurrence deviennent `sautee`.
 /// Avant tout : clôture les occurrences dont l'objectif lié est déjà clos.
@@ -277,6 +287,26 @@ pub fn evaluate_routines(
     issuer_scope: &str,
     candidates: &[DelegationCandidate],
     now: i64,
+) -> Result<Vec<RoutineOccurrence>, RoutineError> {
+    evaluate_routines_with(
+        store,
+        durations,
+        issuer_scope,
+        candidates,
+        now,
+        EvaluateRoutinesOpts::default(),
+    )
+}
+
+/// Comme [`evaluate_routines`], avec injection explicite du point de coupure
+/// (oracles fenêtre crash). Aucun interrupteur externe.
+pub fn evaluate_routines_with(
+    store: &mut MaicieStore,
+    durations: &DurationClasses,
+    issuer_scope: &str,
+    candidates: &[DelegationCandidate],
+    now: i64,
+    opts: EvaluateRoutinesOpts,
 ) -> Result<Vec<RoutineOccurrence>, RoutineError> {
     // Rattrapage de clôture si l'objectif a été clos hors du hook transactionnel
     // (ou avant le correctif) — idempotent.
@@ -422,10 +452,9 @@ pub fn evaluate_routines(
                 delegation_id: Some(created.delegation_id),
                 created_at: now,
             };
-            // Point de coupure testable (oracle relec1 v3 / mutant).
-            // Actif UNIQUEMENT si RELEC1_CRASH est posé — jamais en prod normale.
-            // Simule un crash entre delegate() et insert_occurrence().
-            if std::env::var_os("RELEC1_CRASH").is_some() {
+            // Injection explicite (tests) : fenêtre delegate → insert_occurrence.
+            // La production appelle evaluate_routines → opts = default → jamais vrai.
+            if opts.abort_before_occurrence_insert {
                 break;
             }
             store.insert_occurrence(&occ).map_err(routine_store_error)?;

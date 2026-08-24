@@ -10,19 +10,15 @@ use maicie::app::DelegationCandidate;
 use maicie::config::DurationClasses;
 use maicie::domain::SuiteObjective;
 use maicie::routines::{
-    EtatOccurrence, EtatRoutine, MAX_CATCHUP_BUCKETS, ProposeRoutineRequest, approve_routine,
-    bucket_for, evaluate_routines, pause_routine, propose_routine, resume_routine,
-    sealed_template_hash, template_hash,
+    EtatOccurrence, EtatRoutine, EvaluateRoutinesOpts, MAX_CATCHUP_BUCKETS, ProposeRoutineRequest,
+    approve_routine, bucket_for, evaluate_routines, evaluate_routines_with, pause_routine,
+    propose_routine, resume_routine, sealed_template_hash, template_hash,
 };
 use maicie::store::MaicieStore;
 use rusqlite::params;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use uuid::Uuid;
-
-/// Sérialise les tirs qui posent RELEC1_CRASH (variable process-globale).
-static RELEC1_CRASH_LOCK: Mutex<()> = Mutex::new(());
 
 fn root(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("maicie-routines-{label}-{}", Uuid::new_v4()))
@@ -671,8 +667,6 @@ struct Relec1Tir {
 /// Banc relec1 v2 — série appariée (crash SQL reconstitue l'état / contrôle sain).
 /// Après adoption : 0 doublon, contrôles sains 100 %.
 fn relec1_tir(avec_crash: bool, label: &str) -> Relec1Tir {
-    // Attend que personne ne pose RELEC1_CRASH (tirs v3 concurrents).
-    let _guard = RELEC1_CRASH_LOCK.lock().expect("lock RELEC1_CRASH");
     let root = root(label);
     let database = root.join("maicie.sqlite3");
     let mut store = MaicieStore::open(&database).unwrap();
@@ -725,7 +719,6 @@ fn relec1_tir(avec_crash: bool, label: &str) -> Relec1Tir {
     )
     .expect("reprise");
     drop(store);
-    drop(_guard);
 
     let connexion = rusqlite::Connection::open(&database).unwrap();
     let delegations: i64 = connexion
@@ -774,7 +767,7 @@ fn relec1_serie_mandat_orphelin_apres_adoption() {
     assert_eq!(controles_sains, N, "contrôles positifs sains");
 }
 
-/// Banc relec1 v3 — coupure produite par le chemin de production (RELEC1_CRASH).
+/// Banc relec1 v3 — coupure injectée (opts), sans variable d'environnement.
 #[test]
 fn relec1_serie_crash_reel_apres_adoption() {
     const N: usize = 5;
@@ -789,19 +782,17 @@ fn relec1_serie_crash_reel_apres_adoption() {
         seed_active(&mut store, t0, period);
         let bucket_n = bucket_for(t0, period);
 
-        // SAFETY: variable d'environnement de test isolée sous mutex, retirée juste après.
-        let _guard = RELEC1_CRASH_LOCK.lock().expect("lock RELEC1_CRASH");
-        unsafe { std::env::set_var("RELEC1_CRASH", "1") };
-        let coupe = evaluate_routines(
+        let coupe = evaluate_routines_with(
             &mut store,
             &durations(),
             "maicie",
             &[candidate("prospective")],
             t0,
+            EvaluateRoutinesOpts {
+                abort_before_occurrence_insert: true,
+            },
         )
         .expect("releve coupee");
-        unsafe { std::env::remove_var("RELEC1_CRASH") };
-        drop(_guard);
         drop(store);
 
         assert!(
