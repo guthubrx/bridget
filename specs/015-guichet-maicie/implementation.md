@@ -150,3 +150,116 @@ Commande exécutée :
 ```
 
 Résultat : **PASS**, aucun diff. Durée réelle : **0,66 s**.
+
+## Non-régression finale avant merge du 2026-08-24
+
+**Tête validée** : `7c9a1522a5920eededaccdad0593032ca27a6616`
+**Verdict** : **STOP** — workspace, coutures réelles et Clippy sont verts,
+mais le contrôle Rustfmt est rouge sur le test de nettoyage G1504 ajouté après
+la passe T1513 précédente. Aucun fichier Rust n'a été corrigé ou reformaté.
+
+### Préparation du binaire réel
+
+Commande exécutée :
+
+```bash
+PATH=/Users/moi/.cargo/bin:$PATH /usr/bin/time -p cargo build -p bridget-daemon --bin bridget
+```
+
+Résultat : **PASS**. Le binaire exact du worktree est
+`/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/debug/bridget`.
+Durée réelle : **6,26 s**.
+
+### 1. Workspace complet
+
+Commande exécutée :
+
+```bash
+PATH=/Users/moi/.cargo/bin:$PATH /usr/bin/time -p cargo test --workspace
+```
+
+Résultat : **PASS**, zéro échec. Durée réelle : **181,30 s**.
+
+### 2. Coutures `#[ignore]` explicites
+
+#### Client public Maicie ↔ daemon réel
+
+```bash
+BRIDGET_MVP_GATE_BIN=/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/debug/bridget PATH=/Users/moi/.cargo/bin:$PATH /usr/bin/time -p cargo test -p maicie --test guichet_client_contract 'guichet_client::client_public_et_daemon_reel_partagent_la_negociation_canonique' -- --ignored --exact --nocapture
+```
+
+Résultat : **PASS**, 1 passé, 0 échec. Durée réelle : **0,24 s**.
+
+#### Gate réel G1504 — parcours nominal
+
+```bash
+BRIDGET_MVP_GATE_BIN=/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/debug/bridget PATH=/Users/moi/.cargo/bin:$PATH /usr/bin/time -p cargo test -p maicie --test guichet_gate_integration 'guichet_gate::parcours_reel_g1504_releve_une_lettre_et_ne_la_duplique_pas' -- --ignored --exact --nocapture
+```
+
+Résultat : **PASS**, 1 passé, 0 échec ; observable interne
+`dépôt absent→relève→greffe→answered=860 ms`. Durée réelle : **1,39 s**.
+
+#### Gate réel G1504 — échec injecté après le spawn
+
+```bash
+BRIDGET_MVP_GATE_BIN=/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/debug/bridget PATH=/Users/moi/.cargo/bin:$PATH /usr/bin/time -p cargo test -p maicie --test guichet_gate_integration 'guichet_gate::g1504_nettoie_le_groupe_apres_un_echec_injecte' -- --ignored --exact --nocapture
+```
+
+Résultat : **PASS**, 1 passé, 0 échec. La panique
+`échec G1504 injecté après le spawn : la garde doit nettoyer` est provoquée et
+capturée par l'oracle ; le test se termine `ok`. Durée réelle : **1,44 s**.
+
+#### Gate MVP Maicie
+
+```bash
+BRIDGET_MVP_GATE_BIN=/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/debug/bridget PATH=/Users/moi/.cargo/bin:$PATH /usr/bin/time -p cargo test -p maicie --test mvp_gate 'delegation_reelle_est_accusee_et_visible_sans_fausse_correlation_de_reponse' -- --ignored --exact --nocapture
+```
+
+Résultat : **PASS**, 1 passé, 0 échec ; observables internes
+`livraison+ACK+status=1619 ms` et `clôture=1672 ms`. Durée réelle : **2,04 s**.
+
+### 3. Clippy workspace
+
+```bash
+PATH=/Users/moi/.cargo/bin:$PATH /usr/bin/time -p cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Résultat : **PASS**, zéro warning. Durée réelle : **0,39 s**.
+
+### 4. Formatage
+
+```bash
+PATH=/Users/moi/.cargo/bin:$PATH /usr/bin/time -p cargo fmt --all --check
+```
+
+Résultat : **ÉCHEC**, durée réelle : **0,69 s**. Sortie brute :
+
+```text
+Diff in /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/plugins/maicie/tests/integration/guichet_gate.rs:717:
+         .unwrap();
+     let before = managed_g1504_process_count();
+     let failed = catch_unwind(AssertUnwindSafe(|| run_g1504(true)));
+-    assert!(failed.is_err(), "la branche d'échec doit réellement paniquer");
++    assert!(
++        failed.is_err(),
++        "la branche d'échec doit réellement paniquer"
++    );
+     assert_managed_g1504_process_count(before);
+ }
+
+real 0.69
+user 0.60
+sys 0.04
+```
+
+### 5. Absence de nouvelle fuite G1504
+
+Le comptage reprend exactement le motif du harnais :
+
+```bash
+ps -axo pid=,ppid=,pgid=,command= | awk -v a=managed-wrapper -v b=g1504_fixture -v c=g1504-agent 'index($0,a" "b" "c){print; n++} END{print "G1504_COUNT=" n+0}'
+```
+
+Résultat : **15 avant, 15 après, delta 0**. Les quinze processus antérieurs à
+cette passe n'ont pas été touchés ; les parcours nominal et injecté n'ont créé
+aucun orphelin supplémentaire.
