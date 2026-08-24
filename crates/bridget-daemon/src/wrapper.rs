@@ -52,6 +52,166 @@ const ATTACH_RELAY_COMMAND_CAPACITY: usize = 8;
 const ATTACH_RELAY_READ_BYTES: usize = 128 * 1024;
 const ATTACH_RELAY_IDLE_WAIT: Duration = Duration::from_millis(10);
 
+/// Contexte reconstruit à chaque naissance d'un équipier géré. Il n'est jamais
+/// persisté : le greffe Maicie et Git restent les seules autorités.
+fn managed_resume_context(
+    home: &Path,
+    worktree: &Path,
+    agent: &str,
+    agent_type: &str,
+    protocol: &str,
+    definition_digest: &str,
+) -> String {
+    let mut lines = vec![
+        "Carte de reprise Bridget (faits durables, aucune mémoire reconstruite).".to_string(),
+        format!(
+            "Identité figée : nom={agent}; type={agent_type}; protocole={protocol}; definition_digest={definition_digest}."
+        ),
+    ];
+    match managed_resume_mission(home, agent) {
+        Ok(Some(mission)) => lines.extend([
+            format!(
+                "Mission Maicie active : objectif_id={}; delegation_id={}; message_id={}",
+                mission.objective_id, mission.delegation_id, mission.message_id
+            ),
+            format!(
+                "État attesté : objectif={}; délégation={}; remise_locale={}",
+                mission.objective_state, mission.delegation_state, mission.local_delivery
+            ),
+            format!("Instruction : {}", mission.instruction),
+        ]),
+        Ok(None) => lines.push(format!(
+            "Mission Maicie : aucune mission active attestée pour {agent}."
+        )),
+        Err(error) => lines.push(format!("Mission Maicie : indisponible ({error}).")),
+    }
+    match managed_resume_worktree(worktree) {
+        Ok(worktree) => {
+            lines.push(format!(
+                "Worktree : path={}; branche={}; tête={}",
+                worktree.path, worktree.branch, worktree.head
+            ));
+            if worktree.modified.is_empty() {
+                lines.push("Fichiers non commités : aucun attesté.".to_string());
+            } else {
+                lines.push(format!(
+                    "Fichiers non commités : {}",
+                    worktree.modified.join(", ")
+                ));
+            }
+        }
+        Err(error) => lines.push(format!("Worktree : indisponible ({error}).")),
+    }
+    lines.push("Consigne : lis ton diff, committe ce qui est prêt, puis reprends la mission ou signale le blocage.".to_string());
+    lines.join("\n")
+}
+
+struct ResumeMission {
+    objective_id: String,
+    delegation_id: String,
+    message_id: String,
+    objective_state: String,
+    delegation_state: String,
+    local_delivery: String,
+    instruction: String,
+}
+
+fn managed_resume_mission(home: &Path, agent: &str) -> Result<Option<ResumeMission>, String> {
+    use maicie::domain::{EtatDelegation, EtatObjectif};
+    let config = home.join(".config/maicie/config.json");
+    if !config.is_file() {
+        return Err(format!(
+            "configuration Maicie absente: {}",
+            config.display()
+        ));
+    }
+    let projection = maicie::ui_projection::read_ui_mission_projection_v1(&config)
+        .map_err(|error| error.to_string())?;
+    let candidate = projection
+        .objectives
+        .iter()
+        .filter(|item| item.objective.etat != EtatObjectif::Clos)
+        .flat_map(|item| {
+            item.delegations.iter().filter_map(move |delegation| {
+                (delegation.participant == agent
+                    && !matches!(
+                        delegation.etat,
+                        EtatDelegation::Terminee | EtatDelegation::Annulee
+                    ))
+                .then_some((item, delegation))
+            })
+        })
+        .max_by_key(|(item, delegation)| {
+            (
+                item.objective.mis_a_jour_at,
+                item.objective.cree_at,
+                delegation.id,
+            )
+        });
+    let Some((item, delegation)) = candidate else {
+        return Ok(None);
+    };
+    let delivery = item
+        .local_deliveries
+        .iter()
+        .find(|delivery| delivery.delegation_id == delegation.id);
+    Ok(Some(ResumeMission {
+        objective_id: item.objective.id.to_string(),
+        delegation_id: delegation.id.to_string(),
+        message_id: delivery
+            .map(|delivery| delivery.message_id.to_string())
+            .unwrap_or_else(|| "inconnu (aucune remise locale corrélée)".to_string()),
+        objective_state: resume_fact_label(&item.objective.etat),
+        delegation_state: resume_fact_label(&delegation.etat),
+        local_delivery: delivery
+            .map(|delivery| resume_fact_label(&delivery.state))
+            .unwrap_or_else(|| "inconnue".to_string()),
+        instruction: delegation.instruction.clone(),
+    }))
+}
+
+fn resume_fact_label<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value)
+        .unwrap_or_else(|_| "inconnu".to_string())
+        .trim_matches('"')
+        .to_string()
+}
+
+struct ResumeWorktree {
+    path: String,
+    branch: String,
+    head: String,
+    modified: Vec<String>,
+}
+
+fn managed_resume_worktree(worktree: &Path) -> Result<ResumeWorktree, String> {
+    let git = |args: &[&str]| -> Result<String, String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(worktree)
+            .args(args)
+            .output()
+            .map_err(|error| error.to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    };
+    let branch =
+        git(&["symbolic-ref", "--short", "HEAD"]).unwrap_or_else(|_| "detached".to_string());
+    let head = git(&["rev-parse", "--short", "HEAD"])?;
+    let modified = git(&["status", "--porcelain=v1", "--untracked-files=all"])?
+        .lines()
+        .map(str::to_string)
+        .collect();
+    Ok(ResumeWorktree {
+        path: worktree.display().to_string(),
+        branch,
+        head,
+        modified,
+    })
+}
+
 fn interactive_bridget_prompt(name: &str, mcp_enabled: bool) -> String {
     if mcp_enabled {
         return format!(
@@ -2278,6 +2438,7 @@ fn launch_acp(
         &socket_path(),
         &home,
         None,
+        None,
     )
 }
 
@@ -2306,6 +2467,7 @@ pub fn launch_managed_acp(
             &socket_path(),
             &home,
             Some(&mut reporter),
+            Some(&resolved_definition.digest),
         )
     })();
     if let Err(error) = &result {
@@ -2346,6 +2508,7 @@ pub fn launch_acp_with(
         socket,
         home,
         None,
+        None,
     )
 }
 
@@ -2358,6 +2521,7 @@ fn launch_acp_with_status(
     socket: &std::path::Path,
     home: &std::path::Path,
     mut managed_reporter: Option<&mut crate::managed_process::ManagedStatusReporter>,
+    frozen_definition_digest: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !agent_args.is_empty() {
         return Err("le mode --equipier n'accepte pas d'arguments d'agent".into());
@@ -2512,6 +2676,26 @@ fn launch_acp_with_status(
         live_feed,
         Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
     );
+    if let (Some(_), Some(definition_digest)) =
+        (managed_reporter.as_ref(), frozen_definition_digest)
+    {
+        // La première injection de la session ressuscitée est une projection
+        // des sources durables, préparée avant toute lecture de remise daemon.
+        let worktree = std::env::current_dir()
+            .map_err(|error| format!("worktree courant indisponible: {error}"))?;
+        let resume = managed_resume_context(
+            home,
+            &worktree,
+            &my_name,
+            agent_type,
+            &definition.protocol,
+            definition_digest,
+        );
+        let resume_message = bridget_core::BridgetMessage::new("bridget-reprise", &my_name, resume);
+        if let Err(error) = transport.deliver(&resume_message) {
+            warn!("injection de la carte de reprise impossible: {error}");
+        }
+    }
     if let Some(reporter) = managed_reporter.as_mut() {
         reporter.startup_succeeded();
     }
@@ -3011,10 +3195,131 @@ fn forward_managed_events(
 
 #[cfg(test)]
 mod prompt_tests {
-    use super::{codex_resume_bootstrap, interactive_bridget_prompt, prepare_codex_agent_args};
+    use super::{
+        codex_resume_bootstrap, interactive_bridget_prompt, managed_resume_context,
+        prepare_codex_agent_args,
+    };
+    use maicie::app::{DelegateRequest, DelegationCandidate, delegate};
+    use maicie::config::DurationClasses;
+    use maicie::domain::ClasseDuree;
+    use maicie::store::MaicieStore;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process::Command;
 
     const BEFORE: &str = include_str!("../tests/fixtures/prompts/v1-before.txt");
     const AFTER: &str = include_str!("../tests/fixtures/prompts/v1-after.txt");
+
+    fn resume_root(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-managed-resume-{label}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        root
+    }
+
+    fn init_worktree(root: &std::path::Path) {
+        fs::create_dir_all(root).unwrap();
+        Command::new("git")
+            .args(["init", "-q", root.to_str().unwrap()])
+            .status()
+            .unwrap();
+        fs::write(root.join("tracked.txt"), "initial\n").unwrap();
+        assert!(
+            Command::new("git")
+                .args([
+                    "-C",
+                    root.to_str().unwrap(),
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "add",
+                    "tracked.txt"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args([
+                    "-C",
+                    root.to_str().unwrap(),
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "-qm",
+                    "initial"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(root.join("tracked.txt"), "modifié\n").unwrap();
+    }
+
+    fn write_maicie_config(home: &std::path::Path, database: &std::path::Path) {
+        let config = home.join(".config/maicie/config.json");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(
+            config,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "bridget_socket": "/tmp/bridget-resume-fixture.sock",
+                "database_path": database,
+                "durations": {"short_secs": 30, "normal_secs": 60, "long_secs": 90},
+                "profiles": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn create_active_mission(
+        database: &std::path::Path,
+        participant: &str,
+    ) -> maicie::app::DelegationCreated {
+        let mut store = MaicieStore::open(database).unwrap();
+        let result = delegate(
+            &mut store,
+            DurationClasses {
+                short_secs: 30,
+                normal_secs: 60,
+                long_secs: 90,
+            },
+            "maicie",
+            &[DelegationCandidate {
+                name: participant.to_string(),
+                tags: vec![],
+                available: true,
+                dnd: false,
+            }],
+            &DelegateRequest {
+                goal: "reprendre la bissection durable",
+                explicit_target: Some(participant),
+                required_tags: &[],
+                duration: ClasseDuree::Normale,
+                reply: false,
+                constat_id: None,
+                idempotency_key: "resume-fixture",
+                now: 100,
+                retry_until: 150,
+                dedup_retained_until: 200,
+                max_frame_bytes: 256 * 1024,
+            },
+        )
+        .unwrap();
+        match result {
+            maicie::app::DelegateResult::Created(created) => created,
+            _ => panic!("délégation attendue"),
+        }
+    }
 
     #[test]
     fn prompt_mcp_produit_exactement_la_fixture_reduite_versionnee() {
@@ -3030,6 +3335,81 @@ mod prompt_tests {
             interactive_bridget_prompt("agent-fixture", false),
             BEFORE.trim_end_matches('\n')
         );
+    }
+
+    #[test]
+    fn carte_de_reprise_reconstruit_mission_et_worktree_durables() {
+        let root = resume_root("active");
+        let home = root.join("home");
+        let worktree = root.join("worktree");
+        let database = root.join("maicie.sqlite3");
+        write_maicie_config(&home, &database);
+        let mission = create_active_mission(&database, "resurrected");
+        init_worktree(&worktree);
+
+        let context = managed_resume_context(
+            &home,
+            &worktree,
+            "resurrected",
+            "fixture",
+            "acp",
+            "fixture-digest",
+        );
+        assert!(
+            context.contains(&format!("objectif_id={}", mission.objective_id)),
+            "{context}"
+        );
+        assert!(context.contains(&format!("delegation_id={}", mission.delegation_id)));
+        assert!(context.contains(&format!("message_id={}", mission.message_id)));
+        assert!(context.contains("reprendre la bissection durable"));
+        assert!(context.contains("branche=master") || context.contains("branche=main"));
+        assert!(context.contains(" M tracked.txt"));
+        assert!(context.contains("lis ton diff, committe"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn carte_de_reprise_sans_mission_ne_l_invente_pas() {
+        let root = resume_root("empty");
+        let home = root.join("home");
+        let worktree = root.join("worktree");
+        write_maicie_config(&home, &root.join("maicie.sqlite3"));
+        init_worktree(&worktree);
+
+        let context = managed_resume_context(
+            &home,
+            &worktree,
+            "sans-mission",
+            "fixture",
+            "acp",
+            "fixture-digest",
+        );
+        assert!(
+            context.contains("aucune mission active attestée"),
+            "{context}"
+        );
+        assert!(!context.contains("Mission Maicie active"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn carte_de_reprise_signale_chaque_source_indisponible() {
+        let root = resume_root("unavailable");
+        let context = managed_resume_context(
+            &root.join("home"),
+            &root.join("pas-un-worktree"),
+            "sans-source",
+            "fixture",
+            "acp",
+            "fixture-digest",
+        );
+
+        assert!(
+            context.contains("Mission Maicie : indisponible"),
+            "{context}"
+        );
+        assert!(context.contains("Worktree : indisponible"), "{context}");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -6422,17 +6422,106 @@ mod presence_tests {
         ));
         let config = recovery_daemon_config(&root);
         std::fs::create_dir_all(config.db_path.parent().unwrap()).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q", root.to_str().unwrap()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(root.join("wip.txt"), "base\n").unwrap();
+        assert!(
+            Command::new("git")
+                .args([
+                    "-C",
+                    root.to_str().unwrap(),
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "add",
+                    "wip.txt"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args([
+                    "-C",
+                    root.to_str().unwrap(),
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "-qm",
+                    "base"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(root.join("wip.txt"), "non commité\n").unwrap();
+        let maicie_config = root.join(".config/maicie/config.json");
+        std::fs::create_dir_all(maicie_config.parent().unwrap()).unwrap();
+        let maicie_db = root.join("maicie.sqlite3");
+        std::fs::write(
+            &maicie_config,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1, "bridget_socket": config.socket_path, "database_path": maicie_db,
+                "durations": {"short_secs":30,"normal_secs":60,"long_secs":90}, "profiles": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut maicie = maicie::store::MaicieStore::open(&maicie_db).unwrap();
+        let mission = maicie::app::delegate(
+            &mut maicie,
+            maicie::config::DurationClasses {
+                short_secs: 30,
+                normal_secs: 60,
+                long_secs: 90,
+            },
+            "maicie",
+            &[maicie::app::DelegationCandidate {
+                name: "persistent-one".to_string(),
+                tags: vec![],
+                available: true,
+                dnd: false,
+            }],
+            &maicie::app::DelegateRequest {
+                goal: "reprendre la bissection",
+                explicit_target: Some("persistent-one"),
+                required_tags: &[],
+                duration: maicie::domain::ClasseDuree::Normale,
+                reply: false,
+                constat_id: None,
+                idempotency_key: "resume-daemon-crash",
+                now: 100,
+                retry_until: 150,
+                dedup_retained_until: 200,
+                max_frame_bytes: 256 * 1024,
+            },
+        )
+        .unwrap();
+        let maicie::app::DelegateResult::Created(mission) = mission else {
+            panic!("mission attendue")
+        };
         let registry_path = root.join(".config/bridget/agents.json");
         std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         let adapter = root.join("adapter.sh");
         let changed_adapter = root.join("adapter-changed.sh");
         let old_runs = root.join("old-adapter-runs");
+        let resume_prompts = root.join("resume-prompts");
         let changed_runs = root.join("changed-adapter-runs");
         std::fs::write(
             &adapter,
             format!(
-                "#!/bin/sh\necho old >> {}\nread initialize || exit 1\necho '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1}}}}'\nread session || exit 1\necho '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"sessionId\":\"recovery-session\"}}}}'\nwhile read line; do :; done\n",
-                old_runs.display()
+                "#!/bin/sh\necho old >> {}\nread initialize || exit 1\necho '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1}}}}'\nread session || exit 1\necho '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"sessionId\":\"recovery-session\"}}}}'\nwhile read line; do case \"$line\" in *session/prompt*) echo \"$line\" >> {} ;; esac; done\n",
+                old_runs.display(), resume_prompts.display()
             ),
         )
         .unwrap();
@@ -6474,7 +6563,7 @@ mod presence_tests {
             WrapperToDaemon::SpawnOrder {
                 agent_type: "fixture".to_string(),
                 name: Some("persistent-one".to_string()),
-                cwd: "/tmp".to_string(),
+                cwd: root.to_string_lossy().to_string(),
                 persistent: true,
                 command_id: "initial-persistent".to_string(),
                 issued_at: now,
@@ -6492,6 +6581,19 @@ mod presence_tests {
         ));
         let marker_store =
             ManagedMarkerStore::at_directory(config.db_path.parent().unwrap().join("managed"));
+        let prompt_deadline = Instant::now() + Duration::from_secs(4);
+        while std::fs::read_to_string(&resume_prompts)
+            .unwrap_or_default()
+            .lines()
+            .count()
+            < 1
+        {
+            assert!(
+                Instant::now() < prompt_deadline,
+                "première carte de reprise absente"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
         let first_marker = marker_store.load("persistent-one").unwrap();
         assert!(crate::managed_process::group_exists(first_marker.pgid).unwrap());
 
@@ -6561,6 +6663,23 @@ mod presence_tests {
             );
             thread::yield_now();
         }
+        let prompt_deadline = Instant::now() + Duration::from_secs(4);
+        let prompts = loop {
+            let prompts = std::fs::read_to_string(&resume_prompts).unwrap_or_default();
+            if prompts.lines().count() >= 2 {
+                break prompts;
+            }
+            assert!(
+                Instant::now() < prompt_deadline,
+                "carte de reprise post-crash absente"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(prompts.contains(&mission.objective_id.to_string()));
+        assert!(prompts.contains(&mission.delegation_id.to_string()));
+        assert!(prompts.contains(&mission.message_id.to_string()));
+        assert!(prompts.contains("reprendre la bissection"));
+        assert!(prompts.contains("wip.txt"));
         assert!(
             !changed_runs.exists(),
             "le registre modifié ne doit jamais piloter la génération reprise"
@@ -6571,7 +6690,7 @@ mod presence_tests {
                 WrapperToDaemon::SpawnOrder {
                     agent_type: "fixture".to_string(),
                     name: Some("persistent-one".to_string()),
-                    cwd: "/tmp".to_string(),
+                    cwd: root.to_string_lossy().to_string(),
                     persistent: true,
                     command_id: "initial-persistent".to_string(),
                     issued_at: now,
