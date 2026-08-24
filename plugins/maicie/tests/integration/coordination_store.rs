@@ -708,6 +708,9 @@ fn faute_a_chaque_frontiere_f29_annule_generation_demandes_et_notifications() {
         let store = MaicieStore::open(&fixture.database).unwrap();
         let request_id = initial_request_id(&store, delegation_id);
         drop(store);
+        let initial_connection = Connection::open(&fixture.database).unwrap();
+        let initial_episode = reminder_episode_snapshot(&initial_connection, delegation_id);
+        drop(initial_connection);
         let lot = reassignment_lot(
             objectif_id,
             delegation_id,
@@ -733,9 +736,30 @@ fn faute_a_chaque_frontiere_f29_annule_generation_demandes_et_notifications() {
         let connection = Connection::open(&fixture.database).unwrap();
         assert_eq!(table_count(&connection, "reassignment_events"), 0);
         assert_eq!(table_count(&connection, "reassignment_reductions"), 0);
+        assert_eq!(
+            table_count(&connection, "active_coordination_decisions"),
+            0,
+            "une décision F29 a fui le rollback à {phase:?}"
+        );
+        assert_eq!(
+            reminder_episode_snapshot(&connection, delegation_id),
+            initial_episode,
+            "un épisode F29 a changé malgré le rollback à {phase:?}"
+        );
         assert_eq!(table_count(&connection, "tracked_request_outbox"), 0);
         assert_eq!(table_count(&connection, "notification_outbox"), 0);
         assert_eq!(table_count(&connection, "delegation_generations"), 1);
+        let active_generation: i64 = connection
+            .query_row(
+                "SELECT active_generation FROM delegation_lineages WHERE delegation_id = ?1",
+                [delegation_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            active_generation, 1,
+            "la lignée F29 a avancé malgré le rollback à {phase:?}"
+        );
         let state: String = connection
             .query_row(
                 "SELECT state FROM delegation_generations WHERE delegation_id = ?1",
@@ -981,6 +1005,45 @@ fn table_count(connection: &Connection, table: &str) -> i64 {
         .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
             row.get(0)
         })
+        .unwrap()
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ReminderEpisodeSnapshot {
+    generation: i64,
+    request_id: String,
+    request_ordinal: i64,
+    reminder_count: i64,
+    reemissions_used: i64,
+    state: String,
+    payload_json: Vec<u8>,
+}
+
+fn reminder_episode_snapshot(
+    connection: &Connection,
+    delegation_id: Uuid,
+) -> Vec<ReminderEpisodeSnapshot> {
+    let mut statement = connection
+        .prepare(
+            "SELECT generation,request_id,request_ordinal,reminder_count,
+                    reemissions_used,state,payload_json
+             FROM reminder_episodes WHERE delegation_id=?1 ORDER BY request_ordinal",
+        )
+        .unwrap();
+    statement
+        .query_map([delegation_id.to_string()], |row| {
+            Ok(ReminderEpisodeSnapshot {
+                generation: row.get(0)?,
+                request_id: row.get(1)?,
+                request_ordinal: row.get(2)?,
+                reminder_count: row.get(3)?,
+                reemissions_used: row.get(4)?,
+                state: row.get(5)?,
+                payload_json: row.get(6)?,
+            })
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap()
 }
 
