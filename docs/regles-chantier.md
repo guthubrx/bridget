@@ -66,6 +66,17 @@ contrôle vert. *(Incident : dette de 23 emplacements non détectée sur main,
     commit, jamais avant : l'index est commun, un commit voisin emporte tout
     ce qui y traîne. *(Incident : le commit socle-client a emporté le T017-2
     stagé d'un autre agent, 2026-08-23.)*
+17. **Qui touche une ressource globale ordonnée le dit au greffe AVANT de
+    committer** — les deux cas connus : un numéro de migration de schéma, et
+    les structs/enums filaires de `protocol.rs`. Git fusionne le texte mais
+    pas le sens : deux lots localement cohérents peuvent se voler le même
+    numéro ou construire un `Register` que l'autre a déjà changé. Le message
+    au greffe nomme la ressource et la plage prise ; le référent sérialise
+    les lots concurrents ; et après tout rebase sur un lot qui touche
+    `protocol.rs`, la compile du workspace est rejouée AVANT d'appeler le
+    merge « fait ». *(Incidents : v8 pris deux fois par 016 et le lot refus
+    guichet ; champ `journal_available` ajouté à `Register` cassant la
+    compile du lot G5, tous deux le 2026-08-24.)*
 17. **Un verdict n'existe que signé et lié.** Tout APPROVE/STOP doit venir de
     l'identité STABLE du relecteur désigné, en réponse liée à la demande de
     review — un verdict d'émetteur éphémère (cli-send-*) ou non lié est NUL
