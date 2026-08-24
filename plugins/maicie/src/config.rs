@@ -22,6 +22,7 @@ const MAX_TAGS_PER_PROFILE: usize = 64;
 const MAX_TOOLS_PER_PROFILE: usize = 64;
 const MAX_SHORT_TEXT_BYTES: usize = 128;
 const MAX_REFERENCE_BYTES: usize = 1024;
+const MAX_FALLBACK_CANDIDATES: usize = 64;
 /// Une consultation ne doit pas devenir un pseudo-runtime résident ni retenir
 /// indéfiniment le CLI. Au-delà, le statut rend explicitement l'observation
 /// inconnue plutôt que de conserver un fait périmé.
@@ -45,7 +46,109 @@ pub struct MaicieConfig {
     /// exige sa présence. Aucune valeur implicite n'est inventée.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalogue_path: Option<PathBuf>,
+    /// Politique 016 optionnelle. Son absence conserve les délégations 011 :
+    /// aucune relève ou réassignation n'est alors activée implicitement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordination_policies: Option<CoordinationPoliciesConfig>,
     pub profiles: Vec<ProfileConfig>,
+}
+
+/// Les politiques sont déclarées par classe puis figées avec la délégation.
+/// Elles expliquent le futur ; le snapshot SQLite explique le passé.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoordinationPoliciesConfig {
+    pub courte: ReassignmentPolicyConfig,
+    pub normale: ReassignmentPolicyConfig,
+    pub longue: ReassignmentPolicyConfig,
+}
+
+impl CoordinationPoliciesConfig {
+    pub fn for_duration(&self, duration: crate::domain::ClasseDuree) -> &ReassignmentPolicyConfig {
+        match duration {
+            crate::domain::ClasseDuree::Courte => &self.courte,
+            crate::domain::ClasseDuree::Normale => &self.normale,
+            crate::domain::ClasseDuree::Longue => &self.longue,
+        }
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        self.courte.validate("coordination_policies.courte")?;
+        self.normale.validate("coordination_policies.normale")?;
+        self.longue.validate("coordination_policies.longue")
+    }
+}
+
+/// Une entrée de chaîne est un fait de registre déclaré, jamais une présence
+/// volatile Bridget. Sa version est figée avec la politique.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FallbackCandidateConfig {
+    pub participant_id: String,
+    pub membership_version: u64,
+}
+
+/// Paramètres configurés pour une classe de durée. `max_reemissions` reste
+/// borné indépendamment de la configuration afin qu'une erreur ne crée pas de
+/// tempête de demandes suivies.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReassignmentPolicyConfig {
+    pub version: u64,
+    pub reminder_threshold: u32,
+    pub max_reemissions: u8,
+    #[serde(default)]
+    pub fallback_chain: Vec<FallbackCandidateConfig>,
+}
+
+impl ReassignmentPolicyConfig {
+    fn validate(&self, field: &str) -> Result<(), ConfigError> {
+        if self.version == 0 || self.reminder_threshold == 0 {
+            return Err(ConfigError::validation(
+                field,
+                "version et reminder_threshold doivent être strictement positifs",
+            ));
+        }
+        if !(1..=8).contains(&self.max_reemissions) {
+            return Err(ConfigError::validation(
+                field,
+                "max_reemissions doit être compris entre 1 et 8",
+            ));
+        }
+        if self.fallback_chain.len() > MAX_FALLBACK_CANDIDATES {
+            return Err(ConfigError::validation(
+                field,
+                format!("fallback_chain contient au plus {MAX_FALLBACK_CANDIDATES} candidats"),
+            ));
+        }
+        let mut seen = HashSet::with_capacity(self.fallback_chain.len());
+        for candidate in &self.fallback_chain {
+            validate_text(
+                &format!("{field}.fallback_chain.participant_id"),
+                &candidate.participant_id,
+                MAX_SHORT_TEXT_BYTES,
+            )?;
+            if candidate.participant_id == crate::MAICIE_IDENTITY {
+                return Err(ConfigError::validation(
+                    field,
+                    "le pilote Maicie est interdit dans fallback_chain",
+                ));
+            }
+            if candidate.membership_version == 0 {
+                return Err(ConfigError::validation(
+                    field,
+                    "membership_version doit être strictement positive",
+                ));
+            }
+            if !seen.insert(candidate.participant_id.as_str()) {
+                return Err(ConfigError::validation(
+                    field,
+                    format!("candidat de repli dupliqué : {}", candidate.participant_id),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Delais passifs transmis tels quels au contrat Bridget.
@@ -215,6 +318,9 @@ impl MaicieConfig {
                     "le catalogue doit etre distinct du socket Bridget et de la base SQLite",
                 ));
             }
+        }
+        if let Some(policies) = &self.coordination_policies {
+            policies.validate()?;
         }
         validate_profiles(&self.profiles)
     }

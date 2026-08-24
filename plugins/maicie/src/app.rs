@@ -8,7 +8,7 @@ use crate::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use crate::catalogue::{
     ArbitrationLink, AttestedClosure, CatalogueError, CatalogueJournal, ReconcileReport,
 };
-use crate::config::DurationClasses;
+use crate::config::{CoordinationPoliciesConfig, DurationClasses};
 use crate::domain::guichet::{
     GuichetDomainError, ProjectionCoordinationState, ProjectionDurationClass, ProjectionFreshness,
     ProjectionLocalDelivery, ProjectionLocalDeliveryState, ProjectionReply,
@@ -17,10 +17,11 @@ use crate::domain::guichet::{
 };
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
-    EntreeReductionCoordination, EtatDecision, EtatFlux, EtatObjectif, EtatOutboxDelegation,
-    EtatRequeteGuichet, EvenementCoordination, FaitReassignation, FraicheurCoordination,
-    ModeObjectif, MotifRefusGreffe, ObjectifCoordonne, OutboxDelegation, SnapshotTransport,
-    SourceSnapshot, TypeDecision, TypeFaitReassignation,
+    DefinitionCoordination, EntreeReductionCoordination, EtatDecision, EtatFlux, EtatObjectif,
+    EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination, FaitAppartenanceRepli,
+    FaitReassignation, FraicheurCoordination, ModeObjectif, MotifRefusGreffe, ObjectifCoordonne,
+    OutboxDelegation, PolitiqueReassignation, SnapshotTransport, SourceSnapshot, TypeDecision,
+    TypeFaitReassignation,
 };
 use crate::outbox::{PreparedDelegation, stable_body_hash};
 pub use crate::store::GuichetLifecycleResult;
@@ -1019,6 +1020,51 @@ pub fn delegate(
             Ok(DelegateResult::Created(created_from_stored(stored, true)))
         }
     }
+}
+
+/// Fige la politique configurée après la création durable de la délégation et
+/// avant son dispatch. Une définition déjà présente gagne : un rejeu ne relit
+/// jamais une configuration modifiée pour réinterpréter l'historique.
+pub fn pin_coordination_policy(
+    store: &mut MaicieStore,
+    policies: &CoordinationPoliciesConfig,
+    created: &DelegationCreated,
+) -> Result<(), DelegateError> {
+    if store
+        .coordination_snapshot(created.objective_id)
+        .map_err(store_error)?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    let configured = policies.for_duration(created.duration);
+    let policy = PolitiqueReassignation {
+        delegation_id: created.delegation_id,
+        objectif_id: created.objective_id,
+        classe: created.duration,
+        version: configured.version,
+        seuil_relances: configured.reminder_threshold,
+        max_reemissions: configured.max_reemissions,
+        chaine_repli: configured
+            .fallback_chain
+            .iter()
+            .map(|candidate| FaitAppartenanceRepli {
+                objectif_id: created.objective_id,
+                participant_id: candidate.participant_id.clone(),
+                membership_version: candidate.membership_version,
+                est_pilote: false,
+            })
+            .collect(),
+    };
+    store
+        .register_coordination_snapshot(&DefinitionCoordination {
+            objectif_id: created.objective_id,
+            dependencies: Vec::new(),
+            policies: vec![policy],
+            attentes: Vec::new(),
+        })
+        .map_err(store_error)
 }
 
 #[derive(Serialize)]

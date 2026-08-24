@@ -62,6 +62,7 @@ fn status_capture_des_faits_acp_ephemeres_sans_etat_metier_invente() {
         "selected"
     );
     assert_eq!(value["freshness"]["state"], "fresh");
+    assert_eq!(value["coordination_freshness"]["state"], "fresh");
     // Les états JSON ci-dessus sont l'oracle. Un grep anti-libellé (« bloqu »,
     // « en_attente ») casserait à la première reformulation sans changer le
     // comportement — retiré volontairement.
@@ -88,6 +89,11 @@ fn status_sans_budget_ne_fabrique_ni_fraicheur_ni_capture() {
     assert_eq!(value["availability_state"], "unavailable");
     assert_eq!(value["availability_reason"], "budget_capture_non_configure");
     assert_eq!(value["freshness"]["reason"], "budget_capture_non_configure");
+    assert_eq!(
+        value["coordination_freshness"]["state"],
+        "unavailable",
+        "la relève Bridget indisponible reste une observation distincte des faits locaux"
+    );
     assert!(value["runtime"].as_array().unwrap().is_empty());
 
     let plain = Command::new(env!("CARGO_BIN_EXE_maicie"))

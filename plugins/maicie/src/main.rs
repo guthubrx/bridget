@@ -10,8 +10,8 @@ use maicie::app::{
     CatalogueReconcileError, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate,
     LocalProfileApproval, ObjectiveError, ProfileActivationError, ProfileActivationProposalRequest,
     add_participant, approve_profile_activation, close, delegate, delegated_participants,
-    propose_profile_activation, reconcile_catalogue_from_store, remove_participant, status,
-    stored_profile_activation_proposal, summarize,
+    pin_coordination_policy, propose_profile_activation, reconcile_catalogue_from_store,
+    remove_participant, status, stored_profile_activation_proposal, summarize,
 };
 use maicie::bridget_client::{
     AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits,
@@ -25,7 +25,8 @@ use maicie::profiles::{
     ApprovalProfileView, ProfileError, ResolvedAgentDefinition, approval_view, load_profiles,
 };
 use maicie::reconcile::{
-    ReconcileError, reconcile_activation_startup_at, reconcile_coordination_startup_with_limits,
+    CoordinationReconcileAction, CoordinationReconcileReport, ReconcileError,
+    reconcile_activation_startup_at, reconcile_coordination_startup_with_limits,
     reconcile_guichet_startup_with_limits, reconcile_notification_startup_with_limits,
     reconcile_startup_with_limits,
 };
@@ -75,7 +76,10 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
 
 fn run_status(arguments: StatusArgs) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let store = open_store_with_reconciliation(&config, BridgetClientLimits::default())?;
+    let ReconciledStore {
+        store,
+        coordination: coordination_report,
+    } = open_store_with_reconciliation(&config, BridgetClientLimits::default())?;
     let snapshots = status(&store, arguments.objective_id).map_err(CliError::Objective)?;
     let sources = capture_status_sources(&config, &delegated_participants(&snapshots));
     render_objective_output(
@@ -88,6 +92,10 @@ fn run_status(arguments: StatusArgs) -> Result<String, CliError> {
             runtime: sources.runtime,
             freshness: sources.freshness,
             stream_state: sources.stream_state,
+            coordination_freshness: CoordinationFreshnessOutput::from_report(
+                &coordination_report,
+                unix_now().ok(),
+            ),
         },
         arguments.json,
     )
@@ -297,7 +305,12 @@ fn run_objective(arguments: ObjectiveArgs) -> Result<String, CliError> {
 
 fn open_store(config_path: &PathBuf) -> Result<MaicieStore, CliError> {
     let config = MaicieConfig::load(config_path).map_err(CliError::Configuration)?;
-    open_store_with_reconciliation(&config, BridgetClientLimits::default())
+    open_store_with_reconciliation(&config, BridgetClientLimits::default()).map(|opened| opened.store)
+}
+
+struct ReconciledStore {
+    store: MaicieStore,
+    coordination: CoordinationReconcileReport,
 }
 
 /// Toute commande qui ouvre la base rejoue d'abord les outboxes pendantes dans
@@ -306,7 +319,7 @@ fn open_store(config_path: &PathBuf) -> Result<MaicieStore, CliError> {
 fn open_store_with_reconciliation(
     config: &MaicieConfig,
     limits: BridgetClientLimits,
-) -> Result<MaicieStore, CliError> {
+) -> Result<ReconciledStore, CliError> {
     let mut store = MaicieStore::open(&config.database_path).map_err(CliError::Store)?;
     reconcile_pending(&mut store, config, limits)?;
     reconcile_activation_startup_at(&mut store, &config.bridget_socket, unix_now()?)
@@ -315,13 +328,13 @@ fn open_store_with_reconciliation(
         .map_err(CliError::Reconcile)?;
     // Une commande relève au plus un snapshot borné. Les terminaux du guichet
     // alimentent uniquement F29 ; les événements cursés n'ouvrent jamais F28.
-    reconcile_coordination_startup_with_limits(&mut store, &config.bridget_socket, limits)
+    let coordination = reconcile_coordination_startup_with_limits(&mut store, &config.bridget_socket, limits)
         .map_err(CliError::Reconcile)?;
     // Les notifications naissent durablement du réducteur. Leur émission reste
     // le même chemin borné de reprise, jamais une seconde logique d'envoi CLI.
     reconcile_notification_startup_with_limits(&mut store, &config.bridget_socket, limits)
         .map_err(CliError::Reconcile)?;
-    Ok(store)
+    Ok(ReconciledStore { store, coordination })
 }
 
 fn reconcile_pending(
@@ -337,7 +350,7 @@ fn reconcile_pending(
 fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
     let limits = BridgetClientLimits::default();
-    let mut store = open_store_with_reconciliation(&config, limits)?;
+    let mut store = open_store_with_reconciliation(&config, limits)?.store;
     let client =
         BridgetClient::connect_with_limits(&config.bridget_socket, store.issuer_scope(), limits)
             .map_err(CliError::Bridget)?;
@@ -374,6 +387,12 @@ fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
         &request,
     )
     .map_err(|error| delegate_error_for_cli(error, &config.profiles, &agents, &arguments.config))?;
+    if let (Some(policies), DelegateResult::Created(created)) =
+        (&config.coordination_policies, &result)
+    {
+        pin_coordination_policy(&mut store, policies, created)
+            .map_err(|error| delegate_error_for_cli(error, &config.profiles, &agents, &arguments.config))?;
+    }
     // La transaction `delegate` est déjà commitée ici. T008 effectue ensuite
     // lookup puis replay des octets persistés, sans reconstruire le message.
     reconcile_pending(&mut store, &config, limits)?;
@@ -386,7 +405,7 @@ fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
 /// l'outbox, ensuite reprise par le protocole public Bridget.
 fn run_profile(arguments: ProfileArgs) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let mut store = open_store_with_reconciliation(&config, BridgetClientLimits::default())?;
+    let mut store = open_store_with_reconciliation(&config, BridgetClientLimits::default())?.store;
     let now = unix_now()?;
     match arguments.action {
         ProfileAction::Propose {
@@ -1458,6 +1477,7 @@ enum ObjectiveOutput {
         runtime: Vec<RuntimeAgentOutput>,
         freshness: FreshnessOutput,
         stream_state: EtatFlux,
+        coordination_freshness: CoordinationFreshnessOutput,
     },
     Decision {
         decision: DecisionCoordination,
@@ -1616,6 +1636,56 @@ struct FreshnessOutput {
     state: EtatFlux,
     observed_at: Option<i64>,
     reason: Option<String>,
+}
+
+/// Fraîcheur de la relève 016 de cette invocation. Elle ne remplace aucun fait
+/// local : `stale` et `unavailable` expliquent pourquoi la coordination n'a
+/// pas appliqué d'effet automatique pendant cette passe.
+#[derive(Serialize)]
+struct CoordinationFreshnessOutput {
+    state: &'static str,
+    observed_at: Option<i64>,
+    reason: Option<String>,
+}
+
+impl CoordinationFreshnessOutput {
+    fn from_report(report: &CoordinationReconcileReport, observed_at: Option<i64>) -> Self {
+        let action = report.actions.last();
+        match action {
+            Some(CoordinationReconcileAction::SnapshotAtteint { .. })
+            | Some(CoordinationReconcileAction::EvenementApplique { .. })
+            | Some(CoordinationReconcileAction::TerminalApplique { .. }) => Self {
+                state: "fresh",
+                observed_at,
+                reason: None,
+            },
+            Some(CoordinationReconcileAction::Gap { reason, .. }) => Self {
+                state: "stale",
+                observed_at,
+                reason: Some(reason.clone()),
+            },
+            Some(CoordinationReconcileAction::Unavailable { reason }) => Self {
+                state: "unavailable",
+                observed_at,
+                reason: Some(reason.clone()),
+            },
+            Some(CoordinationReconcileAction::TransportIndisponible) => Self {
+                state: "unavailable",
+                observed_at: None,
+                reason: Some("transport_indisponible".to_string()),
+            },
+            Some(CoordinationReconcileAction::BudgetEpuise) => Self {
+                state: "unavailable",
+                observed_at: None,
+                reason: Some("budget_releve_epuise".to_string()),
+            },
+            None => Self {
+                state: "unavailable",
+                observed_at: None,
+                reason: Some("aucune_observation_coordination".to_string()),
+            },
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -1794,6 +1864,7 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
             runtime,
             freshness,
             stream_state,
+            coordination_freshness,
         } => {
             let auto_permissions = runtime
                 .iter()
@@ -1801,7 +1872,7 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
                 .filter(|observation| observation.nature == "permission_auto_decidee")
                 .count();
             format!(
-                "objectifs={} disponibilité={} état_disponibilité={} motif_disponibilité={} snapshot_transport={} runtime={} permissions_auto_décidées={} fraîcheur={} flux={}",
+                "objectifs={} disponibilité={} état_disponibilité={} motif_disponibilité={} snapshot_transport={} runtime={} permissions_auto_décidées={} fraîcheur={} flux={} coordination_fraîcheur={} coordination_motif={}",
                 coordination.len(),
                 availability.len(),
                 flux_name(availability_state),
@@ -1811,6 +1882,8 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
                 auto_permissions,
                 flux_name(freshness.state),
                 flux_name(stream_state),
+                coordination_freshness.state,
+                coordination_freshness.reason.as_deref().unwrap_or("aucun"),
             )
         }
         ObjectiveOutput::Decision { decision } => format!(
@@ -1995,6 +2068,7 @@ mod tests {
             },
             status_capture_budget_ms: None,
             catalogue_path: None,
+            coordination_policies: None,
             profiles: vec![ProfileConfig {
                 id: "code-review".to_string(),
                 agent_name: Some("coderBridget".to_string()),
