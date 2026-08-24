@@ -3193,6 +3193,12 @@ fn reconnect_managed_session(
                 // même journal local reste actif, il doit donc être annoncé de
                 // nouveau sur la nouvelle connexion.
                 send_wrapper_message(writer, WrapperToDaemon::JournalReady);
+                // Même motif que JournalReady : le wrapper détient le fait
+                // « tour ouvert » (is_busy). Register porte déjà
+                // turn_in_progress, et TurnState le ré-atteste sur le writer
+                // frais — un busy perdu au redémarrage daemon ne dépend plus
+                // d'un prochain événement de tour.
+                send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: busy });
                 return Some((reader, registered_name));
             }
             Ok((_, _, registered_name)) => warn!(

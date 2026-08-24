@@ -1681,23 +1681,40 @@ impl DaemonState {
     }
 
     fn mark_unreachable(&mut self, conn_id: &str) {
-        if let Some(instance_id) = self.conn_instances.remove(conn_id)
-            && let Some(presence) = self.presences.get_mut(&instance_id)
-        {
-            if presence.state == "stopped" {
+        if let Some(instance_id) = self.conn_instances.remove(conn_id) {
+            // Une ré-inscription concurrente peut déjà détenir la même
+            // instance : la fermeture de l'ancienne connexion ne doit pas
+            // écraser busy/connected que le nouveau Register vient d'attester.
+            if self
+                .conn_instances
+                .values()
+                .any(|owned| owned == &instance_id)
+            {
                 return;
             }
-            presence.state = "unreachable".to_string();
-            presence.last_seen = Instant::now();
+            if let Some(presence) = self.presences.get_mut(&instance_id) {
+                if presence.state == "stopped" {
+                    return;
+                }
+                presence.state = "unreachable".to_string();
+                presence.last_seen = Instant::now();
+            }
         }
     }
 
     fn mark_stopped(&mut self, conn_id: &str) {
-        if let Some(instance_id) = self.conn_instances.remove(conn_id)
-            && let Some(presence) = self.presences.get_mut(&instance_id)
-        {
-            presence.state = "stopped".to_string();
-            presence.last_seen = Instant::now();
+        if let Some(instance_id) = self.conn_instances.remove(conn_id) {
+            if self
+                .conn_instances
+                .values()
+                .any(|owned| owned == &instance_id)
+            {
+                return;
+            }
+            if let Some(presence) = self.presences.get_mut(&instance_id) {
+                presence.state = "stopped".to_string();
+                presence.last_seen = Instant::now();
+            }
         }
     }
 
@@ -2972,17 +2989,31 @@ fn handle_register(
                                 })
                         });
                 if presence_owned_by_live_connection {
-                    // Une connexion auxiliaire issue de la filiation MCP peut
-                    // revendiquer la même instance que le wrapper. Elle garde
-                    // son entrée de routage éphémère, mais ne devient jamais
-                    // propriétaire de la présence : sa fermeture ne doit pas
-                    // rendre le wrapper inaccessible ni effacer ses faits.
-                    info!(
-                        "présence {} conservée : connexion auxiliaire {} ignorée",
-                        instance_id, conn_id
-                    );
-                    state.restore_pending_for_agent(&final_name, conn_id);
-                    return DaemonToWrapper::Registered { name: final_name };
+                    let same_equipier = state
+                        .presences
+                        .get(&instance_id)
+                        .is_some_and(|presence| presence.name == final_name);
+                    if !same_equipier {
+                        // Une connexion auxiliaire issue de la filiation MCP peut
+                        // revendiquer la même instance que le wrapper. Elle garde
+                        // son entrée de routage éphémère, mais ne devient jamais
+                        // propriétaire de la présence : sa fermeture ne doit pas
+                        // rendre le wrapper inaccessible ni effacer ses faits.
+                        info!(
+                            "présence {} conservée : connexion auxiliaire {} ignorée",
+                            instance_id, conn_id
+                        );
+                        state.restore_pending_for_agent(&final_name, conn_id);
+                        return DaemonToWrapper::Registered { name: final_name };
+                    }
+                    // Réconnexion du même équipier avant l'EOF de l'ancienne
+                    // connexion : voler l'instance pour que mark_unreachable
+                    // retardé ne puisse plus écraser busy / connected.
+                    state
+                        .conn_instances
+                        .retain(|existing_conn, existing_instance| {
+                            existing_conn == conn_id || existing_instance.as_str() != instance_id
+                        });
                 }
 
                 let previous = state.presences.get(&instance_id).cloned().or_else(|| {
@@ -10297,6 +10328,114 @@ mod presence_tests {
         state.router.unregister_by_conn("conn-2");
         state.mark_stopped("conn-2");
         assert_eq!(state.agent_infos()[0].state, "stopped");
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    /// Redémarrage daemon simulé : aucune présence préalable, le wrapper
+    /// ré-annonce un tour ouvert via Register. Sans `turn_in_progress=true`,
+    /// who afficherait `connected` — exactement le mensonge du constat.
+    #[test]
+    fn redemarrage_daemon_reinscription_tour_en_cours_affiche_busy() {
+        let (mut state, config) = state_with_registered_agent("busy-cold-restart");
+        state.router.unregister_by_conn("conn-1");
+        state.conn_instances.clear();
+        state.presences.clear();
+
+        let response = handle_register(
+            "conn-fresh",
+            "codex".to_string(),
+            Some("coder-natif".to_string()),
+            Some("local".to_string()),
+            Some("unix".to_string()),
+            None,
+            None,
+            Some("macOS".to_string()),
+            Some("instance-cold".to_string()),
+            None,
+            true,
+            Some(false),
+            &mut state,
+        );
+        assert!(matches!(response, DaemonToWrapper::Registered { .. }));
+        let agent = state.agent_infos().pop().expect("agent réinscrit");
+        assert_eq!(agent.name, "coder-natif");
+        assert_eq!(
+            agent.state, "busy",
+            "who doit restaurer busy depuis Register.turn_in_progress, pas attendre un prochain tour"
+        );
+
+        // Contrôle négatif du même oracle : sans le fait, connected reste honnête.
+        state.router.unregister_by_conn("conn-fresh");
+        state.conn_instances.clear();
+        state.presences.clear();
+        let idle = handle_register(
+            "conn-idle",
+            "codex".to_string(),
+            Some("coder-natif".to_string()),
+            Some("local".to_string()),
+            Some("unix".to_string()),
+            None,
+            None,
+            Some("macOS".to_string()),
+            Some("instance-cold".to_string()),
+            None,
+            false,
+            Some(false),
+            &mut state,
+        );
+        assert!(matches!(idle, DaemonToWrapper::Registered { .. }));
+        assert_eq!(state.agent_infos()[0].state, "connected");
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    /// Course production : le router libère le nom (EOF), le nouveau Register
+    /// arrive AVANT mark_unreachable, avec l'ancienne carte instance encore
+    /// présente. Sans prise de possession, le Register est traité comme
+    /// auxiliaire MCP et busy est perdu — rouge sur cet oracle.
+    #[test]
+    fn fermeture_ancienne_connexion_n_ecrase_pas_busy_de_la_reinscription() {
+        let (mut state, config) = state_with_registered_agent("busy-race-rebind");
+        state.set_turn_state("conn-1", true).unwrap();
+        assert_eq!(state.agent_infos()[0].state, "busy");
+
+        // Première moitié du cleanup EOF : le nom est libre, la carte instance
+        // de l'ancienne connexion est encore là (mark_unreachable pas encore).
+        state.router.unregister_by_conn("conn-1");
+        assert!(state.conn_instances.contains_key("conn-1"));
+
+        let response = handle_register(
+            "conn-2",
+            "claude".to_string(),
+            Some("agent-2".to_string()),
+            Some("macbook".to_string()),
+            Some("unix".to_string()),
+            Some(PresenceMode::Acp),
+            None,
+            Some("macOS".to_string()),
+            Some("instance-1".to_string()),
+            None,
+            true,
+            Some(false),
+            &mut state,
+        );
+        assert!(matches!(response, DaemonToWrapper::Registered { .. }));
+        assert_eq!(state.agent_infos()[0].state, "busy");
+        assert!(
+            state.conn_instances.contains_key("conn-2"),
+            "la reconnexion du même équipier doit prendre l'instance, pas rester auxiliaire"
+        );
+        assert!(
+            !state.conn_instances.contains_key("conn-1"),
+            "l'ancienne carte instance doit être retirée au takeover"
+        );
+
+        // Seconde moitié du cleanup EOF (retardée) : ne doit plus toucher busy.
+        state.mark_unreachable("conn-1");
+        assert_eq!(
+            state.agent_infos()[0].state,
+            "busy",
+            "l'EOF retardé de l'ancienne connexion ne doit pas effacer busy attesté"
+        );
         let _ = std::fs::remove_file(&config.db_path);
     }
 
