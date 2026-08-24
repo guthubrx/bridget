@@ -68,3 +68,27 @@ intra-collège filtre le bruit avant la synthèse, et la réconciliation force
 l'explicitation des désaccords entre polarités au lieu de les laisser au
 seul juge. À dogfooder sur le prochain lot critique : 2+2 relecteurs, les
 échanges intra-collège par bridget send, un avis par collège au greffe.
+
+## Protocole du premier jury éphémère (armé le 2026-08-24 16h41, GO utilisateur)
+
+Cible : le prochain lot CRITIQUE à relire (pressenti : l'implémentation des
+routines). Dispositif à CINQ relecteurs éphémères, tous non-persistants,
+nés pour la revue et arrêtés après :
+
+- COLLÈGE À CHARGE : jury-ingrid + jury-viktor. Délibération interne par
+  bridget send (2 tours max), Ingrid préside et consolide UN avis de collège.
+- COLLÈGE CONSTRUCTIF : jury-aminata + jury-hiroshi. Même mécanique,
+  Aminata préside.
+- TÉMOIN EN AVEUGLE : jury-temoin — mandat de revue CLASSIQUE, sans
+  lentille, sans mention de l'existence du jury (le mot « jury » ne doit
+  pas apparaître dans son mandat). Même lot, mêmes gates.
+
+RÉCONCILIATION : le référent confronte les deux avis de collège entre eux
+puis au témoin. MESURES à publier avec le verdict :
+1. trouvailles par relecteur et par collège ; recouvrements ; uniques ;
+2. ce que le témoin a trouvé que le jury a raté (et inversement) — c'est
+   LA mesure : lentilles = outil ou liturgie ;
+3. coût L4 par juré et total du dispositif vs coût du témoin seul ;
+4. temps mural.
+Chaque juré naît avec préambule composé : fiche de rôle relecteur + SA
+fiche de lentille. Verdicts au référent + greffe (doctrine de routage).
