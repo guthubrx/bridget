@@ -270,6 +270,33 @@ pub struct MigrationReport {
     pub skipped: usize,
 }
 
+/// Lien d'arbitrage déclaré `(constat_id, objective_id)`.
+///
+/// Ce fait naît d'une délégation durable (T1708 / store) ; le journal ne le
+/// invente jamais. La réconciliation ne consomme que des couples fournis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArbitrationLink {
+    pub constat_id: String,
+    pub objective_id: String,
+}
+
+/// Clôture d'objectif attestée par l'état durable (événement ou réconciliation).
+///
+/// `observed_at` est l'horodatage du fait attesté — jamais l'horloge locale
+/// du lecteur, ni un silence, ni une échéance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttestedClosure {
+    pub objective_id: String,
+    pub observed_at: String,
+}
+
+/// Compte-rendu d'une réconciliation de clôtures attestées.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReconcileReport {
+    pub appended: usize,
+    pub skipped: usize,
+}
+
 /// État dérivé d'un constat dans la projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DerivedState {
@@ -470,6 +497,80 @@ impl CatalogueJournal {
         };
         validate_add_shape(&add)?;
         self.append_entry_with_existing(CatalogueEntry::Add(add), &existing)
+    }
+
+    /// Append une transition `open → delivered` uniquement si le couple
+    /// `(constat_id, objective_id)` est fourni comme lien d'arbitrage ET que
+    /// la clôture attestée porte le même `objective_id`.
+    ///
+    /// Aucune sévérité, aucun classement, aucune déduction textuelle : seuls
+    /// des faits déclarés. Identité idempotente
+    /// `(constat_id, objective_id, objective_closed)`.
+    pub fn append_delivered_for_attested_closure(
+        &mut self,
+        link: &ArbitrationLink,
+        closure: &AttestedClosure,
+    ) -> Result<AppendOutcome, CatalogueError> {
+        if link.constat_id.trim().is_empty() || link.objective_id.trim().is_empty() {
+            return Err(CatalogueError::Format(
+                "lien d'arbitrage : constat_id et objective_id obligatoires".into(),
+            ));
+        }
+        if link.objective_id != closure.objective_id {
+            return Err(CatalogueError::TransitionInvalide(format!(
+                "clôture objective_id={} hors lien d'arbitrage (attendu {})",
+                closure.objective_id, link.objective_id
+            )));
+        }
+        let entry = TransitionEntry {
+            v: CATALOGUE_VERSION,
+            kind: TransitionKind::Transition,
+            constat_id: link.constat_id.clone(),
+            from: ConstatState::Open,
+            to: ConstatState::Delivered,
+            objective_id: link.objective_id.clone(),
+            observed_at: closure.observed_at.clone(),
+            trigger: TransitionTrigger::ObjectiveClosed,
+        };
+        self.append_transition(entry)
+    }
+
+    /// Réconcilie les clôtures attestées contre les liens d'arbitrage fournis.
+    ///
+    /// Une clôture sans lien correspondant est ignorée (pas de transition
+    /// inventée). Un lien sans clôture reste ouvert. Le rejeu des mêmes faits
+    /// est un no-op. Cette API est pure côté journal : la lecture des liens et
+    /// des états durables (store) reste hors périmètre jusqu'à T1708/T1710.
+    pub fn reconcile_attested_closures(
+        &mut self,
+        links: &[ArbitrationLink],
+        closures: &[AttestedClosure],
+    ) -> Result<ReconcileReport, CatalogueError> {
+        let mut closures_by_objective: BTreeMap<&str, &AttestedClosure> = BTreeMap::new();
+        for closure in closures {
+            if closure.objective_id.trim().is_empty() {
+                return Err(CatalogueError::Format(
+                    "clôture attestée : objective_id obligatoire".into(),
+                ));
+            }
+            // Première attestation gagne : un second horodatage divergent pour
+            // le même objectif serait un conflit d'autorité amont, pas du journal.
+            closures_by_objective
+                .entry(closure.objective_id.as_str())
+                .or_insert(closure);
+        }
+        let mut appended = 0usize;
+        let mut skipped = 0usize;
+        for link in links {
+            let Some(closure) = closures_by_objective.get(link.objective_id.as_str()) else {
+                continue;
+            };
+            match self.append_delivered_for_attested_closure(link, closure)? {
+                AppendOutcome::Appended => appended += 1,
+                AppendOutcome::IdempotentNoop => skipped += 1,
+            }
+        }
+        Ok(ReconcileReport { appended, skipped })
     }
 
     fn append_pending_dedup_provenance(
@@ -1486,6 +1587,103 @@ mod tests {
         middle_corrupt.push('\n');
         let err = parse_journal_bytes(middle_corrupt.as_bytes()).unwrap_err();
         assert!(err.to_string().contains("ligne 2"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reconcile_attested_closures_une_seule_transition_au_rejeu() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-catalogue-reconcile-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("catalogue.jsonl");
+        let mut journal = CatalogueJournal::open(&path).unwrap();
+        journal
+            .append_add(sample_add("c-open", Severity::Major, "2026-08-24T06:00:00Z"))
+            .unwrap();
+
+        let link = ArbitrationLink {
+            constat_id: "c-open".into(),
+            objective_id: "obj-1".into(),
+        };
+        let closure = AttestedClosure {
+            objective_id: "obj-1".into(),
+            observed_at: "2026-08-24T07:00:00Z".into(),
+        };
+
+        // Sans lien : clôture orpheline n'écrit rien.
+        let orphan = journal
+            .reconcile_attested_closures(&[], &[closure.clone()])
+            .unwrap();
+        assert_eq!(orphan.appended, 0);
+        assert_eq!(journal.read_entries().unwrap().len(), 1);
+
+        // Sans clôture : le lien seul n'écrit rien.
+        let waiting = journal
+            .reconcile_attested_closures(&[link.clone()], &[])
+            .unwrap();
+        assert_eq!(waiting.appended, 0);
+
+        // Lien + clôture → une transition.
+        let first = journal
+            .reconcile_attested_closures(&[link.clone()], &[closure.clone()])
+            .unwrap();
+        assert_eq!(first.appended, 1);
+        assert_eq!(first.skipped, 0);
+
+        // Rejeu → no-op (SC-1703).
+        let replay = journal
+            .reconcile_attested_closures(&[link.clone()], &[closure.clone()])
+            .unwrap();
+        assert_eq!(replay.appended, 0);
+        assert_eq!(replay.skipped, 1);
+
+        let entries = journal.read_entries().unwrap();
+        assert_eq!(entries.len(), 2);
+        let view = project_registre(&entries);
+        assert_eq!(view.footer.ouverts, 0);
+        assert!(matches!(
+            &entries[1],
+            CatalogueEntry::Transition(t)
+                if t.constat_id == "c-open"
+                    && t.objective_id == "obj-1"
+                    && t.trigger == TransitionTrigger::ObjectiveClosed
+        ));
+
+        // Clôture d'un autre objectif sans lien : zéro écriture (pas d'homonymie).
+        let unrelated = journal
+            .reconcile_attested_closures(
+                &[],
+                &[AttestedClosure {
+                    objective_id: "obj-homonyme-titre".into(),
+                    observed_at: "2026-08-24T08:00:00Z".into(),
+                }],
+            )
+            .unwrap();
+        assert_eq!(unrelated.appended, 0);
+        assert_eq!(journal.read_entries().unwrap().len(), 2);
+
+        // Lien vers un constat absent : refus franc.
+        let err = journal
+            .append_delivered_for_attested_closure(
+                &ArbitrationLink {
+                    constat_id: "absent".into(),
+                    objective_id: "obj-x".into(),
+                },
+                &AttestedClosure {
+                    objective_id: "obj-x".into(),
+                    observed_at: "2026-08-24T09:00:00Z".into(),
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogueError::ReferenceInconnue {
+                field: "constat_id",
+                ..
+            }
+        ));
         let _ = fs::remove_dir_all(&root);
     }
 }

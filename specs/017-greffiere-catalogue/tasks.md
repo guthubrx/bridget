@@ -22,13 +22,13 @@ oracle, pas seulement exécuter le chemin vert.
 
 ## Phase 1 — Corpus v1 fermé et configuration déclarative
 
-- [ ] T1701 Figer le corpus JSONL v1 dans
+- [x] T1701 Figer le corpus JSONL v1 dans
   `plugins/maicie/tests/fixtures/catalogue-v1/` et les types fermés dans
   `plugins/maicie/src/catalogue.rs` : deux kinds `add|transition`, RFC 3339
   avec fuseau, sévérités et sources fermées, références uniquement par ID.
   **Observable** : les tests de contrat refusent type, champ, sévérité et
   référence inconnus sans préparer d'append (SC-1702).
-- [ ] T1702 Déclarer et valider le chemin unique du catalogue dans
+- [x] T1702 Déclarer et valider le chemin unique du catalogue dans
   `plugins/maicie/src/config.rs` et `plugins/maicie/src/catalogue.rs` : chemin
   explicite, fichier régulier non-symlink sous le projet hôte et aucun autre
   artefact de workflow accessible en écriture.
@@ -40,20 +40,20 @@ sont revus avant d'introduire l'écriture durable.
 
 ## Phase 2 — Migration conservatrice et append durable
 
-- [ ] T1703 Implémenter dans `plugins/maicie/src/catalogue.rs` le lecteur et
+- [x] T1703 Implémenter dans `plugins/maicie/src/catalogue.rs` le lecteur et
   le writer verrouillés : lecture de collision `(id, bytes canoniques)`, no-op
   pour le retry identique, refus sans mutation pour bytes divergents,
   `O_APPEND`, verrou exclusif et `sync_data`, sans temporaire ni rename.
   **Observable** : SC-1708 prouve une seule ligne pour le replay identique et
   zéro mutation pour le replay divergent ; la mutation qui retire le verrou ou
   `sync_data` fait échouer l'oracle.
-- [ ] T1704 Prouver dans `plugins/maicie/tests/contract/catalogue.rs` deux
+- [x] T1704 Prouver dans `plugins/maicie/tests/contract/catalogue.rs` deux
   writers réellement concurrents du même catalogue déclaré, avec deux entrées
   complètes, distinctes et réouvrables.
   **Observable** : SC-1710 produit exactement deux lignes JSONL intactes,
   sans perte ni troncature ; une mutation vers réécriture globale perd une
   entrée et rend le test rouge.
-- [ ] T1705 Migrer le catalogue-prose réel (environ 50 entrées) par
+- [x] T1705 Migrer le catalogue-prose réel (environ 50 entrées) par
   `plugins/maicie/src/catalogue.rs` et un corpus sous
   `plugins/maicie/tests/fixtures/catalogue-migration/`, en préservant chaque
   texte verbatim et son identifiant de provenance ; consigner les entrées
@@ -68,7 +68,7 @@ ce gate sans journal réouvrable.
 
 ## Phase 3 — Vue pure du registre
 
-- [ ] T1706 Implémenter la réduction et le rendu déterministe `registre list`
+- [x] T1706 Implémenter la réduction et le rendu déterministe `registre list`
   dans `plugins/maicie/src/catalogue.rs`, puis l'appel mince dans
   `plugins/maicie/src/main.rs` : ordre figé open, sévérité, récurrence, gate
   raté, date, ID ; footer exact `N/M/K/P` incluant
@@ -76,7 +76,7 @@ ce gate sans journal réouvrable.
   **Observable** : SC-1704 compare octet pour octet deux journaux équivalents
   dont l'ordre physique diffère ; le rendu, son footer et l'absence d'écriture
   sont identiques.
-- [ ] T1707 Exposer `registre add` et `registre list` dans
+- [x] T1707 Exposer `registre add` et `registre list` dans
   `plugins/maicie/src/main.rs`, sans voie de message libre ni logique de tri
   dupliquée.
   **Observable** : un add conforme puis list passent uniquement par le
@@ -94,18 +94,23 @@ frontière lecture seule avant le raccord aux objectifs.
   délégation peut déclarer ce lien ; IDs exacts seulement.
   **Observable** : une homonymie textuelle, un `constat_id` absent ou un
   objectif non déclaré ne peut créer aucun lien ni aucune transition.
-- [ ] T1709 Implémenter dans `plugins/maicie/src/app.rs` et
+  **BLOQUÉ lot 5** : `domain.rs` / `store.rs` occupés par le couloir B 016.
+- [~] T1709 Implémenter dans `plugins/maicie/src/app.rs` et
   `plugins/maicie/src/catalogue.rs` la transition unique `open → delivered`
   depuis une clôture durable attestée : événement reçu ou réconciliation qui
   lit l'état durable du même `objective_id`, jamais horloge, silence ou texte.
   **Observable** : SC-1703 produit une seule transition au rejeu ; SC-1709
   perd l'événement puis réconcilie l'objectif exact avec la même unique ligne.
+  **Partiel lot 5** : API journal `reconcile_attested_closures` livrée ; câblage
+  `app.rs`/store attend T1708.
 - [ ] T1710 Déclencher la réconciliation idempotente **au fil des commandes
   catalogue** dans `plugins/maicie/src/app.rs` et le documenter en une ligne
   dans `specs/017-greffiere-catalogue/quickstart.md` ; n'ajouter ni boucle
   résidente ni polling.
   **Observable** : ouvrir/consulter le registre rattrape une clôture durable
   manquée, tandis qu'aucune activité hors commande ne produit de transition.
+  **BLOQUÉ** : dépend de T1708 (lecture états durables). Documenté dans
+  quickstart (noyau journal prêt).
 
 **Gate G1704 — transitions factuelles** : les transitions sont revues contre
 les deux sources attestées et leur idempotence, avec mutation séparant lien,
@@ -119,18 +124,20 @@ clôture ou append.
   catalogue.
   **Observable** : SC-1705 refuse une voie message-nu et prouve qu'un travail
   lancé possède délégation, corrélation et reçu durable.
-- [ ] T1712 Mettre à jour la skill Maicie active et
+  **BLOQUÉ** : dépend de G1704 / T1708.
+- [x] T1712 Mettre à jour la skill Maicie active et
   `specs/017-greffiere-catalogue/quickstart.md` : `registre list` est exigé au
   début de session, avant toute proposition de suite et en première opération
   du rituel de clôture ; les sorties de jalon affichent `N/M/K/P`.
   **Observable** : SC-1706 couvre démarrage et proposition ; SC-1707 couvre
   le rituel et son footer, sans écrire dans un plan hôte.
-- [ ] T1713 Documenter dans `plugins/maicie/README.md` et `README.md` le
+- [~] T1713 Documenter dans `plugins/maicie/README.md` et `README.md` le
   journal du dû, sa migration, ses interdits, la qualification humaine et les
   limites v1 (pas de déduplication, score, `planned`, runtime résident ou
   adaptateur hôte).
   **Observable** : chaque commande documentée renvoie au journal déclaré et
   aucune documentation ne promet une action automatique hors délégation.
+  **Partiel lot 5** : `plugins/maicie/README.md` fait ; README racine reporté.
 
 ## Phase 6 — Gate final de session
 
