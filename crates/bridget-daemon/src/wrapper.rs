@@ -940,6 +940,22 @@ impl RuntimeProbe {
         }
     }
 
+    /// Oublie la dernière émission pour forcer une republication.
+    ///
+    /// Après un redémarrage du daemon, la présence est vide alors que le
+    /// wrapper a survécu : sans invalidation, `poll` croit encore avoir
+    /// poussé le couple `(model, effort)` et reste muet tant que ce couple
+    /// n'a pas changé. La reconnexion doit donc republier l'observation
+    /// courante, même identique à la précédente.
+    fn invalidate_after_reconnect(&mut self) {
+        self.last_mtime = None;
+        self.last_sent = None;
+        // Forcer une résolution de chemin au prochain tick : un transcript
+        // apparu pendant la coupure ne doit pas rester invisible.
+        self.path_resolved_at = Instant::now() - RUNTIME_PATH_REFRESH;
+        self.last_check = Instant::now() - RUNTIME_PROBE_INTERVAL;
+    }
+
     /// Rend une observation à transmettre, ou `None` s'il n'y a rien de neuf.
     fn poll(&mut self) -> Option<crate::runtime::RuntimeObservation> {
         if self.last_check.elapsed() < RUNTIME_PROBE_INTERVAL {
@@ -1503,6 +1519,11 @@ pub fn launch(
                                 &writer_for_listener,
                                 WrapperToDaemon::JournalReady,
                             );
+                            // La présence runtime a disparu avec le daemon :
+                            // republier modèle/effort même s'ils n'ont pas changé.
+                            if let Some(probe) = runtime_probe.as_mut() {
+                                probe.invalidate_after_reconnect();
+                            }
 
                             info!(
                                 "✅ Agent « {} » reconnecté au daemon avec succès !",
@@ -1667,6 +1688,9 @@ pub fn launch(
                                     &writer_for_listener,
                                     WrapperToDaemon::JournalReady,
                                 );
+                                if let Some(probe) = runtime_probe.as_mut() {
+                                    probe.invalidate_after_reconnect();
+                                }
                                 continue 'connection;
                             }
                             Ok((_, _, registered_name)) => warn!(
@@ -3911,6 +3935,43 @@ mod reconnect_tests {
             bridget_transport::protocol::RuntimeSource::ClaudeTranscript
         );
         assert!(probe.poll().is_none(), "aucun trafic sans changement");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sonde_republication_apres_reconnect_meme_observation() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-claude-probe-reconnect-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let locator = ClaudeTranscriptLocator::new(root.clone());
+        std::fs::write(
+            root.join("courant.jsonl"),
+            concat!(
+                r#"{"type":"assistant","isSidechain":false,"effort":"high","message":{"model":"claude-fable-5"}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let mut probe = RuntimeProbe::claude(locator);
+        let first = probe.poll().expect("première observation");
+        assert_eq!(first.model, "claude-fable-5");
+        assert!(
+            probe.poll().is_none(),
+            "sans invalidation, pas de republication"
+        );
+
+        // Simule la reconnexion après un redémarrage daemon : la présence est
+        // vide, l'observation locale est pourtant inchangée.
+        probe.invalidate_after_reconnect();
+        let again = probe
+            .poll()
+            .expect("republication forcée après reconnect");
+        assert_eq!(again, first);
+
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -919,10 +919,42 @@ fn native_codex_definition() -> AgentDefinition {
     }
 }
 
+fn native_cursor_definition() -> AgentDefinition {
+    // Le CLI Cursor choisit le modèle en interne : on affiche l'étiquette
+    // honnête `auto`, jamais un nom inventé. Sans `--model`, who reste vide.
+    AgentDefinition {
+        command: "cursor-agent".to_string(),
+        args: vec![
+            "--model".to_string(),
+            "auto".to_string(),
+            "acp".to_string(),
+        ],
+        protocol: "acp".to_string(),
+        forbidden_env: vec![
+            "CURSOR_API_KEY".to_string(),
+            "OPENAI_API_KEY".to_string(),
+            "ANTHROPIC_API_KEY".to_string(),
+        ],
+        pass_env: Vec::new(),
+        permissions: "allow".to_string(),
+        queue_capacity: DEFAULT_QUEUE_CAPACITY,
+        notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
+        mcp: McpDefinition {
+            interactive: "none".to_string(),
+            acp_session: true,
+        },
+        capabilities: AdapterCapabilities {
+            execution_paths: vec!["acp".to_string()],
+            models: BTreeMap::from([("auto".to_string(), ModelCapabilities::default())]),
+        },
+    }
+}
+
 fn default_agents() -> BTreeMap<String, AgentDefinition> {
     BTreeMap::from([
         ("codex".to_string(), native_codex_definition()),
         ("claude".to_string(), native_claude_definition()),
+        ("cursor".to_string(), native_cursor_definition()),
         (
             "gemini".to_string(),
             definition(
@@ -1010,6 +1042,34 @@ mod tests {
         assert_eq!(
             registry.get("gemini").unwrap().mcp.interactive,
             "unsupported"
+        );
+        let cursor = registry.get("cursor").unwrap();
+        assert_eq!(cursor.command, "cursor-agent");
+        assert_eq!(cursor.args, vec!["--model", "auto", "acp"]);
+        assert_eq!(cursor.protocol, "acp");
+        assert_eq!(
+            cursor.capabilities.models.get("auto"),
+            Some(&ModelCapabilities::default())
+        );
+        assert_eq!(
+            runtime_model_and_effort(&cursor.args),
+            Some(("auto".to_string(), None))
+        );
+    }
+
+    #[test]
+    fn etiquette_modele_auto_lue_depuis_les_args_cursor() {
+        // Sans --model, who reste vide — c'est le trou constaté sur les
+        // anciennes définitions. Avec --model auto, l'étiquette est honnête.
+        let observed = runtime_model_and_effort(&[
+            "--model".to_string(),
+            "auto".to_string(),
+            "acp".to_string(),
+        ]);
+        assert_eq!(observed, Some(("auto".to_string(), None)));
+        assert!(
+            runtime_model_and_effort(&["acp".to_string()]).is_none(),
+            "sans --model, who reste vide"
         );
     }
 
