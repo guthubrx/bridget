@@ -5,7 +5,7 @@ tenue par le référent humain-agent. Chaque règle exécutée à la main ici es
 candidate à devenir un comportement produit de Maicie. Hors périmètre de la
 v1 (spec 011) — intrants pour les itérations suivantes.
 
-## Tableau de bord — mis à jour le 2026-08-24, 15h20
+## Tableau de bord — mis à jour le 2026-08-24, 18h04
 
 Vue d'avancement des blocs. Détail et jurisprudence dans chaque bloc plus
 bas ; ce tableau ne remplace pas la lecture, il dit où on en est.
@@ -139,6 +139,17 @@ ont été créés directement dans ce fichier le 24/08.
 - [ ] Équipement des Claude gérés (MCP + identité + PATH — envois archivés
       « human », constat de traçabilité) — 🔄 en cours (cursor7)
 - [x] Extinction tmux ACHEVÉE 15h25 — plus aucun ouvrier tmux
+- [x] Chaîne identité SOLDÉE : MCP+identité+PATH injectés aux claude gérés,
+      envois signés du NOM de l'agent (preuve vivante), usurpation éteinte
+- [x] JURY ÉPHÉMÈRE n°1 (format LIMITE) : collèges 5 trouvailles uniques
+      vs témoin 1 — manche aux collèges ; limites consignées, manche 2
+      (2×2 vs 2 témoins, jurés facturables) armée sur le lot routines
+- [x] Format LIMITE mergé : « 5h 19% rst · 7d … » par fenêtre, sans
+      écrasement (effet au prochain redémarrage)
+- [x] Bloquants disque + rouge permanent SOLDÉS (ramasse-copies au boot,
+      seuil 20 Gi, skip nommé) — registre à ZÉRO Bloquant
+- [ ] Routines Maicie — 🔄 implémentation (cursor7, v15, note validée)
+- [ ] outcome_unknown sur livraison réussie — 🔄 instruction (fable2)
 
 **Bloc G — ponts natifs**
 - [x] G1 vocabulaire interne (ADR 010, couche `ManagedSession`)
@@ -153,9 +164,8 @@ ont été créés directement dans ce fichier le 24/08.
 - [ ] G9 coût par mission — 🔄 corrections de revue LIVRÉES (anti-doublon
       assistant+result oraclé, borne droite testée) ; rebase final v13
       derrière la v12 mergée — merge imminent
-- [ ] G10 retirer le pont Zed — 🔄 LIVRÉ et revu (première revue de
-      fable-reviewer : APPROVE_WITH_CHANGES) ; durcissements C1/C2 en
-      cours (normalisation du token, garde sur le chemin wrapper)
+- [x] G10 pont Zed REFUSÉ sous toutes ses formes (4 formes + @version +
+      chemin --equipier), DEPRECATIONS daté, ACP générique préservé
 - [ ] G11 nommer le protocole — 🔄 TRANSPORT affiche codex_app_server /
       claude_stream_json depuis 0a3872b ; vérification liée en cours (coder3)
 
@@ -184,9 +194,9 @@ ont été créés directement dans ce fichier le 24/08.
       décision auto) — format compact 5h/7d en cours (coder4)
 - [ ] L4 coût par mission — 🔄 = G9, rebase final v11→v12→v13 en cours,
       garde M1 en juge de paix
-- [ ] L5 voir qui travaille — ⬜ ROUVERT le 24/08 15h32 (coché trop vite) :
-      busy ne vit que pendant un tour visible, et un redémarrage daemon
-      efface les états en vol — constat utilisateur, au registre
+- [ ] L5 voir qui travaille — 🔄 volet redémarrage CORRIGÉ (busy ré-annoncé
+      à la ré-inscription, mergé) ; l'entre-tours reste aveugle par
+      honnêteté (aucun signal attesté — pas de busy inventé)
 - [x] BASCULE tmux→gérés FAITE le 24/08 12h25 (voir point d'étape bloc L) ;
       extinction ACHEVÉE à 15h25 : cxbridget, prospective puis coderBridget
       (pane fermé par l'utilisateur après sa dernière livraison — état
