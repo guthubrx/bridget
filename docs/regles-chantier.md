@@ -139,3 +139,27 @@ distinctes. Un agent peut légitimement être connecté sans être employable.
 *(Incident fondateur : arrivée de `cursorbridget` le 2026-08-24 — spawn refusé
 faute de type au registre, puis délégation refusée faute de profil Maicie,
 deux échecs successifs pour un même agent.)*
+
+
+## Pièges de validation connus (référent)
+
+Écrit le 2026-08-24 après que deux agents s'y soient fait prendre la même nuit.
+
+- **`cargo test --workspace` n'active PAS les fonctionnalités de test.**
+  Certains points d'arrêt utilisés par les tests de crash sont derrière
+  `#[cfg(feature = "test-support")]` (par exemple `before_coordination_persist`,
+  `daemon.rs`). Sans l'option, le point d'arrêt n'existe pas dans le binaire et
+  le test échoue en le cherchant — avec un message qui annonce un jalon absent
+  là où il faudrait dire que la fonctionnalité n'est pas activée. La commande
+  juste est `cargo test -p <crate> --features test-support`. La feature existe
+  sur `bridget-daemon` et `bridget-transport`, PAS sur `maicie` : un rouge du
+  côté maicie ne s'explique donc jamais ainsi.
+- **`cargo fmt` sans `$HOME/.cargo/bin` dans le `PATH` ne s'exécute pas** et
+  laisse croire à un contrôle vert qui n'a jamais eu lieu.
+- **Les gates marqués `#[ignore]` ne tournent pas par défaut.** Une batterie
+  complète verte ne dit donc rien de leur état. Ils doivent être lancés
+  explicitement, y compris APRÈS un merge — c'est en ne le faisant pas que la
+  régression du gate fondateur est passée sur `main` le 24/08.
+- **Un rouge n'est jamais requalifié en « instable » sans preuve.** Trois tests
+  ont échoué de façon intermittente cette nuit ; deux cachaient un vrai défaut.
+  La preuve d'instabilité est un taux mesuré, pas une impression.
