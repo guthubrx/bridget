@@ -438,6 +438,7 @@ mod tests {
         let file = fs::OpenOptions::new()
             .create(true)
             .write(true)
+            .truncate(true)
             .mode(0o600)
             .open(path)
             .unwrap();
