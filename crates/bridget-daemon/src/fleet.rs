@@ -10,13 +10,21 @@ use crate::idempotency::{
     SpawnCommandIssue, SpawnCommandState, SpawnReservation,
 };
 use bridget_transport::ResolvedAgentDefinition;
+use log::warn;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
+
+/// Variable d'environnement qui fixe le quota de flotte gérée au démarrage.
+pub const FLEET_QUOTA_ENV: &str = "BRIDGET_FLEET_QUOTA";
+
+/// Défaut relevé : la flotte légitime tourne autour de 10–12 équipiers.
+pub const DEFAULT_FLEET_QUOTA: usize = 16;
 
 #[derive(Debug, Clone, Copy)]
 pub struct FleetConfig {
@@ -29,12 +37,116 @@ pub struct FleetConfig {
 impl Default for FleetConfig {
     fn default() -> Self {
         Self {
-            quota: 8,
+            quota: DEFAULT_FLEET_QUOTA,
             persistent_horizon_secs: 7 * 24 * 60 * 60,
             ephemeral_horizon_secs: 24 * 60 * 60,
             issued_at_tolerance_secs: 30,
         }
     }
+}
+
+impl FleetConfig {
+    /// Lit `BRIDGET_FLEET_QUOTA` une fois au démarrage du daemon.
+    /// Valeur invalide → défaut + warning. `0` conserve sa sémantique
+    /// actuelle (`FleetSupervisor::open` refuse la configuration).
+    pub fn from_env() -> Self {
+        #[cfg(test)]
+        {
+            if let Some(quota) = test_fleet_quota_override() {
+                return Self {
+                    quota,
+                    ..Self::default()
+                };
+            }
+            Self::default()
+        }
+        #[cfg(not(test))]
+        Self {
+            quota: resolve_fleet_quota(std::env::var_os(FLEET_QUOTA_ENV)),
+            ..Self::default()
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_FLEET_QUOTA: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn test_fleet_quota_override() -> Option<usize> {
+    TEST_FLEET_QUOTA.with(|cell| cell.get())
+}
+
+/// Surcharge le quota lu par `FleetConfig::from_env` dans le fil courant.
+/// Hors override, les tests restent hermétiques (défaut 16, pas l'env shell).
+#[cfg(test)]
+pub struct TestFleetQuotaGuard {
+    previous: Option<usize>,
+}
+
+#[cfg(test)]
+impl TestFleetQuotaGuard {
+    pub fn set(quota: usize) -> Self {
+        let previous = TEST_FLEET_QUOTA.with(|cell| {
+            let previous = cell.get();
+            cell.set(Some(quota));
+            previous
+        });
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestFleetQuotaGuard {
+    fn drop(&mut self) {
+        TEST_FLEET_QUOTA.with(|cell| cell.set(self.previous));
+    }
+}
+
+/// Résout le quota depuis une valeur d'environnement brute.
+pub fn resolve_fleet_quota(raw: Option<OsString>) -> usize {
+    let Some(raw) = raw else {
+        return DEFAULT_FLEET_QUOTA;
+    };
+    let Some(text) = raw.to_str() else {
+        warn!("{FLEET_QUOTA_ENV} non UTF-8 — défaut {DEFAULT_FLEET_QUOTA} appliqué");
+        return DEFAULT_FLEET_QUOTA;
+    };
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        warn!("{FLEET_QUOTA_ENV} vide — défaut {DEFAULT_FLEET_QUOTA} appliqué");
+        return DEFAULT_FLEET_QUOTA;
+    }
+    match trimmed.parse::<usize>() {
+        Ok(0) => 0,
+        Ok(quota) => quota,
+        Err(_) => {
+            warn!("{FLEET_QUOTA_ENV}={trimmed:?} invalide — défaut {DEFAULT_FLEET_QUOTA} appliqué");
+            DEFAULT_FLEET_QUOTA
+        }
+    }
+}
+
+/// Détail durable du refus `quota_exceeded` (idempotence / replay).
+pub fn quota_exceeded_detail(quota: usize) -> String {
+    format!(
+        "quota de flotte atteint ({quota}) ; lever avec {FLEET_QUOTA_ENV} (ex. export {FLEET_QUOTA_ENV}={})",
+        suggested_fleet_quota(quota)
+    )
+}
+
+/// Message WARN visible quand une reprise est amputée pour quota.
+/// La trace durable complète reste au périmètre D20 — ne pas la dupliquer ici.
+pub fn resume_quota_refusal_message(agent: &str, quota: usize) -> String {
+    format!(
+        "reprise de {agent} refusée: quota de flotte atteint ({quota}) ; lever avec {FLEET_QUOTA_ENV} (ex. export {FLEET_QUOTA_ENV}={})",
+        suggested_fleet_quota(quota)
+    )
+}
+
+fn suggested_fleet_quota(quota: usize) -> usize {
+    quota.saturating_add(8).max(DEFAULT_FLEET_QUOTA)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -359,13 +471,8 @@ impl FleetSupervisor {
                     );
                 }
                 if inner.active_by_command.len() >= self.config.quota {
-                    return terminal_refusal(
-                        &mut inner,
-                        &key,
-                        &command,
-                        "quota_exceeded",
-                        "limite de flotte atteinte",
-                    );
+                    let detail = quota_exceeded_detail(self.config.quota);
+                    return terminal_refusal(&mut inner, &key, &command, "quota_exceeded", &detail);
                 }
                 inner.idempotency.advance_spawn(
                     &key,
@@ -1128,14 +1235,67 @@ mod tests {
             SpawnSubmission::Start(_)
         ));
         let refusal = supervisor.request_spawn(&second, NOW).unwrap();
-        assert!(matches!(
-            refusal,
-            SpawnSubmission::Terminal(SpawnCommandIssue::Failed { ref category, .. })
-                if category == "quota_exceeded"
-        ));
+        match &refusal {
+            SpawnSubmission::Terminal(SpawnCommandIssue::Failed { category, reason }) => {
+                assert_eq!(category, "quota_exceeded");
+                assert_eq!(reason, &quota_exceeded_detail(1));
+                assert!(reason.contains("BRIDGET_FLEET_QUOTA"));
+                assert!(reason.contains("quota de flotte atteint (1)"));
+            }
+            other => panic!("refus quota attendu, obtenu {other:?}"),
+        }
         assert_eq!(supervisor.request_spawn(&second, NOW + 1).unwrap(), refusal);
         drop(supervisor);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolve_fleet_quota_lit_env_invalide_et_zero() {
+        assert_eq!(resolve_fleet_quota(None), DEFAULT_FLEET_QUOTA);
+        assert_eq!(resolve_fleet_quota(Some(OsString::from("24"))), 24);
+        assert_eq!(resolve_fleet_quota(Some(OsString::from("0"))), 0);
+        assert_eq!(
+            resolve_fleet_quota(Some(OsString::from("abc"))),
+            DEFAULT_FLEET_QUOTA
+        );
+        assert_eq!(
+            resolve_fleet_quota(Some(OsString::from(""))),
+            DEFAULT_FLEET_QUOTA
+        );
+        assert_eq!(
+            resolve_fleet_quota(Some(OsString::from("-3"))),
+            DEFAULT_FLEET_QUOTA
+        );
+        let root = test_root("quota-zero");
+        fs::create_dir_all(&root).unwrap();
+        let err = FleetSupervisor::open(
+            &root.join("bridget.db"),
+            DesiredStateStore::at_path(root.join("fleet.json")),
+            FleetConfig {
+                quota: 0,
+                ..config()
+            },
+        );
+        assert!(matches!(
+            err,
+            Err(FleetError::InvalidOrder("configuration de flotte invalide"))
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn from_env_posee_releve_le_quota_consomme_par_le_daemon() {
+        let _guard = TestFleetQuotaGuard::set(24);
+        assert_eq!(FleetConfig::from_env().quota, 24);
+    }
+
+    #[test]
+    fn message_refus_reprise_quota_nomme_agent_quota_et_levier() {
+        let message = resume_quota_refusal_message("cursor8", 8);
+        assert!(message.contains("cursor8"), "{message}");
+        assert!(message.contains("quota de flotte atteint (8)"), "{message}");
+        assert!(message.contains("BRIDGET_FLEET_QUOTA"), "{message}");
+        assert!(message.contains("export BRIDGET_FLEET_QUOTA="), "{message}");
     }
 
     #[test]

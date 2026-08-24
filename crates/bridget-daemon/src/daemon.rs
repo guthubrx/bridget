@@ -1624,7 +1624,7 @@ impl DaemonState {
         let fleet = Arc::new(FleetSupervisor::open(
             &config.db_path,
             desired,
-            FleetConfig::default(),
+            FleetConfig::from_env(),
         )?);
         let registry = AgentRegistry::load()?;
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
@@ -1966,7 +1966,15 @@ fn reserve_managed_recoveries(
         )? {
             SpawnDecision::Ready(recovery) => prepared.push(recovery),
             SpawnDecision::Rejected(reason) => {
-                warn!("reprise de {name} refusée: {reason:?}");
+                if let SpawnRefusal::QuotaExceeded { limit } = &reason {
+                    // WARN visible (agent + quota + levier). Trace durable = D20.
+                    warn!(
+                        "{}",
+                        crate::fleet::resume_quota_refusal_message(&name, *limit)
+                    );
+                } else {
+                    warn!("reprise de {name} refusée: {reason:?}");
+                }
                 state.fleet.remove_desired(&name)?;
             }
             SpawnDecision::EnvelopeMismatch => {
@@ -6445,7 +6453,8 @@ mod presence_tests {
         let (_, config) = recovery_fixture_state(&root);
         let desired = DesiredStateStore::at_path(desired_state_path(&config));
         let mut fleet = crate::desired_state::DesiredFleet::default();
-        for index in 0..10_u64 {
+        let _env = crate::fleet::TestFleetQuotaGuard::set(2);
+        for index in 0..5_u64 {
             fleet.equipiers.insert(
                 format!("agent-{index:02}"),
                 crate::desired_state::DesiredEquipier {
@@ -6461,12 +6470,51 @@ mod presence_tests {
         desired.persist(&fleet).unwrap();
 
         let (mut reopened, _) = recovery_fixture_state(&root);
+        assert_eq!(reopened.fleet.quota(), 2);
         let recoveries = reserve_managed_recoveries(&mut reopened, unix_timestamp()).unwrap();
         assert_eq!(recoveries.len(), reopened.fleet.quota());
         let remaining = reopened.fleet.desired_fleet().unwrap();
         assert_eq!(remaining.equipiers.len(), reopened.fleet.quota());
         assert!(!remaining.equipiers.contains_key("agent-00"));
-        assert!(!remaining.equipiers.contains_key("agent-09"));
+        // agent-03 et agent-04 refusés pour quota (message complet oraclé côté fleet).
+        assert!(!remaining.equipiers.contains_key("agent-03"));
+        assert!(!remaining.equipiers.contains_key("agent-04"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reprise_passe_quand_bridget_fleet_quota_est_pose() {
+        let root = PathBuf::from(format!(
+            "/tmp/bg-quota-env-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        let (_, config) = recovery_fixture_state(&root);
+        let desired = DesiredStateStore::at_path(desired_state_path(&config));
+        let mut fleet = crate::desired_state::DesiredFleet::default();
+        for index in 0..10_u64 {
+            fleet.equipiers.insert(
+                format!("agent-{index:02}"),
+                crate::desired_state::DesiredEquipier {
+                    agent_type: "fixture".to_string(),
+                    cwd: PathBuf::from("/tmp"),
+                    command_id: format!("ancien-{index}"),
+                    generation: index + 1,
+                    created: index.to_string(),
+                    resolved_definition: Some(recovery_fixture_definition()),
+                },
+            );
+        }
+        desired.persist(&fleet).unwrap();
+
+        let _env = crate::fleet::TestFleetQuotaGuard::set(16);
+        let (mut reopened, _) = recovery_fixture_state(&root);
+        assert_eq!(reopened.fleet.quota(), 16);
+        let recoveries = reserve_managed_recoveries(&mut reopened, unix_timestamp()).unwrap();
+        assert_eq!(recoveries.len(), 10);
+        let remaining = reopened.fleet.desired_fleet().unwrap();
+        assert_eq!(remaining.equipiers.len(), 10);
+        assert!(remaining.equipiers.contains_key("agent-09"));
         std::fs::remove_dir_all(root).unwrap();
     }
 
