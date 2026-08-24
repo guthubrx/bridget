@@ -72,14 +72,14 @@ fn migration_v8_main_vers_v11_puis_seconde_ouverture_conservent_l_historique() {
     connection.pragma_update(None, "user_version", 8).unwrap();
     connection
         .execute(
-            "DELETE FROM schema_migrations WHERE version IN (9, 10, 11)",
+            "DELETE FROM schema_migrations WHERE version IN (9, 10, 11, 12, 13)",
             [],
         )
         .unwrap();
     drop(connection);
 
     let store = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 12);
+    assert_eq!(store.schema_version().unwrap(), 13);
     assert_eq!(
         store.objective_snapshots(Some(objectif.id)).unwrap()[0].delegations[0].id,
         delegation
@@ -117,7 +117,7 @@ fn migration_v8_main_vers_v11_puis_seconde_ouverture_conservent_l_historique() {
     );
     drop(connection);
     let reopened = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 12);
+    assert_eq!(reopened.schema_version().unwrap(), 13);
     assert_eq!(
         reopened
             .objective_snapshots(Some(objectif.id))
@@ -170,14 +170,14 @@ fn migration_v9_refuse_de_rejouer_une_notification_sans_horodatage_atteste() {
     connection.pragma_update(None, "user_version", 9).unwrap();
     connection
         .execute(
-            "DELETE FROM schema_migrations WHERE version IN (10, 11)",
+            "DELETE FROM schema_migrations WHERE version IN (10, 11, 12, 13)",
             [],
         )
         .unwrap();
     drop(connection);
 
     let store = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 12);
+    assert_eq!(store.schema_version().unwrap(), 13);
     assert!(matches!(
         store.pending_notification_outboxes(),
         Err(StoreError::Corrupt(
@@ -1690,4 +1690,120 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+#[test]
+fn l4_cout_atteste_non_nul_et_sans_source_reste_inconnu() {
+    use maicie::domain::{CoutMissionAgent, CoutMissionCompteurs};
+
+    let fixture = Fixture::new("l4-cout-atteste");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let native_id = seed_single_delegate(&mut store, "claude-natif", 40);
+    let tmux_id = seed_single_delegate(&mut store, "tmux-sans-sonde", 41);
+
+    store
+        .close_objective_with_costs(
+            native_id,
+            "mission native avec source",
+            1_787_600_000,
+            vec![CoutMissionAgent::attested(
+                "claude-natif",
+                1_787_500_000,
+                1_787_600_000,
+                CoutMissionCompteurs {
+                    turns: 2,
+                    input_tokens: 10,
+                    output_tokens: 20,
+                    cache_creation_input_tokens: 30,
+                    cache_read_input_tokens: 100,
+                },
+            )],
+        )
+        .unwrap();
+    let native_costs = store.mission_costs(native_id).unwrap();
+    assert_eq!(native_costs.len(), 1);
+    assert!(native_costs[0].attested);
+    assert_eq!(native_costs[0].agent, "claude-natif");
+    assert_eq!(native_costs[0].facturable_tokens, Some(60));
+    assert_eq!(native_costs[0].cache_read_input_tokens, Some(100));
+    assert_ne!(native_costs[0].facturable_tokens, Some(0));
+
+    store
+        .close_objective(tmux_id, "tmux sans sonde", 1_787_600_100)
+        .unwrap();
+    let tmux_costs = store.mission_costs(tmux_id).unwrap();
+    assert_eq!(tmux_costs.len(), 1);
+    assert!(!tmux_costs[0].attested);
+    assert_eq!(tmux_costs[0].agent, "tmux-sans-sonde");
+    assert_eq!(tmux_costs[0].facturable_tokens, None);
+    assert_eq!(tmux_costs[0].turns, None);
+}
+
+#[test]
+fn l4_rejouer_close_ne_change_pas_le_cout_porte() {
+    use maicie::domain::{CoutMissionAgent, CoutMissionCompteurs};
+
+    let fixture = Fixture::new("l4-anti-double-comptage");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let objective_id = seed_single_delegate(&mut store, "claude-1", 42);
+
+    store
+        .close_objective_with_costs(
+            objective_id,
+            "première clôture",
+            1_787_700_000,
+            vec![CoutMissionAgent::attested(
+                "claude-1",
+                1_787_600_000,
+                1_787_700_000,
+                CoutMissionCompteurs {
+                    turns: 1,
+                    input_tokens: 2,
+                    output_tokens: 175,
+                    cache_creation_input_tokens: 40_804,
+                    cache_read_input_tokens: 13_907,
+                },
+            )],
+        )
+        .unwrap();
+    let before = store.mission_costs(objective_id).unwrap();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].facturable_tokens, Some(40_981));
+
+    let replay = store.close_objective_with_costs(
+        objective_id,
+        "rejeu qui tenterait un double-comptage",
+        1_787_700_001,
+        vec![CoutMissionAgent::attested(
+            "claude-1",
+            1_787_600_000,
+            1_787_700_001,
+            CoutMissionCompteurs {
+                turns: 9,
+                input_tokens: 999,
+                output_tokens: 999,
+                cache_creation_input_tokens: 999,
+                cache_read_input_tokens: 999,
+            },
+        )],
+    );
+    assert!(matches!(
+        replay,
+        Err(StoreError::Invalid("objectif déjà clos"))
+    ));
+    let after = store.mission_costs(objective_id).unwrap();
+    assert_eq!(after, before);
+    assert_eq!(after[0].facturable_tokens, Some(40_981));
+    assert_eq!(after[0].turns, Some(1));
+}
+
+fn seed_single_delegate(store: &mut MaicieStore, participant: &str, index: i64) -> Uuid {
+    let objective = ObjectifCoordonne::nouveau(
+        format!("l4-{index}"),
+        ModeObjectif::Delegue,
+        1_787_500_000 + index,
+    )
+    .unwrap();
+    create_delegation(store, &objective, participant);
+    objective.id
 }

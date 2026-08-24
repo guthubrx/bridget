@@ -1686,6 +1686,89 @@ pub struct RecuCorrelation {
     pub lifecycle_state: Option<EtatRequeteGuichet>,
 }
 
+/// Compteurs attestés d'une fenêtre de mission. `facturable` = in + out +
+/// cache_create ; `cache_read` reste hors facturable (leçon du comparatif).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoutMissionCompteurs {
+    pub turns: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
+}
+
+impl CoutMissionCompteurs {
+    pub fn facturable_tokens(self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.cache_creation_input_tokens)
+    }
+}
+
+/// Coût porté par un objectif clos pour un agent délégué.
+///
+/// `attested == false` signifie « inconnu » : les compteurs restent absents,
+/// jamais un zéro inventé. `facturable_tokens` = in + out + cache_create ;
+/// `cache_read_input_tokens` reste séparé.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoutMissionAgent {
+    pub agent: String,
+    pub from_secs: i64,
+    pub to_secs: i64,
+    pub attested: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facturable_tokens: Option<u64>,
+}
+
+impl CoutMissionAgent {
+    pub fn unknown(agent: impl Into<String>, from_secs: i64, to_secs: i64) -> Self {
+        Self {
+            agent: agent.into(),
+            from_secs,
+            to_secs,
+            attested: false,
+            turns: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+            facturable_tokens: None,
+        }
+    }
+
+    /// Construit un coût attesté depuis un agrégat Bridget. Jamais appelée
+    /// avec des compteurs inventés : l'appelant n'a que des faits runtime.
+    pub fn attested(
+        agent: impl Into<String>,
+        from_secs: i64,
+        to_secs: i64,
+        compteurs: CoutMissionCompteurs,
+    ) -> Self {
+        Self {
+            agent: agent.into(),
+            from_secs,
+            to_secs,
+            attested: true,
+            turns: Some(compteurs.turns),
+            input_tokens: Some(compteurs.input_tokens),
+            output_tokens: Some(compteurs.output_tokens),
+            cache_creation_input_tokens: Some(compteurs.cache_creation_input_tokens),
+            cache_read_input_tokens: Some(compteurs.cache_read_input_tokens),
+            facturable_tokens: Some(compteurs.facturable_tokens()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delegation {
     pub id: Uuid,

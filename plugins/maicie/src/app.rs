@@ -17,7 +17,7 @@ use crate::domain::guichet::{
     parse_claim, parse_lifecycle_event,
 };
 use crate::domain::{
-    ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination,
+    ActivationOutbox, ApprobationActivation, ClasseDuree, CoutMissionAgent, DecisionCoordination,
     DefinitionCoordination, Delegation, EntreeReductionCoordination, EtatDecision, EtatFlux,
     EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination,
     FaitAppartenanceRepli, FaitReassignation, FraicheurCoordination, ModeObjectif,
@@ -845,18 +845,37 @@ pub fn summarize(
 
 /// Clôture explicitement l'objectif et écrit son audit dans la même
 /// transaction SQLite ; aucune issue Bridget ne peut provoquer cette action.
+/// Sans coûts fournis, chaque agent délégué porte « inconnu » (jamais zéro).
 pub fn close(
     store: &mut MaicieStore,
     objective_id: Uuid,
     reason: &str,
     now: i64,
 ) -> Result<DecisionCoordination, ObjectiveError> {
+    close_with_costs(store, objective_id, reason, now, Vec::new())
+}
+
+/// Clôture en portant les coûts attestés (ou inconnus) fournis par l'appelant.
+/// Les agents absents des overrides restent « inconnu » — jamais un zéro inventé.
+pub fn close_with_costs(
+    store: &mut MaicieStore,
+    objective_id: Uuid,
+    reason: &str,
+    now: i64,
+    costs: Vec<CoutMissionAgent>,
+) -> Result<DecisionCoordination, ObjectiveError> {
     if reason.trim().is_empty() || now <= 0 {
         return Err(ObjectiveError::Invalid("motif ou horodatage absent"));
     }
-    store
-        .close_objective(objective_id, reason, now)
-        .map_err(objective_store_error)
+    if costs.is_empty() {
+        store
+            .close_objective(objective_id, reason, now)
+            .map_err(objective_store_error)
+    } else {
+        store
+            .close_objective_with_costs(objective_id, reason, now, costs)
+            .map_err(objective_store_error)
+    }
 }
 
 const MAICIE_PILOT: &str = "maicie";

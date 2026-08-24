@@ -378,6 +378,18 @@ fn unknown_os() -> String {
     "inconnu".to_string()
 }
 
+/// Agrégat d'usage renvoyé par Bridget pour une fenêtre fermée.
+/// `None` côté appelant signifie « inconnu », jamais un zéro inventé.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct UsageWindowAggregate {
+    pub turns: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub facturable_tokens: u64,
+}
+
 /// Etat public retourne par une annulation de demande suivie.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Cancellation {
@@ -738,6 +750,61 @@ impl BridgetClient {
             }
             "Nack" => Err(parse_nack(response)?),
             other => Err(unexpected("AgentList", other)),
+        }
+    }
+
+    /// Agrège les échantillons d'usage d'un agent dans une fenêtre fermée.
+    ///
+    /// `Ok(None)` = aucun échantillon attesté → le greffe rend « inconnu ».
+    /// Une erreur réseau laisse aussi le greffe sur « inconnu » : la clôture
+    /// ne doit jamais inventer un zéro ni échouer faute de sonde.
+    pub fn usage_window(
+        &self,
+        agent: &str,
+        from_secs: i64,
+        to_secs: i64,
+    ) -> Result<Option<UsageWindowAggregate>, BridgetClientError> {
+        Self::usage_window_at_with_limits(&self.socket_path, self.limits, agent, from_secs, to_secs)
+    }
+
+    pub fn usage_window_at_with_limits(
+        socket_path: impl AsRef<Path>,
+        limits: BridgetClientLimits,
+        agent: &str,
+        from_secs: i64,
+        to_secs: i64,
+    ) -> Result<Option<UsageWindowAggregate>, BridgetClientError> {
+        let deadline = monotonic_now() + limits.connect_timeout + limits.io_timeout;
+        let mut connection = WireConnection::connect(socket_path.as_ref(), limits, deadline)?;
+        let role = connection.request_until(
+            json!({"type": "RoleHandshake", "role": "wrapper"}),
+            deadline,
+        )?;
+        expect_role_accepted(&role, "wrapper")?;
+        let response = connection.request_until(
+            json!({
+                "type": "UsageWindow",
+                "agent": agent,
+                "from_secs": from_secs,
+                "to_secs": to_secs,
+            }),
+            deadline,
+        )?;
+        match response_type(&response)? {
+            "UsageWindowResult" => {
+                let aggregate = response.get("aggregate").cloned().unwrap_or(Value::Null);
+                if aggregate.is_null() {
+                    return Ok(None);
+                }
+                serde_json::from_value(aggregate)
+                    .map(Some)
+                    .map_err(|source| BridgetClientError::Decode {
+                        line: response.to_string(),
+                        source,
+                    })
+            }
+            "Nack" => Err(parse_nack(response)?),
+            other => Err(unexpected("UsageWindowResult", other)),
         }
     }
 

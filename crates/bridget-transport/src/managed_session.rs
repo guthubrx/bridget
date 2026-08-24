@@ -115,6 +115,15 @@ pub enum ManagedEventKind {
     ModelObserved {
         model: String,
     },
+    /// Consommation d'un tour effectivement lue du flux natif. Les compteurs
+    /// absents ou incomplets ne deviennent jamais un zéro inventé : le pilote
+    /// n'émet cet événement que lorsque le schéma attesté est entier.
+    UsageObserved {
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_creation_input_tokens: u64,
+        cache_read_input_tokens: u64,
+    },
     Update {
         detail: String,
     },

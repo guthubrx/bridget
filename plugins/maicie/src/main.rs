@@ -9,9 +9,10 @@ use maicie::MAICIE_IDENTITY;
 use maicie::app::{
     CatalogueReconcileError, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate,
     LocalProfileApproval, ObjectiveError, ProfileActivationError, ProfileActivationProposalRequest,
-    add_participant, approve_profile_activation, close, delegate, delegated_participants,
-    pin_coordination_policy, propose_profile_activation, reconcile_catalogue_from_store,
-    remove_participant, status, stored_profile_activation_proposal, summarize,
+    add_participant, approve_profile_activation, close_with_costs, delegate,
+    delegated_participants, pin_coordination_policy, propose_profile_activation,
+    reconcile_catalogue_from_store, remove_participant, status, stored_profile_activation_proposal,
+    summarize,
 };
 use maicie::bridget_client::{
     AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits,
@@ -19,8 +20,8 @@ use maicie::bridget_client::{
 use maicie::catalogue::{self, AppendOutcome, CatalogueEntry, CatalogueError, CatalogueJournal};
 use maicie::config::{ConfigError, MaicieConfig};
 use maicie::domain::{
-    ClasseDuree, DecisionCoordination, Delegation, EtatFlux, ObjectifCoordonne, SourceSnapshot,
-    SuiteObjective,
+    ClasseDuree, CoutMissionAgent, CoutMissionCompteurs, DecisionCoordination, Delegation,
+    EtatFlux, ObjectifCoordonne, SourceSnapshot, SuiteObjective,
 };
 use maicie::profiles::{
     ApprovalProfileView, ProfileError, ResolvedAgentDefinition, approval_view, load_profiles,
@@ -296,8 +297,12 @@ fn run_objective(arguments: ObjectiveArgs) -> Result<String, CliError> {
             }
         }
         ObjectiveAction::Close { reason } => {
-            let decision = close(&mut store, arguments.objective_id, &reason, unix_now()?)
-                .map_err(CliError::Objective)?;
+            let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+            let now = unix_now()?;
+            let costs = collect_mission_costs(&config, &store, arguments.objective_id, now);
+            let decision =
+                close_with_costs(&mut store, arguments.objective_id, &reason, now, costs)
+                    .map_err(CliError::Objective)?;
             ObjectiveOutput::Decision { decision }
         }
     };
@@ -989,7 +994,10 @@ fn run_registre(arguments: RegistreArgs) -> Result<String, CliError> {
                 eprintln!("avertissement: {warning}");
             }
             let view = catalogue::project_registre(&parsed.entries);
-            Ok(catalogue::render_registre_list_with_attente(&view, attente))
+            let mut rendered = catalogue::render_registre_list_with_attente(&view, attente);
+            let costs = store.all_mission_costs().map_err(CliError::Store)?;
+            rendered.push_str(&render_mission_costs_section(&costs));
+            Ok(rendered)
         }
         RegistreAction::Add { line } => {
             let entry = catalogue::parse_closed_line(line.trim()).map_err(CliError::Catalogue)?;
@@ -1895,6 +1903,8 @@ struct SnapshotOutput {
     decisions: Vec<DecisionCoordination>,
     /// Issue durable enregistrée par Maicie, distincte du snapshot transport.
     remises_locales: Vec<maicie::store::RemiseLocale>,
+    /// Coûts portés à la clôture (attestés ou inconnus). Vide si ouvert.
+    costs: Vec<CoutMissionAgent>,
 }
 
 impl From<ObjectiveSnapshot> for SnapshotOutput {
@@ -1904,6 +1914,7 @@ impl From<ObjectiveSnapshot> for SnapshotOutput {
             delegations: snapshot.delegations,
             decisions: snapshot.decisions,
             remises_locales: snapshot.remises_locales,
+            costs: snapshot.costs,
         }
     }
 }
@@ -1931,7 +1942,7 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
                 .filter(|observation| observation.nature == "permission_auto_decidee")
                 .count();
             format!(
-                "objectifs={} disponibilité={} état_disponibilité={} motif_disponibilité={} snapshot_transport={} runtime={} permissions_auto_décidées={} fraîcheur={} flux={} coordination_fraîcheur={} coordination_motif={}",
+                "objectifs={} disponibilité={} état_disponibilité={} motif_disponibilité={} snapshot_transport={} runtime={} permissions_auto_décidées={} fraîcheur={} flux={} coordination_fraîcheur={} coordination_motif={} coûts={}",
                 coordination.len(),
                 availability.len(),
                 flux_name(availability_state),
@@ -1943,6 +1954,13 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
                 flux_name(stream_state),
                 coordination_freshness.state,
                 coordination_freshness.reason.as_deref().unwrap_or("aucun"),
+                render_costs_summary(
+                    &coordination
+                        .iter()
+                        .flat_map(|snapshot| snapshot.costs.iter())
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ),
             )
         }
         ObjectiveOutput::Decision { decision } => format!(
@@ -1950,12 +1968,108 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
             decision.id, decision.objectif_id
         ),
         ObjectiveOutput::Summary { coordination } => format!(
-            "objectif={} délégations={} décisions={}",
+            "objectif={} délégations={} décisions={} coûts={}",
             coordination.objective.id,
             coordination.delegations.len(),
-            coordination.decisions.len()
+            coordination.decisions.len(),
+            render_costs_summary(&coordination.costs),
         ),
     })
+}
+
+fn render_costs_summary(costs: &[CoutMissionAgent]) -> String {
+    if costs.is_empty() {
+        return "aucun".to_string();
+    }
+    costs
+        .iter()
+        .map(|cost| {
+            if cost.attested {
+                format!(
+                    "{}:facturable={} cache_read={} tours={}",
+                    cost.agent,
+                    cost.facturable_tokens.unwrap_or(0),
+                    cost.cache_read_input_tokens.unwrap_or(0),
+                    cost.turns.unwrap_or(0),
+                )
+            } else {
+                format!("{}:inconnu", cost.agent)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+fn render_mission_costs_section(costs: &[CoutMissionAgent]) -> String {
+    let mut out = String::from("--- coûts des missions closes ---\n");
+    if costs.is_empty() {
+        out.push_str("(aucun coût porté)\n");
+        return out;
+    }
+    for cost in costs {
+        if cost.attested {
+            out.push_str(&format!(
+                "agent={} attested=true tours={} facturable={} cache_read={} fenêtre={}-{}\n",
+                cost.agent,
+                cost.turns.unwrap_or(0),
+                cost.facturable_tokens.unwrap_or(0),
+                cost.cache_read_input_tokens.unwrap_or(0),
+                cost.from_secs,
+                cost.to_secs,
+            ));
+        } else {
+            out.push_str(&format!(
+                "agent={} attested=false coût=inconnu fenêtre={}-{}\n",
+                cost.agent, cost.from_secs, cost.to_secs,
+            ));
+        }
+    }
+    out
+}
+
+/// Interroge le ledger Bridget pour chaque agent délégué. Indisponibilité ou
+/// absence d'échantillon → « inconnu », jamais zéro inventé.
+fn collect_mission_costs(
+    config: &MaicieConfig,
+    store: &MaicieStore,
+    objective_id: uuid::Uuid,
+    closed_at: i64,
+) -> Vec<CoutMissionAgent> {
+    let Ok(windows) = store.delegation_cost_windows(objective_id) else {
+        return Vec::new();
+    };
+    let client = BridgetClient::connect_with_limits(
+        &config.bridget_socket,
+        "maicie-usage",
+        BridgetClientLimits::default(),
+    )
+    .ok();
+    windows
+        .into_iter()
+        .map(|(agent, from_secs)| {
+            let from_secs = from_secs.max(1);
+            let to_secs = closed_at.max(from_secs);
+            match client
+                .as_ref()
+                .and_then(|client| client.usage_window(&agent, from_secs, to_secs).ok())
+                .flatten()
+            {
+                Some(aggregate) => CoutMissionAgent::attested(
+                    agent,
+                    from_secs,
+                    to_secs,
+                    CoutMissionCompteurs {
+                        turns: aggregate.turns,
+                        input_tokens: aggregate.input_tokens,
+                        output_tokens: aggregate.output_tokens,
+                        cache_creation_input_tokens: aggregate.cache_creation_input_tokens,
+                        cache_read_input_tokens: aggregate.cache_read_input_tokens,
+                    },
+                ),
+                None => CoutMissionAgent::unknown(agent, from_secs, to_secs),
+            }
+        })
+        .collect()
 }
 
 fn flux_name(state: EtatFlux) -> &'static str {

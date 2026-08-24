@@ -242,10 +242,104 @@ impl Store {
              );
              INSERT OR IGNORE INTO guichet_coordination_stream_state
                  (singleton, high_watermark)
-             SELECT 1, COALESCE(MAX(cursor), 0) FROM guichet_coordination_events;",
+             SELECT 1, COALESCE(MAX(cursor), 0) FROM guichet_coordination_events;
+             CREATE TABLE IF NOT EXISTS usage_samples (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 agent TEXT NOT NULL,
+                 observed_at INTEGER NOT NULL,
+                 input_tokens INTEGER NOT NULL,
+                 output_tokens INTEGER NOT NULL,
+                 cache_creation_input_tokens INTEGER NOT NULL,
+                 cache_read_input_tokens INTEGER NOT NULL,
+                 source TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_usage_samples_agent_ts
+                 ON usage_samples(agent, observed_at);",
         )
         .map_err(StoreError::Sqlite)?;
         Ok(())
+    }
+
+    /// Enregistre un échantillon de consommation attesté. Jamais de zéro inventé
+    /// ici : l'appelant n'émet que des faits complets du pilote.
+    pub fn record_usage_sample(
+        &self,
+        agent: &str,
+        observed_at: i64,
+        tokens: bridget_transport::protocol::UsageTokens,
+        source: &str,
+    ) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "INSERT INTO usage_samples (
+                     agent, observed_at, input_tokens, output_tokens,
+                     cache_creation_input_tokens, cache_read_input_tokens, source
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    agent,
+                    observed_at,
+                    tokens.input_tokens as i64,
+                    tokens.output_tokens as i64,
+                    tokens.cache_creation_input_tokens as i64,
+                    tokens.cache_read_input_tokens as i64,
+                    source,
+                ],
+            )
+            .map_err(StoreError::Sqlite)?;
+        Ok(())
+    }
+
+    /// Agrège les échantillons d'un agent dans `[from_secs, to_secs]`.
+    /// `None` si aucun échantillon — le greffe rendra « inconnu », pas zéro.
+    pub fn aggregate_usage_window(
+        &self,
+        agent: &str,
+        from_secs: i64,
+        to_secs: i64,
+    ) -> Result<Option<bridget_transport::protocol::UsageAggregate>, StoreError> {
+        let row: Option<(i64, i64, i64, i64, i64)> = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*),
+                        COALESCE(SUM(input_tokens), 0),
+                        COALESCE(SUM(output_tokens), 0),
+                        COALESCE(SUM(cache_creation_input_tokens), 0),
+                        COALESCE(SUM(cache_read_input_tokens), 0)
+                 FROM usage_samples
+                 WHERE agent = ?1 AND observed_at >= ?2 AND observed_at <= ?3",
+                params![agent, from_secs, to_secs],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(StoreError::Sqlite)?;
+        let Some((turns, input, output, cache_create, cache_read)) = row else {
+            return Ok(None);
+        };
+        if turns <= 0 {
+            return Ok(None);
+        }
+        let input_tokens = input as u64;
+        let output_tokens = output as u64;
+        let cache_creation_input_tokens = cache_create as u64;
+        let cache_read_input_tokens = cache_read as u64;
+        Ok(Some(bridget_transport::protocol::UsageAggregate {
+            turns: turns as u64,
+            input_tokens,
+            output_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
+            facturable_tokens: input_tokens
+                .saturating_add(output_tokens)
+                .saturating_add(cache_creation_input_tokens),
+        }))
     }
 
     pub fn create_request(
@@ -2018,6 +2112,52 @@ mod tests {
         assert_eq!(
             live_event_count, 1,
             "l'événement d'une demande vivante ne doit pas être purgé"
+        );
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn usage_sans_echantillon_reste_inconnu_et_n_invente_pas_zero() {
+        let path = std::env::temp_dir().join(format!("bridget-usage-{}.db", Uuid::new_v4()));
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store
+                .aggregate_usage_window("tmux-sans-sonde", 1, 100)
+                .unwrap(),
+            None
+        );
+        store
+            .record_usage_sample(
+                "claude-1",
+                50,
+                bridget_transport::protocol::UsageTokens {
+                    input_tokens: 2,
+                    output_tokens: 175,
+                    cache_creation_input_tokens: 40_804,
+                    cache_read_input_tokens: 13_907,
+                },
+                "claude-stream-json",
+            )
+            .unwrap();
+        let aggregate = store
+            .aggregate_usage_window("claude-1", 1, 100)
+            .unwrap()
+            .expect("échantillon attesté");
+        assert_eq!(aggregate.turns, 1);
+        assert_eq!(aggregate.input_tokens, 2);
+        assert_eq!(aggregate.output_tokens, 175);
+        assert_eq!(aggregate.cache_creation_input_tokens, 40_804);
+        assert_eq!(aggregate.cache_read_input_tokens, 13_907);
+        assert_eq!(aggregate.facturable_tokens, 40_981);
+        assert_eq!(
+            store.aggregate_usage_window("claude-1", 80, 100).unwrap(),
+            None
+        );
+        assert_eq!(
+            store.aggregate_usage_window("claude-1", 1, 40).unwrap(),
+            None,
+            "échantillon après to_secs exclu"
         );
         drop(store);
         let _ = std::fs::remove_file(path);

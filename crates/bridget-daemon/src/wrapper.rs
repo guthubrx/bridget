@@ -3345,6 +3345,28 @@ fn forward_managed_events(
                     warn!("modèle servi ignoré : source ACP non autorisée")
                 }
             },
+            ManagedEventKind::UsageObserved {
+                input_tokens,
+                output_tokens,
+                cache_creation_input_tokens,
+                cache_read_input_tokens,
+            } => match source {
+                bridget_transport::ManagedEventSource::ClaudeStreamJson => send_wrapper_message(
+                    writer,
+                    WrapperToDaemon::Usage {
+                        agent: my_name.to_string(),
+                        input_tokens,
+                        output_tokens,
+                        cache_creation_input_tokens,
+                        cache_read_input_tokens,
+                        source: bridget_transport::protocol::UsageSource::ClaudeStreamJson,
+                    },
+                ),
+                bridget_transport::ManagedEventSource::Acp
+                | bridget_transport::ManagedEventSource::CodexAppServer => {
+                    warn!("fait d'usage ignoré : source ACP/Codex non autorisée pour L4")
+                }
+            },
             ManagedEventKind::Update { .. } | ManagedEventKind::Error { .. } => {}
         }
     }
@@ -3537,7 +3559,12 @@ mod prompt_tests {
             "{context}"
         );
         assert!(context.contains(&format!("delegation_id={}", mission.delegation_id)));
-        assert!(context.contains(&format!("message_id={}", mission.message_id)));
+        assert!(context.contains(&format!(
+            "message_id={}",
+            mission
+                .message_id
+                .expect("délégation créée sans prérequis porte un message_id")
+        )));
         assert!(context.contains("reprendre la bissection durable"));
         assert!(context.contains("branche=master") || context.contains("branche=main"));
         assert!(context.contains(" M tracked.txt"));
@@ -3789,6 +3816,46 @@ mod reconnect_tests {
             decode(line.trim_end()).unwrap(),
             WrapperToDaemon::ServedModel { agent, model }
                 if agent == "claude-1" && model == "claude-opus-4-6"
+        ));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn evenement_d_usage_claude_est_transmis_sans_zero_invente() {
+        let root = mcp_test_root("usage");
+        std::fs::create_dir_all(&root).unwrap();
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "instance-usage").unwrap();
+        let event = ManagedEvent::source_line(
+            bridget_transport::ManagedEventSource::ClaudeStreamJson,
+            br#"{"type":"assistant","message":{"usage":{"input_tokens":2,"output_tokens":175,"cache_creation_input_tokens":40804,"cache_read_input_tokens":13907}}}"#.to_vec(),
+            ManagedEventKind::UsageObserved {
+                input_tokens: 2,
+                output_tokens: 175,
+                cache_creation_input_tokens: 40_804,
+                cache_read_input_tokens: 13_907,
+            },
+        );
+
+        assert!(!forward_managed_events(
+            &writer,
+            "claude-1",
+            vec![event],
+            &mut tracker
+        ));
+        let mut line = String::new();
+        BufReader::new(reader_stream).read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode(line.trim_end()).unwrap(),
+            WrapperToDaemon::Usage {
+                agent,
+                input_tokens: 2,
+                output_tokens: 175,
+                cache_creation_input_tokens: 40_804,
+                cache_read_input_tokens: 13_907,
+                source: bridget_transport::protocol::UsageSource::ClaudeStreamJson,
+            } if agent == "claude-1"
         ));
         std::fs::remove_dir_all(root).unwrap();
     }

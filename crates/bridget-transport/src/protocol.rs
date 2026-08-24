@@ -742,6 +742,27 @@ pub enum WrapperToDaemon {
         resets_at: Option<i64>,
         source: RateLimitSource,
     },
+    /// Rapporter une consommation de tour attestée par le pilote.
+    ///
+    /// Chaque message est un échantillon horodaté côté daemon. L'absence
+    /// d'échantillon dans une fenêtre de mission reste « inconnu », jamais zéro.
+    Usage {
+        agent: String,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_creation_input_tokens: u64,
+        cache_read_input_tokens: u64,
+        source: UsageSource,
+    },
+    /// Agréger les échantillons d'usage d'un agent dans une fenêtre fermée.
+    ///
+    /// Réponse : `UsageWindowResult`. Aucun échantillon → `aggregate: None`
+    /// (inconnu), jamais un agrégat à zéro inventé.
+    UsageWindow {
+        agent: String,
+        from_secs: i64,
+        to_secs: i64,
+    },
     /// Remplacer le domaine d'un agent, ou revenir au domaine dérivé.
     ///
     /// `domain: None` signifie « réinitialiser » : le daemon reprend alors le
@@ -816,6 +837,53 @@ impl std::fmt::Display for RateLimitSource {
             RateLimitSource::CodexAppServer => f.write_str("codex-app-server"),
         }
     }
+}
+
+/// Origine d'une observation de consommation. Fermée : un fournisseur inconnu
+/// ne peut pas se faire passer pour une capacité attestée.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UsageSource {
+    /// Compteurs lus dans le flux Claude `stream-json` (message.usage / result).
+    #[serde(rename = "claude-stream-json")]
+    ClaudeStreamJson,
+}
+
+impl std::fmt::Display for UsageSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UsageSource::ClaudeStreamJson => f.write_str("claude-stream-json"),
+        }
+    }
+}
+
+/// Compteurs d'un échantillon de tour. `facturable` = in + out + cache_create ;
+/// `cache_read` reste hors facturable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageTokens {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
+}
+
+impl UsageTokens {
+    pub fn facturable_tokens(self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.cache_creation_input_tokens)
+    }
+}
+
+/// Agrégat de consommation sur une fenêtre. `facturable` = in + out +
+/// cache_create ; `cache_read` reste séparé (leçon du comparatif).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageAggregate {
+    pub turns: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub facturable_tokens: u64,
 }
 
 /// Messages envoyés par le daemon vers le wrapper.
@@ -1108,6 +1176,13 @@ pub enum DaemonToWrapper {
     Disconnect,
     /// Réponse à ListAgents.
     AgentList { agents: Vec<AgentInfo> },
+    /// Réponse à UsageWindow. `aggregate: None` signifie « aucun échantillon
+    /// attesté dans la fenêtre » — le greffe doit rendre « inconnu », pas zéro.
+    UsageWindowResult {
+        agent: String,
+        #[serde(default)]
+        aggregate: Option<UsageAggregate>,
+    },
     /// État final d'une annulation.
     RequestCancelled { id: String, state: String },
     /// Liste des demandes suivies accessibles à l'agent courant.
@@ -1638,6 +1713,64 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn test_encode_decode_usage_et_fenetre_inconnue() {
+        let sample = WrapperToDaemon::Usage {
+            agent: "claude-1".to_string(),
+            input_tokens: 2,
+            output_tokens: 175,
+            cache_creation_input_tokens: 40_804,
+            cache_read_input_tokens: 13_907,
+            source: UsageSource::ClaudeStreamJson,
+        };
+        let encoded = encode(&sample).unwrap();
+        assert!(encoded.contains("\"type\":\"Usage\""));
+        assert!(encoded.contains("\"source\":\"claude-stream-json\""));
+        assert!(matches!(
+            decode(&encoded).unwrap(),
+            WrapperToDaemon::Usage {
+                input_tokens: 2,
+                output_tokens: 175,
+                cache_creation_input_tokens: 40_804,
+                cache_read_input_tokens: 13_907,
+                source: UsageSource::ClaudeStreamJson,
+                ..
+            }
+        ));
+
+        let window = WrapperToDaemon::UsageWindow {
+            agent: "claude-1".to_string(),
+            from_secs: 10,
+            to_secs: 20,
+        };
+        let encoded_window = encode(&window).unwrap();
+        assert!(encoded_window.contains("\"type\":\"UsageWindow\""));
+
+        let unknown = r#"{"type":"UsageWindowResult","agent":"tmux-1"}"#;
+        assert!(matches!(
+            decode(unknown).unwrap(),
+            DaemonToWrapper::UsageWindowResult {
+                aggregate: None,
+                ..
+            }
+        ));
+
+        let attested = DaemonToWrapper::UsageWindowResult {
+            agent: "claude-1".to_string(),
+            aggregate: Some(UsageAggregate {
+                turns: 1,
+                input_tokens: 2,
+                output_tokens: 175,
+                cache_creation_input_tokens: 40_804,
+                cache_read_input_tokens: 13_907,
+                facturable_tokens: 40_981,
+            }),
+        };
+        let encoded_attested = encode(&attested).unwrap();
+        assert!(encoded_attested.contains("\"facturable_tokens\":40981"));
+        assert!(!encoded_attested.contains("\"facturable_tokens\":0"));
     }
 
     #[test]
