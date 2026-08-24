@@ -17,15 +17,15 @@ use crate::domain::{
     DefinitionCoordination, Delegation, DependanceDelegation, DomainError, EffetDemandeSuivie,
     EntreeReductionCoordination, EpisodeRelance, EtatActivationOutbox, EtatDecision,
     EtatDelegation, EtatEpisodeRelance, EtatGenerationDelegation, EtatNotificationOutbox,
-    EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, FaitReassignation,
-    FraicheurCoordination, GenerationDelegation, IssueGreffe, LienArbitrage, LigneeDelegation,
-    LotReassignation, MotifRefusGreffe, NotificationOutbox, NotificationReassignation,
-    ObjectifCoordonne, OperationGuichet, OutboxDelegation, PolitiqueReassignation,
-    QualificationDependance, ReceptionGreffe, RecuCorrelation, ReductionCoordinationActive,
-    ReductionOuvertureDelegation, ReductionReassignation, TransitionCoordinationActive,
-    TypeDecision, TypeEffetDemandeSuivie, TypeEvenementAttendu, TypeFaitReassignation,
-    TypeNotificationReassignation, identifiant_deterministe, reduire_coordination,
-    reduire_ouverture_dependance, reduire_reassignation,
+    EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination,
+    FaitReassignation, FraicheurCoordination, GenerationDelegation, IssueGreffe, LienArbitrage,
+    LigneeDelegation, LotReassignation, MotifRefusGreffe, NotificationOutbox,
+    NotificationReassignation, ObjectifCoordonne, OperationGuichet, OutboxDelegation,
+    PolitiqueReassignation, QualificationDependance, ReceptionGreffe, RecuCorrelation,
+    ReductionCoordinationActive, ReductionOuvertureDelegation, ReductionReassignation,
+    TransitionCoordinationActive, TypeDecision, TypeEffetDemandeSuivie, TypeEvenementAttendu,
+    TypeFaitReassignation, TypeNotificationReassignation, identifiant_deterministe,
+    reduire_coordination, reduire_ouverture_dependance, reduire_reassignation,
 };
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
@@ -680,6 +680,74 @@ impl MaicieStore {
         tx.commit().map_err(StoreError::Sql)?;
         observer(CoordinationCommitPhase::AfterCommit)?;
         Ok(stored)
+    }
+
+    /// Enregistre un `reminder_sent` attesté **sans** le réduire en F29.
+    ///
+    /// Utilisé quand Bridget pousse un rappel pour une demande étrangère au
+    /// greffe (conversation libre, relance hors Maicie). Le curseur doit
+    /// avancer sinon chaque commande re-consomme le poison. Aucune délégation
+    /// n'est inventée — même doctrine que le `NotFound` toléré sur les
+    /// terminaux guichet hors F29.
+    pub fn acknowledge_untracked_coordination_event(
+        &mut self,
+        event: &EvenementCoordination,
+    ) -> Result<(), StoreError> {
+        if event.event_id().trim().is_empty()
+            || event.request_id().trim().is_empty()
+            || event.cursor() == 0
+        {
+            return Err(StoreError::Invalid("événement de coordination incomplet"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let existing: Option<Vec<u8>> = tx
+            .query_row(
+                "SELECT canonical_bytes FROM coordination_events WHERE event_id = ?1",
+                [event.event_id()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        match existing {
+            Some(bytes) if bytes == event.canonical_bytes() => {
+                tx.commit().map_err(StoreError::Sql)?;
+                return Ok(());
+            }
+            Some(_) => return Err(StoreError::EnvelopeMismatch),
+            None => {}
+        }
+        let inserted = tx
+            .execute(
+                "INSERT INTO coordination_events(
+                     event_id, request_id, kind, reminder_message_id, recipient,
+                     transport_generation, cursor, freshness, observed_at, canonical_bytes
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                params![
+                    event.event_id(),
+                    event.request_id(),
+                    coordination_event_kind_name(event.kind()),
+                    event.reminder_message_id(),
+                    event.recipient(),
+                    i64::try_from(event.generation())
+                        .map_err(|_| StoreError::Invalid("génération transport hors borne"))?,
+                    i64::try_from(event.cursor())
+                        .map_err(|_| StoreError::Invalid("curseur transport hors borne"))?,
+                    coordination_freshness_name(event.freshness()),
+                    event.observed_at(),
+                    event.canonical_bytes(),
+                ],
+            )
+            .map_err(map_coordination_insert_error)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict(
+                "événement de coordination non enregistré",
+            ));
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(())
     }
 
     /// Applique un rappel attesté et son fait F29 sous le même verrou SQLite.

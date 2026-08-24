@@ -1,5 +1,6 @@
 use bridget_transport::DaemonToWrapper;
 use bridget_transport::protocol::{CoordinationEventKind, GuichetLifecycleState};
+use maicie::app::apply_attested_coordination_event;
 use maicie::bridget_client::BridgetClientLimits;
 use maicie::domain::{
     AttenteNotification, ClasseDuree, DefinitionCoordination, Delegation, DependanceDelegation,
@@ -100,6 +101,87 @@ fn releve_coordination_applique_un_snapshot_frais_une_seule_fois() {
         1
     );
     server.join().expect("serveur coordination terminé");
+}
+
+/// Oracle hotfix : un `reminder_sent` Bridget pour une demande hors greffe F29
+/// (conversation libre agent→référent) ne doit plus être fatal. Le curseur
+/// avance ; aucune réassignation n'est inventée. Mutation discriminante : si
+/// `NotFound` redevenait fatal, `reconcile`/`apply` échoueraient et le curseur
+/// resterait `None` — chaque `status` re-mangerait le poison.
+#[test]
+fn reminder_sent_demande_etrangere_avance_curseur_sans_fatal() {
+    let fixture = Fixture::new("reminder-etranger");
+    let foreign_request = "mcp-83147-6a8c90a7-1";
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("relève poison attendue");
+        let (mut reader, mut writer) = split(stream);
+        complete_coordination_handshake(&mut reader, &mut writer, None);
+        write_coordination_event(&mut writer, foreign_request, 1, "evt-rappel-etranger-1");
+        write_coordination_snapshot(&mut writer, Some(1));
+
+        let (stream, _) = listener.accept().expect("seconde relève attendue");
+        let (mut reader, mut writer) = split(stream);
+        complete_coordination_handshake(&mut reader, &mut writer, Some(1));
+        write_coordination_snapshot(&mut writer, Some(1));
+    });
+
+    let mut store = MaicieStore::open(&fixture.database_path).expect("store ouvert");
+    assert_eq!(store.coordination_cursor().unwrap(), None);
+
+    let first = reconcile_coordination_startup_with_limits(
+        &mut store,
+        fixture.socket_path(),
+        limits(Duration::from_secs(2)),
+    )
+    .expect("relève poison non fatale");
+    assert!(
+        first
+            .actions
+            .contains(&CoordinationReconcileAction::EvenementApplique { cursor: 1 })
+    );
+    assert_eq!(store.coordination_cursor().unwrap(), Some(1));
+    assert_eq!(
+        table_count(&fixture.database_path, "coordination_events"),
+        1
+    );
+    assert_eq!(
+        table_count(&fixture.database_path, "reassignment_events"),
+        0
+    );
+
+    let second = reconcile_coordination_startup_with_limits(
+        &mut store,
+        fixture.socket_path(),
+        limits(Duration::from_secs(2)),
+    )
+    .expect("rejeu depuis curseur avancé");
+    assert!(!second.actions.iter().any(|action| matches!(
+        action,
+        CoordinationReconcileAction::EvenementApplique { .. }
+    )));
+    assert_eq!(store.coordination_cursor().unwrap(), Some(1));
+    assert_eq!(
+        table_count(&fixture.database_path, "reassignment_events"),
+        0
+    );
+
+    // Chemin direct : même trame rejouée → idempotent, toujours non fatal.
+    let frame = DaemonToWrapper::CoordinationEvent {
+        version: 2,
+        event_id: "evt-rappel-etranger-1".to_string(),
+        request_id: foreign_request.to_string(),
+        kind: CoordinationEventKind::ReminderSent,
+        reminder_message_id: "rappel-1".to_string(),
+        recipient: "alice".to_string(),
+        generation: 1,
+        observed_at: ISSUED_AT + 1,
+        cursor: Some(1),
+    };
+    let bytes = serde_json::to_vec(&frame).expect("trame sérialisable");
+    apply_attested_coordination_event(&mut store, &bytes, |_| Ok(())).expect("rejeu direct");
+    assert_eq!(store.coordination_cursor().unwrap(), Some(1));
+    server.join().expect("serveur joint");
 }
 
 #[test]
