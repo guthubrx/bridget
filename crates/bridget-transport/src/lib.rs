@@ -3,6 +3,7 @@
 //! Définit les messages JSON qui circulent sur la socket locale.
 
 pub mod acp;
+pub mod claude_stream_json;
 pub mod fsutil;
 pub mod journal;
 pub mod managed_session;
@@ -11,6 +12,7 @@ pub mod tmux;
 pub mod transport;
 
 pub use acp::{AcpEvent, AcpEventQueue, AcpOptions, AcpTransport, TurnState};
+pub use claude_stream_json::{ClaudeStreamJsonOptions, ClaudeStreamJsonTransport};
 pub use managed_session::{
     ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource, ManagedSession,
     ManagedSessionDescriptor, ManagedTerminal,

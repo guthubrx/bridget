@@ -26,6 +26,10 @@ type AppendSamples = Arc<Mutex<Vec<AppendLatencySample>>>;
 #[cfg(feature = "test-support")]
 type AppendProbeRegistry = Mutex<HashMap<PathBuf, Weak<Mutex<Vec<AppendLatencySample>>>>>;
 
+/// Signal minimal vers un adaptateur lorsque le journal append-only devient
+/// non fiable. Le journal reste indépendant du protocole fournisseur.
+pub type JournalFailureSink = Arc<dyn Fn(String) + Send + Sync>;
+
 /// Observation post-flush limitée aux bancs d'intégration. `completed_at` est
 /// pris immédiatement après l'écriture complète de la ligne JSONL.
 #[cfg(feature = "test-support")]
@@ -274,6 +278,29 @@ impl JournalWriter {
         events: Arc<Mutex<AcpEventQueue>>,
         live_feed: Option<JournalLiveFeed>,
     ) -> std::io::Result<Self> {
+        let failure_events = events.clone();
+        Self::start_with_live_feed_and_failure(
+            root,
+            agent,
+            session_id,
+            Arc::new(move |detail| {
+                failure_events
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .push_back(AcpEvent::JournalFailed { detail });
+            }),
+            live_feed,
+        )
+    }
+
+    /// Variante neutre pour les pilotes gérés qui ne parlent pas ACP.
+    pub fn start_with_live_feed_and_failure(
+        root: impl AsRef<Path>,
+        agent: &str,
+        session_id: &str,
+        on_failure: JournalFailureSink,
+        live_feed: Option<JournalLiveFeed>,
+    ) -> std::io::Result<Self> {
         let root = root.as_ref();
         let mut journal = SessionJournal::new(root, agent, session_id)?;
         let (sender, receiver) = mpsc::sync_channel(WRITER_QUEUE_CAPACITY);
@@ -306,10 +333,7 @@ impl JournalWriter {
                                     .lock()
                                     .unwrap_or_else(|poison| poison.into_inner()) =
                                     Some(detail.clone());
-                                events
-                                    .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner())
-                                    .push_back(AcpEvent::JournalFailed { detail });
+                                on_failure(detail);
                                 break;
                             }
                         };

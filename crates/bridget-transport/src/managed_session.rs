@@ -19,6 +19,7 @@ use std::path::Path;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedEventSource {
     Acp,
+    ClaudeStreamJson,
 }
 
 /// Provenance des octets portés par un événement.

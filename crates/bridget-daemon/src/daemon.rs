@@ -2731,6 +2731,7 @@ fn definition_runtime(definition: &ResolvedAgentDefinition) -> Option<(String, O
 fn definition_presence_mode(definition: &ResolvedAgentDefinition) -> Option<PresenceMode> {
     match definition.protocol.as_str() {
         "acp" => Some(PresenceMode::Acp),
+        "claude_stream_json" => Some(PresenceMode::Cli),
         "tmux" => Some(PresenceMode::Tmux),
         _ => None,
     }
@@ -8015,8 +8016,9 @@ mod presence_tests {
         );
 
         // Le journal, et non le mode, est le gate attach. Une fois attesté
-        // sur tmux, le refus progresse jusqu'à la disponibilité réelle du
-        // writer : la barrière de protocole est donc franchie sans inférence.
+        // sur tmux comme sur un pilote CLI natif, le refus progresse jusqu'à
+        // la disponibilité réelle du writer : la barrière de protocole est
+        // donc franchie sans inférence.
         state
             .presences
             .get_mut("tmux-instance")
@@ -8024,6 +8026,17 @@ mod presence_tests {
             .journal_available = true;
         assert_eq!(
             attach_refusal_for_subscription(&state, "tmux-agent")
+                .unwrap_err()
+                .reason,
+            AttachRefusal::WrapperUnavailable
+        );
+        state
+            .presences
+            .get_mut("cli-instance")
+            .unwrap()
+            .journal_available = true;
+        assert_eq!(
+            attach_refusal_for_subscription(&state, "cli-agent")
                 .unwrap_err()
                 .reason,
             AttachRefusal::WrapperUnavailable

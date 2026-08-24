@@ -10,10 +10,10 @@ use bridget_transport::journal::{
 };
 use bridget_transport::protocol::{PresenceMode, decode, encode};
 use bridget_transport::{
-    AcpOptions, AcpTransport, AttachRefusal, AttachWindow, DaemonToWrapper,
-    MAX_ATTACH_FRAGMENT_BYTES, MAX_ATTACH_SERIALIZED_FRAME_BYTES, ManagedEvent, ManagedEventKind,
-    ManagedSession, ManagedSessionDescriptor, ManagedTerminal, TmuxTransport, Transport,
-    WrapperToDaemon,
+    AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ClaudeStreamJsonOptions,
+    ClaudeStreamJsonTransport, DaemonToWrapper, MAX_ATTACH_FRAGMENT_BYTES,
+    MAX_ATTACH_SERIALIZED_FRAME_BYTES, ManagedEvent, ManagedEventKind, ManagedSession,
+    ManagedSessionDescriptor, ManagedTerminal, TmuxTransport, Transport, WrapperToDaemon,
 };
 use log::{debug, error, info, warn};
 use std::collections::{BTreeMap, HashSet, VecDeque};
@@ -2363,8 +2363,10 @@ fn launch_acp_with_status(
         return Err("le mode --equipier n'accepte pas d'arguments d'agent".into());
     }
     let definition = registry.get(agent_type)?;
-    if definition.protocol != "acp" {
-        return Err(format!("le type '{agent_type}' n'utilise pas le protocole ACP").into());
+    if !matches!(definition.protocol.as_str(), "acp" | "claude_stream_json") {
+        return Err(
+            format!("le type '{agent_type}' n'utilise pas une session gérée supportée").into(),
+        );
     }
     if let Some(variable) = crate::registry::forbidden_environment_variable(
         definition,
@@ -2398,22 +2400,64 @@ fn launch_acp_with_status(
         .transpose()?
         .into_iter()
         .collect();
-    let options = AcpOptions {
-        command: definition.command.clone(),
-        args: definition.args.clone(),
-        queue_capacity: definition.queue_capacity,
-        permissions: definition.permissions.clone(),
-        notify_timeout_secs: definition.notify_timeout_secs,
+    let mut transport: Box<dyn ManagedSession> = match definition.protocol.as_str() {
+        "acp" => {
+            let options = AcpOptions {
+                command: definition.command.clone(),
+                args: definition.args.clone(),
+                queue_capacity: definition.queue_capacity,
+                permissions: definition.permissions.clone(),
+                notify_timeout_secs: definition.notify_timeout_secs,
+            };
+            if managed_reporter.is_some() {
+                Box::new(
+                    AcpTransport::spawn_inheriting_stderr_with_environment_and_mcp(
+                        options,
+                        &mcp_environment,
+                        mcp_servers,
+                    )?,
+                )
+            } else {
+                Box::new(AcpTransport::spawn_with_environment_and_mcp(
+                    options,
+                    &mcp_environment,
+                    mcp_servers,
+                )?)
+            }
+        }
+        "claude_stream_json" => {
+            let options = ClaudeStreamJsonOptions {
+                command: definition.command.clone(),
+                args: definition.args.clone(),
+                queue_capacity: definition.queue_capacity,
+                notify_timeout_secs: definition.notify_timeout_secs,
+            };
+            let environment = mcp_environment
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if managed_reporter.is_some() {
+                Box::new(
+                    ClaudeStreamJsonTransport::spawn_inheriting_stderr_with_environment(
+                        options,
+                        &environment,
+                    )?,
+                )
+            } else {
+                Box::new(ClaudeStreamJsonTransport::spawn_with_environment(
+                    options,
+                    &environment,
+                    false,
+                )?)
+            }
+        }
+        _ => unreachable!("protocole validé avant le lancement"),
     };
-    let mut transport: Box<dyn ManagedSession> = Box::new(if managed_reporter.is_some() {
-        AcpTransport::spawn_inheriting_stderr_with_environment_and_mcp(
-            options,
-            &mcp_environment,
-            mcp_servers,
-        )
-    } else {
-        AcpTransport::spawn_with_environment_and_mcp(options, &mcp_environment, mcp_servers)
-    }?);
     let descriptor = transport.descriptor();
     let (mut reader, initial_writer, mut my_name) = match connect_and_register_at(
         socket,
