@@ -686,7 +686,7 @@ fn execute_send(
             "status": "outcome_unknown",
             "id": id,
             "issued_at": issued_at,
-            "reason": format!("accusé perdu après transmission — retry possible avec le même id ({message})")
+            "reason": format!("accusé perdu après transmission — rejouer le même id et le même issued_at lit le sort réel sans jamais dupliquer ({message})")
         })),
         Err(error) => Err(error),
     }
@@ -851,12 +851,26 @@ fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value
         } => {
             json!({ "status": public_refusal_category(&category), "id": id, "issued_at": issued_at, "reason": reason })
         }
-        IdempotencyIssue::OutcomeUnknown { .. } => json!({
-            "status": "outcome_unknown",
-            "id": id,
-            "issued_at": issued_at,
-            "reason": "accusé perdu après transmission — retry possible avec le même id"
-        }),
+        // Le daemon répond AVANT l'accusé du destinataire : sur un premier envoi
+        // nominal, l'issue est donc toujours `OutcomeUnknown`. Un `delivery_id`
+        // atteste que la remise est en vol — rien n'est perdu. Sans lui, le sort
+        // est réellement indéterminé. Le distinguo évite d'annoncer une panne
+        // sur le cas nominal, et donc d'inviter au double envoi.
+        IdempotencyIssue::OutcomeUnknown { delivery_id, .. } => match delivery_id {
+            Some(delivery_id) => json!({
+                "status": "outcome_unknown",
+                "id": id,
+                "issued_at": issued_at,
+                "delivery_id": delivery_id,
+                "reason": "remise en vol — le destinataire n'a pas encore accusé ; rejouer le même id et le même issued_at lit le sort réel sans jamais dupliquer"
+            }),
+            None => json!({
+                "status": "outcome_unknown",
+                "id": id,
+                "issued_at": issued_at,
+                "reason": "sort indéterminé — rejouer le même id et le même issued_at lit le sort réel sans jamais dupliquer"
+            }),
+        },
         IdempotencyIssue::EnvelopeMismatch => json!({
             "status": "envelope_mismatch",
             "id": id,
@@ -1553,6 +1567,49 @@ mod tests {
         std::fs::remove_file(socket).unwrap();
     }
 
+    /// Le cas nominal ne doit plus s'annoncer comme un incident : le daemon
+    /// répond avant l'accusé du destinataire, donc TOUT premier envoi passe
+    /// par là. Annoncer « accusé perdu » sur un succès, c'est inviter au
+    /// double envoi — le défaut mesuré sur ~100 envois d'une seule journée.
+    #[test]
+    fn une_remise_en_vol_ne_s_annonce_pas_comme_un_accuse_perdu() {
+        let issue = IdempotencyIssue::OutcomeUnknown {
+            expires_at: 1_700_000_060,
+            delivery_id: Some("livraison-7".to_string()),
+        };
+        let rendered = send_issue_result("msg-1", 1_700_000_000, issue);
+        assert_eq!(rendered["status"], "outcome_unknown");
+        assert_eq!(rendered["delivery_id"], "livraison-7");
+        let reason = rendered["reason"].as_str().unwrap();
+        assert!(
+            !reason.contains("perdu"),
+            "une remise en vol ne doit rien annoncer de perdu: {reason}"
+        );
+        assert!(
+            reason.contains("issued_at") && reason.contains("dupliquer"),
+            "le retour doit dire comment lire le sort réel sans risque: {reason}"
+        );
+    }
+
+    /// Contre-épreuve : sans `delivery_id`, le sort est vraiment inconnu et le
+    /// retour ne doit pas rassurer. Si ce test tombe, le correctif a effacé la
+    /// distinction qu'il avait pour but d'établir.
+    #[test]
+    fn un_sort_indetermine_ne_promet_pas_une_remise() {
+        let issue = IdempotencyIssue::OutcomeUnknown {
+            expires_at: 1_700_000_060,
+            delivery_id: None,
+        };
+        let rendered = send_issue_result("msg-2", 1_700_000_000, issue);
+        assert_eq!(rendered["status"], "outcome_unknown");
+        assert!(rendered.get("delivery_id").is_none());
+        let reason = rendered["reason"].as_str().unwrap();
+        assert!(
+            reason.contains("indéterminé"),
+            "le sort inconnu doit être nommé comme tel: {reason}"
+        );
+    }
+
     #[test]
     fn coupure_apres_transmission_devient_outcome_unknown_et_le_retry_reste_identique() {
         let socket = test_socket("cut-after-send");
@@ -1663,6 +1720,106 @@ mod tests {
         .unwrap();
         assert_eq!(retry["status"], "accepted");
         server.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    /// L'oracle du mandat : un envoi dont l'accusé aval est retardé rend un
+    /// statut HONNÊTE (remise en vol, avec sa preuve), et le rejeu de la même
+    /// clé lit le sort réel — en portant EXACTEMENT la même enveloppe, jamais
+    /// une nouvelle émission. C'est le geste que le libellé d'origine faisait
+    /// redouter alors qu'il est le seul chemin correct.
+    #[test]
+    fn accuse_retarde_rend_un_statut_honnete_puis_le_rejeu_lit_le_sort_sans_dupliquer() {
+        let socket = test_socket("ack-differe");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let mut envelopes = Vec::new();
+            for issue in [
+                IdempotencyIssue::OutcomeUnknown {
+                    expires_at: 1_700_000_060,
+                    delivery_id: Some("livraison-differee".to_string()),
+                },
+                IdempotencyIssue::Accepted {
+                    expires_at: 1_700_000_060,
+                },
+            ] {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                assert!(matches!(
+                    read_command(&mut reader),
+                    WrapperToDaemon::RoleHandshake { .. }
+                ));
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::RoleAccepted {
+                        role: ConnectionRole::Client,
+                    },
+                );
+                assert!(matches!(
+                    read_command(&mut reader),
+                    WrapperToDaemon::ClientHello { .. }
+                ));
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::ClientWelcome {
+                        version: CLIENT_CONTRACT_VERSION,
+                        build_id: "test-build".to_string(),
+                        horizon_secs: 60,
+                        issued_at_tolerance_secs: 5,
+                        capabilities: vec![ClientCapability::SendIdempotent],
+                    },
+                );
+                match read_command(&mut reader) {
+                    WrapperToDaemon::SendIdempotent {
+                        message_id,
+                        issued_at,
+                        message,
+                        ..
+                    } => envelopes.push((message_id, issued_at, message.body)),
+                    other => panic!("send attendu: {other:?}"),
+                }
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::IdempotencyResult {
+                        operation_kind: "send".to_string(),
+                        idempotency_key: "ack-differe-1".to_string(),
+                        issue,
+                    },
+                );
+            }
+            envelopes
+        });
+        let arguments = json!({
+            "to":"bridget", "body":"livraison", "id":"ack-differe-1", "issued_at":1_700_000_000
+        });
+        let first = execute_tool_at_with_scope(
+            "fable2",
+            "instance",
+            "bridget_send",
+            arguments.as_object().unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(first["status"], "outcome_unknown");
+        assert_eq!(first["delivery_id"], "livraison-differee");
+        assert!(!first["reason"].as_str().unwrap().contains("perdu"));
+
+        let replay = execute_tool_at_with_scope(
+            "fable2",
+            "instance",
+            "bridget_send",
+            arguments.as_object().unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(replay["status"], "accepted");
+
+        let envelopes = server.join().unwrap();
+        assert_eq!(
+            envelopes[0], envelopes[1],
+            "le rejeu doit porter la même enveloppe, sinon il duplique au lieu de consulter"
+        );
         std::fs::remove_file(socket).unwrap();
     }
 

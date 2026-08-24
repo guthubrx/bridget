@@ -39,13 +39,22 @@ Résultat métier :
 ```json
 { "status": "accepted", "id": "…", "issued_at": 1700000000, "hops": 4 }
 { "status": "dnd", "reason": "« sol » ne souhaite pas être dérangé (encore 12 min)", "minutes_left": 12 }
-{ "status": "outcome_unknown", "id": "…", "reason": "accusé perdu après transmission — retry possible avec le même id" }
+{ "status": "outcome_unknown", "id": "…", "issued_at": 1700000000, "delivery_id": "…", "reason": "remise en vol — le destinataire n'a pas encore accusé ; rejouer le même id et le même issued_at lit le sort réel sans jamais dupliquer" }
+{ "status": "outcome_unknown", "id": "…", "issued_at": 1700000000, "reason": "sort indéterminé — rejouer le même id et le même issued_at lit le sort réel sans jamais dupliquer" }
 ```
 
 Règles : corps transmis octet pour octet ; id métier généré avant la connexion
 daemon ; retour dès accusé/refus (jamais d'attente de la réponse du
 destinataire) ; le premier résultat renvoie `id` et `issued_at`, qui doivent
 être rejoués ensemble pour un retry → déduplication daemon.
+
+`outcome_unknown` est le retour **nominal** d'un premier envoi : le daemon
+répond avant que le destinataire ait accusé. La présence de `delivery_id`
+distingue les deux cas — avec lui, la remise est en vol et le dépôt a réussi ;
+sans lui, le sort est réellement indéterminé. Dans les deux cas le rejeu de la
+même clé (`id` + `issued_at`) est une **consultation** sûre, jamais une seconde
+émission : il rend `accepted` une fois l'accusé aval consolidé. Côté CLI, le
+code de sortie suit le dépôt : `0` quand `delivery_id` est présent.
 
 ## `bridget_who`
 
