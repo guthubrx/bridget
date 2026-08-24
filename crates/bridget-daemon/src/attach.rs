@@ -2108,6 +2108,10 @@ fn attach_refusal_message(
             "équipier « {} » arrêté ; son historique reste consultable dans le journal de session, mais le suivi direct exige de le relancer",
             sanitize_inline(agent)
         ),
+        AttachRefusal::JournalUnavailable => format!(
+            "« {} » n'atteste pas de journal append-only actif ; attach ne peut pas suivre son flux sans cette source",
+            sanitize_inline(agent)
+        ),
         AttachRefusal::AgentNotAcp => match rejection.mode {
             Some(PresenceMode::Tmux) => match rejection.location.as_deref() {
                 Some(location) => format!(
@@ -4102,6 +4106,15 @@ mod tests {
 
     #[test]
     fn explique_les_refus_non_acp_et_nom_inconnu() {
+        let sans_journal = AttachRejection {
+            reason: AttachRefusal::JournalUnavailable,
+            mode: Some(PresenceMode::Acp),
+            location: None,
+        };
+        assert!(
+            attach_refusal_message(&sans_journal, "agent-1", &[]).contains("journal append-only")
+        );
+
         let tmux = AttachRejection {
             reason: AttachRefusal::AgentNotAcp,
             mode: Some(PresenceMode::Tmux),

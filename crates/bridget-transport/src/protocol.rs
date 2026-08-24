@@ -331,6 +331,11 @@ pub enum AttachWindow {
 pub enum AttachRefusal {
     AgentUnknown,
     AgentStopped,
+    /// Le pilote n'a pas attesté de journal append-only disponible. La
+    /// compatibilité attach dépend de ce fait, jamais du protocole du pilote.
+    JournalUnavailable,
+    /// Variante historique conservée pour les pairs plus anciens. Les
+    /// nouveaux refus attach doivent employer `JournalUnavailable`.
     AgentNotAcp,
     WrapperUnavailable,
     CommandQueueSaturated,
@@ -603,6 +608,9 @@ pub enum WrapperToDaemon {
         #[serde(default)]
         turn_in_progress: bool,
     },
+    /// Le pilote a ouvert son journal append-only pour cette connexion. Ce
+    /// signal distinct du Register évite de déduire attach du mode ACP.
+    JournalReady,
     /// Se désenregistrer.
     Unregister,
     /// Renommer un agent déjà enregistré.
@@ -1718,6 +1726,21 @@ mod tests {
             } => {}
             other => panic!("message historique inattendu : {other:?}"),
         }
+    }
+
+    #[test]
+    fn journal_ready_est_un_signal_wrapper_hors_du_role_attach() {
+        let signal = WrapperToDaemon::JournalReady;
+        let json = encode(&signal).unwrap();
+        assert_eq!(json, r#"{"type":"JournalReady"}"#);
+        assert!(matches!(
+            decode(&json).unwrap(),
+            WrapperToDaemon::JournalReady
+        ));
+        assert_eq!(
+            signal.attach_refusal(),
+            Some(AttachRefusal::MessageOutsideAttachRole)
+        );
     }
 
     #[test]
