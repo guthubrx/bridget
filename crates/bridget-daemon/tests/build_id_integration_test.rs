@@ -34,7 +34,14 @@ fn build_cli(root: &Path, target: &Path, build_id: &str) -> PathBuf {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let status = Command::new(cargo)
         .current_dir(root)
-        .args(["build", "-p", "bridget-daemon", "--bin", "bridget", "--quiet"])
+        .args([
+            "build",
+            "-p",
+            "bridget-daemon",
+            "--bin",
+            "bridget",
+            "--quiet",
+        ])
         .env("CARGO_TARGET_DIR", target)
         .env("BRIDGET_BUILD_ID", build_id)
         .status()
@@ -67,7 +74,10 @@ fn start_daemon(binary: &Path, home: &Path) -> Child {
     let socket = home.join(".cache/bridget/bridget.sock");
     let deadline = Instant::now() + Duration::from_secs(5);
     while UnixStream::connect(&socket).is_err() {
-        assert!(Instant::now() < deadline, "daemon réel non joignable: {socket:?}");
+        assert!(
+            Instant::now() < deadline,
+            "daemon réel non joignable: {socket:?}"
+        );
         thread::sleep(Duration::from_millis(10));
     }
     child
@@ -99,9 +109,14 @@ fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
     let mut daemon = start_daemon(&daemon_binary, &home);
     let same_build = status(&daemon_binary, &home);
     assert!(same_build.status.success());
-    assert!(String::from_utf8_lossy(&same_build.stdout)
-        .contains("Build-id daemon: daemon-build-test"));
-    assert!(same_build.stderr.is_empty(), "égalité silencieuse: {:?}", same_build.stderr);
+    assert!(
+        String::from_utf8_lossy(&same_build.stdout).contains("Build-id daemon: daemon-build-test")
+    );
+    assert!(
+        same_build.stderr.is_empty(),
+        "égalité silencieuse: {:?}",
+        same_build.stderr
+    );
 
     // Une reconstruction ultérieure porte une identité différente, comme après
     // l'avancée de HEAD déjà vérifiée par build_identity.rs. Cette couture doit
@@ -111,8 +126,10 @@ fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
     copy_binary(&rebuilt, &client_binary);
     let different_build = status(&client_binary, &home);
     assert!(different_build.status.success());
-    assert!(String::from_utf8_lossy(&different_build.stdout)
-        .contains("Build-id daemon: daemon-build-test"));
+    assert!(
+        String::from_utf8_lossy(&different_build.stdout)
+            .contains("Build-id daemon: daemon-build-test")
+    );
     let expected = format!(
         "daemon périmé (daemon-build-test vs client-build-avance) : launchctl kickstart -k gui/{}/com.bridget.daemon\n",
         unsafe { libc::getuid() }

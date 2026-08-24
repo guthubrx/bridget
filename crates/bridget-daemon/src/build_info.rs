@@ -5,10 +5,9 @@ pub fn stale_daemon_warning(daemon_build_id: &str) -> Option<String> {
     (daemon_build_id != BUILD_ID).then(|| {
         // Incident fondateur (2026-08-23) : deux correctifs semblaient absents
         // pendant des heures parce qu'un daemon périmé continuait de répondre.
-        let remediation = format!(
-            "launchctl kickstart -k gui/{}/com.bridget.daemon",
-            unsafe { libc::getuid() }
-        );
+        let remediation = format!("launchctl kickstart -k gui/{}/com.bridget.daemon", unsafe {
+            libc::getuid()
+        });
         if daemon_build_id == "unknown" {
             format!("daemon build-id inconnu : {remediation}")
         } else {
@@ -27,8 +26,10 @@ mod tests {
         let warning = stale_daemon_warning("obsolete-commit").expect("écart signalé");
         assert!(warning.contains("daemon périmé (obsolete-commit vs"));
         assert!(warning.contains("launchctl kickstart -k gui/"));
-        assert!(stale_daemon_warning("unknown")
-            .expect("inconnu signalé honnêtement")
-            .starts_with("daemon build-id inconnu"));
+        assert!(
+            stale_daemon_warning("unknown")
+                .expect("inconnu signalé honnêtement")
+                .starts_with("daemon build-id inconnu")
+        );
     }
 }

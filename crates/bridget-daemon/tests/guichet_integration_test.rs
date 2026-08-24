@@ -1,7 +1,7 @@
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
-    decode, encode, ConnectionRole, GuichetOutcome, GuichetReplyPayload, ServiceCapability,
-    ServiceRequestOperation, ServiceRequestPayload, SERVICE_CONTRACT_VERSION,
+    ConnectionRole, GuichetOutcome, GuichetReplyPayload, SERVICE_CONTRACT_VERSION,
+    ServiceCapability, ServiceRequestOperation, ServiceRequestPayload, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};

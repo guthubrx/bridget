@@ -1181,7 +1181,9 @@ fn send_idempotent_to_daemon_at(
     )?;
     match read_control_message(&mut reader)? {
         DaemonToWrapper::ClientWelcome {
-            capabilities, build_id, ..
+            capabilities,
+            build_id,
+            ..
         } if capabilities.contains(&ClientCapability::SendIdempotent) => {
             if let Some(warning) = crate::build_info::stale_daemon_warning(&build_id) {
                 eprintln!("{warning}");
@@ -2252,7 +2254,10 @@ fn cmd_status() {
     println!("Base de données: {}", config.db_path.display());
     println!("Agents connectés: {}", status.agents.len());
     println!("Messages en base: {}", status.message_count);
-    println!("Build-id daemon: {}", status.build_id.as_deref().unwrap_or("inconnu"));
+    println!(
+        "Build-id daemon: {}",
+        status.build_id.as_deref().unwrap_or("inconnu")
+    );
     emit_stale_daemon_warning(status.build_id.as_deref());
 }
 
@@ -3113,8 +3118,10 @@ mod idempotency_projection_tests {
         let warning = stale_daemon_warning_for_status(Some("daemon-ancien")).unwrap();
         assert!(warning.starts_with("daemon périmé (daemon-ancien vs"));
         assert!(warning.contains("launchctl kickstart -k gui/"));
-        assert!(stale_daemon_warning_for_status(None)
-            .unwrap()
-            .starts_with("daemon build-id inconnu"));
+        assert!(
+            stale_daemon_warning_for_status(None)
+                .unwrap()
+                .starts_with("daemon build-id inconnu")
+        );
     }
 }
