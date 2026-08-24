@@ -27,8 +27,8 @@ use uuid::Uuid;
 const FRAME_LIMIT: usize = 256 * 1024;
 
 #[test]
-fn migration_v7_puis_seconde_ouverture_conservent_l_historique() {
-    let fixture = Fixture::new("migration-v9");
+fn migration_v8_main_vers_v11_puis_seconde_ouverture_conservent_l_historique() {
+    let fixture = Fixture::new("migration-main-v8");
     let mut store = MaicieStore::open(&fixture.database).unwrap();
     let objectif = ObjectifCoordonne::nouveau("historique", ModeObjectif::Delegue, 1).unwrap();
     let delegation = create_delegation(&mut store, &objectif, "alice");
@@ -52,17 +52,34 @@ fn migration_v7_puis_seconde_ouverture_conservent_l_historique() {
              DROP TABLE coordination_events;",
         )
         .unwrap();
-    connection.pragma_update(None, "user_version", 7).unwrap();
     connection
         .execute(
-            "DELETE FROM schema_migrations WHERE version IN (8, 9, 10)",
+            "INSERT INTO guichet_refusal_receptions(
+                 issuer_scope,request_id,canonical_request_bytes,operation,reason,
+                 response_message_id,reply_bytes,claim_generation,claim_token,processed_at
+             ) VALUES (?1,?2,?3,'mission_status','delegation_missing',?4,?5,1,?6,?7)",
+            params![
+                "scope-main-v8-0123456789abcdef",
+                "request-main-v8",
+                b"canon-main-v8".as_slice(),
+                "response-main-v8",
+                b"reply-main-v8".as_slice(),
+                "claim-main-v8-0123456789abcdef",
+                1_787_501_001_i64,
+            ],
+        )
+        .unwrap();
+    connection.pragma_update(None, "user_version", 8).unwrap();
+    connection
+        .execute(
+            "DELETE FROM schema_migrations WHERE version IN (9, 10, 11)",
             [],
         )
         .unwrap();
     drop(connection);
 
     let store = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 10);
+    assert_eq!(store.schema_version().unwrap(), 11);
     assert_eq!(
         store.objective_snapshots(Some(objectif.id)).unwrap()[0].delegations[0].id,
         delegation
@@ -85,9 +102,22 @@ fn migration_v7_puis_seconde_ouverture_conservent_l_historique() {
         )
         .unwrap();
     assert_eq!(coordination_tables, 13);
+    let refusal: (String, Vec<u8>) = connection
+        .query_row(
+            "SELECT reason, reply_bytes FROM guichet_refusal_receptions
+             WHERE issuer_scope='scope-main-v8-0123456789abcdef'
+               AND request_id='request-main-v8'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        refusal,
+        ("delegation_missing".to_string(), b"reply-main-v8".to_vec())
+    );
     drop(connection);
     let reopened = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 10);
+    assert_eq!(reopened.schema_version().unwrap(), 11);
     assert_eq!(
         reopened
             .objective_snapshots(Some(objectif.id))
@@ -98,8 +128,8 @@ fn migration_v7_puis_seconde_ouverture_conservent_l_historique() {
 }
 
 #[test]
-fn migration_v8_refuse_de_rejouer_une_notification_sans_horodatage_atteste() {
-    let fixture = Fixture::new("migration-v8-notification");
+fn migration_v9_refuse_de_rejouer_une_notification_sans_horodatage_atteste() {
+    let fixture = Fixture::new("migration-v9-notification");
     drop(MaicieStore::open(&fixture.database).unwrap());
     let connection = Connection::open(&fixture.database).unwrap();
     connection
@@ -137,14 +167,17 @@ fn migration_v8_refuse_de_rejouer_une_notification_sans_horodatage_atteste() {
             ],
         )
         .unwrap();
-    connection.pragma_update(None, "user_version", 8).unwrap();
+    connection.pragma_update(None, "user_version", 9).unwrap();
     connection
-        .execute("DELETE FROM schema_migrations WHERE version IN (9, 10)", [])
+        .execute(
+            "DELETE FROM schema_migrations WHERE version IN (10, 11)",
+            [],
+        )
         .unwrap();
     drop(connection);
 
     let store = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 10);
+    assert_eq!(store.schema_version().unwrap(), 11);
     assert!(matches!(
         store.pending_notification_outboxes(),
         Err(StoreError::Corrupt(
