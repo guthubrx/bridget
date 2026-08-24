@@ -345,8 +345,15 @@ mod tests {
 
     #[test]
     fn test_is_alive_dead_process() {
-        // PID 999999 n'existe probablement pas
-        let t = TmuxTransport::new("%0", 999999);
+        // Mutation : si is_alive ignore kill(0) et renvoie toujours true,
+        // le PID d'un enfant déjà terminé reste « vivant » et ce test échoue.
+        let mut child = std::process::Command::new("true")
+            .spawn()
+            .expect("spawn true");
+        let pid = child.id();
+        let status = child.wait().expect("wait true");
+        assert!(status.success());
+        let t = TmuxTransport::new("%0", pid);
         assert!(!t.is_alive());
     }
 

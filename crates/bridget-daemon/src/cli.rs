@@ -3400,14 +3400,18 @@ mod idempotency_projection_tests {
 
     #[test]
     fn who_et_status_signalent_exactement_un_daemon_perime() {
+        // Observe les identifiants et la remédiation structurelle — pas un
+        // libellé humain (le gate fondateur a déjà payé ce piège cette nuit).
         assert!(stale_daemon_warning_for_status(Some(crate::build_info::BUILD_ID)).is_none());
         let warning = stale_daemon_warning_for_status(Some("daemon-ancien")).unwrap();
-        assert!(warning.starts_with("daemon périmé (daemon-ancien vs"));
-        assert!(warning.contains("launchctl kickstart -k gui/"));
+        assert!(warning.contains("daemon-ancien"));
+        assert!(warning.contains(crate::build_info::BUILD_ID));
+        let remediation = format!("gui/{}/com.bridget.daemon", unsafe { libc::getuid() });
+        assert!(warning.contains(&remediation));
         assert!(
             stale_daemon_warning_for_status(None)
                 .unwrap()
-                .starts_with("daemon build-id inconnu")
+                .contains(&remediation)
         );
     }
 }
