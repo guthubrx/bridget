@@ -3,9 +3,10 @@
 
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
 use bridget_transport::protocol::{
-    AttachRefusal, CLIENT_CONTRACT_VERSION, COORDINATION_EVENTS_VERSION, ClientCapability,
-    ClientRefusal, ConnectionRole, IdempotencyIssue, PresenceMode, SERVICE_CONTRACT_VERSION,
-    ServiceCapability, ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
+    AttachRefusal, CLIENT_CONTRACT_VERSION, COORDINATION_EVENTS_VERSION,
+    COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole, IdempotencyIssue,
+    PresenceMode, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal, SpawnRefusal,
+    StopOutcome, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
@@ -273,6 +274,9 @@ struct DaemonState {
     /// La capacité du guichet ne dépend jamais d'un nom déclaré : elle est
     /// attachée à cette négociation de service et disparaît avec la connexion.
     service_negotiations: HashMap<String, NegotiatedService>,
+    /// Relevés 016 v2 en cours. Une entrée non fraîche reste volontairement
+    /// muette jusqu'à une nouvelle souscription ayant atteint son snapshot.
+    coordination_subscriptions: HashMap<String, CoordinationSubscription>,
     /// Souscriptions attach actives, distinctes de l'annuaire des équipiers.
     attach_subscriptions: HashMap<String, AttachSubscription>,
     attach_views: HashMap<String, Arc<AttachView>>,
@@ -426,6 +430,12 @@ struct NegotiatedClient {
 struct NegotiatedService {
     version: u16,
     capabilities: Vec<ServiceCapability>,
+}
+
+#[derive(Clone)]
+struct CoordinationSubscription {
+    fresh: bool,
+    next_cursor: u64,
 }
 
 struct QueuedAttachMessage {
@@ -1649,6 +1659,7 @@ impl DaemonState {
             connection_roles: HashMap::new(),
             client_negotiations: HashMap::new(),
             service_negotiations: HashMap::new(),
+            coordination_subscriptions: HashMap::new(),
             attach_subscriptions: HashMap::new(),
             attach_views: HashMap::new(),
             view_closed_tx,
@@ -2508,6 +2519,7 @@ fn handle_connection(
         st.connection_roles.remove(&conn_id);
         st.client_negotiations.remove(&conn_id);
         st.service_negotiations.remove(&conn_id);
+        st.coordination_subscriptions.remove(&conn_id);
         let _ = st.store.release_guichet_claims(&conn_id);
         (writer_opt, removed, controls, views)
     };
@@ -2539,6 +2551,7 @@ fn is_guichet_frame(message: &WrapperToDaemon) -> bool {
     matches!(
         message,
         WrapperToDaemon::ServiceHello { .. }
+            | WrapperToDaemon::CoordinationSubscribe { .. }
             | WrapperToDaemon::ServiceRequest { .. }
             | WrapperToDaemon::GuichetClaimNext { .. }
             | WrapperToDaemon::GuichetClaim { .. }
@@ -2569,6 +2582,7 @@ fn raw_guichet_frame(line: &str) -> bool {
             matches!(
                 kind.as_str(),
                 "ServiceHello"
+                    | "coordination_subscribe"
                     | "service_request"
                     | "guichet_claim_next"
                     | "guichet_claim"
@@ -2724,9 +2738,9 @@ fn guichet_lifecycle_response(event: GuichetLifecycleEvent) -> DaemonToWrapper {
     }
 }
 
-fn guichet_coordination_response(event: GuichetCoordinationEvent) -> DaemonToWrapper {
+fn guichet_coordination_response(event: GuichetCoordinationEvent, version: u16) -> DaemonToWrapper {
     DaemonToWrapper::CoordinationEvent {
-        version: COORDINATION_EVENTS_VERSION,
+        version,
         event_id: event.event_id,
         request_id: event.request_id,
         kind: event.kind,
@@ -2734,6 +2748,7 @@ fn guichet_coordination_response(event: GuichetCoordinationEvent) -> DaemonToWra
         recipient: event.recipient,
         generation: event.generation,
         observed_at: event.observed_at,
+        cursor: (version == COORDINATION_STREAM_VERSION).then_some(event.cursor),
     }
 }
 
@@ -2748,6 +2763,8 @@ fn attest_reminder_sent(
     recipient: &str,
     generation: u64,
 ) {
+    #[cfg(feature = "test-support")]
+    crate::test_sync::checkpoint("before_coordination_persist");
     let controls = {
         let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
         let event = match st.store.record_reminder_sent(
@@ -2763,24 +2780,50 @@ fn attest_reminder_sent(
                 return;
             }
         };
-        st.service_negotiations
+        #[cfg(feature = "test-support")]
+        crate::test_sync::checkpoint("after_coordination_persist");
+        let mut controls = Vec::new();
+        let negotiations = st
+            .service_negotiations
             .iter()
-            .filter(|(_, negotiated)| {
-                negotiated.version == SERVICE_CONTRACT_VERSION
-                    && negotiated
-                        .capabilities
-                        .contains(&ServiceCapability::MaicieGuichet)
-                    && negotiated
-                        .capabilities
-                        .contains(&ServiceCapability::CoordinationEventsV1)
-            })
-            .filter_map(|(connection_id, _)| {
-                st.connections.get(connection_id).map(|writer| DeferredControl {
+            .map(|(connection_id, negotiated)| (connection_id.clone(), negotiated.clone()))
+            .collect::<Vec<_>>();
+        for (connection_id, negotiated) in negotiations {
+            let version = if negotiated
+                .capabilities
+                .contains(&ServiceCapability::CoordinationEventsV1)
+            {
+                Some(COORDINATION_EVENTS_VERSION)
+            } else if negotiated
+                .capabilities
+                .contains(&ServiceCapability::CoordinationEventsV2)
+                && st
+                    .coordination_subscriptions
+                    .get(&connection_id)
+                    .is_some_and(|subscription| {
+                        subscription.fresh && subscription.next_cursor == event.cursor
+                    })
+            {
+                Some(COORDINATION_STREAM_VERSION)
+            } else {
+                None
+            };
+            let Some(version) = version else {
+                continue;
+            };
+            if version == COORDINATION_STREAM_VERSION
+                && let Some(subscription) = st.coordination_subscriptions.get_mut(&connection_id)
+            {
+                subscription.next_cursor = event.cursor.saturating_add(1);
+            }
+            if let Some(writer) = st.connections.get(&connection_id) {
+                controls.push(DeferredControl {
                     writer: writer.clone(),
-                    message: guichet_coordination_response(event.clone()),
-                })
-            })
-            .collect::<Vec<_>>()
+                    message: guichet_coordination_response(event.clone(), version),
+                });
+            }
+        }
+        controls
     };
     let _ = execute_controls(controls);
 }
@@ -4010,6 +4053,7 @@ fn handle_wrapper_message(
         let is_service_message = matches!(
             &msg,
             WrapperToDaemon::ServiceHello { .. }
+                | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
                 | WrapperToDaemon::GuichetClaim { .. }
                 | WrapperToDaemon::GuichetLookup { .. }
@@ -4026,6 +4070,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::GuichetClaim { .. }
                 | WrapperToDaemon::GuichetLookup { .. }
                 | WrapperToDaemon::GuichetReply { .. }
+                | WrapperToDaemon::CoordinationSubscribe { .. }
                     if !st.service_negotiations.contains_key(conn_id) =>
                 {
                     Some(ServiceRefusal::NegotiationRequired)
@@ -4046,7 +4091,21 @@ fn handle_wrapper_message(
                 {
                     Some(ServiceRefusal::CapabilityRequired)
                 }
+                WrapperToDaemon::CoordinationSubscribe { .. }
+                    if !st
+                        .service_negotiations
+                        .get(conn_id)
+                        .is_some_and(|negotiated| {
+                            negotiated.version == SERVICE_CONTRACT_VERSION
+                                && negotiated
+                                    .capabilities
+                                    .contains(&ServiceCapability::CoordinationEventsV2)
+                        }) =>
+                {
+                    Some(ServiceRefusal::CapabilityRequired)
+                }
                 WrapperToDaemon::ServiceHello { .. }
+                | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
                 | WrapperToDaemon::GuichetClaim { .. }
                 | WrapperToDaemon::GuichetLookup { .. }
@@ -4151,11 +4210,14 @@ fn handle_wrapper_message(
             }
             let canonical_capabilities = matches!(
                 capabilities.as_slice(),
-                []
-                    | [ServiceCapability::MaicieGuichet]
+                [] | [ServiceCapability::MaicieGuichet]
                     | [
                         ServiceCapability::MaicieGuichet,
                         ServiceCapability::CoordinationEventsV1,
+                    ]
+                    | [
+                        ServiceCapability::MaicieGuichet,
+                        ServiceCapability::CoordinationEventsV2,
                     ]
             );
             if !canonical_capabilities {
@@ -4191,6 +4253,9 @@ fn handle_wrapper_message(
                     Err(error) => error!("lecture des événements guichet: {error}"),
                 }
             }
+            // La v1 conserve son rejeu initial historique. La v2 ne pousse
+            // rien avant `coordination_subscribe`, sinon un fait live pourrait
+            // être confondu avec une observation fraîche avant le snapshot.
             if capabilities.contains(&ServiceCapability::CoordinationEventsV1) {
                 match st.store.guichet_coordination_events() {
                     Ok(events) => {
@@ -4199,7 +4264,10 @@ fn handle_wrapper_message(
                             .filter_map(|event| {
                                 st.connections.get(conn_id).map(|writer| DeferredControl {
                                     writer: writer.clone(),
-                                    message: guichet_coordination_response(event),
+                                    message: guichet_coordination_response(
+                                        event,
+                                        COORDINATION_EVENTS_VERSION,
+                                    ),
                                 })
                             })
                             .collect::<Vec<_>>();
@@ -4219,6 +4287,94 @@ fn handle_wrapper_message(
                 issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
                 capabilities,
             })
+        }
+        WrapperToDaemon::CoordinationSubscribe {
+            version,
+            after_cursor,
+        } => {
+            if version != COORDINATION_STREAM_VERSION {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::UnsupportedVersion {
+                        supported_versions: vec![COORDINATION_STREAM_VERSION],
+                    },
+                });
+            }
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let replay = match st.store.guichet_coordination_events_after(after_cursor) {
+                Ok(replay) => replay,
+                Err(error) => {
+                    error!("relève de coordination indisponible: {error}");
+                    st.coordination_subscriptions.insert(
+                        conn_id.to_string(),
+                        CoordinationSubscription {
+                            fresh: false,
+                            next_cursor: after_cursor.unwrap_or(0).saturating_add(1),
+                        },
+                    );
+                    if let Some(writer) = st.connections.get(conn_id).cloned() {
+                        st.pending_post_response_controls
+                            .entry(conn_id.to_string())
+                            .or_default()
+                            .push(DeferredControl {
+                                writer,
+                                message: DaemonToWrapper::CoordinationUnavailable {
+                                    version,
+                                    reason: "source_unavailable".to_string(),
+                                },
+                            });
+                    }
+                    return None;
+                }
+            };
+            let mut controls = Vec::new();
+            let next_cursor = replay
+                .through_cursor
+                .or(after_cursor)
+                .unwrap_or(0)
+                .saturating_add(1);
+            let fresh = replay.gap.is_none();
+            if let Some((from_cursor, to_cursor)) = replay.gap {
+                defer_control(
+                    &st,
+                    conn_id,
+                    DaemonToWrapper::CoordinationGap {
+                        version,
+                        from_cursor,
+                        to_cursor,
+                        reason: "cursor_gap".to_string(),
+                    },
+                    &mut controls,
+                );
+            } else {
+                for event in replay.events {
+                    defer_control(
+                        &st,
+                        conn_id,
+                        guichet_coordination_response(event, version),
+                        &mut controls,
+                    );
+                }
+                defer_control(
+                    &st,
+                    conn_id,
+                    DaemonToWrapper::CoordinationSnapshotCaughtUp {
+                        version,
+                        through_cursor: replay.through_cursor,
+                    },
+                    &mut controls,
+                );
+            }
+            st.coordination_subscriptions.insert(
+                conn_id.to_string(),
+                CoordinationSubscription { fresh, next_cursor },
+            );
+            if !controls.is_empty() {
+                st.pending_post_response_controls
+                    .entry(conn_id.to_string())
+                    .or_default()
+                    .extend(controls);
+            }
+            None
         }
         WrapperToDaemon::ServiceRequest {
             version,

@@ -57,3 +57,33 @@ Le consommateur Maicie relira les bytes produits par Bridget ; il ne partage
 ni le store Bridget ni un DTO local supposé équivalent. Tout curseur, toute
 fraîcheur et toute déduplication devront être exposés par le protocole public
 et conserver la reprise des mêmes bytes et du même `event_id`.
+
+## Relève cursée v2 — T1604
+
+La capacité `coordination_events_v2` remplace le rejeu implicite par une
+commande explicite `coordination_subscribe`. Elle reste incompatible avec
+`coordination_events_v1` sur une même connexion : la v1 conserve exactement
+son comportement historique, tandis que la v2 est la seule voie qui donne une
+frontière de fraîcheur publiquement vérifiable.
+
+Le curseur est un entier opaque, alloué durablement par SQLite Bridget dans
+l'ordre de persistance. Après `coordination_subscribe`, Bridget émet, dans cet
+ordre : zéro ou plusieurs `coordination_event` v2 (chacun porte son `cursor`),
+puis `coordination_snapshot_caught_up`. Avant cette dernière trame, et après
+un `coordination_gap` ou `coordination_unavailable`, l'observation est non
+fraîche. Seule une nouvelle souscription qui atteint son snapshot rend la
+fraîcheur à la relève : un événement suivant ne répare jamais un trou.
+
+| Trame v2 | Autorité | Lecteur identifié |
+|---|---|---|
+| `coordination_event.cursor` | watermark SQLite Bridget | C/T1613 le conserve comme curseur durable, B/T1606 déduplique `event_id` |
+| `coordination_snapshot_caught_up` | lecture complète Bridget | C/T1613 peut seulement alors marquer l'observation fraîche |
+| `coordination_gap` | séquence durable absente | B/T1606 bloque l'effet et journalise `observation_incomplète` |
+| `coordination_unavailable` | erreur de lecture Bridget | B/T1606 bloque l'effet sans l'assimiler à une lacune |
+
+Le daemon stocke un watermark monotone séparé des lignes. Ainsi, une ligne
+absente entre deux curseurs est un `coordination_gap`, pas une vue vide. Une
+erreur SQLite est `coordination_unavailable`; ces deux trames sont fermées et
+distinctes. Le corpus `fixtures/coordination-stream-v2.jsonl` est normatif.
+Le rejeu depuis le même curseur relit les mêmes octets JSONL et le même
+`event_id`; Maicie n'ouvre jamais la base Bridget pour l'obtenir.

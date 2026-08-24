@@ -1,7 +1,7 @@
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
-    ConnectionRole, CoordinationEventKind, SERVICE_CONTRACT_VERSION, ServiceCapability, decode,
-    encode,
+    COORDINATION_STREAM_VERSION, ConnectionRole, CoordinationEventKind, SERVICE_CONTRACT_VERSION,
+    ServiceCapability, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -33,7 +33,29 @@ fn start_daemon(home: &Path) -> Child {
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
     while UnixStream::connect(socket(home)).is_err() {
-        assert!(Instant::now() < deadline, "daemon de coordination non démarré");
+        assert!(
+            Instant::now() < deadline,
+            "daemon de coordination non démarré"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    child
+}
+
+fn start_daemon_with_sync(home: &Path, sync: &Path) -> Child {
+    std::fs::create_dir_all(home).unwrap();
+    let child = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .arg("daemon")
+        .env("HOME", home)
+        .env("BRIDGET_TEST_SYNC_DIR", sync)
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while UnixStream::connect(socket(home)).is_err() {
+        assert!(
+            Instant::now() < deadline,
+            "daemon de coordination non démarré"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
     child
@@ -67,6 +89,13 @@ fn next(reader: &mut BufReader<UnixStream>) -> DaemonToWrapper {
     decode(line.trim_end()).unwrap()
 }
 
+fn next_raw(reader: &mut BufReader<UnixStream>) -> String {
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    assert!(!line.is_empty(), "réponse daemon attendue");
+    line
+}
+
 fn register(
     reader: &mut BufReader<UnixStream>,
     writer: &mut BufWriter<UnixStream>,
@@ -94,9 +123,7 @@ fn register(
     ));
 }
 
-fn coordination_service(
-    home: &Path,
-) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
+fn coordination_service(home: &Path) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
     let (mut reader, mut writer) = connect(home);
     assert!(matches!(
         request(
@@ -133,6 +160,84 @@ fn coordination_service(
     (reader, writer)
 }
 
+fn coordination_stream_service(home: &Path) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
+    let (mut reader, mut writer) = connect(home);
+    assert!(matches!(
+        request(
+            &mut reader,
+            &mut writer,
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Service,
+            },
+        ),
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Service
+        }
+    ));
+    assert!(matches!(
+        request(
+            &mut reader,
+            &mut writer,
+            WrapperToDaemon::ServiceHello {
+                version: SERVICE_CONTRACT_VERSION,
+                service: "maicie".to_string(),
+                issuer_scope: SERVICE_SCOPE.to_string(),
+                capabilities: vec![
+                    ServiceCapability::MaicieGuichet,
+                    ServiceCapability::CoordinationEventsV2,
+                ],
+            },
+        ),
+        DaemonToWrapper::ServiceWelcome { capabilities, .. }
+            if capabilities == vec![
+                ServiceCapability::MaicieGuichet,
+                ServiceCapability::CoordinationEventsV2,
+            ]
+    ));
+    (reader, writer)
+}
+
+fn subscribe_coordination(writer: &mut BufWriter<UnixStream>, after_cursor: Option<u64>) {
+    writeln!(
+        writer,
+        "{}",
+        encode(&WrapperToDaemon::CoordinationSubscribe {
+            version: COORDINATION_STREAM_VERSION,
+            after_cursor,
+        })
+        .unwrap()
+    )
+    .unwrap();
+    writer.flush().unwrap();
+}
+
+fn make_fifo(path: &Path) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let path = CString::new(path.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+}
+
+fn wait_marker(marker: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !marker.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "jalon de crash absent: {marker:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn kill_sigkill(child: &mut Child) {
+    assert_eq!(
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGKILL) },
+        0,
+        "SIGKILL réel du daemon"
+    );
+    child.wait().unwrap();
+}
+
 #[test]
 fn reminder_sent_est_atteste_apres_ecriture_et_releve_au_meme_event_id() {
     let home = unique_home();
@@ -165,7 +270,10 @@ fn reminder_sent_est_atteste_apres_ecriture_et_releve_au_meme_event_id() {
         ),
         DaemonToWrapper::Ack { .. }
     ));
-    assert!(matches!(next(&mut recipient_reader), DaemonToWrapper::Deliver(_)));
+    assert!(matches!(
+        next(&mut recipient_reader),
+        DaemonToWrapper::Deliver(_)
+    ));
 
     // Mutation discriminante : si le fait était créé avant l'écriture/flush du
     // rappel, cette corrélation pourrait être observée sans `Deliver` réel.
@@ -180,6 +288,7 @@ fn reminder_sent_est_atteste_apres_ecriture_et_releve_au_meme_event_id() {
             recipient,
             generation,
             observed_at,
+            cursor: _,
         } => {
             assert_eq!(version, 1);
             assert_eq!(event_request_id, request_id);
@@ -310,7 +419,10 @@ fn texte_relance_ne_fabrique_jamais_un_fait_de_coordination() {
         ),
         DaemonToWrapper::Ack { .. }
     ));
-    assert!(matches!(next(&mut recipient_reader), DaemonToWrapper::Deliver(_)));
+    assert!(matches!(
+        next(&mut recipient_reader),
+        DaemonToWrapper::Deliver(_)
+    ));
     service_reader
         .get_ref()
         .set_read_timeout(Some(Duration::from_millis(200)))
@@ -321,6 +433,245 @@ fn texte_relance_ne_fabrique_jamais_un_fait_de_coordination() {
         "un texte ne doit pas créer de coordination_event"
     );
 
+    daemon.kill().unwrap();
+    daemon.wait().unwrap();
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {
+    let home = unique_home();
+    let sync = home.join("sync");
+    std::fs::create_dir_all(&sync).unwrap();
+
+    // Frontière avant persistance : le SIGKILL au jalon prouve qu'aucun fait
+    // n'est inventé après redémarrage. Ce n'est pas un arrêt coopératif.
+    let before_fifo = sync.join("before_coordination_persist.fifo");
+    make_fifo(&before_fifo);
+    let before_marker = sync.join("before_coordination_persist.ready");
+    let mut daemon = start_daemon_with_sync(&home, &sync);
+    let (mut sender_reader, mut sender_writer) = connect(&home);
+    let (mut recipient_reader, mut recipient_writer) = connect(&home);
+    register(
+        &mut sender_reader,
+        &mut sender_writer,
+        "maicie",
+        "cursor-sender",
+    );
+    register(
+        &mut recipient_reader,
+        &mut recipient_writer,
+        "codex-1",
+        "cursor-recipient",
+    );
+    let mut tracked = BridgetMessage::new("maicie", "codex-1", "rappel cursé");
+    tracked.reply = true;
+    tracked.reply_timeout = Some(3);
+    assert!(matches!(
+        request(
+            &mut sender_reader,
+            &mut sender_writer,
+            WrapperToDaemon::Send(tracked),
+        ),
+        DaemonToWrapper::Ack { .. }
+    ));
+    assert!(matches!(
+        next(&mut recipient_reader),
+        DaemonToWrapper::Deliver(_)
+    ));
+    wait_marker(&before_marker);
+    kill_sigkill(&mut daemon);
+    let database = home.join(".cache/bridget/bridget.db");
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let before_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM guichet_coordination_events",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        before_count, 0,
+        "SIGKILL avant persist ne laisse aucun fait"
+    );
+    drop(connection);
+
+    // Nouvelle demande et crash après la transaction : son événement doit être
+    // relu identiquement, y compris son curseur, après deux redémarrages.
+    std::fs::remove_file(&before_fifo).unwrap();
+    let after_fifo = sync.join("after_coordination_persist.fifo");
+    make_fifo(&after_fifo);
+    let after_marker = sync.join("after_coordination_persist.ready");
+    let mut daemon = start_daemon_with_sync(&home, &sync);
+    let (mut sender_reader, mut sender_writer) = connect(&home);
+    let (mut recipient_reader, mut recipient_writer) = connect(&home);
+    register(
+        &mut sender_reader,
+        &mut sender_writer,
+        "maicie",
+        "cursor-sender-restarted",
+    );
+    register(
+        &mut recipient_reader,
+        &mut recipient_writer,
+        "codex-1",
+        "cursor-recipient-restarted",
+    );
+    let mut tracked = BridgetMessage::new("maicie", "codex-1", "rappel durable cursé");
+    tracked.reply = true;
+    tracked.reply_timeout = Some(3);
+    assert!(matches!(
+        request(
+            &mut sender_reader,
+            &mut sender_writer,
+            WrapperToDaemon::Send(tracked),
+        ),
+        DaemonToWrapper::Ack { .. }
+    ));
+    assert!(matches!(
+        next(&mut recipient_reader),
+        DaemonToWrapper::Deliver(_)
+    ));
+    wait_marker(&after_marker);
+    kill_sigkill(&mut daemon);
+
+    let mut daemon = start_daemon(&home);
+    let (mut first_reader, mut first_writer) = coordination_stream_service(&home);
+    subscribe_coordination(&mut first_writer, None);
+    let first_bytes = next_raw(&mut first_reader);
+    let first = decode::<DaemonToWrapper>(first_bytes.trim_end()).unwrap();
+    let (event_id, cursor) = match first {
+        DaemonToWrapper::CoordinationEvent {
+            version,
+            event_id,
+            cursor: Some(cursor),
+            ..
+        } if version == COORDINATION_STREAM_VERSION => (event_id, cursor),
+        other => panic!("coordination_event v2 attendu, reçu {other:?}"),
+    };
+    assert!(matches!(
+        next(&mut first_reader),
+        DaemonToWrapper::CoordinationSnapshotCaughtUp {
+            version: COORDINATION_STREAM_VERSION,
+            through_cursor: Some(through),
+        } if through == cursor
+    ));
+    kill_sigkill(&mut daemon);
+
+    let mut daemon = start_daemon(&home);
+    let (mut replay_reader, mut replay_writer) = coordination_stream_service(&home);
+    subscribe_coordination(&mut replay_writer, None);
+    let replay_bytes = next_raw(&mut replay_reader);
+    let replay = decode::<DaemonToWrapper>(replay_bytes.trim_end()).unwrap();
+    assert!(matches!(
+        replay,
+        DaemonToWrapper::CoordinationEvent {
+            event_id: replay_id,
+            cursor: Some(replay_cursor),
+            ..
+        } if replay_id == event_id && replay_cursor == cursor
+    ));
+    assert_eq!(
+        first_bytes, replay_bytes,
+        "le redémarrage rejoue les mêmes octets, pas un équivalent re-sérialisé"
+    );
+    assert!(matches!(
+        next(&mut replay_reader),
+        DaemonToWrapper::CoordinationSnapshotCaughtUp {
+            through_cursor: Some(through),
+            ..
+        } if through == cursor
+    ));
+    let (mut caught_reader, mut caught_writer) = coordination_stream_service(&home);
+    subscribe_coordination(&mut caught_writer, Some(cursor));
+    assert!(matches!(
+        next(&mut caught_reader),
+        DaemonToWrapper::CoordinationSnapshotCaughtUp {
+            through_cursor: Some(through),
+            ..
+        } if through == cursor
+    ));
+    caught_reader
+        .get_ref()
+        .set_read_timeout(Some(Duration::from_millis(150)))
+        .unwrap();
+    let mut extra = String::new();
+    assert!(
+        caught_reader.read_line(&mut extra).is_err(),
+        "aucun doublon après curseur"
+    );
+    daemon.kill().unwrap();
+    daemon.wait().unwrap();
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn gap_et_unavailable_restant_des_observations_distinctes() {
+    let home = unique_home();
+    let mut daemon = start_daemon(&home);
+    let database = home.join(".cache/bridget/bridget.db");
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute(
+            "INSERT INTO guichet_coordination_stream_state (singleton, high_watermark)
+             VALUES (1, 1)
+             ON CONFLICT(singleton) DO UPDATE SET high_watermark = 1",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let (mut gap_reader, mut gap_writer) = coordination_stream_service(&home);
+    subscribe_coordination(&mut gap_writer, None);
+    assert!(matches!(
+        next(&mut gap_reader),
+        DaemonToWrapper::CoordinationGap {
+            version: COORDINATION_STREAM_VERSION,
+            from_cursor: 1,
+            to_cursor: 1,
+            ..
+        }
+    ));
+
+    // Mutation discriminante : remplacer `CoordinationGap` par Unavailable
+    // ferait échouer l'assertion précédente. Les deux causes ne se confondent
+    // donc pas sous le même état non frais.
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute("DROP TABLE guichet_coordination_events", [])
+        .unwrap();
+    drop(connection);
+    let (mut unavailable_reader, mut unavailable_writer) = coordination_stream_service(&home);
+    subscribe_coordination(&mut unavailable_writer, None);
+    assert!(matches!(
+        next(&mut unavailable_reader),
+        DaemonToWrapper::CoordinationUnavailable {
+            version: COORDINATION_STREAM_VERSION,
+            reason,
+        } if reason == "source_unavailable"
+    ));
+    daemon.kill().unwrap();
+    daemon.wait().unwrap();
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn releve_cursee_refuse_un_champ_futur_avant_toute_lecture() {
+    let home = unique_home();
+    let mut daemon = start_daemon(&home);
+    let (mut reader, mut writer) = coordination_stream_service(&home);
+    writeln!(
+        writer,
+        r#"{{"type":"coordination_subscribe","v":2,"after_cursor":0,"future":true}}"#
+    )
+    .unwrap();
+    writer.flush().unwrap();
+    assert!(matches!(
+        next(&mut reader),
+        DaemonToWrapper::ServiceRejected {
+            reason: bridget_transport::protocol::ServiceRefusal::CanonicalBytesMismatch
+        }
+    ));
     daemon.kill().unwrap();
     daemon.wait().unwrap();
     let _ = std::fs::remove_dir_all(home);
