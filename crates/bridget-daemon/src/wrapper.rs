@@ -54,6 +54,11 @@ const ATTACH_RELAY_IDLE_WAIT: Duration = Duration::from_millis(10);
 
 /// Contexte reconstruit à chaque naissance d'un équipier géré. Il n'est jamais
 /// persisté : le greffe Maicie et Git restent les seules autorités.
+///
+/// La consigne dépend de l'état greffe au moment de la reprise : une mission
+/// close / à évaluer / synthétisée prescrit l'ATTENTE, jamais la relance de
+/// l'instruction d'origine. Le chemin worktree est validé contre la règle 6
+/// (jamais le checkout principal).
 fn managed_resume_context(
     home: &Path,
     worktree: &Path,
@@ -68,41 +73,78 @@ fn managed_resume_context(
             "Identité figée : nom={agent}; type={agent_type}; protocole={protocol}; definition_digest={definition_digest}."
         ),
     ];
-    match managed_resume_mission(home, agent) {
-        Ok(Some(mission)) => lines.extend([
-            format!(
-                "Mission Maicie active : objectif_id={}; delegation_id={}; message_id={}",
-                mission.objective_id, mission.delegation_id, mission.message_id
-            ),
-            format!(
-                "État attesté : objectif={}; délégation={}; remise_locale={}",
-                mission.objective_state, mission.delegation_state, mission.local_delivery
-            ),
-            format!("Instruction : {}", mission.instruction),
-        ]),
-        Ok(None) => lines.push(format!(
-            "Mission Maicie : aucune mission active attestée pour {agent}."
-        )),
-        Err(error) => lines.push(format!("Mission Maicie : indisponible ({error}).")),
-    }
+    let resume_stance = match managed_resume_mission(home, agent) {
+        Ok(stance) => {
+            match &stance {
+                ResumeStance::Actionable(mission) => lines.extend([
+                    format!(
+                        "Mission Maicie active : objectif_id={}; delegation_id={}; message_id={}",
+                        mission.objective_id, mission.delegation_id, mission.message_id
+                    ),
+                    format!(
+                        "État attesté : objectif={}; délégation={}; remise_locale={}",
+                        mission.objective_state, mission.delegation_state, mission.local_delivery
+                    ),
+                    format!("Instruction : {}", mission.instruction),
+                ]),
+                ResumeStance::Waiting(mission) => {
+                    let header = if mission.objective_state == "clos" {
+                        "Mission Maicie close au greffe"
+                    } else {
+                        "Mission Maicie non actionnable (attente greffe)"
+                    };
+                    lines.extend([
+                        format!(
+                            "{header} : objectif_id={}; delegation_id={}; message_id={}",
+                            mission.objective_id, mission.delegation_id, mission.message_id
+                        ),
+                        format!(
+                            "État attesté : objectif={}; délégation={}; remise_locale={}",
+                            mission.objective_state,
+                            mission.delegation_state,
+                            mission.local_delivery
+                        ),
+                        format!(
+                            "Instruction d'origine (NE PAS RELANCER) : {}",
+                            mission.instruction
+                        ),
+                    ]);
+                }
+                ResumeStance::Absent => lines.push(format!(
+                    "Mission Maicie : aucune mission active attestée pour {agent}. Aucun bureau inventé — attends un mandat explicite."
+                )),
+            }
+            Ok(stance)
+        }
+        Err(error) => {
+            lines.push(format!("Mission Maicie : indisponible ({error})."));
+            Err(())
+        }
+    };
     match managed_resume_worktree(worktree) {
-        Ok(worktree) => {
+        Ok(attested) => {
             lines.push(format!(
                 "Worktree : path={}; branche={}; tête={}",
-                worktree.path, worktree.branch, worktree.head
+                attested.path, attested.branch, attested.head
             ));
-            if worktree.modified.is_empty() {
+            if attested.modified.is_empty() {
                 lines.push("Fichiers non commités : aucun attesté.".to_string());
             } else {
                 lines.push(format!(
                     "Fichiers non commités : {}",
-                    worktree.modified.join(", ")
+                    attested.modified.join(", ")
                 ));
             }
         }
         Err(error) => lines.push(format!("Worktree : indisponible ({error}).")),
     }
-    lines.push("Consigne : lis ton diff, committe ce qui est prêt, puis reprends la mission ou signale le blocage.".to_string());
+    if worktree.join(".git").is_dir() {
+        lines.push(
+            "ALERTE règle 6 : ce chemin est le checkout principal (.git est un répertoire), pas un worktree lié. N'y écris PAS ; travaille uniquement dans un worktree attesté."
+                .to_string(),
+        );
+    }
+    lines.push(managed_resume_consigne(&resume_stance).to_string());
     lines.join("\n")
 }
 
@@ -116,7 +158,48 @@ struct ResumeMission {
     instruction: String,
 }
 
-fn managed_resume_mission(home: &Path, agent: &str) -> Result<Option<ResumeMission>, String> {
+/// Posture prescrite par le greffe au moment de la reprise.
+enum ResumeStance {
+    /// Objectif ouvert/en coordination et délégation encore exécutable.
+    Actionable(ResumeMission),
+    /// Close, livrée, gelée ou à évaluer — l'agent doit attendre, pas relancer.
+    Waiting(ResumeMission),
+    /// Aucune mission attestée pour cet agent (naissance sans bureau).
+    Absent,
+}
+
+fn managed_resume_consigne(stance: &Result<ResumeStance, ()>) -> &'static str {
+    match stance {
+        Ok(ResumeStance::Actionable(_)) => {
+            "Consigne : lis ton diff, committe ce qui est prêt, puis reprends la mission ou signale le blocage."
+        }
+        Ok(ResumeStance::Waiting(mission)) if mission.objective_state == "clos" => {
+            "Consigne : mission close au greffe — ATTENDS. N'exécute pas l'instruction d'origine ; attends un mandat explicite."
+        }
+        Ok(ResumeStance::Waiting(_)) => {
+            "Consigne : objectif en attente au greffe (état attesté ci-dessus) — ATTENDS. Ne relance pas l'instruction ; attends la suite du greffe."
+        }
+        Ok(ResumeStance::Absent) | Err(()) => {
+            "Consigne : aucun mandat actionnable attesté — ATTENDS un mandat explicite. Ne reprends aucune mission inventée."
+        }
+    }
+}
+
+fn resume_mission_actionable(
+    objective: &maicie::domain::EtatObjectif,
+    delegation: &maicie::domain::EtatDelegation,
+) -> bool {
+    use maicie::domain::{EtatDelegation, EtatObjectif};
+    matches!(
+        objective,
+        EtatObjectif::Ouvert | EtatObjectif::EnCoordination
+    ) && matches!(
+        delegation,
+        EtatDelegation::EnAttentePrerequis | EtatDelegation::Creee
+    )
+}
+
+fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, String> {
     use maicie::domain::{EtatDelegation, EtatObjectif};
     let config = home.join(".config/maicie/config.json");
     if !config.is_file() {
@@ -127,35 +210,59 @@ fn managed_resume_mission(home: &Path, agent: &str) -> Result<Option<ResumeMissi
     }
     let projection = maicie::ui_projection::read_ui_mission_projection_v1(&config)
         .map_err(|error| error.to_string())?;
-    let candidate = projection
+    let ranking = |item: &maicie::ui_projection::UiObjectiveProjection,
+                   delegation: &maicie::domain::Delegation| {
+        (
+            item.objective.mis_a_jour_at,
+            item.objective.cree_at,
+            delegation.id,
+        )
+    };
+    let for_agent: Vec<_> = projection
         .objectives
         .iter()
-        .filter(|item| item.objective.etat != EtatObjectif::Clos)
         .flat_map(|item| {
             item.delegations.iter().filter_map(move |delegation| {
-                (delegation.participant == agent
-                    && !matches!(
-                        delegation.etat,
-                        EtatDelegation::Terminee | EtatDelegation::Annulee
-                    ))
-                .then_some((item, delegation))
+                (delegation.participant == agent).then_some((item, delegation))
             })
         })
-        .max_by_key(|(item, delegation)| {
-            (
-                item.objective.mis_a_jour_at,
-                item.objective.cree_at,
-                delegation.id,
-            )
-        });
+        .collect();
+    let actionable = for_agent
+        .iter()
+        .copied()
+        .filter(|(item, delegation)| {
+            resume_mission_actionable(&item.objective.etat, &delegation.etat)
+        })
+        .max_by_key(|(item, delegation)| ranking(item, delegation));
+    let candidate = actionable.or_else(|| {
+        // Mission close / livrée / gelée / à évaluer : la surface pour dire
+        // ATTENDS, plutôt que de laisser croire qu'il n'y a rien.
+        for_agent
+            .iter()
+            .copied()
+            .filter(|(item, delegation)| {
+                item.objective.etat == EtatObjectif::Clos
+                    || matches!(
+                        item.objective.etat,
+                        EtatObjectif::AEvaluer | EtatObjectif::Synthetise
+                    )
+                    || matches!(
+                        delegation.etat,
+                        EtatDelegation::AEvaluer
+                            | EtatDelegation::Terminee
+                            | EtatDelegation::Annulee
+                    )
+            })
+            .max_by_key(|(item, delegation)| ranking(item, delegation))
+    });
     let Some((item, delegation)) = candidate else {
-        return Ok(None);
+        return Ok(ResumeStance::Absent);
     };
     let delivery = item
         .local_deliveries
         .iter()
         .find(|delivery| delivery.delegation_id == delegation.id);
-    Ok(Some(ResumeMission {
+    let mission = ResumeMission {
         objective_id: item.objective.id.to_string(),
         delegation_id: delegation.id.to_string(),
         message_id: delivery
@@ -167,7 +274,12 @@ fn managed_resume_mission(home: &Path, agent: &str) -> Result<Option<ResumeMissi
             .map(|delivery| resume_fact_label(&delivery.state))
             .unwrap_or_else(|| "inconnue".to_string()),
         instruction: delegation.instruction.clone(),
-    }))
+    };
+    if resume_mission_actionable(&item.objective.etat, &delegation.etat) {
+        Ok(ResumeStance::Actionable(mission))
+    } else {
+        Ok(ResumeStance::Waiting(mission))
+    }
 }
 
 fn resume_fact_label<T: serde::Serialize>(value: &T) -> String {
@@ -3584,7 +3696,7 @@ mod prompt_tests {
         codex_resume_bootstrap, interactive_bridget_prompt, managed_resume_context,
         prepare_codex_agent_args,
     };
-    use maicie::app::{DelegateRequest, DelegationCandidate, delegate};
+    use maicie::app::{DelegateRequest, DelegationCandidate, close, delegate};
     use maicie::config::DurationClasses;
     use maicie::domain::ClasseDuree;
     use maicie::store::MaicieStore;
@@ -3607,11 +3719,89 @@ mod prompt_tests {
     }
 
     fn init_worktree(root: &std::path::Path) {
+        // Worktree lié (`.git` fichier) — conforme à la règle 6.
+        let principal = root.parent().unwrap().join(format!(
+            "{}-principal",
+            root.file_name().unwrap().to_string_lossy()
+        ));
+        fs::create_dir_all(&principal).unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q", principal.to_str().unwrap()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(principal.join("tracked.txt"), "initial\n").unwrap();
+        assert!(
+            Command::new("git")
+                .args([
+                    "-C",
+                    principal.to_str().unwrap(),
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "add",
+                    "tracked.txt"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args([
+                    "-C",
+                    principal.to_str().unwrap(),
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "-qm",
+                    "initial"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args([
+                    "-C",
+                    principal.to_str().unwrap(),
+                    "worktree",
+                    "add",
+                    "-q",
+                    root.to_str().unwrap(),
+                    "-b",
+                    "resume-wt"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            root.join(".git").is_file(),
+            "le chemin attesté doit être un worktree lié (.git fichier)"
+        );
+        fs::write(root.join("tracked.txt"), "modifié\n").unwrap();
+    }
+
+    fn init_principal_checkout(root: &std::path::Path) {
         fs::create_dir_all(root).unwrap();
-        Command::new("git")
-            .args(["init", "-q", root.to_str().unwrap()])
-            .status()
-            .unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q", root.to_str().unwrap()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            root.join(".git").is_dir(),
+            "checkout principal : .git doit être un répertoire"
+        );
         fs::write(root.join("tracked.txt"), "initial\n").unwrap();
         assert!(
             Command::new("git")
@@ -3646,7 +3836,6 @@ mod prompt_tests {
                 .unwrap()
                 .success()
         );
-        fs::write(root.join("tracked.txt"), "modifié\n").unwrap();
     }
 
     fn write_maicie_config(home: &std::path::Path, database: &std::path::Path) {
@@ -3755,9 +3944,14 @@ mod prompt_tests {
                 .expect("délégation créée sans prérequis porte un message_id")
         )));
         assert!(context.contains("reprendre la bissection durable"));
-        assert!(context.contains("branche=master") || context.contains("branche=main"));
+        assert!(context.contains("branche=resume-wt"), "{context}");
         assert!(context.contains(" M tracked.txt"));
         assert!(context.contains("lis ton diff, committe"));
+        assert!(context.contains("reprends la mission"), "{context}");
+        assert!(
+            !context.contains("ALERTE règle 6"),
+            "worktree lié ne doit pas déclencher la règle 6: {context}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -3781,7 +3975,19 @@ mod prompt_tests {
             context.contains("aucune mission active attestée"),
             "{context}"
         );
+        assert!(
+            context.contains("Aucun bureau inventé") || context.contains("mandat explicite"),
+            "{context}"
+        );
         assert!(!context.contains("Mission Maicie active"));
+        assert!(
+            !context.contains("reprends la mission"),
+            "naissance sans bureau ne doit pas relancer: {context}"
+        );
+        assert!(
+            context.contains("ATTENDS") || context.contains("attends"),
+            "doit prescrire l'attente d'un mandat: {context}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -3802,6 +4008,78 @@ mod prompt_tests {
             "{context}"
         );
         assert!(context.contains("Worktree : indisponible"), "{context}");
+        assert!(
+            !context.contains("reprends la mission"),
+            "source indisponible ne doit pas relancer: {context}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn carte_de_reprise_mission_close_prescrit_attente() {
+        let root = resume_root("closed");
+        let home = root.join("home");
+        let worktree = root.join("worktree");
+        let database = root.join("maicie.sqlite3");
+        write_maicie_config(&home, &database);
+        let mission = create_active_mission(&database, "agent-clos");
+        {
+            let mut store = MaicieStore::open(&database).unwrap();
+            close(&mut store, mission.objective_id, "livré et jugé", 200).unwrap();
+        }
+        init_worktree(&worktree);
+
+        let context = managed_resume_context(
+            &home,
+            &worktree,
+            "agent-clos",
+            "fixture",
+            "acp",
+            "fixture-digest",
+        );
+        assert!(
+            context.contains("close au greffe") || context.contains("objectif=clos"),
+            "{context}"
+        );
+        assert!(
+            context.contains("ATTENDS") || context.contains("attends"),
+            "mission close doit prescrire l'attente: {context}"
+        );
+        assert!(
+            !context.contains("reprends la mission"),
+            "mission close ne doit jamais relancer: {context}"
+        );
+        assert!(
+            context.contains(&format!("objectif_id={}", mission.objective_id)),
+            "{context}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn carte_de_reprise_checkout_principal_alerte_regle_6() {
+        let root = resume_root("principal");
+        let home = root.join("home");
+        let principal = root.join("checkout-principal");
+        write_maicie_config(&home, &root.join("maicie.sqlite3"));
+        init_principal_checkout(&principal);
+
+        let context = managed_resume_context(
+            &home,
+            &principal,
+            "sans-mission",
+            "fixture",
+            "acp",
+            "fixture-digest",
+        );
+        assert!(
+            context.contains("ALERTE règle 6"),
+            "checkout principal (.git répertoire) doit alerter: {context}"
+        );
+        assert!(
+            context.contains("checkout principal") || context.contains("N'y écris PAS"),
+            "{context}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
