@@ -1827,15 +1827,14 @@ mod tests {
     }
 
     #[test]
-    fn fr1711_transcription_gate_amender_et_hors_table() {
+    fn fr1711_gate_failed_derive_blocker() {
         let root = std::env::temp_dir().join(format!(
-            "maicie-catalogue-fr1711-{}",
+            "maicie-catalogue-fr1711-gate-{}",
             uuid::Uuid::new_v4()
         ));
         fs::create_dir_all(&root).unwrap();
         let path = root.join("catalogue.jsonl");
         let mut journal = CatalogueJournal::open(&path).unwrap();
-
         let gate = ObservedFact {
             kind: "gate_failed".into(),
             source_id: "G1701".into(),
@@ -1855,44 +1854,70 @@ mod tests {
         }
         let (_, replay) = journal.consign_observed_fact(&gate).unwrap();
         assert_eq!(replay, AppendOutcome::IdempotentNoop);
+        let _ = fs::remove_dir_all(&root);
+    }
 
+    #[test]
+    fn fr1711_review_amender_derive_major() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-catalogue-fr1711-amender-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("catalogue.jsonl");
+        let mut journal = CatalogueJournal::open(&path).unwrap();
         let amender = ObservedFact {
             kind: "review_amender".into(),
             source_id: "r-hostile".into(),
             date: "2026-08-24T06:31:00Z".into(),
             text: "AMENDER : fenêtre de corruption".into(),
         };
-        let (out, _) = journal.consign_observed_fact(&amender).unwrap();
+        let (out, first) = journal.consign_observed_fact(&amender).unwrap();
+        assert_eq!(first, AppendOutcome::Appended);
         match out {
             TranscriptionOutcome::CoveredAdd(add) => {
                 assert_eq!(add.id, "review_amender:r-hostile");
                 assert_eq!(add.severity, Severity::Major);
                 assert_eq!(add.mission_source.kind, MissionSourceKind::Review);
+                assert!(add.mission_source.failed.is_none());
             }
             TranscriptionOutcome::Pending(_) => panic!("review_amender doit être couvert"),
         }
+        let (_, replay) = journal.consign_observed_fact(&amender).unwrap();
+        assert_eq!(replay, AppendOutcome::IdempotentNoop);
+        let _ = fs::remove_dir_all(&root);
+    }
 
-        // Hors table : attente, jamais de sévérité inventée.
+    #[test]
+    fn fr1711_type_hors_table_part_en_attente_sans_inventer() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-catalogue-fr1711-hors-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("catalogue.jsonl");
+        let mut journal = CatalogueJournal::open(&path).unwrap();
+        // APPROVE n'est pas dans la table : décision absente en amont → attente.
         let approve = ObservedFact {
             kind: "review_approve".into(),
             source_id: "r-ok".into(),
             date: "2026-08-24T06:32:00Z".into(),
             text: "APPROVE sans case dans la table".into(),
         };
-        let (out, _) = journal.consign_observed_fact(&approve).unwrap();
+        let (out, first) = journal.consign_observed_fact(&approve).unwrap();
+        assert_eq!(first, AppendOutcome::Appended);
         match out {
             TranscriptionOutcome::Pending(pending) => {
                 assert!(pending.id.contains("review_approve"));
                 assert!(pending.provenance_id.starts_with("uncovered:"));
+                assert_eq!(pending.text, "APPROVE sans case dans la table");
             }
             TranscriptionOutcome::CoveredAdd(_) => {
-                panic!("hors table ne doit pas produire d'add")
+                panic!("hors table ne doit pas produire d'add ni de sévérité")
             }
         }
-
         let view = project_registre(&journal.read_entries().unwrap());
-        assert_eq!(view.footer.ouverts, 2);
-        assert_eq!(view.footer.gates_rates, 1);
+        assert_eq!(view.footer.ouverts, 0);
         assert_eq!(view.footer.pending_qualification, 1);
         let _ = fs::remove_dir_all(&root);
     }
