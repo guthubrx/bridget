@@ -20,6 +20,20 @@ l'incident.
 5. **Un stub ne se crée que si le fichier n'existe pas.** Un fichier existant
    appartient à son auteur, committé ou pas. *(Incident : stub écrasant le
    config.rs WIP d'un autre agent.)*
+6. **Le checkout principal n'est PAS un chantier.** Il appartient au référent
+   (docs, greffe, merges) et au daemon (binaire de production). Aucun agent
+   n'y écrit du code, aucun agent n'y bascule de branche. *(Incident
+   2026-08-24 19h17 : un agent a basculé le checkout principal sur sa branche
+   — le commit de docs du référent a atterri dessus — pendant qu'un second
+   agent y modifiait wrapper.rs : course à deux mains dans le même arbre,
+   travail extrait en patchs de sauvetage, checkout rendu à main.)*
+7. **`maicie delegate --constat-id` exige l'identifiant COMPLET du registre**,
+   préfixe de kind inclus (`review_amender:constat/…`, `gate_failed:…`) —
+   celui affiché par `registre list`. Un identifiant court passe au delegate
+   mais casse la réconciliation du catalogue à la clôture de l'objectif
+   (« référence inconnue »). *(Incident 2026-08-24 19h25 : quatre délégations,
+   réparées par chirurgie du greffe — et noter que `payload_json` y est du
+   BLOB : un `json_set` nu le réécrit en TEXT et casse le lecteur.)*
 
 ## Les commits
 
