@@ -2270,6 +2270,61 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    /// Ce que le jumeau `IdempotencyIssue` fait d'une variante qu'il ne connaît
+    /// pas — mesuré, pas supposé, parce que la réponse décide du périmètre d'un
+    /// changement de statut.
+    ///
+    /// Le jumeau est un enum tagué SANS variante de repli. Une variante inconnue
+    /// sur le fil ne se perd donc pas en silence : elle fait ÉCHOUER le décodage.
+    /// C'est plus sûr qu'un oubli muet, mais ça signifie qu'ajouter une variante
+    /// `in_flight` au protocole filaire casserait ce consommateur — et ce, sans
+    /// rien lui apporter, puisque `delivery_id` lui donne déjà la distinction.
+    ///
+    /// D'où la frontière tenue par le lot : le statut distinct vit sur la
+    /// SURFACE CLIENT (le champ `status` du retour MCP), le fil reste inchangé.
+    /// Si ce test se met à passer avec un `Ok`, c'est qu'une variante de repli a
+    /// été ajoutée au jumeau, et la frontière peut être rediscutée.
+    #[test]
+    fn le_jumeau_refuse_une_variante_inconnue_au_lieu_de_la_perdre() {
+        let inconnue = json!({ "kind": "in_flight", "expires_at": 1_700_000_060, "delivery_id": "livraison-1" });
+        let decode: Result<super::IdempotencyIssue, _> = serde_json::from_value(inconnue);
+        let erreur = decode.expect_err(
+            "une variante inconnue doit être refusée : si elle passe, le consommateur \
+             lit un état qu'il n'a pas compris",
+        );
+        assert!(
+            erreur.to_string().contains("unknown variant"),
+            "le refus doit nommer la variante inconnue, sinon le diagnostic est illisible: {erreur}"
+        );
+
+        // Contre-épreuve : la variante CONNUE, elle, se décode — sans quoi le
+        // test ci-dessus passerait pour n'importe quelle raison (typo de champ,
+        // tag absent) et ne prouverait rien sur les variantes.
+        let connue = json!({ "kind": "outcome_unknown", "expires_at": 1_700_000_060, "delivery_id": "livraison-1" });
+        let decode: super::IdempotencyIssue = serde_json::from_value(connue).unwrap();
+        assert_eq!(
+            decode,
+            super::IdempotencyIssue::OutcomeUnknown {
+                expires_at: 1_700_000_060,
+                delivery_id: Some("livraison-1".to_string()),
+            }
+        );
+
+        // Et le `serde(default)` du champ, lui, EST silencieux : un fil sans
+        // `delivery_id` rend `None` sans erreur. C'est la mécanique à ne pas
+        // confondre avec la précédente — le champ absent se perd en silence, la
+        // variante inconnue non.
+        let sans_champ = json!({ "kind": "outcome_unknown", "expires_at": 1_700_000_060 });
+        let decode: super::IdempotencyIssue = serde_json::from_value(sans_champ).unwrap();
+        assert_eq!(
+            decode,
+            super::IdempotencyIssue::OutcomeUnknown {
+                expires_at: 1_700_000_060,
+                delivery_id: None,
+            }
+        );
+    }
+
     #[test]
     fn reprise_conserve_les_extensions_inconnues_octet_pour_octet() {
         let message = br#"{"id":"message-1","from":"maicie","to":"prospective","body":"preuve","future_extension":{"level":2}}"#;
