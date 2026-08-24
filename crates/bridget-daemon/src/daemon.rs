@@ -2723,6 +2723,16 @@ fn definition_runtime(definition: &ResolvedAgentDefinition) -> Option<(String, O
     Some((model, effort))
 }
 
+/// Le mode d'un équipier géré vient de sa définition figée, pas de son type
+/// de fournisseur ni de la version du wrapper qui se réenregistre.
+fn definition_presence_mode(definition: &ResolvedAgentDefinition) -> Option<PresenceMode> {
+    match definition.protocol.as_str() {
+        "acp" => Some(PresenceMode::Acp),
+        "tmux" => Some(PresenceMode::Tmux),
+        _ => None,
+    }
+}
+
 fn definition_assignment<'a>(argument: &'a str, key: &str) -> Option<&'a str> {
     argument
         .strip_prefix(key)
@@ -2818,13 +2828,20 @@ fn handle_register(
                         presence.reconnect_count + u32::from(presence.state != "connected")
                     })
                     .unwrap_or(0);
-                let managed_runtime = state
+                let managed_definition = state
                     .managed_by_instance
                     .get(&instance_id)
-                    .and_then(|command_id| state.fleet.resolved_definition_for_command(command_id))
+                    .and_then(|command_id| state.fleet.resolved_definition_for_command(command_id));
+                let managed_runtime = managed_definition
                     .as_ref()
                     .and_then(definition_runtime)
                     .map(|(model, effort)| (Some(model), effort));
+                let managed_mode = managed_definition
+                    .as_ref()
+                    .and_then(definition_presence_mode);
+                let managed_transport = managed_definition
+                    .as_ref()
+                    .map(|definition| definition.protocol.clone());
                 // Un géré tient son runtime de la définition figée. Une
                 // reconnexion interactive conserve, elle, la dernière sonde.
                 let (model, effort) = managed_runtime.unwrap_or_else(|| {
@@ -2841,10 +2858,12 @@ fn handle_register(
                 // Une reconnexion par un binaire antérieur au champ conserve
                 // l'observation déjà attestée ; une présence historique sans
                 // valeur reste volontairement inconnue.
-                let mode = previous
-                    .as_ref()
-                    .and_then(|presence| presence.mode)
-                    .or(mode);
+                let mode = managed_mode.or_else(|| {
+                    previous
+                        .as_ref()
+                        .and_then(|presence| presence.mode)
+                        .or(mode)
+                });
                 let location = match mode {
                     Some(PresenceMode::Tmux) => previous
                         .as_ref()
@@ -2864,13 +2883,15 @@ fn handle_register(
                     .map(|presence| presence.os.clone())
                     .or(os)
                     .unwrap_or_else(|| "inconnu".to_string());
-                let transport = previous
-                    .as_ref()
-                    .filter(|presence| presence.mode.is_some())
-                    .map(|presence| presence.transport.clone())
-                    .or(transport)
-                    .or_else(|| previous.as_ref().map(|presence| presence.transport.clone()))
-                    .unwrap_or_else(|| "unix".to_string());
+                let transport = managed_transport.unwrap_or_else(|| {
+                    previous
+                        .as_ref()
+                        .filter(|presence| presence.mode.is_some())
+                        .map(|presence| presence.transport.clone())
+                        .or(transport)
+                        .or_else(|| previous.as_ref().map(|presence| presence.transport.clone()))
+                        .unwrap_or_else(|| "unix".to_string())
+                });
                 let agent_type = previous
                     .as_ref()
                     .filter(|presence| !matches!(presence.agent_type.as_str(), "mcp" | "cli"))
@@ -7965,7 +7986,7 @@ mod presence_tests {
     }
 
     #[test]
-    fn gere_acp_projette_modele_et_effort_de_sa_definition_figee() {
+    fn gere_acp_de_type_inconnu_tient_mode_et_runtime_de_sa_definition_figee() {
         let (mut state, config) = state_with_registered_agent("managed-runtime-definition");
         state.router.unregister_by_conn("conn-1");
         state.conn_instances.remove("conn-1");
@@ -7995,6 +8016,10 @@ mod presence_tests {
             .managed_by_instance
             .insert(lease.instance_id.clone(), lease.command_id.clone());
         let instance_id = lease.instance_id.clone();
+        let (wrapper_writer, _wrapper_reader) = control_socket("managed-terra-wrapper");
+        state
+            .connections
+            .insert("managed-terra".to_string(), wrapper_writer);
 
         assert!(matches!(
             handle_register(
@@ -8002,8 +8027,11 @@ mod presence_tests {
                 "codex-terra".to_string(),
                 Some("coder-terra".to_string()),
                 Some("local".to_string()),
-                Some("acp".to_string()),
-                Some(PresenceMode::Acp),
+                // Mutation discriminante : un wrapper historique ne connaît
+                // pas PresenceMode et annonce seulement son canal Unix. La
+                // définition gérée `protocol=acp` doit rester l'autorité.
+                Some("unix".to_string()),
+                None,
                 None,
                 Some("macOS".to_string()),
                 Some(instance_id.clone()),
@@ -8019,8 +8047,14 @@ mod presence_tests {
             .unwrap();
         let agent = state.agent_infos().pop().expect("géré visible");
         assert_eq!(agent.name, "coder-terra");
+        assert_eq!(agent.transport, "acp");
+        assert_eq!(agent.mode, Some(PresenceMode::Acp));
         assert_eq!(agent.model.as_deref(), Some("gpt-5.6-terra"));
         assert_eq!(agent.effort.as_deref(), Some("high"));
+        assert_eq!(
+            attach_refusal_for_subscription(&state, "coder-terra").unwrap(),
+            "managed-terra"
+        );
 
         let _ = std::fs::remove_file(config.db_path);
     }
