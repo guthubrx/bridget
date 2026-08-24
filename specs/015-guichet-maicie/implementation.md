@@ -263,3 +263,51 @@ ps -axo pid=,ppid=,pgid=,command= | awk -v a=managed-wrapper -v b=g1504_fixture 
 Résultat : **15 avant, 15 après, delta 0**. Les quinze processus antérieurs à
 cette passe n'ont pas été touchés ; les parcours nominal et injecté n'ont créé
 aucun orphelin supplémentaire.
+
+## Soudure du formatage et de la barrière de test
+
+**Commit de style séparé** : `d0ed0bf`
+**Verdict** : **PASS** — la mise en forme G1504 et la barrière de contenu sont
+validées ; workspace, Clippy et Rustfmt sont verts.
+
+Le premier rejeu du workspace après le seul formatage a révélé la course
+héritée suivante : `wait_for_path` observait la création de `descendant.pid`
+avant l'écriture de son contenu, puis le test tentait de parser une chaîne vide.
+Le helper de test attend désormais, sous la même échéance de cinq secondes, une
+lecture non vide que le consommateur sait parser. Ses deux appelants concernés,
+le PID descendant et `boundary.json`, utilisent cette même barrière.
+
+### Preuve ciblée 10/10
+
+Commande exécutée :
+
+```bash
+for run_index in {1..10}; do PATH=/Users/moi/.cargo/bin:$PATH cargo test -p bridget-daemon --lib 'managed_process::tests::stop_force_termine_l_intermediaire_npx_qui_ignore_l_annulation_et_son_descendant' -- --exact || exit 1; done
+```
+
+Résultat : **PASS**, dix exécutions consécutives, dix réussites, zéro échec.
+
+### Validations finales
+
+```bash
+PATH=/Users/moi/.cargo/bin:$PATH /usr/bin/time -p cargo test --workspace
+```
+
+Résultat : **PASS**, zéro échec. Durée réelle : **185,97 s**.
+
+```bash
+PATH=/Users/moi/.cargo/bin:$PATH /usr/bin/time -p cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Résultat : **PASS**, zéro warning. Durée réelle : **2,67 s**.
+
+```bash
+PATH=/Users/moi/.cargo/bin:$PATH /usr/bin/time -p cargo fmt --all --check
+```
+
+Résultat : **PASS**, aucun diff. Durée réelle : **0,69 s**.
+
+Les gates `#[ignore]` ne sont pas rejoués dans cette passe : ils ont réussi sur
+le même code fonctionnel juste avant `d0ed0bf`, et les deux changements depuis
+ne touchent que la mise en forme du harnais G1504 et une barrière interne aux
+tests de `managed_process.rs`.
