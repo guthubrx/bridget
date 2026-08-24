@@ -14,6 +14,7 @@ pub mod mcp;
 pub mod mcp_identity;
 pub mod receipt_store;
 pub mod registry;
+pub mod reprise;
 pub mod runtime;
 pub mod store;
 #[cfg(feature = "test-support")]

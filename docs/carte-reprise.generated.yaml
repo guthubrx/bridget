@@ -1,0 +1,147 @@
+meta:
+  genere_a: 2026-08-24T04:19:26Z
+  age_sec: 0
+  commande_regen: bridget reprise --write
+
+# 0 — L'ÉQUIPE EST-ELLE VIVANTE ?
+vivant:
+  daemon_en_ligne: true
+  socket: /Users/moi/.cache/bridget/bridget.sock
+  db: /Users/moi/.cache/bridget/bridget.db
+  build_id_daemon: a23ebf3f5960
+  binaire_cli: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/feat-carte-reprise/target/debug/bridget
+  agents_connectes: 15
+  noms:
+    - "bridget (claude, connected)"
+    - "coder2 (codex, connected)"
+    - "coderBridget (codex, connected)"
+    - "cursor2 (cursor, connected)"
+    - "cursor3 (cursor, connected)"
+    - "cursor4 (cursor, connected)"
+    - "cursor5 (cursor, connected)"
+    - "cursorbridget (cursor, connected)"
+    - "cxbridget (codex, connected)"
+    - "fable (claude, connected)"
+    - "fable-reviewer (claude, connected)"
+    - "poucave (codex, connected)"
+    - "prospective (codex, connected)"
+    - "prospective2 (codex-terra, connected)"
+    - "reviewer2 (claude, connected)"
+  preuve_30s: "bridget status && bridget who"
+
+# 1 — OÙ EN EST LE PROJET ?
+chantier:
+  main:
+    commit: 052e8b7
+    message_1l: "docs(v2): Consigner la suite de tests comme goulot"
+  worktrees:
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget
+      branch: main
+      commit_court: 052e8b7bca49
+      dirty: true
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/014-observabilite
+      branch: session-14-observabilite
+      commit_court: 8fc74f7377fc
+      dirty: false
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie
+      branch: session-15-guichet-maicie
+      commit_court: fe73e51d07a8
+      dirty: false
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/016-coordination-active
+      branch: session-16-coordination-active
+      commit_court: 22ed9846644f
+      dirty: false
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/017-greffiere-catalogue
+      branch: session-17-greffiere-catalogue
+      commit_court: 44581ed58dae
+      dirty: false
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/bisect-g1504
+      branch: detached
+      commit_court: c3a40e4db396
+      dirty: false
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/feat-carte-reprise
+      branch: feat/carte-reprise
+      commit_court: 17b6008030fb
+      dirty: true
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/feat-ponts-natifs-socle
+      branch: feat/ponts-natifs-socle
+      commit_court: dafef69da128
+      dirty: true
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/fix-001-t008
+      branch: fix/001-t008
+      commit_court: d957961e613d
+      dirty: false
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/fix-015-review-debt
+      branch: fix/015-review-debt
+      commit_court: 139db354640f
+      dirty: false
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/fix-audit-oracles-n1
+      branch: fix/audit-oracles-n1
+      commit_court: 17b6008030fb
+      dirty: true
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/fix-audit-oracles-n2
+      branch: fix/audit-oracles-n2
+      commit_court: dafef69da128
+      dirty: true
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/fix-isolation-tests-guichet
+      branch: fix/isolation-tests-guichet
+      commit_court: 388fbeaea0f8
+      dirty: false
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/fix-managed-presence-mode
+      branch: fix/managed-presence-mode
+      commit_court: 299498500790
+      dirty: false
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/fix-messages-inscriptions-agent
+      branch: fix/messages-inscriptions-agent
+      commit_court: 842fdb9bc4f5
+      dirty: false
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/fix-orphan-daemon-drop
+      branch: fix/orphan-daemon-drop
+      commit_court: e94d5cfddeaf
+      dirty: true
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/fix-rustfmt-main
+      branch: fix/rustfmt-main
+      commit_court: 21d8a1bdb3b8
+      dirty: false
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/fmt-dette-main
+      branch: fix/fmt-dette-main
+      commit_court: 118708f3aa44
+      dirty: false
+    - path: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/maicie-skill
+      branch: docs/maicie-skill
+      commit_court: 7ca2fafb54b3
+      dirty: false
+  couloirs:
+    - (aucun couloir dans le pin)
+
+# 2 — QUI ATTEND QUOI ?
+attentes:
+  # Projection GLOBALE via LedgerProjection/open_requests — pas bridget requests.
+  bridget_ouvertes:
+    - (aucune demande ouverte)
+  reserves_explicites:
+    - (aucune réserve liée à une demande ouverte dans le ledger récent)
+  coordination:
+    lire: "maicie status --config /Users/moi/.config/maicie/config.json --json"
+    resume_1l: "binaire maicie introuvable dans PATH — lire la config seulement"
+
+# 3 — PROCHAIN GESTE + PIÈGES
+prochain:
+  geste: "mettre à jour ce pin au prochain basculement de chantier"
+  proprietaire: referent
+  bloque_par:
+    - (aucune)
+
+pieges:
+  regles: docs/regles-chantier.md
+  actifs_session:
+    - "Ne pas conclure que l'équipe est morte sans `bridget status` (chemins vivants)"
+  piege_classique: "Ne pas conclure mort sans bridget status — socket ≠ docs/"
+
+acces:
+  maicie_config: /Users/moi/.config/maicie/config.json
+  maicie_db: /Users/moi/.local/state/maicie/maicie.sqlite3
+  repo: /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/feat-carte-reprise
+  specs_index: specs/011-maicie-orchestration/exigences-coordination-v2.md
+  socket: /Users/moi/.cache/bridget/bridget.sock
+  bridget_db: /Users/moi/.cache/bridget/bridget.db

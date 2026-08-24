@@ -20,6 +20,7 @@ bridget-core = { path = "../bridget-core" }
 bridget-transport = { path = "../bridget-transport" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = "0.9"
 uuid = { workspace = true }
 rusqlite = { workspace = true }
 log = { workspace = true }
