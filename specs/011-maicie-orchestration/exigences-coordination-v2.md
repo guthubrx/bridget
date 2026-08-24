@@ -1173,3 +1173,11 @@ actions à distance avec leur propre arbitrage de sécurité.
   prouver : l'activation des services sur machine neuve. Le premier
   déploiement réel s'y fera — après que l'installateur aura passé ses preuves
   locales, jamais avant.
+  ARBITRAGE UTILISATEUR (24/08, le posant lui-même) : les manques ne sont pas
+  des limites à déclarer mais des cas que l'installateur DOIT savoir
+  traiter — « il faut que l'installateur se débrouille ». Cibles retenues :
+  macOS ET Linux, Windows explicitement différé. Donc : détection de
+  plateforme, launchd OU systemd selon la cible, et prise en charge de
+  l'absence de Rust — amorcer la toolchain ou livrer des binaires, au choix
+  argumenté du lot. Critère d'acceptation : l'installateur prouvé sur LES
+  DEUX plateformes — le Mac de l'utilisateur et cartae.app.
