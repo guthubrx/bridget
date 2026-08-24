@@ -3473,6 +3473,7 @@ fn forward_managed_events(
                 window,
                 status,
                 resets_at,
+                used_percent,
             } => match source {
                 bridget_transport::ManagedEventSource::ClaudeStreamJson => send_wrapper_message(
                     writer,
@@ -3481,6 +3482,7 @@ fn forward_managed_events(
                         window,
                         status,
                         resets_at,
+                        used_percent,
                         source: bridget_transport::protocol::RateLimitSource::ClaudeStreamJson,
                     },
                 ),
@@ -3491,6 +3493,7 @@ fn forward_managed_events(
                         window,
                         status,
                         resets_at,
+                        used_percent,
                         source: bridget_transport::protocol::RateLimitSource::CodexAppServer,
                     },
                 ),
@@ -3931,6 +3934,7 @@ mod reconnect_tests {
                 window: "five_hour".to_string(),
                 status: "rejected".to_string(),
                 resets_at: Some(1_787_572_200),
+                used_percent: None,
             },
         );
 
@@ -3949,6 +3953,7 @@ mod reconnect_tests {
                 window,
                 status,
                 resets_at: Some(1_787_572_200),
+                used_percent: None,
                 source: bridget_transport::protocol::RateLimitSource::ClaudeStreamJson,
             } if agent == "claude-1" && window == "five_hour" && status == "rejected"
         ));

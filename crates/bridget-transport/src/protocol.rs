@@ -740,6 +740,9 @@ pub enum WrapperToDaemon {
         /// Instant Unix de retour fourni par le fournisseur, absent si inconnu.
         #[serde(default)]
         resets_at: Option<i64>,
+        /// Pourcentage de volume consommé dans la fenêtre, absent si non attesté.
+        #[serde(default)]
+        used_percent: Option<u8>,
         source: RateLimitSource,
     },
     /// Rapporter une consommation de tour attestée par le pilote.
@@ -1294,11 +1297,11 @@ pub struct AgentInfo {
     /// d'effort). Les deux s'affichent de la même façon.
     #[serde(default)]
     pub effort: Option<String>,
-    /// Dernier fait de limite attesté par le pilote, absent si aucun n'a été
-    /// observé. Ce champ est purement informatif : il ne modifie pas l'état de
-    /// présence ni le routage.
+    /// Faits de limite par fenêtre attestée. Vide = aucune observation.
+    /// Chaque entrée est indépendante : un fait `five_hour` n'efface pas
+    /// un fait `seven_day` déjà présent. Informational seulement.
     #[serde(default)]
-    pub rate_limit: Option<RateLimitFact>,
+    pub rate_limits: Vec<RateLimitFact>,
     /// Écart entre le modèle épinglé de la définition et le modèle attesté
     /// par le flux. Absent si le flux est muet ou si les deux étiquettes
     /// coïncident. Informational seulement : aucun refus ni bascule.
@@ -1307,13 +1310,16 @@ pub struct AgentInfo {
 }
 
 /// Fait de limite exposé dans l'annuaire. Les chaînes fournisseur restent
-/// opaques ; seul `resets_at` manquant signifie explicitement « retour inconnu ».
+/// opaques ; `resets_at` ou `used_percent` manquants restent absents, jamais
+/// inventés.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RateLimitFact {
     pub window: String,
     pub status: String,
     #[serde(default)]
     pub resets_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_percent: Option<u8>,
 }
 
 /// Écart attesté entre le modèle demandé et le modèle réellement servi.
@@ -1689,11 +1695,13 @@ mod tests {
             window: "five_hour".to_string(),
             status: "rejected".to_string(),
             resets_at: Some(1_787_572_200),
+            used_percent: Some(100),
             source: RateLimitSource::ClaudeStreamJson,
         };
         let encoded = encode(&message).unwrap();
         assert!(encoded.contains("\"type\":\"RateLimit\""));
         assert!(encoded.contains("\"source\":\"claude-stream-json\""));
+        assert!(encoded.contains("\"used_percent\":100"));
         assert!(matches!(
             decode(&encoded).unwrap(),
             WrapperToDaemon::RateLimit {
@@ -1701,6 +1709,7 @@ mod tests {
                 window,
                 status,
                 resets_at: Some(1_787_572_200),
+                used_percent: Some(100),
                 source: RateLimitSource::ClaudeStreamJson,
             } if agent == "claude-1" && window == "five_hour" && status == "rejected"
         ));
@@ -1710,6 +1719,7 @@ mod tests {
             decode(without_reset).unwrap(),
             WrapperToDaemon::RateLimit {
                 resets_at: None,
+                used_percent: None,
                 ..
             }
         ));
@@ -1783,7 +1793,7 @@ mod tests {
         let info: AgentInfo = decode(json).unwrap();
         assert!(info.model.is_none());
         assert!(info.effort.is_none());
-        assert!(info.rate_limit.is_none());
+        assert!(info.rate_limits.is_empty());
         assert!(info.model_mismatch.is_none());
     }
 

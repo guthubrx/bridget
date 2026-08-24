@@ -1742,6 +1742,12 @@ fn hook_claude_runtime() {
         log::debug!("hook claude-runtime : payload non JSON");
         return;
     };
+    // Volet 3 (format LIMITE) : le payload Stop n'atteste PAS de limites.
+    // Les champs stables sont session_id, transcript_path, cwd, hook_event_name,
+    // stop_hook_active, last_assistant_message. Les rate_limits (five_hour /
+    // seven_day + used_percentage) vivent dans le payload StatusLine, pas Stop.
+    // On ne pousse donc aucune limite depuis ce hook : la ligne référent reste
+    // honnêtement vide tant qu'aucun flux natif (stream-json) n'a observé.
     let Some(transcript) = payload.get("transcript_path").and_then(|v| v.as_str()) else {
         log::debug!("hook claude-runtime : pas de transcript_path");
         return;
@@ -2458,32 +2464,105 @@ fn format_model(agent: &AgentInfo) -> String {
     }
 }
 
-/// Affiche une limite uniquement lorsqu'elle a été attestée. L'instant de
-/// retour vient du fournisseur ; absent, il est rendu explicitement inconnu.
+/// Affiche les fenêtres attestées en format compact, côte à côte.
+/// Absent = « — » ; une fenêtre non observée n'apparaît pas (pas de « 5h — »).
 fn format_rate_limit(agent: &AgentInfo) -> String {
-    let Some(limit) = &agent.rate_limit else {
+    if agent.rate_limits.is_empty() {
         return "—".to_string();
-    };
-    let status = if limit.status == "rejected" {
-        "épuisée"
-    } else {
-        limit.status.as_str()
-    };
-    let reset = limit
-        .resets_at
-        .and_then(format_local_unix_time)
-        .map(|time| format!("retour {time}"))
-        .unwrap_or_else(|| "retour inconnu".to_string());
-    format!("{status} ({}, {reset})", limit.window)
+    }
+    agent
+        .rate_limits
+        .iter()
+        .map(format_one_rate_limit)
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
-fn format_local_unix_time(timestamp: i64) -> Option<String> {
+fn format_one_rate_limit(limit: &bridget_transport::protocol::RateLimitFact) -> String {
+    let mut parts = vec![abbreviate_window(&limit.window)];
+    if let Some(pct) = limit.used_percent {
+        parts.push(format!("{pct}%"));
+    } else if limit.status == "rejected" {
+        parts.push("épuisée".to_string());
+    }
+    if let Some(reset) = limit.resets_at.and_then(format_local_reset) {
+        parts.push(format!("rst {reset}"));
+    }
+    parts.join(" ")
+}
+
+/// Abrège un nom de fenêtre attesté sans jeter les inconnues.
+/// `five_hour`→`5h`, `seven_day`/`weekly`→`7d`, `primary/300m`→`5h` via
+/// la durée ; sinon raccourci du nom brut.
+fn abbreviate_window(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    if lower.contains("five_hour") {
+        return "5h".to_string();
+    }
+    if lower.contains("seven_day") || lower.contains("weekly") {
+        return "7d".to_string();
+    }
+    if let Some(mins) = duration_mins_from_window(name) {
+        return abbreviate_minutes(mins);
+    }
+    shorten_raw_window(name)
+}
+
+fn duration_mins_from_window(name: &str) -> Option<i64> {
+    let tail = name.rsplit('/').next().unwrap_or(name);
+    let digits = tail.trim_end_matches('m').trim_end_matches('M');
+    if digits.chars().all(|c| c.is_ascii_digit()) && !digits.is_empty() {
+        digits.parse().ok()
+    } else {
+        None
+    }
+}
+
+fn abbreviate_minutes(mins: i64) -> String {
+    if mins <= 0 {
+        return format!("{mins}m");
+    }
+    if mins % (60 * 24) == 0 {
+        return format!("{}d", mins / (60 * 24));
+    }
+    if mins % 60 == 0 {
+        return format!("{}h", mins / 60);
+    }
+    format!("{mins}m")
+}
+
+fn shorten_raw_window(name: &str) -> String {
+    let compact: String = name.chars().filter(|c| *c != '_').take(12).collect();
+    if compact.is_empty() {
+        "?".to_string()
+    } else {
+        compact
+    }
+}
+
+/// Heure locale ; date incluse si la réinitialisation est à plus d'un jour.
+fn format_local_reset(timestamp: i64) -> Option<String> {
     let seconds: libc::time_t = timestamp;
     let mut local: libc::tm = unsafe { std::mem::zeroed() };
     if unsafe { libc::localtime_r(&seconds, &mut local) }.is_null() {
         return None;
     }
-    Some(format!("{:02}:{:02}", local.tm_hour, local.tm_min))
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    let day_secs = 24 * 60 * 60;
+    let time = format!("{:02}:{:02}", local.tm_hour, local.tm_min);
+    if (timestamp - now).abs() >= day_secs {
+        // tm_mon est 0-indexé ; tm_year depuis 1900.
+        Some(format!(
+            "{:02}/{:02} {time}",
+            local.tm_mday,
+            local.tm_mon + 1
+        ))
+    } else {
+        Some(time)
+    }
 }
 
 fn cmd_discover() {
@@ -3680,7 +3759,7 @@ mod idempotency_projection_tests {
             domain: None,
             model: None,
             effort: None,
-            rate_limit: None,
+            rate_limits: vec![],
             model_mismatch: None,
         };
         let rendered = render_who(
@@ -3711,7 +3790,7 @@ mod idempotency_projection_tests {
     }
 
     #[test]
-    fn who_rend_une_limite_epuisee_et_garde_l_absence_inconnue() {
+    fn who_rend_une_limite_compacte_par_fenetre_et_garde_l_absence() {
         let mut agent = AgentInfo {
             name: "claude-1".to_string(),
             agent_type: "claude".to_string(),
@@ -3727,26 +3806,45 @@ mod idempotency_projection_tests {
             domain: None,
             model: Some("claude-opus-5".to_string()),
             effort: None,
-            rate_limit: Some(bridget_transport::protocol::RateLimitFact {
+            rate_limits: vec![bridget_transport::protocol::RateLimitFact {
                 window: "five_hour".to_string(),
-                status: "rejected".to_string(),
+                status: "allowed".to_string(),
                 resets_at: Some(1_787_572_200),
-            }),
+                used_percent: Some(19),
+            }],
             model_mismatch: None,
         };
-        assert!(format_rate_limit(&agent).starts_with("épuisée (five_hour, retour "));
+        let rendered = format_rate_limit(&agent);
+        assert!(rendered.starts_with("5h 19% rst "), "{rendered}");
+        assert!(!rendered.contains("seven_day"), "fenêtre absente = absente");
 
-        agent.rate_limit = Some(bridget_transport::protocol::RateLimitFact {
+        agent
+            .rate_limits
+            .push(bridget_transport::protocol::RateLimitFact {
+                window: "seven_day".to_string(),
+                status: "allowed".to_string(),
+                resets_at: Some(1_787_700_000),
+                used_percent: Some(61),
+            });
+        let both = format_rate_limit(&agent);
+        assert!(both.contains("5h 19% rst "), "{both}");
+        assert!(both.contains(" · "), "{both}");
+        assert!(both.contains("7d 61% rst "), "{both}");
+
+        agent.rate_limits = vec![bridget_transport::protocol::RateLimitFact {
             window: "five_hour".to_string(),
             status: "rejected".to_string(),
             resets_at: None,
-        });
-        assert_eq!(
-            format_rate_limit(&agent),
-            "épuisée (five_hour, retour inconnu)"
-        );
-        agent.rate_limit = None;
+            used_percent: None,
+        }];
+        assert_eq!(format_rate_limit(&agent), "5h épuisée");
+
+        agent.rate_limits.clear();
         assert_eq!(format_rate_limit(&agent), "—");
+
+        assert_eq!(abbreviate_window("primary/300m"), "5h");
+        assert_eq!(abbreviate_window("secondary/10080m"), "7d");
+        assert_eq!(abbreviate_window("exotic_quota_xyz"), "exoticquotax");
     }
 
     #[test]
@@ -3766,7 +3864,7 @@ mod idempotency_projection_tests {
             domain: None,
             model: Some("claude-opus-5".to_string()),
             effort: None,
-            rate_limit: None,
+            rate_limits: vec![],
             model_mismatch: None,
         };
         assert_eq!(format_model(&agent), "claude-opus-5");

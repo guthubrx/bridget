@@ -674,7 +674,17 @@ fn rate_limit_event(value: &Value) -> Option<ManagedEventKind> {
         window: window.to_string(),
         status: status.to_string(),
         resets_at: info.get("resetsAt").and_then(Value::as_i64),
+        used_percent: percent_0_100(info.get("usedPercent").or_else(|| info.get("utilization"))),
     })
+}
+
+fn percent_0_100(value: Option<&Value>) -> Option<u8> {
+    let pct = value.and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|n| n as f64)))?;
+    if (0.0..=100.0).contains(&pct) {
+        Some(pct.round() as u8)
+    } else {
+        None
+    }
 }
 
 /// Extrait la consommation d'un tour depuis l'événement terminal `result`.
@@ -918,6 +928,7 @@ mod tests {
                 ref window,
                 ref status,
                 resets_at: Some(1_787_572_200),
+                used_percent: None,
             }) if window == "five_hour" && status == "rejected"
         ));
 
@@ -929,6 +940,7 @@ mod tests {
             rate_limit_event(&no_reset),
             Some(ManagedEventKind::RateLimitObserved {
                 resets_at: None,
+                used_percent: None,
                 ..
             })
         ));

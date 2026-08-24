@@ -142,9 +142,9 @@ struct Presence {
     model: Option<String>,
     /// Niveau d'effort courant, `None` si jamais observé ou observé absent.
     effort: Option<String>,
-    /// Dernière limite fournisseur attestée. Son absence signifie « inconnue »
-    /// et ne déclenche aucune décision automatique.
-    rate_limit: Option<bridget_transport::protocol::RateLimitFact>,
+    /// Limites fournisseur attestées, indexées par fenêtre. Une observation
+    /// n'écrase que sa propre clé : `five_hour` ne touche pas `seven_day`.
+    rate_limits: std::collections::BTreeMap<String, bridget_transport::protocol::RateLimitFact>,
     /// Modèle annoncé par le flux natif. Distinct du modèle épinglé : un flux
     /// muet laisse ce champ vide et n'invente aucun écart.
     served_model: Option<String>,
@@ -1777,7 +1777,9 @@ impl DaemonState {
                     domain: presence.and_then(|p| p.domain.clone()),
                     model: presence.and_then(|p| p.model.clone()),
                     effort: presence.and_then(|p| p.effort.clone()),
-                    rate_limit: presence.and_then(|p| p.rate_limit.clone()),
+                    rate_limits: presence
+                        .map(|p| p.rate_limits.values().cloned().collect())
+                        .unwrap_or_default(),
                     model_mismatch: presence.and_then(|p| {
                         bridget_transport::protocol::ModelMismatchFact::observe(
                             p.model.as_deref(),
@@ -1822,7 +1824,7 @@ impl DaemonState {
                 domain: self.fleet.desired_domain(&record.lease.name),
                 model,
                 effort,
-                rate_limit: None,
+                rate_limits: Vec::new(),
                 model_mismatch: None,
             });
         }
@@ -1848,7 +1850,7 @@ impl DaemonState {
                 // FR-010 : un agent injoignable garde sa dernière capacité connue.
                 model: presence.model.clone(),
                 effort: presence.effort.clone(),
-                rate_limit: presence.rate_limit.clone(),
+                rate_limits: presence.rate_limits.values().cloned().collect(),
                 model_mismatch: bridget_transport::protocol::ModelMismatchFact::observe(
                     presence.model.as_deref(),
                     presence.served_model.as_deref(),
@@ -3131,11 +3133,12 @@ fn handle_register(
                     })
                     .or_else(|| domain.clone());
                 let dnd_until = previous.as_ref().and_then(|presence| presence.dnd_until);
-                // Un fait de limite reste la dernière observation attestée à
-                // travers une reconnexion ; son absence demeure inconnue.
-                let rate_limit = previous
+                // Les faits de limite restent indexés par fenêtre à travers
+                // une reconnexion ; une fenêtre absente demeure absente.
+                let rate_limits = previous
                     .as_ref()
-                    .and_then(|presence| presence.rate_limit.clone());
+                    .map(|presence| presence.rate_limits.clone())
+                    .unwrap_or_default();
                 let served_model = previous
                     .as_ref()
                     .and_then(|presence| presence.served_model.clone());
@@ -3223,7 +3226,7 @@ fn handle_register(
                         reconnect_count,
                         model,
                         effort,
-                        rate_limit,
+                        rate_limits,
                         served_model,
                         domain: derived_domain.clone(),
                         derived_domain,
@@ -3360,6 +3363,7 @@ fn handle_rate_limit(
     window: String,
     status: String,
     resets_at: Option<i64>,
+    used_percent: Option<u8>,
     source: bridget_transport::protocol::RateLimitSource,
     state: &mut DaemonState,
 ) -> DaemonToWrapper {
@@ -3381,17 +3385,28 @@ fn handle_rate_limit(
             reason: "instant de retour invalide".to_string(),
         };
     }
+    if used_percent.is_some_and(|pct| pct > 100) {
+        return DaemonToWrapper::Nack {
+            id: "rate-limit".to_string(),
+            reason: "pourcentage de limite invalide".to_string(),
+        };
+    }
     let Some(presence) = presence_of_agent(state, agent) else {
         return DaemonToWrapper::Nack {
             id: "rate-limit".to_string(),
             reason: format!("agent introuvable: {agent}"),
         };
     };
-    presence.rate_limit = Some(bridget_transport::protocol::RateLimitFact {
-        window,
-        status,
-        resets_at,
-    });
+    // Upsert par fenêtre : un fait five_hour ne doit pas effacer seven_day.
+    presence.rate_limits.insert(
+        window.clone(),
+        bridget_transport::protocol::RateLimitFact {
+            window,
+            status,
+            resets_at,
+            used_percent,
+        },
+    );
     presence.last_seen = Instant::now();
     log::debug!("limite de '{}' mise à jour par {}", presence.name, source);
     DaemonToWrapper::Ack {
@@ -5902,11 +5917,18 @@ fn handle_wrapper_message(
             window,
             status,
             resets_at,
+            used_percent,
             source,
         } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             Some(handle_rate_limit(
-                &agent, window, status, resets_at, source, &mut st,
+                &agent,
+                window,
+                status,
+                resets_at,
+                used_percent,
+                source,
+                &mut st,
             ))
         }
 
@@ -6446,7 +6468,7 @@ mod presence_tests {
                 reconnect_count: 0,
                 model: Some("gpt-5.3-codex".to_string()),
                 effort: Some("xhigh".to_string()),
-                rate_limit: None,
+                rate_limits: Default::default(),
                 served_model: None,
                 derived_domain: Some("projet-a".to_string()),
                 domain: Some("projet-a".to_string()),
@@ -6525,7 +6547,7 @@ mod presence_tests {
                 reconnect_count: 0,
                 model: None,
                 effort: None,
-                rate_limit: None,
+                rate_limits: Default::default(),
                 served_model: None,
                 derived_domain: None,
                 domain: None,
@@ -10275,20 +10297,63 @@ mod presence_tests {
             "five_hour".to_string(),
             "rejected".to_string(),
             Some(1_787_572_200),
+            None,
             RateLimitSource::ClaudeStreamJson,
             &mut state,
         );
         assert!(matches!(ack, DaemonToWrapper::Ack { .. }));
         let agent = state.agent_infos().pop().unwrap();
         assert_eq!(agent.state, "connected", "la limite ne change pas l'état");
-        assert!(matches!(
-            agent.rate_limit,
-            Some(bridget_transport::protocol::RateLimitFact {
-                window,
-                status,
-                resets_at: Some(1_787_572_200),
-            }) if window == "five_hour" && status == "rejected"
-        ));
+        assert_eq!(agent.rate_limits.len(), 1);
+        assert_eq!(agent.rate_limits[0].window, "five_hour");
+        assert_eq!(agent.rate_limits[0].status, "rejected");
+        assert_eq!(agent.rate_limits[0].resets_at, Some(1_787_572_200));
+
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    #[test]
+    fn fait_five_hour_n_efface_pas_fait_seven_day() {
+        use bridget_transport::protocol::RateLimitSource;
+        let (mut state, config) = state_with_registered_agent("limite-deux-fenetres");
+
+        let first = handle_rate_limit(
+            "agent-2",
+            "seven_day".to_string(),
+            "allowed".to_string(),
+            Some(1_787_700_000),
+            Some(61),
+            RateLimitSource::ClaudeStreamJson,
+            &mut state,
+        );
+        assert!(matches!(first, DaemonToWrapper::Ack { .. }));
+        let second = handle_rate_limit(
+            "agent-2",
+            "five_hour".to_string(),
+            "allowed".to_string(),
+            Some(1_787_572_200),
+            Some(19),
+            RateLimitSource::ClaudeStreamJson,
+            &mut state,
+        );
+        assert!(matches!(second, DaemonToWrapper::Ack { .. }));
+
+        let agent = state.agent_infos().pop().unwrap();
+        assert_eq!(agent.rate_limits.len(), 2, "les deux fenêtres coexistent");
+        let windows: Vec<_> = agent
+            .rate_limits
+            .iter()
+            .map(|fact| fact.window.as_str())
+            .collect();
+        assert!(windows.contains(&"five_hour"));
+        assert!(windows.contains(&"seven_day"));
+        let seven = agent
+            .rate_limits
+            .iter()
+            .find(|fact| fact.window == "seven_day")
+            .expect("7d conservée après upsert 5h");
+        assert_eq!(seven.used_percent, Some(61));
+        assert_eq!(seven.resets_at, Some(1_787_700_000));
 
         let _ = std::fs::remove_file(&config.db_path);
     }

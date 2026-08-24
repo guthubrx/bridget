@@ -190,18 +190,21 @@ impl CodexAppServerTransport {
                 "account/rateLimits/read",
                 Value::Null,
                 RATE_LIMIT_READ_TIMEOUT,
-            ) && let Some((window, status, resets_at)) =
-                rate_limit_from_snapshot(rate_limits.value.get("rateLimits"))
-            {
-                push_source(
-                    &observations,
-                    rate_limits.raw,
-                    ManagedEventKind::RateLimitObserved {
-                        window,
-                        status,
-                        resets_at,
-                    },
-                );
+            ) {
+                for (window, status, resets_at, used_percent) in
+                    rate_limits_from_snapshot(rate_limits.value.get("rateLimits"))
+                {
+                    push_source(
+                        &observations,
+                        rate_limits.raw.clone(),
+                        ManagedEventKind::RateLimitObserved {
+                            window,
+                            status,
+                            resets_at,
+                            used_percent,
+                        },
+                    );
+                }
             }
             thread
                 .value
@@ -802,28 +805,53 @@ fn runtime_from_thread_start(value: &Value) -> Option<(String, Option<String>)> 
     Some((model, effort))
 }
 
-/// Rend le fait public minimal de la fenêtre primaire attestée par Codex.
+/// Rend un fait public par fenêtre attestée (primary et/ou secondary).
 /// Une lecture réussie où `rateLimitReachedType` vaut `null` signifie
 /// explicitement qu'aucun dépassement n'est attesté ; l'étiquette `available`
 /// est une projection de ce null, sans effet de routage ou de lancement.
-fn rate_limit_from_snapshot(snapshot: Option<&Value>) -> Option<(String, String, Option<i64>)> {
-    let snapshot = snapshot?;
-    let primary = snapshot.get("primary")?;
-    // `usedPercent` est le seul champ obligatoire de la fenêtre dans le
-    // schéma app-server : sans lui, une mise à jour sparse ne prouve aucune
-    // limite complète et reste donc inconnue à l'annuaire.
-    primary.get("usedPercent")?.as_i64()?;
-    let minutes = primary.get("windowDurationMins").and_then(Value::as_i64);
-    let window = minutes
-        .map(|minutes| format!("primary/{minutes}m"))
-        .unwrap_or_else(|| "primary".to_string());
+/// Une fenêtre absente du snapshot reste absente — jamais inventée.
+fn rate_limits_from_snapshot(
+    snapshot: Option<&Value>,
+) -> Vec<(String, String, Option<i64>, Option<u8>)> {
+    let Some(snapshot) = snapshot else {
+        return Vec::new();
+    };
     let status = snapshot
         .get("rateLimitReachedType")
         .and_then(Value::as_str)
         .unwrap_or("available")
         .to_string();
-    let resets_at = primary.get("resetsAt").and_then(Value::as_i64);
-    Some((window, status, resets_at))
+    let mut facts = Vec::new();
+    for key in ["primary", "secondary"] {
+        if let Some(fact) = window_fact_from_codex(snapshot.get(key), key, &status) {
+            facts.push(fact);
+        }
+    }
+    facts
+}
+
+fn window_fact_from_codex(
+    window: Option<&Value>,
+    key: &str,
+    status: &str,
+) -> Option<(String, String, Option<i64>, Option<u8>)> {
+    let window = window?;
+    // `usedPercent` est le seul champ obligatoire de la fenêtre dans le
+    // schéma app-server : sans lui, une mise à jour sparse ne prouve aucune
+    // limite complète et reste donc inconnue à l'annuaire.
+    let used_percent = window.get("usedPercent")?.as_i64().and_then(|pct| {
+        if (0..=100).contains(&pct) {
+            Some(pct as u8)
+        } else {
+            None
+        }
+    })?;
+    let minutes = window.get("windowDurationMins").and_then(Value::as_i64);
+    let name = minutes
+        .map(|minutes| format!("{key}/{minutes}m"))
+        .unwrap_or_else(|| key.to_string());
+    let resets_at = window.get("resetsAt").and_then(Value::as_i64);
+    Some((name, status.to_string(), resets_at, Some(used_percent)))
 }
 
 fn write_notification(writer: &Writer, method: &str, params: Value) -> Result<(), TransportError> {
@@ -1101,6 +1129,7 @@ mod tests {
                 ref window,
                 ref status,
                 resets_at: Some(1_787_572_200),
+                used_percent: Some(42),
             } if window == "primary/300m" && status == "available"
         )));
         let raw = events.iter().find(|event| {
@@ -1145,10 +1174,43 @@ mod tests {
     #[test]
     fn absence_de_signaux_codex_ne_cree_aucun_fait() {
         assert_eq!(runtime_from_thread_start(&json!({})), None);
-        assert_eq!(rate_limit_from_snapshot(None), None);
+        assert!(rate_limits_from_snapshot(None).is_empty());
+        assert!(rate_limits_from_snapshot(Some(&json!({ "primary": null }))).is_empty());
+    }
+
+    #[test]
+    fn snapshot_codex_emet_primary_et_secondary_sans_ecrasement() {
+        let facts = rate_limits_from_snapshot(Some(&json!({
+            "primary": {
+                "usedPercent": 19,
+                "windowDurationMins": 300,
+                "resetsAt": 1_787_572_200
+            },
+            "secondary": {
+                "usedPercent": 61,
+                "windowDurationMins": 10080,
+                "resetsAt": 1_787_700_000
+            },
+            "rateLimitReachedType": null
+        })));
+        assert_eq!(facts.len(), 2);
         assert_eq!(
-            rate_limit_from_snapshot(Some(&json!({ "primary": null }))),
-            None
+            facts[0],
+            (
+                "primary/300m".to_string(),
+                "available".to_string(),
+                Some(1_787_572_200),
+                Some(19)
+            )
+        );
+        assert_eq!(
+            facts[1],
+            (
+                "secondary/10080m".to_string(),
+                "available".to_string(),
+                Some(1_787_700_000),
+                Some(61)
+            )
         );
     }
 
