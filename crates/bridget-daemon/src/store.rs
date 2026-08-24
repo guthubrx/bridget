@@ -743,7 +743,7 @@ impl Store {
             .conn
             .unchecked_transaction()
             .map_err(StoreError::Sqlite)?;
-        let deleted = transaction
+        let mut deleted = transaction
             .execute(
                 "DELETE FROM ledger WHERE ts < ?1",
                 rusqlite::params![cutoff],
@@ -762,6 +762,27 @@ impl Store {
         transaction
             .execute(
                 "DELETE FROM tracked_requests WHERE state != 'open' AND completed_at < ?1",
+                rusqlite::params![cutoff],
+            )
+            .map_err(StoreError::Sqlite)?;
+        deleted += transaction
+            .execute(
+                "DELETE FROM guichet_lifecycle_events
+                 WHERE observed_at < ?1
+                   AND EXISTS (
+                     SELECT 1 FROM guichet_requests
+                     WHERE guichet_requests.issuer_scope = guichet_lifecycle_events.issuer_scope
+                       AND guichet_requests.request_id = guichet_lifecycle_events.request_id
+                       AND guichet_requests.state IN ('replied', 'rejected')
+                       AND guichet_requests.expires_at < ?1
+                   )",
+                rusqlite::params![cutoff],
+            )
+            .map_err(StoreError::Sqlite)?;
+        deleted += transaction
+            .execute(
+                "DELETE FROM guichet_requests
+                 WHERE state IN ('replied', 'rejected') AND expires_at < ?1",
                 rusqlite::params![cutoff],
             )
             .map_err(StoreError::Sqlite)?;
@@ -1590,6 +1611,97 @@ mod tests {
                 .latest_deferred_reminder("request-1")
                 .unwrap()
                 .is_none()
+        );
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn purge_guichet_conserve_les_demandes_encore_vivantes() {
+        let path =
+            std::env::temp_dir().join(format!("bridget-store-purge-guichet-{}.db", Uuid::new_v4()));
+        let mut store = Store::open(&path).unwrap();
+        let now = now_secs();
+        let cutoff = now - 86_400;
+        let mut terminal = guichet_deposit("request-terminal", br#"{\"request\":1}"#);
+        terminal.issued_at = now;
+        let mut live = guichet_deposit("request-live", br#"{\"request\":2}"#);
+        live.issued_at = now;
+        store.deposit_guichet(&terminal, 600, 60, now).unwrap();
+        store.deposit_guichet(&live, 600, 60, now).unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE guichet_requests
+                 SET state = 'replied', result_issue = 'accepted', expires_at = ?1
+                 WHERE request_id = ?2",
+                params![cutoff - 1, terminal.request_id],
+            )
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE guichet_requests SET expires_at = ?1 WHERE request_id = ?2",
+                params![cutoff - 1, live.request_id],
+            )
+            .unwrap();
+        for deposit in [&terminal, &live] {
+            store
+                .conn
+                .execute(
+                    "INSERT INTO guichet_lifecycle_events
+                     (issuer_scope, request_id, event_id, state, observed_at)
+                     VALUES (?1, ?2, ?3, 'answered', ?4)",
+                    params![
+                        deposit.issuer_scope,
+                        deposit.request_id,
+                        format!("event-{}", deposit.request_id),
+                        cutoff - 1
+                    ],
+                )
+                .unwrap();
+        }
+
+        store.purge_older_than_days(1).unwrap();
+
+        let terminal_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM guichet_requests WHERE request_id = ?1",
+                [&terminal.request_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let live_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM guichet_requests WHERE request_id = ?1",
+                [&live.request_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let terminal_event_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM guichet_lifecycle_events WHERE request_id = ?1",
+                [&terminal.request_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let live_event_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM guichet_lifecycle_events WHERE request_id = ?1",
+                [&live.request_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(terminal_count, 0);
+        assert_eq!(terminal_event_count, 0);
+        assert_eq!(live_count, 1, "une demande non terminale reste vivante");
+        assert_eq!(
+            live_event_count, 1,
+            "l'événement d'une demande vivante ne doit pas être purgé"
         );
         drop(store);
         let _ = std::fs::remove_file(path);
