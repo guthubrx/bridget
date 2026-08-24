@@ -1053,3 +1053,67 @@ me souviens de chaque pièce.
   Le premier qui l'a fait a mis Maicie à terre. Une capacité livrée, prouvée
   par un gate, et dont le premier usage réel casse le système — c'est la
   différence entre « ça marche » et « ça tient ».
+
+## Bloc L — Ce que le pont natif rend possible, et le sort des panes tmux
+
+Ajouté le 2026-08-24, une fois le pilote Codex natif livré et mergé. Le
+périmètre du pilote a été volontairement borné aux cinq opérations de base
+pour qu'il soit prouvé avant d'être enrichi. Ce bloc recense ce qui devient
+possible et n'est PAS fait, pour ne rien perdre.
+
+Ces gains sont déjà décrits en G7 à G9 ; ce bloc dit ce qui a changé depuis :
+ils ne sont plus hypothétiques, le canal qui les porte existe.
+
+- **L1 — Refuser au lieu de tuer.** Le protocole natif expose la liste des
+  modèles réellement disponibles. Un lancement sur un modèle non servi doit
+  être REFUSÉ avec son motif, pas tenté. C'est exactement la panne du
+  2026-08-23 : deux agents morts à la réception de leur premier message,
+  deux diagnostics faux, une heure perdue. Prérequis : J1.
+- **L2 — Détecter la dégradation silencieuse.** Le protocole signale le
+  reroutage d'un modèle vers un autre. Un agent lancé sur Opus 5 qui rend son
+  verdict en Opus 4.6 doit être visible — aujourd'hui, on ne l'a su que parce
+  qu'on avait exigé qu'il annonce son modèle en tête de réponse.
+- **L3 — Anticiper le quota.** Le flux porte les limites, leur type de
+  fenêtre et l'INSTANT DE RÉINITIALISATION. Côté Codex on peut même les
+  interroger avant d'affecter une mission longue. La panne du 23/08 à 22h27 —
+  cinq heures et demie perdues, six agents vivants sans ordres — était
+  annoncée dans un flux que nous ne lisions pas.
+- **L4 — Mesurer le coût par mission.** La consommation est suivie par fil de
+  conversation. Le greffe pourrait porter ce que chaque objectif a coûté ; les
+  métriques d'efficience disent aujourd'hui « tokens par mission :
+  non mesurable, aucune télémétrie ».
+- **L5 — Voir qui travaille.** Le flux natif porte un état d'occupation. Les
+  agents gérés savent déjà dire qu'ils travaillent ; les panes tmux, jamais.
+  C'est la cause racine des rondes toutes les sept minutes : faute de
+  pouvoir distinguer un agent occupé d'un agent inactif, il faut demander.
+
+### Quand remplacer les panes tmux ?
+
+Question de l'utilisateur, 2026-08-24. Réponse : **pas encore, et voici les
+conditions.** Aujourd'hui la bascule serait une régression déguisée.
+
+Ce que les panes apportent et que les agents gérés n'ont pas encore : le
+modèle demandé est réellement servi (les gérés Claude rendent Opus 4.6 pour
+Opus 5), la session survit à un redémarrage du daemon (les sept agents gérés
+ont perdu la leur le 24/08 à 06h37), et l'utilisateur VOIT son agent.
+
+Ce que les gérés apportent et que les panes n'auront jamais : l'état
+d'occupation, le journal lisible par `attach`, et la résurrection
+automatique.
+
+CONDITIONS CUMULATIVES avant toute bascule :
+1. **Le pont natif servi et prouvé sur les deux fournisseurs** — Codex est
+   fait, Claude reste à faire (G5). Basculer avec un seul pont natif
+   dégraderait la moitié de l'équipe.
+2. **La reprise de session après redémarrage** — un agent géré qui ressuscite
+   doit retrouver son contexte, pas repartir vide. Aujourd'hui il faut lui
+   réécrire son mandat à la main, ce qui a coûté deux réécritures le 24/08.
+3. **Le mode de présence stable à la reconnexion** — encore cassé le 24/08 à
+   07h30, `attach` refusant quatre agents qui venaient de se reconnecter.
+4. **Une vue pour l'utilisateur** — il perd le pane, donc il doit gagner
+   autre chose. C'est le lien avec la GUI, et c'est SA contrepartie : ne pas
+   la livrer avant de retirer les panes serait lui prendre sans rendre.
+
+ORDRE : L1 puis L3 (ils évitent des pannes déjà survenues), puis G5 (pont
+Claude), puis la reprise de session, puis la bascule. Le retrait des panes
+est le DERNIER geste, pas le premier.
