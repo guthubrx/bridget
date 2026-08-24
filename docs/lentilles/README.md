@@ -125,3 +125,36 @@ LIMITES HONNÊTES DE L'EXPÉRIENCE N°1 :
    atteste l'usage aujourd'hui. Prochain jury : jurés claude natifs pour
    la facture, ou attendre l'extension codex/acp de L4.
 3. n=1 : rien de statistique. Les collèges ont gagné CETTE manche.
+
+## Manche 4 — protocole armé (décidé le 2026-08-24 à 20:11, GO utilisateur)
+
+**Question** : où est le genou de la courbe coût/bénéfice, et le personnage
+apporte-t-il quelque chose au-delà de la polarité ?
+
+**Lot désigné** : le lot v16 de cursor4 (délégations soldées à la clôture) —
+réel, déjà livré, famille critique (migration de schéma), revue due de toute
+façon : l'expérience est payée une seule fois. JAMAIS de rejeu sur un lot déjà
+jugé : la vérité est écrite dans le dépôt et le ledger, on mesurerait
+« retrouver », pas « trouver ».
+
+**Trois bras en parallèle, même mandat, aveugle entre bras** :
+1. **1+1 avec personas** — une fiche à charge + une constructive, qui se
+   lisent et se répondent (un tour chacun + une confrontation) ;
+2. **1+1 polarité nue** — deux agents frais SANS fiche mais AVEC la même
+   consigne de polarité (« cherche ce qui casse » / « cherche ce qui tient »,
+   puis confrontation) — sinon on compare « polarité+personnage » à « rien »
+   et on ne sait pas quel ingrédient travaille ;
+3. **1 seul** — témoin de contrôle.
+
+**Lectures** : bras 2 vs 3 = valeur de la structure ; bras 1 vs 2 = valeur du
+personnage seul ; bras 1 vs le 2×2 de la manche 2 = position du genou.
+
+**Conditions matérielles** (héritées des leçons de la manche 2, non
+négociables) : un CARGO_TARGET_DIR isolé par relecteur ; comptes de tests et
+rouges de référence, jamais un rc seul ; binaire d'essai à l'abri ; mandat
+neutre ; capture de budget Maicie CONFIGURÉE AVANT le départ (les factures de
+la manche 2 sont restées « inconnu » — le motif budget_capture_non_configure
+est la dette L4 à solder d'abord).
+
+**Séquence** : jury n°3 (routines, 2×2+témoin, l'étalon) → merge routines →
+manche 4 sur v16.
