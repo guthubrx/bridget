@@ -5,7 +5,37 @@ tenue par le référent humain-agent. Chaque règle exécutée à la main ici es
 candidate à devenir un comportement produit de Maicie. Hors périmètre de la
 v1 (spec 011) — intrants pour les itérations suivantes.
 
-## Tableau de bord — mis à jour le 2026-08-24, 20:40
+## Tableau de bord — mis à jour le 2026-08-24, 21:33
+
+**État de nuit (21:33)** — MERGÉS ce soir : correctif boot (8 s de démarrage),
+spawn-fantôme, hook StatusLine, checklist de redémarrage, lot outcome_unknown
+COMPLET (dégel + gardien durci), hotfix des rappels étrangers.
+**TROIS JURYS 1+1 EN PARALLÈLE** (doctrine adoptée cette nuit, voir
+docs/lentilles/manche-004-routines.md) :
+- *consentement --migrate* (cursor6) — BLOCKED sur la PORTE v0 : une base
+  peuplée remise à user_version=0 migrait encore sans consentement, le
+  contournement exact de sa propre garantie. Corrigé @ 85dbaab, jury rejoue.
+  C'est LE prérequis de tous les merges de migration de la nuit.
+- *routines v15* (cursor7) — BLOCKED unanime 5/5 en manche 4, QUATRE motifs,
+  tous traités en 2 h sur cinq SHA successifs ; tête 061e773. Le remède du
+  mandat orphelin est celui du relecteur, et son point de coupure est devenu
+  un hook de test permanent du dépôt.
+- *ledger émis/vu* (cursorbridget) — le ledger n'était écrit qu'à l'accusé,
+  donc un géré occupé rendait les messages invisibles (2 % vers le référent,
+  67 % vers un géré occupé) ; marqueur « en vol / reçu / indéterminé » imposé
+  en condition par le référent. Jury cursor4/cursor5.
+**EN COURS** : cartes de reprise (livré), présences fantômes, statuts
+distincts in_flight, présence transitoire du hook, diagnostic L4 (muet).
+**RÈGLES GRAVÉES CETTE NUIT** : revue à deux étages + jury 1+1 à polarités
+croisées avec fiches (2×2 réservé à l'irréversible) ; F38/F38-b (carte de
+criticité auto-élue + germe générique) ; comptes REPRODUITS jamais un
+passage ; une absence se vérifie dans la durée ; seul l'horodatage du ledger
+fait foi ; le worktree de l'auteur est fermé au relecteur.
+**INCIDENTS** : 5 pannes Maicie (2 par migration de branche sur la prod, 1 par
+rappel étranger — toutes réparées), 1 constat Bloquant FAUX gravé par le
+référent puis rectifié, le vrai défaut trouvé dessous. Disque 6,7 → 52 → 28 Gi.
+
+**Archive — état précédent (20:40)**
 
 **État de nuit (20:40)** : REDÉMARRAGE GROUPÉ FAIT (19h39, boot 8 s, daemon
 a3707b8) — format LIMITE vivant flotte entière, colonne du référent attestée
