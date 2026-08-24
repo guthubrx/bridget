@@ -716,3 +716,19 @@ aucune ne coupe le pont existant avant que son remplaçant soit prouvé.
   par mission) est développée sur les ponts natifs, et Gemini en est
   simplement privé. Un adaptateur obsolète qu'on maintient à parité coûte
   plus cher que deux ponts vivants.
+- **T3 Code valide l'architecture à registre — et garde ACP en repli, comme
+  nous.** Inventaire de leurs adaptateurs : Claude (SDK officiel Anthropic),
+  Codex (app-server natif), OpenCode (SDK natif `@opencode-ai/sdk`), Cursor,
+  et **Grok — qui passe par ACP** (`effect-acp/schema`). Aucun Gemini chez
+  eux. Leur règle de fait est donc exactement celle que l'utilisateur a
+  arbitrée pour nous : protocole natif quand il existe, ACP en repli pour les
+  fournisseurs qui n'en offrent pas. Notre Gemini est leur Grok.
+  Ils ont par ailleurs un `ProviderAdapterRegistry` qui associe un type de
+  fournisseur à son adaptateur, l'adaptateur étant construit par instance et
+  porté par elle. C'est l'option « vocabulaire interne neutre + traducteur
+  par fournisseur » du G1 — décidée par un produit réel, pas par supposition.
+  Trois composants voisins méritent d'être regardés au moment du G1, parce
+  qu'ils nomment des besoins qu'on découvrira sinon en production :
+  `ProviderSessionDirectory` (où vivent les sessions),
+  `ProviderSessionReaper` (le nettoyage de celles qui traînent — nous avons
+  eu 15 processus orphelins cette nuit) et `ProviderEventLoggers`.
