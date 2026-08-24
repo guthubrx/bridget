@@ -74,6 +74,7 @@ install-k1:
 	@scripts/install-k1.sh \
 		$(if $(CATALOGUE_PATH),--catalogue-path $(CATALOGUE_PATH),) \
 		$(if $(FORCE),--force,) \
-		$(if $(SKIP_LAUNCHD),--skip-launchd,) \
+		$(if $(SKIP_SERVICES)$(SKIP_LAUNCHD),--skip-services,) \
 		$(if $(SKIP_VERIFY),--skip-verify,) \
-		$(if $(VERIFY_DAEMON_ONLY),--verify-daemon-only,)
+		$(if $(VERIFY_DAEMON_ONLY),--verify-daemon-only,) \
+		$(if $(VERIFY_GUICHET),--verify-guichet,)

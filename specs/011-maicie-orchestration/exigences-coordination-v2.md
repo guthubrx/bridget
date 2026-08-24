@@ -986,14 +986,11 @@ ce qui existe ici :
   pose les liens, et VÉRIFIE son travail — daemon joignable, un agent de test
   lancé puis arrêté, un dépôt au guichet relevé. Un installateur qui ne
   vérifie pas est un générateur de fausse confiance.
-  **État 2026-08-24** : `scripts/install-k1.sh` + `make install-k1` (macOS).
-  Preuves à trois niveaux — (1) **prouvé ici** : idempotence sur la machine
-  réelle (créés=0 au second passage, aucun artefact préexistant modifié,
-  daemon joignable) ; (2) **prouvé bac à sable** : HOME jetable avec
-  `--skip-launchd`, pose des fichiers, modes 0600 sur les registres, gabarits
-  vides `profiles=[]` ; (3) **non prouvé** : activation launchd sur machine
-  vierge, spawn/stop agent test, dépôt guichet relevé bout en bout. Cible
-  Linux / cartae.app : voir note machine d'essai plus bas — hors preuve Mac.
+  **État 2026-08-24** : `scripts/install-k1.sh` + `make install-k1`.
+  Cibles : Darwin (launchd) et Linux (systemd --user) ; Windows refusé
+  proprement. Voie Rust : rustup + compilation sur place (autoportant).
+  Preuves Mac — (1) idempotence ici ; (2) pose bac à sable. Preuve Linux —
+  cartae.app (activation + guichet E2E) : en cours / à attester.
 - **K2 — Rendre la ronde portable.** Elle doit vivre dans le dépôt, pas dans
   la session d'un référent. Soit un service au même titre que la relève, soit
   une commande que n'importe quel référent lance. Aujourd'hui, changer de
