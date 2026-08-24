@@ -41,6 +41,52 @@ Une conversation reste libre. Une intention ne devient un objectif coordonné
 que par une commande explicite. Les messages directs ne modifient jamais un
 objectif Maicie par effet de bord.
 
+## Mise à jour 015 — guichet durable Bridget
+
+La session 015 ajoute un guichet Maicie sans changer le modèle compagnon. Le
+destinataire de service `maicie` devient joignable dans Bridget même lorsque le
+binaire Maicie n'est pas lancé, mais cette joignabilité reste une boîte aux
+lettres de transport : Bridget ne possède ni objectif, ni délégation, ni
+décision Maicie.
+
+La capacité `maicie_guichet` est la borne d'autorisation du guichet. Elle
+contrôle la relève `GuichetClaimNext`/`GuichetClaim`, les réponses
+`GuichetReply` et les `RequestLifecycleEvent`. Un nom déclaré, y compris
+`from: "maicie"`, n'accorde jamais ces droits. Ce choix applique la limite C5 :
+dans le modèle local coopératif v1, l'identité reste déclarative et non
+opposable à un processus hostile du même compte. La capacité ferme la surface
+protocolaire sans prétendre fournir une authentification cryptographique.
+
+Le guichet est relevé en pull-only à l'ouverture d'une commande Maicie. Bridget
+retourne au plus une demande relivable par `GuichetClaimNext`, dans l'ordre
+FIFO durable, puis Maicie traite sous budget absolu et rend la main. Il n'y a
+ni polling, ni worker caché, ni boucle résidente dans cette décision. Une
+boucle `maicie serve` visible est explicitement une évolution v2, à spécifier
+avec son arrêt, sa présence et ses règles d'exploitation.
+
+La matrice v1 est fermée : `delivery_report`, `mission_status` et
+`deadline_question`. Les refus sont explicites et sans mutation, notamment pour
+texte libre, opération inconnue, champ inconnu, cible non réservée, capacité
+absente, divergence canonique, claim périmé, terminal déjà atteint et
+expiration d'idempotence. Aucune route guichet, Bridget ou MCP ne peut proposer
+ou consommer une approbation distante ; l'approbation de profil reste une
+frappe TTY humaine locale.
+
+Un dépôt est identifié de façon durable par
+`(issuer_scope, service_request, request_id)` et ses octets canoniques. Le
+rejeu conserve cette enveloppe et l'`issued_at` d'origine ; une divergence est
+refusée, et `idempotency_expired` est terminal. La relève FIFO durable délivre
+au plus une demande avec un propriétaire, un token, une génération et un bail.
+`GuichetReply` et les événements corrélés sont conditionnés au détenteur
+courant : une ancienne génération ne peut pas finaliser la demande.
+
+Le gate G1504 a éprouvé la chaîne livrée avec un wrapper ACP réel : dépôt alors
+que Maicie est absente, relève pull-only, greffe unique dans SQLite, réponse
+corrélée, demande Bridget `answered`, événement durable relevé, puis rejeu
+sans doublon. Le parcours a mesuré 925 ms dans le commit `69ad00d`. Cette
+preuve ne transforme pas le guichet en runtime : elle confirme que l'identité
+de service durable et le compagnon CLI restent découplés.
+
 ## Durabilité et réconciliation
 
 ### Délégations
@@ -101,6 +147,8 @@ une décision explicite.
 - aucune sélection par LLM, interprétation sémantique ou échelle implicite de
   compétence ; la cible est explicite ou issue d'une égalité stricte de tags ;
 - aucun DAG, scheduler, cron, GUI ou TUI dans ce périmètre ;
+- aucun daemon Maicie résident ; la boucle `maicie serve` est une évolution v2
+  séparée, pas un effet secondaire de `status` ou de la relève guichet ;
 - aucun lancement, arrêt ou redémarrage d'agent par Maicie ;
 - les permissions ACP sont affichées comme décisions automatiques déjà prises
   par Bridget, jamais comme demandes humaines en attente ;
@@ -109,6 +157,8 @@ une décision explicite.
   donc se cumuler, contrairement à la voie de délégation ;
 - modèle local coopératif mono-utilisateur, sans frontière d'autorisation
   hostile entre processus du même compte.
+- capacité `maicie_guichet` bornant le guichet, sans droit implicite par nom
+  déclaré et sans identité cryptographique opposable en v1.
 
 ## Conséquences
 
