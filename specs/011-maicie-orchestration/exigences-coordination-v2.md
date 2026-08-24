@@ -5,7 +5,7 @@ tenue par le référent humain-agent. Chaque règle exécutée à la main ici es
 candidate à devenir un comportement produit de Maicie. Hors périmètre de la
 v1 (spec 011) — intrants pour les itérations suivantes.
 
-## Tableau de bord — mis à jour le 2026-08-24, 14h30
+## Tableau de bord — mis à jour le 2026-08-24, 15h30
 
 Vue d'avancement des blocs. Détail et jurisprudence dans chaque bloc plus
 bas ; ce tableau ne remplace pas la lecture, il dit où on en est.
@@ -75,9 +75,10 @@ ont été créés directement dans ce fichier le 24/08.
 - [ ] 34 escalade humaine bornée — ⬜ (pratique référent)
 - [x] 35 (ajout post-plan) greffière du catalogue — 017, registre du dû
       avec transitions automatiques, en production depuis le 24/08
-- [ ] 36-37 (ajout 24/08) lier le référent par le refus (--suite obligatoire,
-      classement des citations, EtatDelegation::EnAttentePrerequis, v12) —
-      🔄 LIVRÉ 14h25, en revue croisée avant merge
+- [x] 36-37 (ajout 24/08) lier le référent par le refus (--suite obligatoire,
+      classement des citations, EnAttentePrerequis, refus de cycle, v12) —
+      MERGÉ 15h05 après BLOCKED (4 défauts réels dont un fail-closed
+      menteur) puis APPROVE ; actif au prochain déploiement du binaire
 
 **Sections antérieures complémentaires (hors plan A-F)**
 - [x] Exigence Phase 5 : l'écran d'approbation montre type/modèle/effort de
@@ -104,6 +105,13 @@ ont été créés directement dans ce fichier le 24/08.
       en est le premier cousin opérationnel, côté référent
 - [ ] Suivis post-gate 014 (C1-C7 fable-reviewer) — ⬜ non bloquants,
       ouverts à dessein (C3 croissance tool_titles à surveiller en priorité)
+- [x] Quota de flotte configurable (BRIDGET_FLEET_QUOTA, défaut 16, refus
+      parlants) — Bloquant du 24/08 réglé en 50 min, mergé
+- [x] Claude gérés opérationnels (option A, décision utilisateur 14h34) —
+      bypass mergé, validation outillée réussie (« mains opérationnelles »)
+- [ ] Équipement des Claude gérés (MCP + identité + PATH — envois archivés
+      « human », constat de traçabilité) — 🔄 en cours (cursor7)
+- [x] Extinction tmux ACHEVÉE 15h25 — plus aucun ouvrier tmux
 
 **Bloc G — ponts natifs**
 - [x] G1 vocabulaire interne (ADR 010, couche `ManagedSession`)
@@ -115,11 +123,12 @@ ont été créés directement dans ce fichier le 24/08.
 - [x] G7 modèle véridique (définition figée affichée en permanence)
 - [x] G8 quota anticipé — Claude (L3) ET Codex (effort+limites app-server,
       mergé+déployé 14h : who affiche EFFORT et LIMITE 7 jours des codex)
-- [ ] G9 coût par mission — 🔄 LIVRÉ, en corrections de revue (double
-      échantillon assistant+result trouvé par la revue croisée) ; merge
-      derrière v12
-- [ ] G10 retirer le pont Zed — 🔄 en cours (cursorbridget, recensement
-      avant retrait)
+- [ ] G9 coût par mission — 🔄 corrections de revue LIVRÉES (anti-doublon
+      assistant+result oraclé, borne droite testée) ; rebase final v13
+      derrière la v12 mergée — merge imminent
+- [ ] G10 retirer le pont Zed — 🔄 LIVRÉ et revu (première revue de
+      fable-reviewer : APPROVE_WITH_CHANGES) ; durcissements C1/C2 en
+      cours (normalisation du token, garde sur le chemin wrapper)
 - [ ] G11 nommer le protocole — 🔄 TRANSPORT affiche codex_app_server /
       claude_stream_json depuis 0a3872b ; vérification liée en cours (coder3)
 
@@ -146,8 +155,8 @@ ont été créés directement dans ce fichier le 24/08.
       mergés+déployés : écart épinglé≠servi visible dans who et au journal
 - [x] L3 quota anticipé Claude (fenêtre/statut/resetsAt dans LIMITE, aucune
       décision auto) — format compact 5h/7d en cours (coder4)
-- [ ] L4 coût par mission — 🔄 LIVRÉ (ledger, fenêtre, facturable séparé,
-      migration v13), corrections de revue en cours ; = G9
+- [ ] L4 coût par mission — 🔄 = G9, rebase final v11→v12→v13 en cours,
+      garde M1 en juge de paix
 - [x] L5 voir qui travaille (état d'occupation des gérés dans who)
 - [x] BASCULE tmux→gérés FAITE le 24/08 12h25 (voir point d'étape bloc L) ;
       extinction ACHEVÉE à 15h25 : cxbridget, prospective puis coderBridget
