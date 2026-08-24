@@ -192,6 +192,30 @@ fn f37_depends_on_cree_arete_et_deblocage_a_la_cloture() {
 }
 
 #[test]
+fn f37_cycle_mutuel_refuse_sans_seconde_arete() {
+    let root = root("cycle-ab");
+    let database = root.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let a = create_seed(&mut store, "lot A", "seed-cycle-a");
+    let b = create_seed(&mut store, "lot B", "seed-cycle-b");
+    store.register_objective_dependencies(a, &[b]).unwrap();
+    let error = store
+        .register_objective_dependencies(b, &[a])
+        .expect_err("cycle A↔B");
+    assert!(
+        matches!(error, maicie::store::StoreError::Invalid(reason) if reason.contains("cycle")),
+        "{error:?}"
+    );
+    assert_eq!(
+        store.dependents_of_objective(a).unwrap(),
+        Vec::<Uuid>::new()
+    );
+    assert_eq!(store.dependents_of_objective(b).unwrap(), vec![a]);
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn f37_uuid_inconnu_ignore_sans_refus() {
     let root = root("uuid-inconnu");
     let database = root.join("maicie.sqlite3");

@@ -2389,6 +2389,9 @@ impl MaicieStore {
             if !exists {
                 return Err(StoreError::NotFound("prérequis objectif absent"));
             }
+            if objective_dependency_creates_cycle(&tx, dependent, *prerequisite)? {
+                return Err(StoreError::Invalid("cycle dans les dépendances"));
+            }
             tx.execute(
                 "INSERT OR IGNORE INTO objective_dependencies(
                      dependent_objective_id, prerequisite_objective_id
@@ -3690,6 +3693,41 @@ fn canonical_coordination_definition(
         .attentes
         .sort_by_key(|expectation| expectation.attente_id);
     canonical
+}
+
+/// `true` si poser `dependent → prerequisite` fermerait un cycle (modèle F28 :
+/// un prérequis qui dépend déjà, même transitivement, du dépendant).
+fn objective_dependency_creates_cycle(
+    tx: &Transaction<'_>,
+    dependent: Uuid,
+    prerequisite: Uuid,
+) -> Result<bool, StoreError> {
+    let mut stack = vec![prerequisite];
+    let mut seen = BTreeSet::new();
+    while let Some(node) = stack.pop() {
+        if node == dependent {
+            return Ok(true);
+        }
+        if !seen.insert(node) {
+            continue;
+        }
+        let mut statement = tx
+            .prepare(
+                "SELECT prerequisite_objective_id FROM objective_dependencies
+                 WHERE dependent_objective_id = ?1",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([node.to_string()], |row| row.get::<_, String>(0))
+            .map_err(StoreError::Sql)?;
+        let mut next = Vec::new();
+        for row in rows {
+            next.push(parse_uuid(&row.map_err(StoreError::Sql)?)?);
+        }
+        drop(statement);
+        stack.extend(next);
+    }
+    Ok(false)
 }
 
 fn validate_coordination_dag(definition: &DefinitionCoordination) -> Result<(), StoreError> {

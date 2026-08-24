@@ -395,7 +395,7 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
     drop(connection);
 
     let mut store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 11);
+    assert_eq!(store.schema_version().unwrap(), 12);
     assert_eq!(
         store
             .objective_snapshots(Some(created.objective_id))
@@ -410,7 +410,7 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
     // Une seconde ouverture d'une base déjà v7 est la vraie preuve
     // d'idempotence : la migration ne doit ni recréer, ni vider les tables.
     let mut reopened = MaicieStore::open(&database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 11);
+    assert_eq!(reopened.schema_version().unwrap(), 12);
     let replay = process_guichet_claim(&mut reopened, &claim, "ignored", 1_020).unwrap();
     assert!(replay.replayed);
     assert_eq!(replay.reply_bytes, first.reply_bytes);
@@ -516,12 +516,13 @@ fn crash_worker() {
     let created = maicie::app::DelegationCreated {
         objective_id,
         delegation_id,
-        message_id,
+        message_id: Some(message_id),
         participant: "prospective".to_string(),
         duration: ClasseDuree::Normale,
         timeout_secs: 60,
         deadline_contractuelle: 960,
         replayed: false,
+        waiting_on_prerequisites: false,
     };
     let claim = delivery_claim(&request_id, &created);
     let canonical = parse_claim(&claim).unwrap();
