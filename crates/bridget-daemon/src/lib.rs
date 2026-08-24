@@ -12,6 +12,7 @@ pub mod managed_process;
 pub mod managers;
 pub mod mcp;
 pub mod mcp_identity;
+pub mod reaper;
 pub mod receipt_store;
 pub mod registry;
 pub mod reprise;

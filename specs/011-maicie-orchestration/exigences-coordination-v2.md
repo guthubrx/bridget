@@ -809,6 +809,10 @@ que la comparaison a révélés, et deux d'entre eux nous ont coûté la nuit.
   appris qu'un nettoyage naïf casse plus qu'il ne répare. Notre ramasseur
   devra porter les mêmes gardes dès le premier jour, sans avoir à commettre
   l'erreur nous-mêmes.
+  ✅ **Phase 0 démarrée (2026-08-24)** — arbitrage (a)–(e) approuvé ; spec
+  `j2-session-reaper-phase0.md` ; commande `bridget reaper report` ;
+  observateur seul ; fail-closed sur l'absence de signal de travail de fond
+  (manque à instruire). Phase 1 = arbitrage explicite après lecture multi-jours.
 - **J3 — Répertoire des sessions.** Ils tiennent une table des sessions
   ouvertes avec leur fournisseur, leur fil et leur curseur de reprise. Chez
   nous cette information est éparpillée entre la base du daemon, les
