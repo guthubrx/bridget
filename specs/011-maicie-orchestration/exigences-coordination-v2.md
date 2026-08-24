@@ -778,3 +778,50 @@ aucune ne coupe le pont existant avant que son remplaçant soit prouvé.
   (vérifié dans le flux Claude), donc migrer les agents interactifs vers le
   mode géré supprimerait le besoin de ronde. À instruire après G4/G6 — c'est
   un changement d'ergonomie pour l'utilisateur, qui perd le pane visible.
+
+## Bloc J — Rattraper T3 Code sur l'outillage d'agents
+
+Ajouté le 2026-08-24, sur demande de l'utilisateur, après comparaison
+détaillée de notre architecture de ponts avec la leur. Constat : **notre
+socle est au moins aussi bon, notre outillage autour l'est moins.** Nous
+avons deux avantages qu'ils n'ont pas — un daemon persistant qui tient
+l'état en base, et le greffe qui journalise des décisions avec leurs
+motifs, dont ils n'ont aucun équivalent. Les manques ci-dessous sont ceux
+que la comparaison a révélés, et deux d'entre eux nous ont coûté la nuit.
+
+- **J1 — Capacités déclarées par pilote ET par modèle.** Ils associent à
+  chaque fournisseur, et à chaque modèle, ce qu'il sait faire : changer de
+  modèle en cours de session, reprendre, être interrompu. Nous, nous
+  supposons. C'est exactement ce qui nous a fait lancer deux agents sur un
+  modèle que le pont ne savait pas servir, et découvrir la panne sur leur
+  cadavre. Une capacité déclarée aurait refusé le spawn avec un motif clair.
+  À faire pendant les blocs G : un pilote annonce ce qu'il sait faire, et le
+  daemon refuse ce qu'il ne sait pas, au lieu de le tenter.
+- **J2 — Ramasseur de sessions abandonnées.** Ils en ont un ; nous n'avons
+  rien, et la nuit du 24 a révélé 15 wrappers orphelins, 7 daemons de test
+  et une cinquantaine de répertoires temporaires. Le correctif en cours
+  traite la CAUSE (gardes à la destruction dans les harnais) ; il ne traite
+  pas les survivants ni les fuites futures d'une autre origine.
+  LEÇON À REPRENDRE TELLE QUELLE, lue dans leur code : leur ramasseur refuse
+  de tuer une session qui a un tour actif, et refuse aussi celle qui a du
+  travail de fond en cours — commentaire d'origine : « ce sont des processus
+  du fournisseur, les arrêter les tuerait silencieusement ». Ils ont donc
+  appris qu'un nettoyage naïf casse plus qu'il ne répare. Notre ramasseur
+  devra porter les mêmes gardes dès le premier jour, sans avoir à commettre
+  l'erreur nous-mêmes.
+- **J3 — Répertoire des sessions.** Ils tiennent une table des sessions
+  ouvertes avec leur fournisseur, leur fil et leur curseur de reprise. Chez
+  nous cette information est éparpillée entre la base du daemon, les
+  définitions figées et les marqueurs d'agents gérés. À instruire pendant
+  G1 : est-ce que notre base couvre déjà le besoin, ou manque-t-il une vue ?
+  Ne pas créer une table par mimétisme — vérifier d'abord.
+- **J4 — Journaux d'événements par pilote.** Ils séparent les journaux par
+  fournisseur, ce qui rend un incident attribuable sans fouiller. Nous avons
+  le journal d'attache, qui est meilleur pour suivre un agent, mais rien
+  pour comparer un pilote à un autre. Utile seulement quand deux ponts
+  tourneront — à ne pas faire avant.
+
+Ordre recommandé : J1 pendant G2 (le refus informé est ce qui aurait évité
+la panne), J2 dès que le correctif de cause est mergé, J3 en instruction
+dans G1, J4 après le second pont. Aucun de ces items ne justifie de retarder
+les blocs G : ce sont des compléments, pas des prérequis.
