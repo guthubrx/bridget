@@ -433,3 +433,27 @@ plus vite ; le coût net est un report, pas une perte.
   fige mode/location à la première attestation — un déménagement de pane
   légitime n'est pas repris. Assumés contre l'écrasement ; à revoir avec
   l'état occupé/inactif.
+- **Le référent est un point de défaillance unique — démontré la nuit du
+  23 au 24/08.** Chronologie reconstituée sur horodatages (jamais au
+  ressenti) : production dense et continue jusqu'à **22h27** (dernier
+  commit 8825f3b), puis **plus rien pendant 5 h 30**, reprise à 03h57.
+  Trois preuves indépendantes convergent sur 22h27 : le dernier commit,
+  la dernière attestation de présence de prospective2, et le nombre de
+  rondes de vigilance empilées sans réponse (~48 à 7 min = 5 h 36).
+  Diagnostic : ce ne sont PAS les exécutants qui sont tombés — coderBridget,
+  prospective et cxbridget étaient vivants et connectés tout du long, et
+  ont repris en quelques secondes dès qu'on leur a redonné du travail à
+  03h50, sans redémarrage. C'est le RÉFÉRENT qui est tombé (quota du
+  modèle épuisé), et comme il est seul à distribuer, toute l'équipe s'est
+  arrêtée faute d'ordres, greffe intact et worktrees propres. Correction
+  d'un diagnostic erroné de ma part : j'avais imputé les décès de coder2 et
+  prospective2 au transport ACP et l'avais écrit dans un motif de clôture ;
+  l'utilisateur a contesté, et la preuve directe lui donne raison — les
+  relecteurs relancés travaillent en ACP sans incident. Leçon : ne pas
+  imputer une panne à la couche technique la plus visible avant d'avoir
+  éliminé la cause d'exploitation la plus banale (quota, crédit, plafond de
+  service). Enjeu pour la suite : c'est exactement le trou que le journal du
+  dû doit boucher — un dû écrit et découvrable survit à la mort du référent,
+  là où un dû qui n'existe que dans sa tête meurt avec lui. Tant que le
+  référent est le seul ordonnanceur, la capacité de l'équipe est plafonnée
+  par SA disponibilité, pas par la sienne propre.
