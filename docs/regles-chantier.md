@@ -170,12 +170,14 @@ deux échecs successifs pour un même agent.)*
 - **`cargo test --workspace` n'active PAS les fonctionnalités de test.**
   Certains points d'arrêt utilisés par les tests de crash sont derrière
   `#[cfg(feature = "test-support")]` (par exemple `before_coordination_persist`,
-  `daemon.rs`). Sans l'option, le point d'arrêt n'existe pas dans le binaire et
-  le test échoue en le cherchant — avec un message qui annonce un jalon absent
-  là où il faudrait dire que la fonctionnalité n'est pas activée. La commande
-  juste est `cargo test -p <crate> --features test-support`. La feature existe
-  sur `bridget-daemon` et `bridget-transport`, PAS sur `maicie` : un rouge du
-  côté maicie ne s'explique donc jamais ainsi.
+  `daemon.rs`). Sans l'option, le point d'arrêt n'existe pas dans le binaire.
+  Les bancs qui en dépendent doivent se marquer `ignore = "exige --features
+  test-support"` (ex. `reprise_cursee_survit_aux_crashs_reels`) — jamais un
+  rouge « jalon absent » qui banalise les vrais rouges. La commande qui
+  exerce la couverture crash est `cargo test -p <crate> --features
+  test-support`. La feature existe sur `bridget-daemon` et
+  `bridget-transport`, PAS sur `maicie` : un rouge du côté maicie ne
+  s'explique donc jamais ainsi.
 - **`cargo fmt` sans `$HOME/.cargo/bin` dans le `PATH` ne s'exécute pas** et
   laisse croire à un contrôle vert qui n'a jamais eu lieu.
 - **Les gates marqués `#[ignore]` ne tournent pas par défaut.** Une batterie
