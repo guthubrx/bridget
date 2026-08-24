@@ -158,3 +158,21 @@ est la dette L4 à solder d'abord).
 
 **Séquence** : jury n°3 (routines, 2×2+témoin, l'étalon) → merge routines →
 manche 4 sur v16.
+
+## Règle de décision de la manche 4 — FIXÉE D'AVANCE (2026-08-24 20:15, opposable au référent)
+
+Le résultat de la manche 4 S'INSTALLE la nuit même comme doctrine de revue —
+ce n'est pas une expérience de plus, c'est la dernière avant adoption.
+
+- 1+1-personas trouve autant que le 2×2 de la manche 2 (trouvailles
+  VÉRIFIÉES) → **adopter 1+1 avec personas** comme revue standard.
+- Les personas n'apportent rien vs la polarité nue → **adopter 1+1 nu**.
+- Le **2×2 complet reste réservé au tout-critique** (migrations, idempotence,
+  chemins de boot/arrêt) quelle que soit l'issue.
+- Résultat ambigu → **défaut : garder les personas** (faisceau manche 1-2
+  favorable, surcoût d'une fiche nul).
+
+Installation = la config gagnante entre dans docs/regles-chantier.md
+(doctrine de revue), les fiches de lentilles deviennent les profils de spawn
+standard des relecteurs, et toutes les revues suivantes de la nuit tournent
+avec. Décision et motifs consignés ici même, chiffres à l'appui.
