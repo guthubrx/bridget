@@ -377,41 +377,25 @@ fn read_snapshot(config: &UiRelayConfig) -> Result<UiSnapshotV1, UiError> {
     })
 }
 
-fn read_recovery_losses(socket_path: &Path) -> Vec<UiRecoveryLossV1> {
-    let fleet_path = crate::desired_state::path_for_daemon_db(&socket_path.with_extension("db"));
-    // En prod socket et db partagent le parent `.cache/bridget` : même résolution
-    // que path_for_daemon_db(db). Si le socket n'est pas sous ce schéma, on tente
-    // aussi le voisin direct de fleet.json dérivé du parent du socket.
-    let candidates = [
-        crate::recovery_trace::report_path(&fleet_path),
-        socket_path
-            .parent()
-            .map(|parent| parent.join(crate::recovery_trace::REPORT_FILE_NAME))
-            .unwrap_or_else(|| PathBuf::from(crate::recovery_trace::REPORT_FILE_NAME)),
-        dirs_home_report(),
-    ];
-    for path in candidates {
-        if let Ok(Some(report)) = crate::recovery_trace::load_report(&path) {
-            return report
-                .absents
-                .into_iter()
-                .map(|entry| UiRecoveryLossV1 {
-                    name: entry.name,
-                    reason: entry.reason,
-                    detail: entry.detail,
-                })
-                .collect();
-        }
-    }
-    Vec::new()
+fn recovery_losses_path_for_socket(socket_path: &Path) -> PathBuf {
+    crate::recovery_trace::report_path(&crate::desired_state::path_for_daemon_db(
+        &socket_path.with_extension("db"),
+    ))
 }
 
-fn dirs_home_report() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".config/bridget")
-        .join(crate::recovery_trace::REPORT_FILE_NAME)
+fn read_recovery_losses(socket_path: &Path) -> Vec<UiRecoveryLossV1> {
+    match crate::recovery_trace::load_report(&recovery_losses_path_for_socket(socket_path)) {
+        Ok(Some(report)) => report
+            .absents
+            .into_iter()
+            .map(|entry| UiRecoveryLossV1 {
+                name: entry.name,
+                reason: entry.reason,
+                detail: entry.detail,
+            })
+            .collect(),
+        Ok(None) | Err(_) => Vec::new(),
+    }
 }
 
 /// Projection globale déjà détenue par le daemon. La connexion reste dans le
@@ -774,6 +758,16 @@ mod tests {
         assert!(
             !response.contains("bridget.sock"),
             "Mutation : une page qui recevrait la socket Unix contournerait le relais; {response}"
+        );
+    }
+
+    #[test]
+    fn pertes_ui_suivent_le_socket_du_relais_pas_le_home() {
+        let path = recovery_losses_path_for_socket(Path::new("/tmp/daemon-test.sock"));
+        assert_eq!(path, PathBuf::from("/tmp/recovery-losses.json"));
+        assert!(
+            !path.components().any(|part| part.as_os_str() == ".config"),
+            "un daemon de test ne doit pas lire ~/.config/bridget: {path:?}"
         );
     }
 

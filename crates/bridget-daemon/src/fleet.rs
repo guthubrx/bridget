@@ -413,16 +413,20 @@ impl FleetSupervisor {
 
     pub fn remove_desired(&self, name: &str) -> Result<(), FleetError> {
         self.desired.remove(name)?;
-        self.roster.forget(name).map_err(FleetError::Observation)?;
+        self.roster.forget(name);
         Ok(())
     }
 
-    pub fn drain_non_persistent_named(
-        &self,
-    ) -> Result<Vec<(String, NamedRosterEntry)>, FleetError> {
-        self.roster
-            .drain_non_persistent()
-            .map_err(FleetError::Observation)
+    pub fn drain_non_persistent_named(&self) -> Vec<(String, NamedRosterEntry)> {
+        self.roster.drain_non_persistent()
+    }
+
+    pub fn persistent_named(&self) -> Vec<(String, NamedRosterEntry)> {
+        self.roster.persistent_entries()
+    }
+
+    pub fn forget_named(&self, name: &str) {
+        self.roster.forget(name);
     }
 
     pub fn persist_recovery_losses(
@@ -449,19 +453,7 @@ impl FleetSupervisor {
     }
 
     pub fn set_desired_domain(&self, name: &str, domain: Option<&str>) -> Result<(), FleetError> {
-        let mut fleet = self.desired.load()?;
-        let Some(entry) = fleet.equipiers.get_mut(name) else {
-            return Ok(());
-        };
-        let next = domain
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned);
-        if entry.domain == next {
-            return Ok(());
-        }
-        entry.domain = next;
-        self.desired.persist(&fleet)?;
+        self.desired.set_domain(name, domain)?;
         Ok(())
     }
 
@@ -681,16 +673,14 @@ impl FleetSupervisor {
                 },
             )?;
         }
-        self.roster
-            .remember(
-                active.name.clone(),
-                NamedRosterEntry {
-                    agent_type: active.agent_type.clone(),
-                    persistent: active.persistent,
-                    domain: resolved_domain(None, &active.cwd),
-                },
-            )
-            .map_err(FleetError::Observation)?;
+        self.roster.remember(
+            active.name.clone(),
+            NamedRosterEntry {
+                agent_type: active.agent_type.clone(),
+                persistent: active.persistent,
+                domain: resolved_domain(None, &active.cwd),
+            },
+        );
         after_fleet().map_err(FleetError::Observation)?;
         let issue = SpawnCommandIssue::Connected {
             name: active.name.clone(),
@@ -747,9 +737,7 @@ impl FleetSupervisor {
             if active.persistent {
                 self.desired.remove(&active.name)?;
             }
-            self.roster
-                .forget(&active.name)
-                .map_err(FleetError::Observation)?;
+            self.roster.forget(&active.name);
             let issue = SpawnCommandIssue::Cancelled {
                 reason: "arrêt demandé".to_string(),
             };
@@ -778,9 +766,7 @@ impl FleetSupervisor {
         if lease.persistent {
             self.desired.remove(&lease.name)?;
         }
-        self.roster
-            .forget(&lease.name)
-            .map_err(FleetError::Observation)?;
+        self.roster.forget(&lease.name);
         Ok(())
     }
 
@@ -797,9 +783,7 @@ impl FleetSupervisor {
         if active.persistent {
             self.desired.remove(&active.name)?;
         }
-        self.roster
-            .forget(&active.name)
-            .map_err(FleetError::Observation)?;
+        self.roster.forget(&active.name);
         let key = spawn_key(&inner, &active.command_id)?;
         inner
             .idempotency
@@ -1056,9 +1040,7 @@ fn expire_locked(
     if active.persistent {
         desired.remove(&active.name)?;
     }
-    roster
-        .forget(&active.name)
-        .map_err(FleetError::Observation)?;
+    roster.forget(&active.name);
     let issue = SpawnCommandIssue::Cancelled {
         reason: "spawn_timeout".to_string(),
     };
@@ -1154,6 +1136,15 @@ mod tests {
         );
         let raw = fs::read_to_string(root.join("fleet.json")).unwrap();
         assert!(raw.contains("\"domain\": \"bridget\""), "{raw}");
+        supervisor
+            .set_desired_domain("cursor6", Some("nouveau-projet"))
+            .unwrap();
+        assert_eq!(
+            supervisor.desired_fleet().unwrap().equipiers["cursor6"]
+                .domain
+                .as_deref(),
+            Some("nouveau-projet")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

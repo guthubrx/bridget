@@ -10,7 +10,14 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-pub const FLEET_SCHEMA_VERSION: u64 = 1;
+/// Schéma écrit par ce binaire. Le schéma 1 (sans `domain`, ou avec `domain`
+/// posé par le premier lot D20) reste lisible.
+pub const FLEET_SCHEMA_VERSION: u64 = 2;
+pub const FLEET_SCHEMA_MIN: u64 = 1;
+
+fn schema_lisible(version: u64) -> bool {
+    (FLEET_SCHEMA_MIN..=FLEET_SCHEMA_VERSION).contains(&version)
+}
 
 /// Entrée persistante d'un équipier que le daemon doit maintenir.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,7 +109,7 @@ impl fmt::Display for DesiredStateError {
             Self::UnsupportedSchema { path, found } => match found {
                 Some(version) => write!(
                     formatter,
-                    "schéma fleet.json non supporté dans {}: {version} (attendu: {FLEET_SCHEMA_VERSION})",
+                    "schéma fleet.json non supporté dans {}: {version} (attendu: {FLEET_SCHEMA_MIN}..={FLEET_SCHEMA_VERSION})",
                     path.display()
                 ),
                 None => write!(
@@ -227,6 +234,30 @@ impl DesiredStateStore {
         Ok(removed)
     }
 
+    /// Met à jour le domain d'une entrée existante sous le même verrou que
+    /// `upsert`/`remove`. Un load+persist disjoint écraserait les insertions
+    /// concurrentes.
+    pub fn set_domain(&self, name: &str, domain: Option<&str>) -> Result<bool, DesiredStateError> {
+        let _transition = self
+            .transition_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut fleet = self.load_unlocked()?;
+        let Some(entry) = fleet.equipiers.get_mut(name) else {
+            return Ok(false);
+        };
+        let next = domain
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        if entry.domain == next {
+            return Ok(false);
+        }
+        entry.domain = next;
+        self.persist_unlocked(&fleet)?;
+        Ok(true)
+    }
+
     fn load_unlocked(&self) -> Result<DesiredFleet, DesiredStateError> {
         let bytes = match fs::read(&self.path) {
             Ok(bytes) => bytes,
@@ -246,7 +277,7 @@ impl DesiredStateStore {
                 source,
             })?;
         let found_schema = raw.get("schema").and_then(serde_json::Value::as_u64);
-        if found_schema != Some(FLEET_SCHEMA_VERSION) {
+        if !found_schema.is_some_and(schema_lisible) {
             return Err(DesiredStateError::UnsupportedSchema {
                 path: self.path.clone(),
                 found: found_schema,
@@ -270,9 +301,11 @@ impl DesiredStateStore {
         fleet: &DesiredFleet,
         observer: impl FnMut(AtomicWritePhase) -> io::Result<()>,
     ) -> Result<(), DesiredStateError> {
-        validate_fleet(&self.path, fleet)?;
+        let mut fleet = fleet.clone();
+        fleet.schema = FLEET_SCHEMA_VERSION;
+        validate_fleet(&self.path, &fleet)?;
         let mut bytes =
-            serde_json::to_vec_pretty(fleet).map_err(|source| DesiredStateError::InvalidJson {
+            serde_json::to_vec_pretty(&fleet).map_err(|source| DesiredStateError::InvalidJson {
                 path: self.path.clone(),
                 source,
             })?;
@@ -288,7 +321,7 @@ impl DesiredStateStore {
 
 /// Validation O(n) de la frontière fichier, n étant le nombre d'entrées.
 fn validate_fleet(path: &Path, fleet: &DesiredFleet) -> Result<(), DesiredStateError> {
-    if fleet.schema != FLEET_SCHEMA_VERSION {
+    if !schema_lisible(fleet.schema) {
         return Err(DesiredStateError::UnsupportedSchema {
             path: path.to_path_buf(),
             found: Some(fleet.schema),
@@ -501,16 +534,98 @@ mod tests {
     }
 
     #[test]
+    fn fleet_json_schema_1_sans_domain_se_relit() {
+        let root = test_root("ancien");
+        let path = root.join("fleet.json");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            &path,
+            r#"{
+  "schema": 1,
+  "equipiers": {
+    "codex-1": {
+      "type": "codex",
+      "cwd": "/tmp/projet",
+      "command_id": "command-1",
+      "generation": 1,
+      "created": "2026-08-22T20:14:00Z"
+    }
+  }
+}
+"#,
+        )
+        .unwrap();
+        let loaded = DesiredStateStore::at_path(&path).load().unwrap();
+        assert_eq!(loaded.schema, 1);
+        assert_eq!(loaded.equipiers["codex-1"].domain, None);
+        DesiredStateStore::at_path(&path)
+            .set_domain("codex-1", Some("bridget"))
+            .unwrap();
+        let rewritten = fs::read_to_string(&path).unwrap();
+        assert!(rewritten.contains("\"schema\": 2"), "{rewritten}");
+        assert!(rewritten.contains("\"domain\": \"bridget\""), "{rewritten}");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn set_domain_ne_ecrase_pas_un_upsert_concurrent() {
+        let root = test_root("course");
+        let path = root.join("fleet.json");
+        let store = std::sync::Arc::new(DesiredStateStore::at_path(&path));
+        store
+            .upsert("agent-x".to_string(), equipier("command-x", 1))
+            .unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let writer = {
+            let store = std::sync::Arc::clone(&store);
+            let barrier = std::sync::Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                for index in 0..80_u64 {
+                    store
+                        .upsert(format!("agent-z{index}"), equipier("command-z", index + 2))
+                        .unwrap();
+                }
+            })
+        };
+        let updater = {
+            let store = std::sync::Arc::clone(&store);
+            let barrier = std::sync::Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..80 {
+                    store.set_domain("agent-x", Some("bridget")).unwrap();
+                }
+            })
+        };
+        writer.join().unwrap();
+        updater.join().unwrap();
+        let loaded = store.load().unwrap();
+        assert!(loaded.equipiers.contains_key("agent-x"));
+        assert_eq!(
+            loaded.equipiers["agent-x"].domain.as_deref(),
+            Some("bridget")
+        );
+        for index in 0..80_u64 {
+            assert!(
+                loaded.equipiers.contains_key(&format!("agent-z{index}")),
+                "agent-z{index} perdu par course load+persist"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn unsupported_or_invalid_schema_is_refused_with_the_path() {
         let root = test_root("version");
         let path = root.join("fleet.json");
         fs::create_dir_all(&root).unwrap();
-        fs::write(&path, r#"{"schema":2,"equipiers":{}}"#).unwrap();
+        fs::write(&path, r#"{"schema":3,"equipiers":{}}"#).unwrap();
         let error = DesiredStateStore::at_path(&path).load().unwrap_err();
 
         assert!(matches!(
             error,
-            DesiredStateError::UnsupportedSchema { found: Some(2), .. }
+            DesiredStateError::UnsupportedSchema { found: Some(3), .. }
         ));
         assert!(error.to_string().contains(path.to_str().unwrap()));
         fs::write(&path, r#"{"equipiers":{}}"#).unwrap();

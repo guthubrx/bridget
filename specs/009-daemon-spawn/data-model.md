@@ -5,16 +5,21 @@
 Daemon **seul écrivain** ; édition manuelle daemon arrêté seulement ; chargé au
 démarrage ; écriture durable = temp + fsync + `rename` + fsync du répertoire.
 
+Schéma **2** depuis D20. Le schéma **1** (avec ou sans `domain`) reste lisible ;
+toute écriture est normalisée en 2. Un binaire antérieur à D20 refuse le schéma
+2 (`UnsupportedSchema`) : pas de retour arrière silencieux.
+
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "equipiers": {
     "codex-1": {
       "type": "codex",
       "cwd": "/chemin/absolu/capture",
       "command_id": "…",
       "generation": 4,
-      "created": "2026-08-22T20:14:00Z"
+      "created": "2026-08-22T20:14:00Z",
+      "domain": "bridget"
     }
   }
 }
@@ -22,6 +27,38 @@ démarrage ; écriture durable = temp + fsync + `rename` + fsync du répertoire.
 
 Clé stable = nom d'équipier. `generation` croît à chaque spawn du même nom ;
 `stop` retire l'entrée **durablement avant** de répondre (FR-010bis).
+
+`domain` est le domaine **effectif** (dérivé au spawn, puis mis à jour à chaque
+`Register`, y compris après `bridget domain <N>`). Il ne fige pas la première
+vie : une relance dans un autre cwd, ou une surcharge manuelle, remplace la
+valeur persistée.
+
+## Trace de reprise (`~/.config/bridget/recovery-losses.json`, 0600)
+
+Voisin de `fleet.json` (même parent, même dérivation tests via
+`db_path.with_extension`). Écrit **seulement** s'il reste des absents après un
+redémarrage. Zéro perte : le fichier est **retiré**, pas vidé.
+
+Chaque entrée porte `name`, `reason` et un `detail` optionnel. Raisons stables :
+
+| `reason` | Cas |
+|---|---|
+| `non_persistant` | spawn nommé sans `--persistent` |
+| `quota_flotte` | reprise amputée par le quota |
+| `definition_figee_absente` | entrée `fleet.json` sans définition figée |
+| `reprise_refusee` | autre refus de préparation / enveloppe |
+| `absent_de_fleet` | roster persistant, plus dans `fleet.json` (incohérence) |
+
+Consultable par `bridget reprise` (bloc `vivant.pertes_reprise`) et par la page
+UI, qui lit **ce seul chemin** dérivé du socket du daemon relais — jamais
+`$HOME/.config` en contrebande.
+
+## Roster nommé (`~/.config/bridget/named-roster.json`, 0600)
+
+Ce n'est **pas** un snapshot d'équipe à ressusciter. Il nomme les équipiers
+gérés encore vivants (persistants ou non) pour que la reprise puisse citer les
+non-persistants, invisibles de `fleet.json`. Un fichier illisible se dégrade
+(roster vide + WARN) : il n'avorte pas la reprise de la flotte.
 
 ## Marqueur de groupe (`~/.cache/bridget/managed/<nom>.json`, 0700/0600)
 

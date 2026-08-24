@@ -7,6 +7,7 @@
 //! sert qu'à nommer les absents non persistants, invisibles de `fleet.json`.
 
 use bridget_transport::fsutil::write_private_file_atomic;
+use log::warn;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -22,6 +23,7 @@ pub const REASON_NON_PERSISTENT: &str = "non_persistant";
 pub const REASON_QUOTA: &str = "quota_flotte";
 pub const REASON_FROZEN_DEFINITION: &str = "definition_figee_absente";
 pub const REASON_RECOVERY_FAILED: &str = "reprise_refusee";
+pub const REASON_ABSENT_FROM_FLEET: &str = "absent_de_fleet";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecoveryLossEntry {
@@ -49,7 +51,9 @@ pub struct NamedRosterEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 struct NamedRosterFile {
+    #[serde(default)]
     schema: u64,
+    #[serde(default)]
     named: BTreeMap<String, NamedRosterEntry>,
 }
 
@@ -118,34 +122,34 @@ impl NamedRosterStore {
         }
     }
 
-    pub fn remember(&self, name: String, entry: NamedRosterEntry) -> io::Result<()> {
+    pub fn remember(&self, name: String, entry: NamedRosterEntry) {
         let _guard = self
             .lock
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let mut file = self.load_unlocked()?;
+        let mut file = self.load_unlocked();
         file.named.insert(name, entry);
-        self.persist_unlocked(&file)
+        self.persist_unlocked(&file);
     }
 
-    pub fn forget(&self, name: &str) -> io::Result<()> {
+    pub fn forget(&self, name: &str) {
         let _guard = self
             .lock
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let mut file = self.load_unlocked()?;
+        let mut file = self.load_unlocked();
         if file.named.remove(name).is_none() {
-            return Ok(());
+            return;
         }
-        self.persist_unlocked(&file)
+        self.persist_unlocked(&file);
     }
 
-    pub fn drain_non_persistent(&self) -> io::Result<Vec<(String, NamedRosterEntry)>> {
+    pub fn drain_non_persistent(&self) -> Vec<(String, NamedRosterEntry)> {
         let _guard = self
             .lock
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let mut file = self.load_unlocked()?;
+        let mut file = self.load_unlocked();
         let mut drained = Vec::new();
         file.named.retain(|name, entry| {
             if entry.persistent {
@@ -156,43 +160,81 @@ impl NamedRosterStore {
             }
         });
         if !drained.is_empty() {
-            self.persist_unlocked(&file)?;
+            self.persist_unlocked(&file);
         }
-        Ok(drained)
+        drained
     }
 
-    fn load_unlocked(&self) -> io::Result<NamedRosterFile> {
+    pub fn persistent_entries(&self) -> Vec<(String, NamedRosterEntry)> {
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        self.load_unlocked()
+            .named
+            .into_iter()
+            .filter(|(_, entry)| entry.persistent)
+            .collect()
+    }
+
+    fn load_unlocked(&self) -> NamedRosterFile {
         match fs::read(&self.path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(NamedRosterFile {
+            Ok(bytes) => match serde_json::from_slice(&bytes) {
+                Ok(file) => file,
+                Err(error) => {
+                    warn!(
+                        "named-roster illisible {}: {error} — reprise sans ce roster",
+                        self.path.display()
+                    );
+                    NamedRosterFile {
+                        schema: TRACE_SCHEMA_VERSION,
+                        named: BTreeMap::new(),
+                    }
+                }
+            },
+            Err(error) if error.kind() == io::ErrorKind::NotFound => NamedRosterFile {
                 schema: TRACE_SCHEMA_VERSION,
                 named: BTreeMap::new(),
-            }),
-            Err(error) => Err(error),
+            },
+            Err(error) => {
+                warn!(
+                    "named-roster inaccessible {}: {error} — reprise sans ce roster",
+                    self.path.display()
+                );
+                NamedRosterFile {
+                    schema: TRACE_SCHEMA_VERSION,
+                    named: BTreeMap::new(),
+                }
+            }
         }
     }
 
-    fn persist_unlocked(&self, file: &NamedRosterFile) -> io::Result<()> {
+    fn persist_unlocked(&self, file: &NamedRosterFile) {
         if file.named.is_empty() {
-            return match fs::remove_file(&self.path) {
-                Ok(()) => Ok(()),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(error),
-            };
+            match fs::remove_file(&self.path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => warn!("named-roster non retiré {}: {error}", self.path.display()),
+            }
+            return;
         }
-        let mut payload = NamedRosterFile {
+        let payload = NamedRosterFile {
             schema: TRACE_SCHEMA_VERSION,
             named: file.named.clone(),
         };
-        // Conserve le schéma déjà lu s'il était renseigné.
-        if file.schema != 0 {
-            payload.schema = file.schema;
+        let bytes = match serde_json::to_vec_pretty(&payload) {
+            Ok(mut bytes) => {
+                bytes.push(b'\n');
+                bytes
+            }
+            Err(error) => {
+                warn!("named-roster non sérialisable: {error}");
+                return;
+            }
+        };
+        if let Err(error) = write_private_file_atomic(&self.path, &bytes) {
+            warn!("named-roster non écrit {}: {error}", self.path.display());
         }
-        let mut bytes = serde_json::to_vec_pretty(&payload)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        bytes.push(b'\n');
-        write_private_file_atomic(&self.path, &bytes)
     }
 }
 
@@ -276,31 +318,39 @@ mod tests {
         let root = temp_dir("roster");
         fs::create_dir_all(&root).unwrap();
         let store = NamedRosterStore::at_path(root.join(ROSTER_FILE_NAME));
-        store
-            .remember(
-                "ephemere".into(),
-                NamedRosterEntry {
-                    agent_type: "cursor".into(),
-                    persistent: false,
-                    domain: Some("bridget".into()),
-                },
-            )
-            .unwrap();
-        store
-            .remember(
-                "durable".into(),
-                NamedRosterEntry {
-                    agent_type: "cursor".into(),
-                    persistent: true,
-                    domain: Some("bridget".into()),
-                },
-            )
-            .unwrap();
-        let drained = store.drain_non_persistent().unwrap();
+        store.remember(
+            "ephemere".into(),
+            NamedRosterEntry {
+                agent_type: "cursor".into(),
+                persistent: false,
+                domain: Some("bridget".into()),
+            },
+        );
+        store.remember(
+            "durable".into(),
+            NamedRosterEntry {
+                agent_type: "cursor".into(),
+                persistent: true,
+                domain: Some("bridget".into()),
+            },
+        );
+        let drained = store.drain_non_persistent();
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].0, "ephemere");
-        let again = store.drain_non_persistent().unwrap();
+        let again = store.drain_non_persistent();
         assert!(again.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn roster_illisible_se_degrade_sans_erreur() {
+        let root = temp_dir("roster-ko");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(ROSTER_FILE_NAME);
+        fs::write(&path, "ce n'est pas du json").unwrap();
+        let store = NamedRosterStore::at_path(&path);
+        assert!(store.drain_non_persistent().is_empty());
+        assert!(store.persistent_entries().is_empty());
         let _ = fs::remove_dir_all(root);
     }
 }
