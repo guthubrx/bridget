@@ -3065,11 +3065,16 @@ pub(crate) fn render_ledger(entries: &[LedgerMessage]) -> String {
     }
     let mut rendered = format!("Derniers {} messages :\n", entries.len());
     for entry in entries.iter().rev() {
+        let status = entry
+            .delivery_status
+            .map(|status| format!(" [{}]", status.label_fr()))
+            .unwrap_or_default();
         rendered.push_str(&format!(
-            "  [{}] {} → {}: {}\n",
+            "  [{}] {} → {}{}: {}\n",
             entry.ts,
             entry.sender,
             entry.target,
+            status,
             entry.body.chars().take(60).collect::<String>()
         ));
     }
@@ -3079,6 +3084,7 @@ pub(crate) fn render_ledger(entries: &[LedgerMessage]) -> String {
 #[cfg(test)]
 mod hook_tests {
     use super::*;
+    use bridget_transport::protocol::LedgerDeliveryStatus;
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
@@ -3138,6 +3144,7 @@ mod hook_tests {
                 sender: "alice".to_string(),
                 target: "bob".to_string(),
                 body: "premier".to_string(),
+                delivery_status: None,
             },
             LedgerMessage {
                 id: "recent".to_string(),
@@ -3145,12 +3152,43 @@ mod hook_tests {
                 sender: "bob".to_string(),
                 target: "alice".to_string(),
                 body: "corps riche $VAR\nintact".to_string(),
+                delivery_status: Some(LedgerDeliveryStatus::Recu),
             },
         ];
         assert_eq!(
             render_ledger(&entries),
-            "Derniers 2 messages :\n  [2] bob → alice: corps riche $VAR\nintact\n  [1] alice → bob: premier\n"
+            "Derniers 2 messages :\n  [2] bob → alice [reçu]: corps riche $VAR\nintact\n  [1] alice → bob: premier\n"
         );
+    }
+
+    #[test]
+    fn rendu_ledger_distingue_en_vol_et_recu() {
+        let en_vol = LedgerMessage {
+            id: "a".into(),
+            ts: 10,
+            sender: "peer-a".into(),
+            target: "peer-b".into(),
+            body: "collège".into(),
+            delivery_status: Some(LedgerDeliveryStatus::EnVol),
+        };
+        let recu = LedgerMessage {
+            id: "b".into(),
+            ts: 11,
+            sender: "peer-a".into(),
+            target: "peer-b".into(),
+            body: "collège".into(),
+            delivery_status: Some(LedgerDeliveryStatus::Recu),
+        };
+        let rendered_vol = render_ledger(&[en_vol]);
+        let rendered_recu = render_ledger(&[recu]);
+        assert_ne!(
+            rendered_vol, rendered_recu,
+            "dispatching et acked ne doivent pas se rendre pareil"
+        );
+        assert!(rendered_vol.contains("[en vol]"));
+        assert!(rendered_recu.contains("[reçu]"));
+        assert!(!rendered_vol.contains("[reçu]"));
+        assert!(!rendered_recu.contains("[en vol]"));
     }
 
     #[test]

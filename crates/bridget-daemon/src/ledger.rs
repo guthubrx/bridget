@@ -1,6 +1,6 @@
 //! Projection de lecture du ledger, indépendante des interfaces CLI et MCP.
 
-use bridget_transport::protocol::{LedgerMessage, LedgerScope, RequestInfo};
+use bridget_transport::protocol::{LedgerDeliveryStatus, LedgerMessage, LedgerScope, RequestInfo};
 
 use crate::store::{Store, StoreError};
 
@@ -32,6 +32,10 @@ pub fn read_projection(
                 sender: entry.sender,
                 target: entry.target,
                 body: entry.body,
+                delivery_status: entry
+                    .delivery_phase
+                    .as_deref()
+                    .and_then(LedgerDeliveryStatus::from_phase),
             })
             .collect()
     } else {
@@ -126,6 +130,79 @@ mod tests {
                 .iter()
                 .any(|request| request.sender == "carol" && request.target == "dave")
         );
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// Oracle : un message `dispatching` et un message `acked` ne se rendent
+    /// pas pareil au ledger (CLI et projection typée).
+    #[test]
+    fn projection_distingue_en_vol_et_recu() {
+        use crate::idempotency::{IdempotencyKey, IdempotencyStore, OperationKind, SendDelivery};
+
+        const NOW: i64 = 1_700_000_000;
+        const HORIZON: i64 = 3600;
+
+        let path = std::env::temp_dir().join(format!(
+            "bridget-ledger-phase-{}-{}.sqlite",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        {
+            let mut idem = IdempotencyStore::open(&path).unwrap();
+            for (msg_id, delivery_id, ack) in [
+                ("msg-en-vol", "delivery-en-vol", false),
+                ("msg-recu", "delivery-recu", true),
+            ] {
+                let key =
+                    IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, msg_id)
+                        .unwrap();
+                let mut message = BridgetMessage::new("peer-a", "peer-b", "corps collège");
+                message.id = msg_id.to_string();
+                let bytes = serde_json::to_vec(&message).unwrap();
+                idem.reserve(&key, &bytes, NOW, HORIZON, NOW, 30).unwrap();
+                idem.begin_send_delivery(
+                    &key,
+                    &SendDelivery {
+                        delivery_id: delivery_id.to_string(),
+                        recipient_instance_id: "instance-b".to_string(),
+                        delivery_generation: 1,
+                        expires_at: NOW + HORIZON,
+                        message_bytes: bytes,
+                    },
+                )
+                .unwrap();
+                if ack {
+                    idem.acknowledge_send_delivery(delivery_id, "instance-b", 1)
+                        .unwrap();
+                }
+            }
+        }
+
+        let store = Store::open(&path).unwrap();
+        let projection = read_projection(&store, LedgerScope::Messages, 10).unwrap();
+        let en_vol = projection
+            .messages
+            .iter()
+            .find(|message| message.id == "msg-en-vol")
+            .expect("message en vol visible");
+        let recu = projection
+            .messages
+            .iter()
+            .find(|message| message.id == "msg-recu")
+            .expect("message reçu visible");
+        assert_eq!(en_vol.delivery_status, Some(LedgerDeliveryStatus::EnVol));
+        assert_eq!(recu.delivery_status, Some(LedgerDeliveryStatus::Recu));
+
+        let rendered_vol = crate::cli::render_ledger(std::slice::from_ref(en_vol));
+        let rendered_recu = crate::cli::render_ledger(std::slice::from_ref(recu));
+        assert_ne!(
+            rendered_vol, rendered_recu,
+            "dispatching et acked ne doivent pas se rendre pareil"
+        );
+        assert!(rendered_vol.contains("[en vol]"), "{rendered_vol}");
+        assert!(rendered_recu.contains("[reçu]"), "{rendered_recu}");
+
         drop(store);
         std::fs::remove_file(path).unwrap();
     }

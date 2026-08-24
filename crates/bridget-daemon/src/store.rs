@@ -1038,11 +1038,62 @@ impl Store {
         Ok(count)
     }
 
-    /// Récupère les échanges récents d'une conversation.
+    /// Récupère les échanges récents, enrichis de la phase de remise quand une
+    /// saga `send_deliveries` existe pour le même identifiant de message.
     pub fn recent_messages(&self, limit: usize) -> Result<Vec<LedgerEntry>, StoreError> {
+        let has_deliveries = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'send_deliveries'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(StoreError::Sqlite)?
+            > 0;
+
+        if has_deliveries {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT l.id, l.ts, l.sender, l.target, l.body,
+                            (SELECT d.phase FROM send_deliveries d
+                             WHERE d.operation_kind = 'send' AND d.idempotency_key = l.id
+                             ORDER BY CASE d.phase
+                                 WHEN 'acked' THEN 0
+                                 WHEN 'dispatching' THEN 1
+                                 ELSE 2
+                             END
+                             LIMIT 1) AS delivery_phase
+                     FROM ledger l
+                     ORDER BY l.ts DESC
+                     LIMIT ?1",
+                )
+                .map_err(StoreError::Sqlite)?;
+
+            let entries = stmt
+                .query_map(rusqlite::params![limit as i64], |row| {
+                    Ok(LedgerEntry {
+                        id: row.get(0)?,
+                        ts: row.get(1)?,
+                        sender: row.get(2)?,
+                        target: row.get(3)?,
+                        body: row.get(4)?,
+                        delivery_phase: row.get(5)?,
+                    })
+                })
+                .map_err(StoreError::Sqlite)?
+                .filter_map(|r| r.ok())
+                .collect();
+            return Ok(entries);
+        }
+
         let mut stmt = self
             .conn
-            .prepare("SELECT id, ts, sender, target, body FROM ledger ORDER BY ts DESC LIMIT ?1")
+            .prepare(
+                "SELECT id, ts, sender, target, body FROM ledger
+                 ORDER BY ts DESC LIMIT ?1",
+            )
             .map_err(StoreError::Sqlite)?;
 
         let entries = stmt
@@ -1053,6 +1104,7 @@ impl Store {
                     sender: row.get(2)?,
                     target: row.get(3)?,
                     body: row.get(4)?,
+                    delivery_phase: None,
                 })
             })
             .map_err(StoreError::Sqlite)?
@@ -1464,6 +1516,8 @@ pub struct LedgerEntry {
     pub sender: String,
     pub target: String,
     pub body: String,
+    /// Phase `send_deliveries` si une saga idempotente porte le même id.
+    pub delivery_phase: Option<String>,
 }
 
 #[derive(Debug)]

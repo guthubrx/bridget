@@ -21,8 +21,9 @@ pub use managed_session::{
 };
 pub use protocol::{
     AdapterCapabilities, AttachRefusal, AttachWindow, ConnectionRole, DaemonToWrapper,
-    MAX_ATTACH_FRAGMENT_BYTES, MAX_ATTACH_SERIALIZED_FRAME_BYTES, ModelCapabilities,
-    ResolvedAgentDefinition, ResolvedMcpDefinition, SpawnRefusal, StopOutcome, WrapperToDaemon,
+    LedgerDeliveryStatus, LedgerMessage, MAX_ATTACH_FRAGMENT_BYTES,
+    MAX_ATTACH_SERIALIZED_FRAME_BYTES, ModelCapabilities, ResolvedAgentDefinition,
+    ResolvedMcpDefinition, SpawnRefusal, StopOutcome, WrapperToDaemon,
 };
 pub use tmux::TmuxTransport;
 pub use transport::{Transport, TransportError};

@@ -955,15 +955,17 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
     );
     // Oracle (ii) : visible au ledger AVANT DeliverAcked, pendant dispatching.
     let store_before_ack = Store::open(&database).expect("store avant ack");
+    let before_ack = store_before_ack
+        .recent_messages(20)
+        .expect("ledger avant ack");
+    let en_vol = before_ack
+        .iter()
+        .find(|entry| entry.id == "mcp-linked-retry")
+        .expect("message visible avant ack");
     assert_eq!(
-        store_before_ack
-            .recent_messages(20)
-            .expect("ledger avant ack")
-            .iter()
-            .filter(|entry| entry.id == "mcp-linked-retry")
-            .count(),
-        1,
-        "le message doit être visible au ledger avant l'accusé du destinataire"
+        en_vol.delivery_phase.as_deref(),
+        Some("dispatching"),
+        "phase en vol avant DeliverAcked"
     );
     let (delivery_id, delivery_generation) = match receive_delivery(&mut recipient) {
         DaemonToWrapper::DeliverIdempotent {
@@ -995,13 +997,13 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
     let tool_messages = tool_ledger["result"]["structuredContent"]["messages"]
         .as_array()
         .expect("projection MCP messages");
+    let tool_entry = tool_messages
+        .iter()
+        .find(|entry| entry["id"] == "mcp-linked-retry")
+        .expect("message au ledger MCP après ack");
     assert_eq!(
-        tool_messages
-            .iter()
-            .filter(|entry| entry["id"] == "mcp-linked-retry")
-            .count(),
-        1,
-        "le retry idempotent ne doit pas dupliquer le ledger MCP"
+        tool_entry["delivery_status"], "recu",
+        "après DeliverAcked le DTO doit exposer reçu, pas en_vol"
     );
     let cli_ledger = Command::new(env!("CARGO_BIN_EXE_bridget"))
         .arg("ledger")
@@ -1013,6 +1015,10 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
     assert!(
         cli_output.contains("réponse MCP liée"),
         "le renderer CLI doit exposer l'envoi MCP livré: {cli_output}"
+    );
+    assert!(
+        cli_output.contains("[reçu]"),
+        "le renderer CLI doit marquer le message accusé: {cli_output}"
     );
     assert_eq!(
         store

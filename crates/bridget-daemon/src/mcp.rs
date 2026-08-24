@@ -1037,13 +1037,17 @@ fn ephemeral_connection_name() -> String {
 }
 
 fn ledger_message_dto(message: bridget_transport::protocol::LedgerMessage) -> Value {
-    json!({
+    let mut payload = json!({
         "id": message.id,
         "from": message.sender,
         "to": message.target,
         "body": message.body,
         "ts": message.ts,
-    })
+    });
+    if let Some(status) = message.delivery_status {
+        payload["delivery_status"] = json!(status);
+    }
+    payload
 }
 
 fn request_dto(request: bridget_transport::protocol::RequestInfo) -> Value {
@@ -2135,15 +2139,16 @@ mod tests {
             sender: "alice".to_string(),
             target: "bob".to_string(),
             body: "riche".to_string(),
+            delivery_status: Some(bridget_transport::protocol::LedgerDeliveryStatus::EnVol),
         };
         let message = ledger_message_dto(source.clone());
         assert_eq!(
             message,
-            json!({"id":"m-1","from":"alice","to":"bob","body":"riche","ts":4})
+            json!({"id":"m-1","from":"alice","to":"bob","body":"riche","ts":4,"delivery_status":"en_vol"})
         );
         assert_eq!(
             crate::cli::render_ledger(&[source]),
-            "Derniers 1 messages :\n  [4] alice → bob: riche\n"
+            "Derniers 1 messages :\n  [4] alice → bob [en vol]: riche\n"
         );
         let request = request_dto(bridget_transport::protocol::RequestInfo {
             id: "r-1".to_string(),

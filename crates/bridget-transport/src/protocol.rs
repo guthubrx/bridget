@@ -1218,6 +1218,38 @@ pub enum LedgerScope {
     Both,
 }
 
+/// État de remise exposé au lecteur du ledger : distinguer « émis » et « vu »
+/// sans diluer l'accusé (Seen ≠ Injected ≠ PromptDispatched).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LedgerDeliveryStatus {
+    /// Remise encore en `dispatching` — visible, pas encore accusée.
+    EnVol,
+    /// Remise `acked` — le destinataire a accusé.
+    Recu,
+    /// Remise passée en quarantaine absorbante.
+    Indetermine,
+}
+
+impl LedgerDeliveryStatus {
+    pub fn from_phase(phase: &str) -> Option<Self> {
+        match phase {
+            "dispatching" => Some(Self::EnVol),
+            "acked" => Some(Self::Recu),
+            "indeterminate" => Some(Self::Indetermine),
+            _ => None,
+        }
+    }
+
+    pub fn label_fr(self) -> &'static str {
+        match self {
+            Self::EnVol => "en vol",
+            Self::Recu => "reçu",
+            Self::Indetermine => "indéterminé",
+        }
+    }
+}
+
 /// Échange stocké par le daemon et exposé aux clients de lecture.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LedgerMessage {
@@ -1226,6 +1258,9 @@ pub struct LedgerMessage {
     pub sender: String,
     pub target: String,
     pub body: String,
+    /// Absent pour les entrées hors saga idempotente (Send legacy / antérieur).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_status: Option<LedgerDeliveryStatus>,
 }
 
 impl WrapperToDaemon {
@@ -2638,13 +2673,17 @@ mod tests {
                 sender: "alice".to_string(),
                 target: "bob".to_string(),
                 body: "bonjour".to_string(),
+                delivery_status: Some(LedgerDeliveryStatus::EnVol),
             }],
             requests: Vec::new(),
         };
         assert!(matches!(
             decode::<DaemonToWrapper>(&encode(&response).unwrap()).unwrap(),
             DaemonToWrapper::LedgerProjection { messages, requests }
-                if messages.len() == 1 && messages[0].id == "m-1" && requests.is_empty()
+                if messages.len() == 1
+                    && messages[0].id == "m-1"
+                    && messages[0].delivery_status == Some(LedgerDeliveryStatus::EnVol)
+                    && requests.is_empty()
         ));
     }
 }
