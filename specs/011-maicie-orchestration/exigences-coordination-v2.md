@@ -10,10 +10,24 @@ v1 (spec 011) — intrants pour les itérations suivantes.
 Vue d'avancement des blocs. Détail et jurisprudence dans chaque bloc plus
 bas ; ce tableau ne remplace pas la lecture, il dit où on en est.
 
-Note de lettrage : il n'existe PAS de blocs A à F dans ce document — le
-lettrage commence à G (né le 24/08 avec les ponts). Tout ce qui précède est
-en sections thématiques, couvertes ci-dessous. La seule référence « bloc F »
-du texte désigne les routines planifiées (point 35 d'un plan antérieur).
+Note de lettrage (corrigée le 24/08 après doute utilisateur, reconstruction
+depuis les transcripts de session — le plan complet a été rogné par les
+compactages et n'avait jamais été recopié ici) : les blocs A à F ÉTAIENT le
+plan de déroulé tenu en session, à points numérotés ; G et suivants ont été
+créés directement dans ce fichier le 24/08. État reconstruit :
+- **A — guichet et chaîne 015** : LIVRÉ (sessions 015/016).
+- **B — journal enrichi, traducteur, GUI** (points B6-B9) : PARTIEL —
+  première tranche livrée (page locale 3 zones + tunnel lecture + SSE).
+- **C — micro-bloc toolchain épinglée, T008, C11, skill maicie** : SOLDÉ
+  (nuit du 23/08 ; ses suivis C1-C7 restent ouverts non bloquants).
+- **D — suivis Bridget numérotés** : D18 identité joignable LIVRÉE (le
+  guichet), D24 parité de repli LIVRÉE ; D23 clos administrativement.
+- **E — aucune trace retrouvée** (ni dépôt ni transcripts) : soit jamais
+  attribué, soit perdu — à confirmer par l'utilisateur.
+- **F — automatisation du référent** : F27-29 (messager, déblocage,
+  réassignation) LIVRÉES par la 016 ; greffière du catalogue LIVRÉE par la
+  017 (registre du dû) ; RESTE : politiques 4-8 en produit, routines
+  planifiées, état « en pause ».
 
 **Sections antérieures (non lettrées)**
 - [x] Politiques de délégation 1-3 : messager, déblocage des dépendants,
