@@ -12,14 +12,19 @@ use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
+static G1504_PROCESS_GATE: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn root(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("maicie-guichet-gate-{label}-{}", Uuid::new_v4()))
@@ -694,118 +699,148 @@ impl Drop for SocketFixture {
 #[test]
 #[ignore = "gate G1504 réel : requiert BRIDGET_MVP_GATE_BIN vers le binaire Bridget du worktree"]
 fn parcours_reel_g1504_releve_une_lettre_et_ne_la_duplique_pas() {
+    let _serial = G1504_PROCESS_GATE
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap();
+    run_g1504(false);
+}
+
+/// La branche forcée traverse la même garde que le gate heureux. Elle verrouille
+/// la fuite qui a auparavant laissé des managed-wrapper orphelins sous PID 1.
+#[test]
+#[ignore = "preuve G1504 réelle : requiert BRIDGET_MVP_GATE_BIN vers le binaire Bridget du worktree"]
+fn g1504_nettoie_le_groupe_apres_un_echec_injecte() {
+    let _serial = G1504_PROCESS_GATE
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap();
+    let before = managed_g1504_process_count();
+    let failed = catch_unwind(AssertUnwindSafe(|| run_g1504(true)));
+    assert!(failed.is_err(), "la branche d'échec doit réellement paniquer");
+    assert_managed_g1504_process_count(before);
+}
+
+fn run_g1504(force_failure_after_spawn: bool) {
+    let before = managed_g1504_process_count();
     let bridget = PathBuf::from(
         std::env::var_os("BRIDGET_MVP_GATE_BIN")
             .expect("BRIDGET_MVP_GATE_BIN doit désigner le binaire Bridget réel"),
     );
-    let fixture = RealGateFixture::new(&bridget);
-    let created = seed_for(&fixture.database, "g1504-agent");
-    fixture.configure_agent(&created);
-    let started = Instant::now();
-    let mut daemon = fixture.start_daemon();
-    fixture.wait_for_agent();
-    fixture.start_ephemeral_maicie();
-    fixture.wait_for_deposit();
-    let tracked_id = created.message_id.to_string();
+    {
+        let fixture = RealGateFixture::new(&bridget);
+        let created = seed_for(&fixture.database, "g1504-agent");
+        fixture.configure_agent(&created);
+        let started = Instant::now();
+        let mut run = RealGateRun::new(&fixture);
+        run.start_daemon();
+        fixture.wait_for_agent();
+        if force_failure_after_spawn {
+            panic!("échec G1504 injecté après le spawn : la garde doit nettoyer");
+        }
+        fixture.start_ephemeral_maicie();
+        fixture.wait_for_deposit();
+        let tracked_id = created.message_id.to_string();
 
-    let deposit = fixture.deposit_args(&tracked_id);
+        let deposit = fixture.deposit_args(&tracked_id);
 
-    // La commande Maicie est le premier consommateur de la boîte aux lettres.
-    // Son ouverture relève, greffe et répond exclusivement depuis les bytes
-    // persistés, puis relève l'événement terminal Bridget sur la même session.
-    let status = fixture.maicie(&[
-        "status".to_string(),
-        created.objective_id.to_string(),
-        "--config".to_string(),
-        fixture.config.display().to_string(),
-        "--json".to_string(),
-    ]);
-    assert!(status.status.success(), "status G1504: {:?}", status.stderr);
-    let status_json: Value = serde_json::from_slice(&status.stdout).unwrap();
-    assert_eq!(status_json["coordination"].as_array().unwrap().len(), 1);
+        // La commande Maicie est le premier consommateur de la boîte aux lettres.
+        // Son ouverture relève, greffe et répond exclusivement depuis les bytes
+        // persistés, puis relève l'événement terminal Bridget sur la même session.
+        let status = fixture.maicie(&[
+            "status".to_string(),
+            created.objective_id.to_string(),
+            "--config".to_string(),
+            fixture.config.display().to_string(),
+            "--json".to_string(),
+        ]);
+        assert!(status.status.success(), "status G1504: {:?}", status.stderr);
+        let status_json: Value = serde_json::from_slice(&status.stdout).unwrap();
+        assert_eq!(status_json["coordination"].as_array().unwrap().len(), 1);
 
-    fixture.assert_request_answered(&tracked_id);
-    let connection = rusqlite::Connection::open(&fixture.database).unwrap();
-    let decisions: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM coordination_decisions
+        fixture.assert_request_answered(&tracked_id);
+        let connection = rusqlite::Connection::open(&fixture.database).unwrap();
+        let decisions: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM coordination_decisions
              WHERE id IN (SELECT decision_id FROM guichet_receptions)",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    let lifecycle: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM guichet_lifecycle_events\n             WHERE issuer_scope = ?1 AND request_id = ?2 AND state = 'answered'",
-            [
-                "015_scope_0123456789abcdef0123456789abcdef",
-                "g1504-depot-01",
-            ],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(decisions, 1, "la greffe réelle ne crée qu'une décision");
-    assert_eq!(
-        lifecycle, 1,
-        "l'événement answered est relevé une seule fois"
-    );
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let lifecycle: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM guichet_lifecycle_events\n             WHERE issuer_scope = ?1 AND request_id = ?2 AND state = 'answered'",
+                [
+                    "015_scope_0123456789abcdef0123456789abcdef",
+                    "g1504-depot-01",
+                ],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(decisions, 1, "la greffe réelle ne crée qu'une décision");
+        assert_eq!(
+            lifecycle, 1,
+            "l'événement answered est relevé une seule fois"
+        );
 
-    // Mutation discriminante : sans clé tripartite durable ou sans rejet du
-    // rejeu terminal, le second dépôt recréerait un claim, une décision ou un
-    // événement. Le daemon rejoue l'issue terminale `accepted` (la CLI la
-    // présente comme issue non-queued et sort donc volontairement en erreur),
-    // puis les compteurs durables prouvent l'absence de second effet.
-    let replay = fixture.bridget(&deposit);
-    assert!(
-        !replay.status.success(),
-        "un dépôt terminal ne doit pas redevenir queued: {:?}",
-        replay.stdout
-    );
-    assert!(
-        String::from_utf8_lossy(&replay.stdout).contains("DÉPÔT: accepted"),
-        "rejeu dépôt: {:?}",
-        replay.stdout
-    );
-    let repeated_status = fixture.maicie(&[
-        "status".to_string(),
-        created.objective_id.to_string(),
-        "--config".to_string(),
-        fixture.config.display().to_string(),
-        "--json".to_string(),
-    ]);
-    assert!(
-        repeated_status.status.success(),
-        "status rejeu: {:?}",
-        repeated_status.stderr
-    );
-    let repeated_decisions: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM coordination_decisions
+        // Mutation discriminante : sans clé tripartite durable ou sans rejet du
+        // rejeu terminal, le second dépôt recréerait un claim, une décision ou un
+        // événement. Le daemon rejoue l'issue terminale `accepted` (la CLI la
+        // présente comme issue non-queued et sort donc volontairement en erreur),
+        // puis les compteurs durables prouvent l'absence de second effet.
+        let replay = fixture.bridget(&deposit);
+        assert!(
+            !replay.status.success(),
+            "un dépôt terminal ne doit pas redevenir queued: {:?}",
+            replay.stdout
+        );
+        assert!(
+            String::from_utf8_lossy(&replay.stdout).contains("DÉPÔT: accepted"),
+            "rejeu dépôt: {:?}",
+            replay.stdout
+        );
+        let repeated_status = fixture.maicie(&[
+            "status".to_string(),
+            created.objective_id.to_string(),
+            "--config".to_string(),
+            fixture.config.display().to_string(),
+            "--json".to_string(),
+        ]);
+        assert!(
+            repeated_status.status.success(),
+            "status rejeu: {:?}",
+            repeated_status.stderr
+        );
+        let repeated_decisions: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM coordination_decisions
              WHERE id IN (SELECT decision_id FROM guichet_receptions)",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    let repeated_lifecycle: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM guichet_lifecycle_events\n             WHERE issuer_scope = ?1 AND request_id = ?2",
-            [
-                "015_scope_0123456789abcdef0123456789abcdef",
-                "g1504-depot-01",
-            ],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(repeated_decisions, 1, "rejeu sans seconde décision");
-    assert_eq!(repeated_lifecycle, 1, "rejeu sans second événement");
-    fixture.assert_request_answered(&tracked_id);
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let repeated_lifecycle: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM guichet_lifecycle_events\n             WHERE issuer_scope = ?1 AND request_id = ?2",
+                [
+                    "015_scope_0123456789abcdef0123456789abcdef",
+                    "g1504-depot-01",
+                ],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(repeated_decisions, 1, "rejeu sans seconde décision");
+        assert_eq!(repeated_lifecycle, 1, "rejeu sans second événement");
+        fixture.assert_request_answered(&tracked_id);
 
-    eprintln!(
-        "G1504: dépôt absent→relève→greffe→answered={} ms",
-        started.elapsed().as_millis()
-    );
-    fixture.stop_agent();
-    stop_real_daemon(&mut daemon);
+        eprintln!(
+            "G1504: dépôt absent→relève→greffe→answered={} ms",
+            started.elapsed().as_millis()
+        );
+        run.finish();
+    }
+    assert_managed_g1504_process_count(before);
 }
 
 struct RealGateFixture {
@@ -819,6 +854,53 @@ struct RealGateFixture {
     deposit_output: PathBuf,
     adapter_error: PathBuf,
     adapter_pgid: PathBuf,
+}
+
+/// Possède les processus créés par un run G1504. Il doit être construit avant
+/// tout point qui peut paniquer : supprimer le répertoire temporaire ne suffit
+/// pas à arrêter un wrapper déjà adopté par le daemon.
+struct RealGateRun<'a> {
+    fixture: &'a RealGateFixture,
+    daemon: Option<Child>,
+    finished: bool,
+}
+
+impl<'a> RealGateRun<'a> {
+    fn new(fixture: &'a RealGateFixture) -> Self {
+        Self {
+            fixture,
+            daemon: None,
+            finished: false,
+        }
+    }
+
+    fn start_daemon(&mut self) {
+        self.daemon = Some(self.fixture.start_daemon());
+    }
+
+    fn cleanup(&mut self) -> bool {
+        let agents_stopped = self.fixture.stop_agents_best_effort();
+        let daemon_stopped = match self.daemon.as_mut() {
+            Some(daemon) => stop_real_daemon_best_effort(daemon),
+            None => true,
+        };
+        agents_stopped && daemon_stopped
+    }
+
+    fn finish(&mut self) {
+        // Si cette assertion échoue, Drop refait une tentative avant de laisser
+        // le test remonter son échec : aucun chemin de sortie ne saute le stop.
+        assert!(self.cleanup(), "nettoyage G1504 incomplet");
+        self.finished = true;
+    }
+}
+
+impl Drop for RealGateRun<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.cleanup();
+        }
+    }
 }
 
 impl RealGateFixture {
@@ -971,7 +1053,10 @@ impl RealGateFixture {
             }
             thread::sleep(Duration::from_millis(20));
         }
-        stop_real_daemon(&mut child);
+        assert!(
+            stop_real_daemon_best_effort(&mut child),
+            "daemon G1504 ne s'arrête pas après un amorçage incomplet"
+        );
         panic!("daemon G1504 non prêt");
     }
 
@@ -1103,31 +1188,37 @@ impl RealGateFixture {
         );
     }
 
-    fn stop_agent(&self) {
-        let stopped = self.bridget(&["stop".to_string(), "g1504-agent".to_string()]);
-        assert!(stopped.status.success(), "stop G1504: {:?}", stopped.stderr);
+    fn stop_agents_best_effort(&self) -> bool {
+        for name in ["g1504-agent", "maicie"] {
+            let _ = Command::new(&self.bridget)
+                .args(["stop", name])
+                .env("HOME", &self.root)
+                .output();
+        }
+        self.stop_adapter_group_best_effort()
+    }
+
+    fn stop_adapter_group_best_effort(&self) -> bool {
+        let Some(pgid) = fs::read_to_string(&self.adapter_pgid)
+            .ok()
+            .and_then(|value| value.trim().parse::<i32>().ok())
+            .filter(|pgid| *pgid > 1)
+        else {
+            return true;
+        };
+
+        let exists = (unsafe { libc::kill(-pgid, 0) }) == 0;
+        if exists && (unsafe { libc::kill(-pgid, libc::SIGTERM) }) != 0 {
+            return false;
+        }
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
-            if BridgetClient::list_agents_at(&self.socket)
-                .unwrap_or_default()
-                .iter()
-                .any(|agent| agent.name == "g1504-agent" && agent.state == "stopped")
-            {
-                let pgid: i32 = fs::read_to_string(&self.adapter_pgid)
-                    .unwrap()
-                    .trim()
-                    .parse()
-                    .unwrap();
-                assert_ne!(
-                    unsafe { libc::kill(-pgid, 0) },
-                    0,
-                    "groupe ACP G1504 encore vivant"
-                );
-                return;
+            if (unsafe { libc::kill(-pgid, 0) }) != 0 {
+                return true;
             }
             thread::sleep(Duration::from_millis(20));
         }
-        panic!("wrapper G1504 non arrêté");
+        (unsafe { libc::kill(-pgid, 0) }) != 0
     }
 }
 
@@ -1137,17 +1228,50 @@ impl Drop for RealGateFixture {
     }
 }
 
-fn stop_real_daemon(daemon: &mut Child) {
-    if daemon.try_wait().unwrap().is_some() {
-        return;
+fn stop_real_daemon_best_effort(daemon: &mut Child) -> bool {
+    match daemon.try_wait() {
+        Ok(Some(_)) => return true,
+        Ok(None) => {}
+        Err(_) => return false,
     }
-    assert_eq!(unsafe { libc::kill(daemon.id() as i32, libc::SIGTERM) }, 0);
+    if unsafe { libc::kill(daemon.id() as i32, libc::SIGTERM) } != 0 {
+        return false;
+    }
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if daemon.try_wait().unwrap().is_some() {
+        match daemon.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => {}
+            Err(_) => return false,
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    false
+}
+
+fn managed_g1504_process_count() -> usize {
+    let output = Command::new("/bin/ps")
+        .args(["-axo", "command="])
+        .output()
+        .expect("ps doit être disponible pour le gate G1504");
+    assert!(output.status.success(), "ps G1504 indisponible");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains("managed-wrapper g1504_fixture g1504-agent"))
+        .count()
+}
+
+fn assert_managed_g1504_process_count(expected: usize) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if managed_g1504_process_count() == expected {
             return;
         }
         thread::sleep(Duration::from_millis(20));
     }
-    panic!("daemon G1504 ne s'arrête pas dans la borne");
+    assert_eq!(
+        managed_g1504_process_count(),
+        expected,
+        "le gate G1504 a laissé un managed-wrapper orphelin"
+    );
 }
