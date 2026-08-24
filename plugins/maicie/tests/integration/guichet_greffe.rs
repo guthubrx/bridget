@@ -7,12 +7,12 @@ use maicie::config::DurationClasses;
 use maicie::domain::guichet::{RequeteGuichet, parse_claim};
 use maicie::domain::{ClasseDuree, EtatDelegation, EtatObjectif};
 use maicie::store::{GuichetCommitPhase, MaicieStore};
-use rusqlite::Connection;
+use rusqlite::{Connection, ErrorCode};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Barrier};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -172,26 +172,66 @@ fn answered_puis_rapport_et_course_concurrente_convergent_vers_un_recu() {
     let created = seed(&database);
     let claim = delivery_claim("request-event-first", &created);
     let response_id = "response-event-first";
-    let barrier = Arc::new(Barrier::new(2));
-    let event_database = database.clone();
-    let event = lifecycle(&claim, &created, response_id, "answered");
-    let event_barrier = Arc::clone(&barrier);
-    let event_thread = thread::spawn(move || {
-        let mut store = MaicieStore::open(event_database).unwrap();
-        event_barrier.wait();
-        record_guichet_lifecycle_event(&mut store, &event).unwrap();
-    });
     let report_database = database.clone();
     let report_claim = claim.clone();
-    let report_barrier = Arc::clone(&barrier);
+    let (transaction_open_tx, transaction_open_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
     let report_thread = thread::spawn(move || {
         let mut store = MaicieStore::open(report_database).unwrap();
-        report_barrier.wait();
-        process_guichet_claim(&mut store, &report_claim, response_id, 1_010).unwrap()
+        let canonical = parse_claim(&report_claim).unwrap();
+        let RequeteGuichet::DeliveryReport(report) = &canonical.request else {
+            panic!("rapport attendu")
+        };
+        store
+            .graft_delivery_report_observed(
+                &report_claim,
+                &canonical,
+                report,
+                response_id,
+                1_010,
+                |phase| {
+                    if phase == GuichetCommitPhase::AfterDecisionInsert {
+                        transaction_open_tx.send(()).unwrap();
+                        release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap()
     });
-    event_thread.join().unwrap();
+    transaction_open_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap();
+
+    let contender = Connection::open(&database).unwrap();
+    contender.busy_timeout(Duration::ZERO).unwrap();
+    let contention = contender.execute(
+        "INSERT INTO guichet_lifecycle_events(
+             issuer_scope, event_id, request_id, state, observed_at,
+             in_reply_to, response_message_id, payload_json
+         ) VALUES ('contention-scope', 'contention-event', 'contention-request',
+                   'answered', 1005, 'contention-message', 'contention-response', X'00')",
+        [],
+    );
+    assert!(matches!(
+        contention,
+        Err(rusqlite::Error::SqliteFailure(error, _))
+            if error.code == ErrorCode::DatabaseBusy
+    ));
+    drop(contender);
+    // Mutation discriminante : retirer la transaction IMMEDIATE de la greffe,
+    // ou placer la barrière hors transaction, rendrait l'INSERT concurrent
+    // possible et ferait échouer l'assertion SQLITE_BUSY ci-dessus.
+    release_tx.send(()).unwrap();
     let result = report_thread.join().unwrap();
-    assert!(String::from_utf8_lossy(&result.reply_bytes).contains("\"outcome\":\"accepted\""));
+    assert!(
+        String::from_utf8_lossy(&result.reception.reply_bytes).contains("\"outcome\":\"accepted\"")
+    );
+
+    let event = lifecycle(&claim, &created, response_id, "answered");
+    let mut event_store = MaicieStore::open(&database).unwrap();
+    record_guichet_lifecycle_event(&mut event_store, &event).unwrap();
+    drop(event_store);
     assert_single_graft(&database, created.objective_id);
     fs::remove_dir_all(root).unwrap();
 }
