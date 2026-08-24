@@ -12,6 +12,28 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+// Le daemon et ses wrappers propagent ces variables à leurs descendants. Un
+// harnais qui remplace seulement HOME hériterait sinon l'identité de l'agent
+// qui lance cargo, notamment son fichier de nom absolu.
+const INHERITED_BRIDGET_ENV: &[&str] = &[
+    "BRIDGET_AGENT_NAME",
+    "BRIDGET_AGENT_NAME_FILE",
+    "BRIDGET_AGENT_INSTANCE_ID",
+    "BRIDGET_MANAGED_STATUS_FD",
+    "BRIDGET_MANAGED_INSTANCE_ID",
+    "BRIDGET_MANAGED_COMMAND_ID",
+    "BRIDGET_MANAGED_GENERATION",
+    "BRIDGET_TRANSPORT",
+];
+
+fn isolated_bridget_command(bridget: &Path) -> Command {
+    let mut command = Command::new(bridget);
+    for variable in INHERITED_BRIDGET_ENV {
+        command.env_remove(variable);
+    }
+    command
+}
+
 #[test]
 #[ignore = "gate MVP réel : requiert BRIDGET_MVP_GATE_BIN"]
 fn delegation_reelle_est_accusee_et_visible_sans_fausse_correlation_de_reponse() {
@@ -159,7 +181,7 @@ impl Fixture {
     }
 
     fn start_daemon(&self) -> Child {
-        let mut child = Command::new(&self.bridget)
+        let mut child = isolated_bridget_command(&self.bridget)
             .arg("daemon")
             .env("HOME", &self.root)
             .stdout(Stdio::null())
@@ -169,7 +191,7 @@ impl Fixture {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
             if self.socket.exists() {
-                let spawn = Command::new(&self.bridget)
+                let spawn = isolated_bridget_command(&self.bridget)
                     .args(["spawn", "mvp_fixture", "--name", "mvp-agent", "--cwd"])
                     .arg(&self.root)
                     .env("HOME", &self.root)
@@ -219,7 +241,7 @@ impl Fixture {
     }
 
     fn stop_agent(&self) {
-        let stopped = Command::new(&self.bridget)
+        let stopped = isolated_bridget_command(&self.bridget)
             .args(["stop", "mvp-agent"])
             .env("HOME", &self.root)
             .output()

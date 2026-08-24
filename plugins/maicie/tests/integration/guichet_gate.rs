@@ -26,6 +26,28 @@ use uuid::Uuid;
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 static G1504_PROCESS_GATE: OnceLock<Mutex<()>> = OnceLock::new();
 
+// Le daemon et ses wrappers propagent ces variables à leurs descendants. Un
+// harnais qui remplace seulement HOME hériterait sinon l'identité de l'agent
+// qui lance cargo, notamment son fichier de nom absolu.
+const INHERITED_BRIDGET_ENV: &[&str] = &[
+    "BRIDGET_AGENT_NAME",
+    "BRIDGET_AGENT_NAME_FILE",
+    "BRIDGET_AGENT_INSTANCE_ID",
+    "BRIDGET_MANAGED_STATUS_FD",
+    "BRIDGET_MANAGED_INSTANCE_ID",
+    "BRIDGET_MANAGED_COMMAND_ID",
+    "BRIDGET_MANAGED_GENERATION",
+    "BRIDGET_TRANSPORT",
+];
+
+fn isolated_bridget_command(bridget: &Path) -> Command {
+    let mut command = Command::new(bridget);
+    for variable in INHERITED_BRIDGET_ENV {
+        command.env_remove(variable);
+    }
+    command
+}
+
 fn root(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("maicie-guichet-gate-{label}-{}", Uuid::new_v4()))
 }
@@ -1027,7 +1049,7 @@ impl RealGateFixture {
     }
 
     fn start_daemon(&self) -> Child {
-        let mut child = Command::new(&self.bridget)
+        let mut child = isolated_bridget_command(&self.bridget)
             .arg("daemon")
             .env("HOME", &self.root)
             .stdin(Stdio::null())
@@ -1064,7 +1086,7 @@ impl RealGateFixture {
     }
 
     fn bridget(&self, args: &[String]) -> std::process::Output {
-        Command::new(&self.bridget)
+        isolated_bridget_command(&self.bridget)
             .args(args)
             .env("HOME", &self.root)
             .output()
@@ -1174,7 +1196,7 @@ impl RealGateFixture {
     }
 
     fn assert_request_answered(&self, request_id: &str) {
-        let requests = Command::new(&self.bridget)
+        let requests = isolated_bridget_command(&self.bridget)
             .args(["requests", "--json"])
             .env("HOME", &self.root)
             .env("BRIDGET_AGENT_NAME", "maicie")
@@ -1193,7 +1215,7 @@ impl RealGateFixture {
 
     fn stop_agents_best_effort(&self) -> bool {
         for name in ["g1504-agent", "maicie"] {
-            let _ = Command::new(&self.bridget)
+            let _ = isolated_bridget_command(&self.bridget)
                 .args(["stop", name])
                 .env("HOME", &self.root)
                 .output();
