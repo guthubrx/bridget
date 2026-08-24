@@ -112,6 +112,10 @@ impl Store {
     }
 
     fn init_schema(conn: &Connection) -> Result<(), StoreError> {
+        // `result_bytes` a été retirée du schéma canonique : `reply_bytes`
+        // porte déjà les octets terminaux rejouables. Les bases antérieures
+        // peuvent conserver cette colonne nullable ignorée ; reconstruire la
+        // table pour la supprimer n'apporterait aucun invariant supplémentaire.
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS ledger (
                 id TEXT NOT NULL,
@@ -160,7 +164,6 @@ impl Store {
                 claim_token TEXT,
                 claim_lease_expires_at INTEGER,
                 result_issue TEXT,
-                result_bytes BLOB,
                 reply_bytes BLOB,
                 UNIQUE (issuer_scope, operation_kind, request_id)
             );
@@ -1239,6 +1242,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(oversized_count, 0, "le refus précède toute persistance");
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn schema_guichet_ne_cree_plus_la_colonne_result_bytes() {
+        let path =
+            std::env::temp_dir().join(format!("bridget-guichet-schema-{}.db", Uuid::new_v4()));
+        let store = Store::open(&path).unwrap();
+        let mut statement = store
+            .conn
+            .prepare("PRAGMA table_info(guichet_requests)")
+            .unwrap();
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(!columns.iter().any(|column| column == "result_bytes"));
+        assert!(columns.iter().any(|column| column == "reply_bytes"));
+        drop(statement);
         drop(store);
         let _ = std::fs::remove_file(path);
     }
