@@ -4,7 +4,13 @@
 //! présence, livraison et délai restent détenus par Bridget.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use uuid::Uuid;
+
+pub const MAX_COORDINATION_NODES: usize = 100;
+pub const MAX_COORDINATION_EDGES: usize = 300;
+pub const MAX_FALLBACK_CANDIDATES: usize = 32;
+pub const MAX_REEMISSIONS: u8 = 8;
 
 #[path = "guichet.rs"]
 pub mod guichet;
@@ -159,6 +165,477 @@ pub enum EtatDelegation {
     AEvaluer,
     Terminee,
     Annulee,
+}
+
+/// Types de faits structurés consommables par la coordination active.
+/// `Answered`, `Cancelled` et `TimedOut` restent des faits de cycle Bridget :
+/// ils ne qualifient jamais une arête du DAG.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeEvenementCoordination {
+    ClotureObjectif,
+    OuvertureDelegation,
+    DeliveryReport,
+    ReminderSent,
+    Answered,
+    Cancelled,
+    TimedOut,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FraicheurCoordination {
+    Fresh,
+    Gap,
+    Ended,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvenementCoordination {
+    pub event_id: String,
+    pub objectif_id: Uuid,
+    pub delegation_id: Option<Uuid>,
+    pub generation: Option<u64>,
+    pub kind: TypeEvenementCoordination,
+    pub observed_at: i64,
+    pub freshness: FraicheurCoordination,
+}
+
+impl EvenementCoordination {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        if self.event_id.trim().is_empty() || self.observed_at <= 0 {
+            return Err(DomainError::DonneeInvalide(
+                "événement de coordination incomplet",
+            ));
+        }
+        if self.generation == Some(0) {
+            return Err(DomainError::DonneeInvalide("génération nulle"));
+        }
+        Ok(())
+    }
+
+    /// Une arête n'est qualifiée que par les deux preuves durables prévues par
+    /// FR-1603. Les événements de cycle 015 ne sont jamais promus implicitement.
+    pub fn peut_qualifier_une_arete(&self) -> bool {
+        self.freshness == FraicheurCoordination::Fresh
+            && matches!(self.kind, TypeEvenementCoordination::DeliveryReport)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModeQualificationDependance {
+    HashGreffe,
+    ClotureEvalueeExigee,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DependanceDelegation {
+    pub objectif_id: Uuid,
+    pub prerequis_id: Uuid,
+    pub dependant_id: Uuid,
+    pub mode: ModeQualificationDependance,
+}
+
+impl DependanceDelegation {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        if self.prerequis_id == self.dependant_id {
+            return Err(DomainError::DonneeInvalide("dépendance réflexive"));
+        }
+        Ok(())
+    }
+}
+
+/// Preuve évaluée créée en amont de la session 016. Le registre 016 la
+/// conserve et la consomme, mais ne la fabrique jamais depuis un texte ou un
+/// événement de cycle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActeClotureEvaluee {
+    pub acte_id: Uuid,
+    pub objectif_id: Uuid,
+    pub delegation_id: Uuid,
+    pub generation: u64,
+    pub delivery_hash: String,
+    pub issue_qualifiante: String,
+    pub evaluated_at: i64,
+}
+
+impl ActeClotureEvaluee {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        let hash_valide = self.delivery_hash.len() == 64
+            && self
+                .delivery_hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit());
+        if self.generation == 0
+            || !hash_valide
+            || self.issue_qualifiante.trim().is_empty()
+            || self.evaluated_at <= 0
+        {
+            return Err(DomainError::DonneeInvalide(
+                "acte de clôture évaluée invalide",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttenteNotification {
+    pub attente_id: Uuid,
+    pub objectif_id: Uuid,
+    pub delegation_id: Option<Uuid>,
+    pub kind: TypeEvenementCoordination,
+    pub recipient: String,
+    pub policy_version: u64,
+}
+
+impl AttenteNotification {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        if self.recipient.trim().is_empty() || self.policy_version == 0 {
+            return Err(DomainError::DonneeInvalide(
+                "attente de notification invalide",
+            ));
+        }
+        if !matches!(
+            self.kind,
+            TypeEvenementCoordination::ClotureObjectif
+                | TypeEvenementCoordination::OuvertureDelegation
+        ) {
+            return Err(DomainError::DonneeInvalide(
+                "type de notification non supporté en v1",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FaitAppartenanceRepli {
+    pub objectif_id: Uuid,
+    pub participant_id: String,
+    pub membership_version: u64,
+    pub est_pilote: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolitiqueReassignation {
+    pub delegation_id: Uuid,
+    pub objectif_id: Uuid,
+    pub classe: ClasseDuree,
+    pub version: u64,
+    pub seuil_relances: u32,
+    pub max_reemissions: u8,
+    pub chaine_repli: Vec<FaitAppartenanceRepli>,
+}
+
+impl PolitiqueReassignation {
+    pub fn verifier(&self, participants_declares: &BTreeSet<String>) -> Result<(), DomainError> {
+        if self.version == 0 || self.seuil_relances == 0 {
+            return Err(DomainError::DonneeInvalide(
+                "politique sans version ou seuil",
+            ));
+        }
+        if !(1..=MAX_REEMISSIONS).contains(&self.max_reemissions) {
+            return Err(DomainError::DonneeInvalide(
+                "borne de réémission hors 1..=8",
+            ));
+        }
+        if self.chaine_repli.len() > MAX_FALLBACK_CANDIDATES {
+            return Err(DomainError::DonneeInvalide("chaîne de repli hors borne"));
+        }
+        let mut uniques = BTreeSet::new();
+        for candidat in &self.chaine_repli {
+            if candidat.objectif_id != self.objectif_id {
+                return Err(DomainError::DonneeInvalide(
+                    "candidat rattaché à un autre objectif",
+                ));
+            }
+            if candidat.participant_id.trim().is_empty()
+                || candidat.membership_version == 0
+                || !participants_declares.contains(&candidat.participant_id)
+            {
+                return Err(DomainError::DonneeInvalide("candidat non déclaré"));
+            }
+            if candidat.est_pilote {
+                return Err(DomainError::DonneeInvalide("pilote interdit en repli"));
+            }
+            if !uniques.insert(candidat.participant_id.as_str()) {
+                return Err(DomainError::DonneeInvalide("candidat de repli dupliqué"));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EtatGenerationDelegation {
+    Bloquee,
+    Ouverte,
+    Reassignee,
+    Annulee,
+    InterventionHumaineRequise,
+}
+
+impl EtatGenerationDelegation {
+    pub fn est_active(self) -> bool {
+        matches!(self, Self::Bloquee | Self::Ouverte)
+    }
+}
+
+impl GenerationDelegation {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        if self.generation == 0 || self.participant_id.trim().is_empty() {
+            return Err(DomainError::DonneeInvalide("génération invalide"));
+        }
+        if self.generation == 1 && self.generation_precedente.is_some() {
+            return Err(DomainError::DonneeInvalide(
+                "première génération avec prédécesseur",
+            ));
+        }
+        if self.generation > 1
+            && self.generation_precedente != Some(self.generation.saturating_sub(1))
+        {
+            return Err(DomainError::DonneeInvalide(
+                "chaîne de générations discontinue",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenerationDelegation {
+    pub delegation_id: Uuid,
+    pub objectif_id: Uuid,
+    pub generation: u64,
+    pub participant_id: String,
+    pub etat: EtatGenerationDelegation,
+    pub generation_precedente: Option<u64>,
+    pub trigger_event_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LigneeDelegation {
+    pub delegation_id: Uuid,
+    pub objectif_id: Uuid,
+    pub generation_active: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EtatEpisodeRelance {
+    Actif,
+    AnnuleAdministrativement,
+    Termine,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EpisodeRelance {
+    pub delegation_id: Uuid,
+    pub objectif_id: Uuid,
+    pub generation: u64,
+    pub request_id: String,
+    pub request_ordinal: u8,
+    pub reminder_count: u32,
+    pub reemissions_used: u8,
+    pub etat: EtatEpisodeRelance,
+}
+
+impl EpisodeRelance {
+    pub fn verifier(&self, max_reemissions: u8) -> Result<(), DomainError> {
+        if self.generation == 0
+            || self.request_id.trim().is_empty()
+            || self.request_ordinal == 0
+            || self.reemissions_used > max_reemissions
+            || max_reemissions > MAX_REEMISSIONS
+        {
+            return Err(DomainError::DonneeInvalide("épisode de relance invalide"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeDecisionCoordinationActive {
+    Aucun,
+    Notifier,
+    Ouvrir,
+    Reassigner,
+    InterventionHumaineRequise,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecisionCoordinationActive {
+    pub decision_id: Uuid,
+    pub objectif_id: Uuid,
+    pub delegation_id: Uuid,
+    pub generation: u64,
+    pub event_id: String,
+    pub policy_version: u64,
+    pub kind: TypeDecisionCoordinationActive,
+    pub motif: String,
+}
+
+impl DecisionCoordinationActive {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        if self.generation == 0
+            || self.event_id.trim().is_empty()
+            || self.policy_version == 0
+            || self.motif.trim().is_empty()
+        {
+            return Err(DomainError::DonneeInvalide(
+                "décision de coordination active invalide",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EtatNotificationOutbox {
+    Prepared,
+    OutcomeUnknown,
+    Accepted,
+    Rejected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationOutbox {
+    pub message_id: Uuid,
+    pub idempotency_key: String,
+    pub objectif_id: Uuid,
+    pub delegation_id: Option<Uuid>,
+    pub generation: Option<u64>,
+    pub event_id: String,
+    pub policy_version: u64,
+    pub recipient: String,
+    pub message_bytes: Vec<u8>,
+    pub etat: EtatNotificationOutbox,
+}
+
+impl NotificationOutbox {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        if self.idempotency_key.trim().is_empty()
+            || self.event_id.trim().is_empty()
+            || self.policy_version == 0
+            || self.recipient.trim().is_empty()
+            || self.message_bytes.is_empty()
+            || self.generation == Some(0)
+        {
+            return Err(DomainError::DonneeInvalide("notification outbox invalide"));
+        }
+        Ok(())
+    }
+
+    pub fn transition(&mut self, next: EtatNotificationOutbox) -> Result<(), DomainError> {
+        let allowed = matches!(
+            (self.etat, next),
+            (
+                EtatNotificationOutbox::Prepared,
+                EtatNotificationOutbox::OutcomeUnknown
+            ) | (
+                EtatNotificationOutbox::Prepared,
+                EtatNotificationOutbox::Accepted
+            ) | (
+                EtatNotificationOutbox::Prepared,
+                EtatNotificationOutbox::Rejected
+            ) | (
+                EtatNotificationOutbox::OutcomeUnknown,
+                EtatNotificationOutbox::Accepted
+            ) | (
+                EtatNotificationOutbox::OutcomeUnknown,
+                EtatNotificationOutbox::Rejected
+            )
+        );
+        if !allowed {
+            return Err(DomainError::TransitionInterdite);
+        }
+        self.etat = next;
+        Ok(())
+    }
+}
+
+/// Définition immuable enregistrée avant toute I/O. Le store complète chaque
+/// politique avec une lignée et une génération initiale dérivées des faits
+/// déjà présents dans le registre de l'objectif.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DefinitionCoordination {
+    pub objectif_id: Uuid,
+    pub dependencies: Vec<DependanceDelegation>,
+    pub policies: Vec<PolitiqueReassignation>,
+    pub attentes: Vec<AttenteNotification>,
+}
+
+impl DefinitionCoordination {
+    pub fn verifier_bornes(&self) -> Result<(), DomainError> {
+        if self.dependencies.len() > MAX_COORDINATION_EDGES {
+            return Err(DomainError::DonneeInvalide(
+                "graphe de coordination hors borne",
+            ));
+        }
+        let mut edges = BTreeSet::new();
+        let mut nodes = BTreeSet::new();
+        for dependency in &self.dependencies {
+            dependency.verifier()?;
+            if dependency.objectif_id != self.objectif_id {
+                return Err(DomainError::DonneeInvalide(
+                    "dépendance rattachée à un autre objectif",
+                ));
+            }
+            if !edges.insert((dependency.prerequis_id, dependency.dependant_id)) {
+                return Err(DomainError::DonneeInvalide("dépendance dupliquée"));
+            }
+            nodes.insert(dependency.prerequis_id);
+            nodes.insert(dependency.dependant_id);
+        }
+        let mut policy_ids = BTreeSet::new();
+        for policy in &self.policies {
+            if policy.objectif_id != self.objectif_id {
+                return Err(DomainError::DonneeInvalide(
+                    "politique rattachée à un autre objectif",
+                ));
+            }
+            if !policy_ids.insert(policy.delegation_id) {
+                return Err(DomainError::DonneeInvalide("politique dupliquée"));
+            }
+            nodes.insert(policy.delegation_id);
+        }
+        if nodes.len() > MAX_COORDINATION_NODES {
+            return Err(DomainError::DonneeInvalide(
+                "graphe de coordination hors borne",
+            ));
+        }
+        let mut expectation_ids = BTreeSet::new();
+        let mut expectation_keys = BTreeSet::new();
+        for expectation in &self.attentes {
+            expectation.verifier()?;
+            if expectation.objectif_id != self.objectif_id {
+                return Err(DomainError::DonneeInvalide(
+                    "attente rattachée à un autre objectif",
+                ));
+            }
+            if !expectation_ids.insert(expectation.attente_id) {
+                return Err(DomainError::DonneeInvalide("attente dupliquée"));
+            }
+            let key = (
+                expectation.delegation_id,
+                format!("{:?}", expectation.kind),
+                expectation.recipient.as_str(),
+                expectation.policy_version,
+            );
+            if !expectation_keys.insert(key) {
+                return Err(DomainError::DonneeInvalide(
+                    "attente sémantiquement dupliquée",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Opérations métier fermées acceptées par le guichet Maicie.

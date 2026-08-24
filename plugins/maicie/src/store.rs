@@ -12,10 +12,12 @@ use crate::domain::guichet::{
     refusal_reply_bytes,
 };
 use crate::domain::{
-    ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
-    DomainError, EtatActivationOutbox, EtatDecision, EtatDelegation, EtatObjectif,
-    EtatOutboxDelegation, EtatRequeteGuichet, IssueGreffe, LienArbitrage, ObjectifCoordonne,
-    MotifRefusGreffe, OperationGuichet, ReceptionGreffe, RecuCorrelation, TypeDecision,
+    ActivationOutbox, ApprobationActivation, AttenteNotification, ClasseDuree,
+    DecisionCoordination, DefinitionCoordination, Delegation, DependanceDelegation, DomainError,
+    EtatActivationOutbox, EtatDecision, EtatDelegation, EtatGenerationDelegation, EtatObjectif,
+    EtatOutboxDelegation, EtatRequeteGuichet, GenerationDelegation, IssueGreffe, LienArbitrage,
+    LigneeDelegation, MotifRefusGreffe, ObjectifCoordonne, OperationGuichet,
+    PolitiqueReassignation, ReceptionGreffe, RecuCorrelation, TypeDecision,
 };
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
@@ -26,6 +28,7 @@ use rusqlite::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -33,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -96,6 +99,26 @@ pub struct ObjectiveSnapshot {
     pub decisions: Vec<DecisionCoordination>,
     /// Registre local de remise, distinct de toute observation ACP live.
     pub remises_locales: Vec<RemiseLocale>,
+}
+
+/// Définition 016 et faits initiaux relus depuis le registre, sans aucune
+/// consultation de la configuration courante.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredCoordinationSnapshot {
+    pub definition: DefinitionCoordination,
+    pub lineages: Vec<LigneeDelegation>,
+    pub generations: Vec<GenerationDelegation>,
+}
+
+impl StoredCoordinationSnapshot {
+    pub fn dependants_by_prerequisite(&self, prerequisite_id: Uuid) -> Vec<Uuid> {
+        self.definition
+            .dependencies
+            .iter()
+            .filter(|edge| edge.prerequis_id == prerequisite_id)
+            .map(|edge| edge.dependant_id)
+            .collect()
+    }
 }
 
 /// Projection honnête de l'outbox durable pour `maicie status`.
@@ -249,6 +272,140 @@ impl MaicieStore {
         self.connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(StoreError::Sql)
+    }
+
+    /// Fige la définition 016 et sa génération initiale sous transaction
+    /// `IMMEDIATE`. Toutes les références et politiques sont validées avant la
+    /// première écriture ; une définition déjà figée ne peut être remplacée
+    /// par une configuration courante différente.
+    pub fn register_coordination_snapshot(
+        &mut self,
+        definition: &DefinitionCoordination,
+    ) -> Result<(), StoreError> {
+        definition.verifier_bornes().map_err(StoreError::Domain)?;
+        if definition.policies.is_empty() {
+            return Err(StoreError::Invalid("définition de coordination vide"));
+        }
+
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let objective_exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM objectives WHERE id = ?1)",
+                [definition.objectif_id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::Sql)?;
+        if !objective_exists {
+            return Err(StoreError::NotFound("objectif de coordination absent"));
+        }
+
+        let delegations = load_delegations_for_coordination(&tx, definition.objectif_id)?;
+        let participants: BTreeSet<String> = delegations
+            .values()
+            .map(|item| item.participant.clone())
+            .collect();
+        for policy in &definition.policies {
+            if !delegations.contains_key(&policy.delegation_id) {
+                return Err(StoreError::Invalid(
+                    "politique liée à une délégation étrangère",
+                ));
+            }
+            policy.verifier(&participants).map_err(StoreError::Domain)?;
+            if policy
+                .chaine_repli
+                .iter()
+                .any(|candidate| candidate.participant_id == crate::MAICIE_IDENTITY)
+            {
+                return Err(StoreError::Invalid("pilote interdit en repli"));
+            }
+        }
+        for edge in &definition.dependencies {
+            if !delegations.contains_key(&edge.prerequis_id)
+                || !delegations.contains_key(&edge.dependant_id)
+            {
+                return Err(StoreError::Invalid(
+                    "dépendance liée à une délégation étrangère",
+                ));
+            }
+        }
+        for expectation in &definition.attentes {
+            if expectation
+                .delegation_id
+                .is_some_and(|id| !delegations.contains_key(&id))
+            {
+                return Err(StoreError::Invalid(
+                    "attente liée à une délégation étrangère",
+                ));
+            }
+        }
+        validate_coordination_dag(definition)?;
+
+        let canonical_definition = canonical_coordination_definition(definition);
+        let blocked: BTreeSet<Uuid> = canonical_definition
+            .dependencies
+            .iter()
+            .map(|edge| edge.dependant_id)
+            .collect();
+        let mut coordinated_delegations: BTreeSet<Uuid> = canonical_definition
+            .policies
+            .iter()
+            .map(|policy| policy.delegation_id)
+            .collect();
+        for edge in &canonical_definition.dependencies {
+            coordinated_delegations.insert(edge.prerequis_id);
+            coordinated_delegations.insert(edge.dependant_id);
+        }
+        let lineages: Vec<LigneeDelegation> = coordinated_delegations
+            .iter()
+            .map(|delegation_id| LigneeDelegation {
+                delegation_id: *delegation_id,
+                objectif_id: canonical_definition.objectif_id,
+                generation_active: 1,
+            })
+            .collect();
+        let generations: Vec<GenerationDelegation> = coordinated_delegations
+            .iter()
+            .map(|delegation_id| GenerationDelegation {
+                delegation_id: *delegation_id,
+                objectif_id: canonical_definition.objectif_id,
+                generation: 1,
+                participant_id: delegations[delegation_id].participant.clone(),
+                etat: if blocked.contains(delegation_id) {
+                    EtatGenerationDelegation::Bloquee
+                } else {
+                    EtatGenerationDelegation::Ouverte
+                },
+                generation_precedente: None,
+                trigger_event_id: None,
+            })
+            .collect();
+        let expected = StoredCoordinationSnapshot {
+            definition: canonical_definition,
+            lineages,
+            generations,
+        };
+        if let Some(stored) = load_coordination_snapshot(&tx, definition.objectif_id)? {
+            if stored == expected {
+                tx.commit().map_err(StoreError::Sql)?;
+                return Ok(());
+            }
+            return Err(StoreError::Conflict(
+                "snapshot de coordination déjà figé différemment",
+            ));
+        }
+
+        insert_coordination_snapshot(&tx, &expected)?;
+        tx.commit().map_err(StoreError::Sql)
+    }
+
+    pub fn coordination_snapshot(
+        &self,
+        objectif_id: Uuid,
+    ) -> Result<Option<StoredCoordinationSnapshot>, StoreError> {
+        load_coordination_snapshot(&self.connection, objectif_id)
     }
 
     /// Greffe un rapport de livraison et son effet de coordination dans une
@@ -2722,6 +2879,310 @@ fn parse_lifecycle_state_name(value: &str) -> Result<EtatRequeteGuichet, StoreEr
     }
 }
 
+fn load_delegations_for_coordination(
+    connection: &Connection,
+    objectif_id: Uuid,
+) -> Result<BTreeMap<Uuid, Delegation>, StoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, payload_json FROM delegations
+             WHERE objective_id = ?1 ORDER BY id",
+        )
+        .map_err(StoreError::Sql)?;
+    let rows = statement
+        .query_map([objectif_id.to_string()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })
+        .map_err(StoreError::Sql)?;
+    let mut result = BTreeMap::new();
+    for row in rows {
+        let (id, payload) = row.map_err(StoreError::Sql)?;
+        let delegation: Delegation = serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        let indexed_id = parse_uuid(&id)?;
+        if delegation.id != indexed_id || delegation.objectif_id != objectif_id {
+            return Err(StoreError::Corrupt(
+                "délégation et index de coordination divergents",
+            ));
+        }
+        result.insert(indexed_id, delegation);
+    }
+    Ok(result)
+}
+
+fn canonical_coordination_definition(
+    definition: &DefinitionCoordination,
+) -> DefinitionCoordination {
+    let mut canonical = definition.clone();
+    canonical
+        .dependencies
+        .sort_by_key(|edge| (edge.prerequis_id, edge.dependant_id));
+    canonical
+        .policies
+        .sort_by_key(|policy| policy.delegation_id);
+    canonical
+        .attentes
+        .sort_by_key(|expectation| expectation.attente_id);
+    canonical
+}
+
+fn validate_coordination_dag(definition: &DefinitionCoordination) -> Result<(), StoreError> {
+    let mut indegrees: BTreeMap<Uuid, usize> = BTreeMap::new();
+    let mut adjacency: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
+    for edge in &definition.dependencies {
+        indegrees.entry(edge.prerequis_id).or_default();
+        *indegrees.entry(edge.dependant_id).or_default() += 1;
+        adjacency
+            .entry(edge.prerequis_id)
+            .or_default()
+            .push(edge.dependant_id);
+    }
+    let mut ready: Vec<Uuid> = indegrees
+        .iter()
+        .filter_map(|(node, degree)| (*degree == 0).then_some(*node))
+        .collect();
+    let mut visited = 0;
+    while let Some(node) = ready.pop() {
+        visited += 1;
+        for dependent in adjacency.get(&node).into_iter().flatten() {
+            let degree = indegrees
+                .get_mut(dependent)
+                .ok_or(StoreError::Corrupt("nœud DAG absent"))?;
+            *degree -= 1;
+            if *degree == 0 {
+                ready.push(*dependent);
+            }
+        }
+    }
+    if visited != indegrees.len() {
+        return Err(StoreError::Invalid("cycle dans les dépendances"));
+    }
+    Ok(())
+}
+
+fn insert_coordination_snapshot(
+    tx: &Transaction<'_>,
+    snapshot: &StoredCoordinationSnapshot,
+) -> Result<(), StoreError> {
+    for policy in &snapshot.definition.policies {
+        tx.execute(
+            "INSERT INTO reassignment_policies(
+                 delegation_id, objective_id, policy_version, reminder_threshold,
+                 max_reemissions, payload_json
+             ) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                policy.delegation_id.to_string(),
+                policy.objectif_id.to_string(),
+                i64::try_from(policy.version)
+                    .map_err(|_| StoreError::Invalid("version de politique hors borne"))?,
+                i64::from(policy.seuil_relances),
+                i64::from(policy.max_reemissions),
+                serde_json::to_vec(policy).map_err(StoreError::Json)?,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    }
+    for edge in &snapshot.definition.dependencies {
+        tx.execute(
+            "INSERT INTO delegation_dependencies(
+                 objective_id, prerequisite_id, dependent_id, qualification_mode, payload_json
+             ) VALUES (?1,?2,?3,?4,?5)",
+            params![
+                edge.objectif_id.to_string(),
+                edge.prerequis_id.to_string(),
+                edge.dependant_id.to_string(),
+                dependency_mode_name(edge.mode),
+                serde_json::to_vec(edge).map_err(StoreError::Json)?,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    }
+    for expectation in &snapshot.definition.attentes {
+        tx.execute(
+            "INSERT INTO coordination_expectations(
+                 expectation_id, objective_id, delegation_id, event_kind,
+                 recipient, policy_version, payload_json
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                expectation.attente_id.to_string(),
+                expectation.objectif_id.to_string(),
+                expectation.delegation_id.map(|id| id.to_string()),
+                expected_event_name(expectation.kind)?,
+                expectation.recipient,
+                i64::try_from(expectation.policy_version)
+                    .map_err(|_| StoreError::Invalid("version d'attente hors borne"))?,
+                serde_json::to_vec(expectation).map_err(StoreError::Json)?,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    }
+    for lineage in &snapshot.lineages {
+        tx.execute(
+            "INSERT INTO delegation_lineages(
+                 delegation_id, objective_id, active_generation, payload_json
+             ) VALUES (?1,?2,?3,?4)",
+            params![
+                lineage.delegation_id.to_string(),
+                lineage.objectif_id.to_string(),
+                i64::try_from(lineage.generation_active)
+                    .map_err(|_| StoreError::Invalid("génération hors borne"))?,
+                serde_json::to_vec(lineage).map_err(StoreError::Json)?,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    }
+    for generation in &snapshot.generations {
+        generation.verifier().map_err(StoreError::Domain)?;
+        tx.execute(
+            "INSERT INTO delegation_generations(
+                 delegation_id, objective_id, generation, participant_id, state, payload_json
+             ) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                generation.delegation_id.to_string(),
+                generation.objectif_id.to_string(),
+                i64::try_from(generation.generation)
+                    .map_err(|_| StoreError::Invalid("génération hors borne"))?,
+                generation.participant_id,
+                generation_state_name(generation.etat),
+                serde_json::to_vec(generation).map_err(StoreError::Json)?,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    }
+    Ok(())
+}
+
+fn load_coordination_snapshot(
+    connection: &Connection,
+    objectif_id: Uuid,
+) -> Result<Option<StoredCoordinationSnapshot>, StoreError> {
+    let policies: Vec<PolitiqueReassignation> = load_coordination_payloads(
+        connection,
+        "SELECT payload_json FROM reassignment_policies WHERE objective_id = ?1 ORDER BY delegation_id",
+        objectif_id,
+    )?;
+    let dependencies: Vec<DependanceDelegation> = load_coordination_payloads(
+        connection,
+        "SELECT payload_json FROM delegation_dependencies WHERE objective_id = ?1 ORDER BY prerequisite_id, dependent_id",
+        objectif_id,
+    )?;
+    let attentes: Vec<AttenteNotification> = load_coordination_payloads(
+        connection,
+        "SELECT payload_json FROM coordination_expectations WHERE objective_id = ?1 ORDER BY expectation_id",
+        objectif_id,
+    )?;
+    let lineages: Vec<LigneeDelegation> = load_coordination_payloads(
+        connection,
+        "SELECT payload_json FROM delegation_lineages WHERE objective_id = ?1 ORDER BY delegation_id",
+        objectif_id,
+    )?;
+    let generations: Vec<GenerationDelegation> = load_coordination_payloads(
+        connection,
+        "SELECT payload_json FROM delegation_generations WHERE objective_id = ?1 ORDER BY delegation_id, generation",
+        objectif_id,
+    )?;
+    if policies.is_empty()
+        && dependencies.is_empty()
+        && attentes.is_empty()
+        && lineages.is_empty()
+        && generations.is_empty()
+    {
+        return Ok(None);
+    }
+    let definition = DefinitionCoordination {
+        objectif_id,
+        dependencies,
+        policies,
+        attentes,
+    };
+    definition.verifier_bornes().map_err(StoreError::Domain)?;
+    validate_coordination_dag(&definition)?;
+    let delegations = load_delegations_for_coordination(connection, objectif_id)?;
+    let participants: BTreeSet<String> = delegations
+        .values()
+        .map(|delegation| delegation.participant.clone())
+        .collect();
+    for policy in &definition.policies {
+        policy.verifier(&participants).map_err(StoreError::Domain)?;
+    }
+    for lineage in &lineages {
+        if lineage.objectif_id != objectif_id || lineage.generation_active == 0 {
+            return Err(StoreError::Corrupt("lignée de coordination divergente"));
+        }
+        let active = generations.iter().filter(|generation| {
+            generation.delegation_id == lineage.delegation_id
+                && generation.generation == lineage.generation_active
+                && generation.etat.est_active()
+        });
+        if active.count() != 1 {
+            return Err(StoreError::Corrupt(
+                "génération active de la lignée divergente",
+            ));
+        }
+    }
+    for generation in &generations {
+        generation.verifier().map_err(StoreError::Domain)?;
+        if generation.objectif_id != objectif_id
+            || !lineages
+                .iter()
+                .any(|lineage| lineage.delegation_id == generation.delegation_id)
+        {
+            return Err(StoreError::Corrupt(
+                "génération de coordination sans lignée",
+            ));
+        }
+    }
+    Ok(Some(StoredCoordinationSnapshot {
+        definition,
+        lineages,
+        generations,
+    }))
+}
+
+fn load_coordination_payloads<T: for<'de> Deserialize<'de>>(
+    connection: &Connection,
+    sql: &str,
+    objectif_id: Uuid,
+) -> Result<Vec<T>, StoreError> {
+    let mut statement = connection.prepare(sql).map_err(StoreError::Sql)?;
+    let rows = statement
+        .query_map([objectif_id.to_string()], |row| row.get::<_, Vec<u8>>(0))
+        .map_err(StoreError::Sql)?;
+    rows.map(|row| {
+        let payload = row.map_err(StoreError::Sql)?;
+        serde_json::from_slice(&payload).map_err(StoreError::Json)
+    })
+    .collect()
+}
+
+fn dependency_mode_name(mode: crate::domain::ModeQualificationDependance) -> &'static str {
+    match mode {
+        crate::domain::ModeQualificationDependance::HashGreffe => "hash_greffe",
+        crate::domain::ModeQualificationDependance::ClotureEvalueeExigee => {
+            "cloture_evaluee_exigee"
+        }
+    }
+}
+
+fn expected_event_name(
+    kind: crate::domain::TypeEvenementCoordination,
+) -> Result<&'static str, StoreError> {
+    match kind {
+        crate::domain::TypeEvenementCoordination::ClotureObjectif => Ok("cloture_objectif"),
+        crate::domain::TypeEvenementCoordination::OuvertureDelegation => Ok("ouverture_delegation"),
+        _ => Err(StoreError::Invalid("type d'attente non supporté par la v1")),
+    }
+}
+
+fn generation_state_name(state: EtatGenerationDelegation) -> &'static str {
+    match state {
+        EtatGenerationDelegation::Bloquee => "bloquee",
+        EtatGenerationDelegation::Ouverte => "ouverte",
+        EtatGenerationDelegation::Reassignee => "reassignee",
+        EtatGenerationDelegation::Annulee => "annulee",
+        EtatGenerationDelegation::InterventionHumaineRequise => "intervention_humaine_requise",
+    }
+}
+
 fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     // L'ouverture est un chemin concurrent normal : plusieurs processus
     // Maicie peuvent démarrer avant qu'un seul ait fini de poser le schéma.
@@ -2914,6 +3375,127 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
                  processed_at INTEGER NOT NULL,
                  PRIMARY KEY(issuer_scope, request_id, canonical_request_bytes)
              );",
+        )
+        .map_err(StoreError::Sql)?;
+    }
+    if current_version < 9 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS coordination_events_v1 (
+                 event_id TEXT PRIMARY KEY,
+                 objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 delegation_id TEXT REFERENCES delegations(id),
+                 generation INTEGER CHECK(generation IS NULL OR generation > 0),
+                 kind TEXT NOT NULL,
+                 freshness TEXT NOT NULL CHECK(freshness IN ('fresh','gap','ended','unavailable')),
+                 observed_at INTEGER NOT NULL CHECK(observed_at > 0),
+                 payload_json BLOB NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS coordination_expectations (
+                 expectation_id TEXT PRIMARY KEY,
+                 objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 delegation_id TEXT REFERENCES delegations(id),
+                 event_kind TEXT NOT NULL CHECK(event_kind IN ('cloture_objectif','ouverture_delegation')),
+                 recipient TEXT NOT NULL,
+                 policy_version INTEGER NOT NULL CHECK(policy_version > 0),
+                 payload_json BLOB NOT NULL,
+                 UNIQUE(objective_id, delegation_id, event_kind, recipient, policy_version)
+             );
+             CREATE TABLE IF NOT EXISTS delegation_dependencies (
+                 objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 prerequisite_id TEXT NOT NULL REFERENCES delegations(id),
+                 dependent_id TEXT NOT NULL REFERENCES delegations(id),
+                 qualification_mode TEXT NOT NULL CHECK(qualification_mode IN ('hash_greffe','cloture_evaluee_exigee')),
+                 payload_json BLOB NOT NULL,
+                 PRIMARY KEY(prerequisite_id, dependent_id),
+                 CHECK(prerequisite_id != dependent_id)
+             );
+             CREATE INDEX IF NOT EXISTS delegation_dependencies_prerequisite_idx
+                 ON delegation_dependencies(prerequisite_id, dependent_id);
+             CREATE INDEX IF NOT EXISTS delegation_dependencies_dependent_idx
+                 ON delegation_dependencies(dependent_id, prerequisite_id);
+             CREATE TABLE IF NOT EXISTS evaluated_closure_acts (
+                 act_id TEXT PRIMARY KEY,
+                 objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 delegation_id TEXT NOT NULL REFERENCES delegations(id),
+                 generation INTEGER NOT NULL CHECK(generation > 0),
+                 delivery_hash TEXT NOT NULL,
+                 evaluated_at INTEGER NOT NULL CHECK(evaluated_at > 0),
+                 payload_json BLOB NOT NULL,
+                 UNIQUE(delegation_id, generation, delivery_hash),
+                 FOREIGN KEY(delegation_id, generation)
+                     REFERENCES delegation_generations(delegation_id, generation)
+             );
+             CREATE TABLE IF NOT EXISTS reassignment_policies (
+                 delegation_id TEXT PRIMARY KEY REFERENCES delegations(id),
+                 objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 policy_version INTEGER NOT NULL CHECK(policy_version > 0),
+                 reminder_threshold INTEGER NOT NULL CHECK(reminder_threshold > 0),
+                 max_reemissions INTEGER NOT NULL CHECK(max_reemissions BETWEEN 1 AND 8),
+                 payload_json BLOB NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS delegation_lineages (
+                 delegation_id TEXT PRIMARY KEY REFERENCES delegations(id),
+                 objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 active_generation INTEGER NOT NULL CHECK(active_generation > 0),
+                 payload_json BLOB NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS delegation_generations (
+                 delegation_id TEXT NOT NULL REFERENCES delegation_lineages(delegation_id),
+                 objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 generation INTEGER NOT NULL CHECK(generation > 0),
+                 participant_id TEXT NOT NULL,
+                 state TEXT NOT NULL CHECK(state IN ('bloquee','ouverte','reassignee','annulee','intervention_humaine_requise')),
+                 payload_json BLOB NOT NULL,
+                 PRIMARY KEY(delegation_id, generation)
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS delegation_generations_active_idx
+                 ON delegation_generations(delegation_id)
+                 WHERE state IN ('bloquee','ouverte');
+             CREATE TABLE IF NOT EXISTS reminder_episodes (
+                 delegation_id TEXT NOT NULL,
+                 generation INTEGER NOT NULL,
+                 request_id TEXT NOT NULL,
+                 request_ordinal INTEGER NOT NULL CHECK(request_ordinal > 0),
+                 reminder_count INTEGER NOT NULL CHECK(reminder_count >= 0),
+                 reemissions_used INTEGER NOT NULL CHECK(reemissions_used BETWEEN 0 AND 8),
+                 state TEXT NOT NULL CHECK(state IN ('actif','annule_administrativement','termine')),
+                 payload_json BLOB NOT NULL,
+                 PRIMARY KEY(delegation_id, generation, request_ordinal),
+                 UNIQUE(request_id),
+                 FOREIGN KEY(delegation_id, generation)
+                     REFERENCES delegation_generations(delegation_id, generation)
+             );
+             CREATE TABLE IF NOT EXISTS active_coordination_decisions (
+                 decision_id TEXT PRIMARY KEY,
+                 objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 delegation_id TEXT NOT NULL,
+                 generation INTEGER NOT NULL CHECK(generation > 0),
+                 event_id TEXT NOT NULL,
+                 policy_version INTEGER NOT NULL CHECK(policy_version > 0),
+                 kind TEXT NOT NULL CHECK(kind IN ('aucun','notifier','ouvrir','reassigner','intervention_humaine_requise')),
+                 payload_json BLOB NOT NULL,
+                 UNIQUE(delegation_id, generation, event_id),
+                 FOREIGN KEY(delegation_id, generation)
+                     REFERENCES delegation_generations(delegation_id, generation)
+             );
+             CREATE TABLE IF NOT EXISTS notification_outbox (
+                 message_id TEXT PRIMARY KEY,
+                 idempotency_key TEXT NOT NULL UNIQUE,
+                 objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 delegation_id TEXT,
+                 generation INTEGER,
+                 event_id TEXT NOT NULL,
+                 policy_version INTEGER NOT NULL CHECK(policy_version > 0),
+                 recipient TEXT NOT NULL,
+                 message_bytes BLOB NOT NULL,
+                 state TEXT NOT NULL CHECK(state IN ('prepared','outcome_unknown','accepted','rejected')),
+                 last_issue_json BLOB,
+                 terminal INTEGER NOT NULL DEFAULT 0 CHECK(terminal IN (0,1)),
+                 FOREIGN KEY(delegation_id, generation)
+                     REFERENCES delegation_generations(delegation_id, generation)
+             );
+             CREATE INDEX IF NOT EXISTS notification_outbox_pending_idx
+                 ON notification_outbox(terminal, state, message_id);",
         )
         .map_err(StoreError::Sql)?;
     }
