@@ -45,7 +45,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -251,6 +251,15 @@ pub enum DelegationRecoveryEntry {
 pub struct PendingActivationOutbox {
     pub activation: ActivationOutbox,
     pub approval: ApprobationActivation,
+}
+
+/// Réservation active d'une plage de ressource (politique 31).
+/// La comparaison de `resource` est exacte : zéro intelligence sur les noms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceRangeReservation {
+    pub resource: String,
+    pub objective_id: Uuid,
+    pub reserved_at: i64,
 }
 
 /// Paramètres revalidés au moment du dispatch. Ils restent séparés de
@@ -1991,6 +2000,109 @@ impl MaicieStore {
         now: i64,
     ) -> Result<DecisionCoordination, StoreError> {
         self.close_objective_observed(objective_id, reason, now, |_| Ok(()))
+    }
+
+    /// Réserve une plage de ressource pour un objectif (politique 31).
+    /// Comparaison exacte de noms. Refuse si un *autre* objectif détient déjà
+    /// la même ressource active. Rejouer pour le même titulaire est idempotent.
+    pub fn reserve_resource_range(
+        &mut self,
+        resource: &str,
+        objective_id: Uuid,
+        now: i64,
+    ) -> Result<ResourceRangeReservation, StoreError> {
+        if resource.is_empty() || now <= 0 {
+            return Err(StoreError::Invalid("réservation de plage invalide"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let objective_state: Option<String> = tx
+            .query_row(
+                "SELECT state FROM objectives WHERE id = ?1",
+                [objective_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let Some(state) = objective_state else {
+            return Err(StoreError::NotFound("objectif absent"));
+        };
+        if parse_objective_state(&state)? == EtatObjectif::Clos {
+            return Err(StoreError::Invalid("objectif déjà clos"));
+        }
+        let existing: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT objective_id, reserved_at FROM resource_range_reservations\n\
+                 WHERE resource_name = ?1",
+                [resource],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        if let Some((holder_raw, reserved_at)) = existing {
+            let holder = parse_uuid(&holder_raw)?;
+            if holder == objective_id {
+                tx.commit().map_err(StoreError::Sql)?;
+                return Ok(ResourceRangeReservation {
+                    resource: resource.to_string(),
+                    objective_id,
+                    reserved_at,
+                });
+            }
+            return Err(StoreError::ResourceHeld {
+                resource: resource.to_string(),
+                holder_objective_id: holder,
+            });
+        }
+        let inserted = tx
+            .execute(
+                "INSERT INTO resource_range_reservations(resource_name, objective_id, reserved_at)\n\
+                 VALUES (?1, ?2, ?3)",
+                params![resource, objective_id.to_string(), now],
+            )
+            .map_err(StoreError::Sql)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("réservation de plage non enregistrée"));
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(ResourceRangeReservation {
+            resource: resource.to_string(),
+            objective_id,
+            reserved_at: now,
+        })
+    }
+
+    /// Liste les réservations de plage actives, triées par nom exact.
+    pub fn list_resource_ranges(&self) -> Result<Vec<ResourceRangeReservation>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT resource_name, objective_id, reserved_at\n\
+                 FROM resource_range_reservations\n\
+                 ORDER BY resource_name",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(StoreError::Sql)?;
+        let mut reservations = Vec::new();
+        for row in rows {
+            let (resource, objective_raw, reserved_at) = row.map_err(StoreError::Sql)?;
+            reservations.push(ResourceRangeReservation {
+                resource,
+                objective_id: parse_uuid(&objective_raw)?,
+                reserved_at,
+            });
+        }
+        Ok(reservations)
     }
 
     /// Variante à observateur utilisée par les tests de crash transactionnel.
@@ -5436,11 +5548,25 @@ where
     for outbox in objective_closure_outboxes(tx, objective.id, decision, issued_at)? {
         insert_notification_outbox(tx, &outbox)?;
     }
+    // Politique 31 : libération des plages dans la même transaction que les notifications.
+    release_resource_ranges_for_objective(tx, objective.id)?;
     persist_objective_costs(tx, objective, issued_at, costs)?;
     // F37 : déblocage OBJECTIF→OBJECTIF dans la même transaction que 016.
     // Aucun dépendant → zéro écriture supplémentaire (oracle silencieux).
     release_waiting_dependents_on_prerequisite_closure(tx, objective.id, decision, issued_at)?;
     observer(ObjectiveClosureCommitPhase::AfterOutboxes)
+}
+
+fn release_resource_ranges_for_objective(
+    tx: &Transaction<'_>,
+    objective_id: Uuid,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "DELETE FROM resource_range_reservations WHERE objective_id = ?1",
+        [objective_id.to_string()],
+    )
+    .map_err(StoreError::Sql)?;
+    Ok(())
 }
 
 fn persist_objective_costs(
@@ -6631,6 +6757,19 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
         )
         .map_err(StoreError::Sql)?;
     }
+    // Politique 31 : registre des plages (comparaison exacte de noms).
+    if current_version < 14 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS resource_range_reservations (
+                 resource_name TEXT PRIMARY KEY,
+                 objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 reserved_at INTEGER NOT NULL CHECK(reserved_at > 0)
+             );
+             CREATE INDEX IF NOT EXISTS resource_range_reservations_objective_idx
+                 ON resource_range_reservations(objective_id);",
+        )
+        .map_err(StoreError::Sql)?;
+    }
     for version in (current_version + 1)..=SCHEMA_VERSION {
         tx.execute(
             "INSERT OR IGNORE INTO schema_migrations(version, applied_at)\n\
@@ -7442,10 +7581,18 @@ fn parse_uuid(value: &str) -> Result<Uuid, StoreError> {
 pub enum StoreError {
     Invalid(&'static str),
     Conflict(&'static str),
+    /// Plage déjà tenue par un autre objectif (comparaison exacte de noms).
+    ResourceHeld {
+        resource: String,
+        holder_objective_id: Uuid,
+    },
     EnvelopeMismatch,
     NotFound(&'static str),
     Corrupt(&'static str),
-    UnsupportedSchema { found: i64, supported: i64 },
+    UnsupportedSchema {
+        found: i64,
+        supported: i64,
+    },
     Io(std::io::Error),
     Sql(rusqlite::Error),
     Json(serde_json::Error),
@@ -7458,6 +7605,13 @@ impl fmt::Display for StoreError {
         match self {
             Self::Invalid(reason) => write!(formatter, "store invalide : {reason}"),
             Self::Conflict(reason) => write!(formatter, "conflit store : {reason}"),
+            Self::ResourceHeld {
+                resource,
+                holder_objective_id,
+            } => write!(
+                formatter,
+                "plage « {resource} » déjà réservée par l'objectif {holder_objective_id}"
+            ),
             Self::EnvelopeMismatch => write!(formatter, "enveloppe idempotente divergente"),
             Self::NotFound(reason) => write!(formatter, "store introuvable : {reason}"),
             Self::Corrupt(reason) => write!(formatter, "store corrompu : {reason}"),
@@ -7484,6 +7638,7 @@ impl std::error::Error for StoreError {
             Self::Domain(_) => None,
             Self::Invalid(_)
             | Self::Conflict(_)
+            | Self::ResourceHeld { .. }
             | Self::EnvelopeMismatch
             | Self::NotFound(_)
             | Self::Corrupt(_)
