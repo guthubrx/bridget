@@ -308,7 +308,11 @@ fn print_usage() {
            --issued-at <unix>     Instant d'émission du rejeu\n  \
            --issuer-scope <portée> Portée requise pour un envoi ordinaire idempotent\n\n\
          Usage interne :\n  \
-           hook claude-runtime    Appelé par le hook Claude Code, lit stdin"
+           hook claude-runtime    Appelé par le hook Claude Code, lit stdin\n  \
+           hook claude-statusline Limites de forfait, lit le payload StatusLine\n    \
+                                  sur stdin. N'affiche RIEN : à appeler en plus\n    \
+                                  de votre statusLine, pas à sa place —\n    \
+                                  printf '%s' \"$input\" | bridget hook claude-statusline &"
     );
 }
 
@@ -1715,11 +1719,12 @@ fn cmd_runtime(args: &[String]) {
 fn cmd_hook(args: &[String]) {
     match args.first().map(String::as_str) {
         Some("claude-runtime") => hook_claude_runtime(),
+        Some("claude-statusline") => hook_claude_statusline(),
         Some(other) => {
             log::debug!("hook inconnu: {}", other);
         }
         None => {
-            eprintln!("usage: bridget hook claude-runtime");
+            eprintln!("usage: bridget hook <claude-runtime|claude-statusline>");
             std::process::exit(2);
         }
     }
@@ -1787,6 +1792,185 @@ fn hook_claude_runtime() {
         Ok(other) => log::debug!("hook claude-runtime : réponse inattendue {:?}", other),
         Err(error) => log::debug!("hook claude-runtime : daemon inaccessible: {}", error),
     }
+}
+
+/// Statut posé sur un fait de limite venu du StatusLine.
+///
+/// Le payload atteste une consommation et un instant de retour, jamais un
+/// verdict du fournisseur : écrire « allowed » inventerait une décision que
+/// Claude Code n'a pas rendue. « unknown » n'affirme rien, et n'active pas le
+/// rendu « épuisée » de `format_one_rate_limit`, réservé à « rejected ».
+const STATUSLINE_LIMIT_STATUS: &str = "unknown";
+
+/// Fenêtres de forfait portées par le payload StatusLine, dans l'ordre de
+/// poussée. Fermée à dessein : une clé inconnue du bloc `rate_limits` n'est
+/// pas remontée, faute de savoir ce qu'elle mesure.
+const STATUSLINE_WINDOWS: [&str; 2] = ["five_hour", "seven_day"];
+
+/// Fait de limite relevé dans un payload StatusLine, avant envoi.
+#[derive(Debug, PartialEq, Eq)]
+struct StatusLineLimit {
+    window: String,
+    used_percent: Option<u8>,
+    resets_at: Option<i64>,
+}
+
+/// Hook StatusLine : pousse les limites de forfait attestées par Claude Code.
+///
+/// Seule source de limite pour un Claude interactif — le flux `stream-json`,
+/// qui porte les `rate_limit_event`, n'existe que pour les agents gérés.
+///
+/// Contrat identique au hook de fin de tour : sortie standard VIDE, code de
+/// retour 0. Le réglage `statusLine` de Claude Code n'accepte qu'un seul
+/// programme, et c'est celui de l'utilisateur qui doit afficher la ligne :
+/// ce hook s'appelle EN PLUS, en lui repassant le payload —
+/// `printf '%s' "$input" | bridget hook claude-statusline &`.
+///
+/// Aucune limitation de débit ici, alors que le StatusLine s'exécute souvent
+/// (déclenchement par événement, débounce 300 ms). C'est délibéré : le daemon
+/// fait un upsert par fenêtre, et republier à chaque tour est précisément ce
+/// qui répare la présence après un redémarrage du daemon. Un cache « ne
+/// renvoyer que si la valeur change » recréerait le trou d'affichage déjà
+/// constaté sur la sonde de runtime.
+fn hook_claude_statusline() {
+    // Hors d'un agent Bridget, le hook est inerte : les sessions Claude
+    // ordinaires de l'utilisateur ne doivent subir aucun effet.
+    let agent = current_agent_name();
+    if agent == "human" {
+        return;
+    }
+
+    let mut payload = String::new();
+    if std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload).is_err() {
+        log::debug!("hook claude-statusline : payload illisible");
+        return;
+    }
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(&payload) else {
+        log::debug!("hook claude-statusline : payload non JSON");
+        return;
+    };
+
+    let facts = rate_limit_facts_from_statusline(&payload);
+    if facts.is_empty() {
+        // Cas nominal, pas une panne : le bloc `rate_limits` n'existe que pour
+        // un abonné Claude.ai, et seulement après une première réponse de
+        // l'API. Tant qu'il manque, il n'y a rien à attester.
+        log::debug!("hook claude-statusline : aucune limite attestée");
+        return;
+    }
+    if let Err(error) = send_rate_limits_to_daemon(&agent, &facts) {
+        log::debug!("hook claude-statusline : {}", error);
+    }
+}
+
+/// Relève les limites d'un payload StatusLine. Atteste ou rien.
+///
+/// Le bloc `rate_limits` est optionnel, et chacune de ses fenêtres l'est aussi
+/// (schéma Claude Code : « Only present for subscribers after first API
+/// response »). Une fenêtre sans aucune valeur exploitable ne produit pas de
+/// fait : elle occuperait la colonne sans rien y dire.
+fn rate_limit_facts_from_statusline(payload: &serde_json::Value) -> Vec<StatusLineLimit> {
+    let Some(limits) = payload
+        .get("rate_limits")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+    STATUSLINE_WINDOWS
+        .iter()
+        .filter_map(|window| {
+            let block = limits.get(*window)?;
+            let used_percent = block.get("used_percentage").and_then(statusline_percent);
+            let resets_at = block.get("resets_at").and_then(statusline_epoch);
+            if used_percent.is_none() && resets_at.is_none() {
+                return None;
+            }
+            Some(StatusLineLimit {
+                window: (*window).to_string(),
+                used_percent,
+                resets_at,
+            })
+        })
+        .collect()
+}
+
+/// `used_percentage` est un nombre de 0 à 100, parfois fractionnaire.
+///
+/// Tronqué vers le bas, jamais rabattu dans les bornes : une valeur hors
+/// domaine n'est pas une valeur à corriger, c'est une valeur qu'on n'a pas
+/// comprise. La ramener à 100 afficherait une saturation que le fournisseur
+/// n'a pas annoncée — et le daemon refuse déjà tout pourcentage > 100.
+fn statusline_percent(value: &serde_json::Value) -> Option<u8> {
+    let raw = value.as_f64()?;
+    if !raw.is_finite() || !(0.0..=100.0).contains(&raw) {
+        return None;
+    }
+    Some(raw.trunc() as u8)
+}
+
+/// `resets_at` est un instant Unix en secondes. Le daemon refuse `<= 0`.
+fn statusline_epoch(value: &serde_json::Value) -> Option<i64> {
+    value.as_i64().filter(|seconds| *seconds > 0)
+}
+
+/// Envoie les faits relevés sur une seule connexion : deux fenêtres ne valent
+/// pas deux poignées de main.
+fn send_rate_limits_to_daemon(agent: &str, facts: &[StatusLineLimit]) -> Result<(), String> {
+    let stream = UnixStream::connect(socket_path()).map_err(|e| e.to_string())?;
+    let read_stream = stream.try_clone().map_err(|e| e.to_string())?;
+    // Même garde que la sonde de runtime : un daemon d'une version antérieure
+    // ignore ce message, et sans délai borné le hook bloquerait le
+    // rafraîchissement de la ligne d'état de l'agent observé.
+    read_stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(
+            RUNTIME_REPLY_TIMEOUT_SECS,
+        )))
+        .map_err(|e| e.to_string())?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    let register = WrapperToDaemon::Register {
+        agent_type: "cli".to_string(),
+        name: Some(format!("cli-statusline-{}", std::process::id())),
+        host: None,
+        transport: None,
+        mode: Some(PresenceMode::Cli),
+        location: None,
+        os: None,
+        instance_id: None,
+        domain: None,
+        turn_in_progress: false,
+        journal_available: None,
+    };
+    writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    writer.flush().map_err(|e| e.to_string())?;
+    let mut line = String::new();
+    reader.read_line(&mut line).map_err(|e| e.to_string())?;
+    let _: DaemonToWrapper = decode(line.trim()).map_err(|e| e.to_string())?;
+
+    for fact in facts {
+        let message = WrapperToDaemon::RateLimit {
+            agent: agent.to_string(),
+            window: fact.window.clone(),
+            status: STATUSLINE_LIMIT_STATUS.to_string(),
+            resets_at: fact.resets_at,
+            used_percent: fact.used_percent,
+            source: bridget_transport::protocol::RateLimitSource::ClaudeStatusLine,
+        };
+        writeln!(writer, "{}", encode(&message).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+        line.clear();
+        reader.read_line(&mut line).map_err(|e| e.to_string())?;
+        match decode(line.trim()).map_err(|e| e.to_string())? {
+            DaemonToWrapper::Ack { .. } => {}
+            DaemonToWrapper::Nack { reason, .. } => {
+                return Err(format!("limite {} refusée: {}", fact.window, reason));
+            }
+            other => return Err(format!("réponse inattendue {:?}", other)),
+        }
+    }
+    Ok(())
 }
 
 /// Vérifie que le chemin de transcript appartient bien à la session du hook.
@@ -3354,6 +3538,173 @@ mod hook_tests {
             ])
             .unwrap(),
             ("codex-1".to_string(), "stop-retry".to_string())
+        );
+    }
+
+    /// Payload StatusLine conforme au schéma publié par Claude Code, avec les
+    /// deux fenêtres présentes. Le reste du payload est là pour vérifier qu'on
+    /// ne confond pas la barre de contexte avec une limite de forfait.
+    fn statusline_payload_complet() -> serde_json::Value {
+        serde_json::json!({
+            "session_id": "abc",
+            "model": {"display_name": "Opus"},
+            "context_window": {"used_percentage": 42, "remaining_percentage": 58},
+            "rate_limits": {
+                "five_hour": {"used_percentage": 19, "resets_at": 1787590200_i64},
+                "seven_day": {"used_percentage": 61, "resets_at": 1788136905_i64}
+            }
+        })
+    }
+
+    #[test]
+    fn statusline_releve_les_deux_fenetres_attestees() {
+        let facts = rate_limit_facts_from_statusline(&statusline_payload_complet());
+        assert_eq!(
+            facts,
+            vec![
+                StatusLineLimit {
+                    window: "five_hour".to_string(),
+                    used_percent: Some(19),
+                    resets_at: Some(1787590200),
+                },
+                StatusLineLimit {
+                    window: "seven_day".to_string(),
+                    used_percent: Some(61),
+                    resets_at: Some(1788136905),
+                },
+            ]
+        );
+    }
+
+    /// Le cas exigé : sans bloc `rate_limits`, on ne pousse RIEN. Le schéma
+    /// Claude Code le donne absent hors abonnement et avant la première
+    /// réponse d'API — la colonne du référent doit rester vide, pas se
+    /// remplir d'un zéro inventé.
+    #[test]
+    fn statusline_sans_bloc_limites_ne_pousse_rien() {
+        let sans_limites = serde_json::json!({
+            "session_id": "abc",
+            "context_window": {"used_percentage": 42}
+        });
+        assert!(rate_limit_facts_from_statusline(&sans_limites).is_empty());
+    }
+
+    /// La barre de contexte porte AUSSI un `used_percentage`, à un autre
+    /// endroit et pour une autre grandeur. Le confondre avec la consommation
+    /// de forfait afficherait le remplissage du contexte comme un quota.
+    #[test]
+    fn statusline_ne_prend_pas_le_contexte_pour_une_limite() {
+        let contexte_seul = serde_json::json!({
+            "context_window": {"used_percentage": 97, "remaining_percentage": 3}
+        });
+        assert!(rate_limit_facts_from_statusline(&contexte_seul).is_empty());
+    }
+
+    #[test]
+    fn statusline_garde_la_fenetre_presente_et_ignore_l_absente() {
+        let une_seule = serde_json::json!({
+            "rate_limits": {"five_hour": {"used_percentage": 5, "resets_at": 1787590200_i64}}
+        });
+        let facts = rate_limit_facts_from_statusline(&une_seule);
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].window, "five_hour");
+    }
+
+    #[test]
+    fn statusline_tronque_le_pourcentage_fractionnaire() {
+        let fractionnaire = serde_json::json!({
+            "rate_limits": {"five_hour": {"used_percentage": 19.87, "resets_at": 1787590200_i64}}
+        });
+        assert_eq!(
+            rate_limit_facts_from_statusline(&fractionnaire)[0].used_percent,
+            Some(19)
+        );
+    }
+
+    /// Hors domaine ou non numérique : on n'invente pas, et on ne rabat pas
+    /// dans les bornes. La fenêtre survit par son `resets_at` attesté, sans
+    /// pourcentage — le daemon aurait refusé un 150 %.
+    #[test]
+    fn statusline_ecarte_un_pourcentage_hors_domaine_sans_le_rabattre() {
+        let aberrant = serde_json::json!({
+            "rate_limits": {
+                "five_hour": {"used_percentage": 150, "resets_at": 1787590200_i64},
+                "seven_day": {"used_percentage": "beaucoup", "resets_at": 1788136905_i64}
+            }
+        });
+        let facts = rate_limit_facts_from_statusline(&aberrant);
+        assert_eq!(facts.len(), 2);
+        assert!(facts.iter().all(|fact| fact.used_percent.is_none()));
+        assert!(facts.iter().all(|fact| fact.resets_at.is_some()));
+    }
+
+    /// Un instant de retour nul ou négatif serait refusé par le daemon : le
+    /// hook ne le fabrique pas en `None` silencieux d'une fenêtre par ailleurs
+    /// vide — la fenêtre disparaît entièrement.
+    #[test]
+    fn statusline_ne_pousse_pas_une_fenetre_sans_aucune_valeur() {
+        let vides = serde_json::json!({
+            "rate_limits": {
+                "five_hour": {},
+                "seven_day": {"resets_at": 0}
+            }
+        });
+        assert!(rate_limit_facts_from_statusline(&vides).is_empty());
+    }
+
+    /// Le statut n'est pas attesté par ce payload : il ne doit jamais valoir
+    /// « allowed » (verdict inventé) ni « rejected » (qui ferait afficher
+    /// « épuisée » sur une fenêtre saine).
+    #[test]
+    fn statusline_n_invente_aucun_verdict_de_statut() {
+        assert_eq!(STATUSLINE_LIMIT_STATUS, "unknown");
+        assert_ne!(STATUSLINE_LIMIT_STATUS, "allowed");
+        assert_ne!(STATUSLINE_LIMIT_STATUS, "rejected");
+    }
+
+    /// Jonction : ce que le hook relève doit remplir la colonne du référent.
+    ///
+    /// Relie l'extraction au rendu réel de `who`, avec le statut non attesté
+    /// tel qu'il sera posé. Sans cet oracle, l'extraction pourrait être juste
+    /// et la colonne rester vide — c'est la colonne qui est la mission.
+    #[test]
+    fn statusline_remplit_la_colonne_du_referent() {
+        let facts = rate_limit_facts_from_statusline(&statusline_payload_complet());
+        let agent = AgentInfo {
+            name: "bridget".to_string(),
+            agent_type: "claude".to_string(),
+            connection_id: "conn-referent".to_string(),
+            host: "local".to_string(),
+            transport: "unix".to_string(),
+            mode: Some(PresenceMode::Tmux),
+            location: None,
+            os: "macOS".to_string(),
+            state: "connected".to_string(),
+            last_seen_secs: 0,
+            reconnect_count: 0,
+            domain: None,
+            model: Some("claude-fable-5".to_string()),
+            effort: None,
+            rate_limits: facts
+                .iter()
+                .map(|fact| bridget_transport::protocol::RateLimitFact {
+                    window: fact.window.clone(),
+                    status: STATUSLINE_LIMIT_STATUS.to_string(),
+                    resets_at: fact.resets_at,
+                    used_percent: fact.used_percent,
+                })
+                .collect(),
+            model_mismatch: None,
+        };
+        let rendered = format_rate_limit(&agent);
+        assert!(rendered.contains("5h 19% rst "), "{rendered}");
+        assert!(rendered.contains("7d 61% rst "), "{rendered}");
+        // Le statut non attesté ne doit pas fuir à l'écran.
+        assert!(!rendered.contains("unknown"), "{rendered}");
+        assert!(!rendered.contains("épuisée"), "{rendered}");
+        assert_ne!(
+            rendered, "—",
+            "la colonne du référent ne doit plus être vide"
         );
     }
 }
