@@ -2691,9 +2691,7 @@ fn guichet_lifecycle_response(event: GuichetLifecycleEvent) -> DaemonToWrapper {
 ///
 /// Les champs du message `Register` restent dépliés ici pour refléter le
 /// protocole de transport ; les regrouper imposerait un refactor hors scope.
-fn definition_runtime(
-    definition: &ResolvedAgentDefinition,
-) -> Option<(String, Option<String>)> {
+fn definition_runtime(definition: &ResolvedAgentDefinition) -> Option<(String, Option<String>)> {
     let mut model = None;
     let mut effort = None;
     let mut index = 0;
@@ -2789,15 +2787,17 @@ fn handle_register(
             );
 
             if let Some(instance_id) = instance_id.filter(|id| !id.is_empty()) {
-                let presence_owned_by_live_connection = state.conn_instances.iter().any(
-                    |(existing_conn, existing_instance)| {
-                        existing_conn != conn_id
-                            && existing_instance == &instance_id
-                            && state.presences.get(&instance_id).is_some_and(|presence| {
-                                matches!(presence.state.as_str(), "connected" | "busy")
-                            })
-                    },
-                );
+                let presence_owned_by_live_connection =
+                    state
+                        .conn_instances
+                        .iter()
+                        .any(|(existing_conn, existing_instance)| {
+                            existing_conn != conn_id
+                                && existing_instance == &instance_id
+                                && state.presences.get(&instance_id).is_some_and(|presence| {
+                                    matches!(presence.state.as_str(), "connected" | "busy")
+                                })
+                        });
                 if presence_owned_by_live_connection {
                     // Une connexion auxiliaire issue de la filiation MCP peut
                     // revendiquer la même instance que le wrapper. Elle garde
@@ -2822,9 +2822,7 @@ fn handle_register(
                 let managed_runtime = state
                     .managed_by_instance
                     .get(&instance_id)
-                    .and_then(|command_id| {
-                        state.fleet.resolved_definition_for_command(command_id)
-                    })
+                    .and_then(|command_id| state.fleet.resolved_definition_for_command(command_id))
                     .as_ref()
                     .and_then(definition_runtime)
                     .map(|(model, effort)| (Some(model), effort));
@@ -2844,7 +2842,10 @@ fn handle_register(
                 // Une reconnexion par un binaire antérieur au champ conserve
                 // l'observation déjà attestée ; une présence historique sans
                 // valeur reste volontairement inconnue.
-                let mode = previous.as_ref().and_then(|presence| presence.mode).or(mode);
+                let mode = previous
+                    .as_ref()
+                    .and_then(|presence| presence.mode)
+                    .or(mode);
                 let location = match mode {
                     Some(PresenceMode::Tmux) => previous
                         .as_ref()
@@ -5556,24 +5557,41 @@ fn daemon_build_id(socket_path: &std::path::Path) -> Option<String> {
     let read_stream = stream.try_clone().ok()?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(read_stream);
-    writeln!(writer, "{}", encode(&WrapperToDaemon::RoleHandshake {
-        role: ConnectionRole::Client,
-    }).ok()?).ok()?;
+    writeln!(
+        writer,
+        "{}",
+        encode(&WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Client,
+        })
+        .ok()?
+    )
+    .ok()?;
     writer.flush().ok()?;
     let mut line = String::new();
     if reader.read_line(&mut line).ok()? == 0 {
         return None;
     }
-    if !matches!(decode(line.trim()).ok()?, DaemonToWrapper::RoleAccepted { role: ConnectionRole::Client }) {
+    if !matches!(
+        decode(line.trim()).ok()?,
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client
+        }
+    ) {
         return None;
     }
-    writeln!(writer, "{}", encode(&WrapperToDaemon::ClientHello {
-        contract_version: CLIENT_CONTRACT_VERSION,
-        // Même dérivation que les clients normaux : la sonde reste compatible
-        // avec toute évolution de la validation de portée.
-        issuer_scope: build_id_probe_issuer_scope(),
-        capabilities: Vec::new(),
-    }).ok()?).ok()?;
+    writeln!(
+        writer,
+        "{}",
+        encode(&WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            // Même dérivation que les clients normaux : la sonde reste compatible
+            // avec toute évolution de la validation de portée.
+            issuer_scope: build_id_probe_issuer_scope(),
+            capabilities: Vec::new(),
+        })
+        .ok()?
+    )
+    .ok()?;
     writer.flush().ok()?;
     line.clear();
     match reader.read_line(&mut line).ok()? {

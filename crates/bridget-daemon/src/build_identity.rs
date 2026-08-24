@@ -12,8 +12,8 @@ pub fn current_build_id(root: &Path) -> Option<String> {
 }
 
 pub fn invalidation_paths(root: &Path) -> Vec<PathBuf> {
-    let Some(git_dir) = git(root, &["rev-parse", "--path-format=absolute", "--git-dir"])
-        .map(PathBuf::from)
+    let Some(git_dir) =
+        git(root, &["rev-parse", "--path-format=absolute", "--git-dir"]).map(PathBuf::from)
     else {
         return Vec::new();
     };
@@ -33,9 +33,12 @@ pub fn invalidation_paths(root: &Path) -> Vec<PathBuf> {
 }
 
 fn git_path(root: &Path, path: &str) -> PathBuf {
-    git(root, &["rev-parse", "--path-format=absolute", "--git-path", path])
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join(".git").join(path))
+    git(
+        root,
+        &["rev-parse", "--path-format=absolute", "--git-path", path],
+    )
+    .map(PathBuf::from)
+    .unwrap_or_else(|| root.join(".git").join(path))
 }
 
 fn git(root: &Path, args: &[&str]) -> Option<String> {
@@ -55,7 +58,11 @@ mod tests {
     use std::fs;
 
     fn run(root: &Path, args: &[&str]) {
-        let status = Command::new("git").args(args).current_dir(root).status().unwrap();
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .status()
+            .unwrap();
         assert!(status.success(), "git {args:?}");
     }
 

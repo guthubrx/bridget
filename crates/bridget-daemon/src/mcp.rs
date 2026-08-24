@@ -654,7 +654,9 @@ fn execute_send(
         capabilities: vec![ClientCapability::SendIdempotent],
     })? {
         DaemonToWrapper::ClientWelcome {
-            capabilities, build_id, ..
+            capabilities,
+            build_id,
+            ..
         } if capabilities.contains(&ClientCapability::SendIdempotent) => {
             if let Some(warning) = crate::build_info::stale_daemon_warning(&build_id) {
                 eprintln!("{warning}");
