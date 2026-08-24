@@ -979,6 +979,13 @@ fn cmd_guichet(args: &[String]) {
             println!(
                 "DÉPÔT: {issue} (id={request_id}, issued_at={issued_at}, issuer_scope={issuer_scope}, expire={expires_at})"
             );
+            // DETTE CONNUE (voie guichet, hors périmètre de ce lot) : le jeton
+            // `outcome_unknown` reste ici le nom d'un dépôt NOMINAL réussi,
+            // imprimé sur stdout et suivi d'une sortie 0. C'est le défaut que
+            // le lot corrige sur la voie send, non transposé : cette voie a
+            // ses propres consommateurs (`scripts/install-k1.sh` filtre ce
+            // jeton, `guichet_integration_test.rs` l'atteste), et les changer
+            // demande son propre mandat.
             if issue != "queued" && issue != "outcome_unknown" {
                 std::process::exit(1);
             }
@@ -1184,14 +1191,18 @@ fn print_idempotency_issue(issue: &IdempotencyIssue, options: &IdempotentSendOpt
             ..
         } => {
             println!(
-                "DÉPÔT: en vol id={} issued_at={} delivery_id={delivery_id} — rejouer le même id et le même issued_at lit le sort réel sans jamais dupliquer",
-                options.id, options.issued_at
+                "DÉPÔT: en vol id={} issued_at={} delivery_id={delivery_id} — {}",
+                options.id,
+                options.issued_at,
+                crate::mcp::REJEU_A_L_IDENTIQUE
             );
         }
         IdempotencyIssue::OutcomeUnknown { .. } => {
             eprintln!(
-                "ISSUE: outcome_unknown id={} issued_at={} — sort indéterminé, rejouer le même id et le même issued_at lit le sort réel sans jamais dupliquer",
-                options.id, options.issued_at
+                "ISSUE: outcome_unknown id={} issued_at={} — sort indéterminé ; {}",
+                options.id,
+                options.issued_at,
+                crate::mcp::REJEU_A_L_IDENTIQUE
             );
         }
         IdempotencyIssue::EnvelopeMismatch => eprintln!(
@@ -1217,14 +1228,17 @@ fn print_idempotency_issue(issue: &IdempotencyIssue, options: &IdempotentSendOpt
 /// réussi. Sans `delivery_id`, le sort est réellement indéterminé : l'échec est
 /// alors honnête.
 pub(crate) fn send_deposited(issue: &IdempotencyIssue) -> bool {
-    matches!(
-        issue,
-        IdempotencyIssue::Accepted { .. }
-            | IdempotencyIssue::OutcomeUnknown {
-                delivery_id: Some(_),
-                ..
-            }
-    )
+    match issue {
+        IdempotencyIssue::Accepted { .. } => true,
+        // Un identifiant vide n'atteste rien : le daemon n'en produit jamais,
+        // et le prendre pour une preuve de dépôt ferait sortir en succès sur
+        // une valeur que lui-même refuserait. On exige la preuve, pas sa forme.
+        IdempotencyIssue::OutcomeUnknown {
+            delivery_id: Some(delivery_id),
+            ..
+        } => !delivery_id.trim().is_empty(),
+        _ => false,
+    }
 }
 
 fn send_idempotent_if_requested(
@@ -4323,6 +4337,30 @@ mod depot_tests {
         assert!(!send_deposited(&IdempotencyIssue::OutcomeUnknown {
             expires_at: 1_700_000_060,
             delivery_id: None,
+        }));
+    }
+
+    /// C5 — un identifiant de remise vide n'est pas une preuve de dépôt.
+    ///
+    /// Le daemon n'en produit jamais et refuserait celui-ci ; l'accepter
+    /// ferait sortir en succès sur une valeur qu'il rejette lui-même. La garde
+    /// porte sur le contenu, pas sur la seule présence du `Some`.
+    #[test]
+    fn un_identifiant_de_remise_vide_n_atteste_pas_un_depot() {
+        for vide in ["", " ", "\t", "\n"] {
+            assert!(
+                !send_deposited(&IdempotencyIssue::OutcomeUnknown {
+                    expires_at: 1_700_000_060,
+                    delivery_id: Some(vide.to_string()),
+                }),
+                "un delivery_id {vide:?} ne prouve aucune remise"
+            );
+        }
+        // Contre-épreuve : un identifiant réel reste un dépôt, sinon la garde
+        // aurait simplement tout refusé.
+        assert!(send_deposited(&IdempotencyIssue::OutcomeUnknown {
+            expires_at: 1_700_000_060,
+            delivery_id: Some("livraison-2".to_string()),
         }));
     }
 

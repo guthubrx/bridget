@@ -20,6 +20,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 const DAEMON_BUDGET: Duration = Duration::from_secs(10);
 const MAX_IN_FLIGHT_TOOL_CALLS: usize = 8;
+
+/// Consigne de rejeu, point de vérité unique des sept ancrages.
+///
+/// Les trois formes d'`outcome_unknown` et les deux sorties du binaire disent
+/// la même chose parce qu'elles disent LA MÊME CHAÎNE. Elle nomme les trois
+/// invariants — un rejeu qui change le corps n'est pas une consultation mais
+/// une seconde émission, que le daemon refusera en `envelope_mismatch` — et
+/// affirme l'absence de doublon, sans quoi le geste reste redouté et personne
+/// ne l'ose.
+pub(crate) const REJEU_A_L_IDENTIQUE: &str = "rejouer à l'identique — même id, même issued_at, même corps — lit le sort réel sans jamais dupliquer";
 static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_CONNECTION_NAME: AtomicU64 = AtomicU64::new(1);
 
@@ -686,7 +696,7 @@ fn execute_send(
             "status": "outcome_unknown",
             "id": id,
             "issued_at": issued_at,
-            "reason": format!("accusé perdu après transmission — rejouer le même id et le même issued_at lit le sort réel sans jamais dupliquer ({message})")
+            "reason": format!("accusé perdu après transmission — {REJEU_A_L_IDENTIQUE} ({message})")
         })),
         Err(error) => Err(error),
     }
@@ -862,13 +872,13 @@ fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value
                 "id": id,
                 "issued_at": issued_at,
                 "delivery_id": delivery_id,
-                "reason": "remise en vol — le destinataire n'a pas encore accusé ; rejouer le même id et le même issued_at lit le sort réel sans jamais dupliquer"
+                "reason": format!("remise en vol — le destinataire n'a pas encore accusé ; {REJEU_A_L_IDENTIQUE}")
             }),
             None => json!({
                 "status": "outcome_unknown",
                 "id": id,
                 "issued_at": issued_at,
-                "reason": "sort indéterminé — rejouer le même id et le même issued_at lit le sort réel sans jamais dupliquer"
+                "reason": format!("sort indéterminé ; {REJEU_A_L_IDENTIQUE}")
             }),
         },
         IdempotencyIssue::EnvelopeMismatch => json!({
@@ -1586,8 +1596,27 @@ mod tests {
             "une remise en vol ne doit rien annoncer de perdu: {reason}"
         );
         assert!(
-            reason.contains("issued_at") && reason.contains("dupliquer"),
-            "le retour doit dire comment lire le sort réel sans risque: {reason}"
+            reason.contains(REJEU_A_L_IDENTIQUE),
+            "le retour doit porter la consigne de rejeu mot pour mot: {reason}"
+        );
+    }
+
+    /// Gardien du point de vérité : les autres oracles vérifient que chaque
+    /// ancrage porte CETTE chaîne, celui-ci vérifie ce que la chaîne dit. Sans
+    /// lui, la consigne pourrait se vider de son sens sans faire rougir un
+    /// seul test — c'est exactement ainsi que le troisième invariant avait
+    /// disparu de la version précédente.
+    #[test]
+    fn la_consigne_de_rejeu_nomme_ses_trois_invariants_et_l_absence_de_doublon() {
+        for invariant in ["id", "issued_at", "corps"] {
+            assert!(
+                REJEU_A_L_IDENTIQUE.contains(invariant),
+                "la consigne doit nommer l'invariant « {invariant} »"
+            );
+        }
+        assert!(
+            REJEU_A_L_IDENTIQUE.contains("dupliquer"),
+            "sans la promesse de non-duplication, le rejeu reste redouté et personne ne l'ose"
         );
     }
 
@@ -1607,6 +1636,10 @@ mod tests {
         assert!(
             reason.contains("indéterminé"),
             "le sort inconnu doit être nommé comme tel: {reason}"
+        );
+        assert!(
+            reason.contains(REJEU_A_L_IDENTIQUE),
+            "même sans preuve de remise, la consigne de rejeu doit être donnée: {reason}"
         );
     }
 
@@ -1820,6 +1853,95 @@ mod tests {
             envelopes[0], envelopes[1],
             "le rejeu doit porter la même enveloppe, sinon il duplique au lieu de consulter"
         );
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    /// ORACLE C4 — la TROISIÈME forme d'`outcome_unknown`, celle qui naît côté
+    /// client sans aucune issue du daemon : la connexion tombe APRÈS l'écriture
+    /// de la commande, donc l'outil ne lira jamais la réponse.
+    ///
+    /// Ce chemin était le seul des trois à n'avoir aucun filet sur son
+    /// contenu : le banc de coupure voisin ne vérifie que le `status`, si bien
+    /// qu'une mutation du corps du retour y survivait. Or c'est justement le
+    /// cas où l'appelant a le plus besoin de la consigne de rejeu — le message
+    /// a pu partir, et lui seul l'ignore.
+    ///
+    /// L'oracle verrouille donc le contrat ENTIER de ce bras : le statut, les
+    /// deux clés sans lesquelles aucun rejeu n'est possible, et les trois
+    /// invariants du rejeu à l'identique.
+    #[test]
+    fn la_coupure_apres_ecriture_rend_les_cles_de_rejeu_et_les_trois_invariants() {
+        let socket = test_socket("coupure-contrat");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::RoleHandshake { .. }
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client,
+                },
+            );
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::ClientHello { .. }
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "test-build".to_string(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![ClientCapability::SendIdempotent],
+                },
+            );
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::SendIdempotent { .. }
+            ));
+            // La coupure : la commande est écrite et lue, aucune réponse ne
+            // vient. C'est ce qui distingue ce cas des deux autres.
+            drop(writer);
+            drop(reader);
+        });
+        let rendered = execute_tool_at_with_scope(
+            "fable2",
+            "instance",
+            "bridget_send",
+            json!({
+                "to":"bridget", "body":"coupure", "id":"coupure-1", "issued_at":1_700_000_000
+            })
+            .as_object()
+            .unwrap(),
+            &socket,
+        )
+        .unwrap();
+
+        assert_eq!(rendered["status"], "outcome_unknown");
+        assert!(
+            rendered.get("delivery_id").is_none(),
+            "aucune issue n'a été lue : rien n'atteste une remise, et rien ne doit le prétendre"
+        );
+        // Sans ces deux clés, la consigne de rejeu est irréalisable.
+        assert_eq!(rendered["id"], "coupure-1");
+        assert_eq!(rendered["issued_at"], 1_700_000_000i64);
+
+        // Ce que la consigne DIT est gardé par
+        // `la_consigne_de_rejeu_nomme_ses_trois_invariants_et_l_absence_de_doublon` ;
+        // ici on vérifie que ce chemin-ci la porte — c'est ce qui manquait.
+        let reason = rendered["reason"].as_str().unwrap();
+        assert!(
+            reason.contains(REJEU_A_L_IDENTIQUE),
+            "le chemin sans issue est celui où l'appelant a le plus besoin de la consigne: {reason}"
+        );
+
+        server.join().unwrap();
         std::fs::remove_file(socket).unwrap();
     }
 
