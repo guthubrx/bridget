@@ -50,3 +50,21 @@ Référence visuelle (ne pas copier dans ce dépôt) :
 - Miroir — `00.Generic/MAICompany/40-registry/review-lenses.json`
 - Calibration — `…/personas-calibration-20260708/outputs/` (dont `review-constructif-aminata-051-agent7.md`)
 - Règles chantier — `docs/regles-chantier.md` ; Articles XVIII / XIX constitution SpecKit
+
+## Protocole des deux collèges (expérience utilisateur, gravé le 2026-08-24 16h35)
+
+Le protocole qui a donné les meilleurs résultats dans les expériences
+antérieures de l'utilisateur n'est PAS deux revues parallèles indépendantes,
+mais DEUX COLLÈGES DÉLIBÉRANTS :
+1. Le collège À CHARGE (ex. Ingrid + Viktor) délibère EN INTERNE — les
+   membres échangent leurs trouvailles, se contestent, rendent UN avis de
+   collège consolidé.
+2. Le collège CONSTRUCTIF (ex. Aminata + Hiroshi) fait de même de son côté.
+3. RÉCONCILIATION : les deux avis de collège se confrontent — divergences
+   nommées, synthèse arbitrée (référent, ou président de séance désigné).
+
+Différence avec le panel parallèle (pilote du 24/08) : la délibération
+intra-collège filtre le bruit avant la synthèse, et la réconciliation force
+l'explicitation des désaccords entre polarités au lieu de les laisser au
+seul juge. À dogfooder sur le prochain lot critique : 2+2 relecteurs, les
+échanges intra-collège par bridget send, un avis par collège au greffe.
