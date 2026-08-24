@@ -708,6 +708,14 @@ fn reconcile_coordination_startup_with_hooks(
                 .push(CoordinationReconcileAction::TransportIndisponible);
             return Ok(report);
         }
+        Err(BridgetClientError::ClientRejected { reason }) => {
+            report
+                .actions
+                .push(CoordinationReconcileAction::Unavailable {
+                    reason: format!("client_rejected:{reason}"),
+                });
+            return Ok(report);
+        }
         Err(error) => return Err(ReconcileError::Client(error)),
     };
     let items = match client.snapshot_after(after_cursor, MAX_COORDINATION_ITEMS_PER_PASS) {
@@ -716,6 +724,14 @@ fn reconcile_coordination_startup_with_hooks(
             report
                 .actions
                 .push(CoordinationReconcileAction::BudgetEpuise);
+            return Ok(report);
+        }
+        Err(BridgetClientError::ClientRejected { reason }) => {
+            report
+                .actions
+                .push(CoordinationReconcileAction::Unavailable {
+                    reason: format!("client_rejected:{reason}"),
+                });
             return Ok(report);
         }
         Err(error) => return Err(ReconcileError::Client(error)),

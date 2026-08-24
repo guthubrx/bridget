@@ -149,6 +149,39 @@ fn gap_avant_snapshot_interdit_tout_effet_metier() {
 }
 
 #[test]
+fn refus_canonique_de_la_releve_reste_non_fatal_et_visible() {
+    let fixture = Fixture::new("coordination-canonical-rejected");
+    let listener = fixture.bind();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("relève attendue");
+        let (mut reader, mut writer) = split(stream);
+        complete_coordination_handshake(&mut reader, &mut writer, None);
+        write_json(
+            &mut writer,
+            json!({
+                "type":"ServiceRejected",
+                "reason":{"kind":"canonical_bytes_mismatch"}
+            }),
+        );
+    });
+
+    let mut store = MaicieStore::open(&fixture.database_path).expect("store ouvert");
+    let report = reconcile_coordination_startup_with_limits(
+        &mut store,
+        fixture.socket_path(),
+        limits(Duration::from_secs(2)),
+    )
+    .expect("un refus de relève ne doit pas interrompre la commande Maicie");
+    assert!(matches!(
+        report.actions.as_slice(),
+        [CoordinationReconcileAction::Unavailable { reason }]
+            if reason.contains("canonical_bytes_mismatch")
+    ));
+    assert_eq!(store.coordination_cursor().unwrap(), None);
+    server.join().expect("serveur refus terminé");
+}
+
+#[test]
 fn releve_coordination_bornee_a_512_refuse_un_lot_incomplet_sans_mutation() {
     let fixture = Fixture::new("coordination-bound");
     let seed = seed_coordination_stream(&fixture.database_path, false);
@@ -987,14 +1020,17 @@ fn complete_coordination_handshake(
             "capabilities":["maicie_guichet","coordination_events_v2"]
         }),
     );
-    assert_eq!(
-        read_json(reader),
-        json!({
-            "type":"coordination_subscribe",
-            "v":2,
-            "after_cursor":expected_cursor
-        })
-    );
+    let mut subscribe = String::new();
+    reader
+        .read_line(&mut subscribe)
+        .expect("trame coordination_subscribe");
+    let expected = match expected_cursor {
+        Some(cursor) => {
+            format!("{{\"type\":\"coordination_subscribe\",\"v\":2,\"after_cursor\":{cursor}}}")
+        }
+        None => "{\"type\":\"coordination_subscribe\",\"v\":2}".to_string(),
+    };
+    assert_eq!(subscribe.trim_end(), expected);
 }
 
 fn write_coordination_event(
