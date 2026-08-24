@@ -200,6 +200,33 @@ livraison *au référent* : celui-ci doit lire le travail pour le vérifier sur
 pièces et router la relecture. Un agent qui livre fait donc les deux : il
 dépose son rapport au guichet, et il envoie sa livraison au référent.
 
+**L'invocation exacte**, établie en conditions réelles le 2026-08-24 après
+que le référent ait tâtonné quatre fois. Les trois pièges sont nommés :
+
+```
+bridget guichet deposer delivery-report \
+  --from <ton nom d'équipier> \
+  --objective <objective_id rendu par maicie delegate> \
+  --delegation <delegation_id rendu par maicie delegate> \
+  --hash <64 caractères hexadécimaux, SHA-256 de ta livraison> \
+  --in-reply-to <message_id de la délégation> \
+  --id <clé de rejeu de ton choix> \
+  --issued-at <horodatage unix> \
+  --issuer-scope <ta portée d'émetteur>
+```
+
+- `--in-reply-to` n'est PAS un identifiant de demande guichet. C'est le
+  `message_id` de la délégation Maicie, celui de la demande suivie créée au
+  moment du `delegate`. C'est le piège principal.
+- `--from` doit être ton nom d'équipier enregistré ET le participant de la
+  délégation. Sinon le dépôt échoue sur « relations du rapport invalides » —
+  et ce cas-là est encore FATAL pour Maicie, dette connue.
+- `--hash` fait exactement 64 caractères hexadécimaux.
+
+Le référent doit transmettre `objective_id` et `delegation_id` dans le
+mandat : Maicie les rend à chaque délégation. Sans eux, la consigne de dépôt
+est inapplicable — elle l'est restée plusieurs heures faute de cette ligne.
+
 **Idempotence.** Le dépôt porte une clé ; rejouer le même dépôt à
 l'identique ne crée pas de doublon. En cas de doute sur un envoi perdu,
 rejouer est sans danger — et préférable au silence.
