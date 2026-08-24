@@ -419,6 +419,12 @@ pub fn evaluate_routines(
                 delegation_id: Some(created.delegation_id),
                 created_at: now,
             };
+            // Point de coupure testable (oracle relec1 v3 / mutant).
+            // Actif UNIQUEMENT si RELEC1_CRASH est posé — jamais en prod normale.
+            // Simule un crash entre delegate() et insert_occurrence().
+            if std::env::var_os("RELEC1_CRASH").is_some() {
+                break;
+            }
             store.insert_occurrence(&occ).map_err(routine_store_error)?;
             produced.push(occ);
             routine.last_bucket = Some(bucket);

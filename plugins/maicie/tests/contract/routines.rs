@@ -18,7 +18,11 @@ use maicie::store::MaicieStore;
 use rusqlite::params;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use uuid::Uuid;
+
+/// Sérialise les tirs qui posent RELEC1_CRASH (variable process-globale).
+static RELEC1_CRASH_LOCK: Mutex<()> = Mutex::new(());
 
 fn root(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("maicie-routines-{label}-{}", Uuid::new_v4()))
@@ -636,4 +640,205 @@ fn relec4_controle_positif_hash_etranger_refuse_et_nominal_passe() {
     );
     drop(store);
     fs::remove_dir_all(root).unwrap();
+}
+
+struct Relec1Tir {
+    delegations: i64,
+    ouvertes: usize,
+    bucket_n_state: Option<EtatOccurrence>,
+    bucket_n_reason: Option<String>,
+}
+
+/// Banc relec1 v2 — série appariée (crash SQL reconstitue l'état / contrôle sain).
+/// Après adoption : 0 doublon, contrôles sains 100 %.
+fn relec1_tir(avec_crash: bool, label: &str) -> Relec1Tir {
+    // Attend que personne ne pose RELEC1_CRASH (tirs v3 concurrents).
+    let _guard = RELEC1_CRASH_LOCK.lock().expect("lock RELEC1_CRASH");
+    let root = root(label);
+    let database = root.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let period = 60_i64;
+    let t0 = 1_787_580_000;
+    let routine_id = seed_active(&mut store, t0, period);
+
+    let premier = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0,
+    )
+    .expect("premiere releve");
+    let bucket_n = bucket_for(t0, period);
+    let ouverte = premier
+        .iter()
+        .find(|o| o.state == EtatOccurrence::Ouverte)
+        .expect("mandat");
+    ouverte.delegation_id.expect("delegation_id");
+    assert_eq!(ouverte.bucket, bucket_n);
+    drop(store);
+
+    if avec_crash {
+        let connexion = rusqlite::Connection::open(&database).unwrap();
+        connexion
+            .execute(
+                "DELETE FROM routine_occurrences WHERE routine_id = ?1 AND bucket = ?2",
+                rusqlite::params![routine_id.to_string(), bucket_n],
+            )
+            .unwrap();
+        connexion
+            .execute(
+                "UPDATE routines SET last_bucket = ?1 WHERE id = ?2",
+                rusqlite::params![bucket_n - 1, routine_id.to_string()],
+            )
+            .unwrap();
+        drop(connexion);
+    }
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    let plus_tard = t0 + 2 * period;
+    let second = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        plus_tard,
+    )
+    .expect("reprise");
+    drop(store);
+    drop(_guard);
+
+    let connexion = rusqlite::Connection::open(&database).unwrap();
+    let delegations: i64 = connexion
+        .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
+        .unwrap();
+    drop(connexion);
+
+    let bucket_row = second.iter().find(|o| o.bucket == bucket_n);
+    let ouvertes = second
+        .iter()
+        .filter(|o| o.state == EtatOccurrence::Ouverte)
+        .count();
+    let _ = fs::remove_dir_all(root);
+    Relec1Tir {
+        delegations,
+        ouvertes,
+        bucket_n_state: bucket_row.map(|o| o.state),
+        bucket_n_reason: bucket_row.and_then(|o| o.reason.clone()),
+    }
+}
+
+#[test]
+fn relec1_serie_mandat_orphelin_apres_adoption() {
+    const N: usize = 10;
+    let mut doublons = 0usize;
+    let mut controles_sains = 0usize;
+    let mut adoptions = 0usize;
+    for tir in 0..N {
+        let crash = relec1_tir(true, &format!("crash-{tir}"));
+        let sain = relec1_tir(false, &format!("sain-{tir}"));
+        if crash.delegations == 2 && crash.ouvertes == 1 {
+            doublons += 1;
+        }
+        if crash.delegations == 1
+            && crash.bucket_n_state == Some(EtatOccurrence::Ouverte)
+            && crash.bucket_n_reason.as_deref() == Some("mandat_adopte")
+        {
+            adoptions += 1;
+        }
+        if sain.delegations == 1 && sain.ouvertes == 0 {
+            controles_sains += 1;
+        }
+    }
+    assert_eq!(doublons, 0, "aucun doublon de mandat après adoption");
+    assert_eq!(adoptions, N, "chaque crash reprend le mandat en ouverte");
+    assert_eq!(controles_sains, N, "contrôles positifs sains");
+}
+
+/// Banc relec1 v3 — coupure produite par le chemin de production (RELEC1_CRASH).
+#[test]
+fn relec1_serie_crash_reel_apres_adoption() {
+    const N: usize = 5;
+    let mut doublons = 0usize;
+    let mut adoptions = 0usize;
+    for tir in 0..N {
+        let root = root(&format!("crash-reel-{tir}"));
+        let database = root.join("maicie.sqlite3");
+        let mut store = MaicieStore::open(&database).unwrap();
+        let period = 60_i64;
+        let t0 = 1_787_580_000;
+        seed_active(&mut store, t0, period);
+        let bucket_n = bucket_for(t0, period);
+
+        // SAFETY: variable d'environnement de test isolée sous mutex, retirée juste après.
+        let _guard = RELEC1_CRASH_LOCK.lock().expect("lock RELEC1_CRASH");
+        unsafe { std::env::set_var("RELEC1_CRASH", "1") };
+        let coupe = evaluate_routines(
+            &mut store,
+            &durations(),
+            "maicie",
+            &[candidate("prospective")],
+            t0,
+        )
+        .expect("releve coupee");
+        unsafe { std::env::remove_var("RELEC1_CRASH") };
+        drop(_guard);
+        drop(store);
+
+        assert!(
+            coupe.is_empty(),
+            "aggravation relec1 : tick coupe rend Ok(produced=0)"
+        );
+
+        let connexion = rusqlite::Connection::open(&database).unwrap();
+        let deleg_apres_coupure: i64 = connexion
+            .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
+            .unwrap();
+        let occ_apres_coupure: i64 = connexion
+            .query_row("SELECT COUNT(*) FROM routine_occurrences", [], |r| r.get(0))
+            .unwrap();
+        drop(connexion);
+        assert_eq!(deleg_apres_coupure, 1, "mandat parti");
+        assert_eq!(occ_apres_coupure, 0, "occurrence jamais écrite");
+
+        let mut store = MaicieStore::open(&database).unwrap();
+        let second = evaluate_routines(
+            &mut store,
+            &durations(),
+            "maicie",
+            &[candidate("prospective")],
+            t0 + 2 * period,
+        )
+        .expect("reprise");
+        drop(store);
+
+        let connexion = rusqlite::Connection::open(&database).unwrap();
+        let deleg_final: i64 = connexion
+            .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
+            .unwrap();
+        drop(connexion);
+
+        let etat_n = second
+            .iter()
+            .find(|o| o.bucket == bucket_n)
+            .map(|o| (o.state, o.reason.clone()));
+        let ouvertes = second
+            .iter()
+            .filter(|o| o.state == EtatOccurrence::Ouverte)
+            .count();
+        if deleg_final == 2 && ouvertes == 1 {
+            doublons += 1;
+        }
+        if deleg_final == 1
+            && matches!(
+                etat_n.as_ref().map(|(s, r)| (*s, r.as_deref())),
+                Some((EtatOccurrence::Ouverte, Some("mandat_adopte")))
+            )
+        {
+            adoptions += 1;
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+    assert_eq!(doublons, 0, "crash réel : zéro doublon après adoption");
+    assert_eq!(adoptions, N, "crash réel : adoption à chaque reprise");
 }
