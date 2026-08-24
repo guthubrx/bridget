@@ -5,7 +5,7 @@ tenue par le référent humain-agent. Chaque règle exécutée à la main ici es
 candidate à devenir un comportement produit de Maicie. Hors périmètre de la
 v1 (spec 011) — intrants pour les itérations suivantes.
 
-## Tableau de bord — mis à jour le 2026-08-24, 14h50
+## Tableau de bord — mis à jour le 2026-08-24, 14h30
 
 Vue d'avancement des blocs. Détail et jurisprudence dans chaque bloc plus
 bas ; ce tableau ne remplace pas la lecture, il dit où on en est.
@@ -77,7 +77,7 @@ ont été créés directement dans ce fichier le 24/08.
       avec transitions automatiques, en production depuis le 24/08
 - [ ] 36-37 (ajout 24/08) lier le référent par le refus (--suite obligatoire,
       classement des citations, EtatDelegation::EnAttentePrerequis, v12) —
-      🔄 LIVRÉ 14h50, en revue croisée avant merge
+      🔄 LIVRÉ 14h25, en revue croisée avant merge
 
 **Sections antérieures complémentaires (hors plan A-F)**
 - [x] Exigence Phase 5 : l'écran d'approbation montre type/modèle/effort de
@@ -1460,7 +1460,7 @@ Même doctrine que la fermeture par fait : rendre le contournement plus
 coûteux que la conformité. Mission à ouvrir après le train de merge du
 24/08 (codex → L2 → attach).
 
-## Permissions des Claude gérés — décision du 2026-08-24, 15h05
+## Permissions des Claude gérés — décision du 2026-08-24, 14h34
 
 DÉCISION UTILISATEUR, en deux temps, après étude sur pièces de T3 Code
 (SDK claude-agent, callback canUseTool, quatre modes dont Supervised ;
