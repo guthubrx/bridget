@@ -38,6 +38,9 @@ fn seed(database: &Path) -> maicie::app::DelegationCreated {
         duration: ClasseDuree::Normale,
         reply: true,
         constat_id: None,
+        suite: maicie::domain::SuiteObjective::Aucune,
+        depends_on: &[],
+        references: &[],
         idempotency_key: "guichet-projection-seed",
         now: 900,
         retry_until: 1_100,
@@ -91,7 +94,7 @@ fn mission_status_separe_remise_transport_et_fraicheur_et_rejoue_les_octets() {
     let mut store = MaicieStore::open(&database).unwrap();
     store
         .record_lookup_issue(
-            created.message_id,
+            created.message_id.unwrap(),
             &IdempotencyIssue::Accepted { expires_at: 1_200 },
             1_005,
         )
@@ -103,7 +106,7 @@ fn mission_status_separe_remise_transport_et_fraicheur_et_rejoue_les_octets() {
         1,
     );
     let transport = SnapshotTransport {
-        message_id: created.message_id,
+        message_id: created.message_id.unwrap(),
         request_state: Some("open".to_string()),
         observed_at: 1_006,
         source: SourceSnapshot::AcpSubscription,

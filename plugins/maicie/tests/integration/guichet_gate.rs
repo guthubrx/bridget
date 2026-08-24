@@ -84,6 +84,9 @@ fn seed_for(database: &std::path::Path, participant: &str) -> maicie::app::Deleg
             duration: ClasseDuree::Normale,
             reply: true,
             constat_id: None,
+            suite: maicie::domain::SuiteObjective::Aucune,
+            depends_on: &[],
+            references: &[],
             idempotency_key: "guichet-gate-seed",
             now: 900,
             retry_until: 1_100,
@@ -110,7 +113,7 @@ fn releve_pull_only_greffe_repond_et_enregistre_l_evenement() {
     let listener = fixture.bind();
     let canonical_request = format!(
         "{{\"type\":\"service_request\",\"v\":1,\"issuer_scope\":\"{issuer_scope}\",\"request_id\":\"request-gate-01\",\"issued_at\":1000,\"from\":\"prospective\",\"to\":\"maicie\",\"operation\":\"delivery_report\",\"payload\":{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\",\"delivery_hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"in_reply_to\":\"{}\"}}}}",
-        created.objective_id, created.delegation_id, created.message_id
+        created.objective_id, created.delegation_id, created.message_id.unwrap()
     )
     .into_bytes();
     let server = thread::spawn(move || {
@@ -162,7 +165,7 @@ fn releve_pull_only_greffe_repond_et_enregistre_l_evenement() {
                 "request_id":"request-gate-01",
                 "state":"answered",
                 "observed_at":1010,
-                "in_reply_to":created.message_id.to_string(),
+                "in_reply_to":created.message_id.unwrap().to_string(),
                 "response_message_id":reply["response_message_id"].as_str().unwrap()
             }),
         );
@@ -220,7 +223,7 @@ fn issue_perdue_puis_releve_regeneree_ne_double_ni_decision_ni_reponse() {
     let listener = fixture.bind();
     let canonical_request = format!(
         "{{\"type\":\"service_request\",\"v\":1,\"issuer_scope\":\"{issuer_scope}\",\"request_id\":\"request-reply-lost\",\"issued_at\":1000,\"from\":\"prospective\",\"to\":\"maicie\",\"operation\":\"delivery_report\",\"payload\":{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\",\"delivery_hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"in_reply_to\":\"{}\"}}}}",
-        created.objective_id, created.delegation_id, created.message_id
+        created.objective_id, created.delegation_id, created.message_id.unwrap()
     )
     .into_bytes();
     let server = thread::spawn(move || {
@@ -282,7 +285,7 @@ fn issue_perdue_puis_releve_regeneree_ne_double_ni_decision_ni_reponse() {
                 "request_id":"request-reply-lost",
                 "state":"answered",
                 "observed_at":1011,
-                "in_reply_to":created.message_id.to_string(),
+                "in_reply_to":created.message_id.unwrap().to_string(),
                 "response_message_id":response_message_id
             }),
         );
@@ -410,7 +413,7 @@ fn crash_reel_aux_trois_frontieres_releve_une_unique_decision() {
         let request_id = format!("request-crash-{phase}");
         let canonical_request = format!(
             "{{\"type\":\"service_request\",\"v\":1,\"issuer_scope\":\"{issuer_scope}\",\"request_id\":\"{request_id}\",\"issued_at\":1000,\"from\":\"prospective\",\"to\":\"maicie\",\"operation\":\"delivery_report\",\"payload\":{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\",\"delivery_hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"in_reply_to\":\"{}\"}}}}",
-            created.objective_id, created.delegation_id, created.message_id
+            created.objective_id, created.delegation_id, created.message_id.unwrap()
         )
         .into_bytes();
         let server = thread::spawn({
@@ -478,7 +481,7 @@ fn crash_reel_aux_trois_frontieres_releve_une_unique_decision() {
                         "request_id":server_request_id,
                         "state":"answered",
                         "observed_at":1010,
-                        "in_reply_to":created.message_id.to_string(),
+                        "in_reply_to":created.message_id.unwrap().to_string(),
                         "response_message_id":response_message_id
                     }),
                 );
@@ -765,7 +768,7 @@ fn run_g1504(force_failure_after_spawn: bool) {
             panic!("échec G1504 injecté après le spawn : la garde doit nettoyer");
         }
         fixture.start_ephemeral_maicie();
-        let tracked_id = created.message_id.to_string();
+        let tracked_id = created.message_id.unwrap().to_string();
         fixture.wait_for_emitter_completion();
         fixture.assert_request_open(&tracked_id);
         fixture.release_deposit();
@@ -1009,7 +1012,7 @@ impl RealGateFixture {
                 errors = self.adapter_error.display(),
                 objective = created.objective_id,
                 delegation = created.delegation_id,
-                tracked_id = created.message_id,
+                tracked_id = created.message_id.unwrap(),
                 hash = hash,
                 issued_at = issued_at,
                 scope = scope,
@@ -1025,7 +1028,7 @@ impl RealGateFixture {
             format!(
                 "#!/bin/sh\nread initialize\necho '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1}}}}'\nread session\necho '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"sessionId\":\"g1504-maicie-emitter\"}}}}'\n'{bridget}' send --from maicie --to g1504-agent --reply --timeout 60 --id '{tracked_id}' --issued-at {issued_at} --issuer-scope '{scope}' 'attestation de livraison attendue' > '{errors}.emitter' 2>&1\nprintf '%s' \"$?\" > '{emitter_status}'\n: > '{emitter_finished}'\n",
                 bridget = self.bridget.display(),
-                tracked_id = created.message_id,
+                tracked_id = created.message_id.unwrap(),
                 issued_at = issued_at,
                 scope = scope,
                 errors = self.adapter_error.display(),

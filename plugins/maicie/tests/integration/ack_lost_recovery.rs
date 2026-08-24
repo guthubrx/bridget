@@ -881,6 +881,9 @@ fn fixture_with_body(
         mis_a_jour_at: ISSUED_AT,
         synthese: None,
         decision_en_attente_id: None,
+        suite: None,
+        depends_on: Vec::new(),
+        references: Vec::new(),
     };
     let delegation = Delegation {
         id: uuid(DELEGATION_ID),

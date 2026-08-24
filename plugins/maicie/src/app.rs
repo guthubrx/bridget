@@ -8,6 +8,7 @@ use crate::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use crate::catalogue::{
     ArbitrationLink, AttestedClosure, CatalogueError, CatalogueJournal, ReconcileReport,
 };
+use crate::citation::unclassified_known_citations;
 use crate::config::{CoordinationPoliciesConfig, DurationClasses};
 use crate::domain::guichet::{
     GuichetDomainError, ProjectionCoordinationState, ProjectionDurationClass, ProjectionFreshness,
@@ -21,14 +22,14 @@ use crate::domain::{
     EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination,
     FaitAppartenanceRepli, FaitReassignation, FraicheurCoordination, ModeObjectif,
     MotifRefusGreffe, ObjectifCoordonne, OutboxDelegation, PolitiqueReassignation,
-    SnapshotTransport, SourceSnapshot, TypeDecision, TypeFaitReassignation,
+    SnapshotTransport, SourceSnapshot, SuiteObjective, TypeDecision, TypeFaitReassignation,
 };
 use crate::outbox::{PreparedDelegation, stable_body_hash};
 pub use crate::store::GuichetLifecycleResult;
 use crate::store::{
-    ActivationApprovalRequest, CoordinationCommitPhase, DelegateReservation,
-    GuichetProjectionFacts, MaicieStore, ObjectiveSnapshot, StoreError, StoredDelegateResult,
-    StoredGuichetReply,
+    ActivationApprovalRequest, CoordinationCommitPhase, DeferredDispatchParams,
+    DelegateReservation, GuichetProjectionFacts, MaicieStore, ObjectiveSnapshot, StoreError,
+    StoredDelegateResult, StoredGuichetReply,
 };
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -498,7 +499,7 @@ pub fn handle_direct_message(
                 record,
                 help: ConversationHelp {
                     command: "maicie delegate",
-                    usage: "maicie delegate --goal <texte> [--to <agent>] [--duration courte|normale|longue]",
+                    usage: "maicie delegate --goal <texte> --suite aucune| <objectif> [--to <agent>] [--depends-on <id>] [--reference <id>] [--duration courte|normale|longue]",
                 },
             })
         }
@@ -515,6 +516,12 @@ pub struct DelegateRequest<'a> {
     /// Identifiant exact du constat motivant cette délégation, s'il est déclaré
     /// à la construction. Absent : délégation ordinaire sans lien d'arbitrage.
     pub constat_id: Option<&'a str>,
+    /// F36 — suite obligatoire (`Aucune` ou objectif nommé).
+    pub suite: SuiteObjective,
+    /// F37 — prérequis objectifs (arêtes OBJECTIF→OBJECTIF).
+    pub depends_on: &'a [Uuid],
+    /// F37 — citations de contexte sans couplage.
+    pub references: &'a [Uuid],
     /// Clé opaque fournie par le client. Elle est l'identité durable de la
     /// commande : un rejeu avec les mêmes octets canoniques rend les mêmes IDs.
     pub idempotency_key: &'a str,
@@ -528,7 +535,8 @@ pub struct DelegateRequest<'a> {
 pub struct DelegationCreated {
     pub objective_id: Uuid,
     pub delegation_id: Uuid,
-    pub message_id: Uuid,
+    /// Absent tant que la délégation est `EnAttentePrerequis`.
+    pub message_id: Option<Uuid>,
     pub participant: String,
     /// Classe explicitement choisie, affichée sans l'interpréter comme un
     /// état de retard local.
@@ -538,6 +546,8 @@ pub struct DelegationCreated {
     /// ne déclenche aucune action quand elle est atteinte.
     pub deadline_contractuelle: i64,
     pub replayed: bool,
+    /// `true` si aucune outbox n'existe encore (attente de prérequis).
+    pub waiting_on_prerequisites: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -911,6 +921,7 @@ pub fn delegate(
     if request.goal.trim().is_empty() || request.now <= 0 {
         return Err(DelegateError::Invalid("objectif ou horodatage absent"));
     }
+    validate_suite_and_citations(store, request)?;
     let canonical_request_bytes = canonical_request_bytes(request)?;
     if let Some(stored) = store
         .lookup_delegate_replay(request.idempotency_key, &canonical_request_bytes)
@@ -960,6 +971,10 @@ pub fn delegate(
     objective
         .transition(EtatObjectif::EnCoordination, request.now)
         .map_err(|_| DelegateError::Invalid("transition objectif invalide"))?;
+    objective.suite = Some(request.suite.clone());
+    objective.depends_on = request.depends_on.to_vec();
+    objective.references = request.references.to_vec();
+
     let reason = if request.explicit_target.is_some() {
         "cible explicite"
     } else {
@@ -977,49 +992,162 @@ pub fn delegate(
         None => Ok(delegation),
     })
     .map_err(|_| DelegateError::Invalid("délégation invalide"))?;
-    let body_bytes = request.goal.as_bytes().to_vec();
-    let outbox = OutboxDelegation {
-        message_id: Uuid::new_v4(),
-        delegation_id: delegation.id,
-        target: selected.clone(),
-        body_hash: stable_body_hash(&body_bytes),
-        body_bytes,
-        reply: request.reply,
-        timeout_secs,
-        deadline_contractuelle: deadline,
-        etat: EtatOutboxDelegation::Prepared,
-        attempted_at: None,
-        retry_until: request.retry_until,
-        dedup_retained_until: request.dedup_retained_until,
+
+    let waiting = {
+        let mut needs_wait = false;
+        for id in request.depends_on {
+            if !store.objective_is_closed(*id).map_err(store_error)? {
+                needs_wait = true;
+                break;
+            }
+        }
+        needs_wait
     };
-    let message_id = outbox.message_id;
-    let prepared = PreparedDelegation::new(
-        objective.clone(),
-        delegation.clone(),
-        outbox,
-        store.issuer_scope(),
-        request.now,
-        request.max_frame_bytes,
-    )
-    .map_err(|_| DelegateError::Invalid("enveloppe de délégation invalide"))?;
-    match store
-        .lookup_or_reserve_delegate(request.idempotency_key, &canonical_request_bytes, &prepared)
-        .map_err(store_error)?
-    {
-        DelegateReservation::Created => Ok(DelegateResult::Created(DelegationCreated {
-            objective_id: objective.id,
+
+    if waiting {
+        let waiting_delegation = delegation
+            .en_attente_de_prerequis()
+            .map_err(|_| DelegateError::Invalid("délégation en attente invalide"))?;
+        let deferred = DeferredDispatchParams {
+            reply: request.reply,
+            timeout_secs,
+            retry_until: request.retry_until,
+            dedup_retained_until: request.dedup_retained_until,
+            max_frame_bytes: request.max_frame_bytes,
+            deadline_contractuelle: deadline,
+            issuer_scope: store.issuer_scope().to_string(),
+        };
+        match store
+            .lookup_or_reserve_waiting_delegate(
+                request.idempotency_key,
+                &canonical_request_bytes,
+                &objective,
+                &waiting_delegation,
+                &deferred,
+            )
+            .map_err(store_error)?
+        {
+            DelegateReservation::Created => Ok(DelegateResult::Created(DelegationCreated {
+                objective_id: objective.id,
+                delegation_id: waiting_delegation.id,
+                message_id: None,
+                participant: selected,
+                duration: request.duration,
+                timeout_secs,
+                deadline_contractuelle: deadline,
+                replayed: false,
+                waiting_on_prerequisites: true,
+            })),
+            DelegateReservation::Replay(stored) => {
+                Ok(DelegateResult::Created(created_from_stored(stored, true)))
+            }
+        }
+    } else {
+        let body_bytes = request.goal.as_bytes().to_vec();
+        let outbox = OutboxDelegation {
+            message_id: Uuid::new_v4(),
             delegation_id: delegation.id,
-            message_id,
-            participant: selected,
-            duration: request.duration,
+            target: selected.clone(),
+            body_hash: stable_body_hash(&body_bytes),
+            body_bytes,
+            reply: request.reply,
             timeout_secs,
             deadline_contractuelle: deadline,
-            replayed: false,
-        })),
-        DelegateReservation::Replay(stored) => {
-            Ok(DelegateResult::Created(created_from_stored(stored, true)))
+            etat: EtatOutboxDelegation::Prepared,
+            attempted_at: None,
+            retry_until: request.retry_until,
+            dedup_retained_until: request.dedup_retained_until,
+        };
+        let message_id = outbox.message_id;
+        let prepared = PreparedDelegation::new(
+            objective.clone(),
+            delegation.clone(),
+            outbox,
+            store.issuer_scope(),
+            request.now,
+            request.max_frame_bytes,
+        )
+        .map_err(|_| DelegateError::Invalid("enveloppe de délégation invalide"))?;
+        match store
+            .lookup_or_reserve_delegate(
+                request.idempotency_key,
+                &canonical_request_bytes,
+                &prepared,
+            )
+            .map_err(store_error)?
+        {
+            DelegateReservation::Created => {
+                if !request.depends_on.is_empty() {
+                    store
+                        .register_objective_dependencies(objective.id, request.depends_on)
+                        .map_err(store_error)?;
+                }
+                Ok(DelegateResult::Created(DelegationCreated {
+                    objective_id: objective.id,
+                    delegation_id: delegation.id,
+                    message_id: Some(message_id),
+                    participant: selected,
+                    duration: request.duration,
+                    timeout_secs,
+                    deadline_contractuelle: deadline,
+                    replayed: false,
+                    waiting_on_prerequisites: false,
+                }))
+            }
+            DelegateReservation::Replay(stored) => {
+                Ok(DelegateResult::Created(created_from_stored(stored, true)))
+            }
         }
     }
+}
+
+fn validate_suite_and_citations(
+    store: &MaicieStore,
+    request: &DelegateRequest<'_>,
+) -> Result<(), DelegateError> {
+    if let SuiteObjective::Objectif(suite_id) = request.suite {
+        let known = store
+            .existing_objective_ids(&[suite_id])
+            .map_err(store_error)?;
+        if known.is_empty() {
+            return Err(DelegateError::Invalid("objectif --suite inconnu"));
+        }
+    }
+    let mut overlap = BTreeSet::new();
+    for id in request.depends_on {
+        if !overlap.insert(*id) {
+            return Err(DelegateError::Invalid("--depends-on dupliqué"));
+        }
+    }
+    for id in request.references {
+        if !overlap.insert(*id) {
+            return Err(DelegateError::Invalid(
+                "citation classée à la fois --depends-on et --reference",
+            ));
+        }
+    }
+    for id in request.depends_on {
+        let known = store.existing_objective_ids(&[*id]).map_err(store_error)?;
+        if known.is_empty() {
+            return Err(DelegateError::Invalid("objectif --depends-on inconnu"));
+        }
+    }
+    for id in request.references {
+        let known = store.existing_objective_ids(&[*id]).map_err(store_error)?;
+        if known.is_empty() {
+            return Err(DelegateError::Invalid("objectif --reference inconnu"));
+        }
+    }
+    let cited = crate::citation::extract_uuids(request.goal);
+    let known = store.existing_objective_ids(&cited).map_err(store_error)?;
+    let missing =
+        unclassified_known_citations(request.goal, &known, request.depends_on, request.references);
+    if !missing.is_empty() {
+        return Err(DelegateError::Invalid(
+            "citation d'objectif non classée (--depends-on ou --reference)",
+        ));
+    }
+    Ok(())
 }
 
 /// Fige la politique configurée après la création durable de la délégation et
@@ -1077,6 +1205,16 @@ struct CanonicalDelegateRequest<'a> {
     reply: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     constat_id: Option<&'a str>,
+    suite: CanonicalSuite<'a>,
+    depends_on: Vec<String>,
+    references: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CanonicalSuite<'a> {
+    Aucune,
+    Objectif(&'a str),
 }
 
 fn canonical_request_bytes(request: &DelegateRequest<'_>) -> Result<Vec<u8>, DelegateError> {
@@ -1097,14 +1235,37 @@ fn canonical_request_bytes(request: &DelegateRequest<'_>) -> Result<Vec<u8>, Del
     {
         return Err(DelegateError::Invalid("tags requis invalides"));
     }
+    let mut depends_on = request
+        .depends_on
+        .iter()
+        .map(Uuid::to_string)
+        .collect::<Vec<_>>();
+    depends_on.sort_unstable();
+    let mut references = request
+        .references
+        .iter()
+        .map(Uuid::to_string)
+        .collect::<Vec<_>>();
+    references.sort_unstable();
+    let suite_id;
+    let suite = match &request.suite {
+        SuiteObjective::Aucune => CanonicalSuite::Aucune,
+        SuiteObjective::Objectif(id) => {
+            suite_id = id.to_string();
+            CanonicalSuite::Objectif(&suite_id)
+        }
+    };
     serde_json::to_vec(&CanonicalDelegateRequest {
-        v: 1,
+        v: 2,
         goal: request.goal,
         explicit_target: request.explicit_target,
         required_tags,
         duration: duration_name(request.duration),
         reply: request.reply,
         constat_id: request.constat_id,
+        suite,
+        depends_on,
+        references,
     })
     .map_err(|_| DelegateError::Invalid("commande delegate non sérialisable"))
 }
@@ -1229,6 +1390,7 @@ fn created_from_stored(stored: StoredDelegateResult, replayed: bool) -> Delegati
         timeout_secs: stored.timeout_secs,
         deadline_contractuelle: stored.deadline_contractuelle,
         replayed,
+        waiting_on_prerequisites: stored.message_id.is_none(),
     }
 }
 

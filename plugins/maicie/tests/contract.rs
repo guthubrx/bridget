@@ -10,6 +10,8 @@ mod catalogue;
 mod delegate;
 #[path = "contract/domain_json.rs"]
 mod domain_json;
+#[path = "contract/f36_f37_suite_citations.rs"]
+mod f36_f37_suite_citations;
 #[path = "contract/telemetry.rs"]
 mod telemetry;
 

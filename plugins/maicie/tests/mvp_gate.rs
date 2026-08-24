@@ -52,6 +52,8 @@ fn delegation_reelle_est_accusee_et_visible_sans_fausse_correlation_de_reponse()
         fixture.config.to_str().unwrap(),
         "--goal",
         "vérifier une délégation réellement remise",
+        "--suite",
+        "aucune",
         "--to",
         "mvp-agent",
         "--duration",

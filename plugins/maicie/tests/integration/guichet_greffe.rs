@@ -44,6 +44,9 @@ fn seed(database: &Path) -> maicie::app::DelegationCreated {
         duration: ClasseDuree::Normale,
         reply: true,
         constat_id: None,
+        suite: maicie::domain::SuiteObjective::Aucune,
+        depends_on: &[],
+        references: &[],
         idempotency_key: "guichet-seed",
         now: 900,
         retry_until: 1_100,
@@ -61,7 +64,7 @@ fn seed(database: &Path) -> maicie::app::DelegationCreated {
 fn delivery_claim(request_id: &str, created: &maicie::app::DelegationCreated) -> GuichetClaim {
     let bytes = format!(
         "{{\"type\":\"service_request\",\"v\":1,\"issuer_scope\":\"scope-0123456789abcdef0123456789abcdef\",\"request_id\":\"{request_id}\",\"issued_at\":1000,\"from\":\"prospective\",\"to\":\"maicie\",\"operation\":\"delivery_report\",\"payload\":{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\",\"delivery_hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"in_reply_to\":\"{}\"}}}}",
-        created.objective_id, created.delegation_id, created.message_id
+        created.objective_id, created.delegation_id, created.message_id.unwrap()
     )
     .into_bytes();
     GuichetClaim {
@@ -89,7 +92,7 @@ fn lifecycle(
         request_id: claim.request_id.clone(),
         state: state.to_string(),
         observed_at: 1_005,
-        in_reply_to: correlated.then(|| created.message_id.to_string()),
+        in_reply_to: correlated.then(|| created.message_id.unwrap().to_string()),
         response_message_id: correlated.then(|| response_message_id.to_string()),
     }
 }
@@ -192,7 +195,10 @@ fn rapport_aux_relations_incoherentes_devient_un_rejet_atteste() {
     let mut claim = delivery_claim("request-invalid-relations", &created);
     claim.canonical_request = String::from_utf8(claim.canonical_request)
         .unwrap()
-        .replace(&created.message_id.to_string(), &Uuid::new_v4().to_string())
+        .replace(
+            &created.message_id.unwrap().to_string(),
+            &Uuid::new_v4().to_string(),
+        )
         .into_bytes();
     let mut store = MaicieStore::open(&database).unwrap();
     let refused = process_guichet_claim(&mut store, &claim, "response-invalid-relations", 1_010)
@@ -389,7 +395,7 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
     drop(connection);
 
     let mut store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 11);
+    assert_eq!(store.schema_version().unwrap(), 12);
     assert_eq!(
         store
             .objective_snapshots(Some(created.objective_id))
@@ -404,7 +410,7 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
     // Une seconde ouverture d'une base déjà v7 est la vraie preuve
     // d'idempotence : la migration ne doit ni recréer, ni vider les tables.
     let mut reopened = MaicieStore::open(&database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 11);
+    assert_eq!(reopened.schema_version().unwrap(), 12);
     let replay = process_guichet_claim(&mut reopened, &claim, "ignored", 1_020).unwrap();
     assert!(replay.replayed);
     assert_eq!(replay.reply_bytes, first.reply_bytes);
@@ -510,12 +516,13 @@ fn crash_worker() {
     let created = maicie::app::DelegationCreated {
         objective_id,
         delegation_id,
-        message_id,
+        message_id: Some(message_id),
         participant: "prospective".to_string(),
         duration: ClasseDuree::Normale,
         timeout_secs: 60,
         deadline_contractuelle: 960,
         replayed: false,
+        waiting_on_prerequisites: false,
     };
     let claim = delivery_claim(&request_id, &created);
     let canonical = parse_claim(&claim).unwrap();
@@ -564,7 +571,10 @@ fn crash_reel_avant_et_apres_commit_discrimine_l_atomicite() {
                 "MAICIE_GUICHET_DELEGATION",
                 created.delegation_id.to_string(),
             )
-            .env("MAICIE_GUICHET_MESSAGE", created.message_id.to_string())
+            .env(
+                "MAICIE_GUICHET_MESSAGE",
+                created.message_id.unwrap().to_string(),
+            )
             .env("MAICIE_GUICHET_CRASH_PHASE", phase)
             .env("MAICIE_GUICHET_CRASH_MARKER", &marker)
             .stdin(Stdio::piped())

@@ -36,6 +36,9 @@ fn request<'a>(
         duration,
         reply: true,
         constat_id: None,
+        suite: maicie::domain::SuiteObjective::Aucune,
+        depends_on: &[],
+        references: &[],
         idempotency_key: "delegate-test-default",
         now: 100,
         retry_until: 150,
@@ -70,7 +73,7 @@ fn cible_explicite_cree_objectif_delegation_et_outbox_atomiques() {
     assert_eq!(created.timeout_secs, 90);
     let pending = store.pending_delegation_outboxes().unwrap();
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].message_id, created.message_id);
+    assert_eq!(pending[0].message_id, created.message_id.unwrap());
     assert_eq!(pending[0].timeout_secs, 90);
     drop(store);
     fs::remove_dir_all(root).unwrap();
@@ -324,7 +327,7 @@ fn cle_reutilisee_avec_enveloppe_divergente_est_refusee_sans_mutation() {
     );
     let pending = store.pending_delegation_outboxes().unwrap();
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].message_id, first.message_id);
+    assert_eq!(pending[0].message_id, first.message_id.unwrap());
     drop(store);
     fs::remove_dir_all(root).unwrap();
 }
@@ -486,6 +489,9 @@ fn concurrent_delegate(
             duration: ClasseDuree::Normale,
             reply: true,
             constat_id: None,
+            suite: maicie::domain::SuiteObjective::Aucune,
+            depends_on: &[],
+            references: &[],
             idempotency_key: key,
             now: 100,
             retry_until: 150,

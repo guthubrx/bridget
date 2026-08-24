@@ -16,6 +16,7 @@
     "longue"
   ],
   "etat_delegation": [
+    "en_attente_prerequis",
     "creee",
     "a_evaluer",
     "terminee",
