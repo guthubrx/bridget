@@ -3204,6 +3204,21 @@ fn forward_managed_events(
                     send_wrapper_message(writer, report);
                 }
             }
+            ManagedEventKind::RuntimeObserved { model, effort } => match source {
+                bridget_transport::ManagedEventSource::CodexAppServer => send_wrapper_message(
+                    writer,
+                    WrapperToDaemon::Runtime {
+                        agent: my_name.to_string(),
+                        model,
+                        effort,
+                        source: bridget_transport::protocol::RuntimeSource::CodexAppServer,
+                    },
+                ),
+                bridget_transport::ManagedEventSource::Acp
+                | bridget_transport::ManagedEventSource::ClaudeStreamJson => {
+                    warn!("fait runtime ignoré : source non autorisée")
+                }
+            },
             ManagedEventKind::RateLimitObserved {
                 window,
                 status,
@@ -3219,8 +3234,17 @@ fn forward_managed_events(
                         source: bridget_transport::protocol::RateLimitSource::ClaudeStreamJson,
                     },
                 ),
-                bridget_transport::ManagedEventSource::Acp
-                | bridget_transport::ManagedEventSource::CodexAppServer => {
+                bridget_transport::ManagedEventSource::CodexAppServer => send_wrapper_message(
+                    writer,
+                    WrapperToDaemon::RateLimit {
+                        agent: my_name.to_string(),
+                        window,
+                        status,
+                        resets_at,
+                        source: bridget_transport::protocol::RateLimitSource::CodexAppServer,
+                    },
+                ),
+                bridget_transport::ManagedEventSource::Acp => {
                     warn!("fait de limite ignoré : source ACP non autorisée")
                 }
             },

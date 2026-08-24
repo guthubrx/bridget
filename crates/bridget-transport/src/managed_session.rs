@@ -97,6 +97,12 @@ pub enum ManagedEventKind {
         message_id: String,
         reason: String,
     },
+    /// Modèle et effort effectivement retournés par le pilote. L'effort
+    /// absent reste une absence attestée, jamais un réglage par défaut local.
+    RuntimeObserved {
+        model: String,
+        effort: Option<String>,
+    },
     /// Limite fournisseur effectivement annoncée par le pilote. Le wrapper la
     /// transmet telle quelle au daemon ; il n'en tire aucune décision locale.
     RateLimitObserved {

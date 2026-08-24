@@ -25,12 +25,19 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const RATE_LIMIT_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const TURN_POLL: Duration = Duration::from_millis(25);
 const SATURATION_RETRIES: u32 = 4;
 
 type Writer = Arc<Mutex<Option<ChildStdin>>>;
-type Waiters = Arc<Mutex<HashMap<u64, mpsc::Sender<Result<Value, String>>>>>;
+type Waiters = Arc<Mutex<HashMap<u64, mpsc::Sender<Result<ServerResponse, String>>>>>;
 type Journal = Arc<Mutex<Option<JournalWriter>>>;
+
+#[derive(Debug)]
+struct ServerResponse {
+    value: Value,
+    raw: Vec<u8>,
+}
 
 #[derive(Debug, Clone)]
 pub struct CodexAppServerOptions {
@@ -148,7 +155,7 @@ impl CodexAppServerTransport {
                 }),
             )?;
             for required in ["userAgent", "codexHome", "platformFamily", "platformOs"] {
-                if initialize.get(required).is_none() {
+                if initialize.value.get(required).is_none() {
                     return Err(TransportError::DeliveryFailed(format!(
                         "initialize Codex ne retourne pas {required}"
                     )));
@@ -162,7 +169,35 @@ impl CodexAppServerTransport {
                 thread_params["model"] = Value::String(model.clone());
             }
             let thread = request(&writer, &waiters, &next_id, "thread/start", thread_params)?;
+            if let Some((model, effort)) = runtime_from_thread_start(&thread.value) {
+                push_source(
+                    &observations,
+                    thread.raw.clone(),
+                    ManagedEventKind::RuntimeObserved { model, effort },
+                );
+            }
+            if let Ok(rate_limits) = request_with_timeout(
+                &writer,
+                &waiters,
+                &next_id,
+                "account/rateLimits/read",
+                Value::Null,
+                RATE_LIMIT_READ_TIMEOUT,
+            ) && let Some((window, status, resets_at)) =
+                rate_limit_from_snapshot(rate_limits.value.get("rateLimits"))
+            {
+                push_source(
+                    &observations,
+                    rate_limits.raw,
+                    ManagedEventKind::RateLimitObserved {
+                        window,
+                        status,
+                        resets_at,
+                    },
+                );
+            }
             thread
+                .value
                 .pointer("/thread/id")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
@@ -557,6 +592,7 @@ fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<St
         ) {
             Ok(result) => {
                 return result
+                    .value
                     .pointer("/turn/id")
                     .and_then(Value::as_str)
                     .map(str::to_owned)
@@ -692,7 +728,18 @@ fn request(
     next_id: &Arc<AtomicU64>,
     method: &str,
     params: Value,
-) -> Result<Value, TransportError> {
+) -> Result<ServerResponse, TransportError> {
+    request_with_timeout(writer, waiters, next_id, method, params, REQUEST_TIMEOUT)
+}
+
+fn request_with_timeout(
+    writer: &Writer,
+    waiters: &Waiters,
+    next_id: &Arc<AtomicU64>,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<ServerResponse, TransportError> {
     let id = next_id.fetch_add(1, Ordering::SeqCst);
     let (sender, receiver) = mpsc::channel();
     waiters
@@ -710,9 +757,42 @@ fn request(
         return Err(error);
     }
     receiver
-        .recv_timeout(REQUEST_TIMEOUT)
+        .recv_timeout(timeout)
         .map_err(|_| TransportError::DeliveryFailed(format!("échéance Codex sur {method}")))?
         .map_err(TransportError::DeliveryFailed)
+}
+
+fn runtime_from_thread_start(value: &Value) -> Option<(String, Option<String>)> {
+    let model = value.get("model")?.as_str()?.to_string();
+    let effort = value
+        .get("reasoningEffort")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some((model, effort))
+}
+
+/// Rend le fait public minimal de la fenêtre primaire attestée par Codex.
+/// Une lecture réussie où `rateLimitReachedType` vaut `null` signifie
+/// explicitement qu'aucun dépassement n'est attesté ; l'étiquette `available`
+/// est une projection de ce null, sans effet de routage ou de lancement.
+fn rate_limit_from_snapshot(snapshot: Option<&Value>) -> Option<(String, String, Option<i64>)> {
+    let snapshot = snapshot?;
+    let primary = snapshot.get("primary")?;
+    // `usedPercent` est le seul champ obligatoire de la fenêtre dans le
+    // schéma app-server : sans lui, une mise à jour sparse ne prouve aucune
+    // limite complète et reste donc inconnue à l'annuaire.
+    primary.get("usedPercent")?.as_i64()?;
+    let minutes = primary.get("windowDurationMins").and_then(Value::as_i64);
+    let window = minutes
+        .map(|minutes| format!("primary/{minutes}m"))
+        .unwrap_or_else(|| "primary".to_string());
+    let status = snapshot
+        .get("rateLimitReachedType")
+        .and_then(Value::as_str)
+        .unwrap_or("available")
+        .to_string();
+    let resets_at = primary.get("resetsAt").and_then(Value::as_i64);
+    Some((window, status, resets_at))
 }
 
 fn write_notification(writer: &Writer, method: &str, params: Value) -> Result<(), TransportError> {
@@ -760,7 +840,12 @@ fn spawn_reader(
                 let result = value
                     .get("error")
                     .map(|error| Err(error.to_string()))
-                    .unwrap_or_else(|| Ok(value.get("result").cloned().unwrap_or(Value::Null)));
+                    .unwrap_or_else(|| {
+                        Ok(ServerResponse {
+                            value: value.get("result").cloned().unwrap_or(Value::Null),
+                            raw,
+                        })
+                    });
                 let _ = waiter.send(result);
                 continue;
             }
@@ -893,13 +978,14 @@ mod tests {
                     case "$line" in
                         *'"method":"initialize"'*) if [ -n "${BRIDGET_CODEX_CHILD_PID:-}" ]; then sleep 60 & printf '%s' "$!" > "$BRIDGET_CODEX_CHILD_PID"; fi; printf '%s\n' '{"id":1,"result":{"userAgent":"fake","codexHome":"/tmp","platformFamily":"unix","platformOs":"macos"}}' ;;
                         *'"method":"initialized"'*) started=1 ;;
-                        *'"method":"thread/start"'*) printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-native"}}}' ;;
+                        *'"method":"thread/start"'*) printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-native"},"model":"gpt-5.6-terra","reasoningEffort":"high"}}' ;;
+                        *'"method":"account/rateLimits/read"'*) printf '%s\n' '{"id":3,"result":{"rateLimits":{"primary":{"usedPercent":42,"windowDurationMins":300,"resetsAt":1787572200},"rateLimitReachedType":null}}}' ;;
                         *'"method":"turn/start"'*)
-                            if [ "$started" != 1 ]; then printf '%s\n' '{"id":3,"error":{"code":-32099,"message":"initialized absent"}}'
-                            elif [ "$saturated" = 0 ]; then saturated=1; printf '%s\n' '{"id":3,"error":{"code":-32001,"message":"saturated"}}'
-                            else printf '%s\n' '{"id":4,"result":{"turn":{"id":"turn-native"}}}'; if [ "${BRIDGET_CODEX_HOLD_TURN:-0}" != 1 ]; then printf '%s\n' '{  "method" : "item/agentMessage/delta" , "params" : { "threadId" : "thread-native" , "turnId" : "turn-native" , "itemId":"i", "delta" : "réponse native" } }'; printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"completed","items":[]}}}'; fi
+                            if [ "$started" != 1 ]; then printf '%s\n' '{"id":4,"error":{"code":-32099,"message":"initialized absent"}}'
+                            elif [ "$saturated" = 0 ]; then saturated=1; printf '%s\n' '{"id":4,"error":{"code":-32001,"message":"saturated"}}'
+                            else printf '%s\n' '{"id":5,"result":{"turn":{"id":"turn-native"}}}'; if [ "${BRIDGET_CODEX_HOLD_TURN:-0}" != 1 ]; then printf '%s\n' '{  "method" : "item/agentMessage/delta" , "params" : { "threadId" : "thread-native" , "turnId" : "turn-native" , "itemId":"i", "delta" : "réponse native" } }'; printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"completed","items":[]}}}'; fi
                             fi ;;
-                        *'"method":"turn/interrupt"'*) printf '%s\n' '{"id":5,"result":{}}'; printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"interrupted","items":[]}}}' ;;
+                        *'"method":"turn/interrupt"'*) printf '%s\n' '{"id":6,"result":{}}'; printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"interrupted","items":[]}}}' ;;
                     esac
                 done"#.to_string(),
             ],
@@ -953,6 +1039,19 @@ mod tests {
             ManagedEventKind::TurnFinished { ref response, terminal: ManagedTerminal::Completed, .. }
                 if response == "réponse native"
         )));
+        assert!(events.iter().any(|event| matches!(
+            event.kind,
+            ManagedEventKind::RuntimeObserved { ref model, effort: Some(ref effort) }
+                if model == "gpt-5.6-terra" && effort == "high"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event.kind,
+            ManagedEventKind::RateLimitObserved {
+                ref window,
+                ref status,
+                resets_at: Some(1_787_572_200),
+            } if window == "primary/300m" && status == "available"
+        )));
         let raw = events.iter().find(|event| {
             matches!(event.kind, ManagedEventKind::Update { .. })
                 && event
@@ -982,6 +1081,7 @@ mod tests {
                 "initialize",
                 "initialized",
                 "thread/start",
+                "account/rateLimits/read",
                 "turn/start",
                 "turn/start"
             ]
@@ -989,6 +1089,16 @@ mod tests {
         assert!(frames.iter().all(|frame| !frame.contains("jsonrpc")));
         transport.stop();
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn absence_de_signaux_codex_ne_cree_aucun_fait() {
+        assert_eq!(runtime_from_thread_start(&json!({})), None);
+        assert_eq!(rate_limit_from_snapshot(None), None);
+        assert_eq!(
+            rate_limit_from_snapshot(Some(&json!({ "primary": null }))),
+            None
+        );
     }
 
     #[test]
