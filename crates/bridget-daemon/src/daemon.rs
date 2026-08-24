@@ -8420,6 +8420,10 @@ mod presence_tests {
                 CLIENT_ISSUED_AT_TOLERANCE_SECS,
             )
             .unwrap();
+        let mut ack_message =
+            bridget_core::BridgetMessage::new("sender-peer", "peer-1", "corps collège");
+        ack_message.id = "message-ack-wrapper".to_string();
+        let message_bytes = serde_json::to_vec(&ack_message).unwrap();
         state
             .idempotency
             .begin_send_delivery(
@@ -8429,7 +8433,7 @@ mod presence_tests {
                     recipient_instance_id: "instance-1".to_string(),
                     delivery_generation: 1,
                     expires_at: now + CLIENT_IDEMPOTENCY_HORIZON_SECS,
-                    message_bytes: b"ack-wrapper-message".to_vec(),
+                    message_bytes,
                 },
             )
             .unwrap();

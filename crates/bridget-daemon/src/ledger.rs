@@ -206,4 +206,69 @@ mod tests {
         drop(store);
         std::fs::remove_file(path).unwrap();
     }
+
+    /// Oracle : une remise `indeterminate` se rend distinctement au ledger.
+    /// Meurt si `from_phase("indeterminate")` perd sa correspondance — le
+    /// troisième état fonctionnerait en base sans jamais s'afficher.
+    #[test]
+    fn projection_rend_indetermine_distinctement() {
+        use crate::idempotency::{IdempotencyKey, IdempotencyStore, OperationKind, SendDelivery};
+
+        const NOW: i64 = 1_700_000_000;
+        const HORIZON: i64 = 3600;
+
+        let path = std::env::temp_dir().join(format!(
+            "bridget-ledger-indetermine-{}-{}.sqlite",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        {
+            let mut idem = IdempotencyStore::open(&path).unwrap();
+            let key = IdempotencyKey::new(
+                "012_scope_aaaaaaaaaaaa",
+                OperationKind::Send,
+                "msg-indetermine",
+            )
+            .unwrap();
+            let mut message = BridgetMessage::new("peer-a", "peer-b", "corps quarantaine");
+            message.id = "msg-indetermine".to_string();
+            let bytes = serde_json::to_vec(&message).unwrap();
+            idem.reserve(&key, &bytes, NOW, HORIZON, NOW, 30).unwrap();
+            idem.begin_send_delivery(
+                &key,
+                &SendDelivery {
+                    delivery_id: "delivery-indetermine".to_string(),
+                    recipient_instance_id: "instance-b".to_string(),
+                    delivery_generation: 1,
+                    expires_at: NOW + HORIZON,
+                    message_bytes: bytes,
+                },
+            )
+            .unwrap();
+            idem.mark_delivery_indeterminate("delivery-indetermine", "instance-b", 1)
+                .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        let projection = read_projection(&store, LedgerScope::Messages, 10).unwrap();
+        let entry = projection
+            .messages
+            .iter()
+            .find(|message| message.id == "msg-indetermine")
+            .expect("message indéterminé visible");
+        assert_eq!(
+            entry.delivery_status,
+            Some(LedgerDeliveryStatus::Indetermine)
+        );
+        let rendered = crate::cli::render_ledger(std::slice::from_ref(entry));
+        assert!(
+            rendered.contains("[indéterminé]"),
+            "la quarantaine doit s'afficher, pas se taire: {rendered}"
+        );
+        assert!(!rendered.contains("[en vol]"));
+        assert!(!rendered.contains("[reçu]"));
+
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
 }

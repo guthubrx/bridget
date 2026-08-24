@@ -100,8 +100,23 @@ Entrée :
 
 Résultat : `requests` = demandes suivies `{ id, from, to, state, deadline,
 created }` (source `ListRequests`) ; `messages` = messages récents `{ id,
-from, to, body, ts }` (couche de lecture partagée avec `bridget ledger`) —
-schémas séparés, jamais mélangés dans une même liste.
+from, to, body, ts, delivery_status? }` (couche de lecture partagée avec
+`bridget ledger`) — schémas séparés, jamais mélangés dans une même liste.
+
+`delivery_status` (snake_case, optionnel) expose la phase de remise idempotente
+quand une saga `send_deliveries` existe pour le même `id` (plage P31 :
+`protocol.rs:LedgerMessage`). Valeurs fermées :
+
+| Valeur JSON | Phase SQL | Sens pour le lecteur |
+|---|---|---|
+| `en_vol` | `dispatching` | émis, accusé pas encore reçu — ne pas conclure à une perte |
+| `recu` | `acked` | destinataire a accusé |
+| `indetermine` | `indeterminate` | quarantaine absorbante — ne sera plus accusé |
+| *(absent)* | pas de saga / Store-only | statut inconnu — **ne pas inventer** `recu` |
+
+Le rendu CLI miroir suffixe `[en vol]` / `[reçu]` / `[indéterminé]`. Visibilité
+ledger ≠ accusé : un message peut être listé `en_vol` sans que le destinataire
+l'ait encore vu.
 
 ## Identité (rappel du contrat FR-004)
 

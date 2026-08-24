@@ -1251,6 +1251,10 @@ impl LedgerDeliveryStatus {
 }
 
 /// Échange stocké par le daemon et exposé aux clients de lecture.
+///
+/// Plage P31 : `protocol.rs:LedgerMessage` — réservée au lot
+/// `fix/ledger-emission-avant-ack` (visibilité ledger ≠ accusé + marqueur
+/// de projection `delivery_status`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LedgerMessage {
     pub id: String,
@@ -2685,5 +2689,27 @@ mod tests {
                     && messages[0].delivery_status == Some(LedgerDeliveryStatus::EnVol)
                     && requests.is_empty()
         ));
+    }
+
+    /// Oracle : les trois phases nommées ont une correspondance. Meurt si l'on
+    /// retire l'arm `indeterminate` (fausse assurance : un état SQL existe
+    /// sans rendu lisible au ledger).
+    #[test]
+    fn from_phase_garde_indetermine_parmi_les_trois_etats() {
+        assert_eq!(
+            LedgerDeliveryStatus::from_phase("dispatching"),
+            Some(LedgerDeliveryStatus::EnVol)
+        );
+        assert_eq!(
+            LedgerDeliveryStatus::from_phase("acked"),
+            Some(LedgerDeliveryStatus::Recu)
+        );
+        assert_eq!(
+            LedgerDeliveryStatus::from_phase("indeterminate"),
+            Some(LedgerDeliveryStatus::Indetermine),
+            "retirer cette correspondance laisse la quarantaine muette au ledger"
+        );
+        assert_eq!(LedgerDeliveryStatus::Indetermine.label_fr(), "indéterminé");
+        assert_eq!(LedgerDeliveryStatus::from_phase("autre"), None);
     }
 }

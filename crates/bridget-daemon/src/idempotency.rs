@@ -916,8 +916,12 @@ impl IdempotencyStore {
         if delivery.message_bytes.is_empty() || delivery.message_bytes.len() > MAX_CANONICAL_BYTES {
             return Err(IdempotencyError::InvalidDelivery);
         }
+        // Jamais de .ok() silencieux : une remise sans enveloppe lisible
+        // recréerait la classe « invisible au ledger » que la gravure à
+        // begin_send_delivery existe pour supprimer.
         let emitted_message =
-            serde_json::from_slice::<bridget_core::BridgetMessage>(&delivery.message_bytes).ok();
+            serde_json::from_slice::<bridget_core::BridgetMessage>(&delivery.message_bytes)
+                .map_err(|_| IdempotencyError::CorruptRecord("enveloppe de remise illisible"))?;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -945,10 +949,8 @@ impl IdempotencyStore {
                 delivery.message_bytes,
             ],
         )?;
-        if let Some(message) = emitted_message.as_ref() {
-            let conversation_key = format!("{}|{}", message.from, message.to);
-            crate::store::record_message_in_transaction(&tx, message, &conversation_key)?;
-        }
+        let conversation_key = format!("{}|{}", emitted_message.from, emitted_message.to);
+        crate::store::record_message_in_transaction(&tx, &emitted_message, &conversation_key)?;
         if let Some(reply) = reply {
             tx.execute(
                 "INSERT INTO tracked_requests (
@@ -1801,7 +1803,7 @@ mod tests {
             recipient_instance_id: "instance-1".to_string(),
             delivery_generation: 1,
             expires_at: NOW + HORIZON,
-            message_bytes: b"message-1".to_vec(),
+            message_bytes: sample_message_bytes("message-1", "peer-1"),
         };
         store.begin_send_delivery(&key, &delivery).unwrap();
         assert_eq!(store.send_delivery(&key).unwrap(), Some(delivery));
@@ -1826,7 +1828,7 @@ mod tests {
             recipient_instance_id: "instance-1".to_string(),
             delivery_generation: 9,
             expires_at: NOW + HORIZON,
-            message_bytes: b"message-retry".to_vec(),
+            message_bytes: sample_message_bytes("message-1", "peer-1"),
         };
         store.begin_send_delivery(&key, &delivery).unwrap();
         assert_eq!(
@@ -1872,6 +1874,61 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap()
+    }
+
+    fn delivery_row_count(store: &IdempotencyStore, delivery_id: &str) -> usize {
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM send_deliveries WHERE delivery_id = ?1",
+                params![delivery_id],
+                |row| row.get::<_, usize>(0),
+            )
+            .unwrap()
+    }
+
+    /// Oracle : enveloppe illisible → erreur explicite, aucune remise créée.
+    /// Meurt si un `.ok()` silencieux réapparaît et laisse passer une remise
+    /// `dispatching` sans ligne au ledger.
+    #[test]
+    fn begin_send_refuse_enveloppe_illisible_sans_creer_remise() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let key = key();
+        assert!(matches!(
+            reserve(&store, b"canon"),
+            Reservation::Prepared { .. }
+        ));
+        let err = store
+            .begin_send_delivery(
+                &key,
+                &SendDelivery {
+                    delivery_id: "delivery-corrupt".to_string(),
+                    recipient_instance_id: "instance-1".to_string(),
+                    delivery_generation: 1,
+                    expires_at: NOW + HORIZON,
+                    message_bytes: b"pas-du-json-message".to_vec(),
+                },
+            )
+            .expect_err("enveloppe illisible doit remonter");
+        assert!(
+            matches!(err, IdempotencyError::CorruptRecord(_)),
+            "attendu CorruptRecord, obtenu {err:?}"
+        );
+        assert_eq!(delivery_row_count(&store, "delivery-corrupt"), 0);
+        assert_eq!(ledger_rows_for(&store, "message-1"), 0);
+        assert_eq!(store.send_delivery(&key).unwrap(), None);
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT state FROM idempotency_records WHERE idempotency_key = 'message-1'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "prepared",
+            "parse avant transaction : pas de demi-écriture dispatching"
+        );
     }
 
     /// Oracle (ii) : un message vers un destinataire encore non accusé est
@@ -1989,7 +2046,7 @@ mod tests {
                     recipient_instance_id: "instance-1".to_string(),
                     delivery_generation: 2,
                     expires_at: NOW + HORIZON,
-                    message_bytes: b"message-expired".to_vec(),
+                    message_bytes: sample_message_bytes("message-1", "peer-1"),
                 },
             )
             .unwrap();
@@ -2016,7 +2073,7 @@ mod tests {
                     recipient_instance_id: "instance-1".to_string(),
                     delivery_generation: 3,
                     expires_at: NOW + HORIZON,
-                    message_bytes: b"message-first".to_vec(),
+                    message_bytes: sample_message_bytes("message-1", "peer-1"),
                 },
             )
             .unwrap();
@@ -2035,7 +2092,7 @@ mod tests {
                         recipient_instance_id: "instance-1".to_string(),
                         delivery_generation: 4,
                         expires_at: NOW + HORIZON,
-                        message_bytes: b"message-second".to_vec(),
+                        message_bytes: sample_message_bytes("message-2", "peer-1"),
                     },
                 )
                 .is_err()
@@ -2062,7 +2119,7 @@ mod tests {
             recipient_instance_id: "instance-1".to_string(),
             delivery_generation: 5,
             expires_at: NOW + HORIZON,
-            message_bytes: b"message-reply".to_vec(),
+            message_bytes: sample_message_bytes("message-1", "agent-2"),
         };
         let reply = ReplyTracking {
             request_id: "request-reply".to_string(),
@@ -2279,7 +2336,7 @@ mod tests {
             recipient_instance_id: "instance-1".to_string(),
             delivery_generation: 4,
             expires_at: NOW + HORIZON,
-            message_bytes: b"enveloppe-intacte".to_vec(),
+            message_bytes: sample_message_bytes("message-1", "peer-1"),
         };
         store.begin_send_delivery(&key, &delivery).unwrap();
         // Avant la quarantaine, la remise est bien en vol : sans ce constat,
