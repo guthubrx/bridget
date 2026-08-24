@@ -77,6 +77,19 @@ pub fn submit_spawn(
     {
         return Ok(SpawnDecision::Rejected(reason));
     }
+    // Une commande absente est une erreur de préparation locale, corrigeable
+    // dans le registre. Elle doit donc rester hors de la saga durable : le
+    // même command_id pourra être rejoué une fois la définition corrigée.
+    if !supervisor.knows_command(&order.command_id)
+        && let Ok(definition) = registry.get(&order.agent_type)
+        && let Ok(env) = build_environment(definition, source)
+        && !command_exists(&definition.command, &env)
+    {
+        return Ok(SpawnDecision::Rejected(SpawnRefusal::CommandMissing {
+            command: definition.command.clone(),
+            registry: registry.source().display().to_string(),
+        }));
+    }
     match supervisor.request_spawn(order, now)? {
         SpawnSubmission::Start(lease) => {
             let prepared = match prepare_spawn(registry, source, order, lease.clone()) {
@@ -173,7 +186,10 @@ fn prepare_spawn_parts(
     ) {
         return Err(SpawnRefusal::BillingGuard { variable });
     }
-    if !matches!(definition.protocol.as_str(), "acp" | "claude_stream_json") {
+    if !matches!(
+        definition.protocol.as_str(),
+        "acp" | "claude_stream_json" | "codex_app_server"
+    ) {
         return Err(SpawnRefusal::NegotiationFailed {
             detail: format!("le protocole '{}' n'est pas ACP", definition.protocol),
         });

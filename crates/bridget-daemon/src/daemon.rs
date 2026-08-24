@@ -2842,6 +2842,7 @@ fn definition_presence_mode(definition: &ResolvedAgentDefinition) -> Option<Pres
     match definition.protocol.as_str() {
         "acp" => Some(PresenceMode::Acp),
         "claude_stream_json" => Some(PresenceMode::Cli),
+        "codex_app_server" => Some(PresenceMode::Cli),
         "tmux" => Some(PresenceMode::Tmux),
         _ => None,
     }
