@@ -32,6 +32,10 @@ use maicie::reconcile::{
     reconcile_guichet_startup_with_limits, reconcile_notification_startup_with_limits,
     reconcile_startup_with_limits,
 };
+use maicie::routines::{
+    EtatRoutine, ProposeRoutineRequest, RoutineError, RoutineStatusRow, approve_routine,
+    evaluate_routines, pause_routine, propose_routine, resume_routine, routines_status_rows,
+};
 use maicie::runtime::{RuntimeNature, RuntimeObservation, RuntimeSignal, RuntimeSubscription};
 use maicie::store::{MaicieStore, ObjectiveSnapshot, ResourceRangeReservation, StoreError};
 use serde::Serialize;
@@ -75,6 +79,7 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
         Command::Profile(profile_args) => run_profile(profile_args, migrate),
         Command::Registre(registre_args) => run_registre(registre_args, migrate),
         Command::Plage(plage_args) => run_plage(plage_args, migrate),
+        Command::Routine(routine_args) => run_routine(routine_args, migrate),
         Command::Migrate(migrate_args) => {
             if migrate {
                 return Err(CliError::Usage(
@@ -381,10 +386,33 @@ fn open_store_with_reconciliation(
     // le même chemin borné de reprise, jamais une seconde logique d'envoi CLI.
     reconcile_notification_startup_with_limits(&mut store, &config.bridget_socket, limits)
         .map_err(CliError::Reconcile)?;
+    // Battement routines : même horloge que la relève (aucune timer Maicie).
+    let now = unix_now()?;
+    let issuer_scope = store.issuer_scope().to_string();
+    let candidates = list_routine_candidates(config, limits).unwrap_or_default();
+    evaluate_routines(
+        &mut store,
+        &config.durations,
+        &issuer_scope,
+        &candidates,
+        now,
+    )
+    .map_err(CliError::Routine)?;
     Ok(ReconciledStore {
         store,
         coordination,
     })
+}
+
+fn list_routine_candidates(
+    config: &MaicieConfig,
+    limits: BridgetClientLimits,
+) -> Result<Vec<DelegationCandidate>, CliError> {
+    let client =
+        BridgetClient::connect_with_limits(&config.bridget_socket, "maicie-routines", limits)
+            .map_err(CliError::Bridget)?;
+    let agents = client.list_agents().map_err(CliError::Bridget)?;
+    Ok(candidates_from(config, &agents))
 }
 
 fn reconcile_pending(
@@ -713,6 +741,7 @@ enum Command {
     Profile(ProfileArgs),
     Registre(RegistreArgs),
     Plage(PlageArgs),
+    Routine(RoutineArgs),
     /// Consentement explicite : applique les migrations de schéma.
     Migrate(MigrateArgs),
 }
@@ -845,9 +874,10 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
         "profile" => parse_profile(tail).map(Command::Profile),
         "registre" => parse_registre(tail).map(Command::Registre),
         "plage" => parse_plage(tail).map(Command::Plage),
+        "routine" => parse_routine(tail).map(Command::Routine),
         "migrate" => parse_migrate(tail).map(Command::Migrate),
         _ => Err(CliError::Usage(
-            "commande inconnue : delegate, status, objective, profile, registre, plage ou migrate",
+            "commande inconnue : delegate, status, objective, profile, registre, plage, routine ou migrate",
         )),
     }
 }
@@ -874,6 +904,287 @@ fn run_migrate(arguments: MigrateArgs) -> Result<String, CliError> {
     let store = MaicieStore::open_and_migrate(&config.database_path).map_err(CliError::Store)?;
     let version = store.schema_version().map_err(CliError::Store)?;
     Ok(format!("schéma migré vers {version}"))
+}
+
+#[derive(Debug)]
+struct RoutineArgs {
+    config: PathBuf,
+    json: bool,
+    action: RoutineAction,
+}
+
+#[derive(Debug)]
+enum RoutineAction {
+    Propose {
+        goal: String,
+        participant: String,
+        period_secs: i64,
+        suite: SuiteObjective,
+        depends_on: Vec<Uuid>,
+        references: Vec<Uuid>,
+    },
+    Approve {
+        routine_id: Uuid,
+    },
+    List,
+    Pause {
+        routine_id: Uuid,
+    },
+    Resume {
+        routine_id: Uuid,
+    },
+    Show {
+        routine_id: Uuid,
+    },
+}
+
+fn parse_routine(arguments: &[String]) -> Result<RoutineArgs, CliError> {
+    let Some((verb, tail)) = arguments.split_first() else {
+        return Err(CliError::Usage(
+            "action routine obligatoire : propose|approve|list|pause|resume|show",
+        ));
+    };
+    let mut config = None;
+    let mut json = false;
+    let mut goal = None;
+    let mut participant = None;
+    let mut period_secs = None;
+    let mut suite = None;
+    let mut depends_on = Vec::new();
+    let mut references = Vec::new();
+    let mut routine_id = None;
+    let mut index = 0;
+    while index < tail.len() {
+        match tail[index].as_str() {
+            "--config" => set_once_path(&mut config, next_value(tail, &mut index, "--config")?)?,
+            "--json" => {
+                if json {
+                    return Err(CliError::Usage("option --json dupliquée"));
+                }
+                json = true;
+            }
+            "--goal" => {
+                set_once_string(&mut goal, next_value(tail, &mut index, "--goal")?, "goal")?
+            }
+            "--to" => set_once_string(
+                &mut participant,
+                next_value(tail, &mut index, "--to")?,
+                "to",
+            )?,
+            "--period-secs" => {
+                if period_secs.is_some() {
+                    return Err(CliError::Usage("option --period-secs dupliquée"));
+                }
+                let raw = next_value(tail, &mut index, "--period-secs")?;
+                period_secs = Some(
+                    raw.parse::<i64>()
+                        .map_err(|_| CliError::Usage("--period-secs entier attendu"))?,
+                );
+            }
+            "--suite" => {
+                if suite.is_some() {
+                    return Err(CliError::Usage("option --suite dupliquée"));
+                }
+                suite = Some(parse_suite(next_value(tail, &mut index, "--suite")?)?);
+            }
+            "--depends-on" => {
+                depends_on.push(parse_objective_id(next_value(
+                    tail,
+                    &mut index,
+                    "--depends-on",
+                )?)?);
+            }
+            "--reference" => {
+                references.push(parse_objective_id(next_value(
+                    tail,
+                    &mut index,
+                    "--reference",
+                )?)?);
+            }
+            "--id" => {
+                if routine_id.is_some() {
+                    return Err(CliError::Usage("option --id dupliquée"));
+                }
+                routine_id = Some(parse_objective_id(next_value(tail, &mut index, "--id")?)?);
+            }
+            other if other.starts_with("--") => {
+                return Err(CliError::Usage("option routine inconnue"));
+            }
+            _ => {
+                return Err(CliError::Usage("option routine inconnue"));
+            }
+        }
+        index += 1;
+    }
+    let config = config.ok_or(CliError::Usage("--config est obligatoire"))?;
+    let action = match verb.as_str() {
+        "propose" => {
+            let suite = suite.ok_or(CliError::Usage(
+                "--suite est obligatoire (--suite aucune|<objectif-id>)",
+            ))?;
+            RoutineAction::Propose {
+                goal: goal.ok_or(CliError::Usage("--goal obligatoire"))?,
+                participant: participant.ok_or(CliError::Usage("--to obligatoire"))?,
+                period_secs: period_secs.ok_or(CliError::Usage("--period-secs obligatoire"))?,
+                suite,
+                depends_on,
+                references,
+            }
+        }
+        "approve" => RoutineAction::Approve {
+            routine_id: routine_id.ok_or(CliError::Usage("--id obligatoire"))?,
+        },
+        "list" => RoutineAction::List,
+        "pause" => RoutineAction::Pause {
+            routine_id: routine_id.ok_or(CliError::Usage("--id obligatoire"))?,
+        },
+        "resume" => RoutineAction::Resume {
+            routine_id: routine_id.ok_or(CliError::Usage("--id obligatoire"))?,
+        },
+        "show" => RoutineAction::Show {
+            routine_id: routine_id.ok_or(CliError::Usage("--id obligatoire"))?,
+        },
+        _ => {
+            return Err(CliError::Usage(
+                "action routine inconnue : propose|approve|list|pause|resume|show",
+            ));
+        }
+    };
+    Ok(RoutineArgs {
+        config,
+        json,
+        action,
+    })
+}
+
+fn run_routine(arguments: RoutineArgs, migrate: bool) -> Result<String, CliError> {
+    let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let mut store = open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)?.store;
+    let now = unix_now()?;
+    match arguments.action {
+        RoutineAction::Propose {
+            goal,
+            participant,
+            period_secs,
+            suite,
+            depends_on,
+            references,
+        } => {
+            let routine = propose_routine(
+                &mut store,
+                &ProposeRoutineRequest {
+                    goal: &goal,
+                    participant: &participant,
+                    period_secs,
+                    suite,
+                    depends_on: &depends_on,
+                    references: &references,
+                    now,
+                },
+            )
+            .map_err(CliError::Routine)?;
+            render_routine_output(
+                RoutineOutput::Proposed {
+                    routine_id: routine.id,
+                    template_hash_hex: hex_hash(&routine.template_hash),
+                    period_secs: routine.period_secs,
+                    participant: routine.participant,
+                },
+                arguments.json,
+            )
+        }
+        RoutineAction::Approve { routine_id } => {
+            let routine = store
+                .load_routine(routine_id)
+                .map_err(CliError::Store)?
+                .ok_or(CliError::Routine(RoutineError::NotFound(routine_id)))?;
+            confirm_local_routine_approval(routine_id, &routine)?;
+            let approved = approve_routine(&mut store, routine_id, &routine.template_hash, now)
+                .map_err(CliError::Routine)?;
+            render_routine_output(
+                RoutineOutput::Approved {
+                    routine_id: approved.id,
+                    state: "active",
+                },
+                arguments.json,
+            )
+        }
+        RoutineAction::List => {
+            let rows = routines_status_rows(&store).map_err(CliError::Routine)?;
+            render_routine_output(
+                RoutineOutput::List {
+                    routines: rows.into_iter().map(RoutineStatusOutput::from).collect(),
+                },
+                arguments.json,
+            )
+        }
+        RoutineAction::Pause { routine_id } => {
+            let paused = pause_routine(&mut store, routine_id, now).map_err(CliError::Routine)?;
+            render_routine_output(
+                RoutineOutput::State {
+                    routine_id: paused.id,
+                    state: "paused",
+                },
+                arguments.json,
+            )
+        }
+        RoutineAction::Resume { routine_id } => {
+            let resumed = resume_routine(&mut store, routine_id, now).map_err(CliError::Routine)?;
+            render_routine_output(
+                RoutineOutput::State {
+                    routine_id: resumed.id,
+                    state: "active",
+                },
+                arguments.json,
+            )
+        }
+        RoutineAction::Show { routine_id } => {
+            let rows = routines_status_rows(&store).map_err(CliError::Routine)?;
+            let row = rows
+                .into_iter()
+                .find(|row| row.routine_id == routine_id)
+                .ok_or(CliError::Routine(RoutineError::NotFound(routine_id)))?;
+            render_routine_output(
+                RoutineOutput::Show {
+                    routine: RoutineStatusOutput::from(row),
+                },
+                arguments.json,
+            )
+        }
+    }
+}
+
+fn confirm_local_routine_approval(
+    routine_id: Uuid,
+    routine: &maicie::routines::Routine,
+) -> Result<(), CliError> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err(CliError::Usage(
+            "approbation routine = terminal interactif uniquement",
+        ));
+    }
+    println!("Approbation locale de la routine");
+    println!("  id={}", routine_id);
+    println!("  participant={}", routine.participant);
+    println!("  period_secs={}", routine.period_secs);
+    println!("  goal={}", sanitize_terminal(&routine.goal));
+    println!("  hash={}", hex_hash(&routine.template_hash));
+    print!("Confirmer l'activation (oui) : ");
+    io::stdout()
+        .flush()
+        .map_err(|_| CliError::Usage("stdout indisponible"))?;
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .map_err(|_| CliError::Usage("stdin indisponible"))?;
+    if line.trim() != "oui" {
+        return Err(CliError::Usage("approbation routine refusée"));
+    }
+    Ok(())
+}
+
+fn hex_hash(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn parse_plage(arguments: &[String]) -> Result<PlageArgs, CliError> {
@@ -2287,7 +2598,8 @@ enum CliError {
     Store(StoreError),
     Reconcile(ReconcileError),
     Profile(ProfileError),
-    ProfileActivation(ProfileActivationError),
+        ProfileActivation(ProfileActivationError),
+    Routine(RoutineError),
 }
 
 impl CliError {
@@ -2374,6 +2686,7 @@ impl fmt::Display for CliError {
             Self::Reconcile(error) => error.fmt(formatter),
             Self::Profile(error) => error.fmt(formatter),
             Self::ProfileActivation(error) => error.fmt(formatter),
+            Self::Routine(error) => error.fmt(formatter),
         }
     }
 }

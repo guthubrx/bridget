@@ -12,6 +12,8 @@ mod delegate;
 mod domain_json;
 #[path = "contract/f36_f37_suite_citations.rs"]
 mod f36_f37_suite_citations;
+#[path = "contract/routines.rs"]
+mod routines;
 #[path = "contract/telemetry.rs"]
 mod telemetry;
 
