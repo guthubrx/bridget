@@ -7,6 +7,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -58,27 +59,36 @@ def unavailable(reason: str) -> dict[str, Any]:
 
 
 def read_maicie_read_only(config_path: str) -> tuple[dict[str, Any] | None, str | None]:
-    """Lit uniquement les index Maicie : aucune commande `status` ici.
+    """Lit les index Maicie sur une copie : aucune commande `status` ici.
 
     `maicie status` réconcilie ses outboxes au démarrage. Une ronde ne doit ni
-    émettre ni modifier une source d'autorité ; SQLite est donc ouvert avec
-    `mode=ro` et les seules requêtes lisent les objectifs/délégations.
+    émettre ni modifier une source d'autorité. Ouvrir même une base WAL en
+    `mode=ro` peut créer/toucher ses sidecars : la base et son WAL sont donc
+    copiés dans un répertoire jetable avant toute ouverture SQLite. Le lecteur
+    ne peut ainsi écrire que dans cette copie non autoritaire.
     """
     try:
         with open(config_path, encoding="utf-8") as stream:
             config = json.load(stream)
-        database_path = config["database_path"]
-        connection = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
-        try:
-            objectives = connection.execute(
-                "SELECT id, state FROM objectives WHERE state = 'a_evaluer' ORDER BY id"
-            ).fetchall()
-            participants = connection.execute(
-                "SELECT d.payload_json FROM delegations d JOIN objectives o ON o.id = d.objective_id "
-                "WHERE o.state = 'en_coordination' ORDER BY d.id"
-            ).fetchall()
-        finally:
-            connection.close()
+        source = Path(config["database_path"])
+        with tempfile.TemporaryDirectory(prefix="bridget-ronde-maicie-") as directory:
+            copied = Path(directory) / source.name
+            shutil.copy2(source, copied)
+            source_wal = Path(f"{source}-wal")
+            if source_wal.exists():
+                shutil.copy2(source_wal, Path(f"{copied}-wal"))
+            connection = sqlite3.connect(copied)
+            try:
+                connection.execute("PRAGMA query_only=ON")
+                objectives = connection.execute(
+                    "SELECT id, state FROM objectives WHERE state = 'a_evaluer' ORDER BY id"
+                ).fetchall()
+                participants = connection.execute(
+                    "SELECT d.payload_json FROM delegations d JOIN objectives o ON o.id = d.objective_id "
+                    "WHERE o.state = 'en_coordination' ORDER BY d.id"
+                ).fetchall()
+            finally:
+                connection.close()
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, sqlite3.Error) as error:
         return None, str(error)
     active = set()

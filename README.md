@@ -139,8 +139,7 @@ Maicie est indisponible, les observations Bridget restent présentes et la
 partie Maicie est explicitement `unavailable`.
 
 ```bash
-python3 /Users/moi/Nextcloud/10.Scripts/bridget/scripts/bridget-ronde.py \
-  --config /Users/moi/.config/maicie/config.json
+python3 scripts/bridget-ronde.py --config "$HOME/.config/maicie/config.json"
 ```
 
 Pour archiver les deux formats après chaque ronde et l'exécuter périodiquement
@@ -149,9 +148,9 @@ unité `launchd` sur macOS ou un service/timer `systemd --user` sur Linux ; aucu
 service n'est nécessaire pour lancer la commande à la main.
 
 ```bash
-/Users/moi/Nextcloud/10.Scripts/bridget/scripts/install-bridget-ronde.sh \
-  --config /Users/moi/.config/maicie/config.json \
-  --report-dir /Users/moi/.cache/bridget/rondes
+scripts/install-bridget-ronde.sh \
+  --config "$HOME/.config/maicie/config.json" \
+  --report-dir "$HOME/.cache/bridget/rondes"
 ```
 
 Les archives portent leur horodatage UTC et sont écrites en `.txt` et `.json`

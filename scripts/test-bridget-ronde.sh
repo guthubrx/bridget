@@ -5,7 +5,12 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ronde="${root_dir}/scripts/bridget-ronde.py"
 installer="${root_dir}/scripts/install-bridget-ronde.sh"
 fixture_root="$(mktemp -d -t bridget-ronde-test.XXXXXX)"
-cleanup() { rm -rf "$fixture_root"; }
+writer_pid=""
+cleanup() {
+  [[ -n "$writer_pid" ]] && touch "${fixture_root}/writer-release"
+  [[ -n "$writer_pid" ]] && wait "$writer_pid" 2>/dev/null || true
+  rm -rf "$fixture_root"
+}
 trap cleanup EXIT
 
 fake_bridget="${fixture_root}/bridget"
@@ -31,20 +36,39 @@ chmod 0755 "$fake_bridget" "$fake_maicie"
 
 config="${fixture_root}/maicie.json"
 database="${fixture_root}/maicie.sqlite3"
-python3 - "$config" "$database" <<'PY'
-import json, sqlite3, sys
-config, database = sys.argv[1:]
+# Ce processus garde une vraie base WAL ouverte : l'oracle vérifie les
+# sidecars de la SOURCE, pas ceux de la copie temporaire de la ronde.
+python3 - "$config" "$database" "${fixture_root}/writer-ready" "${fixture_root}/writer-release" <<'PY' &
+import json, pathlib, sqlite3, sys, time
+config, database, ready, release = map(pathlib.Path, sys.argv[1:])
 db = sqlite3.connect(database)
+db.execute("PRAGMA journal_mode=WAL")
 db.execute("CREATE TABLE objectives(id TEXT PRIMARY KEY, state TEXT NOT NULL)")
 db.execute("CREATE TABLE delegations(id TEXT PRIMARY KEY, objective_id TEXT NOT NULL, payload_json TEXT NOT NULL)")
 db.execute("INSERT INTO objectives VALUES ('evaluate', 'a_evaluer')")
 db.execute("INSERT INTO objectives VALUES ('active', 'en_coordination')")
 db.execute("INSERT INTO delegations VALUES ('d-active', 'active', '{\"participant\":\"alice\"}')")
 db.commit()
+db.execute("SELECT COUNT(*) FROM objectives").fetchone()
+assert pathlib.Path(f"{database}-wal").exists()
+assert pathlib.Path(f"{database}-shm").exists()
+with config.open("w", encoding="utf-8") as stream:
+    json.dump({"database_path": str(database)}, stream)
+pathlib.Path(ready).touch()
+while not pathlib.Path(release).exists():
+    time.sleep(0.01)
 db.close()
-with open(config, "w", encoding="utf-8") as stream:
-    json.dump({"database_path": database}, stream)
 PY
+writer_pid=$!
+for _ in $(seq 1 100); do [[ -f "${fixture_root}/writer-ready" ]] && break; sleep 0.01; done
+[[ -f "${fixture_root}/writer-ready" ]]
+
+sidecars_before="$(python3 - "$database" <<'PY'
+import json, os, sys
+database = sys.argv[1]
+print(json.dumps({suffix: [os.stat(database + suffix).st_size, os.stat(database + suffix).st_mtime_ns] for suffix in ('-wal', '-shm')}))
+PY
+)"
 
 report_dir="${fixture_root}/reports"
 command_log="${fixture_root}/commands.log"
@@ -62,11 +86,33 @@ assert report["registry"]["view"] == "REGISTRE\nopen=1\n"
 PY
 [[ -f "${report_dir}/ronde-1970-01-01T00-01-40Z.txt" ]]
 [[ -f "${report_dir}/ronde-1970-01-01T00-01-40Z.json" ]]
+sidecars_after="$(python3 - "$database" <<'PY'
+import json, os, sys
+database = sys.argv[1]
+print(json.dumps({suffix: [os.stat(database + suffix).st_size, os.stat(database + suffix).st_mtime_ns] for suffix in ('-wal', '-shm')}))
+PY
+)"
+[[ "$sidecars_before" == "$sidecars_after" ]] || {
+  echo "la ronde a modifié les sidecars de la source SQLite" >&2
+  exit 1
+}
 grep -qx 'bridget agents --json' "$command_log"
 grep -qx 'bridget requests --all --json' "$command_log"
 grep -qx 'maicie registre list --config .*/maicie.json --attente' "$command_log"
-if rg -q '(send|spawn|stop|approve|status)' "$command_log"; then
+assert_passive_log() {
+  if rg -q '(send|spawn|stop|approve|status)' "$1"; then
+    return 1
+  fi
+}
+if ! assert_passive_log "$command_log"; then
   echo "la ronde ne doit ni agir ni appeler maicie status" >&2
+  exit 1
+fi
+# Mutation d'oracle : l'action n'est jamais exécutée ; injecter son nom dans
+# le journal DOIT néanmoins faire rougir le détecteur de passivité.
+printf 'bridget send --to alice interdit\n' >>"$command_log"
+if assert_passive_log "$command_log"; then
+  echo "mutation de passivité non détectée" >&2
   exit 1
 fi
 
