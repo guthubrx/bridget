@@ -383,7 +383,21 @@ impl IdempotencyStore {
                 escalation_level INTEGER NOT NULL DEFAULT 0,
                 cancel_reason TEXT,
                 completed_at INTEGER
-            );",
+            );
+            -- Visibilité d'émission (fait distinct de l'accusé). Créée ici pour
+            -- que le socle idempotent puisse graver le ledger sans dépendre du
+            -- Store applicatif dans les tests unitaires isolés.
+            CREATE TABLE IF NOT EXISTS ledger (
+                id TEXT NOT NULL,
+                ts INTEGER NOT NULL,
+                sender TEXT NOT NULL,
+                target TEXT NOT NULL,
+                body TEXT NOT NULL,
+                conversation_key TEXT NOT NULL,
+                PRIMARY KEY (id, target)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ledger_ts ON ledger(ts);
+            CREATE INDEX IF NOT EXISTS idx_ledger_conv ON ledger(conversation_key, ts);",
         )?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let migration_applied = tx.query_row(
@@ -868,8 +882,10 @@ impl IdempotencyStore {
         }
     }
 
-    /// Fige la remise d'un envoi. Le changement d'état du socle et l'entrée
-    /// `send_deliveries` partagent une transaction SQLite et une même clé FK.
+    /// Fige la remise d'un envoi. Le changement d'état du socle, l'entrée
+    /// `send_deliveries` et la **visibilité ledger** (fait d'émission) partagent
+    /// une transaction SQLite. L'accusé (`acked`) reste un fait distinct :
+    /// `outcome_unknown` reste nominal tant que `DeliverAcked` n'est pas reçu.
     pub fn begin_send_delivery(
         &mut self,
         key: &IdempotencyKey,
@@ -900,6 +916,8 @@ impl IdempotencyStore {
         if delivery.message_bytes.is_empty() || delivery.message_bytes.len() > MAX_CANONICAL_BYTES {
             return Err(IdempotencyError::InvalidDelivery);
         }
+        let emitted_message =
+            serde_json::from_slice::<bridget_core::BridgetMessage>(&delivery.message_bytes).ok();
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -927,6 +945,10 @@ impl IdempotencyStore {
                 delivery.message_bytes,
             ],
         )?;
+        if let Some(message) = emitted_message.as_ref() {
+            let conversation_key = format!("{}|{}", message.from, message.to);
+            crate::store::record_message_in_transaction(&tx, message, &conversation_key)?;
+        }
         if let Some(reply) = reply {
             tx.execute(
                 "INSERT INTO tracked_requests (
@@ -943,6 +965,31 @@ impl IdempotencyStore {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Réassigne les remises encore en vol d'une instance morte vers l'instance
+    /// vivante du même équipier. Ne touche ni `acked` ni `indeterminate`.
+    pub fn reassign_dispatching_deliveries(
+        &mut self,
+        from_instance_id: &str,
+        to_instance_id: &str,
+        now: i64,
+    ) -> Result<usize, IdempotencyError> {
+        if from_instance_id.is_empty()
+            || to_instance_id.is_empty()
+            || from_instance_id == to_instance_id
+        {
+            return Ok(0);
+        }
+        let updated = self.conn.execute(
+            "UPDATE send_deliveries
+             SET recipient_instance_id = ?1
+             WHERE recipient_instance_id = ?2
+               AND phase = 'dispatching'
+               AND expires_at > ?3",
+            params![to_instance_id, from_instance_id, now],
+        )?;
+        Ok(updated)
     }
 
     /// Finalise un refus de clé neuve sans rendre l'état intermédiaire
@@ -1076,6 +1123,9 @@ impl IdempotencyStore {
 
     /// Accusé aval : la remise et le résultat public deviennent terminaux dans
     /// une même transaction, après validation de l'instance et génération.
+    /// Le ledger d'émission a déjà été gravé à `begin_send_delivery` — ici on
+    /// ne fait que soldater l'accusé et le cycle de réponse, sans réécrire le
+    /// fait d'émission (visibilité ≠ accusé).
     pub fn acknowledge_send_delivery(
         &mut self,
         delivery_id: &str,
@@ -1119,8 +1169,6 @@ impl IdempotencyStore {
             return Err(IdempotencyError::DispatchUnavailable);
         }
         let answered_request = if let Some(message) = message {
-            let conversation_key = format!("{}|{}", message.from, message.to);
-            crate::store::record_message_in_transaction(&tx, &message, &conversation_key)?;
             if let Some(request_id) = message.in_reply_to.as_deref() {
                 let changed = crate::store::mark_answered_in_transaction(
                     &tx,
@@ -1795,6 +1843,133 @@ mod tests {
             Reservation::Replayed(LookupResult::Accepted {
                 expires_at: NOW + HORIZON
             })
+        );
+    }
+
+    fn sample_message_bytes(id: &str, to: &str) -> Vec<u8> {
+        let mut message = bridget_core::BridgetMessage::new("sender-peer", to, "corps collège");
+        message.id = id.to_string();
+        serde_json::to_vec(&message).expect("message sérialisable")
+    }
+
+    fn ledger_rows_for(store: &IdempotencyStore, id: &str) -> usize {
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM ledger WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, usize>(0),
+            )
+            .unwrap()
+    }
+
+    fn delivery_phase(store: &IdempotencyStore, delivery_id: &str) -> String {
+        store
+            .conn
+            .query_row(
+                "SELECT phase FROM send_deliveries WHERE delivery_id = ?1",
+                params![delivery_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    /// Oracle (ii) : un message vers un destinataire encore non accusé est
+    /// VISIBLE au ledger ; la phase reste `dispatching` (accusé distinct).
+    #[test]
+    fn ledger_visible_pendant_dispatching_avant_accuse() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let key = key();
+        assert!(matches!(
+            reserve(&store, b"canon"),
+            Reservation::Prepared { .. }
+        ));
+        let delivery = SendDelivery {
+            delivery_id: "delivery-visible".to_string(),
+            recipient_instance_id: "instance-busy".to_string(),
+            delivery_generation: 3,
+            expires_at: NOW + HORIZON,
+            message_bytes: sample_message_bytes("msg-visible-busy", "peer-busy"),
+        };
+        store.begin_send_delivery(&key, &delivery).unwrap();
+        assert_eq!(delivery_phase(&store, "delivery-visible"), "dispatching");
+        assert_eq!(
+            ledger_rows_for(&store, "msg-visible-busy"),
+            1,
+            "le fait d'émission doit être au ledger avant DeliverAcked"
+        );
+        assert_eq!(
+            reserve(&store, b"canon"),
+            Reservation::Replayed(LookupResult::OutcomeUnknown {
+                expires_at: NOW + HORIZON
+            }),
+            "outcome_unknown reste nominal tant que l'accusé manque"
+        );
+        store
+            .acknowledge_send_delivery("delivery-visible", "instance-busy", 3)
+            .unwrap();
+        assert_eq!(delivery_phase(&store, "delivery-visible"), "acked");
+        assert_eq!(
+            ledger_rows_for(&store, "msg-visible-busy"),
+            1,
+            "l'accusé ne doit pas dupliquer la ligne d'émission"
+        );
+        assert_eq!(
+            reserve(&store, b"canon"),
+            Reservation::Replayed(LookupResult::Accepted {
+                expires_at: NOW + HORIZON
+            })
+        );
+    }
+
+    /// Oracle (iii) : les remises d'une instance morte sont reprises sur la
+    /// nouvelle instance (réassignation), sans toucher aux phases terminales.
+    #[test]
+    fn remises_dispatching_migrees_au_changement_d_instance() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let key = key();
+        assert!(matches!(
+            reserve(&store, b"canon"),
+            Reservation::Prepared { .. }
+        ));
+        let delivery = SendDelivery {
+            delivery_id: "delivery-orphan".to_string(),
+            recipient_instance_id: "instance-morte".to_string(),
+            delivery_generation: 7,
+            expires_at: NOW + HORIZON,
+            message_bytes: sample_message_bytes("msg-orphan", "peer-respawn"),
+        };
+        store.begin_send_delivery(&key, &delivery).unwrap();
+        assert_eq!(
+            store
+                .reassign_dispatching_deliveries("instance-morte", "instance-vivante", NOW)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            store
+                .dispatching_deliveries_for_instance("instance-morte", NOW)
+                .unwrap()
+                .len(),
+            0
+        );
+        let revived = store
+            .dispatching_deliveries_for_instance("instance-vivante", NOW)
+            .unwrap();
+        assert_eq!(revived.len(), 1);
+        assert_eq!(revived[0].delivery_id, "delivery-orphan");
+        assert_eq!(revived[0].recipient_instance_id, "instance-vivante");
+        // Ack sur la nouvelle instance doit aboutir.
+        store
+            .acknowledge_send_delivery("delivery-orphan", "instance-vivante", 7)
+            .unwrap();
+        assert_eq!(delivery_phase(&store, "delivery-orphan"), "acked");
+        assert_eq!(
+            store
+                .reassign_dispatching_deliveries("instance-vivante", "autre", NOW)
+                .unwrap(),
+            0,
+            "une remise déjà acked ne migre pas"
         );
     }
 

@@ -953,6 +953,18 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
         first["result"]["structuredContent"]["status"],
         "outcome_unknown"
     );
+    // Oracle (ii) : visible au ledger AVANT DeliverAcked, pendant dispatching.
+    let store_before_ack = Store::open(&database).expect("store avant ack");
+    assert_eq!(
+        store_before_ack
+            .recent_messages(20)
+            .expect("ledger avant ack")
+            .iter()
+            .filter(|entry| entry.id == "mcp-linked-retry")
+            .count(),
+        1,
+        "le message doit être visible au ledger avant l'accusé du destinataire"
+    );
     let (delivery_id, delivery_generation) = match receive_delivery(&mut recipient) {
         DaemonToWrapper::DeliverIdempotent {
             delivery_id,
@@ -1010,7 +1022,7 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
             .filter(|entry| entry.id == "mcp-linked-retry")
             .count(),
         1,
-        "le ledger persistant ne contient qu'une remise acquittée"
+        "le ledger persistant ne contient qu'une remise émise (visibilité ≠ accusé)"
     );
     let before_a = store
         .get_request("request-a")
