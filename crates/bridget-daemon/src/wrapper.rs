@@ -3567,6 +3567,47 @@ mod reconnect_tests {
         (events, emitter)
     }
 
+    /// Journal d'observation réservé aux tests qui vérifient l'ordonnancement
+    /// du relais. Chaque émission réveille le test : celui-ci attend donc un
+    /// fait du worker, et non une fenêtre arbitraire dépendante de la charge.
+    struct ObservableRelayEvents {
+        messages: Mutex<Vec<WrapperToDaemon>>,
+        emitted: Condvar,
+    }
+
+    fn observable_relay_emitter() -> (Arc<ObservableRelayEvents>, RelayEmitter) {
+        let events = Arc::new(ObservableRelayEvents {
+            messages: Mutex::new(Vec::new()),
+            emitted: Condvar::new(),
+        });
+        let captured = events.clone();
+        let emitter: Arc<dyn Fn(WrapperToDaemon) + Send + Sync> = Arc::new(move |message| {
+            captured
+                .messages
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push(message);
+            captured.emitted.notify_all();
+        });
+        (events, emitter)
+    }
+
+    fn wait_for_relay_state(
+        events: &ObservableRelayEvents,
+        condition: impl Fn(&[WrapperToDaemon]) -> bool,
+    ) {
+        let mut messages = events
+            .messages
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        while !condition(&messages) {
+            messages = events
+                .emitted
+                .wait(messages)
+                .unwrap_or_else(|poison| poison.into_inner());
+        }
+    }
+
     fn wait_for(condition: impl Fn() -> bool) {
         for _ in 0..100 {
             if condition() {
@@ -4432,7 +4473,7 @@ mod reconnect_tests {
         large.extend_from_slice(b"\"}\n");
         std::fs::write(root.join("2026-08-22.jsonl"), large).unwrap();
         std::fs::write(root.join("2026-08-23.jsonl"), b"").unwrap();
-        let (events, emitter) = relay_emitter();
+        let (events, emitter) = observable_relay_emitter();
         let mut worker = AttachRelayWorker::start_with(
             root.clone(),
             "2026-08-23".to_string(),
@@ -4449,19 +4490,20 @@ mod reconnect_tests {
                 AttachWindow::Date("2026-08-23".to_string()),
             )
             .unwrap();
-        wait_for(|| {
-            let messages = events.lock().unwrap();
+        wait_for_relay_state(&events, |messages| {
             messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 1, .. } if subscription_id == "a-gros"))
                 && messages.iter().any(|message| matches!(message, WrapperToDaemon::SnapshotCaughtUp { subscription_id, .. } if subscription_id == "b-live"))
         });
         std::fs::write(root.join("2026-08-24.jsonl"), b"{\"v\":1,\"seq\":2}\n").unwrap();
-        wait_for(|| {
-            let messages = events.lock().unwrap();
+        wait_for_relay_state(&events, |messages| {
             messages.iter().filter(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 1, .. } if subscription_id == "a-gros")).count() >= 2
                 && messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 2, .. } if subscription_id == "b-live"))
                 && messages.iter().any(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 1, final_fragment: true, .. } if subscription_id == "a-gros"))
         });
-        let messages = events.lock().unwrap();
+        let messages = events
+            .messages
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let b = messages.iter().position(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 2, .. } if subscription_id == "b-live")).expect("fragment B");
         let a_final = messages.iter().position(|message| matches!(message, WrapperToDaemon::JournalFragment { subscription_id, seq: 1, final_fragment: true, .. } if subscription_id == "a-gros")).expect("final A");
         assert!(b < a_final, "B doit passer avant le dernier fragment de A");
