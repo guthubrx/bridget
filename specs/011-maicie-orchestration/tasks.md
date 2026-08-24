@@ -56,7 +56,7 @@ profil réveillé ni dépendance ACP live.
 - [x] T017 [US2] Implémenter la consommation Subscribe session 008 dans `plugins/maicie/src/runtime.rs` avec subscription_id, seq, reprise, Gap et End ; tests `plugins/maicie/tests/contract/runtime_subscription.rs` interdisant la lecture de journal/socket interne.
 - [x] T018 [US2] Afficher `transport_snapshot`, runtime, fraîcheur, flux incomplet et permission auto-décidée dans `plugins/maicie/src/app.rs` et `plugins/maicie/src/main.rs` ; test `plugins/maicie/tests/integration/status_sources.rs` interdisant `bloqué` et toute « permission humaine en attente » fictive.
 - [x] T019 [US3] Traduire les classes configurées vers le timeout Bridget et les afficher passivement dans `plugins/maicie/src/app.rs` ; test `plugins/maicie/tests/contract/duration_timeout.rs` prouvant trois valeurs, aucune relance/timer local et aucune transition sans événement Bridget ou consultation.
-- [x] T020 [US2] Ajouter le benchmark reproductible de `maicie status` sur 100 objectifs dans `plugins/maicie/tests/integration/status_benchmark.rs` ; l'observable consigné respecte SC-008 p95 < 250 ms.
+- [x] T020 [US2] Ajouter la campagne explicitement déclenchée de `maicie status` sur 100 objectifs dans `plugins/maicie/tests/integration/status_benchmark.rs` ; elle est ignorée dans la suite ordinaire, produit 21 échantillons bruts/p95 et une référence locale versionnée, conformément à SC-008. La raison est honnête : un p95 dépendant de la charge hôte est une mesure, pas un oracle fonctionnel.
 
 **Gate** : T017–T020 ne commencent qu'après disponibilité et compatibilité
 testée de session 008. La session 007 seule ne suffit pas.

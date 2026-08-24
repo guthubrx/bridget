@@ -132,12 +132,13 @@ base `session-07-transport-acp@48c3bf7`), fixtures journal gelées.
 
 ## Phase 3 : Critères mesurés
 
-- [x] **T807** [US1] **Bancs SC-001/SC-002 (local)** : latence
-  fin-d'append→rendu p95 < 1 s et max < 3 s à 10 evt/s sur 60 s ; jonction
+- [x] **T807** [US1] **Campagne SC-001 (local) / test SC-002** : la campagne
+  explicitement déclenchée, ignorée dans la suite ordinaire, mesure 21 fois la
+  latence fin-d'append→rendu (p95 < 1 s et max < 3 s à 10 evt/s sur 60 s) et
+  consigne la distribution avec une référence locale versionnée. Son watchdog
+  détecte seulement un blocage. SC-002 garde son oracle fonctionnel de jonction
   rejeu→suivi zéro perte/doublon par continuité de `seq`, rotation de minuit
   simulée comprise.
-  **Observable** : bancs reproductibles en test, chiffres dans
-  `implementation.md`.
 
 - [x] **T808** [US3] **Banc SC-005 (budget d'observation)** : faux adaptateur
   déterministe (réutiliser 007-T704), N ≥ 200 tours identiques, dégradation

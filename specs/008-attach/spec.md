@@ -226,10 +226,13 @@ fonctionnent.
 
 ### Measurable Outcomes
 
-- **SC-001** : en local, mesuré de la **fin de l'append complet** (newline
-  écrit) jusqu'au rendu, sous une cadence fixée de 10 événements/s pendant
-  60 s : latence p95 < 1 s, maximum < 3 s. Le distant a son propre budget :
-  p95 < 3 s dans les mêmes conditions.
+- **SC-001** : campagne locale explicitement déclenchée, jamais la suite
+  ordinaire, mesurée de la **fin de l'append complet** (newline écrit) jusqu'au
+  rendu, sous une cadence fixée de 10 événements/s pendant 60 s : 21 campagnes
+  brutes, p95 < 1 s et maximum < 3 s sont consignés avec une référence Git
+  versionnée (machine, système, commit et charge). Le distant a son propre
+  budget : p95 < 3 s dans les mêmes conditions. Un watchdog de campagne ne
+  mesure aucune performance : il ne fait que détecter un blocage.
 - **SC-002** : ouverture de vue = fenêtre d'historique affichée, puis **zéro
   perte et zéro doublon à la jonction rejeu→suivi** (vérifiée par la continuité
   de `seq`) pendant un tour actif, y compris à travers une rotation de minuit

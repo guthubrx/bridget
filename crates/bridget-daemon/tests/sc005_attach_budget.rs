@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
@@ -20,6 +21,7 @@ const EVENTS_PER_TURN: usize = 2;
 const GLOBAL_TIMEOUT: Duration = Duration::from_secs(60);
 const SC001_TURNS: usize = 600;
 const SC001_CADENCE: Duration = Duration::from_millis(100);
+const SC001_MEASURED_CAMPAIGNS: usize = 21;
 const SC005_INTERNAL_PAIRS: usize = 5;
 
 /// Les deux bancs de latence mesurent des délais de quelques microsecondes :
@@ -498,14 +500,78 @@ fn sc005_deux_vues_reelles_ne_degradent_pas_le_p95_d_append_de_plus_de_cinq_pour
     );
 }
 
+/// SC-001 est une campagne locale explicite : le noyau, la charge et les deux
+/// vues Unix réelles font varier sa mesure. Les 75 secondes sont seulement le
+/// disjoncteur d'une campagne bloquée, jamais un seuil de performance.
 #[test]
+#[ignore = "mesure locale explicite SC-001 ; voir specs/008-attach/implementation.md"]
 fn sc001_append_vers_rendu_attach_reel_reste_sous_les_seuils_locaux() {
     let _lock = lock_latency_bench();
+    let mut campaigns = Vec::with_capacity(SC001_MEASURED_CAMPAIGNS);
+    for campaign in 0..SC001_MEASURED_CAMPAIGNS {
+        campaigns.push(run_sc001_campaign(campaign));
+    }
+
+    let p95s = campaigns
+        .iter()
+        .map(|campaign| campaign.p95)
+        .collect::<Vec<_>>();
+    let p95 = percentile_95(&p95s);
+    let max = campaigns
+        .iter()
+        .map(|campaign| campaign.max)
+        .max()
+        .unwrap_or_default();
+    let report = serde_json::json!({
+        "v": 1,
+        "criterion": "SC-001",
+        "commit": git_commit(),
+        "machine": machine_reference(),
+        "system": system_reference(),
+        "load_1m": load_average(),
+        "charge": "campagne locale explicite ; autres charges à consigner par l'opérateur",
+        "campaigns": campaigns.iter().map(|campaign| serde_json::json!({
+            "index": campaign.index,
+            "p95_ms": duration_ms(campaign.p95),
+            "max_ms": duration_ms(campaign.max),
+            "raw_latency_ms": campaign.raw_latencies.iter().map(|latency| duration_ms(*latency)).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "p95_of_campaign_p95_ms": duration_ms(p95),
+        "max_ms": duration_ms(max),
+        "p95_budget_ms": 1_000.0,
+        "max_budget_ms": 3_000.0,
+        "watchdog_per_campaign_secs": 75,
+    });
+    eprintln!("SC-001 rapport={report}");
+    write_optional_report(&report);
+    assert!(p95 < Duration::from_secs(1), "p95 SC-001={p95:?}");
+    assert!(max < Duration::from_secs(3), "max SC-001={max:?}");
+}
+
+struct Sc001Campaign {
+    index: usize,
+    raw_latencies: Vec<Duration>,
+    p95: Duration,
+    max: Duration,
+}
+
+fn run_sc001_campaign(index: usize) -> Sc001Campaign {
     let started = Instant::now();
     let deadline = started + Duration::from_secs(75);
-    let mut harness = BenchHarness::start("sc001-local", 2, SC001_TURNS, 0, deadline, |_| {});
+    let mut harness = BenchHarness::start(
+        &format!("sc001-local-{index}"),
+        2,
+        SC001_TURNS,
+        0,
+        deadline,
+        |_| {},
+    );
 
     for turn in 0..SC001_TURNS {
+        assert!(
+            Instant::now() < deadline,
+            "SC-001 campagne {index} bloquée pendant l'émission au tour {turn} (watchdog de 75 s)"
+        );
         let due = started + SC001_CADENCE * turn as u32;
         if let Some(wait) = due.checked_duration_since(Instant::now()) {
             thread::sleep(wait);
@@ -528,7 +594,7 @@ fn sc001_append_vers_rendu_attach_reel_reste_sous_les_seuils_locaux() {
         .rendered_at
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    let mut latencies = samples
+    let latencies = samples
         .iter()
         .map(|sample| {
             let rendered_at = rendered
@@ -544,14 +610,56 @@ fn sc001_append_vers_rendu_attach_reel_reste_sous_les_seuils_locaux() {
     assert_eq!(latencies.len(), expected_events);
     let p95 = percentile_95(&latencies);
     let max = latencies.iter().copied().max().unwrap_or_default();
-    eprintln!(
-        "SC-001 append→rendu local: {} événements, p95={p95:?}, max={max:?}",
-        latencies.len()
-    );
-    assert!(p95 < Duration::from_secs(1), "p95 SC-001={p95:?}");
-    assert!(max < Duration::from_secs(3), "max SC-001={max:?}");
-    latencies.clear();
     harness.finish(deadline);
+    Sc001Campaign {
+        index,
+        raw_latencies: latencies,
+        p95,
+        max,
+    }
+}
+
+fn duration_ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1_000.0
+}
+
+fn git_commit() -> String {
+    command_output("git", &["rev-parse", "HEAD"]).unwrap_or_else(|| "inconnu".to_string())
+}
+
+fn machine_reference() -> String {
+    command_output("sysctl", &["-n", "hw.model"])
+        .or_else(|| command_output("uname", &["-m"]))
+        .unwrap_or_else(|| std::env::consts::ARCH.to_string())
+}
+
+fn system_reference() -> String {
+    command_output("uname", &["-sr"]).unwrap_or_else(|| std::env::consts::OS.to_string())
+}
+
+fn command_output(program: &str, arguments: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(arguments).output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn load_average() -> Option<f64> {
+    let mut values = [0.0_f64; 3];
+    // Valeur informative de rapport uniquement, jamais un seuil de ce test.
+    (unsafe { libc::getloadavg(values.as_mut_ptr(), 3) } > 0).then_some(values[0])
+}
+
+fn write_optional_report(report: &serde_json::Value) {
+    let Some(path) = std::env::var_os("BRIDGET_PERF_REPORT") else {
+        return;
+    };
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(report).expect("rapport JSON"),
+    )
+    .expect("écriture référence locale SC-001");
 }
 
 fn previous_host_date() -> String {

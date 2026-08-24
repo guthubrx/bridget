@@ -21,8 +21,10 @@ scheduler, interpréteur LLM et auto-réveil sont exclus.
 à fixtures sous `plugins/maicie/tests/`  
 **Target Platform**: macOS et Linux locaux, même modèle de socket Unix que Bridget  
 **Project Type**: binaire compagnon local dans un workspace Cargo  
-**Performance Goals**: une consultation d'état locale p95 < 250 ms sur une
-fixture de 100 objectifs ; aucune boucle de polling non bornée  
+**Performance Goals**: campagne locale explicitement déclenchée (hors suite
+ordinaire) : 21 échantillons bruts de consultation d'état sur 100 objectifs,
+p95 < 250 ms et référence versionnée de l'hôte ; aucune boucle de polling non
+bornée
 **Constraints**: disponibilité Maicie indépendante ; zéro base partagée ;
 zéro déduction de blocage depuis texte ; outbox idempotente ; session 008 pour
 les événements ACP ; session 009 pour les lancements ; activation de profil

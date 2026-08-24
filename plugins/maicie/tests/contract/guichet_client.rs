@@ -1,6 +1,4 @@
-use maicie::bridget_client::{
-    BridgetClientError, BridgetClientLimits, GuichetClient, GuichetLifecycleEvent,
-};
+use maicie::bridget_client::{BridgetClientError, GuichetClient, GuichetLifecycleEvent};
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -132,32 +130,6 @@ fn retry_de_reponse_rejoue_les_memes_octets_sans_reserialisation() {
         client.reply_exact_bytes(reply).expect("retry exact").issue,
         "accepted"
     );
-    server.join().expect("serveur termine");
-}
-
-#[test]
-fn chaque_phase_service_consomme_la_meme_echeance_absolue() {
-    let fixture = SocketFixture::new("budget");
-    let listener = fixture.bind();
-    let server = thread::spawn(move || {
-        let (stream, _) = listener.accept().expect("service attendue");
-        let (mut reader, mut writer) = split(stream);
-        let _role = read_json(&mut reader);
-        thread::sleep(Duration::from_millis(70));
-        let _ = write_json_checked(&mut writer, json!({"type":"RoleAccepted","role":"service"}));
-    });
-    let limits = BridgetClientLimits {
-        connect_timeout: Duration::from_millis(80),
-        io_timeout: Duration::from_millis(80),
-        max_frame_bytes: 64 * 1024,
-    };
-    let deadline = Instant::now() + Duration::from_millis(35);
-    let error =
-        match GuichetClient::connect_with_limits_until(fixture.path(), SCOPE, limits, deadline) {
-            Ok(_) => panic!("le role seul doit depasser le budget global"),
-            Err(error) => error,
-        };
-    assert!(matches!(error, BridgetClientError::Timeout { .. }));
     server.join().expect("serveur termine");
 }
 

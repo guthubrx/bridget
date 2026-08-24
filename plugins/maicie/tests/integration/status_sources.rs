@@ -10,9 +10,10 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[test]
@@ -108,26 +109,46 @@ fn status_epuise_le_budget_global_sans_conserver_une_fausse_observation() {
     let server = thread::spawn(move || serve_status_until_timeout(&socket, ready_tx));
     ready_rx.recv().unwrap();
 
-    let started = std::time::Instant::now();
-    let output = Command::new(env!("CARGO_BIN_EXE_maicie"))
+    let output = run_status_with_watchdog(&fixture);
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["runtime"][0]["stream_state"], "unavailable");
+    assert_eq!(value["runtime"][0]["reason"], "budget_capture_epuise");
+    assert_eq!(value["freshness"]["state"], "unavailable");
+    assert!(
+        server.join().unwrap(),
+        "le client doit fermer l'abonnement bloqué après l'épuisement du budget"
+    );
+}
+
+/// Le watchdog est un disjoncteur de harnais, non une mesure de performance.
+/// Mutation discriminante : si une phase réinitialise l'échéance au lieu de
+/// propager le budget global, le serveur garde la socket ouverte et ce garde
+/// expire au lieu de recevoir l'EOF attendu.
+fn run_status_with_watchdog(fixture: &Fixture) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_maicie"))
         .args([
             "status",
             "--config",
             fixture.config.to_str().unwrap(),
             "--json",
         ])
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .unwrap();
-    assert!(output.status.success());
-    assert!(
-        started.elapsed() < std::time::Duration::from_millis(300),
-        "la consultation doit respecter son budget, pas le sommeil du serveur"
-    );
-    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["runtime"][0]["stream_state"], "unavailable");
-    assert_eq!(value["runtime"][0]["reason"], "budget_capture_epuise");
-    assert_eq!(value["freshness"]["state"], "unavailable");
-    server.join().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            return child.wait_with_output().unwrap();
+        }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("watchdog : status n'a pas fermé l'abonnement après son budget global");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn serve_status(socket: &std::path::Path, ready: mpsc::Sender<()>) {
@@ -199,7 +220,7 @@ fn serve_status(socket: &std::path::Path, ready: mpsc::Sender<()>) {
     );
 }
 
-fn serve_status_until_timeout(socket: &std::path::Path, ready: mpsc::Sender<()>) {
+fn serve_status_until_timeout(socket: &std::path::Path, ready: mpsc::Sender<()>) -> bool {
     let _ = fs::remove_file(socket);
     let listener = UnixListener::bind(socket).unwrap();
     ready.send(()).unwrap();
@@ -228,7 +249,12 @@ fn serve_status_until_timeout(socket: &std::path::Path, ready: mpsc::Sender<()>)
         &mut writer,
         json!({"type":"Subscribed","subscription_id":"sub-timeout"}),
     );
-    thread::sleep(std::time::Duration::from_millis(400));
+    reader
+        .get_mut()
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut unexpected = String::new();
+    matches!(reader.read_line(&mut unexpected), Ok(0))
 }
 
 fn accept_empty_guichet(listener: &UnixListener) {

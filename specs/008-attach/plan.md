@@ -24,8 +24,10 @@ persistant (FR-004 : reprise inter-invocations exclue)
 faux adaptateur déterministe pour SC-005 (réutilisé de 007-T704 s'il existe)
 **Target Platform**: macOS et Linux
 **Project Type**: extension CLI + daemon + wrapper existants
-**Constraints**: lecteur pur sur le plan d'observation (FR-003) ; SC-001
-p95 < 1 s local à 10 evt/s ; zéro contre-pression sur l'écrivain du journal
+**Constraints**: lecteur pur sur le plan d'observation (FR-003) ; SC-001 est
+une campagne locale explicite (21 échantillons bruts, p95 < 1 s à 10 evt/s,
+max < 3 s) et non un test fonctionnel ordinaire ; zéro contre-pression sur
+l'écrivain du journal
 **Scale/Scope**: 1 module client nouveau, ~500-800 lignes, 8 tâches prévues
 
 ## Constitution Check
