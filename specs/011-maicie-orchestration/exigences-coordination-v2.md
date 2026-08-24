@@ -876,3 +876,25 @@ les blocs G : ce sont des compléments, pas des prérequis.
   dans la spec 017 et relue comme un contrat. Si un jour on hésite sur une
   case, c'est le signe qu'elle n'appartient pas à la table — elle part en
   attente.
+- **Redémarrer le daemon TUE les sessions des agents gérés — leçon payée le
+  2026-08-24 à 06h37.** J'ai redémarré pour déployer le correctif qui me
+  rendait aveugle sur cinq agents. Les agents en panes tmux ont survécu sans
+  broncher ; les SEPT agents gérés ont perdu leur session et sont revenus
+  vides. Leur travail n'était pas perdu — il était sur disque, non commité —
+  mais eux ne savaient plus ce qu'ils faisaient. Il a fallu leur réécrire à
+  chacun où en était leur propre travail, fichier par fichier.
+  CE QUE ÇA COÛTE, mesuré : deux agents à relancer avec un mandat de reprise
+  détaillé, une bissection en cours perdue, et le contexte de trois autres
+  missions envolé. La résurrection automatique des agents persistants
+  fonctionne parfaitement — mais elle ressuscite le processus, pas la
+  mémoire.
+  RÈGLE POSÉE, applicable immédiatement : avant tout redémarrage du daemon,
+  demander aux agents gérés de COMMITER leur travail en cours, pas seulement
+  de retenir leur livraison. Retenir un message ne protège que le message ;
+  seul un commit protège le travail. Les agents tmux n'ont pas besoin de
+  cette précaution — ils survivent.
+  À INSTRUIRE : le mandat de reprise pourrait être automatique. Un agent
+  géré qui ressuscite reçoit aujourd'hui une session vide ; il pourrait
+  recevoir l'état de son worktree — branche, diff non commité, dernière
+  mission au greffe. C'est exactement la carte de reprise, mais à l'échelle
+  d'un agent au lieu du référent. Même problème, même remède.
