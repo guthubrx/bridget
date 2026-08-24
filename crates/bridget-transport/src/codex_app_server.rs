@@ -138,8 +138,15 @@ impl CodexAppServerTransport {
         let observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
         let alive = Arc::new(AtomicBool::new(true));
         let next_id = Arc::new(AtomicU64::new(1));
-        let reader_handle =
-            spawn_reader(stdout, waiters.clone(), observations.clone(), alive.clone());
+        let journal = Arc::new(Mutex::new(None));
+        let reader_handle = spawn_reader(
+            stdout,
+            waiters.clone(),
+            observations.clone(),
+            alive.clone(),
+            journal.clone(),
+            options.model.clone(),
+        );
 
         let setup = (|| -> Result<String, TransportError> {
             let initialize = request(
@@ -231,7 +238,6 @@ impl CodexAppServerTransport {
             Condvar::new(),
         ));
         let busy = Arc::new(AtomicBool::new(false));
-        let journal = Arc::new(Mutex::new(None));
         let worker_handle = spawn_worker(Worker {
             queue: queue.clone(),
             writer: writer.clone(),
@@ -690,6 +696,28 @@ fn record(
         })
 }
 
+fn served_model_from_codex(value: &Value) -> Option<String> {
+    let params = value.get("params")?;
+    ["model", "to", "actual", "served"]
+        .into_iter()
+        .find_map(|key| params.get(key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
+}
+
+fn maybe_record_mismatch(journal: &Journal, pinned: Option<&str>, served: &str) {
+    let Some(pinned) = pinned.filter(|pinned| *pinned != served) else {
+        return;
+    };
+    let _ = record(
+        journal,
+        "model_mismatch",
+        None,
+        json!({ "pinned": pinned, "served": served }),
+    );
+}
+
 fn push_internal(observations: &Arc<(Mutex<Observations>, Condvar)>, kind: ManagedEventKind) {
     let raw = serde_json::to_vec(&json!({ "kind": "codex_internal" }))
         .expect("fait interne Codex sérialisable");
@@ -815,6 +843,8 @@ fn spawn_reader(
     waiters: Waiters,
     observations: Arc<(Mutex<Observations>, Condvar)>,
     alive: Arc<AtomicBool>,
+    journal: Journal,
+    pinned_model: Option<String>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
@@ -903,6 +933,24 @@ fn spawn_reader(
                             detail: "turn/completed Codex".to_string(),
                         },
                     );
+                }
+                Some("modelRerouted" | "model/rerouted" | "ModelReroutedNotification") => {
+                    if let Some(served) = served_model_from_codex(&value) {
+                        maybe_record_mismatch(&journal, pinned_model.as_deref(), &served);
+                        push_source(
+                            &observations,
+                            raw,
+                            ManagedEventKind::ModelObserved { model: served },
+                        );
+                    } else {
+                        push_source(
+                            &observations,
+                            raw,
+                            ManagedEventKind::Update {
+                                detail: "reroutage Codex sans modèle attesté".to_string(),
+                            },
+                        );
+                    }
                 }
                 Some(other) => push_source(
                     &observations,
@@ -1280,5 +1328,19 @@ mod tests {
             "le groupe enfant Codex survit au shutdown"
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reroutage_codex_atteste_le_modele_sans_inventer_si_muet() {
+        let rerouted: Value =
+            serde_json::from_str(r#"{"method":"modelRerouted","params":{"to":"gpt-5.4"}}"#)
+                .unwrap();
+        assert_eq!(
+            served_model_from_codex(&rerouted).as_deref(),
+            Some("gpt-5.4")
+        );
+        let mute: Value =
+            serde_json::from_str(r#"{"method":"modelRerouted","params":{}}"#).unwrap();
+        assert!(served_model_from_codex(&mute).is_none());
     }
 }

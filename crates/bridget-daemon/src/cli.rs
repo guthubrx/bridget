@@ -2284,7 +2284,7 @@ fn cmd_agents(args: &[String]) {
                 agent.host,
                 agent.os,
                 agent.transport,
-                cell(agent.model.as_deref()),
+                format_model(agent),
                 cell(agent.effort.as_deref()),
                 agent.state
             );
@@ -2356,9 +2356,7 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
     let domain_w = column("DOMAINE", &|a: &AgentInfo| {
         cell(a.domain.as_deref()).to_string()
     });
-    let model_w = column("MODÈLE", &|a: &AgentInfo| {
-        cell(a.model.as_deref()).to_string()
-    });
+    let model_w = column("MODÈLE", &|a: &AgentInfo| format_model(a));
     let effort_w = column("EFFORT", &|a: &AgentInfo| {
         cell(a.effort.as_deref()).to_string()
     });
@@ -2387,7 +2385,7 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
             cell(agent.mode.map(PresenceMode::as_str)),
             cell(agent.location.as_deref()),
             cell(agent.domain.as_deref()),
-            cell(agent.model.as_deref()),
+            format_model(agent),
             cell(agent.effort.as_deref()),
             format_rate_limit(agent),
             agent.state
@@ -2402,6 +2400,15 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
 /// colonnes.
 fn cell(value: Option<&str>) -> &str {
     value.unwrap_or("—")
+}
+
+/// Marqueur d'écart : le modèle servi précède l'épinglé. Sans signal de flux,
+/// on conserve le tiret ou le modèle épinglé, sans inventer de verdict.
+fn format_model(agent: &AgentInfo) -> String {
+    match &agent.model_mismatch {
+        Some(gap) => format!("{} ≠ {}", gap.served, gap.pinned),
+        None => cell(agent.model.as_deref()).to_string(),
+    }
 }
 
 /// Affiche une limite uniquement lorsqu'elle a été attestée. L'instant de
@@ -3535,6 +3542,7 @@ mod idempotency_projection_tests {
             model: None,
             effort: None,
             rate_limit: None,
+            model_mismatch: None,
         };
         let rendered = render_who(
             &[
@@ -3585,6 +3593,7 @@ mod idempotency_projection_tests {
                 status: "rejected".to_string(),
                 resets_at: Some(1_787_572_200),
             }),
+            model_mismatch: None,
         };
         assert!(format_rate_limit(&agent).starts_with("épuisée (five_hour, retour "));
 
@@ -3599,6 +3608,38 @@ mod idempotency_projection_tests {
         );
         agent.rate_limit = None;
         assert_eq!(format_rate_limit(&agent), "—");
+    }
+
+    #[test]
+    fn who_marque_l_ecart_de_modele_et_reste_muet_sans_signal() {
+        let mut agent = AgentInfo {
+            name: "claude-1".to_string(),
+            agent_type: "claude".to_string(),
+            connection_id: "conn-claude".to_string(),
+            host: "local".to_string(),
+            transport: "stdio".to_string(),
+            mode: Some(PresenceMode::Cli),
+            location: None,
+            os: "macOS".to_string(),
+            state: "connected".to_string(),
+            last_seen_secs: 0,
+            reconnect_count: 0,
+            domain: None,
+            model: Some("claude-opus-5".to_string()),
+            effort: None,
+            rate_limit: None,
+            model_mismatch: None,
+        };
+        assert_eq!(format_model(&agent), "claude-opus-5");
+        agent.model_mismatch = Some(bridget_transport::protocol::ModelMismatchFact {
+            pinned: "claude-opus-5".to_string(),
+            served: "claude-opus-4-6".to_string(),
+        });
+        let rendered = render_who(std::slice::from_ref(&agent), None);
+        assert!(rendered.contains("claude-opus-4-6 ≠ claude-opus-5"));
+        agent.model = None;
+        agent.model_mismatch = None;
+        assert_eq!(format_model(&agent), "—");
     }
 
     #[test]

@@ -141,6 +141,9 @@ struct Presence {
     /// Dernière limite fournisseur attestée. Son absence signifie « inconnue »
     /// et ne déclenche aucune décision automatique.
     rate_limit: Option<bridget_transport::protocol::RateLimitFact>,
+    /// Modèle annoncé par le flux natif. Distinct du modèle épinglé : un flux
+    /// muet laisse ce champ vide et n'invente aucun écart.
+    served_model: Option<String>,
     /// Domaine dérivé annoncé à l'enregistrement, conservé pour pouvoir revenir
     /// dessus après une surcharge.
     derived_domain: Option<String>,
@@ -1763,6 +1766,12 @@ impl DaemonState {
                     model: presence.and_then(|p| p.model.clone()),
                     effort: presence.and_then(|p| p.effort.clone()),
                     rate_limit: presence.and_then(|p| p.rate_limit.clone()),
+                    model_mismatch: presence.and_then(|p| {
+                        bridget_transport::protocol::ModelMismatchFact::observe(
+                            p.model.as_deref(),
+                            p.served_model.as_deref(),
+                        )
+                    }),
                 }
             })
             .collect();
@@ -1795,6 +1804,7 @@ impl DaemonState {
                 model,
                 effort,
                 rate_limit: None,
+                model_mismatch: None,
             });
         }
         let listed_names: std::collections::HashSet<String> =
@@ -1820,6 +1830,10 @@ impl DaemonState {
                 model: presence.model.clone(),
                 effort: presence.effort.clone(),
                 rate_limit: presence.rate_limit.clone(),
+                model_mismatch: bridget_transport::protocol::ModelMismatchFact::observe(
+                    presence.model.as_deref(),
+                    presence.served_model.as_deref(),
+                ),
             });
         }
         agents.sort_by(|left, right| left.name.cmp(&right.name));
@@ -2958,6 +2972,9 @@ fn handle_register(
                 let rate_limit = previous
                     .as_ref()
                     .and_then(|presence| presence.rate_limit.clone());
+                let served_model = previous
+                    .as_ref()
+                    .and_then(|presence| presence.served_model.clone());
                 // Une reconnexion par un binaire antérieur au champ conserve
                 // l'observation déjà attestée ; une présence historique sans
                 // valeur reste volontairement inconnue.
@@ -3038,6 +3055,7 @@ fn handle_register(
                         model,
                         effort,
                         rate_limit,
+                        served_model,
                         domain: derived_domain.clone(),
                         derived_domain,
                         dnd_until,
@@ -3139,6 +3157,29 @@ fn handle_runtime(
 
     DaemonToWrapper::Ack {
         id: "runtime".to_string(),
+    }
+}
+
+/// Enregistre le modèle servi par le flux, sans toucher au modèle épinglé ni
+/// au routage. Un flux muet n'appelle jamais cette fonction : l'écart reste
+/// alors non-verdict.
+fn handle_served_model(agent: &str, model: String, state: &mut DaemonState) -> DaemonToWrapper {
+    if let Err(reason) = validate_runtime_value(&model) {
+        return DaemonToWrapper::Nack {
+            id: "served-model".to_string(),
+            reason: format!("modèle servi invalide: {reason}"),
+        };
+    }
+    let Some(presence) = presence_of_agent(state, agent) else {
+        return DaemonToWrapper::Nack {
+            id: "served-model".to_string(),
+            reason: format!("agent introuvable: {agent}"),
+        };
+    };
+    presence.served_model = Some(model);
+    presence.last_seen = Instant::now();
+    DaemonToWrapper::Ack {
+        id: "served-model".to_string(),
     }
 }
 
@@ -5611,6 +5652,11 @@ fn handle_wrapper_message(
             Some(handle_runtime(&agent, model, effort, source, &mut st))
         }
 
+        WrapperToDaemon::ServedModel { agent, model } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            Some(handle_served_model(&agent, model, &mut st))
+        }
+
         WrapperToDaemon::RateLimit {
             agent,
             window,
@@ -6130,6 +6176,7 @@ mod presence_tests {
                 model: Some("gpt-5.3-codex".to_string()),
                 effort: Some("xhigh".to_string()),
                 rate_limit: None,
+                served_model: None,
                 derived_domain: Some("projet-a".to_string()),
                 domain: Some("projet-a".to_string()),
                 dnd_until: None,
@@ -6208,6 +6255,7 @@ mod presence_tests {
                 model: None,
                 effort: None,
                 rate_limit: None,
+                served_model: None,
                 derived_domain: None,
                 domain: None,
                 dnd_until: None,
@@ -9415,6 +9463,35 @@ mod presence_tests {
                 resets_at: Some(1_787_572_200),
             }) if window == "five_hour" && status == "rejected"
         ));
+
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    #[test]
+    fn served_model_rend_l_ecart_visible_sans_inventer_si_muet() {
+        let (mut state, config) = state_with_registered_agent("served-model-who");
+        let presence = state.presences.values_mut().next().unwrap();
+        presence.model = Some("claude-opus-5".to_string());
+        presence.served_model = None;
+        let silent = state.agent_infos().pop().unwrap();
+        assert!(
+            silent.model_mismatch.is_none(),
+            "flux muet = pas de verdict"
+        );
+
+        let ack = handle_served_model("agent-2", "claude-opus-4-6".to_string(), &mut state);
+        assert!(matches!(ack, DaemonToWrapper::Ack { .. }));
+        let agent = state.agent_infos().pop().unwrap();
+        assert_eq!(agent.state, "connected", "l'écart ne change pas l'état");
+        assert_eq!(agent.model.as_deref(), Some("claude-opus-5"));
+        let gap = agent.model_mismatch.expect("écart visible");
+        assert_eq!(gap.pinned, "claude-opus-5");
+        assert_eq!(gap.served, "claude-opus-4-6");
+
+        let match_ack = handle_served_model("agent-2", "claude-opus-5".to_string(), &mut state);
+        assert!(matches!(match_ack, DaemonToWrapper::Ack { .. }));
+        let aligned = state.agent_infos().pop().unwrap();
+        assert!(aligned.model_mismatch.is_none());
 
         let _ = std::fs::remove_file(&config.db_path);
     }

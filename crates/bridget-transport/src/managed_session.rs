@@ -110,6 +110,11 @@ pub enum ManagedEventKind {
         status: String,
         resets_at: Option<i64>,
     },
+    /// Modèle réellement annoncé par le flux natif. L'absence de cet événement
+    /// n'autorise aucun verdict : un flux muet reste sans écart.
+    ModelObserved {
+        model: String,
+    },
     Update {
         detail: String,
     },

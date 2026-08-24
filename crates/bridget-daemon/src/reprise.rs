@@ -1019,6 +1019,7 @@ mod tests {
                     model: None,
                     effort: None,
                     rate_limit: None,
+                    model_mismatch: None,
                 }],
                 message_count: 3,
                 build_id: Some("abc123".to_string()),
