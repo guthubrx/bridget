@@ -2269,6 +2269,75 @@ impl MaicieStore {
         Ok(())
     }
 
+    /// Activation atomique : `proposed` → `active` sous garde du hash scellé.
+    /// `updated != 1` = course ou hash divergent (ADR 011 compare-and-swap).
+    pub fn activate_routine_cas(
+        &mut self,
+        routine_id: Uuid,
+        template_hash: &[u8],
+        approved_at: i64,
+        last_bucket: i64,
+    ) -> Result<Routine, StoreError> {
+        let updated = self
+            .connection
+            .execute(
+                "UPDATE routines SET state = 'active', approved_at = ?1, last_bucket = ?2,\n\
+                     paused_at = NULL\n\
+                 WHERE id = ?3 AND state = 'proposed' AND template_hash = ?4",
+                params![
+                    approved_at,
+                    last_bucket,
+                    routine_id.to_string(),
+                    template_hash,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if updated != 1 {
+            return Err(StoreError::Conflict(
+                "activation routine refusée (état ou hash)",
+            ));
+        }
+        self.load_routine(routine_id)?
+            .ok_or(StoreError::NotFound("routine absente après activation"))
+    }
+
+    /// Clôture les occurrences ouvertes liées à un objectif (même transaction
+    /// que la clôture d'objectif). Idempotent : 0 ligne = pas d'occurrence.
+    pub fn terminate_occurrences_for_objective_tx(
+        tx: &Transaction<'_>,
+        objective_id: Uuid,
+    ) -> Result<usize, StoreError> {
+        let changed = tx
+            .execute(
+                "UPDATE routine_occurrences SET state = 'terminee'\n\
+                 WHERE objective_id = ?1 AND state = 'ouverte'",
+                [objective_id.to_string()],
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(changed)
+    }
+
+    /// Rattrapage : toute occurrence encore `ouverte` dont l'objectif est clos
+    /// passe à `terminee`. Appelé en tête de chaque tick routines.
+    pub fn terminate_occurrences_with_closed_objectives(&mut self) -> Result<usize, StoreError> {
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE routine_occurrences\n\
+                 SET state = 'terminee'\n\
+                 WHERE state = 'ouverte'\n\
+                   AND objective_id IS NOT NULL\n\
+                   AND EXISTS (\n\
+                       SELECT 1 FROM objectives\n\
+                       WHERE objectives.id = routine_occurrences.objective_id\n\
+                         AND objectives.state = 'clos'\n\
+                   )",
+                [],
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(changed)
+    }
+
     pub fn load_routine(&self, routine_id: Uuid) -> Result<Option<Routine>, StoreError> {
         self.connection
             .query_row(
@@ -5865,6 +5934,8 @@ where
     // Politique 31 : libération des plages dans la même transaction que les notifications.
     release_resource_ranges_for_objective(tx, objective.id)?;
     persist_objective_costs(tx, objective, issued_at, costs)?;
+    // Routines : clôture d'occurrence liée dans la même transaction (manche 4).
+    MaicieStore::terminate_occurrences_for_objective_tx(tx, objective.id)?;
     // F37 : déblocage OBJECTIF→OBJECTIF dans la même transaction que 016.
     // Aucun dépendant → zéro écriture supplémentaire (oracle silencieux).
     release_waiting_dependents_on_prerequisite_closure(tx, objective.id, decision, issued_at)?;

@@ -395,16 +395,20 @@ fn open_store_with_reconciliation(
     if !actives.is_empty() {
         let now = unix_now()?;
         let issuer_scope = store.issuer_scope().to_string();
-        let candidates = list_routine_candidates(config, limits).unwrap_or_default();
-        // Un échec opérationnel du tick ne doit jamais faire échouer status /
-        // delegate : la prochaine relève retentera (note §2).
-        let _ = evaluate_routines(
+        // Annuaire Bridget manquant : tick sans candidats (retente ensuite).
+        // Motif explicite — pas unwrap_or_default anonyme (manche 4).
+        let candidates =
+            list_routine_candidates(config, limits).unwrap_or_else(|_error| Vec::new());
+        // Erreurs de stockage remontent ; les blips delegate sont absorbés
+        // DANS evaluate_routines (break sans avancer last_bucket).
+        evaluate_routines(
             &mut store,
             &config.durations,
             &issuer_scope,
             &candidates,
             now,
-        );
+        )
+        .map_err(CliError::Routine)?;
     }
     Ok(ReconciledStore {
         store,
@@ -1106,8 +1110,11 @@ fn run_routine(arguments: RoutineArgs, migrate: bool) -> Result<String, CliError
                 .load_routine(routine_id)
                 .map_err(CliError::Store)?
                 .ok_or(CliError::Routine(RoutineError::NotFound(routine_id)))?;
-            confirm_local_routine_approval(routine_id, &routine)?;
-            let approved = approve_routine(&mut store, routine_id, &routine.template_hash, now)
+            // Hash recalculé depuis les champs relus — jamais le blob stocké seul
+            // (sinon la garde est une tautologie : B3 manche 4).
+            let expected_hash = maicie::routines::sealed_template_hash(&routine);
+            confirm_local_routine_approval(routine_id, &routine, &expected_hash)?;
+            let approved = approve_routine(&mut store, routine_id, &expected_hash, now)
                 .map_err(CliError::Routine)?;
             render_routine_output(
                 RoutineOutput::Approved {
@@ -1165,6 +1172,7 @@ fn run_routine(arguments: RoutineArgs, migrate: bool) -> Result<String, CliError
 fn confirm_local_routine_approval(
     routine_id: Uuid,
     routine: &maicie::routines::Routine,
+    expected_hash: &[u8],
 ) -> Result<(), CliError> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(CliError::Usage(
@@ -1176,7 +1184,7 @@ fn confirm_local_routine_approval(
     println!("  participant={}", routine.participant);
     println!("  period_secs={}", routine.period_secs);
     println!("  goal={}", sanitize_terminal(&routine.goal));
-    println!("  hash={}", hex_hash(&routine.template_hash));
+    println!("  hash={}", hex_hash(expected_hash));
     print!("Confirmer l'activation (oui) : ");
     io::stdout()
         .flush()

@@ -2,6 +2,10 @@
 //!
 //! Doctrine : une routine délègue, n'approuve jamais. L'horloge est la relève
 //! (60 s) ; aucun timer résident. Clé d'occurrence = `(routine_id, bucket)`.
+//!
+//! Motifs d'occurrence `sautee` (fermés) :
+//! - `horloge_arretee` — buckets échus pendant une indisponibilité du tick
+//! - `rattrapage_borne` — trou tronqué au-delà de [`MAX_CATCHUP_BUCKETS`]
 
 use crate::app::{DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, delegate};
 use crate::config::DurationClasses;
@@ -13,6 +17,11 @@ use uuid::Uuid;
 
 /// Période minimale (évite un spam à la seconde sur une mauvaise frappe).
 pub const MIN_PERIOD_SECS: i64 = 60;
+
+/// Nombre max de buckets rattrapés par tick (hors bucket courant).
+/// Au-delà : une sautee `rattrapage_borne` puis traitement des `MAX` derniers.
+/// Mesure manche 4 : 30 j / 60 s → 43 201 inserts / 5,8 s sans borne.
+pub const MAX_CATCHUP_BUCKETS: i64 = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -139,6 +148,17 @@ pub fn template_hash(
     hasher.finalize().to_vec()
 }
 
+pub fn sealed_template_hash(routine: &Routine) -> Vec<u8> {
+    template_hash(
+        &routine.goal,
+        &routine.participant,
+        routine.period_secs,
+        &routine.suite,
+        &routine.depends_on,
+        &routine.references,
+    )
+}
+
 pub fn bucket_for(now: i64, period_secs: i64) -> i64 {
     now.div_euclid(period_secs)
 }
@@ -182,25 +202,28 @@ pub fn approve_routine(
     expected_hash: &[u8],
     now: i64,
 ) -> Result<Routine, RoutineError> {
-    let mut routine = store
+    let routine = store
         .load_routine(routine_id)
         .map_err(routine_store_error)?
         .ok_or(RoutineError::NotFound(routine_id))?;
     if routine.state != EtatRoutine::Proposed {
         return Err(RoutineError::Invalid("routine hors état proposed"));
     }
-    if routine.template_hash != expected_hash {
+    // Intégrité du gabarit : les champs relus doivent reseeller le hash stocké.
+    // Sans ce recalcul, passer le hash lu en base est une tautologie (B3).
+    let recomputed = sealed_template_hash(&routine);
+    if recomputed != routine.template_hash {
+        return Err(RoutineError::Invalid("gabarit altéré"));
+    }
+    if recomputed != expected_hash {
         return Err(RoutineError::Invalid("template_hash divergent"));
     }
-    routine.state = EtatRoutine::Active;
-    routine.approved_at = Some(now);
     // Le premier bucket évaluable est celui de l'approve — pas de rattrapage
     // des périodes antérieures à la naissance.
-    routine.last_bucket = Some(bucket_for(now, routine.period_secs).saturating_sub(1));
+    let last_bucket = bucket_for(now, routine.period_secs).saturating_sub(1);
     store
-        .update_routine(&routine)
-        .map_err(routine_store_error)?;
-    Ok(routine)
+        .activate_routine_cas(routine_id, &recomputed, now, last_bucket)
+        .map_err(routine_store_error)
 }
 
 pub fn pause_routine(
@@ -247,6 +270,7 @@ pub fn resume_routine(
 
 /// Évalue les routines actives à `now`. Matérialise au plus une occurrence
 /// ouverte par routine ; les buckets échus sans occurrence deviennent `sautee`.
+/// Avant tout : clôture les occurrences dont l'objectif lié est déjà clos.
 pub fn evaluate_routines(
     store: &mut MaicieStore,
     durations: &DurationClasses,
@@ -254,6 +278,12 @@ pub fn evaluate_routines(
     candidates: &[DelegationCandidate],
     now: i64,
 ) -> Result<Vec<RoutineOccurrence>, RoutineError> {
+    // Rattrapage de clôture si l'objectif a été clos hors du hook transactionnel
+    // (ou avant le correctif) — idempotent.
+    store
+        .terminate_occurrences_with_closed_objectives()
+        .map_err(routine_store_error)?;
+
     let actives = store
         .list_routines(Some(EtatRoutine::Active))
         .map_err(routine_store_error)?;
@@ -264,10 +294,37 @@ pub fn evaluate_routines(
         if after >= current {
             continue;
         }
+
+        let mut from = after + 1;
+        let gap = current - after;
+        if gap > MAX_CATCHUP_BUCKETS {
+            // Sentinel unique pour le trou tronqué, puis au plus MAX buckets.
+            let truncated_end = current - MAX_CATCHUP_BUCKETS;
+            if store
+                .load_occurrence(routine.id, truncated_end)
+                .map_err(routine_store_error)?
+                .is_none()
+            {
+                let occ = RoutineOccurrence {
+                    routine_id: routine.id,
+                    bucket: truncated_end,
+                    state: EtatOccurrence::Sautee,
+                    reason: Some("rattrapage_borne".to_string()),
+                    objective_id: None,
+                    delegation_id: None,
+                    created_at: now,
+                };
+                store.insert_occurrence(&occ).map_err(routine_store_error)?;
+                produced.push(occ);
+            }
+            routine.last_bucket = Some(truncated_end);
+            from = truncated_end + 1;
+        }
+
         let open = store
             .open_occurrence_for_routine(routine.id)
             .map_err(routine_store_error)?;
-        for bucket in (after + 1)..=current {
+        for bucket in from..=current {
             if store
                 .load_occurrence(routine.id, bucket)
                 .map_err(routine_store_error)?
@@ -308,7 +365,7 @@ pub fn evaluate_routines(
                 continue;
             }
             if candidates.is_empty() {
-                // Bridget indisponible : on retentera à la prochaine relève.
+                // Bridget / annuaire indisponible : ne consomme pas le bucket.
                 break;
             }
             let key = format!("routine:{}:{}", routine.id, bucket);
@@ -336,13 +393,11 @@ pub fn evaluate_routines(
             };
             let created = match delegate(store, *durations, issuer_scope, candidates, &request) {
                 Ok(DelegateResult::Created(created)) => created,
-                // Cible non résolue / indisponible : pas de bucket consumé —
-                // la prochaine relève retentera (même doctrine que candidats
-                // vides). Ne jamais remonter en erreur fatale du tick.
-                Ok(DelegateResult::Candidates(_)) | Err(DelegateError::TargetUnavailable(_)) => {
-                    break;
-                }
-                Err(_error) => {
+                // Cible non résolue / indisponible / autre blip : pas de bucket
+                // consumé — prochaine relève. Ne remonte jamais en erreur fatale.
+                Ok(DelegateResult::Candidates(_))
+                | Err(DelegateError::TargetUnavailable(_))
+                | Err(_) => {
                     break;
                 }
             };
