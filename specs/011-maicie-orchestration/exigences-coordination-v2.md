@@ -1383,3 +1383,36 @@ actions à distance avec leur propre arbitrage de sécurité.
   l'absence de Rust — amorcer la toolchain ou livrer des binaires, au choix
   argumenté du lot. Critère d'acceptation : l'installateur prouvé sur LES
   DEUX plateformes — le Mac de l'utilisateur et cartae.app.
+
+## Bloc M — Le référent géré : plus personne hors du flux structuré
+
+Décision de cap posée par l'utilisateur le 2026-08-24 (après la bascule des
+ouvriers) : « qu'il n'y en ait plus un seul qui parle qui n'est pas dans ce
+mode JSON. Pas même toi. » Le coordinateur devient un agent géré comme les
+autres ; la fenêtre de l'humain devient la page, pas un terminal.
+
+Ce que ça remplace : l'injection pty (le wrapper tape les messages entrants
+dans le terminal du référent) — mécanisme rustique assumé jusqu'ici comme
+prix de l'interactivité. Ce que ça tue : B7 en entier (plus aucune session
+interactive à traduire — l'argument « garder B7 réduit pour lire la session
+du référent » est retiré, c'était de la valeur d'outil, pas de produit).
+
+- **M1 — Composer humain dans la page** (reprend le point 10) : l'utilisateur
+  écrit au référent depuis la page ; le message part au ledger comme
+  n'importe quel autre ; le fil de conversation est une vue du ledger.
+- **M2 — Référent spawné en claude_stream_json** : modèle épinglé, profil
+  Maicie, carte de reprise, journal suivable. Un géré parmi les gérés.
+- **M3 — Permissions sans terminal** : les gestes risqués du référent ne
+  peuvent plus s'appuyer sur la confirmation du terminal — médiation par la
+  page + second facteur (converge avec la sortie de dette ADR 011).
+  PRÉREQUIS de M2, pas un raffinement.
+- **M4 — Le mécano hors du système** : une session interactive de RÉPARATION
+  lançable à la demande (jamais résidente). Le système ne doit pas être son
+  propre seul réparateur — un référent géré meurt avec le daemon qu'il
+  devrait réparer.
+- **M5 — Rondes → routines** : les rondes cron de la session référent
+  deviennent des routines Maicie (bloc F reste) livrées par le guichet.
+
+ORDRE : après stabilisation du jour (lots en vol) et les routines (M5 est
+leur premier client) ; M3 avant M2 — un référent sans clavier ET sans
+médiation d'approbation serait une régression de sécurité, pas un progrès.
