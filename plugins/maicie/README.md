@@ -205,8 +205,8 @@ la configuration. `registre list` en est la seule vue humaine d'autorité.
   le catalogue ; score, déduplication automatique, état `planned`, runtime
   résident, adaptateur hôte.
 - **Limite v1** : la transition `open → delivered` exige un lien d'arbitrage
-  `(constat_id, objective_id)` et une clôture d'objectif attestée ; le câblage
-  store (délégation durable) et le déclenchement aux commandes catalogue
-  suivent T1708–T1710.
+  `(constat_id, objective_id)` posé à la délégation et une clôture d'objectif
+  attestée ; chaque commande `registre` réconcilie ces faits depuis le store,
+  sans boucle résidente ni polling.
 
 Guide opératoire : `specs/017-greffiere-catalogue/quickstart.md`.
