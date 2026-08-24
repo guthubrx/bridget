@@ -1563,3 +1563,33 @@ ouverture), puis N1-N4.
   (cartae.app) ; (3) VM par équipe seulement si hébergement pour tiers.
   MÊME CHANTIER que M3 + second facteur + sortie du bypass : une seule
   phase sécurité, pas quatre.
+
+## Axe CARACTÈRE — les Veilleurs retrouvés (2026-08-24, 16h17)
+
+L'utilisateur tenait au troisième axe de définition des agents : TYPE
+(technique, Bridget) / PROFIL (poste, Maicie) / CARACTÈRE (manière de
+penser). Retrouvé par fouille d'archive (cursor4) : « Les Veilleurs » de
+Cartae V2 — 15 fiches complètes de caractères nommés, avec rôle, fonction,
+biographie et citation. Sources d'autorité :
+- cartae.app:/home/moi/20.cartae/specs/015-swarm-the-hive/agents_registry.md
+- seed DB s088_agents_veilleurs.py ; rapatriement local
+  ~/Documents/MAICompany/coordination/cartae-agents-personas-exploration-20260707/
+- miroir lentilles : 00.Generic/MAICompany/40-registry/review-lenses.json
+
+Les clés : Librarian (Aminata, complétude), Connector (Hiroshi, liens),
+Sceptic (Ingrid, contradictions), Explorer (Kofi, lacunes), Shadow
+(Mei-Ling, non-dits), Chimera (Gabriel, synthèses), **Entropy (Viktor,
+briseur de dogmes)**, Jester (Fatou, ironie), Pruner (Chandra, élagage),
+Ontologist (Éliane, doublons), Sommelier (Antoine, lucidité), Legislator
+(Aïcha, règles), Alchemist (Yuki, formats), Provocateur (Ernesto,
+contre-questions), Deal Hunter (Argos, FinOps).
+
+CE QUE ÇA DEVIENT CHEZ NOUS (proposition référent, à arbitrer) : le
+caractère est une LENTILLE DE PENSÉE attachée au profil Maicie
+(personality_ref pointe une fiche), avec deux usages immédiats :
+(1) les REVUES à lentilles diverses — un lot sensible relu par Sceptic +
+Shadow + Entropy voit ce qu'une seule lecture rate (c'est déjà notre
+pratique implicite : le « Juge froid » de fable-reviewer est un Veilleur
+qui s'ignore) ; (2) les mandats cessent de redire la doctrine — la fiche
+la porte. S'inscrit dans la phase AUTONOMIE (« les profils portent la
+doctrine ») ; le FinOps d'Argos rejoint le coût par mission déjà livré.
