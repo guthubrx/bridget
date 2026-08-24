@@ -252,23 +252,31 @@ pub fn build_environment(
     Ok(env)
 }
 
+/// Intention : le répertoire du binaire courant est le **premier** élément du
+/// PATH, pour que `bridget` gagne la résolution même s'il figure déjà ailleurs.
+pub fn path_with_current_exe_dir_first(existing: &str) -> Option<String> {
+    let directory = std::env::current_exe()
+        .ok()?
+        .parent()?
+        .to_string_lossy()
+        .into_owned();
+    let rest: Vec<&str> = existing
+        .split(':')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty() && *entry != directory.as_str())
+        .collect();
+    if rest.is_empty() {
+        Some(directory)
+    } else {
+        Some(format!("{directory}:{}", rest.join(":")))
+    }
+}
+
 fn prepend_current_exe_dir(path: &OsString) -> OsString {
-    let Some(directory) = std::env::current_exe()
-        .ok()
-        .as_deref()
-        .and_then(Path::parent)
-        .map(|parent| parent.to_string_lossy().into_owned())
-    else {
-        return path.clone();
-    };
-    let existing = path.to_string_lossy();
-    if existing.split(':').any(|entry| entry == directory) {
-        return path.clone();
+    match path_with_current_exe_dir_first(&path.to_string_lossy()) {
+        Some(prefixed) => OsString::from(prefixed),
+        None => path.clone(),
     }
-    if existing.is_empty() {
-        return OsString::from(directory);
-    }
-    OsString::from(format!("{directory}:{existing}"))
 }
 
 fn command_exists(command: &str, env: &SourceEnvironment) -> bool {
@@ -476,9 +484,11 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let path = env.get("PATH").unwrap().to_string_lossy();
-        assert!(
-            path.split(':').any(|entry| entry == directory),
-            "PATH géré sans le répertoire du binaire courant: {path}"
+        // Intention : le binaire courant doit gagner la résolution (premier élément).
+        assert_eq!(
+            path.split(':').map(str::trim).next(),
+            Some(directory.as_str()),
+            "PATH géré sans préfixe du binaire courant: {path}"
         );
         let _ = fs::remove_dir_all(root);
     }

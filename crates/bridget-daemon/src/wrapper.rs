@@ -2626,21 +2626,18 @@ fn launch_acp_with_status(
         .as_deref()
         .and_then(effective_domain)
         .or_else(derive_domain);
-    let name_state_path = explicit_name.map(|name| {
-        socket
-            .parent()
-            .unwrap_or(socket)
-            .join("agent-names")
-            .join(format!("active-{name}"))
-    });
-    if let Some(path) = name_state_path.as_ref() {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(path, explicit_name.unwrap_or_default())?;
+    let name_state_path = instance_name_state_path(socket, &instance_id);
+    if let Some(parent) = name_state_path.parent() {
+        std::fs::create_dir_all(parent)?;
     }
+    // Indexé par instance (pas par nom) : un rename ne déplace pas le chemin et
+    // un concurrent ne peut pas usurper le fichier d'un autre équipier.
+    std::fs::write(
+        &name_state_path,
+        explicit_name.unwrap_or_default().as_bytes(),
+    )?;
     let mcp_environment =
-        managed_adapter_environment(&instance_id, explicit_name, name_state_path.as_deref());
+        managed_adapter_environment(&instance_id, explicit_name, Some(&name_state_path));
     let mcp_servers = definition
         .mcp
         .acp_session
@@ -2649,7 +2646,7 @@ fn launch_acp_with_status(
         .into_iter()
         .collect();
     let mut native_args = definition.args.clone();
-    let ephemeral_mcp_config = apply_managed_mcp(
+    let _ephemeral_mcp_config = apply_managed_mcp(
         definition.protocol.as_str(),
         definition.mcp.interactive.as_str(),
         &mut native_args,
@@ -2730,7 +2727,6 @@ fn launch_acp_with_status(
         }
         _ => unreachable!("protocole validé avant le lancement"),
     };
-    let _keep_mcp_config = ephemeral_mcp_config;
     let descriptor = transport.descriptor();
     let (mut reader, initial_writer, mut my_name) = match connect_and_register_at(
         socket,
@@ -2753,14 +2749,6 @@ fn launch_acp_with_status(
     };
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
     let mut idempotent_deliveries = IdempotentDeliveryTracker::open(home, &instance_id)?;
-    let name_state_path = socket
-        .parent()
-        .unwrap()
-        .join("agent-names")
-        .join(format!("active-{my_name}"));
-    if let Some(parent) = name_state_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     std::fs::write(&name_state_path, &my_name)?;
     let marker_directory = socket.parent().unwrap().join("agent-pids");
     let adapter_pid = transport.process_id();
@@ -2970,6 +2958,14 @@ fn billing_guard_error(variable: &str) -> String {
     )
 }
 
+fn instance_name_state_path(socket: &Path, instance_id: &str) -> PathBuf {
+    socket
+        .parent()
+        .unwrap_or(socket)
+        .join("agent-names")
+        .join(format!("instance-{instance_id}"))
+}
+
 fn managed_adapter_environment(
     instance_id: &str,
     explicit_name: Option<&str>,
@@ -2995,20 +2991,7 @@ fn managed_adapter_environment(
 }
 
 fn path_with_current_exe_dir() -> Option<String> {
-    let directory = std::env::current_exe()
-        .ok()?
-        .parent()?
-        .to_string_lossy()
-        .into_owned();
-    let existing = std::env::var("PATH").unwrap_or_default();
-    if existing.split(':').any(|entry| entry == directory) {
-        return Some(existing);
-    }
-    if existing.is_empty() {
-        Some(directory)
-    } else {
-        Some(format!("{directory}:{existing}"))
-    }
+    crate::lifecycle::path_with_current_exe_dir_first(&std::env::var("PATH").unwrap_or_default())
 }
 
 fn string_environment(environment: &[(OsString, OsString)]) -> Vec<(String, String)> {
@@ -3156,20 +3139,38 @@ fn claude_mcp_config_in(
     let environment = server["env"]
         .as_object()
         .ok_or("environnement MCP absent")?;
-    std::fs::write(
-        &path,
-        serde_json::to_vec(&serde_json::json!({
-            "mcpServers": {
-                "bridget": {
-                    "type": "stdio",
-                    "command": command,
-                    "args": args,
-                    "env": environment
-                }
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "mcpServers": {
+            "bridget": {
+                "type": "stdio",
+                "command": command,
+                "args": args,
+                "env": environment
             }
-        }))?,
-    )?;
+        }
+    }))?;
+    bridget_transport::fsutil::write_private_file_atomic(&path, &bytes)?;
     Ok(EphemeralMcpConfig { path })
+}
+
+/// Retire les `mcp-*.json` orphelins laissés par un crash (Drop non exécuté).
+pub(crate) fn purge_orphan_mcp_configs(directory: &Path) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("mcp-") && name.ends_with(".json") {
+            if let Err(error) = std::fs::remove_file(entry.path()) {
+                warn!(
+                    "purge MCP orphelin impossible {}: {}",
+                    entry.path().display(),
+                    error
+                );
+            }
+        }
+    }
 }
 
 fn codex_mcp_override(server: &serde_json::Value) -> Result<String, Box<dyn std::error::Error>> {
@@ -4082,7 +4083,7 @@ mod reconnect_tests {
     fn spawn_gere_injecte_mcp_identite_et_path() {
         let root = mcp_test_root("gere-equip");
         let socket = root.join("bridget.sock");
-        let name_file = root.join("agent-names").join("active-fable-reviewer");
+        let name_file = root.join("agent-names").join("instance-instance-1");
         let env =
             managed_adapter_environment("instance-1", Some("fable-reviewer"), Some(&name_file));
         let pairs: Vec<(String, String)> = string_environment(&env);
@@ -4111,7 +4112,13 @@ mod reconnect_tests {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        assert!(path.split(':').any(|entry| entry == directory), "{path}");
+        // Intention : premier élément = binaire courant (mutant « déjà présent
+        // plus loin » doit rougir).
+        assert_eq!(
+            path.split(':').map(str::trim).next(),
+            Some(directory.as_str()),
+            "{path}"
+        );
 
         let mut claude_args = vec!["--model".to_string(), "claude-opus-5".to_string()];
         let config = apply_managed_mcp(
@@ -4134,6 +4141,35 @@ mod reconnect_tests {
                 .any(|argument| argument == "--strict-mcp-config")
         );
         assert!(config.path().exists());
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(config.path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+
+        let mut codex_args = vec!["app-server".to_string()];
+        assert!(
+            apply_managed_mcp(
+                "codex_app_server",
+                "codex",
+                &mut codex_args,
+                "instance-1",
+                &socket
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(codex_args[0], "-c");
+        assert!(
+            codex_args[1].starts_with("mcp_servers.bridget="),
+            "{}",
+            codex_args[1]
+        );
+        assert_eq!(codex_args[2], "app-server");
 
         let mut none_args = Vec::new();
         assert!(
@@ -4143,11 +4179,29 @@ mod reconnect_tests {
         );
         assert!(none_args.is_empty());
 
-        let unnamed = string_environment(&managed_adapter_environment("instance-1", None, None));
+        let unnamed = string_environment(&managed_adapter_environment(
+            "instance-1",
+            None,
+            Some(&name_file),
+        ));
         assert!(
             unnamed.iter().all(|(key, _)| key != "BRIDGET_AGENT_NAME"),
             "{unnamed:?}"
         );
+        assert_eq!(
+            instance_name_state_path(&socket, "abc"),
+            socket
+                .parent()
+                .unwrap()
+                .join("agent-names")
+                .join("instance-abc")
+        );
+
+        let orphan = root.join("mcp-crash.json");
+        std::fs::write(&orphan, b"{}").unwrap();
+        purge_orphan_mcp_configs(&root);
+        assert!(!orphan.exists());
+
         drop(config);
         std::fs::remove_dir_all(root).unwrap();
     }
