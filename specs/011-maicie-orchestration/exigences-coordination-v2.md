@@ -150,8 +150,10 @@ ont été créés directement dans ce fichier le 24/08.
       migration v13), corrections de revue en cours ; = G9
 - [x] L5 voir qui travaille (état d'occupation des gérés dans who)
 - [x] BASCULE tmux→gérés FAITE le 24/08 12h25 (voir point d'étape bloc L) ;
-      extinction : cxbridget et prospective terminés, coderBridget en
-      dernière mission, référent reste tmux par nature
+      extinction ACHEVÉE à 15h25 : cxbridget, prospective puis coderBridget
+      (pane fermé par l'utilisateur après sa dernière livraison — état
+      « stopped » propre au daemon). Plus AUCUN ouvrier tmux ; le référent
+      reste tmux par nature (session interactive), cible bloc M
 
 ## Politiques de délégation observées (candidates à l'automatisation)
 
