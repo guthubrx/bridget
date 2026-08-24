@@ -96,6 +96,13 @@ pub enum ManagedEventKind {
         message_id: String,
         reason: String,
     },
+    /// Limite fournisseur effectivement annoncée par le pilote. Le wrapper la
+    /// transmet telle quelle au daemon ; il n'en tire aucune décision locale.
+    RateLimitObserved {
+        window: String,
+        status: String,
+        resets_at: Option<i64>,
+    },
     Update {
         detail: String,
     },

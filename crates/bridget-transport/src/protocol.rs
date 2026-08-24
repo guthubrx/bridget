@@ -669,6 +669,21 @@ pub enum WrapperToDaemon {
         effort: Option<String>,
         source: RuntimeSource,
     },
+    /// Rapporter un fait de limite attesté par le pilote d'un agent.
+    ///
+    /// L'absence de ce message ne permet aucune déduction : une limite inconnue
+    /// reste inconnue. Cette observation n'autorise ni refus ni bascule.
+    RateLimit {
+        agent: String,
+        /// Fenêtre opaque du fournisseur, par exemple `five_hour`.
+        window: String,
+        /// Statut opaque attesté, par exemple `allowed` ou `rejected`.
+        status: String,
+        /// Instant Unix de retour fourni par le fournisseur, absent si inconnu.
+        #[serde(default)]
+        resets_at: Option<i64>,
+        source: RateLimitSource,
+    },
     /// Remplacer le domaine d'un agent, ou revenir au domaine dérivé.
     ///
     /// `domain: None` signifie « réinitialiser » : le daemon reprend alors le
@@ -717,6 +732,23 @@ impl std::fmt::Display for RuntimeSource {
             RuntimeSource::Declared => "declared",
         };
         f.write_str(label)
+    }
+}
+
+/// Origine d'une observation de limite. Elle est fermée afin qu'un fournisseur
+/// inconnu ne puisse pas se faire passer pour une capacité attestée.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RateLimitSource {
+    /// Événement `rate_limit_event` effectivement lu du flux Claude natif.
+    #[serde(rename = "claude-stream-json")]
+    ClaudeStreamJson,
+}
+
+impl std::fmt::Display for RateLimitSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RateLimitSource::ClaudeStreamJson => f.write_str("claude-stream-json"),
+        }
     }
 }
 
@@ -1074,6 +1106,21 @@ pub struct AgentInfo {
     /// d'effort). Les deux s'affichent de la même façon.
     #[serde(default)]
     pub effort: Option<String>,
+    /// Dernier fait de limite attesté par le pilote, absent si aucun n'a été
+    /// observé. Ce champ est purement informatif : il ne modifie pas l'état de
+    /// présence ni le routage.
+    #[serde(default)]
+    pub rate_limit: Option<RateLimitFact>,
+}
+
+/// Fait de limite exposé dans l'annuaire. Les chaînes fournisseur restent
+/// opaques ; seul `resets_at` manquant signifie explicitement « retour inconnu ».
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RateLimitFact {
+    pub window: String,
+    pub status: String,
+    #[serde(default)]
+    pub resets_at: Option<i64>,
 }
 
 fn unknown_os() -> String {
@@ -1331,6 +1378,39 @@ mod tests {
     }
 
     #[test]
+    fn test_encode_decode_rate_limit_et_absence_de_retour() {
+        let message = WrapperToDaemon::RateLimit {
+            agent: "claude-1".to_string(),
+            window: "five_hour".to_string(),
+            status: "rejected".to_string(),
+            resets_at: Some(1_787_572_200),
+            source: RateLimitSource::ClaudeStreamJson,
+        };
+        let encoded = encode(&message).unwrap();
+        assert!(encoded.contains("\"type\":\"RateLimit\""));
+        assert!(encoded.contains("\"source\":\"claude-stream-json\""));
+        assert!(matches!(
+            decode(&encoded).unwrap(),
+            WrapperToDaemon::RateLimit {
+                agent,
+                window,
+                status,
+                resets_at: Some(1_787_572_200),
+                source: RateLimitSource::ClaudeStreamJson,
+            } if agent == "claude-1" && window == "five_hour" && status == "rejected"
+        ));
+
+        let without_reset = r#"{"type":"RateLimit","agent":"claude-1","window":"five_hour","status":"allowed","source":"claude-stream-json"}"#;
+        assert!(matches!(
+            decode(without_reset).unwrap(),
+            WrapperToDaemon::RateLimit {
+                resets_at: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn test_agent_info_sans_runtime_reste_decodable() {
         // Compatibilité ascendante : un daemon d'une version antérieure ne
         // sérialise ni model ni effort.
@@ -1340,6 +1420,7 @@ mod tests {
         let info: AgentInfo = decode(json).unwrap();
         assert!(info.model.is_none());
         assert!(info.effort.is_none());
+        assert!(info.rate_limit.is_none());
     }
 
     #[test]
