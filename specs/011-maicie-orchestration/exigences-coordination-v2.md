@@ -474,3 +474,42 @@ plus vite ; le coût net est un report, pas une perte.
   un composant non résident sera systématiquement pris pour mort par ses
   pairs tant que la voie de dépôt asynchrone ne leur est pas enseignée —
   l'absence de canal se lit comme une panne.
+- **Le pont Codex des agents gérés est une impasse — solution trouvée chez
+  T3 Code, nuit du 24/08.** Diagnostic établi par le journal `bridget
+  attach` (et non par déduction, voir la leçon plus bas) : les agents gérés
+  de type Codex meurent à la seconde où ils reçoivent leur premier message,
+  refusés par l'API — « The 'gpt-5.6-terra' model requires a newer version
+  of Codex ». Cause : `@zed-industries/codex-acp` embarque sa propre copie
+  figée de Codex, et 0.16.0 est la DERNIÈRE version publiée : il n'y a pas
+  de mise à jour à installer. Le CLI Codex local, lui, est à jour (0.149.0)
+  et fait tourner `terra` sans problème — c'est pourquoi les agents tmux
+  n'ont jamais eu ce défaut, et pourquoi le symptôme paraissait aléatoire.
+  CE QUE FAIT T3 CODE, vérifié dans son code : il n'utilise PAS ACP pour
+  Codex. Il lance le CLI local en `codex app-server` et lui parle en
+  JSON-RPC (`initialize` puis `initialized`, cf. CodexProvider.ts:368-391),
+  via une bibliothèque maison `effect-codex-app-server` vendue dans son
+  dépôt, donc lisible comme implémentation de référence. Leur liste de
+  modèles inclut sol, terra et luna (contracts/src/model.ts:136-147).
+  ATOUT DÉCISIF : `codex app-server generate-json-schema` produit la spec
+  machine du protocole — mesuré : 37 fichiers, 1,6 Mo, 579 définitions,
+  versionné v2. Un pont se construirait donc sur un schéma généré, pas sur
+  du reverse-engineering, et le sous-ensemble utile (initialize, ouverture
+  de conversation, tour utilisateur, flux d'événements) est petit.
+  CONSÉQUENCE : remplacer le pont `codex-acp` par un pont `app-server`
+  supprime la dépendance à Zed, débloque les modèles récents et aligne les
+  agents gérés sur ce que les agents tmux savent déjà faire. À instruire en
+  session dédiée, APRÈS le merge 015 — ce n'est pas un correctif, c'est un
+  chantier. En attendant, les agents gérés Codex tournent sur un modèle
+  supporté par 0.16.0, et les agents gérés Claude ne sont pas concernés.
+- **Leçon de méthode : devant un agent mort, lire le journal AVANT de
+  formuler une hypothèse.** J'ai produit deux diagnostics successifs faux —
+  d'abord le transport ACP, puis l'épuisement de quota — alors que le
+  message d'erreur exact était disponible dès la première minute dans
+  `bridget attach <agent>`, une commande que j'ai dans les mains. Le premier
+  était séduisant parce que technique, le second plausible parce qu'une
+  panne de quota réelle avait lieu au même moment. Ma propre règle
+  anti-boucle impose d'aller chercher la donnée runtime avant de reformuler
+  une hypothèse ; je ne me l'étais pas appliquée. Le coût : deux agents
+  déclarés morts pour une mauvaise raison, un motif de clôture erroné au
+  greffe, et une mission relancée à l'identique qui ne pouvait que
+  réechouer.
