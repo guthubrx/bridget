@@ -176,3 +176,18 @@ Installation = la config gagnante entre dans docs/regles-chantier.md
 (doctrine de revue), les fiches de lentilles deviennent les profils de spawn
 standard des relecteurs, et toutes les revues suivantes de la nuit tournent
 avec. Décision et motifs consignés ici même, chiffres à l'appui.
+
+## Amendement du 2026-08-24 20:17 — jury n°3 ANNULÉ, manche 4 avancée (arbitrage utilisateur)
+
+Le « 2×2 de calibration » sur les routines est SUPPRIMÉ : le 2×2 est déjà
+mesuré deux fois (manches 1 et 2), une troisième mesure serait de la liturgie.
+**La manche 4 se joue directement sur le lot des routines de cursor7** (le
+prochain à livrer — v16 attend son merge, tout avance d'autant). Trois bras
+réunis = cinq relecteurs sur le lot : pour la DÉCISION DE MERGE on prend
+l'UNION des trouvailles des trois bras (couverture supérieure à un 2×2) ;
+pour l'EXPÉRIENCE on compare bras par bras. Le lot v16 sera ensuite revu avec
+la configuration ADOPTÉE — premier test en service réel de la doctrine.
+Précision de doctrine issue du même arbitrage : la fiche de personnage est
+GRATUITE (une consigne de spawn) — ce que les paliers décident, c'est le
+NOMBRE de relecteurs, jamais le port de la fiche. Si les personas gagnent,
+même le relecteur seul du tout-venant en porte une.
