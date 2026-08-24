@@ -5,10 +5,13 @@
 //! puis ne rejoue que l'enveloppe filaire strictement identique enregistrée
 //! avant la première I/O.
 
-use crate::app::{GuichetError, process_guichet_claim, record_guichet_lifecycle_event};
+use crate::app::{
+    GuichetError, apply_attested_coordination_event, process_guichet_claim,
+    record_guichet_lifecycle_event,
+};
 use crate::bridget_client::{
-    BridgetClient, BridgetClientError, BridgetClientLimits, GuichetClient, IdempotencyIssue,
-    SpawnOutcome,
+    BridgetClient, BridgetClientError, BridgetClientLimits, CoordinationClient,
+    CoordinationStreamItem, GuichetClient, IdempotencyIssue, SpawnOutcome,
 };
 use crate::domain::{MotifRefusGreffe, NotificationOutbox};
 use crate::outbox::{OutboxError, PendingDelegationOutbox};
@@ -146,6 +149,44 @@ pub enum GuichetReconcileAction {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct GuichetReconcileReport {
     pub actions: Vec<GuichetReconcileAction>,
+}
+
+const MAX_COORDINATION_ITEMS_PER_PASS: usize = 512;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoordinationReconcileAction {
+    EvenementApplique {
+        cursor: u64,
+    },
+    TerminalApplique {
+        request_id: String,
+        state: String,
+    },
+    SnapshotAtteint {
+        through_cursor: Option<u64>,
+    },
+    Gap {
+        from_cursor: u64,
+        to_cursor: u64,
+        reason: String,
+    },
+    Unavailable {
+        reason: String,
+    },
+    TransportIndisponible,
+    BudgetEpuise,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct CoordinationReconcileReport {
+    pub actions: Vec<CoordinationReconcileAction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinationReconcilePhase {
+    BeforeApply,
+    BeforeStoreCommit,
+    AfterStoreCommit,
 }
 
 /// Jalons réservés aux crash-tests de la relève guichet. Ils encadrent la
@@ -594,6 +635,141 @@ pub fn reconcile_guichet_startup_observed_with_limits(
             }
         }
     }
+}
+
+/// Relève un snapshot cursé au début d'une commande, puis applique au plus une
+/// fenêtre bornée de faits attestés. Les événements ne sont jamais frais avant
+/// `SnapshotCaughtUp` : la passe les conserve donc en mémoire sans mutation,
+/// puis les commit un par un dans l'ordre du curseur.
+pub fn reconcile_coordination_startup_with_limits(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    limits: BridgetClientLimits,
+) -> Result<CoordinationReconcileReport, ReconcileError> {
+    reconcile_coordination_startup_observed_with_limits(store, bridget_socket, limits, |_| Ok(()))
+}
+
+#[doc(hidden)]
+pub fn reconcile_coordination_startup_observed_with_limits(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    limits: BridgetClientLimits,
+    mut observer: impl FnMut(CoordinationReconcilePhase) -> Result<(), StoreError>,
+) -> Result<CoordinationReconcileReport, ReconcileError> {
+    let deadline = Instant::now() + reconciliation_budget(limits);
+    let after_cursor = store.coordination_cursor()?;
+    let mut report = CoordinationReconcileReport::default();
+    let mut client = match CoordinationClient::connect_with_limits_until(
+        bridget_socket,
+        store.issuer_scope(),
+        limits,
+        deadline,
+    ) {
+        Ok(client) => client,
+        Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {
+            report
+                .actions
+                .push(CoordinationReconcileAction::TransportIndisponible);
+            return Ok(report);
+        }
+        Err(error) => return Err(ReconcileError::Client(error)),
+    };
+    let items = match client.snapshot_after(after_cursor, MAX_COORDINATION_ITEMS_PER_PASS) {
+        Ok(items) => items,
+        Err(BridgetClientError::Timeout { .. } | BridgetClientError::ItemLimitExceeded { .. }) => {
+            report
+                .actions
+                .push(CoordinationReconcileAction::BudgetEpuise);
+            return Ok(report);
+        }
+        Err(error) => return Err(ReconcileError::Client(error)),
+    };
+    let boundary = items.last().ok_or(ReconcileError::InvalidSnapshot(
+        "relève coordination sans frontière terminale",
+    ))?;
+    match boundary {
+        CoordinationStreamItem::Gap {
+            from_cursor,
+            to_cursor,
+            reason,
+        } => {
+            report.actions.push(CoordinationReconcileAction::Gap {
+                from_cursor: *from_cursor,
+                to_cursor: *to_cursor,
+                reason: reason.clone(),
+            });
+            return Ok(report);
+        }
+        CoordinationStreamItem::Unavailable { reason } => {
+            report
+                .actions
+                .push(CoordinationReconcileAction::Unavailable {
+                    reason: reason.clone(),
+                });
+            return Ok(report);
+        }
+        CoordinationStreamItem::SnapshotCaughtUp { through_cursor } => {
+            report
+                .actions
+                .push(CoordinationReconcileAction::SnapshotAtteint {
+                    through_cursor: *through_cursor,
+                });
+        }
+        _ => {
+            return Err(ReconcileError::InvalidSnapshot(
+                "relève coordination incomplète",
+            ));
+        }
+    }
+
+    for item in items
+        .into_iter()
+        .take_while(|item| !matches!(item, CoordinationStreamItem::SnapshotCaughtUp { .. }))
+    {
+        observer(CoordinationReconcilePhase::BeforeApply)?;
+        match item {
+            CoordinationStreamItem::Event { canonical_bytes } => {
+                apply_attested_coordination_event(store, &canonical_bytes, |phase| {
+                    observer(match phase {
+                        crate::store::CoordinationCommitPhase::BeforeCommit => {
+                            CoordinationReconcilePhase::BeforeStoreCommit
+                        }
+                        crate::store::CoordinationCommitPhase::AfterCommit => {
+                            CoordinationReconcilePhase::AfterStoreCommit
+                        }
+                        _ => return Ok(()),
+                    })
+                })
+                .map_err(ReconcileError::Guichet)?;
+                let cursor =
+                    store
+                        .coordination_cursor()?
+                        .ok_or(ReconcileError::InvalidSnapshot(
+                            "événement appliqué sans curseur local",
+                        ))?;
+                report
+                    .actions
+                    .push(CoordinationReconcileAction::EvenementApplique { cursor });
+            }
+            CoordinationStreamItem::Lifecycle(event) => {
+                let request_id = event.request_id.clone();
+                let state = event.state.clone();
+                record_guichet_lifecycle_event(store, &event).map_err(ReconcileError::Guichet)?;
+                observer(CoordinationReconcilePhase::AfterStoreCommit)?;
+                report
+                    .actions
+                    .push(CoordinationReconcileAction::TerminalApplique { request_id, state });
+            }
+            CoordinationStreamItem::Gap { .. }
+            | CoordinationStreamItem::Unavailable { .. }
+            | CoordinationStreamItem::SnapshotCaughtUp { .. } => {
+                return Err(ReconcileError::InvalidSnapshot(
+                    "frontière coordination avant la fin du lot",
+                ));
+            }
+        }
+    }
+    Ok(report)
 }
 
 fn record_guichet_transport_error(

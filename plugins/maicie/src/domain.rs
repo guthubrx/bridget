@@ -1321,6 +1321,10 @@ pub enum EntreeReductionCoordination {
     EvenementAtteste {
         objectif_id: Uuid,
         delegation_id: Uuid,
+        /// Génération métier de la délégation, résolue par la demande suivie.
+        /// Elle est distincte du palier `generation` attesté par Bridget dans
+        /// l'événement de rappel (1=doux, 2=ferme).
+        generation: u64,
         evenement: EvenementCoordination,
     },
     ClotureEvaluee(EvaluationCloture),
@@ -1343,7 +1347,7 @@ impl EntreeReductionCoordination {
 
     pub fn generation(&self) -> u64 {
         match self {
-            Self::EvenementAtteste { evenement, .. } => evenement.generation(),
+            Self::EvenementAtteste { generation, .. } => *generation,
             Self::ClotureEvaluee(evaluation) => evaluation.generation,
         }
     }

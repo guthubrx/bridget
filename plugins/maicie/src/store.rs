@@ -17,9 +17,10 @@ use crate::domain::{
     DefinitionCoordination, Delegation, DependanceDelegation, DomainError, EffetDemandeSuivie,
     EntreeReductionCoordination, EpisodeRelance, EtatActivationOutbox, EtatDecision,
     EtatDelegation, EtatEpisodeRelance, EtatGenerationDelegation, EtatNotificationOutbox,
-    EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, FraicheurCoordination,
-    GenerationDelegation, IssueGreffe, LienArbitrage, LigneeDelegation, LotReassignation,
-    MotifRefusGreffe, NotificationOutbox, NotificationReassignation, ObjectifCoordonne,
+    EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, FaitReassignation,
+    FraicheurCoordination, GenerationDelegation, IssueGreffe, LienArbitrage, LigneeDelegation,
+    LotReassignation, MotifRefusGreffe, NotificationOutbox, NotificationReassignation,
+    ObjectifCoordonne,
     OperationGuichet, PolitiqueReassignation, QualificationDependance, ReceptionGreffe,
     RecuCorrelation, ReductionCoordinationActive, ReductionOuvertureDelegation,
     ReductionReassignation, TransitionCoordinationActive, TypeDecision, TypeEffetDemandeSuivie,
@@ -150,6 +151,18 @@ pub struct TrackedRequestOutbox {
 pub struct StoredReassignmentReduction {
     pub reduction: ReductionReassignation,
     pub replayed: bool,
+}
+
+/// Corrélation locale d'une demande suivie. Elle provient uniquement des
+/// outboxes/épisodes durables Maicie et ne déduit jamais une délégation d'un
+/// texte transport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReassignmentRequestContext {
+    pub objectif_id: Uuid,
+    pub delegation_id: Uuid,
+    pub generation: u64,
+    pub participant: String,
+    pub timeout_secs: u64,
 }
 
 impl StoredCoordinationSnapshot {
@@ -518,6 +531,61 @@ impl MaicieStore {
         load_coordination_snapshot(&self.connection, objectif_id)
     }
 
+    /// Dernier curseur dont tous les effets locaux ont été commités. Une
+    /// transaction avortée ne peut donc jamais faire sauter un événement au
+    /// prochain `coordination_subscribe`.
+    pub fn coordination_cursor(&self) -> Result<Option<u64>, StoreError> {
+        let cursor: Option<i64> = self
+            .connection
+            .query_row("SELECT MAX(cursor) FROM coordination_events", [], |row| {
+                row.get(0)
+            })
+            .map_err(StoreError::Sql)?;
+        cursor
+            .map(|value| {
+                u64::try_from(value).map_err(|_| StoreError::Corrupt("curseur local invalide"))
+            })
+            .transpose()
+    }
+
+    /// Résout une demande suivie depuis les faits durables Maicie. L'épisode
+    /// F29 gagne ; la demande initiale historique est admise uniquement sur la
+    /// génération 1 explicitement persistée.
+    pub fn reassignment_request_context(
+        &self,
+        request_id: &str,
+    ) -> Result<ReassignmentRequestContext, StoreError> {
+        reassignment_request_context_from(&self.connection, request_id)
+    }
+
+    /// Construit le lot normalisé autour d'un fait Bridget et y joint tout
+    /// rapport de livraison local déjà durable pour la même demande. Cette
+    /// priorité est factuelle ; aucun contenu humain n'est consulté.
+    pub fn reassignment_batch_for_fact(
+        &self,
+        fact: FaitReassignation,
+    ) -> Result<LotReassignation, StoreError> {
+        reassignment_batch_for_fact_from(&self.connection, fact)
+    }
+
+    /// Applique un terminal Bridget sous un verrou pris AVANT la lecture des
+    /// rapports de livraison. Un rapport concurrent se linéarise donc avant
+    /// l'arbitrage (et gagne) ou après celui-ci, jamais dans une fenêtre TOCTOU.
+    pub fn apply_reassignment_fact(
+        &mut self,
+        fact: FaitReassignation,
+    ) -> Result<StoredReassignmentReduction, StoreError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let lot = reassignment_batch_for_fact_from(&tx, fact)?;
+        let mut observer = |_| Ok(());
+        let stored = apply_reassignment_batch_in_transaction(&tx, &lot, &mut observer)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(stored)
+    }
+
     /// Réduit puis applique un fait 016 sous une transaction `IMMEDIATE`.
     /// La méthode n'effectue aucune I/O externe : événements, décision,
     /// transition et outboxes deviennent visibles ensemble au commit.
@@ -543,95 +611,42 @@ impl MaicieStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(StoreError::Sql)?;
-        let (generation, policy) = load_active_coordination_context(
-            &tx,
-            input.objectif_id(),
-            input.delegation_id(),
-            input.generation(),
-        )?;
-        let reduction =
-            reduire_coordination(&generation, &policy, input).map_err(StoreError::Domain)?;
-        let decision_bytes = serde_json::to_vec(&reduction.decision).map_err(StoreError::Json)?;
-
-        let existing_decision: Option<Vec<u8>> = tx
-            .query_row(
-                "SELECT payload_json FROM active_coordination_decisions WHERE decision_id = ?1",
-                [reduction.decision.decision_id.to_string()],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(StoreError::Sql)?;
-        if let Some(existing) = existing_decision {
-            if existing != decision_bytes {
-                return Err(StoreError::EnvelopeMismatch);
-            }
-            verify_replayed_coordination_effects(&tx, input, &reduction)?;
-            tx.commit().map_err(StoreError::Sql)?;
-            return Ok(StoredCoordinationReduction {
-                reduction,
-                replayed: true,
-            });
-        }
-
-        if let Some(event) = input.evenement_atteste() {
-            let inserted = tx
-                .execute(
-                    "INSERT INTO coordination_events(
-                         event_id, request_id, kind, reminder_message_id, recipient,
-                         transport_generation, cursor, freshness, observed_at, canonical_bytes
-                     ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-                    params![
-                        event.event_id(),
-                        event.request_id(),
-                        coordination_event_kind_name(event.kind()),
-                        event.reminder_message_id(),
-                        event.recipient(),
-                        i64::try_from(event.generation())
-                            .map_err(|_| StoreError::Invalid("génération transport hors borne"))?,
-                        i64::try_from(event.cursor())
-                            .map_err(|_| StoreError::Invalid("curseur transport hors borne"))?,
-                        coordination_freshness_name(event.freshness()),
-                        event.observed_at(),
-                        event.canonical_bytes(),
-                    ],
-                )
-                .map_err(map_coordination_insert_error)?;
-            if inserted != 1 {
-                return Err(StoreError::Conflict(
-                    "événement de coordination non enregistré",
-                ));
-            }
-        }
-        observer(CoordinationCommitPhase::AfterEventInsert)?;
-        persist_coordination_effects(&tx, &generation, &reduction, &decision_bytes, &mut observer)?;
-        if let EntreeReductionCoordination::ClotureEvaluee(evaluation) = input {
-            open_ready_dependents(
-                &tx,
-                evaluation.delegation_id,
-                &evaluation.event_id,
-                evaluation.evaluated_at,
-                |phase| {
-                    observer(match phase {
-                        DependencyOpeningCommitPhase::Decision => {
-                            CoordinationCommitPhase::AfterDependentDecision
-                        }
-                        DependencyOpeningCommitPhase::Generation => {
-                            CoordinationCommitPhase::AfterDependentTransition
-                        }
-                        DependencyOpeningCommitPhase::Notification => {
-                            CoordinationCommitPhase::AfterDependentOutbox
-                        }
-                    })
-                },
-            )?;
-        }
+        let stored = apply_coordination_reduction_in_transaction(&tx, input, &mut observer)?;
         observer(CoordinationCommitPhase::BeforeCommit)?;
         tx.commit().map_err(StoreError::Sql)?;
         observer(CoordinationCommitPhase::AfterCommit)?;
-        Ok(StoredCoordinationReduction {
-            reduction,
-            replayed: false,
-        })
+        Ok(stored)
+    }
+
+    /// Applique un rappel attesté et son fait F29 sous le même verrou SQLite.
+    /// Le curseur n'est donc jamais avancé si la décision de réassignation,
+    /// ses transitions ou ses outboxes échouent. Le lot est construit après
+    /// `BEGIN IMMEDIATE`, ce qui ferme la course avec un rapport de livraison.
+    pub fn apply_attested_coordination_and_reassignment(
+        &mut self,
+        input: &EntreeReductionCoordination,
+        fact: FaitReassignation,
+        mut observer: impl FnMut(CoordinationCommitPhase) -> Result<(), StoreError>,
+    ) -> Result<(StoredCoordinationReduction, StoredReassignmentReduction), StoreError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let lot = reassignment_batch_for_fact_from(&tx, fact)?;
+        if input.objectif_id() != lot.objectif_id
+            || input.delegation_id() != lot.delegation_id
+            || input.generation() != lot.generation
+        {
+            return Err(StoreError::Invalid("rappel et lot F29 divergents"));
+        }
+        let coordination = apply_coordination_reduction_in_transaction(&tx, input, &mut observer)?;
+        let mut reassignment_observer = |_| Ok(());
+        let reassignment =
+            apply_reassignment_batch_in_transaction(&tx, &lot, &mut reassignment_observer)?;
+        observer(CoordinationCommitPhase::BeforeCommit)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        observer(CoordinationCommitPhase::AfterCommit)?;
+        Ok((coordination, reassignment))
     }
 
     /// Applique un lot F29 sans I/O externe. Les faits déjà consommés sont
@@ -654,143 +669,11 @@ impl MaicieStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(StoreError::Sql)?;
-
-        let mut nouveaux = Vec::new();
-        let mut replay_batches = BTreeSet::new();
-        for fait in &lot.faits {
-            let payload = serde_json::to_vec(fait).map_err(StoreError::Json)?;
-            let existing: Option<(Vec<u8>, String)> = tx
-                .query_row(
-                    "SELECT payload_json, batch_event_id FROM reassignment_events
-                     WHERE event_id = ?1",
-                    [&fait.event_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .map_err(StoreError::Sql)?;
-            if let Some((stored, batch_event_id)) = existing {
-                if stored != payload {
-                    return Err(StoreError::EnvelopeMismatch);
-                }
-                replay_batches.insert(batch_event_id);
-            } else {
-                nouveaux.push(fait.clone());
-            }
-        }
-        if nouveaux.is_empty() {
-            if replay_batches.len() != 1 {
-                return Err(StoreError::Conflict("rejeu F29 couvre plusieurs lots"));
-            }
-            let event_id = replay_batches
-                .into_iter()
-                .next()
-                .ok_or(StoreError::Corrupt("lot F29 rejoué absent"))?;
-            let payload: Vec<u8> = tx
-                .query_row(
-                    "SELECT r.payload_json
-                     FROM active_coordination_decisions d
-                     JOIN reassignment_reductions r ON r.decision_id = d.decision_id
-                     WHERE d.delegation_id = ?1 AND d.generation = ?2 AND d.event_id = ?3",
-                    params![
-                        lot.delegation_id.to_string(),
-                        i64::try_from(lot.generation)
-                            .map_err(|_| StoreError::Invalid("génération F29 hors borne"))?,
-                        event_id,
-                    ],
-                    |row| row.get(0),
-                )
-                .map_err(StoreError::Sql)?;
-            let reduction: ReductionReassignation =
-                serde_json::from_slice(&payload).map_err(StoreError::Json)?;
-            tx.commit().map_err(StoreError::Sql)?;
-            return Ok(StoredReassignmentReduction {
-                reduction,
-                replayed: true,
-            });
-        }
-
-        let effective = LotReassignation {
-            objectif_id: lot.objectif_id,
-            delegation_id: lot.delegation_id,
-            generation: lot.generation,
-            issued_at: lot.issued_at,
-            next_deadline_at: lot.next_deadline_at,
-            faits: nouveaux,
-        };
-        let (generation, policy, episode, generations) =
-            load_reassignment_context(&tx, &effective)?;
-        let reduction =
-            reduire_reassignation(&generation, &policy, &episode, &generations, &effective)
-                .map_err(StoreError::Domain)?;
-        let batch_event_id = reduction.decision.event_id.clone();
-        for fait in &effective.faits {
-            let inserted = tx
-                .execute(
-                    "INSERT INTO reassignment_events(
-                         event_id, objective_id, delegation_id, generation,
-                         batch_event_id, request_id, kind, payload_json
-                     ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-                    params![
-                        fait.event_id,
-                        lot.objectif_id.to_string(),
-                        lot.delegation_id.to_string(),
-                        i64::try_from(lot.generation)
-                            .map_err(|_| StoreError::Invalid("génération F29 hors borne"))?,
-                        batch_event_id,
-                        fait.request_id,
-                        reassignment_fact_kind_name(fait.kind),
-                        serde_json::to_vec(fait).map_err(StoreError::Json)?,
-                    ],
-                )
-                .map_err(map_coordination_insert_error)?;
-            if inserted != 1 {
-                return Err(StoreError::Conflict("fait F29 non enregistré"));
-            }
-        }
-        observer(ReassignmentCommitPhase::AfterEvents)?;
-
-        let decision_bytes = serde_json::to_vec(&reduction.decision).map_err(StoreError::Json)?;
-        insert_active_coordination_decision(&tx, &reduction.decision, &decision_bytes)?;
-        observer(ReassignmentCommitPhase::AfterDecision)?;
-        persist_reassignment_generations(&tx, &generation, &reduction)?;
-        observer(ReassignmentCommitPhase::AfterGenerations)?;
-
-        let (body_bytes, timeout_secs) = load_delegation_request_template(&tx, lot.delegation_id)?;
-        for effect in &reduction.effets_demandes {
-            let outbox = tracked_request_outbox(
-                lot,
-                &policy,
-                effect,
-                &body_bytes,
-                timeout_secs,
-                &batch_event_id,
-            )?;
-            insert_tracked_request_outbox(&tx, &outbox)?;
-        }
-        observer(ReassignmentCommitPhase::AfterRequestOutboxes)?;
-        for notification in &reduction.notifications {
-            let outbox =
-                reassignment_notification_outbox(lot, &policy, notification, &batch_event_id)?;
-            insert_notification_outbox(&tx, &outbox)?;
-        }
-        observer(ReassignmentCommitPhase::AfterNotifications)?;
-        let reduction_bytes = serde_json::to_vec(&reduction).map_err(StoreError::Json)?;
-        let inserted = tx
-            .execute(
-                "INSERT INTO reassignment_reductions(decision_id, payload_json) VALUES (?1,?2)",
-                params![reduction.decision.decision_id.to_string(), reduction_bytes],
-            )
-            .map_err(StoreError::Sql)?;
-        if inserted != 1 {
-            return Err(StoreError::Conflict("réduction F29 non enregistrée"));
-        }
+        let stored = apply_reassignment_batch_in_transaction(&tx, lot, &mut observer)?;
         observer(ReassignmentCommitPhase::BeforeCommit)?;
         tx.commit().map_err(StoreError::Sql)?;
         observer(ReassignmentCommitPhase::AfterCommit)?;
-        Ok(StoredReassignmentReduction {
-            reduction,
-            replayed: false,
-        })
+        Ok(stored)
     }
 
     pub fn pending_tracked_request_outboxes(
@@ -3847,6 +3730,352 @@ fn load_active_coordination_context(
     }
     loaded_generation.verifier().map_err(StoreError::Domain)?;
     Ok((loaded_generation, policy))
+}
+
+fn reassignment_request_context_from(
+    connection: &Connection,
+    request_id: &str,
+) -> Result<ReassignmentRequestContext, StoreError> {
+    if request_id.trim().is_empty() {
+        return Err(StoreError::Invalid("request_id F29 vide"));
+    }
+    let episode: Option<(String, String, i64, String, i64)> = connection
+        .query_row(
+            "SELECT g.objective_id,g.delegation_id,g.generation,g.participant_id,o.timeout_secs
+             FROM reminder_episodes r
+             JOIN delegation_generations g
+               ON g.delegation_id=r.delegation_id AND g.generation=r.generation
+             JOIN delegation_outbox o ON o.delegation_id=r.delegation_id
+             WHERE r.request_id=?1",
+            [request_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    let row = match episode {
+        Some(row) => row,
+        None => connection
+            .query_row(
+                "SELECT g.objective_id,g.delegation_id,g.generation,g.participant_id,o.timeout_secs
+                 FROM delegation_outbox o
+                 JOIN delegation_generations g
+                   ON g.delegation_id=o.delegation_id AND g.generation=1
+                 WHERE o.message_id=?1",
+                [request_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(StoreError::Sql)?
+            .ok_or(StoreError::NotFound("demande suivie F29 inconnue"))?,
+    };
+    Ok(ReassignmentRequestContext {
+        objectif_id: parse_uuid(&row.0)?,
+        delegation_id: parse_uuid(&row.1)?,
+        generation: u64::try_from(row.2)
+            .map_err(|_| StoreError::Corrupt("génération F29 invalide"))?,
+        participant: row.3,
+        timeout_secs: u64::try_from(row.4)
+            .map_err(|_| StoreError::Corrupt("timeout F29 invalide"))?,
+    })
+}
+
+fn reassignment_batch_for_fact_from(
+    connection: &Connection,
+    fact: FaitReassignation,
+) -> Result<LotReassignation, StoreError> {
+    fact.verifier().map_err(StoreError::Domain)?;
+    let context = reassignment_request_context_from(connection, &fact.request_id)?;
+    let next_deadline_at = fact
+        .observed_at
+        .checked_add(
+            i64::try_from(context.timeout_secs)
+                .map_err(|_| StoreError::Invalid("timeout F29 hors borne"))?,
+        )
+        .ok_or(StoreError::Invalid("échéance F29 hors borne"))?;
+    let mut facts = vec![fact.clone()];
+    if fact.kind != TypeFaitReassignation::DeliveryReport {
+        let mut statement = connection
+            .prepare(
+                "SELECT issuer_scope,request_id,delivery_hash,processed_at
+                 FROM guichet_receptions
+                 WHERE operation='delivery_report' AND in_reply_to=?1
+                 ORDER BY request_id",
+            )
+            .map_err(StoreError::Sql)?;
+        let reports = statement
+            .query_map([&fact.request_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(StoreError::Sql)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Sql)?;
+        for (issuer_scope, report_request_id, delivery_hash, processed_at) in reports {
+            facts.push(FaitReassignation {
+                event_id: format!("delivery-report:{issuer_scope}:{report_request_id}"),
+                request_id: fact.request_id.clone(),
+                kind: TypeFaitReassignation::DeliveryReport,
+                observed_at: processed_at,
+                freshness: FraicheurCoordination::Fresh,
+                delivery_hash: Some(delivery_hash),
+            });
+        }
+    }
+    Ok(LotReassignation {
+        objectif_id: context.objectif_id,
+        delegation_id: context.delegation_id,
+        generation: context.generation,
+        issued_at: fact.observed_at,
+        next_deadline_at,
+        faits: facts,
+    })
+}
+
+fn apply_coordination_reduction_in_transaction(
+    tx: &Transaction<'_>,
+    input: &EntreeReductionCoordination,
+    observer: &mut impl FnMut(CoordinationCommitPhase) -> Result<(), StoreError>,
+) -> Result<StoredCoordinationReduction, StoreError> {
+    let (generation, policy) = load_active_coordination_context(
+        tx,
+        input.objectif_id(),
+        input.delegation_id(),
+        input.generation(),
+    )?;
+    let reduction =
+        reduire_coordination(&generation, &policy, input).map_err(StoreError::Domain)?;
+    let decision_bytes = serde_json::to_vec(&reduction.decision).map_err(StoreError::Json)?;
+    let existing_decision: Option<Vec<u8>> = tx
+        .query_row(
+            "SELECT payload_json FROM active_coordination_decisions WHERE decision_id = ?1",
+            [reduction.decision.decision_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    if let Some(existing) = existing_decision {
+        if existing != decision_bytes {
+            return Err(StoreError::EnvelopeMismatch);
+        }
+        verify_replayed_coordination_effects(tx, input, &reduction)?;
+        return Ok(StoredCoordinationReduction {
+            reduction,
+            replayed: true,
+        });
+    }
+
+    if let Some(event) = input.evenement_atteste() {
+        let inserted = tx
+            .execute(
+                "INSERT INTO coordination_events(
+                     event_id, request_id, kind, reminder_message_id, recipient,
+                     transport_generation, cursor, freshness, observed_at, canonical_bytes
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                params![
+                    event.event_id(),
+                    event.request_id(),
+                    coordination_event_kind_name(event.kind()),
+                    event.reminder_message_id(),
+                    event.recipient(),
+                    i64::try_from(event.generation())
+                        .map_err(|_| StoreError::Invalid("génération transport hors borne"))?,
+                    i64::try_from(event.cursor())
+                        .map_err(|_| StoreError::Invalid("curseur transport hors borne"))?,
+                    coordination_freshness_name(event.freshness()),
+                    event.observed_at(),
+                    event.canonical_bytes(),
+                ],
+            )
+            .map_err(map_coordination_insert_error)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict(
+                "événement de coordination non enregistré",
+            ));
+        }
+    }
+    observer(CoordinationCommitPhase::AfterEventInsert)?;
+    persist_coordination_effects(tx, &generation, &reduction, &decision_bytes, observer)?;
+    if let EntreeReductionCoordination::ClotureEvaluee(evaluation) = input {
+        open_ready_dependents(
+            tx,
+            evaluation.delegation_id,
+            &evaluation.event_id,
+            evaluation.evaluated_at,
+            |phase| {
+                observer(match phase {
+                    DependencyOpeningCommitPhase::Decision => {
+                        CoordinationCommitPhase::AfterDependentDecision
+                    }
+                    DependencyOpeningCommitPhase::Generation => {
+                        CoordinationCommitPhase::AfterDependentTransition
+                    }
+                    DependencyOpeningCommitPhase::Notification => {
+                        CoordinationCommitPhase::AfterDependentOutbox
+                    }
+                })
+            },
+        )?;
+    }
+    Ok(StoredCoordinationReduction {
+        reduction,
+        replayed: false,
+    })
+}
+
+fn apply_reassignment_batch_in_transaction(
+    tx: &Transaction<'_>,
+    lot: &LotReassignation,
+    observer: &mut impl FnMut(ReassignmentCommitPhase) -> Result<(), StoreError>,
+) -> Result<StoredReassignmentReduction, StoreError> {
+    let mut nouveaux = Vec::new();
+    let mut replay_batches = BTreeSet::new();
+    for fait in &lot.faits {
+        let payload = serde_json::to_vec(fait).map_err(StoreError::Json)?;
+        let existing: Option<(Vec<u8>, String)> = tx
+            .query_row(
+                "SELECT payload_json, batch_event_id FROM reassignment_events
+                 WHERE event_id = ?1",
+                [&fait.event_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        if let Some((stored, batch_event_id)) = existing {
+            if stored != payload {
+                return Err(StoreError::EnvelopeMismatch);
+            }
+            replay_batches.insert(batch_event_id);
+        } else {
+            nouveaux.push(fait.clone());
+        }
+    }
+    if nouveaux.is_empty() {
+        if replay_batches.len() != 1 {
+            return Err(StoreError::Conflict("rejeu F29 couvre plusieurs lots"));
+        }
+        let event_id = replay_batches
+            .into_iter()
+            .next()
+            .ok_or(StoreError::Corrupt("lot F29 rejoué absent"))?;
+        let payload: Vec<u8> = tx
+            .query_row(
+                "SELECT r.payload_json
+                 FROM active_coordination_decisions d
+                 JOIN reassignment_reductions r ON r.decision_id = d.decision_id
+                 WHERE d.delegation_id = ?1 AND d.generation = ?2 AND d.event_id = ?3",
+                params![
+                    lot.delegation_id.to_string(),
+                    i64::try_from(lot.generation)
+                        .map_err(|_| StoreError::Invalid("génération F29 hors borne"))?,
+                    event_id,
+                ],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::Sql)?;
+        let reduction: ReductionReassignation =
+            serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        return Ok(StoredReassignmentReduction {
+            reduction,
+            replayed: true,
+        });
+    }
+
+    let effective = LotReassignation {
+        objectif_id: lot.objectif_id,
+        delegation_id: lot.delegation_id,
+        generation: lot.generation,
+        issued_at: lot.issued_at,
+        next_deadline_at: lot.next_deadline_at,
+        faits: nouveaux,
+    };
+    let (generation, policy, episode, generations) = load_reassignment_context(tx, &effective)?;
+    let reduction = reduire_reassignation(&generation, &policy, &episode, &generations, &effective)
+        .map_err(StoreError::Domain)?;
+    let batch_event_id = reduction.decision.event_id.clone();
+    for fait in &effective.faits {
+        let inserted = tx
+            .execute(
+                "INSERT INTO reassignment_events(
+                     event_id, objective_id, delegation_id, generation,
+                     batch_event_id, request_id, kind, payload_json
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![
+                    fait.event_id,
+                    lot.objectif_id.to_string(),
+                    lot.delegation_id.to_string(),
+                    i64::try_from(lot.generation)
+                        .map_err(|_| StoreError::Invalid("génération F29 hors borne"))?,
+                    batch_event_id,
+                    fait.request_id,
+                    reassignment_fact_kind_name(fait.kind),
+                    serde_json::to_vec(fait).map_err(StoreError::Json)?,
+                ],
+            )
+            .map_err(map_coordination_insert_error)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("fait F29 non enregistré"));
+        }
+    }
+    observer(ReassignmentCommitPhase::AfterEvents)?;
+
+    let decision_bytes = serde_json::to_vec(&reduction.decision).map_err(StoreError::Json)?;
+    insert_active_coordination_decision(tx, &reduction.decision, &decision_bytes)?;
+    observer(ReassignmentCommitPhase::AfterDecision)?;
+    persist_reassignment_generations(tx, &generation, &reduction)?;
+    observer(ReassignmentCommitPhase::AfterGenerations)?;
+
+    let (body_bytes, timeout_secs) = load_delegation_request_template(tx, lot.delegation_id)?;
+    for effect in &reduction.effets_demandes {
+        let outbox = tracked_request_outbox(
+            lot,
+            &policy,
+            effect,
+            &body_bytes,
+            timeout_secs,
+            &batch_event_id,
+        )?;
+        insert_tracked_request_outbox(tx, &outbox)?;
+    }
+    observer(ReassignmentCommitPhase::AfterRequestOutboxes)?;
+    for notification in &reduction.notifications {
+        let outbox = reassignment_notification_outbox(lot, &policy, notification, &batch_event_id)?;
+        insert_notification_outbox(tx, &outbox)?;
+    }
+    observer(ReassignmentCommitPhase::AfterNotifications)?;
+    let reduction_bytes = serde_json::to_vec(&reduction).map_err(StoreError::Json)?;
+    let inserted = tx
+        .execute(
+            "INSERT INTO reassignment_reductions(decision_id, payload_json) VALUES (?1,?2)",
+            params![reduction.decision.decision_id.to_string(), reduction_bytes],
+        )
+        .map_err(StoreError::Sql)?;
+    if inserted != 1 {
+        return Err(StoreError::Conflict("réduction F29 non enregistrée"));
+    }
+    Ok(StoredReassignmentReduction {
+        reduction,
+        replayed: false,
+    })
 }
 
 fn load_reassignment_context(

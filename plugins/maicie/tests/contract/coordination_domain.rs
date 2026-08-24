@@ -58,6 +58,7 @@ fn reducteur_repete_cent_fois_les_memes_octets_et_refuse_une_fraicheur_incomplet
     let input = EntreeReductionCoordination::EvenementAtteste {
         objectif_id,
         delegation_id,
+        generation: 1,
         evenement: event,
     };
     let expected =
@@ -72,6 +73,7 @@ fn reducteur_repete_cent_fois_les_memes_octets_et_refuse_une_fraicheur_incomplet
     let incomplete = EntreeReductionCoordination::EvenementAtteste {
         objectif_id,
         delegation_id,
+        generation: 1,
         evenement: fixture_event(FraicheurCoordination::Gap),
     };
     assert_eq!(

@@ -1,12 +1,17 @@
+use bridget_transport::DaemonToWrapper;
+use bridget_transport::protocol::{CoordinationEventKind, GuichetLifecycleState};
 use maicie::bridget_client::BridgetClientLimits;
 use maicie::domain::{
-    AttenteNotification, ClasseDuree, DefinitionCoordination, Delegation, EtatOutboxDelegation,
-    FaitAppartenanceRepli, ModeObjectif, ObjectifCoordonne, OutboxDelegation,
-    PolitiqueReassignation, TypeEvenementAttendu,
+    AttenteNotification, ClasseDuree, DefinitionCoordination, Delegation, DependanceDelegation,
+    EtatGenerationDelegation, EtatOutboxDelegation, FaitAppartenanceRepli, ModeObjectif,
+    ModeQualificationDependance, ObjectifCoordonne, OutboxDelegation, PolitiqueReassignation,
+    TypeEvenementAttendu,
 };
 use maicie::outbox::{PreparedDelegation, stable_body_hash};
 use maicie::reconcile::{
-    NotificationReconcileAction, NotificationReconcilePhase,
+    CoordinationReconcileAction, CoordinationReconcilePhase, NotificationReconcileAction,
+    NotificationReconcilePhase, reconcile_coordination_startup_observed_with_limits,
+    reconcile_coordination_startup_with_limits,
     reconcile_notification_startup_observed_with_limits,
     reconcile_notification_startup_with_limits,
 };
@@ -30,6 +35,304 @@ const CHILD_MODE: &str = "MAICIE_T1608_CRASH_MODE";
 const CHILD_DATABASE: &str = "MAICIE_T1608_CRASH_DATABASE";
 const CHILD_SOCKET: &str = "MAICIE_T1608_CRASH_SOCKET";
 const CHILD_BARRIER: &str = "MAICIE_T1608_CRASH_BARRIER";
+const COORDINATION_CHILD_DATABASE: &str = "MAICIE_T1610_CRASH_DATABASE";
+const COORDINATION_CHILD_SOCKET: &str = "MAICIE_T1610_CRASH_SOCKET";
+const COORDINATION_CHILD_BARRIER: &str = "MAICIE_T1610_CRASH_BARRIER";
+
+#[test]
+fn releve_coordination_applique_un_snapshot_frais_une_seule_fois() {
+    let fixture = Fixture::new("coordination-fresh");
+    let seed = seed_coordination_stream(&fixture.database_path, false);
+    let listener = fixture.bind();
+    let request_id = seed.request_id.clone();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("première relève attendue");
+        let (mut reader, mut writer) = split(stream);
+        complete_coordination_handshake(&mut reader, &mut writer, None);
+        write_coordination_event(&mut writer, &request_id, 1, "evt-rappel-1");
+        write_coordination_snapshot(&mut writer, Some(1));
+
+        let (stream, _) = listener.accept().expect("seconde relève attendue");
+        let (mut reader, mut writer) = split(stream);
+        complete_coordination_handshake(&mut reader, &mut writer, Some(1));
+        write_coordination_snapshot(&mut writer, Some(1));
+    });
+
+    let mut store = MaicieStore::open(&fixture.database_path).expect("store ouvert");
+    let first = reconcile_coordination_startup_with_limits(
+        &mut store,
+        fixture.socket_path(),
+        limits(Duration::from_secs(2)),
+    )
+    .expect("première relève");
+    assert!(
+        first
+            .actions
+            .contains(&CoordinationReconcileAction::EvenementApplique { cursor: 1 })
+    );
+    assert_eq!(store.coordination_cursor().unwrap(), Some(1));
+    assert_eq!(
+        table_count(&fixture.database_path, "coordination_events"),
+        1
+    );
+    assert_eq!(
+        table_count(&fixture.database_path, "reassignment_events"),
+        1
+    );
+
+    let second = reconcile_coordination_startup_with_limits(
+        &mut store,
+        fixture.socket_path(),
+        limits(Duration::from_secs(2)),
+    )
+    .expect("rejeu depuis curseur");
+    assert!(!second.actions.iter().any(|action| matches!(
+        action,
+        CoordinationReconcileAction::EvenementApplique { .. }
+    )));
+    assert_eq!(
+        table_count(&fixture.database_path, "coordination_events"),
+        1
+    );
+    assert_eq!(
+        table_count(&fixture.database_path, "reassignment_events"),
+        1
+    );
+    server.join().expect("serveur coordination terminé");
+}
+
+#[test]
+fn gap_avant_snapshot_interdit_tout_effet_metier() {
+    let fixture = Fixture::new("coordination-gap");
+    let seed = seed_coordination_stream(&fixture.database_path, false);
+    let listener = fixture.bind();
+    let request_id = seed.request_id.clone();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("relève attendue");
+        let (mut reader, mut writer) = split(stream);
+        complete_coordination_handshake(&mut reader, &mut writer, None);
+        write_coordination_event(&mut writer, &request_id, 1, "evt-non-frais");
+        write_json(
+            &mut writer,
+            json!({
+                "type":"coordination_gap",
+                "v":2,
+                "from_cursor":1,
+                "to_cursor":1,
+                "reason":"fixture_gap"
+            }),
+        );
+    });
+
+    let mut store = MaicieStore::open(&fixture.database_path).expect("store ouvert");
+    let report = reconcile_coordination_startup_with_limits(
+        &mut store,
+        fixture.socket_path(),
+        limits(Duration::from_secs(2)),
+    )
+    .expect("Gap reste une observation");
+    assert!(matches!(
+        report.actions.as_slice(),
+        [CoordinationReconcileAction::Gap { reason, .. }] if reason == "fixture_gap"
+    ));
+    assert_eq!(store.coordination_cursor().unwrap(), None);
+    assert_eq!(
+        table_count(&fixture.database_path, "coordination_events"),
+        0
+    );
+    assert_eq!(
+        table_count(&fixture.database_path, "reassignment_events"),
+        0
+    );
+    server.join().expect("serveur Gap terminé");
+}
+
+#[test]
+fn releve_coordination_bornee_a_512_refuse_un_lot_incomplet_sans_mutation() {
+    let fixture = Fixture::new("coordination-bound");
+    let seed = seed_coordination_stream(&fixture.database_path, false);
+    let listener = fixture.bind();
+    let request_id = seed.request_id.clone();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("relève bornée attendue");
+        let (mut reader, mut writer) = split(stream);
+        complete_coordination_handshake(&mut reader, &mut writer, None);
+        for cursor in 1..=512 {
+            write_coordination_event(
+                &mut writer,
+                &request_id,
+                cursor,
+                &format!("evt-borne-{cursor}"),
+            );
+        }
+    });
+
+    let mut store = MaicieStore::open(&fixture.database_path).expect("store ouvert");
+    let report = reconcile_coordination_startup_with_limits(
+        &mut store,
+        fixture.socket_path(),
+        limits(Duration::from_secs(2)),
+    )
+    .expect("la borne devient un résultat visible");
+    assert_eq!(
+        report.actions,
+        vec![CoordinationReconcileAction::BudgetEpuise]
+    );
+    assert_eq!(store.coordination_cursor().unwrap(), None);
+    assert_eq!(
+        table_count(&fixture.database_path, "coordination_events"),
+        0
+    );
+    assert_eq!(
+        table_count(&fixture.database_path, "reassignment_events"),
+        0
+    );
+    server.join().expect("serveur borne terminé");
+}
+
+#[test]
+fn terminal_transport_reassigne_sans_qualifier_une_arete_f28() {
+    let fixture = Fixture::new("coordination-terminal-f29");
+    let seed = seed_coordination_stream(&fixture.database_path, true);
+    let listener = fixture.bind();
+    let request_id = seed.request_id.clone();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("relève attendue");
+        let (mut reader, mut writer) = split(stream);
+        complete_coordination_handshake(&mut reader, &mut writer, None);
+        write_json(
+            &mut writer,
+            serde_json::to_value(DaemonToWrapper::RequestLifecycleEvent {
+                version: 1,
+                issuer_scope: "scope-coordination-fixture-0123456789".to_string(),
+                event_id: "evt-timeout-source".to_string(),
+                request_id,
+                state: GuichetLifecycleState::TimedOut,
+                observed_at: ISSUED_AT + 10,
+                in_reply_to: None,
+                response_message_id: None,
+            })
+            .expect("terminal sérialisable"),
+        );
+        write_coordination_snapshot(&mut writer, None);
+    });
+
+    let mut store = MaicieStore::open(&fixture.database_path).expect("store ouvert");
+    let report = reconcile_coordination_startup_with_limits(
+        &mut store,
+        fixture.socket_path(),
+        limits(Duration::from_secs(2)),
+    )
+    .expect("terminal F29 appliqué");
+    assert!(report.actions.iter().any(|action| matches!(
+        action,
+        CoordinationReconcileAction::TerminalApplique { state, .. } if state == "timed_out"
+    )));
+    let snapshot = store
+        .coordination_snapshot(seed.objective_id)
+        .unwrap()
+        .expect("snapshot coordination");
+    let dependant = seed.dependant_id.expect("dépendant fixture");
+    assert_eq!(
+        snapshot
+            .generations
+            .iter()
+            .find(|generation| generation.delegation_id == dependant)
+            .expect("génération dépendante")
+            .etat,
+        EtatGenerationDelegation::Bloquee,
+        "timed_out alimente F29 mais ne qualifie jamais l'arête F28"
+    );
+    assert_eq!(
+        store.pending_tracked_request_outboxes().unwrap().len(),
+        2,
+        "F29 écrit annulation source et demande successeur"
+    );
+    server.join().expect("serveur terminal terminé");
+}
+
+#[test]
+fn sigkill_pendant_application_rejoue_sans_double_effet() {
+    let fixture = Fixture::new("coordination-crash");
+    let seed = seed_coordination_stream(&fixture.database_path, false);
+    let listener = fixture.bind();
+    let request_id = seed.request_id.clone();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("relève enfant attendue");
+        let (mut reader, mut writer) = split(stream);
+        complete_coordination_handshake(&mut reader, &mut writer, None);
+        write_coordination_event(&mut writer, &request_id, 1, "evt-crash-replay");
+        write_coordination_snapshot(&mut writer, Some(1));
+    });
+    let (mut child, mut barrier, barrier_path) = spawn_coordination_crash_child(&fixture);
+    wait_barrier(&mut barrier, "before_store_commit");
+    child.kill().expect("SIGKILL enfant réel");
+    child.wait().expect("wait enfant réel");
+    server.join().expect("serveur enfant terminé");
+    fs::remove_file(&barrier_path).expect("barrière supprimée");
+    fs::remove_file(fixture.socket_path()).expect("socket crash supprimée");
+    assert_eq!(
+        table_count(&fixture.database_path, "coordination_events"),
+        0
+    );
+    assert_eq!(
+        table_count(&fixture.database_path, "reassignment_events"),
+        0
+    );
+
+    let listener = fixture.bind();
+    let request_id = seed.request_id;
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("rejeu attendu");
+        let (mut reader, mut writer) = split(stream);
+        complete_coordination_handshake(&mut reader, &mut writer, None);
+        write_coordination_event(&mut writer, &request_id, 1, "evt-crash-replay");
+        write_coordination_snapshot(&mut writer, Some(1));
+    });
+    let mut store = MaicieStore::open(&fixture.database_path).expect("store repris");
+    reconcile_coordination_startup_with_limits(
+        &mut store,
+        fixture.socket_path(),
+        limits(Duration::from_secs(2)),
+    )
+    .expect("rejeu après crash");
+    assert_eq!(store.coordination_cursor().unwrap(), Some(1));
+    assert_eq!(
+        table_count(&fixture.database_path, "coordination_events"),
+        1
+    );
+    assert_eq!(
+        table_count(&fixture.database_path, "reassignment_events"),
+        1
+    );
+    server.join().expect("serveur rejeu terminé");
+}
+
+#[test]
+fn coordination_crash_child() {
+    let Some(database) = std::env::var_os(COORDINATION_CHILD_DATABASE) else {
+        return;
+    };
+    let socket = PathBuf::from(
+        std::env::var_os(COORDINATION_CHILD_SOCKET).expect("socket coordination enfant"),
+    );
+    let barrier = PathBuf::from(
+        std::env::var_os(COORDINATION_CHILD_BARRIER).expect("barrière coordination enfant"),
+    );
+    let mut store = MaicieStore::open(database).expect("store coordination enfant");
+    reconcile_coordination_startup_observed_with_limits(
+        &mut store,
+        socket,
+        limits(Duration::from_secs(3)),
+        |phase| {
+            if phase == CoordinationReconcilePhase::BeforeStoreCommit {
+                block_at_barrier(&barrier, "before_store_commit");
+            }
+            Ok(())
+        },
+    )
+    .expect("relève coordination enfant");
+}
 
 #[test]
 fn notification_rejoue_les_octets_durables_et_ne_les_emet_qu_une_fois() {
@@ -540,6 +843,111 @@ fn write_accepted(writer: &mut BufWriter<UnixStream>, message_id: Uuid) {
     );
 }
 
+fn complete_coordination_handshake(
+    reader: &mut BufReader<UnixStream>,
+    writer: &mut BufWriter<UnixStream>,
+    expected_cursor: Option<u64>,
+) {
+    assert_eq!(
+        read_json(reader),
+        json!({"type":"RoleHandshake","role":"service"})
+    );
+    write_json(writer, json!({"type":"RoleAccepted","role":"service"}));
+    let hello = read_json(reader);
+    assert_eq!(hello["type"], "ServiceHello");
+    assert_eq!(hello["version"], 1);
+    assert_eq!(hello["service"], "maicie");
+    assert_eq!(
+        hello["capabilities"],
+        json!(["maicie_guichet", "coordination_events_v2"])
+    );
+    write_json(
+        writer,
+        json!({
+            "type":"ServiceWelcome",
+            "version":1,
+            "horizon_secs":3600,
+            "issued_at_tolerance_secs":30,
+            "capabilities":["maicie_guichet","coordination_events_v2"]
+        }),
+    );
+    assert_eq!(
+        read_json(reader),
+        json!({
+            "type":"coordination_subscribe",
+            "v":2,
+            "after_cursor":expected_cursor
+        })
+    );
+}
+
+fn write_coordination_event(
+    writer: &mut BufWriter<UnixStream>,
+    request_id: &str,
+    cursor: u64,
+    event_id: &str,
+) {
+    let frame = DaemonToWrapper::CoordinationEvent {
+        version: 2,
+        event_id: event_id.to_string(),
+        request_id: request_id.to_string(),
+        kind: CoordinationEventKind::ReminderSent,
+        reminder_message_id: format!("rappel-{cursor}"),
+        recipient: "alice".to_string(),
+        generation: 1,
+        observed_at: ISSUED_AT + i64::try_from(cursor).expect("curseur borne"),
+        cursor: Some(cursor),
+    };
+    writer
+        .write_all(&serde_json::to_vec(&frame).expect("événement sérialisable"))
+        .expect("écriture événement");
+    writer.write_all(b"\n").expect("fin de trame événement");
+    writer.flush().expect("flush événement");
+}
+
+fn write_coordination_snapshot(writer: &mut BufWriter<UnixStream>, through_cursor: Option<u64>) {
+    write_json(
+        writer,
+        serde_json::to_value(DaemonToWrapper::CoordinationSnapshotCaughtUp {
+            version: 2,
+            through_cursor,
+        })
+        .expect("snapshot sérialisable"),
+    );
+}
+
+fn spawn_coordination_crash_child(fixture: &Fixture) -> (Child, UnixStream, PathBuf) {
+    let barrier_path = fixture.root.join("coordination-crash.barrier.sock");
+    let listener = UnixListener::bind(&barrier_path).expect("barrière coordination parent");
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        sender
+            .send(listener.accept().map(|pair| pair.0))
+            .expect("barrière coordination connectée");
+    });
+    let mut child = Command::new(std::env::current_exe().expect("binaire test"))
+        .arg("--exact")
+        .arg("coordination_dispatch::coordination_crash_child")
+        .arg("--nocapture")
+        .env(COORDINATION_CHILD_DATABASE, &fixture.database_path)
+        .env(COORDINATION_CHILD_SOCKET, &fixture.socket)
+        .env(COORDINATION_CHILD_BARRIER, &barrier_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("enfant coordination lancé");
+    let barrier = match receiver.recv_timeout(Duration::from_secs(5)) {
+        Ok(Ok(stream)) => stream,
+        other => {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("barrière coordination absente : {other:?}");
+        }
+    };
+    (child, barrier, barrier_path)
+}
+
 fn spawn_crash_child(mode: &str, fixture: &Fixture) -> (Child, UnixStream, PathBuf) {
     let barrier_path = fixture.root.join(format!("{mode}.barrier.sock"));
     let listener = UnixListener::bind(&barrier_path).expect("barrière parent");
@@ -632,7 +1040,67 @@ fn seed_closure_with_recipients(store: &mut MaicieStore, recipients: usize) -> U
     objective.id
 }
 
+struct CoordinationSeed {
+    objective_id: Uuid,
+    request_id: String,
+    dependant_id: Option<Uuid>,
+}
+
+fn seed_coordination_stream(database_path: &PathBuf, with_dependency: bool) -> CoordinationSeed {
+    let mut store = MaicieStore::open(database_path).expect("store de semence");
+    let objective =
+        ObjectifCoordonne::nouveau("relève de coordination", ModeObjectif::Delegue, ISSUED_AT)
+            .expect("objectif fixture");
+    let (source, request_id) = create_delegation_with_message(&mut store, &objective, "alice");
+    create_delegation(&mut store, &objective, "bob");
+    let dependant = with_dependency.then(|| create_delegation(&mut store, &objective, "carol"));
+    let dependencies = dependant
+        .map(|dependant_id| {
+            vec![DependanceDelegation {
+                objectif_id: objective.id,
+                prerequis_id: source,
+                dependant_id,
+                mode: ModeQualificationDependance::HashGreffe,
+            }]
+        })
+        .unwrap_or_default();
+    store
+        .register_coordination_snapshot(&DefinitionCoordination {
+            objectif_id: objective.id,
+            dependencies,
+            policies: vec![PolitiqueReassignation {
+                delegation_id: source,
+                objectif_id: objective.id,
+                classe: ClasseDuree::Normale,
+                version: 1,
+                seuil_relances: 2,
+                max_reemissions: 2,
+                chaine_repli: vec![FaitAppartenanceRepli {
+                    objectif_id: objective.id,
+                    participant_id: "bob".to_string(),
+                    membership_version: 1,
+                    est_pilote: false,
+                }],
+            }],
+            attentes: Vec::new(),
+        })
+        .expect("snapshot coordination inscrit");
+    CoordinationSeed {
+        objective_id: objective.id,
+        request_id: request_id.to_string(),
+        dependant_id: dependant,
+    }
+}
+
 fn create_delegation(store: &mut MaicieStore, objective: &ObjectifCoordonne, target: &str) -> Uuid {
+    create_delegation_with_message(store, objective, target).0
+}
+
+fn create_delegation_with_message(
+    store: &mut MaicieStore,
+    objective: &ObjectifCoordonne,
+    target: &str,
+) -> (Uuid, Uuid) {
     let delegation = Delegation::nouvelle(
         objective.id,
         target,
@@ -642,8 +1110,9 @@ fn create_delegation(store: &mut MaicieStore, objective: &ObjectifCoordonne, tar
     )
     .expect("délégation fixture");
     let body = b"fixture".to_vec();
+    let message_id = Uuid::new_v4();
     let outbox = OutboxDelegation {
-        message_id: Uuid::new_v4(),
+        message_id,
         delegation_id: delegation.id,
         target: target.to_string(),
         body_hash: stable_body_hash(&body),
@@ -668,7 +1137,16 @@ fn create_delegation(store: &mut MaicieStore, objective: &ObjectifCoordonne, tar
     store
         .create_prepared_delegation(&prepared)
         .expect("délégation persistée");
-    delegation.id
+    (delegation.id, message_id)
+}
+
+fn table_count(database_path: &PathBuf, table: &str) -> i64 {
+    Connection::open(database_path)
+        .expect("base observable")
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .expect("compteur observable")
 }
 
 struct Fixture {

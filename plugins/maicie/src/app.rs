@@ -17,14 +17,17 @@ use crate::domain::guichet::{
 };
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
-    EtatDecision, EtatFlux, EtatObjectif, EtatOutboxDelegation, ModeObjectif, ObjectifCoordonne,
-    MotifRefusGreffe, OutboxDelegation, SnapshotTransport, SourceSnapshot, TypeDecision,
+    EntreeReductionCoordination, EtatDecision, EtatFlux, EtatObjectif, EtatOutboxDelegation,
+    EtatRequeteGuichet, EvenementCoordination, FaitReassignation, FraicheurCoordination,
+    ModeObjectif, MotifRefusGreffe, ObjectifCoordonne, OutboxDelegation, SnapshotTransport,
+    SourceSnapshot, TypeDecision, TypeFaitReassignation,
 };
 use crate::outbox::{PreparedDelegation, stable_body_hash};
 pub use crate::store::GuichetLifecycleResult;
 use crate::store::{
-    ActivationApprovalRequest, DelegateReservation, GuichetProjectionFacts, MaicieStore,
-    ObjectiveSnapshot, StoreError, StoredDelegateResult, StoredGuichetReply,
+    ActivationApprovalRequest, CoordinationCommitPhase, DelegateReservation,
+    GuichetProjectionFacts, MaicieStore, ObjectiveSnapshot, StoreError, StoredDelegateResult,
+    StoredGuichetReply,
 };
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -372,9 +375,70 @@ pub fn record_guichet_lifecycle_event(
     event: &GuichetLifecycleEvent,
 ) -> Result<GuichetLifecycleResult, GuichetError> {
     let event = parse_lifecycle_event(event).map_err(guichet_domain_error)?;
-    store
+    let result = store
         .record_guichet_lifecycle_event(&event)
-        .map_err(guichet_store_error)
+        .map_err(guichet_store_error)?;
+    let kind = match event.state {
+        EtatRequeteGuichet::Answered => TypeFaitReassignation::Answered,
+        EtatRequeteGuichet::Cancelled => TypeFaitReassignation::AnnulationAdministrative,
+        EtatRequeteGuichet::TimedOut => TypeFaitReassignation::TimedOut,
+    };
+    let fact = FaitReassignation {
+        event_id: event.event_id.clone(),
+        request_id: event.request_id.clone(),
+        kind,
+        observed_at: event.observed_at,
+        freshness: FraicheurCoordination::Fresh,
+        delivery_hash: None,
+    };
+    match store.apply_reassignment_fact(fact) {
+        Ok(_) => {}
+        // Tous les terminaux du guichet ne décrivent pas une demande suivie
+        // F29. Leur fait reste durable sans qu'une délégation soit inventée.
+        Err(StoreError::NotFound(_)) => {}
+        Err(error) => return Err(guichet_store_error(error)),
+    }
+    Ok(result)
+}
+
+/// Applique un rappel cursé seulement après la frontière SnapshotCaughtUp.
+/// Le curseur, la décision F29 et ses outboxes partagent le même commit.
+pub fn apply_attested_coordination_event(
+    store: &mut MaicieStore,
+    canonical_bytes: &[u8],
+    observer: impl FnMut(CoordinationCommitPhase) -> Result<(), StoreError>,
+) -> Result<(), GuichetError> {
+    let event =
+        EvenementCoordination::depuis_trame_attestee(canonical_bytes, FraicheurCoordination::Fresh)
+            .map_err(|_| {
+                GuichetError::InvalidEnvelope("trame de coordination invalide".to_string())
+            })?;
+    let context = store
+        .reassignment_request_context(event.request_id())
+        .map_err(guichet_store_error)?;
+    if context.participant != event.recipient() {
+        return Err(GuichetError::InvalidEnvelope(
+            "destinataire du rappel et demande suivie divergents".to_string(),
+        ));
+    }
+    let fact = FaitReassignation {
+        event_id: event.event_id().to_string(),
+        request_id: event.request_id().to_string(),
+        kind: TypeFaitReassignation::ReminderSent,
+        observed_at: event.observed_at(),
+        freshness: FraicheurCoordination::Fresh,
+        delivery_hash: None,
+    };
+    let input = EntreeReductionCoordination::EvenementAtteste {
+        objectif_id: context.objectif_id,
+        delegation_id: context.delegation_id,
+        generation: context.generation,
+        evenement: event,
+    };
+    store
+        .apply_attested_coordination_and_reassignment(&input, fact, observer)
+        .map_err(guichet_store_error)?;
+    Ok(())
 }
 
 fn guichet_domain_error(error: GuichetDomainError) -> GuichetError {

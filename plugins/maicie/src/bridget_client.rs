@@ -30,6 +30,13 @@ pub const GUICHET_CONTRACT_VERSION: u16 = 1;
 /// contrôle de protocole.
 pub const REQUIRED_GUICHET_CAPABILITY: &str = "maicie_guichet";
 
+/// Capacité cursée de coordination. La v1 pousse un historique sans frontière
+/// de fraîcheur ; Maicie ne la négocie donc jamais pour ses décisions 016.
+pub const REQUIRED_COORDINATION_CAPABILITY: &str = "coordination_events_v2";
+
+/// Version du flux cursé attesté par Bridget.
+pub const COORDINATION_STREAM_VERSION: u16 = 2;
+
 /// Bornes de la frontière locale : une réponse Bridget ne peut ni suspendre
 /// Maicie indéfiniment ni lui faire accumuler une ligne JSONL illimitée.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +92,9 @@ pub enum BridgetClientError {
     FrameTooLarge {
         max_frame_bytes: usize,
     },
+    ItemLimitExceeded {
+        max_items: usize,
+    },
     ConnectionUnusable,
     InvalidLimits(String),
     InvalidEnvelope(String),
@@ -119,6 +129,10 @@ impl fmt::Display for BridgetClientError {
             Self::FrameTooLarge { max_frame_bytes } => write!(
                 formatter,
                 "trame Bridget superieure a la borne de {max_frame_bytes} octets"
+            ),
+            Self::ItemLimitExceeded { max_items } => write!(
+                formatter,
+                "snapshot Bridget superieur a la borne de {max_items} elements"
             ),
             Self::ConnectionUnusable => formatter.write_str(
                 "connexion Bridget inutilisable apres une reponse ambiguë ; reconnecter avant tout nouvel appel",
@@ -293,6 +307,37 @@ pub struct GuichetLifecycleEvent {
     pub observed_at: i64,
     pub in_reply_to: Option<String>,
     pub response_message_id: Option<String>,
+}
+
+/// Trame reçue pendant une relève bornée du flux de coordination. Les octets
+/// de l'événement restent l'autorité du producteur ; les frontières de flux
+/// sont projetées séparément et ne deviennent jamais des faits métier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoordinationStreamItem {
+    Event {
+        canonical_bytes: Vec<u8>,
+    },
+    Lifecycle(GuichetLifecycleEvent),
+    SnapshotCaughtUp {
+        through_cursor: Option<u64>,
+    },
+    Gap {
+        from_cursor: u64,
+        to_cursor: u64,
+        reason: String,
+    },
+    Unavailable {
+        reason: String,
+    },
+}
+
+/// Connexion ponctuelle du service Maicie au flux cursé Bridget.
+///
+/// Elle est créée au début d'une commande et détruite après un seul snapshot :
+/// aucun thread résident ni polling n'est introduit.
+pub struct CoordinationClient {
+    connection: WireConnection,
+    deadline: Instant,
 }
 
 /// Connexion de service Maicie au guichet public Bridget.
@@ -995,6 +1040,96 @@ impl GuichetClient {
     }
 }
 
+impl CoordinationClient {
+    pub fn connect_with_limits_until(
+        socket_path: impl AsRef<Path>,
+        issuer_scope: impl Into<String>,
+        limits: BridgetClientLimits,
+        deadline: Instant,
+    ) -> Result<Self, BridgetClientError> {
+        validate_limits(limits)?;
+        let issuer_scope = issuer_scope.into();
+        if issuer_scope.len() < 16 || issuer_scope.trim().is_empty() {
+            return Err(BridgetClientError::InvalidEnvelope(
+                "issuer_scope coordination doit contenir au moins 128 bits opaques".to_string(),
+            ));
+        }
+        let mut connection = WireConnection::connect(socket_path.as_ref(), limits, deadline)?;
+        let role = request_raw_with_deadline(
+            &mut connection,
+            &canonical_service_role_handshake()?,
+            Some(deadline),
+        )?;
+        expect_role_accepted(&role, "service")?;
+        let welcome = request_raw_with_deadline(
+            &mut connection,
+            &canonical_coordination_service_hello(&issuer_scope)?,
+            Some(deadline),
+        )?;
+        let negotiated = parse_service_welcome(welcome)?;
+        if negotiated.version != GUICHET_CONTRACT_VERSION {
+            return Err(BridgetClientError::VersionUnsupported {
+                requested: GUICHET_CONTRACT_VERSION,
+                received: negotiated.version,
+            });
+        }
+        for capability in [
+            REQUIRED_GUICHET_CAPABILITY,
+            REQUIRED_COORDINATION_CAPABILITY,
+        ] {
+            if !negotiated.capabilities.contains(capability) {
+                return Err(BridgetClientError::CapabilityMissing {
+                    capability: capability.to_string(),
+                });
+            }
+        }
+        Ok(Self {
+            connection,
+            deadline,
+        })
+    }
+
+    /// Envoie une seule demande de snapshot puis lit au plus `max_items`
+    /// trames. La borne inclut les terminaux guichet poussés avant le snapshot.
+    /// L'absence de frontière terminale est rendue comme une erreur explicite :
+    /// l'appelant ne peut donc jamais déclarer ces événements frais.
+    pub fn snapshot_after(
+        &mut self,
+        after_cursor: Option<u64>,
+        max_items: usize,
+    ) -> Result<Vec<CoordinationStreamItem>, BridgetClientError> {
+        if max_items == 0 {
+            return Err(BridgetClientError::InvalidLimits(
+                "max_items coordination doit être strictement positif".to_string(),
+            ));
+        }
+        self.connection.send_until(
+            json!({
+                "type":"coordination_subscribe",
+                "v":COORDINATION_STREAM_VERSION,
+                "after_cursor":after_cursor,
+            }),
+            self.deadline,
+        )?;
+        let mut items = Vec::new();
+        while items.len() < max_items {
+            let (canonical_bytes, frame) = self.connection.receive_raw_until(self.deadline)?;
+            let item = parse_coordination_stream_item(frame, canonical_bytes)?;
+            let terminal = matches!(
+                item,
+                CoordinationStreamItem::SnapshotCaughtUp { .. }
+                    | CoordinationStreamItem::Gap { .. }
+                    | CoordinationStreamItem::Unavailable { .. }
+            );
+            items.push(item);
+            if terminal {
+                return Ok(items);
+            }
+        }
+        Err(BridgetClientError::ItemLimitExceeded { max_items })
+    }
+}
+
 #[derive(Deserialize)]
 struct PersistedSpawnOrder {
     #[serde(rename = "type")]
@@ -1112,7 +1247,7 @@ struct CanonicalServiceHello<'a> {
     version: u16,
     service: &'a str,
     issuer_scope: &'a str,
-    capabilities: [&'a str; 1],
+    capabilities: &'a [&'a str],
 }
 
 fn canonical_service_role_handshake() -> Result<Vec<u8>, BridgetClientError> {
@@ -1124,12 +1259,28 @@ fn canonical_service_role_handshake() -> Result<Vec<u8>, BridgetClientError> {
 }
 
 fn canonical_service_hello(issuer_scope: &str) -> Result<Vec<u8>, BridgetClientError> {
+    let capabilities = [REQUIRED_GUICHET_CAPABILITY];
     serde_json::to_vec(&CanonicalServiceHello {
         kind: "ServiceHello",
         version: GUICHET_CONTRACT_VERSION,
         service: "maicie",
         issuer_scope,
-        capabilities: [REQUIRED_GUICHET_CAPABILITY],
+        capabilities: &capabilities,
+    })
+    .map_err(BridgetClientError::Encode)
+}
+
+fn canonical_coordination_service_hello(issuer_scope: &str) -> Result<Vec<u8>, BridgetClientError> {
+    let capabilities = [
+        REQUIRED_GUICHET_CAPABILITY,
+        REQUIRED_COORDINATION_CAPABILITY,
+    ];
+    serde_json::to_vec(&CanonicalServiceHello {
+        kind: "ServiceHello",
+        version: GUICHET_CONTRACT_VERSION,
+        service: "maicie",
+        issuer_scope,
+        capabilities: &capabilities,
     })
     .map_err(BridgetClientError::Encode)
 }
@@ -1351,6 +1502,14 @@ impl WireConnection {
     }
 
     fn receive_until(&mut self, deadline: Instant) -> Result<Value, BridgetClientError> {
+        let (_, value) = self.receive_raw_until(deadline)?;
+        Ok(value)
+    }
+
+    fn receive_raw_until(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<(Vec<u8>, Value), BridgetClientError> {
         self.ensure_usable()?;
         let mut frame = Vec::new();
         loop {
@@ -1394,10 +1553,12 @@ impl WireConnection {
             frame.extend_from_slice(buffer);
             self.reader.consume(consumed);
         }
-        let line = String::from_utf8(frame).map_err(|error| {
+        let line = String::from_utf8(frame.clone()).map_err(|error| {
             BridgetClientError::Protocol(format!("trame Bridget non UTF-8: {error}"))
         })?;
-        serde_json::from_str(&line).map_err(|source| BridgetClientError::Decode { line, source })
+        let value = serde_json::from_str(&line)
+            .map_err(|source| BridgetClientError::Decode { line, source })?;
+        Ok((frame, value))
     }
 
     fn ensure_usable(&self) -> Result<(), BridgetClientError> {
@@ -1749,6 +1910,50 @@ fn parse_guichet_lifecycle_event(
         in_reply_to: optional_string(&response, "in_reply_to")?,
         response_message_id: optional_string(&response, "response_message_id")?,
     })
+}
+
+fn parse_coordination_stream_item(
+    response: Value,
+    canonical_bytes: Vec<u8>,
+) -> Result<CoordinationStreamItem, BridgetClientError> {
+    match response_type(&response)? {
+        "coordination_event" => {
+            if required_u64(&response, "v")? != u64::from(COORDINATION_STREAM_VERSION)
+                || response.get("cursor").and_then(Value::as_u64).is_none()
+            {
+                return Err(BridgetClientError::Protocol(
+                    "événement de coordination non cursé".to_string(),
+                ));
+            }
+            Ok(CoordinationStreamItem::Event { canonical_bytes })
+        }
+        "request_lifecycle_event" => Ok(CoordinationStreamItem::Lifecycle(
+            parse_guichet_lifecycle_event(response)?,
+        )),
+        "coordination_snapshot_caught_up" => {
+            if required_u64(&response, "v")? != u64::from(COORDINATION_STREAM_VERSION) {
+                return Err(BridgetClientError::Protocol(
+                    "snapshot de coordination de version inattendue".to_string(),
+                ));
+            }
+            Ok(CoordinationStreamItem::SnapshotCaughtUp {
+                through_cursor: optional_u64(&response, "through_cursor")?,
+            })
+        }
+        "coordination_gap" => Ok(CoordinationStreamItem::Gap {
+            from_cursor: required_u64(&response, "from_cursor")?,
+            to_cursor: required_u64(&response, "to_cursor")?,
+            reason: required_string(&response, "reason")?,
+        }),
+        "coordination_unavailable" => Ok(CoordinationStreamItem::Unavailable {
+            reason: required_string(&response, "reason")?,
+        }),
+        "Nack" => Err(parse_nack(response)?),
+        "ClientRejected" | "ServiceRejected" => Err(BridgetClientError::ClientRejected {
+            reason: response.get("reason").cloned().unwrap_or(Value::Null),
+        }),
+        other => Err(unexpected("événement de coordination", other)),
+    }
 }
 
 fn validate_guichet_reply_bytes(

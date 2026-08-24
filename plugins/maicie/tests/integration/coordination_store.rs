@@ -933,6 +933,7 @@ fn deux_ecrivains_se_concurrencent_reellement_et_un_seul_commit_gagne() {
     let input = EntreeReductionCoordination::EvenementAtteste {
         objectif_id,
         delegation_id,
+        generation: 1,
         evenement: fixture_event(FraicheurCoordination::Fresh),
     };
     let mut first_store = MaicieStore::open(&fixture.database).unwrap();
@@ -1056,6 +1057,7 @@ fn evenement_d_une_generation_inactive_est_refuse_avant_toute_decision() {
     let input = EntreeReductionCoordination::EvenementAtteste {
         objectif_id,
         delegation_id,
+        generation: 1,
         evenement: fixture_event(FraicheurCoordination::Fresh),
     };
     let mut store = MaicieStore::open(&fixture.database).unwrap();

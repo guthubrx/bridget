@@ -157,10 +157,39 @@ fn serve_statuses(socket: &std::path::Path, runs: usize, ready: mpsc::Sender<()>
     ready.send(()).expect("signal prêt");
     for run in 0..runs {
         accept_empty_guichet(&listener);
+        accept_empty_coordination(&listener);
         accept_client(&listener);
         send_agent_list(&listener);
         send_snapshot(&listener, run);
     }
+}
+
+fn accept_empty_coordination(listener: &UnixListener) {
+    let (stream, _) = listener.accept().expect("connexion coordination status");
+    let (mut reader, mut writer) = split(stream);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"RoleHandshake","role":"service"})
+    );
+    write_json(&mut writer, json!({"type":"RoleAccepted","role":"service"}));
+    let hello = read_json(&mut reader);
+    assert_eq!(
+        hello["capabilities"],
+        json!(["maicie_guichet", "coordination_events_v2"])
+    );
+    write_json(
+        &mut writer,
+        json!({
+            "type":"ServiceWelcome","version":1,"horizon_secs":3600,
+            "issued_at_tolerance_secs":30,
+            "capabilities":["maicie_guichet","coordination_events_v2"]
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["type"], "coordination_subscribe");
+    write_json(
+        &mut writer,
+        json!({"type":"coordination_snapshot_caught_up","v":2}),
+    );
 }
 
 fn accept_empty_guichet(listener: &UnixListener) {

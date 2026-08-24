@@ -179,6 +179,8 @@ fn serve_delegate_fixture(socket: &Path, ready: mpsc::Sender<()>) {
     let (stream, _) = listener.accept().unwrap();
     serve_guichet_empty(stream);
     let (stream, _) = listener.accept().unwrap();
+    serve_coordination_empty(stream);
+    let (stream, _) = listener.accept().unwrap();
     serve_client_handshake(stream);
     let (stream, _) = listener.accept().unwrap();
     serve_agent_list(stream);
@@ -186,6 +188,8 @@ fn serve_delegate_fixture(socket: &Path, ready: mpsc::Sender<()>) {
     serve_reconcile_send(stream);
     let (stream, _) = listener.accept().unwrap();
     serve_guichet_empty(stream);
+    let (stream, _) = listener.accept().unwrap();
+    serve_coordination_empty(stream);
     let (stream, _) = listener.accept().unwrap();
     serve_client_handshake(stream);
     let (stream, _) = listener.accept().unwrap();
@@ -201,6 +205,8 @@ fn serve_list_only_fixture_with_agent(socket: &Path, ready: mpsc::Sender<()>, ag
     ready.send(()).unwrap();
     let (stream, _) = listener.accept().unwrap();
     serve_guichet_empty(stream);
+    let (stream, _) = listener.accept().unwrap();
+    serve_coordination_empty(stream);
     let (stream, _) = listener.accept().unwrap();
     serve_client_handshake(stream);
     let (stream, _) = listener.accept().unwrap();
@@ -240,6 +246,43 @@ fn serve_guichet_empty(stream: UnixStream) {
         json!({"type": "guichet_claim_next", "v": 1})
     );
     write_json(&mut writer, json!({"type": "guichet_empty", "v": 1}));
+}
+
+fn serve_coordination_empty(stream: UnixStream) {
+    let mut writer = stream.try_clone().unwrap();
+    let mut reader = BufReader::new(stream);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type": "RoleHandshake", "role": "service"})
+    );
+    write_json(
+        &mut writer,
+        json!({"type": "RoleAccepted", "role": "service"}),
+    );
+    let hello = read_json(&mut reader);
+    assert_eq!(hello["type"], "ServiceHello");
+    assert_eq!(
+        hello["capabilities"],
+        json!(["maicie_guichet", "coordination_events_v2"])
+    );
+    write_json(
+        &mut writer,
+        json!({
+            "type": "ServiceWelcome",
+            "version": 1,
+            "horizon_secs": 60,
+            "issued_at_tolerance_secs": 5,
+            "capabilities": ["maicie_guichet", "coordination_events_v2"]
+        }),
+    );
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"coordination_subscribe","v":2,"after_cursor":null})
+    );
+    write_json(
+        &mut writer,
+        json!({"type":"coordination_snapshot_caught_up","v":2}),
+    );
 }
 
 fn serve_client_handshake(stream: UnixStream) {

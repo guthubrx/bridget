@@ -82,7 +82,7 @@ aucun référent actif produisent trois notifications acceptées, jamais six.
 dépendant une fois, sans ouverture prématurée.
 
 - [X] T1609 [US2] Implémenter dans `plugins/maicie/src/domain.rs` et `plugins/maicie/src/store.rs` le DAG borné, l'index `prérequis → dépendants`, les refus cycle/doublon/inter-objectif/rétroactif et les modes `hash_greffé|clôture_évaluée_exigée`, puis écrire ouverture et notification dans la même transaction. **Observable** : chaîne, losange, 100 nœuds/300 arêtes, concurrence du dernier prérequis, hash seul sous mode strict, annulation et échec couvrent SC-1602 ; muter le sens d'une arête ou retirer l'`ActeClôtureÉvaluée` requis provoque une ouverture prématurée détectée.
-- [ ] T1610 [US2] Raccorder dans `plugins/maicie/src/app.rs` et `plugins/maicie/src/reconcile.rs` les événements qualifiants et le dispatch d'ouverture, sans scan d'un autre objectif ni logique DAG dupliquée. **Observable** : le harnais C reçoit exactement une notification après le dernier prérequis, conserve le motif bloquant sinon et ne touche jamais profil/approve/spawn ; deux ordres d'événements rendent le même terminal.
+- [X] T1610 [US2] Raccorder dans `plugins/maicie/src/app.rs` et `plugins/maicie/src/reconcile.rs` les événements qualifiants et le dispatch d'ouverture, sans scan d'un autre objectif ni logique DAG dupliquée. **Observable** : le harnais C reçoit exactement une notification après le dernier prérequis, conserve le motif bloquant sinon et ne touche jamais profil/approve/spawn ; deux ordres d'événements rendent le même terminal.
 
 ## Phase 6 — User Story 3 : réémission et réassignation (F29, P1)
 
