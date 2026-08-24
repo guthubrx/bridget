@@ -740,6 +740,9 @@ pub enum WrapperToDaemon {
         /// Instant Unix de retour fourni par le fournisseur, absent si inconnu.
         #[serde(default)]
         resets_at: Option<i64>,
+        /// Pourcentage de volume consommé dans la fenêtre, absent si non attesté.
+        #[serde(default)]
+        used_percent: Option<u8>,
         source: RateLimitSource,
     },
     /// Rapporter une consommation de tour attestée par le pilote.
@@ -1265,6 +1268,7 @@ pub fn decode<T: for<'de> Deserialize<'de>>(line: &str) -> Result<T, serde_json:
 
 /// Information sur un agent connecté.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "AgentInfoWire")]
 pub struct AgentInfo {
     pub name: String,
     pub agent_type: String,
@@ -1294,11 +1298,11 @@ pub struct AgentInfo {
     /// d'effort). Les deux s'affichent de la même façon.
     #[serde(default)]
     pub effort: Option<String>,
-    /// Dernier fait de limite attesté par le pilote, absent si aucun n'a été
-    /// observé. Ce champ est purement informatif : il ne modifie pas l'état de
-    /// présence ni le routage.
+    /// Faits de limite par fenêtre attestée. Vide = aucune observation.
+    /// Chaque entrée est indépendante : un fait `five_hour` n'efface pas
+    /// un fait `seven_day` déjà présent. Informational seulement.
     #[serde(default)]
-    pub rate_limit: Option<RateLimitFact>,
+    pub rate_limits: Vec<RateLimitFact>,
     /// Écart entre le modèle épinglé de la définition et le modèle attesté
     /// par le flux. Absent si le flux est muet ou si les deux étiquettes
     /// coïncident. Informational seulement : aucun refus ni bascule.
@@ -1306,14 +1310,79 @@ pub struct AgentInfo {
     pub model_mismatch: Option<ModelMismatchFact>,
 }
 
+/// Forme fil de lecture : accepte l'ancien champ mono-fenêtre `rate_limit`
+/// et le nouveau `rate_limits`. Un fait ancien devient un Vec d'un élément
+/// sans inventer de fenêtre.
+#[derive(Debug, Deserialize)]
+struct AgentInfoWire {
+    name: String,
+    agent_type: String,
+    connection_id: String,
+    host: String,
+    transport: String,
+    #[serde(default)]
+    mode: Option<PresenceMode>,
+    #[serde(default)]
+    location: Option<String>,
+    #[serde(default = "unknown_os")]
+    os: String,
+    state: String,
+    last_seen_secs: u64,
+    reconnect_count: u32,
+    #[serde(default)]
+    domain: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    effort: Option<String>,
+    #[serde(default)]
+    rate_limits: Vec<RateLimitFact>,
+    /// Ancien instantané unique. Lu uniquement si `rate_limits` est vide.
+    #[serde(default)]
+    rate_limit: Option<RateLimitFact>,
+    #[serde(default)]
+    model_mismatch: Option<ModelMismatchFact>,
+}
+
+impl From<AgentInfoWire> for AgentInfo {
+    fn from(wire: AgentInfoWire) -> Self {
+        let rate_limits = if !wire.rate_limits.is_empty() {
+            wire.rate_limits
+        } else {
+            wire.rate_limit.into_iter().collect()
+        };
+        Self {
+            name: wire.name,
+            agent_type: wire.agent_type,
+            connection_id: wire.connection_id,
+            host: wire.host,
+            transport: wire.transport,
+            mode: wire.mode,
+            location: wire.location,
+            os: wire.os,
+            state: wire.state,
+            last_seen_secs: wire.last_seen_secs,
+            reconnect_count: wire.reconnect_count,
+            domain: wire.domain,
+            model: wire.model,
+            effort: wire.effort,
+            rate_limits,
+            model_mismatch: wire.model_mismatch,
+        }
+    }
+}
+
 /// Fait de limite exposé dans l'annuaire. Les chaînes fournisseur restent
-/// opaques ; seul `resets_at` manquant signifie explicitement « retour inconnu ».
+/// opaques ; `resets_at` ou `used_percent` manquants restent absents, jamais
+/// inventés.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RateLimitFact {
     pub window: String,
     pub status: String,
     #[serde(default)]
     pub resets_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_percent: Option<u8>,
 }
 
 /// Écart attesté entre le modèle demandé et le modèle réellement servi.
@@ -1689,11 +1758,13 @@ mod tests {
             window: "five_hour".to_string(),
             status: "rejected".to_string(),
             resets_at: Some(1_787_572_200),
+            used_percent: Some(100),
             source: RateLimitSource::ClaudeStreamJson,
         };
         let encoded = encode(&message).unwrap();
         assert!(encoded.contains("\"type\":\"RateLimit\""));
         assert!(encoded.contains("\"source\":\"claude-stream-json\""));
+        assert!(encoded.contains("\"used_percent\":100"));
         assert!(matches!(
             decode(&encoded).unwrap(),
             WrapperToDaemon::RateLimit {
@@ -1701,6 +1772,7 @@ mod tests {
                 window,
                 status,
                 resets_at: Some(1_787_572_200),
+                used_percent: Some(100),
                 source: RateLimitSource::ClaudeStreamJson,
             } if agent == "claude-1" && window == "five_hour" && status == "rejected"
         ));
@@ -1710,6 +1782,7 @@ mod tests {
             decode(without_reset).unwrap(),
             WrapperToDaemon::RateLimit {
                 resets_at: None,
+                used_percent: None,
                 ..
             }
         ));
@@ -1783,8 +1856,43 @@ mod tests {
         let info: AgentInfo = decode(json).unwrap();
         assert!(info.model.is_none());
         assert!(info.effort.is_none());
-        assert!(info.rate_limit.is_none());
+        assert!(info.rate_limits.is_empty());
         assert!(info.model_mismatch.is_none());
+    }
+
+    #[test]
+    fn fait_mono_fenetre_ancien_se_relit_en_vec_sans_inventer() {
+        // Ancien fil : un seul champ `rate_limit`. Doit devenir Vec d'1 élément
+        // avec la fenêtre attestée telle quelle — aucune fenêtre inventée.
+        let json = r#"{
+            "name":"claude-1","agent_type":"claude","connection_id":"c1",
+            "host":"h","transport":"unix","os":"macOS","state":"connected",
+            "last_seen_secs":0,"reconnect_count":0,
+            "rate_limit":{"window":"five_hour","status":"rejected","resets_at":1787572200}
+        }"#;
+        let info: AgentInfo = decode(json).unwrap();
+        assert_eq!(info.rate_limits.len(), 1);
+        assert_eq!(info.rate_limits[0].window, "five_hour");
+        assert_eq!(info.rate_limits[0].status, "rejected");
+        assert_eq!(info.rate_limits[0].resets_at, Some(1_787_572_200));
+        assert_eq!(info.rate_limits[0].used_percent, None);
+
+        // Nouveau fil : `rate_limits` gagne ; l'ancien champ s'il coexiste est ignoré.
+        let both = r#"{
+            "name":"claude-1","agent_type":"claude","connection_id":"c1",
+            "host":"h","transport":"unix","os":"macOS","state":"connected",
+            "last_seen_secs":0,"reconnect_count":0,
+            "rate_limits":[{"window":"seven_day","status":"allowed","used_percent":61}],
+            "rate_limit":{"window":"five_hour","status":"rejected"}
+        }"#;
+        let prefer_new: AgentInfo = decode(both).unwrap();
+        assert_eq!(prefer_new.rate_limits.len(), 1);
+        assert_eq!(prefer_new.rate_limits[0].window, "seven_day");
+
+        // Sérialisation neuve : uniquement `rate_limits`, jamais `rate_limit`.
+        let encoded = encode(&prefer_new).unwrap();
+        assert!(encoded.contains("\"rate_limits\""));
+        assert!(!encoded.contains("\"rate_limit\":"));
     }
 
     #[test]

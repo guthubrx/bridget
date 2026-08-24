@@ -4274,7 +4274,7 @@ mod tests {
                 domain: None,
                 model: None,
                 effort: None,
-                rate_limit: None,
+                rate_limits: Default::default(),
                 model_mismatch: None,
             };
         let attachable = attachable_agent_names(vec![

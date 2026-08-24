@@ -217,11 +217,12 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {
     assert_eq!(codex.model.as_deref(), Some("gpt-5.6-terra"));
     assert_eq!(codex.effort.as_deref(), Some("high"));
     assert!(matches!(
-        codex.rate_limit.as_ref(),
-        Some(limit)
+        codex.rate_limits.as_slice(),
+        [limit]
             if limit.window == "primary/300m"
                 && limit.status == "available"
                 && limit.resets_at == Some(1_787_572_200)
+                && limit.used_percent == Some(42)
     ));
     let who = Command::new(env!("CARGO_BIN_EXE_bridget"))
         .arg("who")
@@ -238,7 +239,7 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {
     let who = String::from_utf8(who.stdout).expect("who UTF-8");
     assert!(who.contains("EFFORT") && who.contains("LIMITE"));
     assert!(who.contains("high"));
-    assert!(who.contains("primary/300m"));
+    assert!(who.contains("5h 42% rst "), "format compact LIMITE: {who}");
     let mut request = BridgetMessage::new("sender-native", "codex-native", "mission réelle");
     request.reply = true;
     write_frame(&mut sender_writer, &WrapperToDaemon::Send(request.clone()));
@@ -309,7 +310,7 @@ fn wrapper_codex_sans_signal_laisse_effort_et_limite_inconnus() {
                     .find(|agent| agent.name == "codex-native")
                     .expect("agent Codex natif absent");
                 assert!(codex.effort.is_none(), "effort inventé: {codex:?}");
-                assert!(codex.rate_limit.is_none(), "limite inventée: {codex:?}");
+                assert!(codex.rate_limits.is_empty(), "limite inventée: {codex:?}");
                 break;
             }
             DaemonToWrapper::AgentList { .. } if Instant::now() < deadline => {
@@ -398,7 +399,7 @@ fn gate_reel_codex_app_server_gpt_5_6_terra_et_attach() {
         "effort Codex non attesté: {codex:?}"
     );
     assert!(
-        codex.rate_limit.is_some(),
+        !codex.rate_limits.is_empty(),
         "limite Codex non attestée: {codex:?}"
     );
     let who = Command::new(env!("CARGO_BIN_EXE_bridget"))
@@ -415,7 +416,12 @@ fn gate_reel_codex_app_server_gpt_5_6_terra_et_attach() {
     );
     let who = String::from_utf8(who.stdout).expect("who Codex réel UTF-8");
     assert!(who.contains(codex.effort.as_deref().expect("effort attesté")));
-    assert!(who.contains(&codex.rate_limit.as_ref().expect("limite attestée").window));
+    // who affiche l'abréviation (5h/7d…), pas le nom brut primary/…
+    assert!(
+        who.contains("rst ") || who.contains('%'),
+        "LIMITE compacte absente de who={who} faits={:?}",
+        codex.rate_limits
+    );
     let mut request = BridgetMessage::new(
         "sender-native",
         "codex-native",

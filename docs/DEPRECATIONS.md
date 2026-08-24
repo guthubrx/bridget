@@ -6,6 +6,7 @@ atteinte.
 
 | Chemin | Remplacé par | Supprimable quand |
 |---|---|---|
+| Champ fil `AgentInfo.rate_limit` (Option mono-fenêtre) | `AgentInfo.rate_limits` (Vec par fenêtre) ; lecture wire : l'ancien champ se relit en Vec d'un élément | Dès que tous les consommateurs who/UI/MCP lisent `rate_limits` |
 | Liste blanche de binaires dans `crates/bridget-daemon/src/wrapper.rs` | Registre `~/.config/bridget/agents.json` | Supprimée en T703 |
 | Affichage stderr sans transport dans `crates/bridget-daemon/src/wrapper.rs` | Livraison structurée ACP ou log applicatif | Supprimé en T705 |
 | Micro-banc SC-005 ignoré dans `crates/bridget-transport/src/acp.rs` | Banc à deux vues attach réelles dans `crates/bridget-daemon/tests/sc005_attach_budget.rs` | Après suppression de la couverture historique ACP au prochain cycle de nettoyage des tests |
