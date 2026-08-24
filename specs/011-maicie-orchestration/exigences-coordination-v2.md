@@ -825,3 +825,28 @@ Ordre recommandé : J1 pendant G2 (le refus informé est ce qui aurait évité
 la panne), J2 dès que le correctif de cause est mergé, J3 en instruction
 dans G1, J4 après le second pont. Aucun de ces items ne justifie de retarder
 les blocs G : ce sont des compléments, pas des prérequis.
+- **La suite de tests est devenue un goulot d'étranglement — constat
+  systémique, nuit du 24/08.** QUATRE agents différents ont perdu du temps
+  sur la même chose en quelques heures : `cargo test --workspace` prend
+  environ trois minutes, contient des oracles instables, et chaque agent qui
+  veut valider son lot doit la traverser. Trois l'ont vue interrompue après
+  quinze à vingt-cinq minutes ; un quatrième a été bloqué en fin de lot par
+  un test qui n'appartient pas à son périmètre. Le coût cumulé dépasse
+  largement celui des défauts qu'elle a détectés cette nuit.
+  DEUX EFFETS, et le second est le pire : (1) du temps perdu à attendre ;
+  (2) une incitation à requalifier un rouge en « flake » pour avancer. Deux
+  agents ont explicitement refusé de le faire cette nuit — et ils ont eu
+  raison les deux fois, il y avait un vrai défaut derrière. Mais compter sur
+  la vertu de chacun face à une friction structurelle est une mauvaise
+  politique : la friction finira par gagner.
+  DÉCISION DE CONDUITE, appliquée immédiatement : un agent bloqué par un
+  test hors de son périmètre LIVRE avec une validation ciblée, en annonçant
+  explicitement ce qui n'a pas pu être joué et pourquoi. Une preuve
+  partielle déclarée comme telle vaut mieux qu'une attente d'une demi-heure,
+  et infiniment mieux qu'une preuve verte affirmée sans avoir été obtenue.
+  Le référent rejoue la suite au moment du merge, quand les correctifs
+  d'instabilité sont en place.
+  À INSTRUIRE quand les niveaux 1 et 2 de l'audit seront soldés : séparer
+  les tests rapides et déterministes, jouables par chaque agent en quelques
+  secondes, des campagnes lentes ou mesurées, jouées au merge. Aujourd'hui
+  tout est mélangé, donc tout coûte le prix du plus lent.
