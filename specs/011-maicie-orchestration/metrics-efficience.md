@@ -50,3 +50,21 @@ Le gain dominant n'est pas la vitesse brute d'une tâche — c'est la
 chaque review liée, chaque décision au greffe. Le coût : des cycles de
 review plus nombreux (5 tours sur le contrat 015) — payés en minutes,
 économisés en semaines.
+
+## Mesure du 2026-08-24 midi — références pour la mesure quotidienne
+
+Méthode : git (commits, merges, numstat sans merges) + tokens du référent
+depuis les journaux de session (lignes `usage`, fenêtres locales = UTC+2).
+Les ratios par unité produite sont la métrique retenue par l'utilisateur.
+
+| Fenêtre | Commits | Fusions | Lignes+ | Tours réf. | Tokens sortie | tok/commit | tok/fusion | tok/ligne |
+|---|---|---|---|---|---|---|---|---|
+| A : 23→24 midi (Maicie greffier) | 266 | 38 | 71 015 | 4 202 | 2 679 614 | 10 073 | 70 516 | 37,7 |
+| B : 22→23 midi (avant) | 213 | 10 | 53 588 | 2 407 | 1 637 948 | 7 689 | 163 794 | 30,6 |
+
+Lecture : +31 % par commit et +23 % par ligne (le coût de la coordination),
+mais **−57 % par fusion** — l'unité livrée-relue-intégrée coûte moitié moins.
+La fenêtre A portait 5 h 30 de panne (22h27→03h57). Mesure suivante planifiée
+le 25/08 à 12h03 (fenêtre C, coordination AUTONOME attendue en service) —
+hypothèse : les ratios du référent baissent, les relances et transcriptions
+étant reprises par Maicie.
