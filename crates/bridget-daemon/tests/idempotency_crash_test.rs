@@ -1075,8 +1075,21 @@ fn binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee() {
             "réponse liée paritaire",
         ],
     );
-    assert!(!first.status.success(), "première issue attendue inconnue");
-    assert!(output_text(&first).contains("outcome_unknown"));
+    // Le premier envoi est nominalement « sort inconnu » : le daemon répond
+    // avant l'accusé du destinataire. Il a pourtant PRIS la remise, donc le
+    // dépôt a réussi et le code de sortie doit le dire. Ce banc attestait
+    // l'inverse — c'était le défaut, gravé en contrat.
+    assert!(
+        first.status.success(),
+        "une remise en vol est un dépôt réussi: {}",
+        output_text(&first)
+    );
+    assert!(output_text(&first).contains("en vol"));
+    assert!(
+        !output_text(&first).contains("perdu"),
+        "rien n'est perdu tant que la remise est en vol: {}",
+        output_text(&first)
+    );
     let message_id = output_field(&first, "id");
     let sent_at = output_field(&first, "issued_at")
         .parse::<i64>()
