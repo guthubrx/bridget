@@ -424,6 +424,16 @@ pub struct BridgetClient {
     deadline: Option<Instant>,
 }
 
+/// Frontière filaire observable uniquement par les crash-tests d'outbox.
+///
+/// Le jalon suit l'écriture complète du JSONL et précède toute lecture de
+/// l'accusé : interrompre le processus ici reproduit donc un ACK perdu, pas
+/// un arrêt coopératif après la réponse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplayIdempotentPhase {
+    AfterWriteBeforeAck,
+}
+
 impl BridgetClient {
     /// Ouvre et negocie strictement le contrat client public v1.
     pub fn connect(
@@ -563,6 +573,18 @@ impl BridgetClient {
         message_id: &str,
         issued_at: i64,
     ) -> Result<IdempotencyIssue, BridgetClientError> {
+        self.replay_idempotent_bytes_observed(message_bytes, message_id, issued_at, |_| {})
+    }
+
+    /// Variante réservée aux tests de frontière : l'observateur n'altère ni
+    /// les octets ni la machine d'état du client.
+    pub(crate) fn replay_idempotent_bytes_observed(
+        &mut self,
+        message_bytes: &[u8],
+        message_id: &str,
+        issued_at: i64,
+        mut observer: impl FnMut(ReplayIdempotentPhase),
+    ) -> Result<IdempotencyIssue, BridgetClientError> {
         let replay: ReplayPublicMessage =
             serde_json::from_slice(message_bytes).map_err(|source| BridgetClientError::Decode {
                 line: String::from_utf8_lossy(message_bytes).into_owned(),
@@ -576,7 +598,21 @@ impl BridgetClient {
             ));
         }
         let request = replay_idempotent_request(message_bytes, message_id, issued_at)?;
-        let response = self.request_raw_json(&request)?;
+        let response = match self.deadline {
+            Some(deadline) => {
+                self.connection
+                    .request_raw_json_until_observed(&request, deadline, || {
+                        observer(ReplayIdempotentPhase::AfterWriteBeforeAck)
+                    })
+            }
+            None => {
+                let deadline = Instant::now() + self.limits.io_timeout;
+                self.connection
+                    .request_raw_json_until_observed(&request, deadline, || {
+                        observer(ReplayIdempotentPhase::AfterWriteBeforeAck)
+                    })
+            }
+        }?;
         let issue = parse_idempotency_issue(response, message_id);
         self.connection.poison_after(&issue);
         issue
@@ -601,13 +637,6 @@ impl BridgetClient {
 
     fn request(&mut self, value: Value) -> Result<Value, BridgetClientError> {
         request_with_deadline(&mut self.connection, value, self.deadline)
-    }
-
-    fn request_raw_json(&mut self, json_bytes: &[u8]) -> Result<Value, BridgetClientError> {
-        match self.deadline {
-            Some(deadline) => self.connection.request_raw_json_until(json_bytes, deadline),
-            None => self.connection.request_raw_json(json_bytes),
-        }
     }
 
     /// Lit l'annuaire public Bridget sur une connexion ponctuelle non mutante.
@@ -1259,9 +1288,19 @@ impl WireConnection {
         json_bytes: &[u8],
         deadline: Instant,
     ) -> Result<Value, BridgetClientError> {
+        self.request_raw_json_until_observed(json_bytes, deadline, || {})
+    }
+
+    fn request_raw_json_until_observed(
+        &mut self,
+        json_bytes: &[u8],
+        deadline: Instant,
+        mut observer: impl FnMut(),
+    ) -> Result<Value, BridgetClientError> {
         self.ensure_usable()?;
         let result = (|| {
             self.send_bytes_until(json_bytes, deadline)?;
+            observer();
             self.receive_until(deadline)
         })();
         self.poison_after(&result);

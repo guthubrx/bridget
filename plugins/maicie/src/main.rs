@@ -26,7 +26,7 @@ use maicie::profiles::{
 };
 use maicie::reconcile::{
     ReconcileError, reconcile_activation_startup_at, reconcile_guichet_startup_with_limits,
-    reconcile_startup_with_limits,
+    reconcile_notification_startup_with_limits, reconcile_startup_with_limits,
 };
 use maicie::runtime::{RuntimeNature, RuntimeObservation, RuntimeSignal, RuntimeSubscription};
 use maicie::store::{MaicieStore, ObjectiveSnapshot, StoreError};
@@ -311,6 +311,10 @@ fn open_store_with_reconciliation(
     reconcile_activation_startup_at(&mut store, &config.bridget_socket, unix_now()?)
         .map_err(CliError::Reconcile)?;
     reconcile_guichet_startup_with_limits(&mut store, &config.bridget_socket, unix_now()?, limits)
+        .map_err(CliError::Reconcile)?;
+    // Les notifications naissent durablement du réducteur. Leur émission reste
+    // le même chemin borné de reprise, jamais une seconde logique d'envoi CLI.
+    reconcile_notification_startup_with_limits(&mut store, &config.bridget_socket, limits)
         .map_err(CliError::Reconcile)?;
     Ok(store)
 }

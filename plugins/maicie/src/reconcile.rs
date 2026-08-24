@@ -10,7 +10,7 @@ use crate::bridget_client::{
     BridgetClient, BridgetClientError, BridgetClientLimits, GuichetClient, IdempotencyIssue,
     SpawnOutcome,
 };
-use crate::domain::MotifRefusGreffe;
+use crate::domain::{MotifRefusGreffe, NotificationOutbox};
 use crate::outbox::{OutboxError, PendingDelegationOutbox};
 use crate::profiles::definition_digest_matches;
 use crate::store::{DelegationRecoveryEntry, LocalFailureReason, MaicieStore, StoreError};
@@ -91,6 +91,33 @@ pub enum ActivationReconcileAction {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ActivationReconcileReport {
     pub actions: Vec<ActivationReconcileAction>,
+}
+
+/// Conséquence factuelle d'une notification de clôture pendant une passe
+/// bornée. Les octets et l'identité viennent exclusivement de l'outbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotificationReconcileAction {
+    Issue {
+        objective_id: Uuid,
+        message_id: Uuid,
+        issue: IdempotencyIssue,
+    },
+    TransportIndisponible {
+        objective_id: Uuid,
+        message_id: Uuid,
+    },
+    TransportIncertain {
+        objective_id: Uuid,
+        message_id: Uuid,
+    },
+    BudgetEpuise,
+}
+
+/// Résultat d'une relève de notifications. Une commande ne conserve jamais
+/// ce rapport : il décrit seulement les faits de sa passe pull-only.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct NotificationReconcileReport {
+    pub actions: Vec<NotificationReconcileAction>,
 }
 
 /// Fait constaté pendant une relève pull-only du guichet. Cette projection ne
@@ -303,6 +330,109 @@ pub fn reconcile_startup_at_observed_with_limits(
         }
     }
     Ok(report)
+}
+
+/// Rejoue les notifications de coordination sans jamais reconstruire leur
+/// enveloppe. La requête envoyée est la projection filaire des seuls octets
+/// durables de l'outbox ; un `OutcomeUnknown` demeure donc pending et sera
+/// rejoué identiquement lors d'une passe ultérieure.
+///
+/// Une unique échéance couvre toute la relève. Après une indisponibilité ou
+/// une frontière ambiguë, les lignes suivantes viseraient le même socket :
+/// les retenter ne produirait aucune information supplémentaire et ferait
+/// croître une commande CLI avec le nombre d'outboxes.
+pub fn reconcile_notification_startup_with_limits(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    limits: BridgetClientLimits,
+) -> Result<NotificationReconcileReport, ReconcileError> {
+    let socket = bridget_socket.as_ref();
+    let deadline = Instant::now() + reconciliation_budget(limits);
+    let mut report = NotificationReconcileReport::default();
+
+    for outbox in store.pending_notification_outboxes()? {
+        if Instant::now() >= deadline {
+            report
+                .actions
+                .push(NotificationReconcileAction::BudgetEpuise);
+            break;
+        }
+
+        let action = reconcile_notification_one(store, socket, &outbox, limits, deadline)?;
+        let stop = matches!(
+            action,
+            NotificationReconcileAction::TransportIndisponible { .. }
+                | NotificationReconcileAction::TransportIncertain { .. }
+        );
+        report.actions.push(action);
+        if stop {
+            break;
+        }
+    }
+
+    Ok(report)
+}
+
+fn reconcile_notification_one(
+    store: &mut MaicieStore,
+    socket: &Path,
+    outbox: &NotificationOutbox,
+    limits: BridgetClientLimits,
+    deadline: Instant,
+) -> Result<NotificationReconcileAction, ReconcileError> {
+    outbox.verifier().map_err(|_| {
+        ReconcileError::InvalidSnapshot("notification durable invalide avant la reprise")
+    })?;
+
+    let mut client = match BridgetClient::connect_with_limits_until(
+        socket,
+        store.issuer_scope(),
+        limits,
+        deadline,
+    ) {
+        Ok(client) => client,
+        Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {
+            return Ok(NotificationReconcileAction::TransportIndisponible {
+                objective_id: outbox.objectif_id,
+                message_id: outbox.message_id,
+            });
+        }
+        Err(error) if transport_is_ambiguous(&error) => {
+            return Ok(NotificationReconcileAction::TransportIncertain {
+                objective_id: outbox.objectif_id,
+                message_id: outbox.message_id,
+            });
+        }
+        Err(error) => return Err(ReconcileError::Client(error)),
+    };
+
+    match client.replay_idempotent_bytes(
+        &outbox.message_bytes,
+        &outbox.message_id.to_string(),
+        outbox.issued_at,
+    ) {
+        Ok(issue) => {
+            store.record_notification_issue(outbox.message_id, &issue)?;
+            Ok(NotificationReconcileAction::Issue {
+                objective_id: outbox.objectif_id,
+                message_id: outbox.message_id,
+                issue,
+            })
+        }
+        Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {
+            Ok(NotificationReconcileAction::TransportIndisponible {
+                objective_id: outbox.objectif_id,
+                message_id: outbox.message_id,
+            })
+        }
+        Err(error) if transport_is_ambiguous(&error) => {
+            Ok(NotificationReconcileAction::TransportIncertain {
+                objective_id: outbox.objectif_id,
+                message_id: outbox.message_id,
+            })
+        }
+        Err(error) => Err(ReconcileError::Client(error)),
+    }
 }
 
 /// Relève le guichet au début d'une commande sans conserver de connexion ni
