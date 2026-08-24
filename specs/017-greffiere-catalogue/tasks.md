@@ -165,3 +165,10 @@ clôture ou append.
 Le MVP est T1701 à T1710 : un journal fermé, durable, migré, lisible et dont
 les clôtures sont seulement des faits attestés. T1711 à T1715 rendent cette
 discipline découvrable, vérifiable et prête pour le gel final.
+
+## Lot FR-1711 (arbitrage 2026-08-24)
+
+Table de correspondance écrite dans `spec.md` / `data-model.md`. Émission
+automatique hors `domain.rs`/`store.rs` : `registre consign` +
+`transcribe_observed_fact` / `consign_observed_fact` pour `gate_failed` et
+`review_amender` ; hors table → pending. SC-1711 couvert par test unitaire.

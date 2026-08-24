@@ -297,6 +297,125 @@ pub struct ReconcileReport {
     pub skipped: usize,
 }
 
+/// Type de fait couvert par le contrat FR-1711 (spec 017).
+///
+/// Fermé : ajouter une variante = changer le contrat (revue hostile).
+/// La sévérité associée est une **transcription**, pas un jugement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoveredFactKind {
+    /// Gate raté → `blocker` (définition d'un gate).
+    GateFailed,
+    /// Verdict de revue `AMENDER` → `major` (décision déjà prise par le relecteur).
+    ReviewAmender,
+}
+
+impl CoveredFactKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::GateFailed => "gate_failed",
+            Self::ReviewAmender => "review_amender",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "gate_failed" => Some(Self::GateFailed),
+            "review_amender" => Some(Self::ReviewAmender),
+            _ => None,
+        }
+    }
+
+    /// Correspondance totale et sans exception (FR-1711).
+    pub const fn derived_severity(self) -> Severity {
+        match self {
+            Self::GateFailed => Severity::Blocker,
+            Self::ReviewAmender => Severity::Major,
+        }
+    }
+
+    pub const fn mission_source_kind(self) -> MissionSourceKind {
+        match self {
+            Self::GateFailed => MissionSourceKind::Gate,
+            Self::ReviewAmender => MissionSourceKind::Review,
+        }
+    }
+}
+
+/// Fait observé à transcrire vers le journal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedFact {
+    /// Type machine (`gate_failed`, `review_amender`, ou hors table).
+    pub kind: String,
+    pub source_id: String,
+    pub date: String,
+    pub text: String,
+}
+
+/// Issue d'une transcription FR-1711.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TranscriptionOutcome {
+    /// Fait couvert → `add` avec sévérité dérivée.
+    CoveredAdd(AddEntry),
+    /// Hors table → attente humaine, zéro sévérité inventée.
+    Pending(PendingQualificationEntry),
+}
+
+/// Transcrit un fait observé selon le contrat FR-1711.
+///
+/// Couvert → `add` ; hors table → `pending_qualification`. Aucune case
+/// ambiguë : si le type n'est pas dans la table, le défaut est l'attente.
+pub fn transcribe_observed_fact(
+    fact: &ObservedFact,
+) -> Result<TranscriptionOutcome, CatalogueError> {
+    if fact.source_id.trim().is_empty() {
+        return Err(CatalogueError::Format(
+            "source_id obligatoire pour une transcription".into(),
+        ));
+    }
+    if fact.text.is_empty() {
+        return Err(CatalogueError::Format(
+            "texte verbatim obligatoire pour une transcription".into(),
+        ));
+    }
+    validate_rfc3339_with_offset(&fact.date)?;
+
+    if let Some(covered) = CoveredFactKind::parse(fact.kind.trim()) {
+        let id = format!("{}:{}", covered.as_str(), fact.source_id);
+        let mission_source = MissionSource {
+            kind: covered.mission_source_kind(),
+            id: fact.source_id.clone(),
+            failed: match covered {
+                CoveredFactKind::GateFailed => Some(true),
+                CoveredFactKind::ReviewAmender => None,
+            },
+        };
+        mission_source.validate()?;
+        let add = AddEntry {
+            v: CATALOGUE_VERSION,
+            kind: AddKind::Add,
+            id,
+            date: fact.date.clone(),
+            mission_source,
+            severity: covered.derived_severity(),
+            recurrence_of: None,
+            text: fact.text.clone(),
+        };
+        validate_add_shape(&add)?;
+        return Ok(TranscriptionOutcome::CoveredAdd(add));
+    }
+
+    // Défaut : attente, jamais invention de sévérité.
+    let pending = PendingQualificationEntry {
+        v: CATALOGUE_VERSION,
+        kind: PendingKind::PendingQualification,
+        id: format!("pending:{}:{}", fact.kind.trim(), fact.source_id),
+        provenance_id: format!("uncovered:{}:{}", fact.kind.trim(), fact.source_id),
+        text: fact.text.clone(),
+    };
+    validate_pending_shape(&pending)?;
+    Ok(TranscriptionOutcome::Pending(pending))
+}
+
 /// État dérivé d'un constat dans la projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DerivedState {
@@ -497,6 +616,26 @@ impl CatalogueJournal {
         };
         validate_add_shape(&add)?;
         self.append_entry_with_existing(CatalogueEntry::Add(add), &existing)
+    }
+
+    /// Transcrit un fait observé (FR-1711) et l'append au journal.
+    ///
+    /// Fait couvert → `add` à sévérité dérivée. Hors table →
+    /// `pending_qualification` (défaut = attente, jamais invention).
+    pub fn consign_observed_fact(
+        &mut self,
+        fact: &ObservedFact,
+    ) -> Result<(TranscriptionOutcome, AppendOutcome), CatalogueError> {
+        match transcribe_observed_fact(fact)? {
+            TranscriptionOutcome::CoveredAdd(add) => {
+                let outcome = self.append_add(add.clone())?;
+                Ok((TranscriptionOutcome::CoveredAdd(add), outcome))
+            }
+            TranscriptionOutcome::Pending(pending) => {
+                let outcome = self.append_pending_dedup_provenance(pending.clone())?;
+                Ok((TranscriptionOutcome::Pending(pending), outcome))
+            }
+        }
     }
 
     /// Append une transition `open → delivered` uniquement si le couple
@@ -1684,6 +1823,77 @@ mod tests {
                 ..
             }
         ));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fr1711_transcription_gate_amender_et_hors_table() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-catalogue-fr1711-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("catalogue.jsonl");
+        let mut journal = CatalogueJournal::open(&path).unwrap();
+
+        let gate = ObservedFact {
+            kind: "gate_failed".into(),
+            source_id: "G1701".into(),
+            date: "2026-08-24T06:30:00Z".into(),
+            text: "gate G1701 rouge".into(),
+        };
+        let (out, first) = journal.consign_observed_fact(&gate).unwrap();
+        assert_eq!(first, AppendOutcome::Appended);
+        match out {
+            TranscriptionOutcome::CoveredAdd(add) => {
+                assert_eq!(add.id, "gate_failed:G1701");
+                assert_eq!(add.severity, Severity::Blocker);
+                assert_eq!(add.mission_source.kind, MissionSourceKind::Gate);
+                assert_eq!(add.mission_source.failed, Some(true));
+            }
+            TranscriptionOutcome::Pending(_) => panic!("gate_failed doit être couvert"),
+        }
+        let (_, replay) = journal.consign_observed_fact(&gate).unwrap();
+        assert_eq!(replay, AppendOutcome::IdempotentNoop);
+
+        let amender = ObservedFact {
+            kind: "review_amender".into(),
+            source_id: "r-hostile".into(),
+            date: "2026-08-24T06:31:00Z".into(),
+            text: "AMENDER : fenêtre de corruption".into(),
+        };
+        let (out, _) = journal.consign_observed_fact(&amender).unwrap();
+        match out {
+            TranscriptionOutcome::CoveredAdd(add) => {
+                assert_eq!(add.id, "review_amender:r-hostile");
+                assert_eq!(add.severity, Severity::Major);
+                assert_eq!(add.mission_source.kind, MissionSourceKind::Review);
+            }
+            TranscriptionOutcome::Pending(_) => panic!("review_amender doit être couvert"),
+        }
+
+        // Hors table : attente, jamais de sévérité inventée.
+        let approve = ObservedFact {
+            kind: "review_approve".into(),
+            source_id: "r-ok".into(),
+            date: "2026-08-24T06:32:00Z".into(),
+            text: "APPROVE sans case dans la table".into(),
+        };
+        let (out, _) = journal.consign_observed_fact(&approve).unwrap();
+        match out {
+            TranscriptionOutcome::Pending(pending) => {
+                assert!(pending.id.contains("review_approve"));
+                assert!(pending.provenance_id.starts_with("uncovered:"));
+            }
+            TranscriptionOutcome::CoveredAdd(_) => {
+                panic!("hors table ne doit pas produire d'add")
+            }
+        }
+
+        let view = project_registre(&journal.read_entries().unwrap());
+        assert_eq!(view.footer.ouverts, 2);
+        assert_eq!(view.footer.gates_rates, 1);
+        assert_eq!(view.footer.pending_qualification, 1);
         let _ = fs::remove_dir_all(&root);
     }
 }

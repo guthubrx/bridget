@@ -52,6 +52,31 @@ stable.
 
 ---
 
+### US1bis — Transcrire un fait couvert (P1)
+
+Lorsqu'un **type de fait couvert** par le contrat de correspondance ci-dessous
+est observé (gate raté, verdict de revue `AMENDER`), Maicie append un `add`
+dont la sévérité est **dérivée** de la table versionnée — pas jugée à
+l'écriture. Tout fait hors table part en `pending_qualification`.
+
+**Pourquoi P1** : le journal du dû doit se remplir sans frappe du référent
+lorsque la décision est déjà prise ailleurs (définition d'un gate, verdict
+explicite d'un relecteur).
+
+**Scénarios d'acceptation** :
+
+1. **Étant donné** un gate identifié qui échoue, **quand** le fait
+   `gate_failed` est consigné, **alors** un `add` de sévérité `blocker` et
+   source `gate`/`failed=true` est appendé (ou no-op idempotent).
+2. **Étant donné** un verdict de revue `AMENDER` identifié, **quand** le fait
+   `review_amender` est consigné, **alors** un `add` de sévérité `major` et
+   source `review` est appendé.
+3. **Étant donné** un type de fait absent de la table, **quand** une
+   transcription est demandée, **alors** aucune sévérité n'est inventée : le
+   texte part en `pending_qualification`.
+
+---
+
 ### US2 — Constater automatiquement la clôture (P1)
 
 Lorsqu'un objectif explicitement lié par une délégation d'arbitrage est clôturé
@@ -156,10 +181,20 @@ explicite conserve corrélation et reçu durable.
 - **FR-1703 — Constat add** : `constat add` DOIT exiger `id`, `date`,
   `mission_source`, `severity`, `recurrence_of` optionnel et `text` verbatim.
   `date` est un horodatage ISO-8601/RFC 3339 avec fuseau explicite et la
-  sévérité est l'énumération fermée `blocker|major|minor|info`, déclarée par
-  l'émetteur ; Maicie ne la calcule jamais. Un `id` déjà présent est un no-op
-  idempotent si les octets canoniques sont identiques, sinon un refus sans
-  mutation : il ne peut jamais produire une seconde entrée.
+  sévérité est l'énumération fermée `blocker|major|minor|info`. La sévérité
+  est soit **déclarée** par l'émetteur humain, soit **dérivée** par
+  transcription du contrat de correspondance (FR-1711) pour un type de fait
+  couvert : ce n'est pas un jugement formé à l'écriture. Hors table, aucune
+  sévérité n'est inventée. Un `id` déjà présent est un no-op idempotent si les
+  octets canoniques sont identiques, sinon un refus sans mutation : il ne peut
+  jamais produire une seconde entrée.
+- **FR-1711 — Correspondance fait→sévérité** : Maicie DOIT appliquer
+  exclusivement la table versionnée ci-dessous. Elle est totale sur les types
+  qu'elle couvre (aucune exception « selon le contexte »). Tout fait hors
+  table DOIT partir en `pending_qualification`. Classer par importance,
+  calculer une priorité ou décider qu'un constat mérite l'attention reste
+  interdit : la frontière passe entre **transcrire** une décision prise
+  ailleurs et **former** un avis.
 - **FR-1704 — Références exactes** : une mission source, une récurrence et une
   clôture d'objectif DOIVENT utiliser des identifiants stables. Le système NE
   DOIT effectuer aucune recherche par texte, similarité ou homonymie.
@@ -196,12 +231,37 @@ explicite conserve corrélation et reçu durable.
   portant texte verbatim, sévérité déclarée et éventuelle récurrence.
 - **Mission source** : fait d'origine typé (mission, incident, review ou gate)
   avec identifiant stable ; un gate raté est un fait de source, non un score.
+- **Fait couvert** : type de fait listé dans le contrat de correspondance
+  FR-1711 ; sa sévérité est dérivée par transcription, jamais jugée à
+  l'écriture.
 - **Transition de constat** : événement appendé qui dérive l'état `delivered`
   d'un constat à partir de la clôture durable d'un objectif identifié.
 - **Lien d'arbitrage** : fait durable de délégation portant le couple exact
   `(constat_id, objective_id)` qui autorise, et seul autorise, une transition.
 - **Vue de registre** : projection en lecture seule du journal canonique et de
   ses champs explicitement déclarés.
+
+## Contrat de correspondance fait → sévérité (FR-1711)
+
+Versionnée avec la spec 017. Toute modification de cette table est un
+changement de sémantique du journal : elle repasse par revue hostile.
+
+Règle générale : **le défaut est l'attente, jamais l'invention.** Si un type
+de fait n'apparaît pas ici, ou si l'appartenance à une case est douteuse, le
+texte part en `pending_qualification`.
+
+| Type de fait (id machine) | Source journal | Sévérité dérivée | Justification (une ligne) |
+|---|---|---|---|
+| `gate_failed` | `mission_source.kind=gate`, `failed=true` | `blocker` | Échouer un gate **est** la définition d'un blocage ; ce n'est pas une évaluation. |
+| `review_amender` | `mission_source.kind=review` | `major` | Le verdict `AMENDER` est déjà une décision du relecteur ; le journal la transcrit. |
+
+Hors table (exemples non couverts, non exhaustifs) : gate vert, verdict
+`APPROVE`, incident libre, mission close sans lien d'arbitrage, prose
+ambiguë — tous → `pending_qualification` ou refus, **jamais** une sévérité
+improvisée.
+
+Identité d'émission automatique : `id = "{type}:{source_id}"` (ex.
+`gate_failed:G1701`). Le rejeu du même fait est un no-op idempotent.
 
 ## Critères mesurables
 
@@ -229,6 +289,10 @@ explicite conserve corrélation et reçu durable.
   l'objectif identifié produit exactement la même unique transition.
 - **SC-1710** : deux writers concurrents ajoutent deux lignes complètes et
   distinctes au catalogue déclaré ; aucune entrée n'est perdue ni tronquée.
+- **SC-1711** : un fait `gate_failed` produit un `add` `blocker` ; un fait
+  `review_amender` produit un `add` `major` ; un type hors table produit un
+  `pending_qualification` sans sévérité ; le rejeu du même `id` dérivé est un
+  no-op.
 
 ## Hors périmètre
 
@@ -246,5 +310,7 @@ explicite conserve corrélation et reçu durable.
   Maicie et le versionne avec son dépôt.
 - La fermeture d'objectif durable est accessible au composant Maicie comme fait
   attesté, notamment via les événements Bridget/guichet déjà prévus.
-- Les humains gardent l'autorité sur la sévérité, la récurrence, la promotion
-  d'un constat et les arbitrages inter-projets.
+- Les humains gardent l'autorité sur la récurrence, la promotion d'un constat
+  hors table, et les arbitrages inter-projets. La sévérité des faits **couverts**
+  est fixée par le contrat FR-1711 ; hors table, elle reste humaine via
+  qualification.

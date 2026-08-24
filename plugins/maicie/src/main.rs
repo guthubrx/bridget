@@ -652,6 +652,13 @@ enum RegistreAction {
         source_failed: bool,
         date: String,
     },
+    /// Transcription FR-1711 : sévérité dérivée si fait couvert, sinon pending.
+    Consign {
+        fait: String,
+        source_id: String,
+        date: String,
+        text: String,
+    },
 }
 
 #[derive(Debug)]
@@ -729,7 +736,7 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
 fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
     let Some((verb, tail)) = arguments.split_first() else {
         return Err(CliError::Usage(
-            "action registre obligatoire : list, add, migrer ou qualifier",
+            "action registre obligatoire : list, add, migrer, qualifier ou consign",
         ));
     };
     let mut config = None;
@@ -742,6 +749,8 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
     let mut date = None;
     let mut attente = false;
     let mut source_failed = false;
+    let mut fait = None;
+    let mut text = None;
     let mut index = 0;
     while index < tail.len() {
         match tail[index].as_str() {
@@ -773,6 +782,12 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             "--date" => {
                 set_once_string(&mut date, next_value(tail, &mut index, "--date")?, "date")?
             }
+            "--fait" => {
+                set_once_string(&mut fait, next_value(tail, &mut index, "--fait")?, "fait")?
+            }
+            "--text" => {
+                set_once_string(&mut text, next_value(tail, &mut index, "--text")?, "text")?
+            }
             "--attente" => {
                 if attente {
                     return Err(CliError::Usage("option --attente dupliquée"));
@@ -792,7 +807,12 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
     let config = config.ok_or(CliError::Usage("--config est obligatoire"))?;
     let action = match verb.as_str() {
         "list" => {
-            if line.is_some() || depuis.is_some() || pending_id.is_some() {
+            if line.is_some()
+                || depuis.is_some()
+                || pending_id.is_some()
+                || fait.is_some()
+                || text.is_some()
+            {
                 return Err(CliError::Usage(
                     "registre list n'accepte que --config et --attente",
                 ));
@@ -800,7 +820,7 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             RegistreAction::List { attente }
         }
         "add" => {
-            if depuis.is_some() || attente || pending_id.is_some() {
+            if depuis.is_some() || attente || pending_id.is_some() || fait.is_some() {
                 return Err(CliError::Usage("options incompatibles avec registre add"));
             }
             RegistreAction::Add {
@@ -808,7 +828,7 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             }
         }
         "migrer" => {
-            if line.is_some() || attente || pending_id.is_some() {
+            if line.is_some() || attente || pending_id.is_some() || fait.is_some() {
                 return Err(CliError::Usage(
                     "options incompatibles avec registre migrer",
                 ));
@@ -820,7 +840,7 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             }
         }
         "qualifier" => {
-            if line.is_some() || depuis.is_some() || attente {
+            if line.is_some() || depuis.is_some() || attente || fait.is_some() {
                 return Err(CliError::Usage(
                     "options incompatibles avec registre qualifier",
                 ));
@@ -846,9 +866,37 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
                 ))?,
             }
         }
+        "consign" => {
+            if line.is_some()
+                || depuis.is_some()
+                || attente
+                || pending_id.is_some()
+                || severity.is_some()
+                || source_kind.is_some()
+                || source_failed
+            {
+                return Err(CliError::Usage(
+                    "registre consign : pas de --severity (dérivée ou absente) ; options --fait --source-id --date --text",
+                ));
+            }
+            RegistreAction::Consign {
+                fait: fait.ok_or(CliError::Usage(
+                    "--fait est obligatoire pour registre consign",
+                ))?,
+                source_id: source_id.ok_or(CliError::Usage(
+                    "--source-id est obligatoire pour registre consign",
+                ))?,
+                date: date.ok_or(CliError::Usage(
+                    "--date est obligatoire pour registre consign",
+                ))?,
+                text: text.ok_or(CliError::Usage(
+                    "--text est obligatoire pour registre consign",
+                ))?,
+            }
+        }
         _ => {
             return Err(CliError::Usage(
-                "action registre inconnue : list, add, migrer ou qualifier",
+                "action registre inconnue : list, add, migrer, qualifier ou consign",
             ));
         }
     };
@@ -952,6 +1000,42 @@ fn run_registre(arguments: RegistreArgs) -> Result<String, CliError> {
             Ok(match outcome {
                 AppendOutcome::Appended => "registre qualifier: appended".to_string(),
                 AppendOutcome::IdempotentNoop => "registre qualifier: idempotent_noop".to_string(),
+            })
+        }
+        RegistreAction::Consign {
+            fait,
+            source_id,
+            date,
+            text,
+        } => {
+            let fact = catalogue::ObservedFact {
+                kind: fait,
+                source_id,
+                date,
+                text,
+            };
+            let mut journal =
+                CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
+            let (transcription, outcome) = journal
+                .consign_observed_fact(&fact)
+                .map_err(CliError::Catalogue)?;
+            let kind = match &transcription {
+                catalogue::TranscriptionOutcome::CoveredAdd(add) => {
+                    let severity = match add.severity {
+                        catalogue::Severity::Blocker => "blocker",
+                        catalogue::Severity::Major => "major",
+                        catalogue::Severity::Minor => "minor",
+                        catalogue::Severity::Info => "info",
+                    };
+                    format!("add/{severity}")
+                }
+                catalogue::TranscriptionOutcome::Pending(_) => "pending_qualification".to_string(),
+            };
+            Ok(match outcome {
+                AppendOutcome::Appended => format!("registre consign: appended ({kind})"),
+                AppendOutcome::IdempotentNoop => {
+                    format!("registre consign: idempotent_noop ({kind})")
+                }
             })
         }
     }

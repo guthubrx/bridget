@@ -25,6 +25,20 @@ plan/spec).
 ./target/release/maicie registre qualifier --config /chemin/absolu/maicie.json \
   --pending <id> --severity major --source-kind review --source-id <id> \
   --date 2026-08-24T06:00:00Z
+
+# Transcription FR-1711 : sévérité dérivée si fait couvert (pas de --severity)
+./target/release/maicie registre consign --config /chemin/absolu/maicie.json \
+  --fait gate_failed --source-id G1701 --date 2026-08-24T06:00:00Z \
+  --text "gate G1701 rouge"
+
+./target/release/maicie registre consign --config /chemin/absolu/maicie.json \
+  --fait review_amender --source-id r-hostile --date 2026-08-24T06:00:00Z \
+  --text "AMENDER : …"
+
+# Hors table → pending_qualification (défaut = attente)
+./target/release/maicie registre consign --config /chemin/absolu/maicie.json \
+  --fait review_approve --source-id r-ok --date 2026-08-24T06:00:00Z \
+  --text "APPROVE"
 ```
 
 Le pied de page de `registre list` est toujours `N/M/K/P` :
@@ -46,5 +60,5 @@ polling : la réconciliation ne tourne qu'au fil d'une commande.
 2. Clôture de session : `registre list` en première opération du rituel ;
    afficher le footer `N/M/K/P`.
 3. Ne jamais écrire dans un plan/tasks/issues hôte depuis le catalogue.
-4. Ne jamais inventer une sévérité ni classer un constat : Maicie propose,
-   l'humain (ou une source qui déclare explicitement) décide des champs fermés.
+4. Ne jamais inventer une sévérité hors contrat FR-1711, ni classer un
+   constat : Maicie propose, la table transcrit, l'humain qualifie le reste.

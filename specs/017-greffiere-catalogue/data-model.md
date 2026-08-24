@@ -15,9 +15,18 @@ source de vérité : `registre list` est la vue humaine du journal.
 | `id` | identifiant stable unique |
 | `date` | horodatage RFC 3339 avec fuseau explicite |
 | `mission_source` | `{kind, id}` ; kind fermé `mission|incident|review|gate` |
-| `severity` | enum fermé `blocker|major|minor|info` |
+| `severity` | enum fermé `blocker|major|minor|info` ; déclarée par l'humain **ou** dérivée du contrat FR-1711 pour un fait couvert |
 | `recurrence_of` | absent ou identifiant de constat existant |
 | `text` | texte verbatim, jamais classé ni réécrit |
+
+### Contrat de transcription (FR-1711)
+
+| Type de fait | Source | Sévérité |
+|---|---|---|
+| `gate_failed` | `gate` + `failed=true` | `blocker` |
+| `review_amender` | `review` | `major` |
+
+Hors table → `pending_qualification`. Identité : `id = "{type}:{source_id}"`.
 
 ### `transition`
 
