@@ -1,7 +1,6 @@
 use bridget_transport::DaemonToWrapper;
 use bridget_transport::protocol::{CoordinationEventKind, GuichetLifecycleState};
-use maicie::bridget_client::{BridgetClientLimits, GuichetClaim};
-use maicie::domain::guichet::{RequeteGuichet, parse_claim};
+use maicie::bridget_client::BridgetClientLimits;
 use maicie::domain::{
     AttenteNotification, ClasseDuree, DefinitionCoordination, Delegation, DependanceDelegation,
     EtatGenerationDelegation, EtatObjectif, EtatOutboxDelegation, FaitAppartenanceRepli,
@@ -12,6 +11,7 @@ use maicie::outbox::{PreparedDelegation, stable_body_hash};
 use maicie::reconcile::{
     CoordinationReconcileAction, CoordinationReconcilePhase, NotificationReconcileAction,
     NotificationReconcilePhase, reconcile_coordination_startup_observed_with_limits,
+    reconcile_coordination_startup_with_forbidden_f28_mutation_for_test,
     reconcile_coordination_startup_with_limits,
     reconcile_notification_startup_observed_with_limits,
     reconcile_notification_startup_with_limits,
@@ -227,13 +227,6 @@ fn run_terminal_transport_case(
 ) -> (EtatGenerationDelegation, usize) {
     let fixture = Fixture::new(label);
     let seed = seed_coordination_stream(&fixture.database_path, true);
-    if inject_forbidden_f28_route {
-        // Mutation volontaire : elle représente exactement le branchement
-        // interdit « terminal transport → qualification F28 ». Le rapport est
-        // injecté avant F29 afin que l'oracle ne puisse être sauvé par l'ordre
-        // terminal du guichet.
-        inject_transport_terminal_into_f28(&fixture.database_path, &seed);
-    }
     let listener = fixture.bind();
     let request_id = seed.request_id.clone();
     let server = thread::spawn(move || {
@@ -258,11 +251,19 @@ fn run_terminal_transport_case(
     });
 
     let mut store = MaicieStore::open(&fixture.database_path).expect("store ouvert");
-    let report = reconcile_coordination_startup_with_limits(
-        &mut store,
-        fixture.socket_path(),
-        limits(Duration::from_secs(2)),
-    )
+    let report = if inject_forbidden_f28_route {
+        reconcile_coordination_startup_with_forbidden_f28_mutation_for_test(
+            &mut store,
+            fixture.socket_path(),
+            limits(Duration::from_secs(2)),
+        )
+    } else {
+        reconcile_coordination_startup_with_limits(
+            &mut store,
+            fixture.socket_path(),
+            limits(Duration::from_secs(2)),
+        )
+    }
     .expect("terminal F29 appliqué");
     assert!(report.actions.iter().any(|action| matches!(
         action,
@@ -282,73 +283,6 @@ fn run_terminal_transport_case(
     let pending_requests = store.pending_tracked_request_outboxes().unwrap().len();
     server.join().expect("serveur terminal terminé");
     (state, pending_requests)
-}
-
-fn inject_transport_terminal_into_f28(database_path: &PathBuf, seed: &CoordinationSeed) {
-    let issuer_scope = "scope-mutant-f28-0123456789abcdef";
-    let report_id = "mutant-terminal-vers-f28";
-    let delivery_hash = "ab".repeat(32);
-    let canonical_request = format!(
-        "{{\"type\":\"service_request\",\"v\":1,\"issuer_scope\":\"{issuer_scope}\",\"request_id\":\"{report_id}\",\"issued_at\":{},\"from\":\"alice\",\"to\":\"maicie\",\"operation\":\"delivery_report\",\"payload\":{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\",\"delivery_hash\":\"{delivery_hash}\",\"in_reply_to\":\"{}\"}}}}",
-        ISSUED_AT + 9,
-        seed.objective_id,
-        seed.source_id,
-        seed.request_id,
-    )
-    .into_bytes();
-    let claim = GuichetClaim {
-        issuer_scope: issuer_scope.to_string(),
-        request_id: report_id.to_string(),
-        canonical_request,
-        claimed_at: ISSUED_AT + 9,
-        claim_generation: 1,
-        claim_token: "claim-mutant-f28-0123456789abcdef".to_string(),
-        claim_lease_expires_at: ISSUED_AT + 109,
-        expires_at: ISSUED_AT + 209,
-    };
-    let canonical = parse_claim(&claim).expect("mutation F28 canonique");
-    let RequeteGuichet::DeliveryReport(report) = &canonical.request else {
-        panic!("rapport mutant attendu")
-    };
-    MaicieStore::open(database_path)
-        .expect("store mutant ouvert")
-        .graft_delivery_report(
-            &claim,
-            &canonical,
-            report,
-            "response-mutant-f28",
-            ISSUED_AT + 9,
-        )
-        .expect("mutation F28 injectée");
-    let snapshot = MaicieStore::open(database_path)
-        .expect("store mutant relu")
-        .coordination_snapshot(seed.objective_id)
-        .expect("snapshot mutant")
-        .expect("coordination mutante");
-    let connection = Connection::open(database_path).expect("base mutante observable");
-    let (outcome, prerequisite_state): (String, String) = connection
-        .query_row(
-            "SELECT r.outcome,g.state FROM guichet_receptions r\n\
-             JOIN delegation_lineages l ON l.delegation_id=r.delegation_id\n\
-             JOIN delegation_generations g ON g.delegation_id=l.delegation_id\n\
-               AND g.generation=l.active_generation\n\
-             WHERE r.request_id=?1",
-            [report_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .expect("faits mutants observables");
-    let dependant = seed.dependant_id.expect("dépendant mutant");
-    let state = snapshot
-        .generations
-        .iter()
-        .find(|generation| generation.delegation_id == dependant)
-        .expect("génération dépendante mutante")
-        .etat;
-    assert_eq!(
-        state,
-        EtatGenerationDelegation::Ouverte,
-        "la mutation de routage doit réellement traverser l'ouverture F28 (issue={outcome}, prerequis={prerequisite_state})"
-    );
 }
 
 #[test]

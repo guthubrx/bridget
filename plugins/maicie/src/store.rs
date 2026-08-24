@@ -575,6 +575,39 @@ impl MaicieStore {
         reassignment_batch_for_fact_from(&self.connection, fact)
     }
 
+    /// Mutant réservé à l'oracle causal T1610. Il reproduit le défaut interdit
+    /// dans le chemin lui-même : un terminal transport est traité comme une
+    /// qualification F28, puis traverse le vrai réducteur et la vraie écriture
+    /// d'ouverture. Aucun appel de production ne possède cette voie.
+    pub(crate) fn inject_forbidden_transport_terminal_into_f28_for_test(
+        &mut self,
+        request_id: &str,
+        event_id: &str,
+        observed_at: i64,
+    ) -> Result<(), StoreError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let context = reassignment_request_context_from(&tx, request_id)?;
+        open_ready_dependents_with_qualification_mutator(
+            &tx,
+            context.delegation_id,
+            event_id,
+            observed_at,
+            |qualifications| {
+                for qualification in qualifications {
+                    if qualification.dependance.prerequis_id == context.delegation_id {
+                        qualification.hash_greffe = true;
+                        qualification.cloture_evaluee = true;
+                    }
+                }
+            },
+            |_| Ok(()),
+        )?;
+        tx.commit().map_err(StoreError::Sql)
+    }
+
     /// Applique un terminal Bridget sous un verrou pris AVANT la lecture des
     /// rapports de livraison. Un rapport concurrent se linéarise donc avant
     /// l'arbitrage (et gagne) ou après celui-ci, jamais dans une fenêtre TOCTOU.
@@ -4569,6 +4602,24 @@ fn open_ready_dependents(
     issued_at: i64,
     mut observer: impl FnMut(DependencyOpeningCommitPhase) -> Result<(), StoreError>,
 ) -> Result<(), StoreError> {
+    open_ready_dependents_with_qualification_mutator(
+        tx,
+        prerequisite_id,
+        event_id,
+        issued_at,
+        |_| {},
+        &mut observer,
+    )
+}
+
+fn open_ready_dependents_with_qualification_mutator(
+    tx: &Transaction<'_>,
+    prerequisite_id: Uuid,
+    event_id: &str,
+    issued_at: i64,
+    mut mutate_qualifications: impl FnMut(&mut [QualificationDependance]),
+    mut observer: impl FnMut(DependencyOpeningCommitPhase) -> Result<(), StoreError>,
+) -> Result<(), StoreError> {
     if event_id.trim().is_empty() || issued_at <= 0 {
         return Err(StoreError::Invalid("fait d'ouverture F28 incomplet"));
     }
@@ -4588,7 +4639,8 @@ fn open_ready_dependents(
     for dependant in dependants {
         let dependant_id = parse_uuid(&dependant)?;
         let generation = load_active_generation(tx, dependant_id)?;
-        let qualifications = load_dependency_qualifications(tx, &generation)?;
+        let mut qualifications = load_dependency_qualifications(tx, &generation)?;
+        mutate_qualifications(&mut qualifications);
         let Some(opening) = reduire_ouverture_dependance(&generation, &qualifications, event_id)
             .map_err(StoreError::Domain)?
         else {

@@ -658,7 +658,28 @@ pub fn reconcile_coordination_startup_observed_with_limits(
     store: &mut MaicieStore,
     bridget_socket: impl AsRef<Path>,
     limits: BridgetClientLimits,
+    observer: impl FnMut(CoordinationReconcilePhase) -> Result<(), StoreError>,
+) -> Result<CoordinationReconcileReport, ReconcileError> {
+    reconcile_coordination_startup_with_hooks(store, bridget_socket, limits, observer, false)
+}
+
+/// Mutant causal réservé au test T1610 : la réception du terminal traverse la
+/// branche réelle de relève, puis tente le routage F28 explicitement interdit.
+#[doc(hidden)]
+pub fn reconcile_coordination_startup_with_forbidden_f28_mutation_for_test(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    limits: BridgetClientLimits,
+) -> Result<CoordinationReconcileReport, ReconcileError> {
+    reconcile_coordination_startup_with_hooks(store, bridget_socket, limits, |_| Ok(()), true)
+}
+
+fn reconcile_coordination_startup_with_hooks(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    limits: BridgetClientLimits,
     mut observer: impl FnMut(CoordinationReconcilePhase) -> Result<(), StoreError>,
+    inject_forbidden_f28_route: bool,
 ) -> Result<CoordinationReconcileReport, ReconcileError> {
     let deadline = Instant::now() + reconciliation_budget(limits);
     let after_cursor = store.coordination_cursor()?;
@@ -771,6 +792,13 @@ pub fn reconcile_coordination_startup_observed_with_limits(
                 let request_id = event.request_id.clone();
                 let state = event.state.clone();
                 record_guichet_lifecycle_event(store, &event).map_err(ReconcileError::Guichet)?;
+                if inject_forbidden_f28_route {
+                    store.inject_forbidden_transport_terminal_into_f28_for_test(
+                        &event.request_id,
+                        &event.event_id,
+                        event.observed_at,
+                    )?;
+                }
                 observer(CoordinationReconcilePhase::AfterStoreCommit)?;
                 report
                     .actions
