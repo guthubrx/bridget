@@ -113,7 +113,9 @@ fn stop_daemon_child_best_effort(child: Option<&mut Child>) -> bool {
     child.wait().is_ok()
 }
 
-fn harness_daemon_home_count() -> usize {
+/// Compte les daemons dont le HOME est exactement celui de CE test.
+/// Un compteur borné au PID du harnais croise les voisins parallèles.
+fn daemon_count_for_home(home: &Path) -> usize {
     let output = Command::new("/bin/ps")
         .args(["-axo", "pid=,command="])
         .output()
@@ -133,11 +135,11 @@ fn harness_daemon_home_count() -> usize {
             }
             Some(pid.trim())
         })
-        .filter(|pid| daemon_home_matches_harness_prefix(pid))
+        .filter(|pid| daemon_home_is(pid, home))
         .count()
 }
 
-fn daemon_home_matches_harness_prefix(pid: &str) -> bool {
+fn daemon_home_is(pid: &str, home: &Path) -> bool {
     let output = Command::new("lsof").args(["-p", pid, "-Fn"]).output();
     let Ok(output) = output else {
         return false;
@@ -145,44 +147,27 @@ fn daemon_home_matches_harness_prefix(pid: &str) -> bool {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| line.strip_prefix('n'))
-        .any(path_is_harness_daemon_home)
+        .any(|path| path_is_under_home(path, home))
 }
 
-fn path_is_harness_daemon_home(path: &str) -> bool {
-    // Borné au PID du binaire de test : un compteur global croise les orphelins
-    // des autres agents et rend l'oracle flaky (observé : 8→7 pendant un run).
-    let mine = std::process::id().to_string();
-    let bg909_marker = format!("-{mine}-");
-    path.split('/').any(|component| {
-        if let Some(rest) = component.strip_prefix("bg909-") {
-            return rest.contains(&bg909_marker) || rest.ends_with(&format!("-{mine}"));
-        }
-        let Some(rest) = component.strip_prefix("bg-") else {
-            return false;
-        };
-        let mut parts = rest.splitn(2, '-');
-        let Some(process_id) = parts.next() else {
-            return false;
-        };
-        let Some(nonce) = parts.next() else {
-            return false;
-        };
-        process_id == mine && !nonce.is_empty() && nonce.chars().all(|c| c.is_ascii_hexdigit())
-    })
+fn path_is_under_home(path: &str, home: &Path) -> bool {
+    let home = home.to_string_lossy();
+    path == home.as_ref() || path.starts_with(&format!("{home}/"))
 }
 
-fn assert_harness_daemon_home_count(expected: usize) {
+fn assert_daemon_count_for_home(home: &Path, expected: usize) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if harness_daemon_home_count() == expected {
+        if daemon_count_for_home(home) == expected {
             return;
         }
         std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(
-        harness_daemon_home_count(),
+        daemon_count_for_home(home),
         expected,
-        "le harnais guichet a laissé un daemon orphelin (préfixes bg909-/bg-)"
+        "daemon orphelin pour le HOME du test: {}",
+        home.display()
     );
 }
 
@@ -614,10 +599,9 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
 }
 
 /// La garde doit être active avant le spawn : une panique juste après le
-/// démarrage ne laisse aucun daemon `bg-` sous PID 1.
+/// démarrage ne laisse aucun daemon sous le HOME de CE test.
 #[test]
 fn daemon_guard_nettoie_apres_une_panique_injectee() {
-    let before = harness_daemon_home_count();
     let home_slot = Mutex::new(None::<PathBuf>);
     let mid = std::sync::atomic::AtomicUsize::new(usize::MAX);
     let failed = catch_unwind(AssertUnwindSafe(|| {
@@ -625,14 +609,20 @@ fn daemon_guard_nettoie_apres_une_panique_injectee() {
         *home_slot
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(home.clone());
+        // Compteur borné à CE HOME : un voisin parallèle ne peut pas le fausser.
+        assert_eq!(
+            daemon_count_for_home(&home),
+            0,
+            "le HOME du test doit être vide avant le spawn"
+        );
         let _daemon = DaemonGuard::start(&home);
         // Premier temps : le spawn doit apparaître au compteur (sinon l'égalité
         // avant/après ne prouverait rien).
         let deadline = Instant::now() + Duration::from_secs(5);
-        let mut seen = harness_daemon_home_count();
-        while seen != before + 1 && Instant::now() < deadline {
+        let mut seen = daemon_count_for_home(&home);
+        while seen != 1 && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
-            seen = harness_daemon_home_count();
+            seen = daemon_count_for_home(&home);
         }
         mid.store(seen, std::sync::atomic::Ordering::SeqCst);
         panic!("échec injecté après le spawn : la garde doit nettoyer");
@@ -643,16 +633,15 @@ fn daemon_guard_nettoie_apres_une_panique_injectee() {
     );
     assert_eq!(
         mid.load(std::sync::atomic::Ordering::SeqCst),
-        before + 1,
+        1,
         "premier temps : le daemon spawné doit être compté"
     );
-    // Second temps : après Drop (dépliage), retour au compteur initial.
-    assert_harness_daemon_home_count(before);
-    if let Some(home) = home_slot
+    let home = home_slot
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .take()
-    {
-        let _ = std::fs::remove_dir_all(home);
-    }
+        .expect("HOME du test créé avant la panique");
+    // Second temps : après Drop (dépliage), plus aucun daemon sur CE HOME.
+    assert_daemon_count_for_home(&home, 0);
+    let _ = std::fs::remove_dir_all(home);
 }
