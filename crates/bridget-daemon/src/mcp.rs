@@ -722,7 +722,7 @@ fn execute_ledger(
     arguments: &serde_json::Map<String, Value>,
     socket: &Path,
 ) -> Result<Value, ToolError> {
-    reject_unknown_arguments(arguments, &["view", "limit"])?;
+    reject_unknown_arguments(arguments, &["view", "limit", "requests_scope"])?;
     let view = arguments
         .get("view")
         .and_then(Value::as_str)
@@ -737,6 +737,7 @@ fn execute_ledger(
             ));
         }
     };
+    let requests_scope = parse_requests_scope(arguments)?;
     let limit = match arguments.get("limit") {
         Some(value) => value
             .as_u64()
@@ -761,18 +762,62 @@ fn execute_ledger(
         }
     }
     if matches!(scope, LedgerScope::Requests | LedgerScope::Both) {
-        match connection.exchange(&WrapperToDaemon::ListRequests {
-            sender: identity.to_string(),
-            limit,
-        })? {
-            DaemonToWrapper::RequestList { requests: result } => requests = result,
-            other => return unexpected_response(other),
-        }
+        requests = fetch_ledger_requests(&mut connection, identity, requests_scope, limit)?;
     }
     Ok(json!({
         "messages": messages.into_iter().map(ledger_message_dto).collect::<Vec<_>>(),
         "requests": requests.into_iter().map(request_dto).collect::<Vec<_>>(),
+        "requests_scope": match requests_scope {
+            RequestsScope::Mine => "mine",
+            RequestsScope::All => "all",
+        },
     }))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequestsScope {
+    Mine,
+    All,
+}
+
+fn parse_requests_scope(
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<RequestsScope, ToolError> {
+    match arguments
+        .get("requests_scope")
+        .and_then(Value::as_str)
+        .unwrap_or("mine")
+    {
+        "mine" => Ok(RequestsScope::Mine),
+        "all" => Ok(RequestsScope::All),
+        _ => Err(ToolError::InvalidParams(
+            "requests_scope doit valoir mine ou all".to_string(),
+        )),
+    }
+}
+
+fn fetch_ledger_requests(
+    connection: &mut DaemonConnection,
+    identity: &str,
+    scope: RequestsScope,
+    limit: u16,
+) -> Result<Vec<bridget_transport::protocol::RequestInfo>, ToolError> {
+    match scope {
+        RequestsScope::Mine => match connection.exchange(&WrapperToDaemon::ListRequests {
+            sender: identity.to_string(),
+            limit,
+        })? {
+            DaemonToWrapper::RequestList { requests } => Ok(requests),
+            other => unexpected_response(other),
+        },
+        RequestsScope::All => match connection.exchange(&WrapperToDaemon::LedgerProjection {
+            scope: LedgerScope::Requests,
+            limit,
+        })? {
+            DaemonToWrapper::LedgerProjection { requests, .. } => Ok(requests),
+            other => unexpected_response(other),
+        },
+    }
 }
 
 fn registered_connection(socket: &Path) -> Result<DaemonConnection, ToolError> {
@@ -1031,7 +1076,12 @@ fn tools() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "view": { "enum": ["messages", "requests", "both"] },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 20 }
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 20 },
+                    "requests_scope": {
+                        "enum": ["mine", "all"],
+                        "default": "mine",
+                        "description": "mine = demandes où l'appelant est participant (défaut) ; all = toutes les demandes ouvertes."
+                    }
                 },
                 "additionalProperties": false
             }
@@ -1774,6 +1824,30 @@ mod tests {
             request,
             json!({"id":"r-1","from":"alice","to":"bob","state":"open","deadline":9,"created":2})
         );
+    }
+
+    #[test]
+    fn ledger_requests_scope_mine_par_defaut_et_all_accepte() {
+        let schema = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "bridget_ledger")
+            .unwrap();
+        assert_eq!(
+            schema["inputSchema"]["properties"]["requests_scope"]["default"],
+            "mine"
+        );
+        assert_eq!(
+            schema["inputSchema"]["properties"]["requests_scope"]["enum"],
+            json!(["mine", "all"])
+        );
+
+        let mut args = serde_json::Map::new();
+        args.insert("view".into(), json!("requests"));
+        assert_eq!(parse_requests_scope(&args).unwrap(), RequestsScope::Mine);
+        args.insert("requests_scope".into(), json!("all"));
+        assert_eq!(parse_requests_scope(&args).unwrap(), RequestsScope::All);
+        args.insert("requests_scope".into(), json!("everyone"));
+        assert!(parse_requests_scope(&args).is_err());
     }
 
     #[test]
