@@ -1153,3 +1153,23 @@ CE QUE ÇA AJOUTE, et qui n'était pas dans le périmètre instruit :
 ORDRE PROPOSÉ : la page locale d'abord (elle fait la projection et le
 relais, communs aux trois vues), puis le distant en lecture, puis les
 actions à distance avec leur propre arbitrage de sécurité.
+- **Une machine d'essai réelle existe : cartae.app (ssh -p 2222) — offerte
+  par l'utilisateur le 24/08.** Reconnaissance faite : Ubuntu Linux x86_64,
+  accès sudo sans mot de passe, git présent, PAS de toolchain Rust.
+  L'ancienne version de Bridget (0.1.0 du 15/08, lien /usr/local/bin vers un
+  checkout) a été RETIRÉE sur ordre — archivée et non supprimée, dans
+  ~/anciennes-versions/ : le lien est défait, le checkout déplacé. Un
+  federation.env d'une ligne subsiste dans ~/.config/bridget, non lu (peut
+  porter un secret), conservé.
+  CONSÉQUENCES POUR LE BLOC K, et elles sont structurantes :
+  (1) K1 est écrit pour macOS — plists launchd. La machine d'essai est
+  Linux : il faut un chemin systemd. L'installateur doit DÉCLARER ses cibles
+  et refuser proprement une plateforme non couverte, plutôt que d'échouer à
+  moitié posé.
+  (2) Pas de Rust sur la cible : le déploiement réel exige soit une
+  compilation croisée depuis le Mac (aarch64→x86_64), soit l'installation de
+  la toolchain sur place, soit des binaires publiés. À trancher dans K1.
+  (3) C'est le banc d'essai du chemin VIERGE que le bac à sable ne peut pas
+  prouver : l'activation des services sur machine neuve. Le premier
+  déploiement réel s'y fera — après que l'installateur aura passé ses preuves
+  locales, jamais avant.

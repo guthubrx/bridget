@@ -1,4 +1,4 @@
-.PHONY: build release test daemon install uninstall clean
+.PHONY: build release test daemon install install-k1 uninstall clean
 
 BINARY = bridget
 INSTALL_DIR = $(HOME)/.local/bin
@@ -68,3 +68,12 @@ uninstall:
 
 clean:
 	cargo clean
+
+install-k1:
+	@chmod +x scripts/install-k1.sh
+	@scripts/install-k1.sh \
+		$(if $(CATALOGUE_PATH),--catalogue-path $(CATALOGUE_PATH),) \
+		$(if $(FORCE),--force,) \
+		$(if $(SKIP_LAUNCHD),--skip-launchd,) \
+		$(if $(SKIP_VERIFY),--skip-verify,) \
+		$(if $(VERIFY_DAEMON_ONLY),--verify-daemon-only,)
