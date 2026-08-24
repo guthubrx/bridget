@@ -236,6 +236,25 @@ impl ReplayPublicMessage {
 }
 
 /// Issue durable du contrat client, sans inferrer d'etat Maicie.
+///
+/// DEUX MÉCANIQUES SERDE, souvent confondues, et elles n'ont pas du tout le
+/// même effet quand le daemon évolue :
+///
+/// - **Les VARIANTES ne sont pas tolérantes.** L'enum est tagué et ne porte
+///   aucune variante de repli : un `kind` inconnu ne se perd pas en silence, il
+///   fait ÉCHOUER le décodage (`unknown variant`, donc `BridgetClientError::
+///   Decode`). Ajouter une variante au protocole filaire CASSE donc ce
+///   consommateur — c'est bruyant, pas discret, mais c'est une casse.
+/// - **Les CHAMPS, eux, le sont.** Le `#[serde(default)]` ci-dessous rend
+///   `None` sans erreur quand le pair n'envoie pas `delivery_id` : là, et là
+///   seulement, l'information se perd silencieusement.
+///
+/// Conséquence tenue par le dépôt : la distinction dépôt-attesté / sort-inconnu
+/// vit sur la SURFACE CLIENT (le champ `status` du retour MCP et la sortie du
+/// binaire), jamais en variante filaire. Ce serait une casse pure — Maicie
+/// dispose déjà de la distinction par `delivery_id`. Voir l'oracle
+/// `le_jumeau_refuse_une_variante_inconnue_au_lieu_de_la_perdre`, qui mesure
+/// les deux mécaniques plutôt que de les supposer.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum IdempotencyIssue {
@@ -249,6 +268,7 @@ pub enum IdempotencyIssue {
     },
     OutcomeUnknown {
         expires_at: i64,
+        /// Tolérant par CHAMP : absent du fil, il vaut `None` sans erreur.
         #[serde(default)]
         delivery_id: Option<String>,
     },
