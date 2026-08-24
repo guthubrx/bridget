@@ -39,6 +39,33 @@ Voisin de `fleet.json` (même parent, même dérivation tests via
 `db_path.with_extension`). Écrit **seulement** s'il reste des absents après un
 redémarrage. Zéro perte : le fichier est **retiré**, pas vidé.
 
+**Schéma de la trace = 1**, indépendant du schéma `fleet.json` (2). Une
+évolution de la flotte ne bump pas ce fichier, et inversement.
+
+```json
+{
+  "schema": 1,
+  "recorded_at": 1787581626,
+  "absents": [
+    {
+      "name": "agent-ephemere",
+      "reason": "non_persistant",
+      "detail": "spawn sans --persistent"
+    },
+    {
+      "name": "agent-quota",
+      "reason": "quota_flotte",
+      "detail": "quota de flotte atteint (8)"
+    },
+    {
+      "name": "agent-refuse",
+      "reason": "reprise_refusee",
+      "detail": "enveloppe divergente"
+    }
+  ]
+}
+```
+
 Chaque entrée porte `name`, `reason` et un `detail` optionnel. Raisons stables :
 
 | `reason` | Cas |
@@ -46,7 +73,7 @@ Chaque entrée porte `name`, `reason` et un `detail` optionnel. Raisons stables 
 | `non_persistant` | spawn nommé sans `--persistent` |
 | `quota_flotte` | reprise amputée par le quota |
 | `definition_figee_absente` | entrée `fleet.json` sans définition figée |
-| `reprise_refusee` | autre refus de préparation / enveloppe |
+| `reprise_refusee` | autre refus de préparation / enveloppe — se lit **toujours** avec `detail` (motif textuel du refus) ; `reason` seul ne suffit pas |
 | `absent_de_fleet` | roster persistant, plus dans `fleet.json` (incohérence) |
 
 Consultable par `bridget reprise` (bloc `vivant.pertes_reprise`) et par la page
@@ -59,6 +86,26 @@ Ce n'est **pas** un snapshot d'équipe à ressusciter. Il nomme les équipiers
 gérés encore vivants (persistants ou non) pour que la reprise puisse citer les
 non-persistants, invisibles de `fleet.json`. Un fichier illisible se dégrade
 (roster vide + WARN) : il n'avorte pas la reprise de la flotte.
+
+Schéma **1** (même compteur que la trace, distinct du schéma fleet). Exemple
+minimal :
+
+```json
+{
+  "schema": 1,
+  "named": {
+    "codex-1": {
+      "type": "codex",
+      "persistent": true,
+      "domain": "bridget"
+    },
+    "cursor-ephemere": {
+      "type": "cursor",
+      "persistent": false
+    }
+  }
+}
+```
 
 ## Marqueur de groupe (`~/.cache/bridget/managed/<nom>.json`, 0700/0600)
 
