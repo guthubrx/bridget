@@ -1491,3 +1491,38 @@ tournent DÉJÀ en --dangerously-skip-permissions via wrapper.rs:1229) :
   second facteur ADR 011 : même chantier d'UI d'approbation, à faire
   ENSEMBLE, pas trois fois. Pas de copie de T3 (leur SDK, pas nos
   contraintes) — leur modèle de POLITIQUE, pas leurs lignes.
+
+## Bloc N — Produit & ouverture (cap fixé le 2026-08-24, 15h42)
+
+VISION UTILISATEUR (antérieure à Grogbot, réaffirmée ce jour) : « une équipe
+d'agents qui pourrait faire tourner une AI company ». L'usage reste interne
+d'abord ; le dépôt sera ouvert à terme comme carte de visite — il faut que
+Bridget/Maicie RÉSOLVE quelque chose et porte un avantage concurrentiel,
+sans changer de nature.
+
+POSITIONNEMENT RETENU (après analyse de marché externe du 24/08, vérifiée
+sur pièces — codex queue/agents et SendMessage confirmés localement) : la
+boîte aux lettres se commoditise ; le créneau défendable est LE SYSTÈME
+D'EXPLOITATION D'UNE ÉQUIPE D'AGENTS HÉTÉROGÈNE ET AUDITABLE. Maicie est le
+produit, Bridget le socle. Le fossé : registre du dû auto-écrit, fermeture
+par fait, refus déterministes, coût par mission, naissances sous approbation
+humaine, coordinateur zéro-LLM, hétérogénéité jour 1 — la GOUVERNANCE que
+ni les Teams de silo, ni les orchestrateurs, ni les clones mailbox n'ont.
+
+- **N1 — La vitrine par la preuve** : récit d'opérations d'une journée
+  réelle (pannes→constats→missions→revues→merges→mesures), métriques
+  d'efficience, demarrage-a-froid.md. Le dogfooding est l'argument.
+- **N2 — Silos absorbés comme transports** : ponts de livraison via
+  SendMessage (Claude) et codex queue quand disponibles, sous notre
+  sémantique de dette (canal ≠ protocole, doctrine ADR 010).
+- **N3 — Isolation/merge en produit** : worktree+ports fournis par le
+  daemon au spawn, plages arbitrées par Maicie (P31 livré), garde M1 —
+  transformer TOUTES les règles de chantier en comportements.
+- **N4 — K3 requalifié PRÉREQUIS d'ouverture** : séparer projet/outil
+  (chemins, configs, identités) avant tout dépôt public.
+- **N5 — A2A : adaptateur éventuel**, le jour où la fédération dépasse SSH.
+  Inscrit pour ne pas y penser deux fois, pas un chantier.
+
+ORDRE INCHANGÉ : phase 2 (autonomie — les routines SONT les opérations de
+l'AI company), puis sécurité (sortie de dette ADR 011, exigée par toute
+ouverture), puis N1-N4.
