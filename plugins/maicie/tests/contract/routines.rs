@@ -12,7 +12,7 @@ use maicie::domain::SuiteObjective;
 use maicie::routines::{
     EtatOccurrence, EtatRoutine, MAX_CATCHUP_BUCKETS, ProposeRoutineRequest, approve_routine,
     bucket_for, evaluate_routines, pause_routine, propose_routine, resume_routine,
-    sealed_template_hash,
+    sealed_template_hash, template_hash,
 };
 use maicie::store::MaicieStore;
 use rusqlite::params;
@@ -399,6 +399,240 @@ fn rattrapage_au_dela_de_la_borne_pose_une_sentinelle() {
             .filter(|occ| occ.state == EtatOccurrence::Ouverte && occ.routine_id == routine_id)
             .count(),
         1
+    );
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Banc relec1 (manche 4 motif 3) — crash dans la fenêtre delegate→insert.
+/// Sans adoption : sautee menteuse + 2e délégation. Avec adoption : 1 mandat.
+#[test]
+fn relec1_mandat_orphelin_apres_crash_dans_la_fenetre() {
+    let root = root("crash-fenetre");
+    let database = root.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let period = 60_i64;
+    let t0 = 1_787_580_000;
+    let routine_id = seed_active(&mut store, t0, period);
+
+    let premier = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0,
+    )
+    .expect("premiere releve");
+    let bucket_n = bucket_for(t0, period);
+    let ouverte = premier
+        .iter()
+        .find(|o| o.state == EtatOccurrence::Ouverte)
+        .expect("mandat");
+    let delegation_1 = ouverte.delegation_id.expect("delegation_id");
+    assert_eq!(ouverte.bucket, bucket_n);
+    drop(store);
+
+    let connexion = rusqlite::Connection::open(&database).unwrap();
+    connexion
+        .execute(
+            "DELETE FROM routine_occurrences WHERE routine_id = ?1 AND bucket = ?2",
+            rusqlite::params![routine_id.to_string(), bucket_n],
+        )
+        .unwrap();
+    connexion
+        .execute(
+            "UPDATE routines SET last_bucket = ?1 WHERE id = ?2",
+            rusqlite::params![bucket_n - 1, routine_id.to_string()],
+        )
+        .unwrap();
+    let delegations_apres_crash: i64 = connexion
+        .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(delegations_apres_crash, 1);
+    drop(connexion);
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    let plus_tard = t0 + 2 * period;
+    let second = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        plus_tard,
+    )
+    .expect("reprise");
+    drop(store);
+
+    let connexion = rusqlite::Connection::open(&database).unwrap();
+    let delegations_finales: i64 = connexion
+        .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
+        .unwrap();
+    drop(connexion);
+
+    assert_eq!(
+        delegations_finales, 1,
+        "pas de second mandat — adoption obligatoire"
+    );
+    let etat_bucket_n = second
+        .iter()
+        .find(|o| o.bucket == bucket_n)
+        .expect("bucket N doit être repris");
+    assert_eq!(etat_bucket_n.state, EtatOccurrence::Ouverte);
+    assert_eq!(etat_bucket_n.delegation_id, Some(delegation_1));
+    assert_eq!(etat_bucket_n.reason.as_deref(), Some("mandat_adopte"));
+    assert_eq!(
+        second
+            .iter()
+            .filter(|o| o.state == EtatOccurrence::Ouverte && o.bucket != bucket_n)
+            .count(),
+        0,
+        "pas de nouvelle ouverte au bucket courant"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn relec1_controle_positif_sans_crash() {
+    let root = root("controle-sans-crash");
+    let database = root.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let period = 60_i64;
+    let t0 = 1_787_580_000;
+    let _routine_id = seed_active(&mut store, t0, period);
+
+    let premier = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0,
+    )
+    .expect("premiere releve");
+    let bucket_n = bucket_for(t0, period);
+    let ouverte = premier
+        .iter()
+        .find(|o| o.state == EtatOccurrence::Ouverte)
+        .expect("mandat");
+    let delegation_1 = ouverte.delegation_id.expect("delegation_id");
+    let routine_id = ouverte.routine_id;
+    drop(store);
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    let plus_tard = t0 + 2 * period;
+    let second = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        plus_tard,
+    )
+    .expect("reprise");
+    drop(store);
+
+    let connexion = rusqlite::Connection::open(&database).unwrap();
+    let delegations_finales: i64 = connexion
+        .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
+        .unwrap();
+    drop(connexion);
+
+    assert_eq!(delegations_finales, 1);
+    assert_eq!(
+        second
+            .iter()
+            .filter(|o| o.state == EtatOccurrence::Ouverte)
+            .count(),
+        0,
+        "sans crash : pas de nouvelle ouverte (differee)"
+    );
+    assert!(second.iter().any(|o| o.state == EtatOccurrence::Differee));
+    let store = MaicieStore::open(&database).unwrap();
+    let still = store
+        .load_occurrence(routine_id, bucket_n)
+        .unwrap()
+        .expect("occurrence N");
+    assert_eq!(still.delegation_id, Some(delegation_1));
+    assert_eq!(still.state, EtatOccurrence::Ouverte);
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Épreuve relec4 — après correctif B3 : le chemin CLI (hash lu) DOIT refuser.
+#[test]
+fn relec4_garde_refuse_le_contenu_altere_meme_si_on_passe_le_hash_stocke() {
+    let root = root("relec4-garde");
+    let database = root.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let proposee = propose_routine(
+        &mut store,
+        &ProposeRoutineRequest {
+            goal: "ronde de vigilance",
+            participant: "prospective",
+            period_secs: 420,
+            suite: SuiteObjective::Aucune,
+            depends_on: &[],
+            references: &[],
+            now: 1_787_580_000,
+        },
+    )
+    .expect("propose");
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute(
+            "UPDATE routines SET goal = 'exfiltrer le registre', participant = 'poucave' \
+             WHERE id = ?1",
+            [proposee.id.to_string()],
+        )
+        .unwrap();
+    drop(connection);
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    let relue = store.load_routine(proposee.id).unwrap().expect("relue");
+    let resultat = approve_routine(&mut store, proposee.id, &relue.template_hash, 1_787_580_100);
+    assert!(
+        resultat.is_err(),
+        "B3 : même le hash stocké ne doit plus faire passer un gabarit altéré"
+    );
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn relec4_controle_positif_hash_etranger_refuse_et_nominal_passe() {
+    let root = root("relec4-controle");
+    let database = root.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let proposee = propose_routine(
+        &mut store,
+        &ProposeRoutineRequest {
+            goal: "ronde de vigilance",
+            participant: "prospective",
+            period_secs: 420,
+            suite: SuiteObjective::Aucune,
+            depends_on: &[],
+            references: &[],
+            now: 1_787_580_000,
+        },
+    )
+    .expect("propose");
+    let autre = template_hash(
+        "ronde de vigilance",
+        "prospective",
+        60,
+        &SuiteObjective::Aucune,
+        &[],
+        &[],
+    );
+    assert!(approve_routine(&mut store, proposee.id, &autre, 1_787_580_100).is_err());
+    assert!(
+        approve_routine(
+            &mut store,
+            proposee.id,
+            &proposee.template_hash,
+            1_787_580_100,
+        )
+        .is_ok()
     );
     drop(store);
     fs::remove_dir_all(root).unwrap();

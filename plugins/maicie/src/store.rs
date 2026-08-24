@@ -2708,6 +2708,29 @@ impl MaicieStore {
         Ok(())
     }
 
+    /// Retrouve objective_id + delegation_id pour une clé d'idempotence, sans
+    /// exiger les octets canoniques (adoption d'un mandat orphelin routines).
+    pub fn lookup_delegate_ids_by_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<(Uuid, Uuid)>, StoreError> {
+        validate_delegate_idempotency_key(idempotency_key)?;
+        let row = self
+            .connection
+            .query_row(
+                "SELECT objective_id, delegation_id FROM delegate_idempotency\n\
+                 WHERE idempotency_key = ?1",
+                [idempotency_key],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        row.map(|(objective_raw, delegation_raw)| {
+            Ok((parse_uuid(&objective_raw)?, parse_uuid(&delegation_raw)?))
+        })
+        .transpose()
+    }
+
     /// Lit un résultat durable déjà réservé pour une clé de commande. Les
     /// octets canoniques font partie de l'identité : une clé réemployée pour
     /// une autre enveloppe est refusée sans écrire quoi que ce soit.

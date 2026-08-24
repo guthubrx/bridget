@@ -1184,14 +1184,44 @@ fn confirm_local_routine_approval(
             "approbation routine = terminal interactif uniquement",
         ));
     }
+    let suite_label = match &routine.suite {
+        maicie::domain::SuiteObjective::Aucune => "aucune".to_string(),
+        maicie::domain::SuiteObjective::Objectif(id) => id.to_string(),
+    };
+    let depends = routine
+        .depends_on
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let references = routine
+        .references
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     println!("Approbation locale de la routine");
     println!("  id={}", routine_id);
+    // Six entrées scellées par template_hash — toutes visibles (B3 aggravé).
+    println!("  goal={}", sanitize_terminal(&routine.goal));
     println!("  participant={}", routine.participant);
     println!("  period_secs={}", routine.period_secs);
-    println!("  goal={}", sanitize_terminal(&routine.goal));
-    // Empreinte des champs AFFICHÉS (recalculée), pas le blob stocké — ADR 011.
+    println!("  suite={}", suite_label);
     println!(
-        "  hash={} (recalculé depuis les champs affichés)",
+        "  depends_on={}",
+        if depends.is_empty() { "—" } else { &depends }
+    );
+    println!(
+        "  references={}",
+        if references.is_empty() {
+            "—"
+        } else {
+            &references
+        }
+    );
+    println!("  hash_stocke={}", hex_hash(&routine.template_hash));
+    println!(
+        "  hash_recalcule={} (depuis les six champs affichés)",
         hex_hash(expected_hash)
     );
     print!("Confirmer l'activation (oui) : ");

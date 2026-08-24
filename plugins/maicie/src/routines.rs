@@ -324,6 +324,7 @@ pub fn evaluate_routines(
         let open = store
             .open_occurrence_for_routine(routine.id)
             .map_err(routine_store_error)?;
+        let mut has_open = open.is_some();
         for bucket in from..=current {
             if store
                 .load_occurrence(routine.id, bucket)
@@ -331,6 +332,15 @@ pub fn evaluate_routines(
                 .is_some()
             {
                 routine.last_bucket = Some(bucket);
+                continue;
+            }
+            let key = format!("routine:{}:{}", routine.id, bucket);
+            // Avant toute sautee : adopter un mandat déjà parti (fenêtre
+            // delegate→insert_occurrence sans tx commune — manche 4 motif 3).
+            if let Some(adopted) = adopt_orphan_mandate(store, routine.id, bucket, &key, now)? {
+                produced.push(adopted);
+                routine.last_bucket = Some(bucket);
+                has_open = true;
                 continue;
             }
             if bucket < current {
@@ -349,7 +359,7 @@ pub fn evaluate_routines(
                 continue;
             }
             // bucket == current
-            if open.is_some() {
+            if has_open {
                 let occ = RoutineOccurrence {
                     routine_id: routine.id,
                     bucket,
@@ -368,7 +378,6 @@ pub fn evaluate_routines(
                 // Bridget / annuaire indisponible : ne consomme pas le bucket.
                 break;
             }
-            let key = format!("routine:{}:{}", routine.id, bucket);
             let goal = format!(
                 "[routine {} bucket {}] {}",
                 routine.id, bucket, routine.goal
@@ -413,6 +422,7 @@ pub fn evaluate_routines(
             store.insert_occurrence(&occ).map_err(routine_store_error)?;
             produced.push(occ);
             routine.last_bucket = Some(bucket);
+            has_open = true;
         }
         store
             .update_routine(&routine)
@@ -462,6 +472,34 @@ fn validate_propose(request: &ProposeRoutineRequest<'_>) -> Result<(), RoutineEr
         return Err(RoutineError::Invalid("now invalide"));
     }
     Ok(())
+}
+
+/// Si un mandat `routine:{id}:{bucket}` existe déjà sans occurrence : l'adopter
+/// en `ouverte` (jamais `sautee`). Remède manche 4 motif 3.
+fn adopt_orphan_mandate(
+    store: &mut MaicieStore,
+    routine_id: Uuid,
+    bucket: i64,
+    idempotency_key: &str,
+    now: i64,
+) -> Result<Option<RoutineOccurrence>, RoutineError> {
+    let Some((objective_id, delegation_id)) = store
+        .lookup_delegate_ids_by_key(idempotency_key)
+        .map_err(routine_store_error)?
+    else {
+        return Ok(None);
+    };
+    let occ = RoutineOccurrence {
+        routine_id,
+        bucket,
+        state: EtatOccurrence::Ouverte,
+        reason: Some("mandat_adopte".to_string()),
+        objective_id: Some(objective_id),
+        delegation_id: Some(delegation_id),
+        created_at: now,
+    };
+    store.insert_occurrence(&occ).map_err(routine_store_error)?;
+    Ok(Some(occ))
 }
 
 fn routine_store_error(error: StoreError) -> RoutineError {
