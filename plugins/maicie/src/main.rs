@@ -1113,6 +1113,11 @@ fn run_routine(arguments: RoutineArgs, migrate: bool) -> Result<String, CliError
             // Hash recalculé depuis les champs relus — jamais le blob stocké seul
             // (sinon la garde est une tautologie : B3 manche 4).
             let expected_hash = maicie::routines::sealed_template_hash(&routine);
+            // Refus AVANT l'écran : ne jamais afficher un goal altéré à côté
+            // d'une empreinte d'avant l'altération (vigilance visuelle piégée).
+            if expected_hash != routine.template_hash {
+                return Err(CliError::Routine(RoutineError::Invalid("gabarit altéré")));
+            }
             confirm_local_routine_approval(routine_id, &routine, &expected_hash)?;
             let approved = approve_routine(&mut store, routine_id, &expected_hash, now)
                 .map_err(CliError::Routine)?;
@@ -1184,7 +1189,11 @@ fn confirm_local_routine_approval(
     println!("  participant={}", routine.participant);
     println!("  period_secs={}", routine.period_secs);
     println!("  goal={}", sanitize_terminal(&routine.goal));
-    println!("  hash={}", hex_hash(expected_hash));
+    // Empreinte des champs AFFICHÉS (recalculée), pas le blob stocké — ADR 011.
+    println!(
+        "  hash={} (recalculé depuis les champs affichés)",
+        hex_hash(expected_hash)
+    );
     print!("Confirmer l'activation (oui) : ");
     io::stdout()
         .flush()

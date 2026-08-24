@@ -200,7 +200,7 @@ fn occurrence_vivante_differre_puis_cloture_permet_un_nouveau_mandat() {
 }
 
 #[test]
-fn rejeu_de_releve_zero_doublon_sous_cle_routine_bucket() {
+fn rejeu_de_releve_exerce_la_garde_load_occurrence() {
     let root = root("rejeu");
     let database = root.join("maicie.sqlite3");
     let mut store = MaicieStore::open(&database).unwrap();
@@ -216,6 +216,20 @@ fn rejeu_de_releve_zero_doublon_sous_cle_routine_bucket() {
         now,
     )
     .expect("first");
+    let bucket = bucket_for(now, period);
+    assert_eq!(first.iter().filter(|occ| occ.bucket == bucket).count(), 1);
+    let occ = store
+        .load_occurrence(routine_id, bucket)
+        .unwrap()
+        .expect("occurrence posée");
+
+    // Court-circuit `after >= current` : on REWINDE last_bucket pour forcer
+    // le chemin load_occurrence (la garde que le rejeu au même now ne touche
+    // jamais — mutant manche 4 : retirer la garde laisse le contrat vert).
+    let mut routine = store.load_routine(routine_id).unwrap().unwrap();
+    routine.last_bucket = Some(bucket.saturating_sub(1));
+    store.update_routine(&routine).unwrap();
+
     let second = evaluate_routines(
         &mut store,
         &durations(),
@@ -223,16 +237,20 @@ fn rejeu_de_releve_zero_doublon_sous_cle_routine_bucket() {
         &[candidate("prospective")],
         now,
     )
-    .expect("second");
+    .expect("second doit rester Ok grâce à load_occurrence");
     assert!(
-        second.is_empty(),
-        "rejeu à même now : zéro nouvelle occurrence"
+        second
+            .iter()
+            .filter(|row| row.bucket == bucket && row.state == EtatOccurrence::Ouverte)
+            .count()
+            == 0,
+        "aucune seconde ouverte pour le même bucket"
     );
-    let bucket = bucket_for(now, period);
-    let occ = store.load_occurrence(routine_id, bucket).unwrap();
-    assert!(occ.is_some());
-    assert_eq!(first.iter().filter(|occ| occ.bucket == bucket).count(), 1);
-    let conflict = store.insert_occurrence(occ.as_ref().unwrap());
+    let again = store.load_occurrence(routine_id, bucket).unwrap().unwrap();
+    assert_eq!(again.objective_id, occ.objective_id);
+    assert_eq!(again.delegation_id, occ.delegation_id);
+    // PK : un INSERT à la main sur la même clé doit Conflict (garde SQL).
+    let conflict = store.insert_occurrence(&occ);
     assert!(matches!(
         conflict,
         Err(maicie::store::StoreError::Conflict(_))
