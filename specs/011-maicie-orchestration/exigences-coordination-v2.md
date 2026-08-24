@@ -732,3 +732,24 @@ aucune ne coupe le pont existant avant que son remplaçant soit prouvé.
   `ProviderSessionDirectory` (où vivent les sessions),
   `ProviderSessionReaper` (le nettoyage de celles qui traînent — nous avons
   eu 15 processus orphelins cette nuit) et `ProviderEventLoggers`.
+- **CLARIFICATION qui change le critère du bloc G : ACP n'est pas le
+  problème, le PONT TIERS FIGÉ l'est.** Vérifié sur pièces : chez T3 Code,
+  Cursor et Grok passent tous deux par ACP — mais pour Cursor, c'est le CLI
+  du fournisseur LUI-MÊME qui expose le mode (`cursor-agent acp`, confirmé
+  sur la machine : binaire présent, version 2026.08.11, l'aide annonce
+  « Start the Cursor Agent as an ACP server »). Rien à voir avec
+  `@zed-industries/codex-acp`, qui est un tiers embarquant une copie figée
+  de Codex et qui a tué nos agents. Le bon critère n'est donc pas
+  « natif contre ACP » mais « maintenu par le fournisseur contre pont tiers
+  figé ». Un ACP publié et maintenu par le fournisseur est aussi sain qu'un
+  protocole propriétaire.
+- **Cursor est ajoutable presque gratuitement — type déclaré le 2026-08-24.**
+  Le CLI est installé, il parle ACP nativement, l'authentification passe par
+  le compte (`cursor_login` chez T3 Code) et non par une clé API, ce qui
+  respecte la politique du projet. Notre pont ACP existe déjà : c'est le
+  seul fournisseur qu'on peut brancher SANS écrire de pont. Type `cursor`
+  inscrit dans le registre (commande `cursor-agent acp`, clés API interdites
+  en dur). Reste la naissance d'agent, qui appartient à l'utilisateur.
+  Conséquence sur G10 : le pont ACP ne sert plus seulement un fournisseur
+  obsolète, il sert Cursor — il n'est donc PAS à retirer, seulement à ne
+  plus être le chemin par défaut pour Codex et Claude.
