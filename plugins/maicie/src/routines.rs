@@ -336,18 +336,14 @@ pub fn evaluate_routines(
             };
             let created = match delegate(store, *durations, issuer_scope, candidates, &request) {
                 Ok(DelegateResult::Created(created)) => created,
-                Ok(DelegateResult::Candidates(_)) => {
-                    return Err(RoutineError::Delegate(
-                        "cible routine non résolue (candidats)".into(),
-                    ));
+                // Cible non résolue / indisponible : pas de bucket consumé —
+                // la prochaine relève retentera (même doctrine que candidats
+                // vides). Ne jamais remonter en erreur fatale du tick.
+                Ok(DelegateResult::Candidates(_)) | Err(DelegateError::TargetUnavailable(_)) => {
+                    break;
                 }
-                Err(DelegateError::TargetUnavailable(name)) => {
-                    return Err(RoutineError::Delegate(format!(
-                        "cible indisponible: {name}"
-                    )));
-                }
-                Err(error) => {
-                    return Err(RoutineError::Delegate(error.to_string()));
+                Err(_error) => {
+                    break;
                 }
             };
             let occ = RoutineOccurrence {

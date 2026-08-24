@@ -387,17 +387,25 @@ fn open_store_with_reconciliation(
     reconcile_notification_startup_with_limits(&mut store, &config.bridget_socket, limits)
         .map_err(CliError::Reconcile)?;
     // Battement routines : même horloge que la relève (aucune timer Maicie).
-    let now = unix_now()?;
-    let issuer_scope = store.issuer_scope().to_string();
-    let candidates = list_routine_candidates(config, limits).unwrap_or_default();
-    evaluate_routines(
-        &mut store,
-        &config.durations,
-        &issuer_scope,
-        &candidates,
-        now,
-    )
-    .map_err(CliError::Routine)?;
+    // Court-circuit si aucune active — zéro I/O Bridget, les fixtures CLI
+    // mono-séquence et les commandes hors routines restent intactes.
+    let actives = store
+        .list_routines(Some(EtatRoutine::Active))
+        .map_err(CliError::Store)?;
+    if !actives.is_empty() {
+        let now = unix_now()?;
+        let issuer_scope = store.issuer_scope().to_string();
+        let candidates = list_routine_candidates(config, limits).unwrap_or_default();
+        // Un échec opérationnel du tick ne doit jamais faire échouer status /
+        // delegate : la prochaine relève retentera (note §2).
+        let _ = evaluate_routines(
+            &mut store,
+            &config.durations,
+            &issuer_scope,
+            &candidates,
+            now,
+        );
+    }
     Ok(ReconciledStore {
         store,
         coordination,
