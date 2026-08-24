@@ -92,3 +92,36 @@ puis au témoin. MESURES à publier avec le verdict :
 4. temps mural.
 Chaque juré naît avec préambule composé : fiche de rôle relecteur + SA
 fiche de lentille. Verdicts au référent + greffe (doctrine de routage).
+
+## Jury n°1 — résultats (2026-08-24, 17h56, lot format LIMITE @ 8b23d92)
+
+VERDICTS : témoin seul APPROVE ; collège constructif AWC (2 conditions) ;
+collège à charge AWC (3 filets). Zéro contradiction de fond entre les trois.
+
+TROUVAILLES UNIQUES (la mesure) :
+- Témoin seul : 1 — le fmt rouge sur main (hors lot, corrigé sur-le-champ).
+  A aussi planté un mutant de son cru. Solide, état-présent seulement.
+- Collège CONSTRUCTIF : 2 — la RÉSERVE HISTORIQUE (le SHA initial perdait
+  les données legacy en silence : prouvé empiriquement, aurait mérité
+  BLOCKED avant le commit de compat) ; la ligne de doc consommateurs.
+- Collège À CHARGE : 3 — le faux-ami d'abréviation (contains au lieu
+  d'exact), l'usedPercent hors bornes qui efface la FENÊTRE au lieu du %
+  (écart réel au mandat), la projection de status non nommée.
+BILAN : 5 trouvailles réelles des collèges que le solo n'a pas vues ;
+1 trouvaille du solo (hors lot) que les collèges n'ont pas relevée.
+
+CE QUE LA DÉLIBÉRATION A APPORTÉ (au-delà des trouvailles) :
+- le désaccord interne NOMMÉ et tranché (Hiroshi a fait retirer une
+  exigence de confort du premier jet d'Aminata — le bruit filtré DANS le
+  collège, la synthèse arrivée épurée) ;
+- la révision d'Ingrid (BLOCKED au tour 1 sur l'ancien SHA → AWC après
+  l'addendum) — le collège juge l'HISTOIRE du lot, le témoin juge l'état ;
+- des conditions de retournement explicites (AWC→BLOCKED si récidive).
+
+LIMITES HONNÊTES DE L'EXPÉRIENCE N°1 :
+1. Aveugle imparfait : le témoin s'appelait « jury-temoin » et le
+   protocole est public dans le dépôt. Prochain jury : nom banal.
+2. Coût L4 non mesuré : les jurés étaient des cursor — seul le flux claude
+   atteste l'usage aujourd'hui. Prochain jury : jurés claude natifs pour
+   la facture, ou attendre l'extension codex/acp de L4.
+3. n=1 : rien de statistique. Les collèges ont gagné CETTE manche.
