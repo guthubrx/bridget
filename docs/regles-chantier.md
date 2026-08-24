@@ -215,6 +215,13 @@ deux échecs successifs pour un même agent.)*
   passage unique et bâti leurs conclusions dessus.)* Corollaire du même
   incident : un rouge intermittent se qualifie par un TAUX mesuré des deux
   côtés (lot et base), jamais par une impression.
+- **Les heures déclarées par les agents ne font pas foi ; l'horodatage
+  d'inscription au ledger, oui.** Mesuré le 2026-08-24 : décalages de +1 à
+  +40 minutes, collectifs et dans le même sens — les agents alignent leur
+  heure sur celle de leurs pairs plutôt que de lire l'horloge. Pour tout
+  rapport, ETA ou reconstruction de chronologie : prendre les `ts`. Corollaire
+  de la règle du référent (« les heures viennent de `date` ou de git, jamais
+  du ressenti »), qui vaut donc pour toute la flotte.
 - **Une ABSENCE se vérifie dans la durée, jamais à l'instant.** Le ledger a
   une latence d'inscription qui a atteint 8 minutes sous la charge du
   2026-08-24 ; `outcome_unknown` est rendu immédiatement et n'en dit rien.

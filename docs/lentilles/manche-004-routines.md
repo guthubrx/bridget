@@ -144,3 +144,34 @@ point de son « ce qui tient » parce qu'un pair l'a muté, refuser qu'on
 compte deux voix là où il n'y en a qu'une, signaler l'antériorité d'un autre,
 corriger une motivation fausse qui soutenait une conclusion juste. Aucune de
 ces corrections ne leur profitait.
+
+## Deux derniers apports, dont un qui protège la décision de merge
+
+**« Le correctif est petit » n'est pas établi — contestation de relec3
+contre son propre binôme.** relec4 conclut de son mutant que la clôture
+d'occurrence est « petite et localisée » ; relec3 conteste, et l'argument
+tient : le mutant pose l'UPDATE À LA MAIN dans un banc, ce qui prouve que le
+mécanisme n'a qu'un verrou — pas que le correctif est petit. **Il manque le
+DÉCLENCHEUR, et c'est lui le vrai travail** : qui clôt, sur quel événement
+(fin de délégation ? clôture d'objectif ? les deux ?), avec quelle
+idempotence, dans quelle transaction, et que fait-on d'une délégation
+annulée ou d'une occurrence dont la délégation ne revient jamais. Aucun
+chemin du lot n'observe aujourd'hui la fin d'une délégation côté routines :
+c'est une **couture neuve entre deux sous-systèmes**, pas une ligne à
+ajouter. Portée : « petit et localisé » est précisément l'argument qui fait
+basculer un BLOCKED en AWC — le référent ne s'appuiera pas sur une facilité
+que personne n'a chiffrée. Un relecteur qui affaiblit la trouvaille de son
+propre binôme parce qu'elle est mal étayée : c'est le dispositif qui
+fonctionne.
+
+**Les heures déclarées par les agents sont fausses, parfois de 40 minutes.**
+Vérifié par relec3 contre les `ts` d'inscription : ses deux pièces annoncées
+« 21h33 » et « 21h49 » sont inscrites à 21:07:34 et 21:08:22 ; relec4
+annonce « 21h47 » sur une pièce inscrite à 21:07:18 ; relec2 annonce
+« 21h02 » à 21:03:17. Le décalage va de +1 à +40 minutes et il est
+collectif — les agents alignent leur heure sur celle de leurs pairs au lieu
+de lire l'horloge. **Seul l'horodatage d'inscription au ledger fait foi.**
+Effet mesuré : toutes les cibles ont été tenues avec bien plus d'avance que
+les intéressés ne le croyaient (verdicts rendus vers 21h05-21h10 pour une
+cible annoncée à 21h45). Conséquence pour tout ce qui reconstruit une
+chronologie — rapports, ETA, échéances : prendre les `ts`, jamais la phrase.
