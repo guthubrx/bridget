@@ -9,10 +9,20 @@ atteinte.
 | Liste blanche de binaires dans `crates/bridget-daemon/src/wrapper.rs` | Registre `~/.config/bridget/agents.json` | Supprimée en T703 |
 | Affichage stderr sans transport dans `crates/bridget-daemon/src/wrapper.rs` | Livraison structurée ACP ou log applicatif | Supprimé en T705 |
 | Micro-banc SC-005 ignoré dans `crates/bridget-transport/src/acp.rs` | Banc à deux vues attach réelles dans `crates/bridget-daemon/tests/sc005_attach_budget.rs` | Après suppression de la couverture historique ACP au prochain cycle de nettoyage des tests |
+| Pont npm `@zed-industries/codex-acp` et `@zed-industries/claude-code-acp` (lancement via `npx` / binaire du paquet) | Pilotes natifs `codex app-server` et `claude_stream_json` (défauts registre + ADR 010) | **Retiré le 2026-08-24 (G10)** : le daemon refuse désormais tout spawn dont la commande ou les args citent ces paquets (`SpawnRefusal::EnvUnfit`). L'ACP générique **reste** pour Cursor (`cursor-agent acp`) et Gemini (`gemini --acp`). |
+| Protocole ACP comme chemin d'investissement pour Codex/Claude | Ponts natifs uniquement pour nouvelles capacités (modèle, quota, coût) | Dès G10 : aucune nouvelle capacité ne passe par ACP pour ces deux fournisseurs. ACP reste le chemin vivant de Cursor/Gemini ; retirable le jour où Gemini (et éventuellement Cursor) exposent un accès natif, ou sortent du périmètre. |
 
 Relecture T711 : ces deux chemins hérités sont les seuls retirés par la
 migration ACP ; ils restent étiquetés ici jusqu'à la suppression de leur
 référence historique.
+
+Relecture G10 (2026-08-24) : le pont Zed n'était pas une couche de code
+distincte — c'était le protocole ACP générique pointé vers des paquets npm
+tiers figés. Le retrait consiste donc à (1) garder les défauts natifs déjà
+posés pour `codex`/`claude`, (2) refuser explicitement les paquets Zed au
+spawn, (3) laisser `acp.rs` et le chemin ACP pour les fournisseurs qui le
+maintiennent. Les specs 007/009/010 qui documentent l'ancien pin npm restent
+en archive historique et ne sont pas réécrites.
 
 Relecture T911 : la gestion du cycle de vie par le daemon est additive. Le
 lancement historique par wrapper-terminal reste supporté et aucun nouveau

@@ -265,6 +265,41 @@ fn legacy_capabilities_for(definition: &AgentDefinition) -> AdapterCapabilities 
     capabilities
 }
 
+/// Paquets npm `@zed-industries/{codex,claude-code}-acp` : pont tiers figé
+/// retiré en G10 (ADR 010). L'ACP générique (`cursor-agent acp`, `gemini
+/// --acp`, fixtures ACP) reste autorisé.
+fn zed_bridge_token(token: &str) -> Option<&'static str> {
+    let lowered = token.to_ascii_lowercase();
+    if lowered.contains("@zed-industries/codex-acp") || lowered == "codex-acp" {
+        Some("@zed-industries/codex-acp")
+    } else if lowered.contains("@zed-industries/claude-code-acp")
+        || lowered == "claude-code-acp"
+        || lowered == "claude-acp"
+    {
+        Some("@zed-industries/claude-code-acp")
+    } else {
+        None
+    }
+}
+
+/// Refuse un lancement qui ciblerait encore le pont Zed pour Codex ou Claude.
+/// Ne touche pas le protocole ACP lui-même : seuls les paquets tiers figés
+/// sont exclus.
+pub(crate) fn reject_retired_zed_bridge(definition: &AgentDefinition) -> Result<(), SpawnRefusal> {
+    let mut tokens = vec![definition.command.as_str()];
+    tokens.extend(definition.args.iter().map(String::as_str));
+    for token in tokens {
+        if let Some(package) = zed_bridge_token(token) {
+            return Err(SpawnRefusal::EnvUnfit {
+                detail: format!(
+                    "pont Zed retiré (G10, 2026-08-24) : le paquet {package} n'est plus un chemin de lancement ; utiliser le pilote natif (codex app-server / claude_stream_json) — ACP reste pour cursor et gemini"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Vérifie une demande de lancement contre la matrice persistable du registre.
 /// Aucune sonde du pilote n'est exécutée : le même ordre rejoué conserve donc
 /// la même décision après un crash ou une évolution externe.
@@ -272,6 +307,7 @@ pub(crate) fn validate_launch_capabilities(
     agent_type: &str,
     definition: &AgentDefinition,
 ) -> Result<(), SpawnRefusal> {
+    reject_retired_zed_bridge(definition)?;
     let (model, effort) = runtime_labels(&definition.args);
     let model_label = model.clone().unwrap_or_else(|| "<non déclaré>".to_string());
     if !definition
@@ -1282,5 +1318,73 @@ mod tests {
         let error = registry.type_for_command("not-declared").unwrap_err();
         assert!(error.contains("/tmp/agents.json"));
         assert!(error.contains(&format!("codex ({NATIVE_CODEX_COMMAND})")));
+    }
+
+    #[test]
+    fn pont_zed_codex_est_refuse_avant_lancement() {
+        let registry = AgentRegistry::from_json(
+            r#"{"agents":{"legacy":{"command":"npx","args":["@zed-industries/codex-acp@0.16.0","-c","model=\"gpt-5.6-terra\""],"protocol":"acp"}}}"#,
+            "/tmp/agents.json",
+        )
+        .unwrap();
+        let definition = registry.get("legacy").unwrap();
+        let refusal = reject_retired_zed_bridge(definition).unwrap_err();
+        assert!(matches!(
+            refusal,
+            SpawnRefusal::EnvUnfit { detail } if detail.contains("@zed-industries/codex-acp")
+        ));
+        assert!(matches!(
+            validate_launch_capabilities("legacy", definition),
+            Err(SpawnRefusal::EnvUnfit { .. })
+        ));
+    }
+
+    #[test]
+    fn pont_zed_claude_est_refuse_avant_lancement() {
+        let registry = AgentRegistry::from_json(
+            r#"{"agents":{"legacy":{"command":"claude-code-acp","protocol":"acp"}}}"#,
+            "/tmp/agents.json",
+        )
+        .unwrap();
+        let definition = registry.get("legacy").unwrap();
+        let refusal = reject_retired_zed_bridge(definition).unwrap_err();
+        assert!(matches!(
+            refusal,
+            SpawnRefusal::EnvUnfit { detail } if detail.contains("@zed-industries/claude-code-acp")
+        ));
+    }
+
+    #[test]
+    fn acp_generique_cursor_et_gemini_restent_admis() {
+        let registry = AgentRegistry::from_json(
+            r#"{"agents":{
+                "cursor":{"command":"cursor-agent","args":["--model","auto","acp"],"protocol":"acp","capabilities":{"execution_paths":["acp"],"models":{"auto":{"efforts":[]}}}},
+                "gemini":{"command":"gemini","args":["--acp"],"protocol":"acp"}
+            }}"#,
+            "/tmp/agents.json",
+        )
+        .unwrap();
+        reject_retired_zed_bridge(registry.get("cursor").unwrap()).unwrap();
+        reject_retired_zed_bridge(registry.get("gemini").unwrap()).unwrap();
+        validate_launch_capabilities("cursor", registry.get("cursor").unwrap()).unwrap();
+        // gemini sans modèle explicite : la matrice accepte le chemin seul
+        validate_launch_capabilities("gemini", registry.get("gemini").unwrap()).unwrap();
+    }
+
+    #[test]
+    fn defauts_natifs_codex_et_claude_ne_passent_pas_par_zed() {
+        let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
+        for name in ["codex", "claude"] {
+            let definition = registry.get(name).unwrap();
+            reject_retired_zed_bridge(definition).unwrap();
+            assert!(!definition.command.contains("npx"));
+            assert!(
+                !definition
+                    .args
+                    .iter()
+                    .any(|arg| zed_bridge_token(arg).is_some())
+            );
+            assert_ne!(definition.protocol, "acp");
+        }
     }
 }

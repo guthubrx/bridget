@@ -12,15 +12,15 @@
     "spawn_order_ref": "agents/codex-high"
   },
   "resolved_definition": {
-    "command": "codex-acp",
-    "args": ["--model", "gpt-5.5"],
-    "protocol": "acp",
+    "command": "/opt/homebrew/bin/codex",
+    "args": ["-c", "model=\"gpt-5.5\"", "app-server"],
+    "protocol": "codex_app_server",
     "forbidden_env": ["OPENAI_API_KEY", "CODEX_API_KEY"],
     "pass_env": ["HOME"],
     "permissions": "allow",
     "queue_capacity": 32,
     "notify_timeout_secs": 60,
-    "mcp": {"interactive": "codex", "acp_session": true},
+    "mcp": {"interactive": "codex", "acp_session": false},
     "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   }
 }

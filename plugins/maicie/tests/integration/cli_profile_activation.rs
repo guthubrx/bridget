@@ -41,7 +41,10 @@ fn profile_propose_puis_approve_expose_le_consentement_local_et_l_outbox() {
     );
     let proposed: Value = serde_json::from_slice(&proposed.stdout).unwrap();
     assert_eq!(proposed["kind"], "proposed");
-    assert_eq!(proposed["screen"]["command"], "claude-code-acp");
+    assert_eq!(
+        proposed["screen"]["command"],
+        "/Users/moi/.local/bin/claude"
+    );
     assert_eq!(
         proposed["screen"]["args"],
         json!(["--model", "claude-fable-5"])
@@ -135,15 +138,15 @@ impl Fixture {
         fs::write(
             &definition,
             serde_json::to_vec(&json!({
-                "command": "claude-code-acp",
+                "command": "/Users/moi/.local/bin/claude",
                 "args": ["--model", "claude-fable-5"],
-                "protocol": "acp",
+                "protocol": "claude_stream_json",
                 "forbidden_env": ["ANTHROPIC_API_KEY"],
                 "pass_env": ["HOME"],
                 "permissions": "allow",
                 "queue_capacity": 32,
                 "notify_timeout_secs": 60,
-                "mcp": {"interactive": "none", "acp_session": true},
+                "mcp": {"interactive": "none", "acp_session": false},
                 "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             }))
             .unwrap(),
