@@ -949,3 +949,57 @@ les blocs G : ce sont des compléments, pas des prérequis.
   satisfaire un oracle faux. L'agent l'a signalé de lui-même comme un piège
   pour l'auteur du correctif. C'est exactement le genre de correction qui
   fait disparaître un rouge et apparaître un bug.
+
+## Bloc K — Déployer Bridget et Maicie ailleurs
+
+Ajouté le 2026-08-24 sur demande de l'utilisateur, non urgent mais à prévoir.
+Question posée : peut-on installer l'ensemble sur une autre machine, pour un
+autre projet, et retrouver les mécanismes dont on se sert depuis des heures ?
+**Réponse honnête : non.** Le dépôt contient le code et la doctrine ; tout ce
+qui fait fonctionner l'ensemble au quotidien vit HORS du dépôt et a été créé
+à la main, geste par geste, pendant des semaines.
+
+Inventaire de ce qui manquerait sur une machine neuve, établi en regardant
+ce qui existe ici :
+
+- `~/.config/bridget/agents.json` — le registre des types d'agents, en 0600,
+  avec les commandes, protocoles et variables interdites. Sans lui, aucun
+  agent ne peut être lancé.
+- `~/.config/maicie/config.json` — les profils, sans lesquels aucun agent
+  n'est missionnable. Les DEUX inscriptions sont nécessaires, et l'oubli de
+  la seconde ne se voit qu'au premier échec de délégation.
+- `~/Library/LaunchAgents/com.bridget.daemon.plist` — le daemon lui-même, en
+  service géré.
+- `~/Library/LaunchAgents/com.bridget.maicie.releve.plist` — le battement de
+  cœur de Maicie, créé le 24/08 : sans lui, elle ne relève rien en l'absence
+  du référent.
+- `~/.local/bin/bridget` — le lien vers le binaire, ce que les agents
+  appellent réellement.
+- `~/.local/bin/maicie-suivi` — la vue horodatée du greffe.
+- La ronde de vigilance — aujourd'hui une tâche planifiée dans la session du
+  référent, donc ni portable ni versionnée. C'est le mécanisme le plus utilisé
+  de tous et le moins reproductible.
+- Le chemin du journal du dû, déclaré en configuration.
+
+- **K1 — Écrire l'installateur.** Une commande qui crée les deux
+  configurations avec un contenu minimal viable, installe les deux services,
+  pose les liens, et VÉRIFIE son travail — daemon joignable, un agent de test
+  lancé puis arrêté, un dépôt au guichet relevé. Un installateur qui ne
+  vérifie pas est un générateur de fausse confiance.
+- **K2 — Rendre la ronde portable.** Elle doit vivre dans le dépôt, pas dans
+  la session d'un référent. Soit un service au même titre que la relève, soit
+  une commande que n'importe quel référent lance. Aujourd'hui, changer de
+  machine ou de session la fait disparaître — c'est arrivé le 24/08.
+- **K3 — Séparer ce qui est propre au projet de ce qui est propre à l'outil.**
+  Les règles de chantier, les profils d'agents et le catalogue sont
+  spécifiques à CE projet ; le daemon, le guichet et la greffière ne le sont
+  pas. Sans cette séparation, déployer ailleurs signifie hériter de nos
+  spécificités — nos noms d'agents, nos couloirs, notre catalogue.
+- **K4 — Documenter le démarrage à froid.** Que fait un référent qui arrive
+  sur une installation neuve, sans historique ? La carte de reprise couvre le
+  cas « je reprends un projet en cours » ; elle ne couvre pas « je démarre ».
+
+Priorité : après les blocs en cours. Aucune urgence déclarée par
+l'utilisateur, mais le coût augmente à chaque geste manuel non consigné —
+c'est pour cela que l'inventaire ci-dessus est écrit MAINTENANT, tant que je
+me souviens de chaque pièce.
