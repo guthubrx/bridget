@@ -6,6 +6,7 @@
 //! cette frontière.
 
 use crate::journal::JournalLiveFeed;
+use crate::protocol::PresenceMode;
 use crate::transport::Transport;
 use bridget_core::BridgetMessage;
 use std::path::Path;
@@ -20,6 +21,29 @@ pub enum ManagedEventSource {
     Acp,
 }
 
+/// Provenance des octets portés par un événement.
+///
+/// Une ligne effectivement lue sur stdout ne doit jamais être confondue avec
+/// un fait interne produit par le wrapper (annulation locale, échec du
+/// journal, etc.). Les adaptateurs gardent ainsi la frontière d'observation
+/// honnête, y compris pour une notification fournisseur inconnue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedEventOrigin {
+    SourceLine,
+    Internal,
+}
+
+/// Identité de présence attestée par le pilote de session.
+///
+/// Le wrapper ne déduit jamais ce descripteur du protocole qu'il implémente :
+/// il le transporte aussi bien au premier Register qu'à chaque reconnexion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedSessionDescriptor {
+    pub transport: String,
+    pub mode: PresenceMode,
+    pub location: Option<String>,
+}
+
 /// Projection neutre des événements que le wrapper consomme aujourd'hui.
 ///
 /// Chaque événement conserve les octets émis par son pilote à cette frontière
@@ -29,8 +53,29 @@ pub enum ManagedEventSource {
 #[derive(Debug, Clone)]
 pub struct ManagedEvent {
     pub source: ManagedEventSource,
+    pub origin: ManagedEventOrigin,
     pub raw: Vec<u8>,
     pub kind: ManagedEventKind,
+}
+
+impl ManagedEvent {
+    pub fn source_line(source: ManagedEventSource, raw: Vec<u8>, kind: ManagedEventKind) -> Self {
+        Self {
+            source,
+            origin: ManagedEventOrigin::SourceLine,
+            raw,
+            kind,
+        }
+    }
+
+    pub fn internal(source: ManagedEventSource, raw: Vec<u8>, kind: ManagedEventKind) -> Self {
+        Self {
+            source,
+            origin: ManagedEventOrigin::Internal,
+            raw,
+            kind,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -44,7 +89,7 @@ pub enum ManagedEventKind {
     TurnFinished {
         message: BridgetMessage,
         response: String,
-        stop_reason: String,
+        terminal: ManagedTerminal,
     },
     DeliveryRejected {
         message_id: String,
@@ -61,12 +106,25 @@ pub enum ManagedEventKind {
     },
 }
 
+/// Issue terminale normalisée par l'adaptateur au bord fournisseur.
+///
+/// La couche commune ne connaît ni `stopReason` ACP ni une chaîne native
+/// particulière. Le détail d'un refus reste attesté, mais sa sémantique est
+/// fermée avant d'atteindre le wrapper.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManagedTerminal {
+    Completed,
+    Cancelled,
+    Failed { detail: String },
+}
+
 /// Contrat commun d'une session enfant gérée.
 ///
 /// `Transport` porte la livraison et l'état de vie ; ce trait ajoute
 /// exclusivement les opérations de session dont le wrapper a besoin. Il ne
 /// déclare ni modèle, ni quota, ni sémantique de protocole fournisseur.
 pub trait ManagedSession: Transport {
+    fn descriptor(&self) -> ManagedSessionDescriptor;
     fn process_id(&self) -> u32;
     fn activate_journal(
         &self,

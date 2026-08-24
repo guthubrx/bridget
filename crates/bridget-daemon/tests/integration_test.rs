@@ -53,6 +53,7 @@ impl FakeAgent {
             instance_id: None,
             domain: None,
             turn_in_progress: false,
+            journal_available: None,
         };
         let reg_json = encode(&reg).map_err(|e| e.to_string())?;
 

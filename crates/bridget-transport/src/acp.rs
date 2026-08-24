@@ -2,7 +2,11 @@
 //! worker FIFO. Le lecteur est l'unique propriétaire du flux de l'adaptateur.
 
 use crate::journal::{JournalLiveFeed, JournalWriter};
-use crate::managed_session::{ManagedEvent, ManagedEventKind, ManagedEventSource, ManagedSession};
+use crate::managed_session::{
+    ManagedEvent, ManagedEventKind, ManagedEventSource, ManagedSession, ManagedSessionDescriptor,
+    ManagedTerminal,
+};
+use crate::protocol::PresenceMode;
 use crate::transport::{Transport, TransportError};
 use bridget_core::BridgetMessage;
 use serde_json::{Value, json};
@@ -70,6 +74,66 @@ pub enum AcpEvent {
     },
 }
 
+/// File des événements ACP conservant leur provenance jusqu'à la frontière
+/// commune. Les insertions historiques gardent `push_back` et sont donc
+/// explicitement internes ; seul le lecteur stdout peut inscrire une ligne
+/// source via `push_source`.
+#[derive(Default)]
+pub struct AcpEventQueue(VecDeque<QueuedAcpEvent>);
+
+struct QueuedAcpEvent {
+    event: AcpEvent,
+    raw_source_line: Option<Vec<u8>>,
+}
+
+impl AcpEventQueue {
+    pub(crate) fn push_back(&mut self, event: AcpEvent) {
+        self.0.push_back(QueuedAcpEvent {
+            event,
+            raw_source_line: None,
+        });
+    }
+
+    fn push_source(&mut self, event: AcpEvent, raw_source_line: Vec<u8>) {
+        self.0.push_back(QueuedAcpEvent {
+            event,
+            raw_source_line: Some(raw_source_line),
+        });
+    }
+
+    #[cfg(test)]
+    fn pop_front(&mut self) -> Option<AcpEvent> {
+        self.0.pop_front().map(|queued| queued.event)
+    }
+
+    fn drain_acp(&mut self) -> Vec<AcpEvent> {
+        self.0.drain(..).map(|queued| queued.event).collect()
+    }
+
+    fn drain_managed(&mut self) -> Vec<ManagedEvent> {
+        self.0
+            .drain(..)
+            .map(|queued| match queued.raw_source_line {
+                Some(raw) => ManagedEvent::source_line(
+                    ManagedEventSource::Acp,
+                    raw,
+                    managed_kind(queued.event),
+                ),
+                None => ManagedEvent::internal(
+                    ManagedEventSource::Acp,
+                    acp_event_bytes(&queued.event),
+                    managed_kind(queued.event),
+                ),
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &AcpEvent> {
+        self.0.iter().map(|queued| &queued.event)
+    }
+}
+
 type Waiters = Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>;
 type Writer = Arc<Mutex<Option<ChildStdin>>>;
 type Completions = Arc<Mutex<HashMap<String, mpsc::Sender<()>>>>;
@@ -102,7 +166,7 @@ struct TurnWorker {
     next_id: Arc<AtomicU64>,
     alive: Arc<AtomicBool>,
     state: Arc<Mutex<TurnState>>,
-    events: Arc<Mutex<VecDeque<AcpEvent>>>,
+    events: Arc<Mutex<AcpEventQueue>>,
     response: Arc<Mutex<String>>,
     session_id: String,
     notify_timeout: Duration,
@@ -119,7 +183,7 @@ pub struct AcpTransport {
     alive: Arc<AtomicBool>,
     shutdown_started: Arc<AtomicBool>,
     state: Arc<Mutex<TurnState>>,
-    events: Arc<Mutex<VecDeque<AcpEvent>>>,
+    events: Arc<Mutex<AcpEventQueue>>,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     queue_capacity: usize,
     writer: Writer,
@@ -269,7 +333,7 @@ impl AcpTransport {
             .ok_or_else(|| TransportError::Io("stdout ACP absent".to_string()))?;
         let alive = Arc::new(AtomicBool::new(true));
         let shutdown_started = Arc::new(AtomicBool::new(false));
-        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let events = Arc::new(Mutex::new(AcpEventQueue::default()));
         let response = Arc::new(Mutex::new(String::new()));
         let writer = Arc::new(Mutex::new(Some(stdin)));
         let waiters: Waiters = Arc::new(Mutex::new(HashMap::new()));
@@ -419,8 +483,7 @@ impl AcpTransport {
         self.events
             .lock()
             .unwrap_or_else(|err| err.into_inner())
-            .drain(..)
-            .collect()
+            .drain_acp()
     }
 
     /// Retire atomiquement un message en attente, ou signale au worker que le
@@ -558,6 +621,14 @@ impl Transport for AcpTransport {
 }
 
 impl ManagedSession for AcpTransport {
+    fn descriptor(&self) -> ManagedSessionDescriptor {
+        ManagedSessionDescriptor {
+            transport: "acp".to_string(),
+            mode: PresenceMode::Acp,
+            location: None,
+        }
+    }
+
     fn process_id(&self) -> u32 {
         AcpTransport::process_id(self)
     }
@@ -572,10 +643,10 @@ impl ManagedSession for AcpTransport {
     }
 
     fn drain_events(&self) -> Vec<ManagedEvent> {
-        AcpTransport::drain_events(self)
-            .into_iter()
-            .map(ManagedEvent::from)
-            .collect()
+        self.events
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .drain_managed()
     }
 
     fn cancel_delivery(&self, message_id: &str, reason: &str) -> bool {
@@ -591,35 +662,37 @@ impl ManagedSession for AcpTransport {
     }
 }
 
-impl From<AcpEvent> for ManagedEvent {
-    fn from(event: AcpEvent) -> Self {
-        let raw = acp_event_bytes(&event);
-        let kind = match event {
-            AcpEvent::TurnStarted { message_id } => ManagedEventKind::TurnStarted { message_id },
-            AcpEvent::PromptDispatched { message_id } => {
-                ManagedEventKind::PromptDispatched { message_id }
-            }
-            AcpEvent::TurnFinished {
-                message,
-                response,
-                stop_reason,
-            } => ManagedEventKind::TurnFinished {
-                message,
-                response,
-                stop_reason,
-            },
-            AcpEvent::DeliveryRejected { message_id, reason } => {
-                ManagedEventKind::DeliveryRejected { message_id, reason }
-            }
-            AcpEvent::Update { detail } => ManagedEventKind::Update { detail },
-            AcpEvent::Error { detail } => ManagedEventKind::Error { detail },
-            AcpEvent::JournalFailed { detail } => ManagedEventKind::JournalFailed { detail },
-        };
-        ManagedEvent {
-            source: ManagedEventSource::Acp,
-            raw,
-            kind,
+fn managed_kind(event: AcpEvent) -> ManagedEventKind {
+    match event {
+        AcpEvent::TurnStarted { message_id } => ManagedEventKind::TurnStarted { message_id },
+        AcpEvent::PromptDispatched { message_id } => {
+            ManagedEventKind::PromptDispatched { message_id }
         }
+        AcpEvent::TurnFinished {
+            message,
+            response,
+            stop_reason,
+        } => ManagedEventKind::TurnFinished {
+            message,
+            response,
+            terminal: terminal_from_acp_stop_reason(&stop_reason),
+        },
+        AcpEvent::DeliveryRejected { message_id, reason } => {
+            ManagedEventKind::DeliveryRejected { message_id, reason }
+        }
+        AcpEvent::Update { detail } => ManagedEventKind::Update { detail },
+        AcpEvent::Error { detail } => ManagedEventKind::Error { detail },
+        AcpEvent::JournalFailed { detail } => ManagedEventKind::JournalFailed { detail },
+    }
+}
+
+fn terminal_from_acp_stop_reason(stop_reason: &str) -> ManagedTerminal {
+    match stop_reason {
+        "end_turn" | "completed" | "complete" => ManagedTerminal::Completed,
+        "cancelled" | "canceled" => ManagedTerminal::Cancelled,
+        other => ManagedTerminal::Failed {
+            detail: format!("terminal ACP: {other}"),
+        },
     }
 }
 
@@ -840,7 +913,7 @@ fn record_journal(
 
 fn record_or_terminal(
     journal: &Journal,
-    events: &Arc<Mutex<VecDeque<AcpEvent>>>,
+    events: &Arc<Mutex<AcpEventQueue>>,
     event: &str,
     message_id: Option<&str>,
     payload: Value,
@@ -908,7 +981,7 @@ fn spawn_reader(
     writer: Writer,
     waiters: Waiters,
     completions: Completions,
-    events: Arc<Mutex<VecDeque<AcpEvent>>>,
+    events: Arc<Mutex<AcpEventQueue>>,
     response: Arc<Mutex<String>>,
     alive: Arc<AtomicBool>,
     permissions: String,
@@ -927,6 +1000,7 @@ fn spawn_reader(
             let Ok(line) = line else {
                 break;
             };
+            let raw_line = line.as_bytes().to_vec();
             let Ok(value) = serde_json::from_str::<Value>(&line) else {
                 let message_id = active_message_id(&queue);
                 record_or_terminal(
@@ -939,9 +1013,12 @@ fn spawn_reader(
                 events
                     .lock()
                     .unwrap_or_else(|err| err.into_inner())
-                    .push_back(AcpEvent::Error {
-                        detail: "ligne ACP invalide".to_string(),
-                    });
+                    .push_source(
+                        AcpEvent::Error {
+                            detail: "ligne ACP invalide".to_string(),
+                        },
+                        raw_line,
+                    );
                 continue;
             };
             let rpc_result = rpc_response(&value);
@@ -986,9 +1063,13 @@ fn spawn_reader(
                         events
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
-                            .push_back(AcpEvent::Error {
-                                detail: "update ACP ignorée pour une session étrangère".to_string(),
-                            });
+                            .push_source(
+                                AcpEvent::Error {
+                                    detail: "update ACP ignorée pour une session étrangère"
+                                        .to_string(),
+                                },
+                                raw_line.clone(),
+                            );
                     } else if active_turn_is_cancelled(&queue) {
                         let message_id = active_message_id(&queue);
                         record_or_terminal(
@@ -1001,9 +1082,13 @@ fn spawn_reader(
                         events
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
-                            .push_back(AcpEvent::Error {
-                                detail: "update ACP ignorée après annulation du tour".to_string(),
-                            });
+                            .push_source(
+                                AcpEvent::Error {
+                                    detail: "update ACP ignorée après annulation du tour"
+                                        .to_string(),
+                                },
+                                raw_line.clone(),
+                            );
                     } else if let Some(text) = update_text(&value, session_id.as_deref()) {
                         let message_id = active_message_id(&queue);
                         record_or_terminal(
@@ -1023,7 +1108,7 @@ fn spawn_reader(
                         events
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
-                            .push_back(event);
+                            .push_source(event, raw_line.clone());
                     } else if matches!(
                         value
                             .pointer("/params/update/sessionUpdate")
@@ -1070,9 +1155,12 @@ fn spawn_reader(
                     events
                         .lock()
                         .unwrap_or_else(|err| err.into_inner())
-                        .push_back(AcpEvent::Error {
-                            detail: format!("méthode ACP inconnue: {method}"),
-                        });
+                        .push_source(
+                            AcpEvent::Error {
+                                detail: format!("méthode ACP inconnue: {method}"),
+                            },
+                            raw_line.clone(),
+                        );
                 }
                 Some(method) => {
                     let message_id = active_message_id(&queue);
@@ -1086,9 +1174,12 @@ fn spawn_reader(
                     events
                         .lock()
                         .unwrap_or_else(|err| err.into_inner())
-                        .push_back(AcpEvent::Error {
-                            detail: format!("notification ACP inconnue: {method}"),
-                        });
+                        .push_source(
+                            AcpEvent::Error {
+                                detail: format!("notification ACP inconnue: {method}"),
+                            },
+                            raw_line.clone(),
+                        );
                 }
                 None => {
                     let message_id = active_message_id(&queue);
@@ -1102,9 +1193,12 @@ fn spawn_reader(
                     events
                         .lock()
                         .unwrap_or_else(|err| err.into_inner())
-                        .push_back(AcpEvent::Error {
-                            detail: "message ACP inattendu".to_string(),
-                        });
+                        .push_source(
+                            AcpEvent::Error {
+                                detail: "message ACP inattendu".to_string(),
+                            },
+                            raw_line,
+                        );
                 }
             }
         }
@@ -1136,7 +1230,7 @@ fn spawn_reader(
     })
 }
 
-fn drain_queue(queue: &mut QueueState, events: &Arc<Mutex<VecDeque<AcpEvent>>>, reason: &str) {
+fn drain_queue(queue: &mut QueueState, events: &Arc<Mutex<AcpEventQueue>>, reason: &str) {
     for message in queue.messages.drain(..) {
         events
             .lock()
@@ -1166,7 +1260,7 @@ fn prompt_request(
     session_id: &str,
     child: &Arc<Mutex<Child>>,
     queue: &Arc<(Mutex<QueueState>, Condvar)>,
-    events: &Arc<Mutex<VecDeque<AcpEvent>>>,
+    events: &Arc<Mutex<AcpEventQueue>>,
     test_observer: &Option<mpsc::Sender<AcpEvent>>,
     prompt_message_id: &str,
     alive: &AtomicBool,
@@ -1298,7 +1392,7 @@ fn force_stop_transport(
     writer: &Writer,
     child: &Arc<Mutex<Child>>,
     queue: &Arc<(Mutex<QueueState>, Condvar)>,
-    events: &Arc<Mutex<VecDeque<AcpEvent>>>,
+    events: &Arc<Mutex<AcpEventQueue>>,
     waiters: &Waiters,
     completions: &Completions,
     alive: &AtomicBool,
@@ -1585,11 +1679,21 @@ mod tests {
     }
 
     #[test]
-    fn evenement_gere_conserve_la_source_et_les_octets_du_pilote() {
-        let event = ManagedEvent::from(AcpEvent::Update {
-            detail: "octets source".to_string(),
-        });
+    fn evenement_interne_est_explicitement_distingue_de_la_ligne_source() {
+        let event = ManagedEvent::internal(
+            ManagedEventSource::Acp,
+            acp_event_bytes(&AcpEvent::Update {
+                detail: "octets source".to_string(),
+            }),
+            ManagedEventKind::Update {
+                detail: "octets source".to_string(),
+            },
+        );
         assert_eq!(event.source, ManagedEventSource::Acp);
+        assert_eq!(
+            event.origin,
+            crate::managed_session::ManagedEventOrigin::Internal
+        );
         assert_eq!(
             event.raw,
             br#"{"detail":"octets source","kind":"update"}"#.to_vec()
@@ -1598,6 +1702,24 @@ mod tests {
             event.kind,
             ManagedEventKind::Update { detail } if detail == "octets source"
         ));
+    }
+
+    #[test]
+    fn terminal_acp_est_normalise_avant_la_frontiere_commune() {
+        assert_eq!(
+            terminal_from_acp_stop_reason("end_turn"),
+            ManagedTerminal::Completed
+        );
+        assert_eq!(
+            terminal_from_acp_stop_reason("cancelled"),
+            ManagedTerminal::Cancelled
+        );
+        assert_eq!(
+            terminal_from_acp_stop_reason("provider-overloaded"),
+            ManagedTerminal::Failed {
+                detail: "terminal ACP: provider-overloaded".to_string(),
+            }
+        );
     }
 
     #[test]
@@ -1868,7 +1990,7 @@ while read line; do :; done
         let journal = Arc::new(Mutex::new(Some(
             crate::journal::JournalWriter::saturated_for_test(),
         )));
-        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let events = Arc::new(Mutex::new(AcpEventQueue::default()));
         record_or_terminal(
             &journal,
             &events,
@@ -1988,6 +2110,43 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             }
         }
         panic!("le faux adaptateur n'a pas terminé le tour");
+    }
+
+    #[test]
+    fn raw_source_line_survives_unusual_spacing_and_unknown_notification() {
+        let raw = r#" { "method" : "vendor/future" , "params" : { "future" : true } }"#;
+        let script = format!(
+            r#"
+read request
+echo '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1}}}}'
+read request
+echo '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"fixture-session"}}}}'
+printf '%s\n' '{raw}'
+while read request; do :; done
+"#
+        );
+        let transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script],
+            queue_capacity: 1,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+        })
+        .unwrap();
+
+        for _ in 0..20 {
+            thread::sleep(Duration::from_millis(10));
+            let events = ManagedSession::drain_events(&transport);
+            if let Some(event) = events.into_iter().find(|event| {
+                matches!(event.kind, ManagedEventKind::Error { ref detail } if detail == "notification ACP inconnue: vendor/future")
+            }) {
+                assert_eq!(event.source, ManagedEventSource::Acp);
+                assert_eq!(event.origin, crate::managed_session::ManagedEventOrigin::SourceLine);
+                assert_eq!(event.raw, raw.as_bytes());
+                return;
+            }
+        }
+        panic!("la notification source inconnue n'a pas traversé la frontière");
     }
 
     fn observation_case(view_count: usize, root: &std::path::Path) -> Vec<Duration> {
