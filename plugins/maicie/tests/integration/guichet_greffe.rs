@@ -1,5 +1,5 @@
 use maicie::app::{
-    DelegateRequest, DelegateResult, DelegationCandidate, GuichetError, GuichetProcessResult,
+    DelegateRequest, DelegateResult, DelegationCandidate, GuichetProcessResult,
     delegate, process_guichet_claim, record_guichet_lifecycle_event,
 };
 use maicie::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
@@ -157,12 +157,59 @@ fn rapport_puis_answered_rejoue_les_memes_octets_sans_seconde_decision() {
             "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         )
         .into_bytes();
+    let refused = process_guichet_claim(&mut store, &divergent, "response-divergent", 1_030)
+        .expect("enveloppe divergente reçue et refusée durablement");
     assert_eq!(
-        process_guichet_claim(&mut store, &divergent, "response-divergent", 1_030),
-        Err(GuichetError::EnvelopeMismatch)
+        refused.refusal_reason,
+        Some(maicie::domain::MotifRefusGreffe::EnveloppeDivergente)
     );
+    assert!(String::from_utf8_lossy(&refused.reply_bytes).contains("envelope_mismatch"));
+    let replay_refused = process_guichet_claim(&mut store, &divergent, "ignored", 1_031).unwrap();
+    assert!(replay_refused.replayed);
+    assert_eq!(replay_refused.reply_bytes, refused.reply_bytes);
     drop(store);
     assert_single_graft(&database, created.objective_id);
+    let connection = Connection::open(&database).unwrap();
+    let refusals: i64 = connection
+        .query_row("SELECT COUNT(*) FROM guichet_refusal_receptions", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(refusals, 1);
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Mutation discriminante : si la jointure `in_reply_to` était seulement
+/// ignorée, ce rapport créerait une décision malgré son lien absent. Le refus
+/// durable laisse ensuite la relève suivante disponible.
+#[test]
+fn rapport_aux_relations_incoherentes_devient_un_rejet_atteste() {
+    let root = root("invalid-relations-refusal");
+    let database = root.join("maicie.sqlite3");
+    let created = seed(&database);
+    let mut claim = delivery_claim("request-invalid-relations", &created);
+    claim.canonical_request = String::from_utf8(claim.canonical_request)
+        .unwrap()
+        .replace(&created.message_id.to_string(), &Uuid::new_v4().to_string())
+        .into_bytes();
+    let mut store = MaicieStore::open(&database).unwrap();
+    let refused = process_guichet_claim(&mut store, &claim, "response-invalid-relations", 1_010)
+        .expect("relations invalides refusées sans quitter la relève");
+    assert_eq!(
+        refused.refusal_reason,
+        Some(maicie::domain::MotifRefusGreffe::RelationsInvalides)
+    );
+    assert!(String::from_utf8_lossy(&refused.reply_bytes).contains("relation_invalid"));
+    let replay = process_guichet_claim(&mut store, &claim, "ignored", 1_020).unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.reply_bytes, refused.reply_bytes);
+    drop(store);
+    let connection = Connection::open(&database).unwrap();
+    let decisions: i64 = connection
+        .query_row("SELECT COUNT(*) FROM coordination_decisions", [], |row| row.get(0))
+        .unwrap();
+    let refusals: i64 = connection
+        .query_row("SELECT COUNT(*) FROM guichet_refusal_receptions", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!((decisions, refusals), (0, 1));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -332,7 +379,7 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
     drop(connection);
 
     let mut store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 7);
+    assert_eq!(store.schema_version().unwrap(), 8);
     assert_eq!(
         store
             .objective_snapshots(Some(created.objective_id))
@@ -347,7 +394,7 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
     // Une seconde ouverture d'une base déjà v7 est la vraie preuve
     // d'idempotence : la migration ne doit ni recréer, ni vider les tables.
     let mut reopened = MaicieStore::open(&database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 7);
+    assert_eq!(reopened.schema_version().unwrap(), 8);
     let replay = process_guichet_claim(&mut reopened, &claim, "ignored", 1_020).unwrap();
     assert!(replay.replayed);
     assert_eq!(replay.reply_bytes, first.reply_bytes);

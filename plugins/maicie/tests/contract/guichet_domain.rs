@@ -1,4 +1,4 @@
-use maicie::app::{GuichetError, process_guichet_claim};
+use maicie::app::process_guichet_claim;
 use maicie::bridget_client::GuichetClaim;
 use maicie::domain::guichet::{GuichetDomainError, RequeteGuichet, parse_claim};
 use maicie::store::MaicieStore;
@@ -77,7 +77,7 @@ fn trois_operations_seulement_et_octets_canoniques_exacts() {
 }
 
 #[test]
-fn reference_absente_refuse_sans_aucun_etat_maicie() {
+fn reference_absente_recoit_un_refus_atteste_sans_etat_d_orchestration() {
     let root = root("missing");
     let database = root.join("maicie.sqlite3");
     let mut store = MaicieStore::open(&database).unwrap();
@@ -89,10 +89,11 @@ fn reference_absente_refuse_sans_aucun_etat_maicie() {
             "52000000-0000-4000-8000-000000000002",
         ),
     );
-    assert!(matches!(
-        process_guichet_claim(&mut store, &request, "response-01", 1_010),
-        Err(GuichetError::InvalidEnvelope(_))
-    ));
+    let refused = process_guichet_claim(&mut store, &request, "response-01", 1_010).unwrap();
+    assert_eq!(
+        refused.refusal_reason,
+        Some(maicie::domain::MotifRefusGreffe::DelegationAbsente)
+    );
     drop(store);
     let connection = Connection::open(&database).unwrap();
     for table in [
@@ -110,6 +111,10 @@ fn reference_absente_refuse_sans_aucun_etat_maicie() {
             .unwrap();
         assert_eq!(count, 0, "mutation inattendue dans {table}");
     }
+    let refusals: i64 = connection
+        .query_row("SELECT COUNT(*) FROM guichet_refusal_receptions", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(refusals, 1);
     drop(connection);
     fs::remove_dir_all(root).unwrap();
 }

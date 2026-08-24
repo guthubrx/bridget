@@ -4,7 +4,7 @@
 //! refuse néanmoins toute opération ou charge hors matrice avant que le store
 //! Maicie ne soit consulté.
 
-use super::{EtatRequeteGuichet, IssueGreffe, OperationGuichet};
+use super::{EtatRequeteGuichet, IssueGreffe, MotifRefusGreffe, OperationGuichet};
 use crate::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -26,6 +26,13 @@ impl RequeteGuichet {
             Self::DeliveryReport(_) => OperationGuichet::DeliveryReport,
             Self::MissionStatus { .. } => OperationGuichet::MissionStatus,
             Self::DeadlineQuestion { .. } => OperationGuichet::DeadlineQuestion,
+        }
+    }
+
+    pub fn in_reply_to(&self, request_id: &str) -> String {
+        match self {
+            Self::DeliveryReport(report) => report.in_reply_to.clone(),
+            Self::MissionStatus { .. } | Self::DeadlineQuestion { .. } => request_id.to_string(),
         }
     }
 }
@@ -374,6 +381,13 @@ struct DeliveryReplyPayload<'a> {
     delivery_hash: &'a str,
 }
 
+#[derive(Serialize)]
+struct RefusalReplyPayload {
+    kind: &'static str,
+    operation: &'static str,
+    reason: &'static str,
+}
+
 pub fn delivery_reply_bytes(
     claim: &GuichetClaim,
     report: &RapportLivraison,
@@ -385,6 +399,7 @@ pub fn delivery_reply_bytes(
     let outcome = match issue {
         IssueGreffe::Accepted => "accepted",
         IssueGreffe::DemandeDejaTerminale => "request_already_terminal",
+        IssueGreffe::Refusee => "refused",
     };
     let payload = DeliveryReplyPayload {
         kind: "delivery_report",
@@ -405,6 +420,47 @@ pub fn delivery_reply_bytes(
         payload: &payload,
     })
     .map_err(|_| GuichetDomainError::InvalidEnvelope("réponse non sérialisable"))
+}
+
+/// Produit le reçu fermé d'un claim bien formé mais impossible à appliquer au
+/// registre local. Aucun fait métier n'est inventé : la charge ne contient que
+/// l'opération demandée et le motif attesté par la greffe.
+pub fn refusal_reply_bytes(
+    claim: &GuichetClaim,
+    response_message_id: &str,
+    request: &RequeteCanonique,
+    reason: MotifRefusGreffe,
+) -> Result<Vec<u8>, GuichetDomainError> {
+    validate_identifier(response_message_id)?;
+    validate_identifier(&claim.claim_token)?;
+    let operation = match request.request.operation() {
+        OperationGuichet::DeliveryReport => "delivery_report",
+        OperationGuichet::MissionStatus => "mission_status",
+        OperationGuichet::DeadlineQuestion => "deadline_question",
+    };
+    let reason = match reason {
+        MotifRefusGreffe::DelegationAbsente => "delegation_missing",
+        MotifRefusGreffe::RelationsInvalides => "relation_invalid",
+        MotifRefusGreffe::EnveloppeDivergente => "envelope_mismatch",
+    };
+    let in_reply_to = request.request.in_reply_to(&request.request_id);
+    serde_json::to_vec(&GuichetReplyWire {
+        kind: "guichet_reply",
+        v: 1,
+        issuer_scope: &claim.issuer_scope,
+        request_id: &claim.request_id,
+        claim_generation: claim.claim_generation,
+        claim_token: &claim.claim_token,
+        response_message_id,
+        in_reply_to: &in_reply_to,
+        outcome: "refused",
+        payload: &RefusalReplyPayload {
+            kind: "refused",
+            operation,
+            reason,
+        },
+    })
+    .map_err(|_| GuichetDomainError::InvalidEnvelope("refus non sérialisable"))
 }
 
 pub fn projection_reply_bytes(

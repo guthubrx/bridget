@@ -9,12 +9,13 @@ use crate::bridget_client::{GuichetClaim, IdempotencyIssue, SpawnOutcome};
 use crate::domain::guichet::{
     EvenementCycleGuichet, ProjectionReply, RapportLivraison, RequeteCanonique,
     delivery_reply_bytes, projection_reply_bytes, reclaim_projection_reply_bytes,
+    refusal_reply_bytes,
 };
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
     DomainError, EtatActivationOutbox, EtatDecision, EtatDelegation, EtatObjectif,
     EtatOutboxDelegation, EtatRequeteGuichet, IssueGreffe, LienArbitrage, ObjectifCoordonne,
-    OperationGuichet, ReceptionGreffe, RecuCorrelation, TypeDecision,
+    MotifRefusGreffe, OperationGuichet, ReceptionGreffe, RecuCorrelation, TypeDecision,
 };
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
@@ -32,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -425,6 +426,9 @@ impl MaicieStore {
                         "rapport tardif greffé sans réouverture : {}",
                         report.delivery_hash
                     ),
+                    IssueGreffe::Refusee => {
+                        return Err(StoreError::Corrupt("refus greffé par la voie livraison"));
+                    }
                 }
             },
         };
@@ -886,6 +890,135 @@ impl MaicieStore {
         tx.commit().map_err(StoreError::Sql)?;
         Ok(StoredGuichetReply {
             reception,
+            correlation: None,
+            replayed: false,
+        })
+    }
+
+    /// Persiste un refus déterministe sans modifier le reçu éventuellement
+    /// associé à une autre enveloppe portant la même clé métier. Cette table
+    /// séparée est nécessaire au cas `EnvelopeMismatch` : le premier reçu
+    /// demeure l'autorité de son enveloppe, le refus devient l'autorité de la
+    /// seconde, et les deux rejouent leurs octets propres.
+    pub fn persist_guichet_refusal(
+        &mut self,
+        claim: &GuichetClaim,
+        canonical: &RequeteCanonique,
+        response_message_id: &str,
+        now: i64,
+        reason: MotifRefusGreffe,
+    ) -> Result<StoredGuichetReply, StoreError> {
+        if now <= 0 || response_message_id.trim().is_empty() {
+            return Err(StoreError::Invalid("reçu de refus incomplet"));
+        }
+        if canonical.issuer_scope != claim.issuer_scope || canonical.request_id != claim.request_id {
+            return Err(StoreError::Invalid("claim et refus divergents"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        if let Some(mut reception) = load_guichet_refusal_reception(
+            &tx,
+            &canonical.issuer_scope,
+            &canonical.request_id,
+            &claim.canonical_request,
+        )? {
+            if claim.claim_generation == reception.claim_generation
+                && claim.claim_token == reception.claim_token
+            {
+                tx.commit().map_err(StoreError::Sql)?;
+                return Ok(StoredGuichetReply {
+                    reception,
+                    correlation: None,
+                    replayed: true,
+                });
+            }
+            if claim.claim_generation <= reception.claim_generation {
+                return Err(StoreError::Conflict("claim de refus obsolète ou divergent"));
+            }
+            let reply_bytes = refusal_reply_bytes(claim, &reception.response_message_id, canonical, reason)
+                .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
+            let changed = tx
+                .execute(
+                    "UPDATE guichet_refusal_receptions\n\
+                     SET claim_generation = ?1, claim_token = ?2, reply_bytes = ?3\n\
+                     WHERE issuer_scope = ?4 AND request_id = ?5 AND canonical_request_bytes = ?6\n\
+                       AND claim_generation = ?7 AND claim_token = ?8",
+                    params![
+                        i64::try_from(claim.claim_generation)
+                            .map_err(|_| StoreError::Invalid("génération de claim hors borne"))?,
+                        claim.claim_token,
+                        reply_bytes,
+                        canonical.issuer_scope,
+                        canonical.request_id,
+                        claim.canonical_request,
+                        i64::try_from(reception.claim_generation)
+                            .map_err(|_| StoreError::Corrupt("génération de refus invalide"))?,
+                        reception.claim_token,
+                    ],
+                )
+                .map_err(StoreError::Sql)?;
+            if changed != 1 {
+                return Err(StoreError::Conflict("reçu de refus modifié concurremment"));
+            }
+            reception.claim_generation = claim.claim_generation;
+            reception.claim_token = claim.claim_token.clone();
+            reception.reply_bytes = refusal_reply_bytes(
+                claim,
+                &reception.response_message_id,
+                canonical,
+                reason,
+            )
+            .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(StoredGuichetReply {
+                reception,
+                correlation: None,
+                replayed: true,
+            });
+        }
+
+        let reply_bytes = refusal_reply_bytes(claim, response_message_id, canonical, reason)
+            .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
+        tx.execute(
+            "INSERT INTO guichet_refusal_receptions(\n\
+                 issuer_scope, request_id, canonical_request_bytes, operation, reason,\n\
+                 response_message_id, reply_bytes, claim_generation, claim_token, processed_at\n\
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![
+                canonical.issuer_scope,
+                canonical.request_id,
+                claim.canonical_request,
+                operation_name(canonical.request.operation()),
+                refusal_reason_name(reason),
+                response_message_id,
+                reply_bytes,
+                i64::try_from(claim.claim_generation)
+                    .map_err(|_| StoreError::Invalid("génération de claim hors borne"))?,
+                claim.claim_token,
+                now,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(StoredGuichetReply {
+            reception: ReceptionGreffe {
+                issuer_scope: canonical.issuer_scope.clone(),
+                request_id: canonical.request_id.clone(),
+                operation: canonical.request.operation(),
+                canonical_request_bytes: claim.canonical_request.clone(),
+                objective_id: None,
+                delegation_id: None,
+                delivery_hash: None,
+                response_message_id: response_message_id.to_string(),
+                claim_generation: claim.claim_generation,
+                claim_token: claim.claim_token.clone(),
+                reply_bytes,
+                issue: IssueGreffe::Refusee,
+                decision_id: None,
+                processed_at: now,
+            },
             correlation: None,
             replayed: false,
         })
@@ -2118,6 +2251,55 @@ type RawGuichetProjectionFacts = (
     i64,
 );
 
+type RawGuichetRefusalReception = (
+    String,
+    String,
+    String,
+    Vec<u8>,
+    i64,
+    String,
+    i64,
+);
+
+fn load_guichet_refusal_reception(
+    tx: &Transaction<'_>,
+    issuer_scope: &str,
+    request_id: &str,
+    canonical_request_bytes: &[u8],
+) -> Result<Option<ReceptionGreffe>, StoreError> {
+    let raw: Option<RawGuichetRefusalReception> = tx
+        .query_row(
+            "SELECT operation, response_message_id, reason, reply_bytes, claim_generation, claim_token, processed_at\n\
+             FROM guichet_refusal_receptions\n\
+             WHERE issuer_scope = ?1 AND request_id = ?2 AND canonical_request_bytes = ?3",
+            params![issuer_scope, request_id, canonical_request_bytes],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    raw.map(|(operation, response_message_id, reason, reply_bytes, claim_generation, claim_token, processed_at)| {
+        parse_refusal_reason_name(&reason)?;
+        Ok(ReceptionGreffe {
+            issuer_scope: issuer_scope.to_string(),
+            request_id: request_id.to_string(),
+            operation: parse_operation_name(&operation)?,
+            canonical_request_bytes: canonical_request_bytes.to_vec(),
+            objective_id: None,
+            delegation_id: None,
+            delivery_hash: None,
+            response_message_id,
+            claim_generation: u64::try_from(claim_generation)
+                .map_err(|_| StoreError::Corrupt("génération de refus invalide"))?,
+            claim_token,
+            reply_bytes,
+            issue: IssueGreffe::Refusee,
+            decision_id: None,
+            processed_at,
+        })
+    })
+    .transpose()
+}
+
 fn load_guichet_projection_facts(
     connection: &Connection,
     delegation_id: Uuid,
@@ -2493,6 +2675,7 @@ fn issue_name(issue: IssueGreffe) -> &'static str {
     match issue {
         IssueGreffe::Accepted => "accepted",
         IssueGreffe::DemandeDejaTerminale => "request_already_terminal",
+        IssueGreffe::Refusee => "refused",
     }
 }
 
@@ -2500,7 +2683,25 @@ fn parse_issue_name(value: &str) -> Result<IssueGreffe, StoreError> {
     match value {
         "accepted" => Ok(IssueGreffe::Accepted),
         "request_already_terminal" => Ok(IssueGreffe::DemandeDejaTerminale),
+        "refused" => Ok(IssueGreffe::Refusee),
         _ => Err(StoreError::Corrupt("issue de greffe inconnue")),
+    }
+}
+
+fn refusal_reason_name(reason: MotifRefusGreffe) -> &'static str {
+    match reason {
+        MotifRefusGreffe::DelegationAbsente => "delegation_missing",
+        MotifRefusGreffe::RelationsInvalides => "relation_invalid",
+        MotifRefusGreffe::EnveloppeDivergente => "envelope_mismatch",
+    }
+}
+
+fn parse_refusal_reason_name(value: &str) -> Result<MotifRefusGreffe, StoreError> {
+    match value {
+        "delegation_missing" => Ok(MotifRefusGreffe::DelegationAbsente),
+        "relation_invalid" => Ok(MotifRefusGreffe::RelationsInvalides),
+        "envelope_mismatch" => Ok(MotifRefusGreffe::EnveloppeDivergente),
+        _ => Err(StoreError::Corrupt("motif de refus inconnu")),
     }
 }
 
@@ -2694,6 +2895,24 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
                  lifecycle_state TEXT CHECK(lifecycle_state IN ('answered','cancelled','timed_out')),
                  PRIMARY KEY(in_reply_to, response_message_id),
                  UNIQUE(issuer_scope, request_id)
+             );",
+        )
+        .map_err(StoreError::Sql)?;
+    }
+    if current_version < 8 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS guichet_refusal_receptions (
+                 issuer_scope TEXT NOT NULL,
+                 request_id TEXT NOT NULL,
+                 canonical_request_bytes BLOB NOT NULL,
+                 operation TEXT NOT NULL CHECK(operation IN ('delivery_report','mission_status','deadline_question')),
+                 reason TEXT NOT NULL CHECK(reason IN ('delegation_missing','relation_invalid','envelope_mismatch')),
+                 response_message_id TEXT NOT NULL,
+                 reply_bytes BLOB NOT NULL,
+                 claim_generation INTEGER NOT NULL CHECK(claim_generation >= 0),
+                 claim_token TEXT NOT NULL,
+                 processed_at INTEGER NOT NULL,
+                 PRIMARY KEY(issuer_scope, request_id, canonical_request_bytes)
              );",
         )
         .map_err(StoreError::Sql)?;

@@ -10,6 +10,7 @@ use crate::bridget_client::{
     BridgetClient, BridgetClientError, BridgetClientLimits, GuichetClient, IdempotencyIssue,
     SpawnOutcome,
 };
+use crate::domain::MotifRefusGreffe;
 use crate::outbox::{OutboxError, PendingDelegationOutbox};
 use crate::profiles::definition_digest_matches;
 use crate::store::{DelegationRecoveryEntry, LocalFailureReason, MaicieStore, StoreError};
@@ -97,6 +98,7 @@ pub struct ActivationReconcileReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuichetReconcileAction {
     ReponseAttestee { request_id: String, issue: String },
+    RejetAtteste { request_id: String, reason: MotifRefusGreffe },
     EvenementAtteste { request_id: String, state: String },
     ClaimPerime { request_id: String },
     Vide,
@@ -392,12 +394,19 @@ pub fn reconcile_guichet_startup_observed_with_limits(
             });
             continue;
         }
-        report
-            .actions
-            .push(GuichetReconcileAction::ReponseAttestee {
+        if let Some(reason) = processed.refusal_reason {
+            report.actions.push(GuichetReconcileAction::RejetAtteste {
                 request_id: processed.request_id,
-                issue: response.issue,
+                reason,
             });
+        } else {
+            report
+                .actions
+                .push(GuichetReconcileAction::ReponseAttestee {
+                    request_id: processed.request_id,
+                    issue: response.issue,
+                });
+        }
 
         // Bridget pousse l'événement seulement après avoir rendu l'issue de
         // réponse durable. Son absence à l'échéance reste un fait transport :

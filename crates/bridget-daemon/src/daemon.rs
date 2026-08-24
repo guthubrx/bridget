@@ -2640,6 +2640,7 @@ fn guichet_reply_is_valid(
             delegation_id,
             ..
         } => identifier(delegation_id),
+        bridget_transport::protocol::GuichetReplyPayload::Refused { .. } => true,
     }
 }
 
