@@ -385,6 +385,9 @@ enum ManagedSupervisorEvent {
         lease: SpawnLease,
         kind: String,
         reason: String,
+        /// Connexion wrapper déjà inscrite (Register) — à retirer de l'annuaire
+        /// quand le spawn échoue après naissance du processus.
+        conn_id: Option<String>,
     },
     Exited {
         lease: SpawnLease,
@@ -1194,6 +1197,7 @@ fn handle_managed_command(
                         lease: prepared.lease,
                         kind: "spawn_timeout".to_string(),
                         reason,
+                        conn_id: None,
                     });
                 }
                 Err(error) => {
@@ -1212,6 +1216,7 @@ fn handle_managed_command(
                         lease: prepared.lease,
                         kind: "negotiation_failed".to_string(),
                         reason,
+                        conn_id: None,
                     });
                 }
             }
@@ -1272,6 +1277,21 @@ fn poll_managed_processes(
                 continue;
             }
         }
+
+        // Délai absolu avant Connected : le client a déjà (ou va) recevoir un
+        // refus — le processus enfant ne doit PAS survivre (fantôme hors quota).
+        if !process.connected
+            && !process.failure_sent
+            && unix_timestamp() >= process.prepared.lease.deadline_at
+        {
+            let reason = "délai absolu dépassé avant Connected".to_string();
+            let _ = fleet.fail(&process.prepared.lease, "spawn_timeout", &reason);
+            if reap_failed_managed_child(process, events, "spawn_timeout", reason) {
+                finished.push(instance_id.clone());
+            }
+            continue;
+        }
+
         let status = process.child.try_status();
         match status {
             Ok(Some(ManagedStatus::StartupFailed {
@@ -1294,35 +1314,29 @@ fn poll_managed_processes(
                 };
                 if !process.failure_sent {
                     let _ = fleet.fail(&process.prepared.lease, &kind, &reason);
-                    let _ = events.send(ManagedSupervisorEvent::Failed {
-                        lease: process.prepared.lease.clone(),
-                        kind,
-                        reason,
-                    });
-                    process.failure_sent = true;
+                    if reap_failed_managed_child(process, events, &kind, reason) {
+                        finished.push(instance_id.clone());
+                    }
+                    continue;
                 }
             }
             Ok(Some(ManagedStatus::BootstrapReady(_))) => {
                 if !process.failure_sent {
                     let reason = "second BootstrapReady interdit".to_string();
                     let _ = fleet.fail(&process.prepared.lease, "negotiation_failed", &reason);
-                    let _ = events.send(ManagedSupervisorEvent::Failed {
-                        lease: process.prepared.lease.clone(),
-                        kind: "negotiation_failed".to_string(),
-                        reason,
-                    });
-                    process.failure_sent = true;
+                    if reap_failed_managed_child(process, events, "negotiation_failed", reason) {
+                        finished.push(instance_id.clone());
+                    }
+                    continue;
                 }
             }
             Err(error) if !process.failure_sent => {
                 let reason = error.to_string();
                 let _ = fleet.fail(&process.prepared.lease, "negotiation_failed", &reason);
-                let _ = events.send(ManagedSupervisorEvent::Failed {
-                    lease: process.prepared.lease.clone(),
-                    kind: "negotiation_failed".to_string(),
-                    reason,
-                });
-                process.failure_sent = true;
+                if reap_failed_managed_child(process, events, "negotiation_failed", reason) {
+                    finished.push(instance_id.clone());
+                }
+                continue;
             }
             Ok(None) | Err(_) => {}
         }
@@ -1342,7 +1356,9 @@ fn poll_managed_processes(
                         lease: process.prepared.lease.clone(),
                         kind: "negotiation_failed".to_string(),
                         reason,
+                        conn_id: process.registered.as_ref().map(|value| value.0.clone()),
                     });
+                    process.failure_sent = true;
                 }
                 let _ = process.child.remove_marker();
                 finished.push(instance_id.clone());
@@ -1373,19 +1389,68 @@ fn poll_managed_processes(
                     });
                 }
                 Err(error) => {
-                    let reason = error.to_string();
-                    let _ = events.send(ManagedSupervisorEvent::Failed {
-                        lease: process.prepared.lease.clone(),
-                        kind: "negotiation_failed".to_string(),
-                        reason,
-                    });
-                    process.failure_sent = true;
+                    // DeadlineElapsed a déjà clos la lease (expire_locked) :
+                    // ne pas rappeler fail — seulement tuer l'enfant.
+                    let (kind, reason, fleet_already_closed) = match &error {
+                        crate::fleet::FleetError::DeadlineElapsed => {
+                            ("spawn_timeout", error.to_string(), true)
+                        }
+                        _ => ("negotiation_failed", error.to_string(), false),
+                    };
+                    if !fleet_already_closed {
+                        let _ = fleet.fail(&process.prepared.lease, kind, &reason);
+                    }
+                    if reap_failed_managed_child(process, events, kind, reason) {
+                        finished.push(instance_id.clone());
+                    }
                 }
             }
         }
     }
     for instance_id in finished {
         active.remove(&instance_id);
+    }
+}
+
+/// Émet l'échec au client et termine le groupe (SIGTERM, jamais SIGKILL).
+/// Retourne true si le groupe a disparu et peut quitter `active`.
+fn reap_failed_managed_child(
+    process: &mut SupervisedProcess,
+    events: &Sender<ManagedSupervisorEvent>,
+    kind: &str,
+    reason: String,
+) -> bool {
+    let conn_id = process.registered.as_ref().map(|value| value.0.clone());
+    let _ = events.send(ManagedSupervisorEvent::Failed {
+        lease: process.prepared.lease.clone(),
+        kind: kind.to_string(),
+        reason,
+        conn_id,
+    });
+    process.failure_sent = true;
+    match process.child.stop_group(
+        MANAGED_STOP_COOPERATIVE_GRACE,
+        MANAGED_STOP_FORCED_GRACE,
+        MANAGED_STOP_POLL,
+    ) {
+        Ok(ManagedStopResult::Stopped | ManagedStopResult::StoppedForced { .. }) => {
+            let _ = process.child.remove_marker();
+            true
+        }
+        Ok(ManagedStopResult::Timeout) => {
+            warn!(
+                "groupe encore vivant après SIGTERM suite à échec de spawn {} — pas de SIGKILL",
+                process.prepared.lease.name
+            );
+            false
+        }
+        Err(error) => {
+            warn!(
+                "arrêt du groupe après échec de spawn {} impossible: {error}",
+                process.prepared.lease.name
+            );
+            false
+        }
     }
 }
 
@@ -1427,16 +1492,17 @@ fn drain_managed_events(
                     lease,
                     kind,
                     reason,
+                    conn_id,
                 } => {
-                    let refusal = if kind == "command_missing" {
-                        SpawnRefusal::CommandMissing {
+                    let refusal = match kind.as_str() {
+                        "command_missing" => SpawnRefusal::CommandMissing {
                             command: reason.clone(),
                             registry: "canal managed-status".to_string(),
-                        }
-                    } else {
-                        SpawnRefusal::NegotiationFailed {
+                        },
+                        "spawn_timeout" => SpawnRefusal::SpawnTimeout,
+                        _ => SpawnRefusal::NegotiationFailed {
                             detail: reason.clone(),
-                        }
+                        },
                     };
                     if let Some(record) = st.managed_spawns.remove(&lease.command_id) {
                         if record.stop.is_requested() {
@@ -1457,7 +1523,8 @@ fn drain_managed_events(
                                 &mut controls,
                             );
                         }
-                        if let Some(conn_id) = record.wrapper_conn {
+                        let wrapper_conn = conn_id.or(record.wrapper_conn);
+                        if let Some(conn_id) = wrapper_conn {
                             let (attach_controls, attach_views) =
                                 close_attach_subscriptions(&mut st, &conn_id);
                             controls.extend(attach_controls);
@@ -7223,6 +7290,7 @@ mod presence_tests {
                 lease: lease.clone(),
                 kind: "name_active".to_string(),
                 reason: "nom déjà actif".to_string(),
+                conn_id: None,
             })
             .unwrap();
         drain_managed_events(&shared, &event_rx);
@@ -11474,6 +11542,80 @@ mod presence_tests {
         let _ = std::fs::remove_file(config.db_path);
     }
 
+    /// Oracle anti-fantôme : si la négociation expire après naissance du
+    /// processus (BootstrapReady + RELEASE, pas encore Connected), le groupe
+    /// réel DOIT mourir sous SIGTERM. Meurt si l'enfant survit au refus.
+    #[test]
+    fn timeout_avant_connected_termine_le_groupe_reel_sans_fantome() {
+        let (mut state, config) = state_with_registered_agent("spawn-timeout-fantome");
+        let (requester, mut requester_reader) = control_socket("timeout-fantome-requester");
+        state.connections.insert("requester".to_string(), requester);
+        let (lease, stop) = install_managed_test_spawn(&mut state, "spawn-timeout-fantome", false);
+        {
+            let record = state
+                .managed_spawns
+                .get_mut(&lease.command_id)
+                .expect("spawn enregistré");
+            record.requester_conns.push("requester".to_string());
+        }
+        let process_root = PathBuf::from(format!(
+            "/tmp/bg-fantome-{}-{}",
+            std::process::id(),
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        std::fs::create_dir_all(&process_root).unwrap();
+        let child = running_managed_test_group(
+            &lease,
+            &process_root,
+            "trap 'exit 0' TERM; while :; do sleep 1; done",
+        );
+        let pgid = child.marker().marker().pgid;
+        let marker_path = child.marker().path().to_path_buf();
+        assert!(
+            crate::managed_process::group_exists(pgid).unwrap(),
+            "précondition: enfant vivant"
+        );
+
+        let mut prepared = managed_test_prepared(&lease, &process_root);
+        prepared.lease.deadline_at = unix_timestamp() - 1;
+        let fleet = Arc::clone(&state.fleet);
+        let mut active = HashMap::from([(
+            lease.instance_id.clone(),
+            SupervisedProcess {
+                prepared,
+                child,
+                registered: None,
+                connected: false,
+                failure_sent: false,
+                stop: Arc::clone(&stop),
+                stop_attempted: false,
+            },
+        )]);
+        let shared = Arc::new(Mutex::new(state));
+        let (event_tx, event_rx) = mpsc::channel();
+        poll_managed_processes(&fleet, &event_tx, &mut active);
+        assert!(
+            active.is_empty(),
+            "le superviseur doit retirer le spawn expiré de active"
+        );
+        assert!(
+            !crate::managed_process::group_exists(pgid).unwrap(),
+            "fantôme: le groupe survit à une négociation expirée"
+        );
+        assert!(!marker_path.exists(), "marqueur résiduel après timeout");
+        drain_managed_events(&shared, &event_rx);
+        assert!(matches!(
+            read_control(&mut requester_reader),
+            DaemonToWrapper::SpawnRejected {
+                reason: SpawnRefusal::SpawnTimeout,
+                ..
+            }
+        ));
+        assert!(shared.lock().unwrap().managed_spawns.is_empty());
+        std::fs::remove_dir_all(process_root).unwrap();
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
     #[test]
     fn stop_apres_register_traverse_le_wrapper_et_le_superviseur_reels() {
         let root = PathBuf::from(format!(
@@ -11706,6 +11848,7 @@ mod presence_tests {
                 lease: lease.clone(),
                 kind: "command_missing".to_string(),
                 reason: "/adaptateur/disparu".to_string(),
+                conn_id: None,
             })
             .unwrap();
         drain_managed_events(&shared, &event_rx);
