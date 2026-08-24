@@ -106,3 +106,36 @@ contrôle vert. *(Incident : dette de 23 emplacements non détectée sur main,
    *(Incident : catalogue muet sur les livraisons 014, constaté par
    l'utilisateur le soir même.)*
 6. Statuts des spec.md alignés sur la réalité (ni flatteurs ni périmés).
+
+## Rituel d'arrivée d'un agent (référent)
+
+Un agent n'est utilisable qu'après DEUX inscriptions distinctes, dans deux
+fichiers différents. Une seule ne suffit pas, et l'oubli de la seconde ne se
+voit qu'au premier échec de délégation.
+
+1. **Être joignable** — type déclaré dans `~/.config/bridget/agents.json`
+   (mode 0600) : commande, arguments, protocole, variables d'environnement
+   interdites. Sans lui, `bridget spawn` répond « type d'agent inconnu ».
+   *Le daemon lit ce registre à SON démarrage : après modification, il faut
+   le relancer (`launchctl kickstart -k gui/$(id -u)/com.bridget.daemon`),
+   sinon le nouveau type reste invisible.*
+2. **Être missionnable** — profil déclaré dans `~/.config/maicie/config.json`,
+   section `profiles` : `id`, `agent_name` (le nom Bridget exact),
+   `display_name`, `tags`. Sans lui, `maicie delegate` répond « cible
+   indisponible » alors que l'agent est bel et bien connecté.
+
+Cette séparation est voulue, ce n'est pas un défaut à contourner : être
+joignable et être autorisé à recevoir du travail sont deux décisions
+distinctes. Un agent peut légitimement être connecté sans être employable.
+
+3. **Première mission = calibrage**, jamais un couloir. Une tâche réelle,
+   bornée, en lecture seule, dont on connaît déjà la réponse ou dont on peut
+   vérifier le résultat sur pièces. On y exige la ligne `MODELE:` en tête,
+   et on y énonce les deux règles maison : aucune modification sans mandat,
+   et livraison par `bridget send` explicite.
+4. **Clés API interdites** dans la déclaration du type : `forbidden_env` liste
+   les variables à refuser. L'authentification passe par l'abonnement.
+
+*(Incident fondateur : arrivée de `cursorbridget` le 2026-08-24 — spawn refusé
+faute de type au registre, puis délégation refusée faute de profil Maicie,
+deux échecs successifs pour un même agent.)*
