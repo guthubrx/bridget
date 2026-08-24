@@ -10,6 +10,33 @@ v1 (spec 011) — intrants pour les itérations suivantes.
 Vue d'avancement des blocs. Détail et jurisprudence dans chaque bloc plus
 bas ; ce tableau ne remplace pas la lecture, il dit où on en est.
 
+**ORDRE DE DÉROULÉ v2 (validé utilisateur le 24/08, 15h53)** :
+1. Finir l'orange (tout 🔄 ci-dessous) — aucun nouveau chantier avant.
+2. Phase AUTONOMIE : routines (bloc F reste, note de conception en cours)
+   + politiques 30-34 en produit (P31 plages déjà livré) + M5.
+3. Phase SÉCURITÉ, en UN chantier : C5/D21 opposabilité + M3 permissions
+   sans terminal + second facteur ADR 011 + sortie du bypass (Supervised)
+   + N6 confinement. Une seule UI d'approbation, pas quatre lots.
+4. Phase OUVERTURE : N4/K3 d'abord, puis N1 vitrine, N2 silos-transports,
+   N3 isolation-produit. Bloc M (référent géré) quand M5+M3 existent.
+Rayé d'un commun accord : J4, B7. À trier le moment venu : D22.
+
+**Bloc M — le référent géré** (détail en fin de document)
+- [ ] M5 rondes → routines — 🔄 note de conception chez coder5
+- [ ] M3 permissions sans terminal — ⬜ phase sécurité
+- [ ] M1 composer dans la page — ⬜ (intérim : attach est déjà un composer)
+- [ ] M2 référent spawné en flux natif — ⬜ après M3+M5
+- [ ] M4 session mécano à la demande — ⬜
+
+**Bloc N — produit & ouverture** (détail en fin de document)
+- [ ] N1 vitrine par la preuve (récit d'opérations + métriques) — ⬜
+- [ ] N2 silos comme transports (SendMessage/codex queue) — ⬜
+- [ ] N3 isolation/merge en produit — 🔄 entamé de fait (M1 garde, P31
+      plages) ; reste worktree+ports au spawn, file de merge Maicie
+- [ ] N4 = K3 séparation projet/outil, PRÉREQUIS d'ouverture — ⬜
+- [ ] N5 adaptateur A2A éventuel — ⬜ inscrit, pas un chantier
+- [ ] N6 confinement d'exécution — ⬜ phase sécurité
+
 Note de lettrage : les blocs A à F sont le plan de déroulé à 34 points tenu
 en session (l'énumération complète, rognée par les compactages, a été
 RETROUVÉE par l'utilisateur le 24/08 et regravée ci-dessous — leçon : un
