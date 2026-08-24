@@ -215,6 +215,13 @@ deux échecs successifs pour un même agent.)*
   passage unique et bâti leurs conclusions dessus.)* Corollaire du même
   incident : un rouge intermittent se qualifie par un TAUX mesuré des deux
   côtés (lot et base), jamais par une impression.
+- **Un lot en attente de jury se rebase AVANT que le jury ne mesure, jamais
+  après.** Sinon les relecteurs jugent une tête qui ne sera pas mergée, et le
+  rebase post-verdict invalide leurs mesures. L'auteur vérifie la collision
+  (fichiers communs avec la base), rebase, rejoue ses gates avec les comptes,
+  et annonce le nouveau SHA au référent qui le transmet au jury. *(Deux
+  incidents le 2026-08-24 : un jury lancé sur une tête déjà dépassée, puis un
+  auteur livrant cinq SHA pendant que son jury mesurait le premier.)*
 - **Jamais d'accent grave dans un mandat passé en ligne de commande.** Le
   shell les interprète comme une substitution : les mots encadrés
   DISPARAISSENT du mandat livré à l'agent, silencieusement, et seule une
