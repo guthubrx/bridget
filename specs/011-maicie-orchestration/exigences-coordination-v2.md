@@ -10,6 +10,44 @@ v1 (spec 011) — intrants pour les itérations suivantes.
 Vue d'avancement des blocs. Détail et jurisprudence dans chaque bloc plus
 bas ; ce tableau ne remplace pas la lecture, il dit où on en est.
 
+Note de lettrage : il n'existe PAS de blocs A à F dans ce document — le
+lettrage commence à G (né le 24/08 avec les ponts). Tout ce qui précède est
+en sections thématiques, couvertes ci-dessous. La seule référence « bloc F »
+du texte désigne les routines planifiées (point 35 d'un plan antérieur).
+
+**Sections antérieures (non lettrées)**
+- [x] Politiques de délégation 1-3 : messager, déblocage des dépendants,
+      réassignation — PRODUITES par la session 016 (clôture+notifications
+      transactionnelles, graphe F28, chaîne F29)
+- [ ] Politiques 4-8 (contrat d'interface avant commit, propriété des
+      ressources, vérification factuelle, diffusion de groupe, escalade
+      bornée) — 🔄 pratiquées à la main + règles de chantier (dont la
+      règle 17 née le 24/08) ; pas encore des comportements produit Maicie
+- [x] Exigence Phase 5 : l'écran d'approbation montre type/modèle/effort de
+      la définition RÉSOLUE avec digest (livré avec L1 ; ADR 011)
+- [ ] Amendement palette (prérequis T021) — 🔄 digest de définition livré ;
+      warning forbidden_env et durcissement lecture agents.json à vérifier
+- [ ] C5 approbation opposable côté Bridget — ⬜ candidat v2, non commencé
+- [ ] C7 budget global d'activation — ⬜ non commencé
+- [x] T015b : identité Maicie joignable + statut corrélé — livré par LE
+      GUICHET (016 : dépôts durables, relève bornée, refus attestés)
+- [x] Parité de repli du binaire (D24 : --in-reply-to au CLI)
+- [x] Reprise après crash — carte de réveil déterministe LIVRÉE et prouvée
+      2× en production le 24/08 (reprise avec mission active)
+- [ ] Reprise après crash, restes — ⬜ `maicie profile refuse` absent ;
+      domain dans fleet.json et trace « N équipiers non revenus » à vérifier
+- [ ] GUI — 🔄 première tranche LIVRÉE (page locale 3 zones + tunnel lecture
+      seule + SSE) ; journal enrichi, abonnements, vue unifiée tous modes :
+      restent ouverts (le journal des reconnectés est le bug en réparation)
+- [x] Périmètre 014 : livré intégralement (7/7, gate MERGEABLE, 23/08)
+- [x] Divers gravés : skill maicie, doctrine « zéro trace IA y compris
+      contenu » — vivants
+- [ ] Routines planifiées (« bloc F ») — ⬜ non commencé ; doctrine posée
+      (une routine délègue, n'approuve jamais) ; NB : la ronde portable K2
+      en est le premier cousin opérationnel, côté référent
+- [ ] Suivis post-gate 014 (C1-C7 fable-reviewer) — ⬜ non bloquants,
+      ouverts à dessein (C3 croissance tool_titles à surveiller en priorité)
+
 **Bloc G — ponts natifs**
 - [x] G1 vocabulaire interne (ADR 010, couche `ManagedSession`)
 - [x] G2 pont Codex app-server prouvé (couture réelle terra)
