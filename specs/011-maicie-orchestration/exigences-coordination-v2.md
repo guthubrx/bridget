@@ -1400,6 +1400,11 @@ du référent » est retiré, c'était de la valeur d'outil, pas de produit).
 - **M1 — Composer humain dans la page** (reprend le point 10) : l'utilisateur
   écrit au référent depuis la page ; le message part au ledger comme
   n'importe quel autre ; le fil de conversation est une vue du ledger.
+  INTÉRIM SANS CODE (constat utilisateur+référent, 24/08) : la paire
+  `bridget send --reply` (la bouche, tracée au ledger) + `bridget attach`
+  (l'œil, à sens unique PAR CONSTRUCTION — un canal d'observation ne doit
+  jamais écrire) offre déjà ce dialogue au CLI. M1 est une couche de
+  présentation sur ces deux primitives ; M2 ne dépend donc PAS de la page.
 - **M2 — Référent spawné en claude_stream_json** : modèle épinglé, profil
   Maicie, carte de reprise, journal suivable. Un géré parmi les gérés.
 - **M3 — Permissions sans terminal** : les gestes risqués du référent ne
