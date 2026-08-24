@@ -1,10 +1,11 @@
 use maicie::domain::{
     ClasseDuree, DefinitionCoordination, DependanceDelegation, DomainError,
-    EntreeReductionCoordination, EtatGenerationDelegation, EvaluationCloture,
-    EvenementCoordination, FaitAppartenanceRepli, FraicheurCoordination, GenerationDelegation,
-    IssueClotureEvaluee, MAX_COORDINATION_EDGES, MAX_COORDINATION_NODES,
-    ModeQualificationDependance, PolitiqueReassignation, TransitionCoordinationActive,
-    TypeDecisionCoordinationActive, reduire_coordination,
+    EntreeReductionCoordination, EpisodeRelance, EtatEpisodeRelance, EtatGenerationDelegation,
+    EvaluationCloture, EvenementCoordination, FaitAppartenanceRepli, FaitReassignation,
+    FraicheurCoordination, GenerationDelegation, IssueClotureEvaluee, LotReassignation,
+    MAX_COORDINATION_EDGES, MAX_COORDINATION_NODES, ModeQualificationDependance,
+    PolitiqueReassignation, TransitionCoordinationActive, TypeDecisionCoordinationActive,
+    TypeFaitReassignation, reduire_coordination, reduire_reassignation,
 };
 use std::collections::BTreeSet;
 use uuid::Uuid;
@@ -211,6 +212,162 @@ fn borne_de_noeuds_accepte_cent_et_refuse_cent_un_independamment_des_aretes() {
     );
 }
 
+#[test]
+fn deux_reponses_reemettent_puis_la_troisieme_prend_le_successeur_epingle() {
+    let objectif_id = Uuid::new_v4();
+    let delegation_id = Uuid::new_v4();
+    let generation = generation(objectif_id, delegation_id, "alice");
+    let policy = policy(objectif_id, delegation_id, "bob");
+    let mut episode = episode(objectif_id, delegation_id, "request-initial");
+    let known = vec![generation.clone()];
+
+    for ordinal in 1..=2 {
+        let reduction = reduire_reassignation(
+            &generation,
+            &policy,
+            &episode,
+            &known,
+            &lot(
+                objectif_id,
+                delegation_id,
+                1,
+                fact(
+                    &format!("answered-{ordinal}"),
+                    &episode.request_id,
+                    TypeFaitReassignation::Answered,
+                ),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            reduction.decision.kind,
+            TypeDecisionCoordinationActive::Aucun
+        );
+        assert_eq!(reduction.effets_demandes.len(), 1);
+        episode = reduction.episode_successeur.unwrap();
+        assert_eq!(episode.reemissions_used, ordinal);
+    }
+
+    let third = reduire_reassignation(
+        &generation,
+        &policy,
+        &episode,
+        &known,
+        &lot(
+            objectif_id,
+            delegation_id,
+            1,
+            fact(
+                "answered-3",
+                &episode.request_id,
+                TypeFaitReassignation::Answered,
+            ),
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        third.decision.kind,
+        TypeDecisionCoordinationActive::Reassigner
+    );
+    assert_eq!(third.source.etat, EtatGenerationDelegation::Reassignee);
+    let successor = third.successeur.unwrap();
+    assert_eq!(successor.participant_id, "bob");
+    assert_eq!(successor.generation, 2);
+    assert_eq!(third.effets_demandes.len(), 2);
+    assert_eq!(third.notifications.len(), 2);
+}
+
+#[test]
+fn candidat_hors_chaine_n_est_jamais_choisi_et_l_epuisement_arrete() {
+    let objectif_id = Uuid::new_v4();
+    let delegation_id = Uuid::new_v4();
+    let source = generation(objectif_id, delegation_id, "alice");
+    let mut rogue = source.clone();
+    rogue.generation = 2;
+    rogue.generation_precedente = Some(1);
+    rogue.participant_id = "volontaire-non-autorise".into();
+    rogue.etat = EtatGenerationDelegation::Reassignee;
+    let mut policy = policy(objectif_id, delegation_id, "bob");
+    policy.chaine_repli.clear();
+    let episode = episode(objectif_id, delegation_id, "request-initial");
+    let reduction = reduire_reassignation(
+        &source,
+        &policy,
+        &episode,
+        &[source.clone(), rogue],
+        &lot(
+            objectif_id,
+            delegation_id,
+            1,
+            fact(
+                "timeout-1",
+                "request-initial",
+                TypeFaitReassignation::TimedOut,
+            ),
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        reduction.decision.kind,
+        TypeDecisionCoordinationActive::InterventionHumaineRequise
+    );
+    assert_eq!(
+        reduction.source.etat,
+        EtatGenerationDelegation::InterventionHumaineRequise
+    );
+    assert!(reduction.successeur.is_none());
+    assert_eq!(reduction.effets_demandes.len(), 1);
+}
+
+#[test]
+fn livraison_gagne_le_timeout_dans_les_deux_ordres_du_lot() {
+    let objectif_id = Uuid::new_v4();
+    let delegation_id = Uuid::new_v4();
+    let source = generation(objectif_id, delegation_id, "alice");
+    let policy = policy(objectif_id, delegation_id, "bob");
+    let episode = episode(objectif_id, delegation_id, "request-initial");
+    let delivery = FaitReassignation {
+        delivery_hash: Some("ab".repeat(32)),
+        ..fact(
+            "delivery-1",
+            "request-initial",
+            TypeFaitReassignation::DeliveryReport,
+        )
+    };
+    let timeout = fact(
+        "timeout-1",
+        "request-initial",
+        TypeFaitReassignation::TimedOut,
+    );
+    let mut left = lot(objectif_id, delegation_id, 1, delivery.clone());
+    left.faits.push(timeout.clone());
+    let mut right = lot(objectif_id, delegation_id, 1, timeout);
+    right.faits.push(delivery);
+    let first = reduire_reassignation(
+        &source,
+        &policy,
+        &episode,
+        std::slice::from_ref(&source),
+        &left,
+    )
+    .unwrap();
+    let second = reduire_reassignation(
+        &source,
+        &policy,
+        &episode,
+        std::slice::from_ref(&source),
+        &right,
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_vec(&first).unwrap(),
+        serde_json::to_vec(&second).unwrap()
+    );
+    assert!(first.successeur.is_none());
+    assert!(first.effets_demandes.is_empty());
+    assert_eq!(first.episode_source.etat, EtatEpisodeRelance::Termine);
+}
+
 fn chain_definition(objectif_id: Uuid, nodes: usize) -> DefinitionCoordination {
     let ids: Vec<Uuid> = (1..=nodes)
         .map(|index| Uuid::from_u128(index as u128))
@@ -265,6 +422,46 @@ fn policy(objectif_id: Uuid, delegation_id: Uuid, fallback: &str) -> PolitiqueRe
         seuil_relances: 2,
         max_reemissions: 2,
         chaine_repli: vec![membership(objectif_id, fallback, false)],
+    }
+}
+
+fn episode(objectif_id: Uuid, delegation_id: Uuid, request_id: &str) -> EpisodeRelance {
+    EpisodeRelance {
+        delegation_id,
+        objectif_id,
+        generation: 1,
+        request_id: request_id.to_string(),
+        request_ordinal: 1,
+        reminder_count: 0,
+        reemissions_used: 0,
+        etat: EtatEpisodeRelance::Actif,
+    }
+}
+
+fn fact(event_id: &str, request_id: &str, kind: TypeFaitReassignation) -> FaitReassignation {
+    FaitReassignation {
+        event_id: event_id.to_string(),
+        request_id: request_id.to_string(),
+        kind,
+        observed_at: 1_787_500_100,
+        freshness: FraicheurCoordination::Fresh,
+        delivery_hash: None,
+    }
+}
+
+fn lot(
+    objectif_id: Uuid,
+    delegation_id: Uuid,
+    generation: u64,
+    fait: FaitReassignation,
+) -> LotReassignation {
+    LotReassignation {
+        objectif_id,
+        delegation_id,
+        generation,
+        issued_at: 1_787_500_100,
+        next_deadline_at: 1_787_500_200,
+        faits: vec![fait],
     }
 }
 

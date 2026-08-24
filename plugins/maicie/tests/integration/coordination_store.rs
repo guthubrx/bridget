@@ -1,14 +1,18 @@
+use bridget_transport::protocol::WrapperToDaemon;
+use maicie::bridget_client::PublicMessage;
 use maicie::domain::{
     AttenteNotification, ClasseDuree, DecisionCoordination, DefinitionCoordination, Delegation,
     DependanceDelegation, EntreeReductionCoordination, EtatDecision, EtatGenerationDelegation,
     EtatObjectif, EtatOutboxDelegation, EvaluationCloture, EvenementCoordination,
-    FaitAppartenanceRepli, FraicheurCoordination, GenerationDelegation, IssueClotureEvaluee,
-    ModeObjectif, ModeQualificationDependance, ObjectifCoordonne, OutboxDelegation,
-    PolitiqueReassignation, TypeDecision, TypeEvenementAttendu,
+    FaitAppartenanceRepli, FaitReassignation, FraicheurCoordination, GenerationDelegation,
+    IssueClotureEvaluee, LotReassignation, ModeObjectif, ModeQualificationDependance,
+    ObjectifCoordonne, OutboxDelegation, PolitiqueReassignation, TypeDecision,
+    TypeEvenementAttendu, TypeFaitReassignation,
 };
 use maicie::outbox::{PreparedDelegation, stable_body_hash};
 use maicie::store::{
-    CoordinationCommitPhase, MaicieStore, ObjectiveClosureCommitPhase, StoreError,
+    CoordinationCommitPhase, MaicieStore, ObjectiveClosureCommitPhase, ReassignmentCommitPhase,
+    StoreError,
 };
 use rusqlite::{Connection, ErrorCode, params};
 use std::fs;
@@ -38,6 +42,9 @@ fn migration_v7_puis_seconde_ouverture_conservent_l_historique() {
              DROP TABLE delegation_generations;
              DROP TABLE delegation_lineages;
              DROP TABLE reassignment_policies;
+             DROP TABLE tracked_request_outbox;
+             DROP TABLE reassignment_reductions;
+             DROP TABLE reassignment_events;
              DROP TABLE evaluated_closure_acts;
              DROP TABLE delegation_dependencies;
              DROP TABLE coordination_expectations;
@@ -46,12 +53,15 @@ fn migration_v7_puis_seconde_ouverture_conservent_l_historique() {
         .unwrap();
     connection.pragma_update(None, "user_version", 7).unwrap();
     connection
-        .execute("DELETE FROM schema_migrations WHERE version IN (8, 9)", [])
+        .execute(
+            "DELETE FROM schema_migrations WHERE version IN (8, 9, 10)",
+            [],
+        )
         .unwrap();
     drop(connection);
 
     let store = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 9);
+    assert_eq!(store.schema_version().unwrap(), 10);
     assert_eq!(
         store.objective_snapshots(Some(objectif.id)).unwrap()[0].delegations[0].id,
         delegation
@@ -65,16 +75,18 @@ fn migration_v7_puis_seconde_ouverture_conservent_l_historique() {
                  'delegation_dependencies', 'evaluated_closure_acts',
                  'reassignment_policies', 'delegation_lineages',
                  'delegation_generations', 'reminder_episodes',
-                 'active_coordination_decisions', 'notification_outbox'
+                 'active_coordination_decisions', 'notification_outbox',
+                 'reassignment_events', 'reassignment_reductions',
+                 'tracked_request_outbox'
              )",
             [],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(coordination_tables, 10);
+    assert_eq!(coordination_tables, 13);
     drop(connection);
     let reopened = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 9);
+    assert_eq!(reopened.schema_version().unwrap(), 10);
     assert_eq!(
         reopened
             .objective_snapshots(Some(objectif.id))
@@ -126,12 +138,12 @@ fn migration_v8_refuse_de_rejouer_une_notification_sans_horodatage_atteste() {
         .unwrap();
     connection.pragma_update(None, "user_version", 8).unwrap();
     connection
-        .execute("DELETE FROM schema_migrations WHERE version = 9", [])
+        .execute("DELETE FROM schema_migrations WHERE version IN (9, 10)", [])
         .unwrap();
     drop(connection);
 
     let store = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 9);
+    assert_eq!(store.schema_version().unwrap(), 10);
     assert!(matches!(
         store.pending_notification_outboxes(),
         Err(StoreError::Corrupt(
@@ -619,6 +631,252 @@ fn evenement_d_une_generation_inactive_est_refuse_avant_toute_decision() {
     assert_eq!(table_count(&connection, "active_coordination_decisions"), 0);
 }
 
+#[test]
+fn seuil_reassigne_vers_la_chaine_epinglee_et_prepare_quatre_effets_atomiques() {
+    let fixture = Fixture::new("reassignation-atomique");
+    let (objectif_id, delegation_id) = seed_coordination(&fixture.database, "alice");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let request_id = initial_request_id(&store, delegation_id);
+    let lot = reassignment_lot(
+        objectif_id,
+        delegation_id,
+        1,
+        vec![
+            reassignment_fact(
+                "reminder-1",
+                &request_id,
+                TypeFaitReassignation::ReminderSent,
+            ),
+            reassignment_fact(
+                "reminder-2",
+                &request_id,
+                TypeFaitReassignation::ReminderSent,
+            ),
+        ],
+    );
+    let first = store.apply_reassignment_batch(&lot).unwrap();
+    assert!(!first.replayed);
+    assert_eq!(
+        first.reduction.source.etat,
+        EtatGenerationDelegation::Reassignee
+    );
+    let successor = first.reduction.successeur.as_ref().unwrap();
+    assert_eq!(successor.participant_id, "bob");
+    assert_eq!(successor.generation, 2);
+    let request_outboxes = store.pending_tracked_request_outboxes().unwrap();
+    assert_eq!(request_outboxes.len(), 2);
+    let cancel = request_outboxes
+        .iter()
+        .find(|outbox| outbox.kind == maicie::domain::TypeEffetDemandeSuivie::Annuler)
+        .unwrap();
+    assert!(matches!(
+        serde_json::from_slice::<WrapperToDaemon>(&cancel.message_bytes).unwrap(),
+        WrapperToDaemon::CancelRequest { id, sender, .. }
+            if id == request_id && sender == maicie::MAICIE_IDENTITY
+    ));
+    let create = request_outboxes
+        .iter()
+        .find(|outbox| outbox.kind == maicie::domain::TypeEffetDemandeSuivie::Creer)
+        .unwrap();
+    let message: PublicMessage = serde_json::from_slice(&create.message_bytes).unwrap();
+    assert_eq!(message.id, create.request_id);
+    assert_eq!(message.to, "bob");
+    assert!(message.reply);
+    assert_eq!(message.deadline_at, Some(1_787_500_200));
+    assert_eq!(store.pending_notification_outboxes().unwrap().len(), 2);
+
+    let replay = store.apply_reassignment_batch(&lot).unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.reduction, first.reduction);
+    assert_eq!(store.pending_tracked_request_outboxes().unwrap().len(), 2);
+    assert_eq!(store.pending_notification_outboxes().unwrap().len(), 2);
+    let snapshot = store.coordination_snapshot(objectif_id).unwrap().unwrap();
+    assert_eq!(snapshot.lineages[0].generation_active, 2);
+    assert_eq!(snapshot.generations.len(), 2);
+}
+
+#[test]
+fn faute_a_chaque_frontiere_f29_annule_generation_demandes_et_notifications() {
+    for phase in [
+        ReassignmentCommitPhase::AfterDecision,
+        ReassignmentCommitPhase::AfterGenerations,
+        ReassignmentCommitPhase::AfterRequestOutboxes,
+        ReassignmentCommitPhase::AfterNotifications,
+    ] {
+        let fixture = Fixture::new(&format!("reassignation-rollback-{phase:?}"));
+        let (objectif_id, delegation_id) = seed_coordination(&fixture.database, "alice");
+        let store = MaicieStore::open(&fixture.database).unwrap();
+        let request_id = initial_request_id(&store, delegation_id);
+        drop(store);
+        let lot = reassignment_lot(
+            objectif_id,
+            delegation_id,
+            1,
+            vec![reassignment_fact(
+                "timeout-source",
+                &request_id,
+                TypeFaitReassignation::TimedOut,
+            )],
+        );
+        let mut store = MaicieStore::open(&fixture.database).unwrap();
+        let failed = store.apply_reassignment_batch_observed(&lot, |observed| {
+            if observed == phase {
+                return Err(StoreError::Conflict("faute F29 injectée"));
+            }
+            Ok(())
+        });
+        assert!(matches!(
+            failed,
+            Err(StoreError::Conflict("faute F29 injectée"))
+        ));
+        drop(store);
+        let connection = Connection::open(&fixture.database).unwrap();
+        assert_eq!(table_count(&connection, "reassignment_events"), 0);
+        assert_eq!(table_count(&connection, "reassignment_reductions"), 0);
+        assert_eq!(table_count(&connection, "tracked_request_outbox"), 0);
+        assert_eq!(table_count(&connection, "notification_outbox"), 0);
+        assert_eq!(table_count(&connection, "delegation_generations"), 1);
+        let state: String = connection
+            .query_row(
+                "SELECT state FROM delegation_generations WHERE delegation_id = ?1",
+                [delegation_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "ouverte");
+    }
+}
+
+#[test]
+fn borne_m_deux_cree_deux_reemissions_puis_un_unique_successeur() {
+    let fixture = Fixture::new("reassignation-borne-m");
+    let (objectif_id, delegation_id) = seed_coordination(&fixture.database, "alice");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let mut request_id = initial_request_id(&store, delegation_id);
+    for ordinal in 1..=2 {
+        let lot = reassignment_lot(
+            objectif_id,
+            delegation_id,
+            1,
+            vec![reassignment_fact(
+                &format!("answered-{ordinal}"),
+                &request_id,
+                TypeFaitReassignation::Answered,
+            )],
+        );
+        let result = store.apply_reassignment_batch(&lot).unwrap();
+        assert!(result.reduction.successeur.is_none());
+        request_id = result
+            .reduction
+            .episode_successeur
+            .as_ref()
+            .unwrap()
+            .request_id
+            .clone();
+    }
+    let third = reassignment_lot(
+        objectif_id,
+        delegation_id,
+        1,
+        vec![reassignment_fact(
+            "answered-3",
+            &request_id,
+            TypeFaitReassignation::Answered,
+        )],
+    );
+    let result = store.apply_reassignment_batch(&third).unwrap();
+    assert_eq!(result.reduction.successeur.unwrap().participant_id, "bob");
+    assert_eq!(store.pending_tracked_request_outboxes().unwrap().len(), 4);
+    assert_eq!(store.pending_notification_outboxes().unwrap().len(), 2);
+}
+
+#[test]
+fn annulation_administrative_inhibe_definitivement_timeout_et_successeur() {
+    let fixture = Fixture::new("reassignation-annulation");
+    let (objectif_id, delegation_id) = seed_coordination(&fixture.database, "alice");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let request_id = initial_request_id(&store, delegation_id);
+    let cancel = reassignment_lot(
+        objectif_id,
+        delegation_id,
+        1,
+        vec![reassignment_fact(
+            "admin-cancel",
+            &request_id,
+            TypeFaitReassignation::AnnulationAdministrative,
+        )],
+    );
+    store.apply_reassignment_batch(&cancel).unwrap();
+    let late = reassignment_lot(
+        objectif_id,
+        delegation_id,
+        1,
+        vec![reassignment_fact(
+            "late-timeout",
+            &request_id,
+            TypeFaitReassignation::TimedOut,
+        )],
+    );
+    let late_result = store.apply_reassignment_batch(&late).unwrap();
+    assert!(late_result.reduction.successeur.is_none());
+    assert!(late_result.reduction.effets_demandes.is_empty());
+    assert_eq!(store.pending_tracked_request_outboxes().unwrap().len(), 1);
+    assert_eq!(store.pending_notification_outboxes().unwrap().len(), 1);
+}
+
+#[test]
+fn deux_ecrivains_arbitrent_le_meme_timeout_avec_une_contention_prouvee() {
+    let fixture = Fixture::new("reassignation-course");
+    let (objectif_id, delegation_id) = seed_coordination(&fixture.database, "alice");
+    let first_store = MaicieStore::open(&fixture.database).unwrap();
+    let second_store = MaicieStore::open(&fixture.database).unwrap();
+    let request_id = initial_request_id(&first_store, delegation_id);
+    let lot = reassignment_lot(
+        objectif_id,
+        delegation_id,
+        1,
+        vec![reassignment_fact(
+            "timeout-concurrent",
+            &request_id,
+            TypeFaitReassignation::TimedOut,
+        )],
+    );
+    let first_lot = lot.clone();
+    let second_lot = lot;
+    let (locked_tx, locked_rx) = mpsc::sync_channel(1);
+    let (release_tx, release_rx) = mpsc::sync_channel(1);
+    let first = thread::spawn(move || {
+        let mut store = first_store;
+        store.apply_reassignment_batch_observed(&first_lot, |phase| {
+            if phase == ReassignmentCommitPhase::AfterDecision {
+                locked_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            }
+            Ok(())
+        })
+    });
+    locked_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+
+    let probe = Connection::open(&fixture.database).unwrap();
+    probe.busy_timeout(Duration::ZERO).unwrap();
+    let busy = probe.execute_batch("BEGIN IMMEDIATE").unwrap_err();
+    assert_eq!(busy.sqlite_error_code(), Some(ErrorCode::DatabaseBusy));
+    drop(probe);
+
+    let second = thread::spawn(move || {
+        let mut store = second_store;
+        store.apply_reassignment_batch(&second_lot)
+    });
+    release_tx.send(()).unwrap();
+    let first_result = first.join().unwrap().unwrap();
+    let second_result = second.join().unwrap().unwrap();
+    assert_ne!(first_result.replayed, second_result.replayed);
+    let connection = Connection::open(&fixture.database).unwrap();
+    assert_eq!(table_count(&connection, "reassignment_reductions"), 1);
+    assert_eq!(table_count(&connection, "tracked_request_outbox"), 2);
+    assert_eq!(table_count(&connection, "notification_outbox"), 2);
+}
+
 fn definition(
     objectif_id: Uuid,
     delegation_id: Uuid,
@@ -774,6 +1032,48 @@ fn create_delegation(
     .unwrap();
     store.create_prepared_delegation(&prepared).unwrap();
     delegation.id
+}
+
+fn initial_request_id(store: &MaicieStore, delegation_id: Uuid) -> String {
+    store
+        .pending_delegation_outboxes()
+        .unwrap()
+        .into_iter()
+        .find(|outbox| outbox.delegation_id == delegation_id)
+        .unwrap()
+        .message_id
+        .to_string()
+}
+
+fn reassignment_fact(
+    event_id: &str,
+    request_id: &str,
+    kind: TypeFaitReassignation,
+) -> FaitReassignation {
+    FaitReassignation {
+        event_id: event_id.to_string(),
+        request_id: request_id.to_string(),
+        kind,
+        observed_at: 1_787_500_100,
+        freshness: FraicheurCoordination::Fresh,
+        delivery_hash: None,
+    }
+}
+
+fn reassignment_lot(
+    objectif_id: Uuid,
+    delegation_id: Uuid,
+    generation: u64,
+    faits: Vec<FaitReassignation>,
+) -> LotReassignation {
+    LotReassignation {
+        objectif_id,
+        delegation_id,
+        generation,
+        issued_at: 1_787_500_100,
+        next_deadline_at: 1_787_500_200,
+        faits,
+    }
 }
 
 struct Fixture {

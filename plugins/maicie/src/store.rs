@@ -5,7 +5,7 @@
 //! les octets préparés avant I/O sont l'autorité.
 
 use crate::app::ConversationRecord;
-use crate::bridget_client::{GuichetClaim, IdempotencyIssue, SpawnOutcome};
+use crate::bridget_client::{GuichetClaim, IdempotencyIssue, PublicMessage, SpawnOutcome};
 use crate::domain::guichet::{
     EvenementCycleGuichet, ProjectionReply, RapportLivraison, RequeteCanonique,
     delivery_reply_bytes, projection_reply_bytes, reclaim_projection_reply_bytes,
@@ -14,20 +14,22 @@ use crate::domain::guichet::{
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, AttenteNotification, ClasseDuree,
     DecisionCoordination, DecisionCoordinationActive, DefinitionCoordination, Delegation,
-    DependanceDelegation, DomainError, EntreeReductionCoordination, EtatActivationOutbox,
-    EtatDecision, EtatDelegation, EtatGenerationDelegation, EtatNotificationOutbox, EtatObjectif,
-    EtatOutboxDelegation, EtatRequeteGuichet, FraicheurCoordination, GenerationDelegation,
-    IssueGreffe, LienArbitrage, LigneeDelegation, MotifRefusGreffe, NotificationOutbox,
-    ObjectifCoordonne, OperationGuichet, PolitiqueReassignation, ReceptionGreffe,
-    RecuCorrelation, ReductionCoordinationActive, TransitionCoordinationActive, TypeDecision,
-    TypeEvenementAttendu,
-    identifiant_deterministe, reduire_coordination,
+    DependanceDelegation, DomainError, EffetDemandeSuivie, EntreeReductionCoordination,
+    EpisodeRelance, EtatActivationOutbox, EtatDecision, EtatDelegation, EtatEpisodeRelance,
+    EtatGenerationDelegation, EtatNotificationOutbox, EtatObjectif, EtatOutboxDelegation,
+    EtatRequeteGuichet, FraicheurCoordination, GenerationDelegation, IssueGreffe, LienArbitrage,
+    LigneeDelegation, LotReassignation, MotifRefusGreffe, NotificationOutbox,
+    NotificationReassignation, ObjectifCoordonne, OperationGuichet, PolitiqueReassignation,
+    ReceptionGreffe, RecuCorrelation, ReductionCoordinationActive, ReductionReassignation,
+    TransitionCoordinationActive, TypeDecision, TypeEffetDemandeSuivie, TypeEvenementAttendu,
+    TypeFaitReassignation, TypeNotificationReassignation, identifiant_deterministe,
+    reduire_coordination, reduire_reassignation,
 };
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
     StoreCommitPhase,
 };
-use bridget_transport::protocol::CoordinationEventKind;
+use bridget_transport::protocol::{CoordinationEventKind, WrapperToDaemon};
 use rusqlite::{
     Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
 };
@@ -41,7 +43,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 11;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -121,6 +123,30 @@ pub struct StoredCoordinationSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredCoordinationReduction {
     pub reduction: ReductionCoordinationActive,
+    pub replayed: bool,
+}
+
+/// Effet filaire F29 figé avant toute I/O. `message_bytes` est l'autorité de
+/// reprise, qu'il s'agisse d'un `CancelRequest` ou d'un message suivi.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackedRequestOutbox {
+    pub effect_id: Uuid,
+    pub issued_at: i64,
+    pub objectif_id: Uuid,
+    pub delegation_id: Uuid,
+    pub generation: u64,
+    pub event_id: String,
+    pub policy_version: u64,
+    pub kind: TypeEffetDemandeSuivie,
+    pub request_id: String,
+    pub recipient: String,
+    pub message_bytes: Vec<u8>,
+    pub etat: EtatNotificationOutbox,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredReassignmentReduction {
+    pub reduction: ReductionReassignation,
     pub replayed: bool,
 }
 
@@ -238,6 +264,19 @@ pub enum CoordinationCommitPhase {
     AfterDecisionInsert,
     AfterTransition,
     AfterOutboxes,
+    BeforeCommit,
+    AfterCommit,
+}
+
+/// Frontières de la transaction F29. Elles permettent de prouver qu'aucune
+/// génération, demande ou notification n'échappe isolément au rollback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReassignmentCommitPhase {
+    AfterEvents,
+    AfterDecision,
+    AfterGenerations,
+    AfterRequestOutboxes,
+    AfterNotifications,
     BeforeCommit,
     AfterCommit,
 }
@@ -536,6 +575,219 @@ impl MaicieStore {
             reduction,
             replayed: false,
         })
+    }
+
+    /// Applique un lot F29 sans I/O externe. Les faits déjà consommés sont
+    /// dédupliqués par leurs octets structurés ; un rejeu exact relit la
+    /// réduction durable au lieu de recalculer depuis l'état courant.
+    pub fn apply_reassignment_batch(
+        &mut self,
+        lot: &LotReassignation,
+    ) -> Result<StoredReassignmentReduction, StoreError> {
+        self.apply_reassignment_batch_observed(lot, |_| Ok(()))
+    }
+
+    pub fn apply_reassignment_batch_observed(
+        &mut self,
+        lot: &LotReassignation,
+        mut observer: impl FnMut(ReassignmentCommitPhase) -> Result<(), StoreError>,
+    ) -> Result<StoredReassignmentReduction, StoreError> {
+        lot.verifier().map_err(StoreError::Domain)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+
+        let mut nouveaux = Vec::new();
+        let mut replay_batches = BTreeSet::new();
+        for fait in &lot.faits {
+            let payload = serde_json::to_vec(fait).map_err(StoreError::Json)?;
+            let existing: Option<(Vec<u8>, String)> = tx
+                .query_row(
+                    "SELECT payload_json, batch_event_id FROM reassignment_events
+                     WHERE event_id = ?1",
+                    [&fait.event_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(StoreError::Sql)?;
+            if let Some((stored, batch_event_id)) = existing {
+                if stored != payload {
+                    return Err(StoreError::EnvelopeMismatch);
+                }
+                replay_batches.insert(batch_event_id);
+            } else {
+                nouveaux.push(fait.clone());
+            }
+        }
+        if nouveaux.is_empty() {
+            if replay_batches.len() != 1 {
+                return Err(StoreError::Conflict("rejeu F29 couvre plusieurs lots"));
+            }
+            let event_id = replay_batches
+                .into_iter()
+                .next()
+                .ok_or(StoreError::Corrupt("lot F29 rejoué absent"))?;
+            let payload: Vec<u8> = tx
+                .query_row(
+                    "SELECT r.payload_json
+                     FROM active_coordination_decisions d
+                     JOIN reassignment_reductions r ON r.decision_id = d.decision_id
+                     WHERE d.delegation_id = ?1 AND d.generation = ?2 AND d.event_id = ?3",
+                    params![
+                        lot.delegation_id.to_string(),
+                        i64::try_from(lot.generation)
+                            .map_err(|_| StoreError::Invalid("génération F29 hors borne"))?,
+                        event_id,
+                    ],
+                    |row| row.get(0),
+                )
+                .map_err(StoreError::Sql)?;
+            let reduction: ReductionReassignation =
+                serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(StoredReassignmentReduction {
+                reduction,
+                replayed: true,
+            });
+        }
+
+        let effective = LotReassignation {
+            objectif_id: lot.objectif_id,
+            delegation_id: lot.delegation_id,
+            generation: lot.generation,
+            issued_at: lot.issued_at,
+            next_deadline_at: lot.next_deadline_at,
+            faits: nouveaux,
+        };
+        let (generation, policy, episode, generations) =
+            load_reassignment_context(&tx, &effective)?;
+        let reduction =
+            reduire_reassignation(&generation, &policy, &episode, &generations, &effective)
+                .map_err(StoreError::Domain)?;
+        let batch_event_id = reduction.decision.event_id.clone();
+        for fait in &effective.faits {
+            let inserted = tx
+                .execute(
+                    "INSERT INTO reassignment_events(
+                         event_id, objective_id, delegation_id, generation,
+                         batch_event_id, request_id, kind, payload_json
+                     ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                    params![
+                        fait.event_id,
+                        lot.objectif_id.to_string(),
+                        lot.delegation_id.to_string(),
+                        i64::try_from(lot.generation)
+                            .map_err(|_| StoreError::Invalid("génération F29 hors borne"))?,
+                        batch_event_id,
+                        fait.request_id,
+                        reassignment_fact_kind_name(fait.kind),
+                        serde_json::to_vec(fait).map_err(StoreError::Json)?,
+                    ],
+                )
+                .map_err(map_coordination_insert_error)?;
+            if inserted != 1 {
+                return Err(StoreError::Conflict("fait F29 non enregistré"));
+            }
+        }
+        observer(ReassignmentCommitPhase::AfterEvents)?;
+
+        let decision_bytes = serde_json::to_vec(&reduction.decision).map_err(StoreError::Json)?;
+        insert_active_coordination_decision(&tx, &reduction.decision, &decision_bytes)?;
+        observer(ReassignmentCommitPhase::AfterDecision)?;
+        persist_reassignment_generations(&tx, &generation, &reduction)?;
+        observer(ReassignmentCommitPhase::AfterGenerations)?;
+
+        let (body_bytes, timeout_secs) = load_delegation_request_template(&tx, lot.delegation_id)?;
+        for effect in &reduction.effets_demandes {
+            let outbox = tracked_request_outbox(
+                lot,
+                &policy,
+                effect,
+                &body_bytes,
+                timeout_secs,
+                &batch_event_id,
+            )?;
+            insert_tracked_request_outbox(&tx, &outbox)?;
+        }
+        observer(ReassignmentCommitPhase::AfterRequestOutboxes)?;
+        for notification in &reduction.notifications {
+            let outbox =
+                reassignment_notification_outbox(lot, &policy, notification, &batch_event_id)?;
+            insert_notification_outbox(&tx, &outbox)?;
+        }
+        observer(ReassignmentCommitPhase::AfterNotifications)?;
+        let reduction_bytes = serde_json::to_vec(&reduction).map_err(StoreError::Json)?;
+        let inserted = tx
+            .execute(
+                "INSERT INTO reassignment_reductions(decision_id, payload_json) VALUES (?1,?2)",
+                params![reduction.decision.decision_id.to_string(), reduction_bytes],
+            )
+            .map_err(StoreError::Sql)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("réduction F29 non enregistrée"));
+        }
+        observer(ReassignmentCommitPhase::BeforeCommit)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        observer(ReassignmentCommitPhase::AfterCommit)?;
+        Ok(StoredReassignmentReduction {
+            reduction,
+            replayed: false,
+        })
+    }
+
+    pub fn pending_tracked_request_outboxes(
+        &self,
+    ) -> Result<Vec<TrackedRequestOutbox>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT effect_id, issued_at, objective_id, delegation_id, generation,
+                        event_id, policy_version, kind, request_id, recipient,
+                        message_bytes, state
+                 FROM tracked_request_outbox
+                 WHERE terminal = 0 AND state IN ('prepared','outcome_unknown')
+                 ORDER BY effect_id",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, Vec<u8>>(10)?,
+                    row.get::<_, String>(11)?,
+                ))
+            })
+            .map_err(StoreError::Sql)?;
+        rows.map(|row| {
+            let row = row.map_err(StoreError::Sql)?;
+            Ok(TrackedRequestOutbox {
+                effect_id: parse_uuid(&row.0)?,
+                issued_at: row.1,
+                objectif_id: parse_uuid(&row.2)?,
+                delegation_id: parse_uuid(&row.3)?,
+                generation: u64::try_from(row.4)
+                    .map_err(|_| StoreError::Corrupt("génération d'effet F29 invalide"))?,
+                event_id: row.5,
+                policy_version: u64::try_from(row.6)
+                    .map_err(|_| StoreError::Corrupt("version d'effet F29 invalide"))?,
+                kind: parse_tracked_request_kind(&row.7)?,
+                request_id: row.8,
+                recipient: row.9,
+                message_bytes: row.10,
+                etat: parse_notification_state(&row.11)?,
+            })
+        })
+        .collect()
     }
 
     /// Lit les notifications non terminales sans reconstruire leur charge.
@@ -3323,6 +3575,29 @@ fn insert_coordination_snapshot(
         )
         .map_err(StoreError::Sql)?;
     }
+    for policy in &snapshot.definition.policies {
+        let request_id: String = tx
+            .query_row(
+                "SELECT message_id FROM delegation_outbox WHERE delegation_id = ?1",
+                [policy.delegation_id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::Sql)?;
+        let episode = EpisodeRelance {
+            delegation_id: policy.delegation_id,
+            objectif_id: policy.objectif_id,
+            generation: 1,
+            request_id,
+            request_ordinal: 1,
+            reminder_count: 0,
+            reemissions_used: 0,
+            etat: EtatEpisodeRelance::Actif,
+        };
+        episode
+            .verifier(policy.max_reemissions)
+            .map_err(StoreError::Domain)?;
+        insert_reminder_episode(tx, &episode)?;
+    }
     Ok(())
 }
 
@@ -3383,14 +3658,13 @@ fn load_coordination_snapshot(
         if lineage.objectif_id != objectif_id || lineage.generation_active == 0 {
             return Err(StoreError::Corrupt("lignée de coordination divergente"));
         }
-        let active = generations.iter().filter(|generation| {
+        let current = generations.iter().filter(|generation| {
             generation.delegation_id == lineage.delegation_id
                 && generation.generation == lineage.generation_active
-                && generation.etat.est_active()
         });
-        if active.count() != 1 {
+        if current.count() != 1 {
             return Err(StoreError::Corrupt(
-                "génération active de la lignée divergente",
+                "génération courante de la lignée divergente",
             ));
         }
     }
@@ -3499,6 +3773,435 @@ fn load_active_coordination_context(
     }
     loaded_generation.verifier().map_err(StoreError::Domain)?;
     Ok((loaded_generation, policy))
+}
+
+fn load_reassignment_context(
+    tx: &Transaction<'_>,
+    lot: &LotReassignation,
+) -> Result<
+    (
+        GenerationDelegation,
+        PolitiqueReassignation,
+        EpisodeRelance,
+        Vec<GenerationDelegation>,
+    ),
+    StoreError,
+> {
+    let generation_payload: Vec<u8> = tx
+        .query_row(
+            "SELECT payload_json FROM delegation_generations
+             WHERE delegation_id = ?1 AND objective_id = ?2 AND generation = ?3",
+            params![
+                lot.delegation_id.to_string(),
+                lot.objectif_id.to_string(),
+                i64::try_from(lot.generation)
+                    .map_err(|_| StoreError::Invalid("génération F29 hors borne"))?,
+            ],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::Sql)?;
+    let generation: GenerationDelegation =
+        serde_json::from_slice(&generation_payload).map_err(StoreError::Json)?;
+    let policy_payload: Vec<u8> = tx
+        .query_row(
+            "SELECT payload_json FROM reassignment_policies WHERE delegation_id = ?1",
+            [lot.delegation_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::Sql)?;
+    let policy: PolitiqueReassignation =
+        serde_json::from_slice(&policy_payload).map_err(StoreError::Json)?;
+
+    let mut statement = tx
+        .prepare(
+            "SELECT payload_json FROM delegation_generations
+             WHERE delegation_id = ?1 ORDER BY generation",
+        )
+        .map_err(StoreError::Sql)?;
+    let generations = statement
+        .query_map([lot.delegation_id.to_string()], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })
+        .map_err(StoreError::Sql)?
+        .map(|row| serde_json::from_slice(&row.map_err(StoreError::Sql)?).map_err(StoreError::Json))
+        .collect::<Result<Vec<GenerationDelegation>, StoreError>>()?;
+    drop(statement);
+
+    let active_episode: Option<Vec<u8>> = tx
+        .query_row(
+            "SELECT payload_json FROM reminder_episodes
+             WHERE delegation_id = ?1 AND generation = ?2 AND state = 'actif'
+             ORDER BY request_ordinal DESC LIMIT 1",
+            params![
+                lot.delegation_id.to_string(),
+                i64::try_from(lot.generation)
+                    .map_err(|_| StoreError::Invalid("génération F29 hors borne"))?,
+            ],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    let episode = if let Some(payload) = active_episode {
+        serde_json::from_slice(&payload).map_err(StoreError::Json)?
+    } else {
+        let request_ids: BTreeSet<&str> = lot
+            .faits
+            .iter()
+            .map(|fait| fait.request_id.as_str())
+            .collect();
+        let mut found = None;
+        for request_id in request_ids {
+            let payload: Option<Vec<u8>> = tx
+                .query_row(
+                    "SELECT payload_json FROM reminder_episodes
+                     WHERE delegation_id = ?1 AND generation = ?2 AND request_id = ?3",
+                    params![
+                        lot.delegation_id.to_string(),
+                        i64::try_from(lot.generation)
+                            .map_err(|_| StoreError::Invalid("génération F29 hors borne"))?,
+                        request_id,
+                    ],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(StoreError::Sql)?;
+            if payload.is_some() {
+                found = payload;
+                break;
+            }
+        }
+        if let Some(payload) = found {
+            serde_json::from_slice(&payload).map_err(StoreError::Json)?
+        } else if generation.generation == 1 && generation.etat.est_active() {
+            // Les snapshots créés sous le schéma v9 possèdent déjà leur
+            // demande initiale dans delegation_outbox mais pas encore
+            // d'épisode F29. L'enrôlement se fait dans la transaction du
+            // premier lot, sans reconstruire l'identifiant ni l'enveloppe.
+            let request_id: String = tx
+                .query_row(
+                    "SELECT message_id FROM delegation_outbox WHERE delegation_id = ?1",
+                    [lot.delegation_id.to_string()],
+                    |row| row.get(0),
+                )
+                .map_err(StoreError::Sql)?;
+            let seeded = EpisodeRelance {
+                delegation_id: lot.delegation_id,
+                objectif_id: lot.objectif_id,
+                generation: 1,
+                request_id,
+                request_ordinal: 1,
+                reminder_count: 0,
+                reemissions_used: 0,
+                etat: EtatEpisodeRelance::Actif,
+            };
+            seeded
+                .verifier(policy.max_reemissions)
+                .map_err(StoreError::Domain)?;
+            insert_reminder_episode(tx, &seeded)?;
+            seeded
+        } else {
+            return Err(StoreError::NotFound("épisode F29 absent"));
+        }
+    };
+    Ok((generation, policy, episode, generations))
+}
+
+fn persist_reassignment_generations(
+    tx: &Transaction<'_>,
+    current: &GenerationDelegation,
+    reduction: &ReductionReassignation,
+) -> Result<(), StoreError> {
+    if reduction.source != *current {
+        reduction.source.verifier().map_err(StoreError::Domain)?;
+        if reduction.source.objectif_id != current.objectif_id
+            || reduction.source.delegation_id != current.delegation_id
+            || reduction.source.generation != current.generation
+            || reduction.source.participant_id != current.participant_id
+            || !generation_transition_allowed(current.etat, reduction.source.etat)
+        {
+            return Err(StoreError::Invalid("transition source F29 invalide"));
+        }
+        let changed = tx
+            .execute(
+                "UPDATE delegation_generations SET state = ?1, payload_json = ?2
+                 WHERE delegation_id = ?3 AND generation = ?4 AND state = ?5",
+                params![
+                    generation_state_name(reduction.source.etat),
+                    serde_json::to_vec(&reduction.source).map_err(StoreError::Json)?,
+                    current.delegation_id.to_string(),
+                    i64::try_from(current.generation)
+                        .map_err(|_| StoreError::Invalid("génération F29 hors borne"))?,
+                    generation_state_name(current.etat),
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict(
+                "génération F29 modifiée concurremment",
+            ));
+        }
+    }
+
+    update_reminder_episode(tx, &reduction.episode_source)?;
+    if let Some(next) = &reduction.successeur {
+        next.verifier().map_err(StoreError::Domain)?;
+        let inserted = tx
+            .execute(
+                "INSERT INTO delegation_generations(
+                     delegation_id, objective_id, generation, participant_id, state, payload_json
+                 ) VALUES (?1,?2,?3,?4,?5,?6)",
+                params![
+                    next.delegation_id.to_string(),
+                    next.objectif_id.to_string(),
+                    i64::try_from(next.generation)
+                        .map_err(|_| StoreError::Invalid("génération F29 hors borne"))?,
+                    next.participant_id,
+                    generation_state_name(next.etat),
+                    serde_json::to_vec(next).map_err(StoreError::Json)?,
+                ],
+            )
+            .map_err(map_coordination_insert_error)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("successeur F29 non enregistré"));
+        }
+        let lineage = LigneeDelegation {
+            delegation_id: next.delegation_id,
+            objectif_id: next.objectif_id,
+            generation_active: next.generation,
+        };
+        let changed = tx
+            .execute(
+                "UPDATE delegation_lineages SET active_generation = ?1, payload_json = ?2
+                 WHERE delegation_id = ?3 AND active_generation = ?4",
+                params![
+                    i64::try_from(next.generation)
+                        .map_err(|_| StoreError::Invalid("génération F29 hors borne"))?,
+                    serde_json::to_vec(&lineage).map_err(StoreError::Json)?,
+                    next.delegation_id.to_string(),
+                    i64::try_from(current.generation)
+                        .map_err(|_| StoreError::Invalid("génération F29 hors borne"))?,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict("lignée F29 modifiée concurremment"));
+        }
+    }
+    if let Some(next_episode) = &reduction.episode_successeur {
+        insert_reminder_episode(tx, next_episode)?;
+    }
+    Ok(())
+}
+
+fn insert_reminder_episode(
+    tx: &Transaction<'_>,
+    episode: &EpisodeRelance,
+) -> Result<(), StoreError> {
+    let inserted = tx
+        .execute(
+            "INSERT INTO reminder_episodes(
+                 delegation_id, generation, request_id, request_ordinal,
+                 reminder_count, reemissions_used, state, payload_json
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                episode.delegation_id.to_string(),
+                i64::try_from(episode.generation)
+                    .map_err(|_| StoreError::Invalid("génération d'épisode hors borne"))?,
+                episode.request_id,
+                i64::from(episode.request_ordinal),
+                i64::from(episode.reminder_count),
+                i64::from(episode.reemissions_used),
+                reminder_episode_state_name(episode.etat),
+                serde_json::to_vec(episode).map_err(StoreError::Json)?,
+            ],
+        )
+        .map_err(map_coordination_insert_error)?;
+    if inserted != 1 {
+        return Err(StoreError::Conflict("épisode F29 non enregistré"));
+    }
+    Ok(())
+}
+
+fn update_reminder_episode(
+    tx: &Transaction<'_>,
+    episode: &EpisodeRelance,
+) -> Result<(), StoreError> {
+    let changed = tx
+        .execute(
+            "UPDATE reminder_episodes
+             SET reminder_count = ?1, reemissions_used = ?2, state = ?3, payload_json = ?4
+             WHERE delegation_id = ?5 AND generation = ?6 AND request_id = ?7",
+            params![
+                i64::from(episode.reminder_count),
+                i64::from(episode.reemissions_used),
+                reminder_episode_state_name(episode.etat),
+                serde_json::to_vec(episode).map_err(StoreError::Json)?,
+                episode.delegation_id.to_string(),
+                i64::try_from(episode.generation)
+                    .map_err(|_| StoreError::Invalid("génération d'épisode hors borne"))?,
+                episode.request_id,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    if changed != 1 {
+        return Err(StoreError::Conflict("épisode F29 modifié concurremment"));
+    }
+    Ok(())
+}
+
+fn load_delegation_request_template(
+    tx: &Transaction<'_>,
+    delegation_id: Uuid,
+) -> Result<(Vec<u8>, u64), StoreError> {
+    let (body, timeout): (Vec<u8>, i64) = tx
+        .query_row(
+            "SELECT body_bytes, timeout_secs FROM delegation_outbox WHERE delegation_id = ?1",
+            [delegation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(StoreError::Sql)?;
+    Ok((
+        body,
+        u64::try_from(timeout).map_err(|_| StoreError::Corrupt("timeout F29 invalide"))?,
+    ))
+}
+
+fn tracked_request_outbox(
+    lot: &LotReassignation,
+    policy: &PolitiqueReassignation,
+    effect: &EffetDemandeSuivie,
+    body_bytes: &[u8],
+    timeout_secs: u64,
+    event_id: &str,
+) -> Result<TrackedRequestOutbox, StoreError> {
+    let message_bytes = match effect.kind {
+        TypeEffetDemandeSuivie::Annuler => serde_json::to_vec(&WrapperToDaemon::CancelRequest {
+            id: effect.request_id.clone(),
+            sender: crate::MAICIE_IDENTITY.to_string(),
+            reason: Some("réassignation Maicie préautorisée".to_string()),
+        })
+        .map_err(StoreError::Json)?,
+        TypeEffetDemandeSuivie::Creer => {
+            let body = std::str::from_utf8(body_bytes)
+                .map_err(|_| StoreError::Corrupt("instruction F29 non UTF-8"))?;
+            serde_json::to_vec(&PublicMessage {
+                id: effect.request_id.clone(),
+                from: crate::MAICIE_IDENTITY.to_string(),
+                to: effect.recipient.clone(),
+                body: body.to_string(),
+                reply: true,
+                hops: 4,
+                reply_timeout: Some(timeout_secs),
+                deadline_at: effect
+                    .deadline_at
+                    .and_then(|value| u64::try_from(value).ok()),
+                in_reply_to: None,
+            })
+            .map_err(StoreError::Json)?
+        }
+    };
+    Ok(TrackedRequestOutbox {
+        effect_id: effect.effect_id,
+        issued_at: lot.issued_at,
+        objectif_id: lot.objectif_id,
+        delegation_id: lot.delegation_id,
+        generation: effect.generation,
+        event_id: event_id.to_string(),
+        policy_version: policy.version,
+        kind: effect.kind,
+        request_id: effect.request_id.clone(),
+        recipient: effect.recipient.clone(),
+        message_bytes,
+        etat: EtatNotificationOutbox::Prepared,
+    })
+}
+
+fn insert_tracked_request_outbox(
+    tx: &Transaction<'_>,
+    outbox: &TrackedRequestOutbox,
+) -> Result<(), StoreError> {
+    if outbox.issued_at <= 0
+        || outbox.generation == 0
+        || outbox.policy_version == 0
+        || outbox.request_id.trim().is_empty()
+        || outbox.recipient.trim().is_empty()
+        || outbox.message_bytes.is_empty()
+        || outbox.etat != EtatNotificationOutbox::Prepared
+    {
+        return Err(StoreError::Invalid("outbox de demande F29 invalide"));
+    }
+    let inserted = tx
+        .execute(
+            "INSERT INTO tracked_request_outbox(
+                 effect_id, issued_at, objective_id, delegation_id, generation,
+                 event_id, policy_version, kind, request_id, recipient,
+                 message_bytes, state, last_issue_json, terminal
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'prepared',NULL,0)",
+            params![
+                outbox.effect_id.to_string(),
+                outbox.issued_at,
+                outbox.objectif_id.to_string(),
+                outbox.delegation_id.to_string(),
+                i64::try_from(outbox.generation)
+                    .map_err(|_| StoreError::Invalid("génération d'effet hors borne"))?,
+                outbox.event_id,
+                i64::try_from(outbox.policy_version)
+                    .map_err(|_| StoreError::Invalid("version d'effet hors borne"))?,
+                tracked_request_kind_name(outbox.kind),
+                outbox.request_id,
+                outbox.recipient,
+                outbox.message_bytes,
+            ],
+        )
+        .map_err(map_coordination_insert_error)?;
+    if inserted != 1 {
+        return Err(StoreError::Conflict(
+            "outbox de demande F29 non enregistrée",
+        ));
+    }
+    Ok(())
+}
+
+fn reassignment_notification_outbox(
+    lot: &LotReassignation,
+    policy: &PolitiqueReassignation,
+    notification: &NotificationReassignation,
+    event_id: &str,
+) -> Result<NotificationOutbox, StoreError> {
+    let body = match notification.kind {
+        TypeNotificationReassignation::Sortant => "Mission réassignée ou arrêtée",
+        TypeNotificationReassignation::Successeur => "Mission de repli ouverte",
+        TypeNotificationReassignation::InterventionHumaineRequise => {
+            "Chaîne de repli épuisée : intervention humaine requise"
+        }
+    };
+    let message_bytes = serde_json::to_vec(&PublicMessage {
+        id: notification.message_id.to_string(),
+        from: crate::MAICIE_IDENTITY.to_string(),
+        to: notification.recipient.clone(),
+        body: body.to_string(),
+        reply: false,
+        hops: 4,
+        reply_timeout: None,
+        deadline_at: None,
+        in_reply_to: None,
+    })
+    .map_err(StoreError::Json)?;
+    let outbox = NotificationOutbox {
+        message_id: notification.message_id,
+        idempotency_key: format!("notification:{}", notification.message_id),
+        issued_at: lot.issued_at,
+        objectif_id: lot.objectif_id,
+        delegation_id: Some(lot.delegation_id),
+        generation: Some(notification.generation),
+        event_id: event_id.to_string(),
+        policy_version: policy.version,
+        recipient: notification.recipient.clone(),
+        message_bytes,
+        etat: EtatNotificationOutbox::Prepared,
+    };
+    outbox.verifier().map_err(StoreError::Domain)?;
+    Ok(outbox)
 }
 
 fn insert_active_coordination_decision(
@@ -4029,6 +4732,39 @@ fn generation_state_name(state: EtatGenerationDelegation) -> &'static str {
     }
 }
 
+fn reminder_episode_state_name(state: EtatEpisodeRelance) -> &'static str {
+    match state {
+        EtatEpisodeRelance::Actif => "actif",
+        EtatEpisodeRelance::AnnuleAdministrativement => "annule_administrativement",
+        EtatEpisodeRelance::Termine => "termine",
+    }
+}
+
+fn reassignment_fact_kind_name(kind: TypeFaitReassignation) -> &'static str {
+    match kind {
+        TypeFaitReassignation::DeliveryReport => "delivery_report",
+        TypeFaitReassignation::ReminderSent => "reminder_sent",
+        TypeFaitReassignation::Answered => "answered",
+        TypeFaitReassignation::TimedOut => "timed_out",
+        TypeFaitReassignation::AnnulationAdministrative => "annulation_administrative",
+    }
+}
+
+fn tracked_request_kind_name(kind: TypeEffetDemandeSuivie) -> &'static str {
+    match kind {
+        TypeEffetDemandeSuivie::Annuler => "annuler",
+        TypeEffetDemandeSuivie::Creer => "creer",
+    }
+}
+
+fn parse_tracked_request_kind(value: &str) -> Result<TypeEffetDemandeSuivie, StoreError> {
+    match value {
+        "annuler" => Ok(TypeEffetDemandeSuivie::Annuler),
+        "creer" => Ok(TypeEffetDemandeSuivie::Creer),
+        _ => Err(StoreError::Corrupt("type d'effet F29 inconnu")),
+    }
+}
+
 fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     // L'ouverture est un chemin concurrent normal : plusieurs processus
     // Maicie peuvent démarrer avant qu'un seul ait fini de poser le schéma.
@@ -4348,7 +5084,7 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
         )
         .map_err(StoreError::Sql)?;
     }
-    if current_version == 8 {
+    if current_version == 9 {
         // Une ancienne notification ne possède aucune preuve permettant de
         // reconstruire son horodatage canonique. La colonne reste donc NULL
         // pour ces lignes et la lecture des pending échoue fermée, au lieu de
@@ -4356,6 +5092,49 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
         tx.execute_batch(
             "ALTER TABLE notification_outbox
              ADD COLUMN issued_at INTEGER CHECK(issued_at > 0);",
+        )
+        .map_err(StoreError::Sql)?;
+    }
+    if current_version < 11 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS reassignment_events (
+                 event_id TEXT PRIMARY KEY,
+                 objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 delegation_id TEXT NOT NULL REFERENCES delegations(id),
+                 generation INTEGER NOT NULL CHECK(generation > 0),
+                 batch_event_id TEXT NOT NULL,
+                 request_id TEXT NOT NULL,
+                 kind TEXT NOT NULL CHECK(kind IN (
+                     'delivery_report','reminder_sent','answered','timed_out','annulation_administrative'
+                 )),
+                 payload_json BLOB NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS reassignment_events_request_idx
+                 ON reassignment_events(delegation_id, generation, request_id, event_id);
+             CREATE TABLE IF NOT EXISTS reassignment_reductions (
+                 decision_id TEXT PRIMARY KEY REFERENCES active_coordination_decisions(decision_id),
+                 payload_json BLOB NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS tracked_request_outbox (
+                 effect_id TEXT PRIMARY KEY,
+                 issued_at INTEGER NOT NULL CHECK(issued_at > 0),
+                 objective_id TEXT NOT NULL REFERENCES objectives(id),
+                 delegation_id TEXT NOT NULL REFERENCES delegations(id),
+                 generation INTEGER NOT NULL CHECK(generation > 0),
+                 event_id TEXT NOT NULL,
+                 policy_version INTEGER NOT NULL CHECK(policy_version > 0),
+                 kind TEXT NOT NULL CHECK(kind IN ('annuler','creer')),
+                 request_id TEXT NOT NULL,
+                 recipient TEXT NOT NULL,
+                 message_bytes BLOB NOT NULL,
+                 state TEXT NOT NULL CHECK(state IN ('prepared','outcome_unknown','accepted','rejected')),
+                 last_issue_json BLOB,
+                 terminal INTEGER NOT NULL DEFAULT 0 CHECK(terminal IN (0,1)),
+                 FOREIGN KEY(delegation_id, generation)
+                     REFERENCES delegation_generations(delegation_id, generation)
+             );
+             CREATE INDEX IF NOT EXISTS tracked_request_outbox_pending_idx
+                 ON tracked_request_outbox(terminal, state, effect_id);",
         )
         .map_err(StoreError::Sql)?;
     }

@@ -587,6 +587,521 @@ impl EpisodeRelance {
     }
 }
 
+/// Faits fermés qu'un lot F29 peut soumettre au réducteur. Leur ordre dans
+/// le lot n'a aucune autorité : une livraison durable est toujours examinée
+/// avant les signaux de relance ou d'expiration de la même demande.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeFaitReassignation {
+    DeliveryReport,
+    ReminderSent,
+    Answered,
+    TimedOut,
+    AnnulationAdministrative,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FaitReassignation {
+    pub event_id: String,
+    pub request_id: String,
+    pub kind: TypeFaitReassignation,
+    pub observed_at: i64,
+    pub freshness: FraicheurCoordination,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_hash: Option<String>,
+}
+
+impl FaitReassignation {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        if self.event_id.trim().is_empty()
+            || self.request_id.trim().is_empty()
+            || self.observed_at <= 0
+        {
+            return Err(DomainError::DonneeInvalide("fait F29 incomplet"));
+        }
+        match self.kind {
+            TypeFaitReassignation::DeliveryReport => {
+                let Some(hash) = &self.delivery_hash else {
+                    return Err(DomainError::DonneeInvalide(
+                        "rapport de livraison sans hash",
+                    ));
+                };
+                let valide = hash.len() == 64
+                    && hash
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase());
+                if !valide {
+                    return Err(DomainError::DonneeInvalide(
+                        "hash de livraison F29 invalide",
+                    ));
+                }
+            }
+            _ if self.delivery_hash.is_some() => {
+                return Err(DomainError::DonneeInvalide(
+                    "hash de livraison sur un fait non livraison",
+                ));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LotReassignation {
+    pub objectif_id: Uuid,
+    pub delegation_id: Uuid,
+    pub generation: u64,
+    /// Instant attesté utilisé pour figer les outboxes ; jamais une horloge
+    /// consultée par le réducteur.
+    pub issued_at: i64,
+    /// Échéance fournie par Bridget pour toute demande créée par ce lot.
+    pub next_deadline_at: i64,
+    pub faits: Vec<FaitReassignation>,
+}
+
+impl LotReassignation {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        if self.generation == 0
+            || self.issued_at <= 0
+            || self.next_deadline_at <= self.issued_at
+            || self.faits.is_empty()
+        {
+            return Err(DomainError::DonneeInvalide("lot F29 incomplet"));
+        }
+        let mut ids = BTreeSet::new();
+        for fait in &self.faits {
+            fait.verifier()?;
+            if !ids.insert(fait.event_id.as_str()) {
+                return Err(DomainError::DonneeInvalide("fait F29 dupliqué"));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn event_id_canonique(&self) -> Result<String, DomainError> {
+        self.verifier()?;
+        let mut ids: Vec<&str> = self
+            .faits
+            .iter()
+            .map(|fait| fait.event_id.as_str())
+            .collect();
+        ids.sort_unstable();
+        Ok(identifiant_deterministe(
+            b"lot-reassignation-v1",
+            &ids.iter().map(|id| id.as_bytes()).collect::<Vec<_>>(),
+        )
+        .to_string())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeEffetDemandeSuivie {
+    Annuler,
+    Creer,
+}
+
+/// Effet logique produit sans I/O. Le store en fige ensuite les octets
+/// filaires dans la même transaction que la décision et les générations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EffetDemandeSuivie {
+    pub effect_id: Uuid,
+    pub kind: TypeEffetDemandeSuivie,
+    pub generation: u64,
+    pub request_id: String,
+    pub recipient: String,
+    pub deadline_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeNotificationReassignation {
+    Sortant,
+    Successeur,
+    InterventionHumaineRequise,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationReassignation {
+    pub message_id: Uuid,
+    pub generation: u64,
+    pub recipient: String,
+    pub kind: TypeNotificationReassignation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReductionReassignation {
+    pub decision: DecisionCoordinationActive,
+    pub source: GenerationDelegation,
+    pub successeur: Option<GenerationDelegation>,
+    pub episode_source: EpisodeRelance,
+    pub episode_successeur: Option<EpisodeRelance>,
+    pub effets_demandes: Vec<EffetDemandeSuivie>,
+    pub notifications: Vec<NotificationReassignation>,
+}
+
+/// Réduit F29 à partir du seul snapshot épinglé. La chaîne de repli est
+/// parcourue dans son ordre déclaré ; aucune cible proposée par l'appelant,
+/// présence Bridget, disponibilité ou profil n'entre dans la décision.
+pub fn reduire_reassignation(
+    generation: &GenerationDelegation,
+    politique: &PolitiqueReassignation,
+    episode: &EpisodeRelance,
+    generations_connues: &[GenerationDelegation],
+    lot: &LotReassignation,
+) -> Result<ReductionReassignation, DomainError> {
+    generation.verifier()?;
+    episode.verifier(politique.max_reemissions)?;
+    lot.verifier()?;
+    if generation.objectif_id != lot.objectif_id
+        || generation.delegation_id != lot.delegation_id
+        || generation.generation != lot.generation
+        || politique.objectif_id != lot.objectif_id
+        || politique.delegation_id != lot.delegation_id
+        || episode.objectif_id != lot.objectif_id
+        || episode.delegation_id != lot.delegation_id
+        || episode.generation != lot.generation
+    {
+        return Err(DomainError::DonneeInvalide("contexte F29 divergent"));
+    }
+
+    let mut faits = lot.faits.clone();
+    faits.sort_by(|left, right| {
+        priorite_fait_reassignation(left.kind)
+            .cmp(&priorite_fait_reassignation(right.kind))
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    let batch_event_id = lot.event_id_canonique()?;
+    let decision_id = identifiant_deterministe(
+        b"decision-reassignation-v1",
+        &[
+            lot.objectif_id.as_bytes(),
+            lot.delegation_id.as_bytes(),
+            &lot.generation.to_be_bytes(),
+            batch_event_id.as_bytes(),
+            &politique.version.to_be_bytes(),
+        ],
+    );
+    let mut source = generation.clone();
+    let mut episode_source = episode.clone();
+    let mut effets_demandes = Vec::new();
+    let mut notifications = Vec::new();
+    let mut successeur = None;
+    let mut episode_successeur = None;
+
+    let active_facts: Vec<&FaitReassignation> = faits
+        .iter()
+        .filter(|fait| fait.request_id == episode.request_id)
+        .collect();
+    if active_facts
+        .iter()
+        .any(|fait| fait.freshness != FraicheurCoordination::Fresh)
+    {
+        return Err(DomainError::DonneeInvalide("observation F29 incomplète"));
+    }
+
+    let (kind, motif) = if !generation.etat.est_active()
+        || episode.etat != EtatEpisodeRelance::Actif
+        || active_facts.is_empty()
+    {
+        (TypeDecisionCoordinationActive::Aucun, "fait_tardif")
+    } else if active_facts
+        .iter()
+        .any(|fait| fait.kind == TypeFaitReassignation::DeliveryReport)
+    {
+        episode_source.etat = EtatEpisodeRelance::Termine;
+        (TypeDecisionCoordinationActive::Aucun, "livraison_terminale")
+    } else if active_facts
+        .iter()
+        .any(|fait| fait.kind == TypeFaitReassignation::AnnulationAdministrative)
+    {
+        source.etat = EtatGenerationDelegation::Annulee;
+        episode_source.etat = EtatEpisodeRelance::AnnuleAdministrativement;
+        effets_demandes.push(effet_annulation(
+            lot,
+            &batch_event_id,
+            &episode.request_id,
+            &generation.participant_id,
+        ));
+        notifications.push(notification_reassignation(
+            lot,
+            &batch_event_id,
+            &generation.participant_id,
+            TypeNotificationReassignation::Sortant,
+            lot.generation,
+        ));
+        (
+            TypeDecisionCoordinationActive::Aucun,
+            "annulation_administrative",
+        )
+    } else if active_facts
+        .iter()
+        .any(|fait| fait.kind == TypeFaitReassignation::Answered)
+        && episode.reemissions_used < politique.max_reemissions
+    {
+        episode_source.etat = EtatEpisodeRelance::Termine;
+        let next_ordinal = episode
+            .request_ordinal
+            .checked_add(1)
+            .ok_or(DomainError::DonneeInvalide("ordinal F29 hors borne"))?;
+        let request_id = identifiant_deterministe(
+            b"demande-suivie-reemission-v1",
+            &[
+                lot.delegation_id.as_bytes(),
+                &lot.generation.to_be_bytes(),
+                &[next_ordinal],
+                batch_event_id.as_bytes(),
+            ],
+        )
+        .to_string();
+        effets_demandes.push(effet_creation(
+            lot,
+            &batch_event_id,
+            &request_id,
+            &generation.participant_id,
+            lot.generation,
+        ));
+        episode_successeur = Some(EpisodeRelance {
+            delegation_id: lot.delegation_id,
+            objectif_id: lot.objectif_id,
+            generation: lot.generation,
+            request_id,
+            request_ordinal: next_ordinal,
+            reminder_count: 0,
+            reemissions_used: episode.reemissions_used + 1,
+            etat: EtatEpisodeRelance::Actif,
+        });
+        (TypeDecisionCoordinationActive::Aucun, "demande_reemise")
+    } else {
+        let reminder_count = active_facts
+            .iter()
+            .filter(|fait| fait.kind == TypeFaitReassignation::ReminderSent)
+            .count() as u32;
+        episode_source.reminder_count =
+            episode_source
+                .reminder_count
+                .checked_add(reminder_count)
+                .ok_or(DomainError::DonneeInvalide("compteur F29 hors borne"))?;
+        let doit_arbitrer = active_facts
+            .iter()
+            .any(|fait| fait.kind == TypeFaitReassignation::TimedOut)
+            || (active_facts
+                .iter()
+                .any(|fait| fait.kind == TypeFaitReassignation::Answered)
+                && episode.reemissions_used >= politique.max_reemissions)
+            || episode_source.reminder_count >= politique.seuil_relances;
+        if !doit_arbitrer {
+            (TypeDecisionCoordinationActive::Aucun, "seuil_non_atteint")
+        } else {
+            episode_source.etat = EtatEpisodeRelance::Termine;
+            effets_demandes.push(effet_annulation(
+                lot,
+                &batch_event_id,
+                &episode.request_id,
+                &generation.participant_id,
+            ));
+            let deja_consommes: BTreeSet<&str> = generations_connues
+                .iter()
+                .filter(|known| known.delegation_id == generation.delegation_id)
+                .map(|known| known.participant_id.as_str())
+                .collect();
+            let candidat = politique.chaine_repli.iter().find(|candidate| {
+                candidate.objectif_id == lot.objectif_id
+                    && !candidate.est_pilote
+                    && !deja_consommes.contains(candidate.participant_id.as_str())
+            });
+            if let Some(candidat) = candidat {
+                source.etat = EtatGenerationDelegation::Reassignee;
+                let next_generation = generation
+                    .generation
+                    .checked_add(1)
+                    .ok_or(DomainError::DonneeInvalide("génération F29 hors borne"))?;
+                let next_request_id = identifiant_deterministe(
+                    b"demande-suivie-successeur-v1",
+                    &[
+                        lot.delegation_id.as_bytes(),
+                        &next_generation.to_be_bytes(),
+                        batch_event_id.as_bytes(),
+                    ],
+                )
+                .to_string();
+                let next = GenerationDelegation {
+                    delegation_id: lot.delegation_id,
+                    objectif_id: lot.objectif_id,
+                    generation: next_generation,
+                    participant_id: candidat.participant_id.clone(),
+                    etat: EtatGenerationDelegation::Ouverte,
+                    generation_precedente: Some(generation.generation),
+                    trigger_event_id: Some(batch_event_id.clone()),
+                };
+                next.verifier()?;
+                effets_demandes.push(effet_creation(
+                    lot,
+                    &batch_event_id,
+                    &next_request_id,
+                    &candidat.participant_id,
+                    next_generation,
+                ));
+                notifications.push(notification_reassignation(
+                    lot,
+                    &batch_event_id,
+                    &generation.participant_id,
+                    TypeNotificationReassignation::Sortant,
+                    lot.generation,
+                ));
+                notifications.push(notification_reassignation(
+                    lot,
+                    &batch_event_id,
+                    &candidat.participant_id,
+                    TypeNotificationReassignation::Successeur,
+                    next_generation,
+                ));
+                episode_successeur = Some(EpisodeRelance {
+                    delegation_id: lot.delegation_id,
+                    objectif_id: lot.objectif_id,
+                    generation: next_generation,
+                    request_id: next_request_id,
+                    request_ordinal: 1,
+                    reminder_count: 0,
+                    reemissions_used: 0,
+                    etat: EtatEpisodeRelance::Actif,
+                });
+                successeur = Some(next);
+                (
+                    TypeDecisionCoordinationActive::Reassigner,
+                    "successeur_preautorise",
+                )
+            } else {
+                source.etat = EtatGenerationDelegation::InterventionHumaineRequise;
+                notifications.push(notification_reassignation(
+                    lot,
+                    &batch_event_id,
+                    &generation.participant_id,
+                    TypeNotificationReassignation::InterventionHumaineRequise,
+                    lot.generation,
+                ));
+                (
+                    TypeDecisionCoordinationActive::InterventionHumaineRequise,
+                    "chaine_preautorisee_epuisee",
+                )
+            }
+        }
+    };
+
+    let decision = DecisionCoordinationActive {
+        decision_id,
+        objectif_id: lot.objectif_id,
+        delegation_id: lot.delegation_id,
+        generation: lot.generation,
+        event_id: batch_event_id,
+        policy_version: politique.version,
+        kind,
+        motif: motif.to_string(),
+    };
+    decision.verifier()?;
+    episode_source.verifier(politique.max_reemissions)?;
+    if let Some(next) = &episode_successeur {
+        next.verifier(politique.max_reemissions)?;
+    }
+    Ok(ReductionReassignation {
+        decision,
+        source,
+        successeur,
+        episode_source,
+        episode_successeur,
+        effets_demandes,
+        notifications,
+    })
+}
+
+fn priorite_fait_reassignation(kind: TypeFaitReassignation) -> u8 {
+    match kind {
+        TypeFaitReassignation::DeliveryReport => 0,
+        TypeFaitReassignation::AnnulationAdministrative => 1,
+        TypeFaitReassignation::Answered => 2,
+        TypeFaitReassignation::TimedOut => 3,
+        TypeFaitReassignation::ReminderSent => 4,
+    }
+}
+
+fn effet_annulation(
+    lot: &LotReassignation,
+    event_id: &str,
+    request_id: &str,
+    recipient: &str,
+) -> EffetDemandeSuivie {
+    EffetDemandeSuivie {
+        effect_id: identifiant_deterministe(
+            b"effet-annulation-demande-v1",
+            &[
+                lot.delegation_id.as_bytes(),
+                event_id.as_bytes(),
+                request_id.as_bytes(),
+            ],
+        ),
+        kind: TypeEffetDemandeSuivie::Annuler,
+        generation: lot.generation,
+        request_id: request_id.to_string(),
+        recipient: recipient.to_string(),
+        deadline_at: None,
+    }
+}
+
+fn effet_creation(
+    lot: &LotReassignation,
+    event_id: &str,
+    request_id: &str,
+    recipient: &str,
+    generation: u64,
+) -> EffetDemandeSuivie {
+    EffetDemandeSuivie {
+        effect_id: identifiant_deterministe(
+            b"effet-creation-demande-v1",
+            &[
+                lot.delegation_id.as_bytes(),
+                event_id.as_bytes(),
+                request_id.as_bytes(),
+            ],
+        ),
+        kind: TypeEffetDemandeSuivie::Creer,
+        generation,
+        request_id: request_id.to_string(),
+        recipient: recipient.to_string(),
+        deadline_at: Some(lot.next_deadline_at),
+    }
+}
+
+fn notification_reassignation(
+    lot: &LotReassignation,
+    event_id: &str,
+    recipient: &str,
+    kind: TypeNotificationReassignation,
+    generation: u64,
+) -> NotificationReassignation {
+    let kind_bytes = match kind {
+        TypeNotificationReassignation::Sortant => b"sortant".as_slice(),
+        TypeNotificationReassignation::Successeur => b"successeur".as_slice(),
+        TypeNotificationReassignation::InterventionHumaineRequise => {
+            b"intervention_humaine_requise".as_slice()
+        }
+    };
+    NotificationReassignation {
+        message_id: identifiant_deterministe(
+            b"notification-reassignation-v1",
+            &[
+                lot.delegation_id.as_bytes(),
+                event_id.as_bytes(),
+                recipient.as_bytes(),
+                kind_bytes,
+            ],
+        ),
+        generation,
+        recipient: recipient.to_string(),
+        kind,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TypeDecisionCoordinationActive {
