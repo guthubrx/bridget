@@ -305,7 +305,8 @@ fn run_objective(arguments: ObjectiveArgs) -> Result<String, CliError> {
 
 fn open_store(config_path: &PathBuf) -> Result<MaicieStore, CliError> {
     let config = MaicieConfig::load(config_path).map_err(CliError::Configuration)?;
-    open_store_with_reconciliation(&config, BridgetClientLimits::default()).map(|opened| opened.store)
+    open_store_with_reconciliation(&config, BridgetClientLimits::default())
+        .map(|opened| opened.store)
 }
 
 struct ReconciledStore {
@@ -328,13 +329,17 @@ fn open_store_with_reconciliation(
         .map_err(CliError::Reconcile)?;
     // Une commande relève au plus un snapshot borné. Les terminaux du guichet
     // alimentent uniquement F29 ; les événements cursés n'ouvrent jamais F28.
-    let coordination = reconcile_coordination_startup_with_limits(&mut store, &config.bridget_socket, limits)
-        .map_err(CliError::Reconcile)?;
+    let coordination =
+        reconcile_coordination_startup_with_limits(&mut store, &config.bridget_socket, limits)
+            .map_err(CliError::Reconcile)?;
     // Les notifications naissent durablement du réducteur. Leur émission reste
     // le même chemin borné de reprise, jamais une seconde logique d'envoi CLI.
     reconcile_notification_startup_with_limits(&mut store, &config.bridget_socket, limits)
         .map_err(CliError::Reconcile)?;
-    Ok(ReconciledStore { store, coordination })
+    Ok(ReconciledStore {
+        store,
+        coordination,
+    })
 }
 
 fn reconcile_pending(
@@ -390,8 +395,9 @@ fn run_delegate(arguments: DelegateArgs) -> Result<String, CliError> {
     if let (Some(policies), DelegateResult::Created(created)) =
         (&config.coordination_policies, &result)
     {
-        pin_coordination_policy(&mut store, policies, created)
-            .map_err(|error| delegate_error_for_cli(error, &config.profiles, &agents, &arguments.config))?;
+        pin_coordination_policy(&mut store, policies, created).map_err(|error| {
+            delegate_error_for_cli(error, &config.profiles, &agents, &arguments.config)
+        })?;
     }
     // La transaction `delegate` est déjà commitée ici. T008 effectue ensuite
     // lookup puis replay des octets persistés, sans reconstruire le message.

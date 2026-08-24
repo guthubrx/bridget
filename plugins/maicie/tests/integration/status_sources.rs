@@ -90,8 +90,7 @@ fn status_sans_budget_ne_fabrique_ni_fraicheur_ni_capture() {
     assert_eq!(value["availability_reason"], "budget_capture_non_configure");
     assert_eq!(value["freshness"]["reason"], "budget_capture_non_configure");
     assert_eq!(
-        value["coordination_freshness"]["state"],
-        "unavailable",
+        value["coordination_freshness"]["state"], "unavailable",
         "la relève Bridget indisponible reste une observation distincte des faits locaux"
     );
     assert!(value["runtime"].as_array().unwrap().is_empty());

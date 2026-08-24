@@ -99,7 +99,10 @@ fn politique_configuree_est_figee_avant_dispatch_et_ignore_la_config_rechargee()
     };
     let initial_policies = policies(3, 2);
     pin_coordination_policy(&mut store, &initial_policies, &created).unwrap();
-    let snapshot = store.coordination_snapshot(created.objective_id).unwrap().unwrap();
+    let snapshot = store
+        .coordination_snapshot(created.objective_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(snapshot.definition.policies[0].version, 3);
     assert_eq!(snapshot.definition.policies[0].seuil_relances, 2);
     assert_eq!(snapshot.definition.policies[0].max_reemissions, 2);
@@ -108,7 +111,13 @@ fn politique_configuree_est_figee_avant_dispatch_et_ignore_la_config_rechargee()
     // rouge en remplaçant la version épinglée par 99.
     pin_coordination_policy(&mut store, &policies(99, 9), &created).unwrap();
     assert_eq!(
-        store.coordination_snapshot(created.objective_id).unwrap().unwrap().definition.policies[0].version,
+        store
+            .coordination_snapshot(created.objective_id)
+            .unwrap()
+            .unwrap()
+            .definition
+            .policies[0]
+            .version,
         3
     );
     drop(store);

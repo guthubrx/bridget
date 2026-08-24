@@ -69,9 +69,18 @@ fn valide_les_politiques_de_reassignation_par_classe_avant_toute_io() {
     "longue": {"version": 3, "reminder_threshold": 4, "max_reemissions": 8, "fallback_chain": []}
   },
 "#;
-    let fixture = Fixture::new("coordination-policies", &VALID_CONFIG.replace("\"profiles\": [{", &format!("{policies}  \"profiles\": [{{")));
+    let fixture = Fixture::new(
+        "coordination-policies",
+        &VALID_CONFIG.replace(
+            "\"profiles\": [{",
+            &format!("{policies}  \"profiles\": [{{"),
+        ),
+    );
     let config = MaicieConfig::load(&fixture.path).unwrap();
-    assert_eq!(config.coordination_policies.unwrap().normale.fallback_chain[0].participant_id, "bob");
+    assert_eq!(
+        config.coordination_policies.unwrap().normale.fallback_chain[0].participant_id,
+        "bob"
+    );
 }
 
 #[test]
@@ -84,11 +93,34 @@ fn refuse_les_bornes_et_le_pilote_des_politiques_avant_toute_io() {
   },
 "#;
     for (label, policies, expected) in [
-        ("reemissions", base.replacen("\"max_reemissions\": 1", "\"max_reemissions\": 9", 1), "max_reemissions"),
-        ("pilote", base.replacen("\"fallback_chain\": []", "\"fallback_chain\": [{\"participant_id\":\"maicie\",\"membership_version\":1}]", 1), "pilote Maicie"),
+        (
+            "reemissions",
+            base.replacen("\"max_reemissions\": 1", "\"max_reemissions\": 9", 1),
+            "max_reemissions",
+        ),
+        (
+            "pilote",
+            base.replacen(
+                "\"fallback_chain\": []",
+                "\"fallback_chain\": [{\"participant_id\":\"maicie\",\"membership_version\":1}]",
+                1,
+            ),
+            "pilote Maicie",
+        ),
     ] {
-        let fixture = Fixture::new(label, &VALID_CONFIG.replace("\"profiles\": [{", &format!("{policies}  \"profiles\": [{{")));
-        assert!(MaicieConfig::load(&fixture.path).unwrap_err().to_string().contains(expected));
+        let fixture = Fixture::new(
+            label,
+            &VALID_CONFIG.replace(
+                "\"profiles\": [{",
+                &format!("{policies}  \"profiles\": [{{"),
+            ),
+        );
+        assert!(
+            MaicieConfig::load(&fixture.path)
+                .unwrap_err()
+                .to_string()
+                .contains(expected)
+        );
     }
 }
 

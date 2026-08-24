@@ -16,12 +16,12 @@ use crate::domain::guichet::{
     parse_claim, parse_lifecycle_event,
 };
 use crate::domain::{
-    ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
-    DefinitionCoordination, EntreeReductionCoordination, EtatDecision, EtatFlux, EtatObjectif,
-    EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination, FaitAppartenanceRepli,
-    FaitReassignation, FraicheurCoordination, ModeObjectif, MotifRefusGreffe, ObjectifCoordonne,
-    OutboxDelegation, PolitiqueReassignation, SnapshotTransport, SourceSnapshot, TypeDecision,
-    TypeFaitReassignation,
+    ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination,
+    DefinitionCoordination, Delegation, EntreeReductionCoordination, EtatDecision, EtatFlux,
+    EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination,
+    FaitAppartenanceRepli, FaitReassignation, FraicheurCoordination, ModeObjectif,
+    MotifRefusGreffe, ObjectifCoordonne, OutboxDelegation, PolitiqueReassignation,
+    SnapshotTransport, SourceSnapshot, TypeDecision, TypeFaitReassignation,
 };
 use crate::outbox::{PreparedDelegation, stable_body_hash};
 pub use crate::store::GuichetLifecycleResult;
