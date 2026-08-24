@@ -1459,3 +1459,22 @@ jamais par engagement. Donc on encode.
 Même doctrine que la fermeture par fait : rendre le contournement plus
 coûteux que la conformité. Mission à ouvrir après le train de merge du
 24/08 (codex → L2 → attach).
+
+## Permissions des Claude gérés — décision du 2026-08-24, 15h05
+
+DÉCISION UTILISATEUR, en deux temps, après étude sur pièces de T3 Code
+(SDK claude-agent, callback canUseTool, quatre modes dont Supervised ;
+leur défaut est full-access = bypass ; nos tmux claude, référent compris,
+tournent DÉJÀ en --dangerously-skip-permissions via wrapper.rs:1229) :
+- **Premier temps (GO, en cours)** : option A — les Claude gérés reçoivent
+  les mêmes flags de bypass que les tmux. Alignement honnête sur la classe
+  de risque déjà acceptée (codex yolo de fait, worktrees, catalogue 0600,
+  jamais de clé API). Oracle : un claude géré exécute une mission outillée
+  réelle.
+- **Second temps (priorité basse, inscrit)** : sortir du bypass — médiation
+  des permissions type « Supervised » de T3 : chaque outil non listé ouvre
+  une demande d'approbation dans la page, avec accepter/refuser/accepter
+  pour la session. CONVERGE avec M3 (permissions sans terminal) et le
+  second facteur ADR 011 : même chantier d'UI d'approbation, à faire
+  ENSEMBLE, pas trois fois. Pas de copie de T3 (leur SDK, pas nos
+  contraintes) — leur modèle de POLITIQUE, pas leurs lignes.
