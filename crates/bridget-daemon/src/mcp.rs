@@ -30,6 +30,17 @@ const MAX_IN_FLIGHT_TOOL_CALLS: usize = 8;
 /// affirme l'absence de doublon, sans quoi le geste reste redouté et personne
 /// ne l'ose.
 pub(crate) const REJEU_A_L_IDENTIQUE: &str = "rejouer à l'identique — même id, même issued_at, même corps — lit le sort réel sans jamais dupliquer";
+
+/// Diagnostics des trois formes d'`outcome_unknown`, un par chemin.
+///
+/// La consigne de rejeu ne suffit pas à rendre un retour honnête : elle peut
+/// être portée mot pour mot par un motif qui, juste avant, affirme un dépôt que
+/// personne n'a constaté. Un motif est donc COMPOSÉ de ces constantes et de
+/// rien d'autre — c'est cette forme close que les oracles verrouillent, et non
+/// la seule présence de la consigne.
+const DIAGNOSTIC_REMISE_EN_VOL: &str = "remise en vol — le destinataire n'a pas encore accusé";
+const DIAGNOSTIC_SORT_INDETERMINE: &str = "sort indéterminé";
+const DIAGNOSTIC_ACCUSE_PERDU: &str = "accusé perdu après transmission";
 static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_CONNECTION_NAME: AtomicU64 = AtomicU64::new(1);
 
@@ -696,7 +707,7 @@ fn execute_send(
             "status": "outcome_unknown",
             "id": id,
             "issued_at": issued_at,
-            "reason": format!("accusé perdu après transmission — {REJEU_A_L_IDENTIQUE} ({message})")
+            "reason": format!("{DIAGNOSTIC_ACCUSE_PERDU} — {REJEU_A_L_IDENTIQUE} ({message})")
         })),
         Err(error) => Err(error),
     }
@@ -872,13 +883,13 @@ fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value
                 "id": id,
                 "issued_at": issued_at,
                 "delivery_id": delivery_id,
-                "reason": format!("remise en vol — le destinataire n'a pas encore accusé ; {REJEU_A_L_IDENTIQUE}")
+                "reason": format!("{DIAGNOSTIC_REMISE_EN_VOL} ; {REJEU_A_L_IDENTIQUE}")
             }),
             None => json!({
                 "status": "outcome_unknown",
                 "id": id,
                 "issued_at": issued_at,
-                "reason": format!("sort indéterminé ; {REJEU_A_L_IDENTIQUE}")
+                "reason": format!("{DIAGNOSTIC_SORT_INDETERMINE} ; {REJEU_A_L_IDENTIQUE}")
             }),
         },
         IdempotencyIssue::EnvelopeMismatch => json!({
@@ -1590,14 +1601,12 @@ mod tests {
         let rendered = send_issue_result("msg-1", 1_700_000_000, issue);
         assert_eq!(rendered["status"], "outcome_unknown");
         assert_eq!(rendered["delivery_id"], "livraison-7");
-        let reason = rendered["reason"].as_str().unwrap();
-        assert!(
-            !reason.contains("perdu"),
-            "une remise en vol ne doit rien annoncer de perdu: {reason}"
-        );
-        assert!(
-            reason.contains(REJEU_A_L_IDENTIQUE),
-            "le retour doit porter la consigne de rejeu mot pour mot: {reason}"
+        // Forme CLOSE : diagnostic puis consigne, rien avant, rien après. Un
+        // `contains` laissait passer tout préfixe ajouté — dont un préfixe qui
+        // affirme un dépôt que personne n'a constaté.
+        assert_eq!(
+            rendered["reason"].as_str().unwrap(),
+            format!("{DIAGNOSTIC_REMISE_EN_VOL} ; {REJEU_A_L_IDENTIQUE}")
         );
     }
 
@@ -1620,6 +1629,34 @@ mod tests {
         );
     }
 
+    /// Gardien des diagnostics : la forme close verrouille la COMPOSITION du
+    /// motif, celui-ci verrouille ce que chaque morceau affirme. Sans lui, il
+    /// suffirait de réécrire une constante pour qu'un sort inconnu s'annonce
+    /// comme un dépôt attesté — les oracles de forme resteraient verts, car ils
+    /// compareraient le rendu à la constante mensongère elle-même.
+    ///
+    /// Une seule des trois formes atteste une remise. Les deux autres portent
+    /// sur des cas où rien n'est constaté : elles ne doivent rien promettre.
+    #[test]
+    fn seul_le_diagnostic_de_remise_en_vol_atteste_quelque_chose() {
+        assert!(
+            DIAGNOSTIC_REMISE_EN_VOL.contains("remise en vol"),
+            "le seul cas où le daemon a pris la remise doit le dire"
+        );
+        for (diagnostic, nom) in [
+            (DIAGNOSTIC_SORT_INDETERMINE, "sort indéterminé"),
+            (DIAGNOSTIC_ACCUSE_PERDU, "accusé perdu"),
+        ] {
+            for promesse in ["remise en vol", "attesté", "atteste", "réussi", "déposé"] {
+                assert!(
+                    !diagnostic.contains(promesse),
+                    "le diagnostic « {nom} » porte sur un sort NON constaté : \
+                     il ne doit rien promettre, or il contient « {promesse} »"
+                );
+            }
+        }
+    }
+
     /// Contre-épreuve : sans `delivery_id`, le sort est vraiment inconnu et le
     /// retour ne doit pas rassurer. Si ce test tombe, le correctif a effacé la
     /// distinction qu'il avait pour but d'établir.
@@ -1632,14 +1669,9 @@ mod tests {
         let rendered = send_issue_result("msg-2", 1_700_000_000, issue);
         assert_eq!(rendered["status"], "outcome_unknown");
         assert!(rendered.get("delivery_id").is_none());
-        let reason = rendered["reason"].as_str().unwrap();
-        assert!(
-            reason.contains("indéterminé"),
-            "le sort inconnu doit être nommé comme tel: {reason}"
-        );
-        assert!(
-            reason.contains(REJEU_A_L_IDENTIQUE),
-            "même sans preuve de remise, la consigne de rejeu doit être donnée: {reason}"
+        assert_eq!(
+            rendered["reason"].as_str().unwrap(),
+            format!("{DIAGNOSTIC_SORT_INDETERMINE} ; {REJEU_A_L_IDENTIQUE}")
         );
     }
 
@@ -1932,13 +1964,24 @@ mod tests {
         assert_eq!(rendered["id"], "coupure-1");
         assert_eq!(rendered["issued_at"], 1_700_000_000i64);
 
-        // Ce que la consigne DIT est gardé par
-        // `la_consigne_de_rejeu_nomme_ses_trois_invariants_et_l_absence_de_doublon` ;
-        // ici on vérifie que ce chemin-ci la porte — c'est ce qui manquait.
+        // Forme CLOSE. Porter la consigne ne suffit pas : un motif peut la
+        // citer mot pour mot et affirmer juste avant un dépôt que personne n'a
+        // constaté. Sur CE chemin le mensonge optimiste est le pire de tous —
+        // aucune issue n'a été lue, le message a pu ne jamais partir.
+        //
+        // Le seul ajout tolérable est le détail technique final entre
+        // parenthèses : il vient de l'erreur d'entrée-sortie, il n'est pas
+        // rédigé, et il varie d'une plateforme à l'autre. Tout le reste est
+        // verrouillé au caractère près.
         let reason = rendered["reason"].as_str().unwrap();
+        let attendu = format!("{DIAGNOSTIC_ACCUSE_PERDU} — {REJEU_A_L_IDENTIQUE} (");
         assert!(
-            reason.contains(REJEU_A_L_IDENTIQUE),
-            "le chemin sans issue est celui où l'appelant a le plus besoin de la consigne: {reason}"
+            reason.starts_with(&attendu),
+            "le motif doit être exactement le diagnostic puis la consigne, sans rien avant ni entre: {reason}"
+        );
+        assert!(
+            reason.ends_with(')'),
+            "seul le détail technique entre parenthèses peut suivre la consigne: {reason}"
         );
 
         server.join().unwrap();
