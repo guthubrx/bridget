@@ -703,7 +703,16 @@ aucune ne coupe le pont existant avant que son remplaçant soit prouvé.
 - **G9 — Coût par mission.** Brancher la consommation par fil sur le greffe :
   chaque objectif clos porte ce qu'il a coûté. Ferme le trou « tokens par
   mission : non mesurable » des métriques d'efficience.
-- **G10 — Retirer le pont Zed.** Seulement une fois G2 et G5 prouvés en
-  production. Décider du sort de Gemini, qui n'a pas d'alternative native
-  connue : soit on garde le pont ACP pour lui seul, soit on inscrit Gemini
-  aux dépréciations. Zéro code mort — pas de pont conservé « au cas où ».
+- **G10 — Retirer le pont Zed pour Codex et Claude.** Seulement une fois G2
+  et G5 prouvés en production. ARBITRÉ PAR L'UTILISATEUR le 2026-08-24 : le
+  pont ACP est CONSERVÉ pour Gemini seul, et inscrit comme OBSOLÈTE. Ce
+  n'est pas une exception au principe « zéro code mort » : le pont sert
+  encore pour un fournisseur réel, mais il ne reçoit plus d'investissement
+  et sa disparition est décidée par avance — le jour où Gemini expose un
+  accès natif, ou le jour où Gemini sort du périmètre. À inscrire dans
+  DEPRECATIONS.md au moment de G10, avec sa condition de retrait. Corollaire
+  opérationnel : plus aucune nouvelle capacité ne passe par ACP ; toute
+  fonction ajoutée aux blocs G7 à G9 (modèle véridique, quota anticipé, coût
+  par mission) est développée sur les ponts natifs, et Gemini en est
+  simplement privé. Un adaptateur obsolète qu'on maintient à parité coûte
+  plus cher que deux ponts vivants.
