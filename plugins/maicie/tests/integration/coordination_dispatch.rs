@@ -1,11 +1,12 @@
 use bridget_transport::DaemonToWrapper;
 use bridget_transport::protocol::{CoordinationEventKind, GuichetLifecycleState};
-use maicie::bridget_client::BridgetClientLimits;
+use maicie::bridget_client::{BridgetClientLimits, GuichetClaim};
+use maicie::domain::guichet::{RequeteGuichet, parse_claim};
 use maicie::domain::{
     AttenteNotification, ClasseDuree, DefinitionCoordination, Delegation, DependanceDelegation,
-    EtatGenerationDelegation, EtatOutboxDelegation, FaitAppartenanceRepli, ModeObjectif,
-    ModeQualificationDependance, ObjectifCoordonne, OutboxDelegation, PolitiqueReassignation,
-    TypeEvenementAttendu,
+    EtatGenerationDelegation, EtatObjectif, EtatOutboxDelegation, FaitAppartenanceRepli,
+    ModeObjectif, ModeQualificationDependance, ObjectifCoordonne, OutboxDelegation,
+    PolitiqueReassignation, TypeEvenementAttendu,
 };
 use maicie::outbox::{PreparedDelegation, stable_body_hash};
 use maicie::reconcile::{
@@ -15,8 +16,8 @@ use maicie::reconcile::{
     reconcile_notification_startup_observed_with_limits,
     reconcile_notification_startup_with_limits,
 };
-use maicie::store::MaicieStore;
-use rusqlite::{Connection, params};
+use maicie::store::{MaicieStore, StoreError};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::json;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
@@ -192,8 +193,47 @@ fn releve_coordination_bornee_a_512_refuse_un_lot_incomplet_sans_mutation() {
 
 #[test]
 fn terminal_transport_reassigne_sans_qualifier_une_arete_f28() {
-    let fixture = Fixture::new("coordination-terminal-f29");
+    let (state, pending_requests) = run_terminal_transport_case("coordination-terminal-f29", false);
+    assert_eq!(
+        state,
+        EtatGenerationDelegation::Bloquee,
+        "timed_out alimente F29 mais ne qualifie jamais l'arête F28"
+    );
+    assert_eq!(
+        pending_requests, 2,
+        "F29 écrit annulation source et demande successeur"
+    );
+}
+
+#[test]
+fn oracle_refuse_le_mutant_qui_route_un_terminal_transport_vers_f28() {
+    let (state, _) = run_terminal_transport_case("coordination-terminal-mutant", true);
+    let oracle_failed = std::panic::catch_unwind(|| {
+        assert_eq!(
+            state,
+            EtatGenerationDelegation::Bloquee,
+            "un terminal transport ne doit jamais ouvrir F28"
+        );
+    });
+    assert!(
+        oracle_failed.is_err(),
+        "l'oracle doit tuer la mutation qui transforme timed_out en fait F28"
+    );
+}
+
+fn run_terminal_transport_case(
+    label: &str,
+    inject_forbidden_f28_route: bool,
+) -> (EtatGenerationDelegation, usize) {
+    let fixture = Fixture::new(label);
     let seed = seed_coordination_stream(&fixture.database_path, true);
+    if inject_forbidden_f28_route {
+        // Mutation volontaire : elle représente exactement le branchement
+        // interdit « terminal transport → qualification F28 ». Le rapport est
+        // injecté avant F29 afin que l'oracle ne puisse être sauvé par l'ordre
+        // terminal du guichet.
+        inject_transport_terminal_into_f28(&fixture.database_path, &seed);
+    }
     let listener = fixture.bind();
     let request_id = seed.request_id.clone();
     let server = thread::spawn(move || {
@@ -233,22 +273,164 @@ fn terminal_transport_reassigne_sans_qualifier_une_arete_f28() {
         .unwrap()
         .expect("snapshot coordination");
     let dependant = seed.dependant_id.expect("dépendant fixture");
-    assert_eq!(
-        snapshot
-            .generations
-            .iter()
-            .find(|generation| generation.delegation_id == dependant)
-            .expect("génération dépendante")
-            .etat,
-        EtatGenerationDelegation::Bloquee,
-        "timed_out alimente F29 mais ne qualifie jamais l'arête F28"
-    );
-    assert_eq!(
-        store.pending_tracked_request_outboxes().unwrap().len(),
-        2,
-        "F29 écrit annulation source et demande successeur"
-    );
+    let state = snapshot
+        .generations
+        .iter()
+        .find(|generation| generation.delegation_id == dependant)
+        .expect("génération dépendante")
+        .etat;
+    let pending_requests = store.pending_tracked_request_outboxes().unwrap().len();
     server.join().expect("serveur terminal terminé");
+    (state, pending_requests)
+}
+
+fn inject_transport_terminal_into_f28(database_path: &PathBuf, seed: &CoordinationSeed) {
+    let issuer_scope = "scope-mutant-f28-0123456789abcdef";
+    let report_id = "mutant-terminal-vers-f28";
+    let delivery_hash = "ab".repeat(32);
+    let canonical_request = format!(
+        "{{\"type\":\"service_request\",\"v\":1,\"issuer_scope\":\"{issuer_scope}\",\"request_id\":\"{report_id}\",\"issued_at\":{},\"from\":\"alice\",\"to\":\"maicie\",\"operation\":\"delivery_report\",\"payload\":{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\",\"delivery_hash\":\"{delivery_hash}\",\"in_reply_to\":\"{}\"}}}}",
+        ISSUED_AT + 9,
+        seed.objective_id,
+        seed.source_id,
+        seed.request_id,
+    )
+    .into_bytes();
+    let claim = GuichetClaim {
+        issuer_scope: issuer_scope.to_string(),
+        request_id: report_id.to_string(),
+        canonical_request,
+        claimed_at: ISSUED_AT + 9,
+        claim_generation: 1,
+        claim_token: "claim-mutant-f28-0123456789abcdef".to_string(),
+        claim_lease_expires_at: ISSUED_AT + 109,
+        expires_at: ISSUED_AT + 209,
+    };
+    let canonical = parse_claim(&claim).expect("mutation F28 canonique");
+    let RequeteGuichet::DeliveryReport(report) = &canonical.request else {
+        panic!("rapport mutant attendu")
+    };
+    MaicieStore::open(database_path)
+        .expect("store mutant ouvert")
+        .graft_delivery_report(
+            &claim,
+            &canonical,
+            report,
+            "response-mutant-f28",
+            ISSUED_AT + 9,
+        )
+        .expect("mutation F28 injectée");
+    let snapshot = MaicieStore::open(database_path)
+        .expect("store mutant relu")
+        .coordination_snapshot(seed.objective_id)
+        .expect("snapshot mutant")
+        .expect("coordination mutante");
+    let connection = Connection::open(database_path).expect("base mutante observable");
+    let (outcome, prerequisite_state): (String, String) = connection
+        .query_row(
+            "SELECT r.outcome,g.state FROM guichet_receptions r\n\
+             JOIN delegation_lineages l ON l.delegation_id=r.delegation_id\n\
+             JOIN delegation_generations g ON g.delegation_id=l.delegation_id\n\
+               AND g.generation=l.active_generation\n\
+             WHERE r.request_id=?1",
+            [report_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("faits mutants observables");
+    let dependant = seed.dependant_id.expect("dépendant mutant");
+    let state = snapshot
+        .generations
+        .iter()
+        .find(|generation| generation.delegation_id == dependant)
+        .expect("génération dépendante mutante")
+        .etat;
+    assert_eq!(
+        state,
+        EtatGenerationDelegation::Ouverte,
+        "la mutation de routage doit réellement traverser l'ouverture F28 (issue={outcome}, prerequis={prerequisite_state})"
+    );
+}
+
+#[test]
+fn faute_f29_du_chemin_combine_annule_curseur_evenements_generations_et_boites() {
+    for phase in [
+        CoordinationReconcilePhase::AfterDecision,
+        CoordinationReconcilePhase::AfterGenerations,
+        CoordinationReconcilePhase::AfterRequestOutboxes,
+        CoordinationReconcilePhase::AfterNotifications,
+    ] {
+        let fixture = Fixture::new(&format!("coordination-f29-rollback-{phase:?}"));
+        // Un seuil de un garantit que chaque frontière observée suit de vraies
+        // écritures F29 ; aucune phase n'est une vacuole sans effet à annuler.
+        let seed = seed_coordination_stream_with_threshold(&fixture.database_path, false, 1);
+        let initial_generations = table_count(&fixture.database_path, "delegation_generations");
+        let initial_episode = reminder_episode(&fixture.database_path, seed.source_id);
+        let listener = fixture.bind();
+        let request_id = seed.request_id.clone();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("relève fautive attendue");
+            let (mut reader, mut writer) = split(stream);
+            complete_coordination_handshake(&mut reader, &mut writer, None);
+            write_coordination_event(&mut writer, &request_id, 1, "evt-f29-rollback");
+            write_coordination_snapshot(&mut writer, Some(1));
+        });
+
+        let mut store = MaicieStore::open(&fixture.database_path).expect("store ouvert");
+        let failed = reconcile_coordination_startup_observed_with_limits(
+            &mut store,
+            fixture.socket_path(),
+            limits(Duration::from_secs(2)),
+            |observed| {
+                if observed == phase {
+                    return Err(StoreError::Conflict("faute F29 combinée injectée"));
+                }
+                Ok(())
+            },
+        );
+        assert!(
+            failed.is_err(),
+            "la faute {phase:?} doit sortir du point d'entrée réel"
+        );
+        server.join().expect("serveur fautif terminé");
+        drop(store);
+
+        assert_eq!(coordination_cursor(&fixture.database_path), None);
+        assert_eq!(
+            table_count(&fixture.database_path, "coordination_events"),
+            0
+        );
+        assert_eq!(
+            table_count(&fixture.database_path, "reassignment_events"),
+            0
+        );
+        assert_eq!(
+            table_count(&fixture.database_path, "reassignment_reductions"),
+            0
+        );
+        assert_eq!(
+            table_count(&fixture.database_path, "active_coordination_decisions"),
+            0
+        );
+        assert_eq!(
+            table_count(&fixture.database_path, "tracked_request_outbox"),
+            0
+        );
+        assert_eq!(
+            table_count(&fixture.database_path, "notification_outbox"),
+            0
+        );
+        assert_eq!(
+            table_count(&fixture.database_path, "delegation_generations"),
+            initial_generations,
+            "aucune génération ne doit fuir à {phase:?}"
+        );
+        assert_eq!(active_generation(&fixture.database_path, seed.source_id), 1);
+        assert_eq!(
+            reminder_episode(&fixture.database_path, seed.source_id),
+            initial_episode,
+            "l'épisode de relance doit rester identique à {phase:?}"
+        );
+    }
 }
 
 #[test]
@@ -1042,15 +1224,27 @@ fn seed_closure_with_recipients(store: &mut MaicieStore, recipients: usize) -> U
 
 struct CoordinationSeed {
     objective_id: Uuid,
+    source_id: Uuid,
     request_id: String,
     dependant_id: Option<Uuid>,
 }
 
 fn seed_coordination_stream(database_path: &PathBuf, with_dependency: bool) -> CoordinationSeed {
+    seed_coordination_stream_with_threshold(database_path, with_dependency, 2)
+}
+
+fn seed_coordination_stream_with_threshold(
+    database_path: &PathBuf,
+    with_dependency: bool,
+    reminder_threshold: u32,
+) -> CoordinationSeed {
     let mut store = MaicieStore::open(database_path).expect("store de semence");
-    let objective =
+    let mut objective =
         ObjectifCoordonne::nouveau("relève de coordination", ModeObjectif::Delegue, ISSUED_AT)
             .expect("objectif fixture");
+    objective
+        .transition(EtatObjectif::EnCoordination, ISSUED_AT + 1)
+        .expect("objectif coordonné");
     let (source, request_id) = create_delegation_with_message(&mut store, &objective, "alice");
     create_delegation(&mut store, &objective, "bob");
     let dependant = with_dependency.then(|| create_delegation(&mut store, &objective, "carol"));
@@ -1073,7 +1267,7 @@ fn seed_coordination_stream(database_path: &PathBuf, with_dependency: bool) -> C
                 objectif_id: objective.id,
                 classe: ClasseDuree::Normale,
                 version: 1,
-                seuil_relances: 2,
+                seuil_relances: reminder_threshold,
                 max_reemissions: 2,
                 chaine_repli: vec![FaitAppartenanceRepli {
                     objectif_id: objective.id,
@@ -1087,6 +1281,7 @@ fn seed_coordination_stream(database_path: &PathBuf, with_dependency: bool) -> C
         .expect("snapshot coordination inscrit");
     CoordinationSeed {
         objective_id: objective.id,
+        source_id: source,
         request_id: request_id.to_string(),
         dependant_id: dependant,
     }
@@ -1147,6 +1342,38 @@ fn table_count(database_path: &PathBuf, table: &str) -> i64 {
             row.get(0)
         })
         .expect("compteur observable")
+}
+
+fn coordination_cursor(database_path: &PathBuf) -> Option<i64> {
+    Connection::open(database_path)
+        .expect("base observable")
+        .query_row("SELECT MAX(cursor) FROM coordination_events", [], |row| {
+            row.get(0)
+        })
+        .expect("curseur observable")
+}
+
+fn active_generation(database_path: &PathBuf, delegation_id: Uuid) -> i64 {
+    Connection::open(database_path)
+        .expect("base observable")
+        .query_row(
+            "SELECT active_generation FROM delegation_lineages WHERE delegation_id=?1",
+            [delegation_id.to_string()],
+            |row| row.get(0),
+        )
+        .expect("génération active observable")
+}
+
+fn reminder_episode(database_path: &PathBuf, delegation_id: Uuid) -> Option<Vec<u8>> {
+    Connection::open(database_path)
+        .expect("base observable")
+        .query_row(
+            "SELECT payload_json FROM reminder_episodes WHERE delegation_id=?1",
+            [delegation_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("épisode observable")
 }
 
 struct Fixture {

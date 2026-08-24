@@ -185,6 +185,10 @@ pub struct CoordinationReconcileReport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoordinationReconcilePhase {
     BeforeApply,
+    AfterDecision,
+    AfterGenerations,
+    AfterRequestOutboxes,
+    AfterNotifications,
     BeforeStoreCommit,
     AfterStoreCommit,
 }
@@ -736,6 +740,18 @@ pub fn reconcile_coordination_startup_observed_with_limits(
                         }
                         crate::store::CoordinationCommitPhase::AfterCommit => {
                             CoordinationReconcilePhase::AfterStoreCommit
+                        }
+                        crate::store::CoordinationCommitPhase::AfterDecision => {
+                            CoordinationReconcilePhase::AfterDecision
+                        }
+                        crate::store::CoordinationCommitPhase::AfterGenerations => {
+                            CoordinationReconcilePhase::AfterGenerations
+                        }
+                        crate::store::CoordinationCommitPhase::AfterRequestOutboxes => {
+                            CoordinationReconcilePhase::AfterRequestOutboxes
+                        }
+                        crate::store::CoordinationCommitPhase::AfterNotifications => {
+                            CoordinationReconcilePhase::AfterNotifications
                         }
                         _ => return Ok(()),
                     })

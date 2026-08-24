@@ -285,6 +285,13 @@ pub enum CoordinationCommitPhase {
     AfterDependentDecision,
     AfterDependentTransition,
     AfterDependentOutbox,
+    /// Frontières F29 exposées aussi par le commit combiné T1610. Elles
+    /// empêchent le point d'entrée de production de masquer une écriture
+    /// partielle derrière son propre observateur de coordination.
+    AfterDecision,
+    AfterGenerations,
+    AfterRequestOutboxes,
+    AfterNotifications,
     BeforeCommit,
     AfterCommit,
 }
@@ -640,7 +647,23 @@ impl MaicieStore {
             return Err(StoreError::Invalid("rappel et lot F29 divergents"));
         }
         let coordination = apply_coordination_reduction_in_transaction(&tx, input, &mut observer)?;
-        let mut reassignment_observer = |_| Ok(());
+        let mut reassignment_observer = |phase| match phase {
+            ReassignmentCommitPhase::AfterDecision => {
+                observer(CoordinationCommitPhase::AfterDecision)
+            }
+            ReassignmentCommitPhase::AfterGenerations => {
+                observer(CoordinationCommitPhase::AfterGenerations)
+            }
+            ReassignmentCommitPhase::AfterRequestOutboxes => {
+                observer(CoordinationCommitPhase::AfterRequestOutboxes)
+            }
+            ReassignmentCommitPhase::AfterNotifications => {
+                observer(CoordinationCommitPhase::AfterNotifications)
+            }
+            ReassignmentCommitPhase::AfterEvents
+            | ReassignmentCommitPhase::BeforeCommit
+            | ReassignmentCommitPhase::AfterCommit => Ok(()),
+        };
         let reassignment =
             apply_reassignment_batch_in_transaction(&tx, &lot, &mut reassignment_observer)?;
         observer(CoordinationCommitPhase::BeforeCommit)?;
