@@ -14,6 +14,7 @@ pub mod reconcile;
 pub mod runtime;
 pub mod store;
 pub mod telemetry;
+pub mod ui_projection;
 
 /// Identité stable réservée au compagnon d'orchestration.
 pub const MAICIE_IDENTITY: &str = "maicie";

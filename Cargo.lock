@@ -106,6 +106,7 @@ dependencies = [
  "env_logger",
  "libc",
  "log",
+ "maicie",
  "rusqlite",
  "serde",
  "serde_json",

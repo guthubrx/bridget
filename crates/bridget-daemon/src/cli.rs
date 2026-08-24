@@ -115,6 +115,7 @@ pub fn run() {
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
         "mcp" => cmd_mcp(),
+        "ui" => cmd_ui(&args[2..]),
         "attach" => cmd_attach(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
@@ -165,6 +166,40 @@ pub fn run() {
 fn cmd_mcp() {
     if let Err(error) = crate::mcp::run_stdio() {
         eprintln!("bridget mcp: {error}");
+        std::process::exit(1);
+    }
+}
+
+fn cmd_ui(args: &[String]) {
+    let mut maicie_config = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--maicie-config" => {
+                index += 1;
+                maicie_config = args.get(index).map(PathBuf::from);
+                if maicie_config.is_none() {
+                    eprintln!("bridget ui: --maicie-config requiert un chemin absolu");
+                    std::process::exit(2);
+                }
+            }
+            option => {
+                eprintln!("bridget ui: option inconnue {option}");
+                std::process::exit(2);
+            }
+        }
+        index += 1;
+    }
+    let maicie_config = maicie_config.unwrap_or_else(|| {
+        eprintln!("bridget ui: --maicie-config <chemin-absolu> est obligatoire");
+        std::process::exit(2);
+    });
+    if !maicie_config.is_absolute() {
+        eprintln!("bridget ui: le chemin --maicie-config doit être absolu");
+        std::process::exit(2);
+    }
+    if let Err(error) = crate::ui::run(socket_path(), maicie_config) {
+        eprintln!("bridget ui: {error}");
         std::process::exit(1);
     }
 }
@@ -240,6 +275,7 @@ fn print_usage() {
          Daemon & client :\n  \
            daemon                 Lance le daemon\n  \
            mcp                    Lance le serveur MCP sur stdio\n  \
+           ui --maicie-config <P> Lance le relais UI loopback lecture seule\n  \
            attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            spawn <TYPE>           Lance un équipier géré [--name N] [--persistent]\n  \
            stop <N>               Arrête un équipier géré\n  \
