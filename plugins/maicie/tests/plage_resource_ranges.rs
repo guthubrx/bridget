@@ -112,6 +112,76 @@ fn ressources_distinctes_coexistent() {
     assert_eq!(listed[2].objective_id, a);
 }
 
+#[test]
+fn rejeu_meme_titulaire_conserve_reserved_at_du_premier() {
+    // Tue MUTANT-A : branche holder==objective_id remplacée par Err.
+    let fixture = Fixture::new("rejeu-idempotent");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let titulaire = seed_objective(&mut store, "rejeu");
+
+    let premier = store
+        .reserve_resource_range("migration:v14", titulaire, 4_000)
+        .unwrap();
+    assert_eq!(premier.reserved_at, 4_000);
+
+    let second = store
+        .reserve_resource_range("migration:v14", titulaire, 4_999)
+        .unwrap();
+    assert_eq!(
+        second.reserved_at, 4_000,
+        "le rejeu doit conserver reserved_at du PREMIER, pas celui du second appel"
+    );
+    assert_eq!(second.objective_id, titulaire);
+    assert_eq!(second.resource, "migration:v14");
+
+    let listed = store.list_resource_ranges().unwrap();
+    assert_eq!(listed.len(), 1, "une seule ligne après rejeu");
+    assert_eq!(listed[0].reserved_at, 4_000);
+    assert_eq!(listed[0].objective_id, titulaire);
+}
+
+#[test]
+fn casse_distingue_deux_ressources_accordees_a_deux_objectifs() {
+    // Tue MUTANT-B : COLLATE NOCASE qui fusionnerait migration:v14 et Migration:V14.
+    let fixture = Fixture::new("casse-exacte");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let bas = seed_objective(&mut store, "bas");
+    let haut = seed_objective(&mut store, "haut");
+
+    store
+        .reserve_resource_range("migration:v14", bas, 5_000)
+        .unwrap();
+    store
+        .reserve_resource_range("Migration:V14", haut, 5_001)
+        .unwrap();
+
+    let listed = store.list_resource_ranges().unwrap();
+    assert_eq!(
+        listed.len(),
+        2,
+        "la casse DISTINGUE : deux lignes accordées, pas un chevauchement"
+    );
+    let noms: Vec<&str> = listed.iter().map(|r| r.resource.as_str()).collect();
+    assert!(noms.contains(&"migration:v14"));
+    assert!(noms.contains(&"Migration:V14"));
+    assert_eq!(
+        listed
+            .iter()
+            .find(|r| r.resource == "migration:v14")
+            .unwrap()
+            .objective_id,
+        bas
+    );
+    assert_eq!(
+        listed
+            .iter()
+            .find(|r| r.resource == "Migration:V14")
+            .unwrap()
+            .objective_id,
+        haut
+    );
+}
+
 fn seed_objective(store: &mut MaicieStore, label: &str) -> Uuid {
     let objective = ObjectifCoordonne::nouveau(label, ModeObjectif::Delegue, 1).unwrap();
     let delegation = Delegation::nouvelle(
