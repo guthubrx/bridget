@@ -163,3 +163,38 @@ deux échecs successifs pour un même agent.)*
 - **Un rouge n'est jamais requalifié en « instable » sans preuve.** Trois tests
   ont échoué de façon intermittente cette nuit ; deux cachaient un vrai défaut.
   La preuve d'instabilité est un taux mesuré, pas une impression.
+
+
+## Rapporter à Maicie : le guichet (tous les agents)
+
+Écrit le 2026-08-24, jour où le guichet est entré en production.
+
+**Maicie n'est pas joignable en direct, et ce n'est pas une panne.** Elle ne
+tourne pas en permanence : elle s'exécute quand on l'appelle, puis se
+termine. Un envoi Bridget vers `maicie` répond donc `unknown_recipient`.
+C'est nominal. Trois agents s'y sont fait prendre la même nuit avant que le
+guichet existe, et ont conclu à une panne.
+
+**Le guichet est sa boîte de dépôt.** Ce qui y est déposé pendant son absence
+est relevé, greffé et répondu à sa prochaine exécution.
+
+```
+bridget guichet deposer <delivery-report|mission-status|deadline-question> [options]
+```
+
+Trois opérations FERMÉES, jamais de texte libre : rapporter une livraison,
+demander où en est une mission, poser une question d'échéance. La restriction
+est voulue — un agent dépose un FAIT dans une forme prévue, il ne raconte
+pas. Un fait déposé est exploitable ; un texte libre demanderait une
+interprétation, et Maicie n'interprète pas.
+
+**Ce que le dépôt remplace, et ce qu'il ne remplace pas.** Il remplace le
+rapport *à Maicie* — donc le passage où le référent transcrivait
+l'information au greffe à la place de l'agent. Il ne remplace PAS la
+livraison *au référent* : celui-ci doit lire le travail pour le vérifier sur
+pièces et router la relecture. Un agent qui livre fait donc les deux : il
+dépose son rapport au guichet, et il envoie sa livraison au référent.
+
+**Idempotence.** Le dépôt porte une clé ; rejouer le même dépôt à
+l'identique ne crée pas de doublon. En cas de doute sur un envoi perdu,
+rejouer est sans danger — et préférable au silence.
