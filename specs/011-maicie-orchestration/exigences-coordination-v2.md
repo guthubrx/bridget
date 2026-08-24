@@ -571,3 +571,35 @@ plus vite ; le coût net est un report, pas une perte.
   binaire de référence, config Maicie), pas seulement les chemins des
   documents. Un successeur qui ne trouve pas la socket déclare l'équipe
   morte et agit en conséquence.
+- **La voie app-server est confirmée par OpenAI eux-mêmes, et une crate Rust
+  officielle existe.** Vérifié en ligne (l'utilisateur a corrigé une erreur
+  de ma part : ce n'était pas « le réseau bloqué », c'était le bac à sable de
+  mes commandes shell — les outils web, eux, passent). Faits établis :
+  `codex-app-server-protocol` est publiée sur crates.io, version 0.63.0
+  (11/12/2025), « App server protocol for Codex AI agent » ; le dépôt
+  openai/codex contient les crates `app-server-protocol`,
+  `app-server-transport`, `app-server`, `app-server-daemon` et
+  `app-server-client`, et `codex-core` est présenté comme la surface
+  d'embarquement Rust prévue. Un SDK tiers typé, `codex-codes`, fournit des
+  clients synchrone et Tokio avec framing, corrélation et flux
+  d'approbations. Bridget étant en Rust et ne dépendant d'AUCUNE
+  bibliothèque ACP aujourd'hui (vérifié : le daemon n'a que serde,
+  serde_json, rusqlite, uuid, libc, signal-hook), il parle déjà le protocole
+  à la main sur stdio — passer à app-server change les messages écrits, pas
+  l'architecture.
+  DÉTAILS DE PROTOCOLE À RETENIR : JSON-RPC 2.0 délimité par newline sur
+  stdio, MAIS sans le champ `"jsonrpc":"2.0"` (piège) ; séquence
+  `initialize` + `initialized`, puis `thread/start`, puis `turn/start` ;
+  saturation signalée par le code -32001, à retenter en backoff exponentiel
+  avec gigue. À VÉRIFIER avant de s'engager : la correspondance de versions
+  entre la crate (0.63.0) et le CLI local (0.149.0), qui ne suivent pas la
+  même numérotation.
+  ARGUMENT DÉCISIF, et il vient d'OpenAI : ils ont d'abord tenté d'exposer
+  Codex en serveur MCP, et ont constaté que le modèle requête/réponse
+  orienté outils de MCP ne pouvait accommoder ni le flux des diffs, ni les
+  circuits d'approbation, ni la persistance des fils, ni les requêtes
+  initiées par le serveur. D'où leur partage : app-server pour connecter un
+  client À Codex, MCP pour connecter des outils À Codex. C'est exactement la
+  distinction que Bridget doit faire, et elle valide au passage que notre
+  usage de MCP (outils exposés aux agents) et le futur pont app-server
+  (pilotage des agents) sont deux couches distinctes, pas concurrentes.
