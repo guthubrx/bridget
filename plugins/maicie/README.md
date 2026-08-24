@@ -68,6 +68,41 @@ strictement locales. Toutes rendent ensuite la main :
 Réutiliser la même clé d'idempotence avec le même contenu rejoue le même
 résultat. Réutiliser cette clé avec un contenu différent est refusé.
 
+## Migration de schéma — consentement explicite
+
+L'ouverture d'une base Maicie **ne migre plus** un schéma déjà versionné.
+Créer une base neuve (`user_version = 0`) reste autorisé sans flag : créer
+n'est pas migrer. Un schéma trop récent pour le binaire reste refusé
+(fail-closed, inchangé).
+
+Quand la base porte un schéma **antérieur** au binaire, l'ouverture refuse
+avec un message parlant et **n'écrit rien** (`user_version` inchangé). Le
+seul consentement documenté est :
+
+```bash
+maicie migrate --config /chemin/absolu/vers/maicie.json
+```
+
+Équivalent sur toute commande qui ouvre la base (flag global, avant ou après
+le verbe) :
+
+```bash
+maicie --migrate status --config /chemin/absolu/vers/maicie.json
+maicie plage list --migrate --config /chemin/absolu/vers/maicie.json
+```
+
+Codes de sortie : refus de migration = erreur `store` (exit 6), comme les
+autres erreurs SQLite / schéma. Usage invalide (flag dupliqué, `migrate`
+sans `--config`) = exit 2.
+
+**Limite assumée** : ce consentement tue la migration *silencieuse* ; il
+n'est pas une garde anti-production. Un binaire de branche invoqué avec
+`--migrate` (ou `maicie migrate`) contre la config de production migre
+encore. La règle sociale du chantier (« un binaire de branche ne touche
+jamais la config/base de production ») reste la seule barrière ; une garde
+technique (allowlist de chemins, variable d'environnement) est un chantier
+séparé, hors de ce lot.
+
 ## Arrêt
 
 Maicie ne maintient aucun service résident, timer ou processus enfant. Une

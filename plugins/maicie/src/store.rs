@@ -376,8 +376,8 @@ impl MaicieStore {
 
     /// Ouvre la base privée et applique les migrations idempotentes jusqu'à
     /// la version de schéma portée par ce binaire. Réservé au consentement
-    /// explicite (CLI `--migrate` / `maicie migrate`) : c'est le seul chemin
-    /// qui peut avancer un schéma déjà versionné.
+    /// explicite (CLI `maicie migrate --config <chemin>` / flag `--migrate`) :
+    /// c'est le seul chemin qui peut avancer un schéma déjà versionné.
     pub fn open_and_migrate(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         Self::open_with_migration_consent(path, true)
     }
@@ -7723,7 +7723,7 @@ impl fmt::Display for StoreError {
             ),
             Self::MigrationRequired { found, supported } => write!(
                 formatter,
-                "schéma SQLite {found} antérieur au binaire (attend {supported}) ; relancer avec --migrate"
+                "schéma SQLite {found} antérieur au binaire (attend {supported}) ; relancer avec : maicie migrate --config <chemin>"
             ),
             Self::Io(source) => write!(formatter, "I/O store impossible : {source}"),
             Self::Sql(source) => write!(formatter, "SQLite impossible : {source}"),

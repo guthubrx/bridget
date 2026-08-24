@@ -58,7 +58,7 @@ fn base_anterieure_sans_flag_refuse_parlant_sans_ecriture() {
     assert!(
         message.contains("schéma SQLite 13")
             && message.contains("attend 14")
-            && message.contains("--migrate"),
+            && message.contains("maicie migrate --config <chemin>"),
         "message parlant attendu, reçu : {message}"
     );
     assert_eq!(
