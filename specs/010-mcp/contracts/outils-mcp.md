@@ -39,13 +39,47 @@ Résultat métier :
 ```json
 { "status": "accepted", "id": "…", "issued_at": 1700000000, "hops": 4 }
 { "status": "dnd", "reason": "« sol » ne souhaite pas être dérangé (encore 12 min)", "minutes_left": 12 }
-{ "status": "outcome_unknown", "id": "…", "reason": "accusé perdu après transmission — retry possible avec le même id" }
+{ "status": "outcome_unknown", "id": "…", "issued_at": 1700000000, "delivery_id": "…", "reason": "remise en vol — le destinataire n'a pas encore accusé ; rejouer à l'identique — même id, même issued_at, même corps — lit le sort réel sans jamais dupliquer" }
+{ "status": "outcome_unknown", "id": "…", "issued_at": 1700000000, "reason": "sort indéterminé ; rejouer à l'identique — même id, même issued_at, même corps — lit le sort réel sans jamais dupliquer" }
+{ "status": "outcome_unknown", "id": "…", "issued_at": 1700000000, "reason": "accusé perdu après transmission — rejouer à l'identique … (détail technique)" }
 ```
 
 Règles : corps transmis octet pour octet ; id métier généré avant la connexion
 daemon ; retour dès accusé/refus (jamais d'attente de la réponse du
 destinataire) ; le premier résultat renvoie `id` et `issued_at`, qui doivent
 être rejoués ensemble pour un retry → déduplication daemon.
+
+`outcome_unknown` est le retour **nominal** d'un premier envoi : le daemon
+répond avant que le destinataire ait accusé. La présence de `delivery_id`
+distingue les deux cas — avec lui, la remise est en vol et le dépôt a réussi ;
+sans lui, le sort est réellement indéterminé. Dans les deux cas le rejeu à
+l'identique (**même `id`, même `issued_at`, même corps**) est une
+**consultation** sûre, jamais une seconde émission : il rend `accepted` une fois
+l'accusé aval consolidé.
+
+`outcome_unknown` a donc **trois** formes, pas deux. Les deux premières viennent
+d'une issue rendue par le daemon (avec ou sans `delivery_id`). La troisième naît
+côté client, sans issue du tout : la connexion tombe **après** l'écriture de la
+commande, si bien que l'outil ne lit jamais la réponse. Le message a pu partir
+ou non ; c'est le seul cas où l'outil l'ignore vraiment. Le rejeu à l'identique
+est là aussi le geste correct, et le seul.
+
+Un `delivery_id` n'atteste un dépôt que tant que la remise est **en vol**. Une
+remise mise en quarantaine — échec de reprise, `DeliveryIndeterminate`, ou
+migration écartant une enveloppe absente — cesse d'être annoncée comme telle et
+retombe sur la forme « sort indéterminé » : cet état est absorbant, plus rien ne
+l'accusera, et l'annoncer comme un dépôt réussi serait un mensonge tenu jusqu'à
+l'expiration de l'horizon.
+
+`envelope_mismatch` survient lorsqu'un rejeu réutilise un `id` déjà connu avec
+un contenu différent — corps modifié, destinataire changé, `issued_at` distinct.
+C'est la garde qui rend le rejeu sûr : elle refuse qu'une clé déjà engagée serve
+à faire passer un autre message. Un rejeu qui la déclenche n'est pas à
+contourner par une nouvelle clé sans avoir d'abord lu le sort du premier envoi ;
+tout ajout part dans un message séparé.
+
+Le code de sortie du binaire n'est pas défini ici : il est domicilié dans
+`specs/003-cycle-vie-demandes/contracts/cli.md`.
 
 ## `bridget_who`
 

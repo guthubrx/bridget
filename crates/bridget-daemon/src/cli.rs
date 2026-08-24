@@ -979,6 +979,13 @@ fn cmd_guichet(args: &[String]) {
             println!(
                 "DÉPÔT: {issue} (id={request_id}, issued_at={issued_at}, issuer_scope={issuer_scope}, expire={expires_at})"
             );
+            // DETTE CONNUE (voie guichet, hors périmètre de ce lot) : le jeton
+            // `outcome_unknown` reste ici le nom d'un dépôt NOMINAL réussi,
+            // imprimé sur stdout et suivi d'une sortie 0. C'est le défaut que
+            // le lot corrige sur la voie send, non transposé : cette voie a
+            // ses propres consommateurs (`scripts/install-k1.sh` filtre ce
+            // jeton, `guichet_integration_test.rs` l'atteste), et les changer
+            // demande son propre mandat.
             if issue != "queued" && issue != "outcome_unknown" {
                 std::process::exit(1);
             }
@@ -1177,12 +1184,25 @@ fn print_idempotency_issue(issue: &IdempotencyIssue, options: &IdempotentSendOpt
             options.id,
             options.issued_at
         ),
-        IdempotencyIssue::OutcomeUnknown { delivery_id, .. } => {
-            eprintln!(
-                "ISSUE: outcome_unknown id={} issued_at={} delivery_id={}",
+        // Une remise en vol n'est pas une panne : elle passe par la sortie
+        // standard, comme le succès dont elle est le premier temps.
+        IdempotencyIssue::OutcomeUnknown {
+            delivery_id: Some(delivery_id),
+            ..
+        } => {
+            println!(
+                "DÉPÔT: en vol id={} issued_at={} delivery_id={delivery_id} — {}",
                 options.id,
                 options.issued_at,
-                delivery_id.as_deref().unwrap_or("—")
+                crate::mcp::REJEU_A_L_IDENTIQUE
+            );
+        }
+        IdempotencyIssue::OutcomeUnknown { .. } => {
+            eprintln!(
+                "ISSUE: outcome_unknown id={} issued_at={} — sort indéterminé ; {}",
+                options.id,
+                options.issued_at,
+                crate::mcp::REJEU_A_L_IDENTIQUE
             );
         }
         IdempotencyIssue::EnvelopeMismatch => eprintln!(
@@ -1200,6 +1220,27 @@ fn print_idempotency_issue(issue: &IdempotencyIssue, options: &IdempotentSendOpt
     }
 }
 
+/// Le code de sortie suit le DÉPÔT, pas la consolidation de l'accusé aval.
+///
+/// Le daemon répond avant que le destinataire ait accusé : sur un premier envoi
+/// nominal l'issue est `OutcomeUnknown`, et un `delivery_id` atteste qu'il a
+/// pris la remise. Traiter ce cas en échec faisait sortir en `rc=1` tout envoi
+/// réussi. Sans `delivery_id`, le sort est réellement indéterminé : l'échec est
+/// alors honnête.
+pub(crate) fn send_deposited(issue: &IdempotencyIssue) -> bool {
+    match issue {
+        IdempotencyIssue::Accepted { .. } => true,
+        // Un identifiant vide n'atteste rien : le daemon n'en produit jamais,
+        // et le prendre pour une preuve de dépôt ferait sortir en succès sur
+        // une valeur que lui-même refuserait. On exige la preuve, pas sa forme.
+        IdempotencyIssue::OutcomeUnknown {
+            delivery_id: Some(delivery_id),
+            ..
+        } => !delivery_id.trim().is_empty(),
+        _ => false,
+    }
+}
+
 fn send_idempotent_if_requested(
     message: &mut BridgetMessage,
     options: Option<IdempotentSendOptions>,
@@ -1211,7 +1252,7 @@ fn send_idempotent_if_requested(
     match send_idempotent_to_daemon(message, &options) {
         Ok(DaemonToWrapper::IdempotencyResult { issue, .. }) => {
             print_idempotency_issue(&issue, &options);
-            if !matches!(issue, IdempotencyIssue::Accepted { .. }) {
+            if !send_deposited(&issue) {
                 std::process::exit(1);
             }
         }
@@ -4267,5 +4308,73 @@ mod idempotency_projection_tests {
                 .unwrap()
                 .contains(&remediation)
         );
+    }
+}
+
+#[cfg(test)]
+mod depot_tests {
+    use super::*;
+
+    /// Le cas nominal : le daemon a pris la remise mais le destinataire n'a pas
+    /// encore accusé. C'est un succès de dépôt, pas une panne — c'est ce que le
+    /// `rc=1` d'origine niait sur CHAQUE premier envoi.
+    #[test]
+    fn une_remise_en_vol_est_un_depot_reussi() {
+        assert!(send_deposited(&IdempotencyIssue::OutcomeUnknown {
+            expires_at: 1_700_000_060,
+            delivery_id: Some("livraison-1".to_string()),
+        }));
+        assert!(send_deposited(&IdempotencyIssue::Accepted {
+            expires_at: 1_700_000_060,
+        }));
+    }
+
+    /// La contre-épreuve : sans `delivery_id`, le sort est réellement inconnu.
+    /// Si cette assertion tombe, le correctif est allé trop loin et masque un
+    /// échec véritable derrière un code de sortie nul.
+    #[test]
+    fn un_sort_indetermine_n_est_pas_un_depot() {
+        assert!(!send_deposited(&IdempotencyIssue::OutcomeUnknown {
+            expires_at: 1_700_000_060,
+            delivery_id: None,
+        }));
+    }
+
+    /// C5 — un identifiant de remise vide n'est pas une preuve de dépôt.
+    ///
+    /// Le daemon n'en produit jamais et refuserait celui-ci ; l'accepter
+    /// ferait sortir en succès sur une valeur qu'il rejette lui-même. La garde
+    /// porte sur le contenu, pas sur la seule présence du `Some`.
+    #[test]
+    fn un_identifiant_de_remise_vide_n_atteste_pas_un_depot() {
+        for vide in ["", " ", "\t", "\n"] {
+            assert!(
+                !send_deposited(&IdempotencyIssue::OutcomeUnknown {
+                    expires_at: 1_700_000_060,
+                    delivery_id: Some(vide.to_string()),
+                }),
+                "un delivery_id {vide:?} ne prouve aucune remise"
+            );
+        }
+        // Contre-épreuve : un identifiant réel reste un dépôt, sinon la garde
+        // aurait simplement tout refusé.
+        assert!(send_deposited(&IdempotencyIssue::OutcomeUnknown {
+            expires_at: 1_700_000_060,
+            delivery_id: Some("livraison-2".to_string()),
+        }));
+    }
+
+    /// Les refus restent des échecs : le correctif ne touche qu'à l'issue qui
+    /// décrivait un succès comme une perte.
+    #[test]
+    fn les_refus_restent_des_echecs() {
+        assert!(!send_deposited(&IdempotencyIssue::Rejected {
+            category: "dnd".to_string(),
+            reason: "destinataire en ne-pas-déranger".to_string(),
+            expires_at: 1_700_000_060,
+        }));
+        assert!(!send_deposited(&IdempotencyIssue::EnvelopeMismatch));
+        assert!(!send_deposited(&IdempotencyIssue::IdempotencyExpired));
+        assert!(!send_deposited(&IdempotencyIssue::InvalidIssuedAt));
     }
 }

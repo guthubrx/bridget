@@ -20,6 +20,34 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 const DAEMON_BUDGET: Duration = Duration::from_secs(10);
 const MAX_IN_FLIGHT_TOOL_CALLS: usize = 8;
+
+/// Consigne de rejeu, point de vérité unique des sept ancrages.
+///
+/// Les trois formes d'`outcome_unknown` et les deux sorties du binaire disent
+/// la même chose parce qu'elles disent LA MÊME CHAÎNE. Elle nomme les trois
+/// invariants — un rejeu qui change le corps n'est pas une consultation mais
+/// une seconde émission, que le daemon refusera en `envelope_mismatch` — et
+/// affirme l'absence de doublon, sans quoi le geste reste redouté et personne
+/// ne l'ose.
+///
+/// Provenance, pour qui voudra la vérifier : la SUBSTANCE vient de
+/// `README.md` (« rejouez exactement le même corps avec les valeurs
+/// affichées »), qui portait déjà le troisième invariant quand les retours ne
+/// nommaient que les deux premiers. La FORMULATION est celle du mandat de
+/// dégel, adaptée en ponctuation pour tenir dans un motif. Ce n'est donc pas
+/// une recopie littérale du README, et il ne faut pas l'annoncer comme telle.
+pub(crate) const REJEU_A_L_IDENTIQUE: &str = "rejouer à l'identique — même id, même issued_at, même corps — lit le sort réel sans jamais dupliquer";
+
+/// Diagnostics des trois formes d'`outcome_unknown`, un par chemin.
+///
+/// La consigne de rejeu ne suffit pas à rendre un retour honnête : elle peut
+/// être portée mot pour mot par un motif qui, juste avant, affirme un dépôt que
+/// personne n'a constaté. Un motif est donc COMPOSÉ de ces constantes et de
+/// rien d'autre — c'est cette forme close que les oracles verrouillent, et non
+/// la seule présence de la consigne.
+const DIAGNOSTIC_REMISE_EN_VOL: &str = "remise en vol — le destinataire n'a pas encore accusé";
+const DIAGNOSTIC_SORT_INDETERMINE: &str = "sort indéterminé";
+const DIAGNOSTIC_ACCUSE_PERDU: &str = "accusé perdu après transmission";
 static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_CONNECTION_NAME: AtomicU64 = AtomicU64::new(1);
 
@@ -686,7 +714,7 @@ fn execute_send(
             "status": "outcome_unknown",
             "id": id,
             "issued_at": issued_at,
-            "reason": format!("accusé perdu après transmission — retry possible avec le même id ({message})")
+            "reason": format!("{DIAGNOSTIC_ACCUSE_PERDU} — {REJEU_A_L_IDENTIQUE} ({message})")
         })),
         Err(error) => Err(error),
     }
@@ -851,12 +879,26 @@ fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value
         } => {
             json!({ "status": public_refusal_category(&category), "id": id, "issued_at": issued_at, "reason": reason })
         }
-        IdempotencyIssue::OutcomeUnknown { .. } => json!({
-            "status": "outcome_unknown",
-            "id": id,
-            "issued_at": issued_at,
-            "reason": "accusé perdu après transmission — retry possible avec le même id"
-        }),
+        // Le daemon répond AVANT l'accusé du destinataire : sur un premier envoi
+        // nominal, l'issue est donc toujours `OutcomeUnknown`. Un `delivery_id`
+        // atteste que la remise est en vol — rien n'est perdu. Sans lui, le sort
+        // est réellement indéterminé. Le distinguo évite d'annoncer une panne
+        // sur le cas nominal, et donc d'inviter au double envoi.
+        IdempotencyIssue::OutcomeUnknown { delivery_id, .. } => match delivery_id {
+            Some(delivery_id) => json!({
+                "status": "outcome_unknown",
+                "id": id,
+                "issued_at": issued_at,
+                "delivery_id": delivery_id,
+                "reason": format!("{DIAGNOSTIC_REMISE_EN_VOL} ; {REJEU_A_L_IDENTIQUE}")
+            }),
+            None => json!({
+                "status": "outcome_unknown",
+                "id": id,
+                "issued_at": issued_at,
+                "reason": format!("{DIAGNOSTIC_SORT_INDETERMINE} ; {REJEU_A_L_IDENTIQUE}")
+            }),
+        },
         IdempotencyIssue::EnvelopeMismatch => json!({
             "status": "envelope_mismatch",
             "id": id,
@@ -1553,6 +1595,99 @@ mod tests {
         std::fs::remove_file(socket).unwrap();
     }
 
+    /// Le cas nominal ne doit plus s'annoncer comme un incident : le daemon
+    /// répond avant l'accusé du destinataire, donc TOUT premier envoi passe
+    /// par là. Annoncer « accusé perdu » sur un succès, c'est inviter au
+    /// double envoi — le défaut mesuré sur ~100 envois d'une seule journée.
+    #[test]
+    fn une_remise_en_vol_ne_s_annonce_pas_comme_un_accuse_perdu() {
+        let issue = IdempotencyIssue::OutcomeUnknown {
+            expires_at: 1_700_000_060,
+            delivery_id: Some("livraison-7".to_string()),
+        };
+        let rendered = send_issue_result("msg-1", 1_700_000_000, issue);
+        assert_eq!(rendered["status"], "outcome_unknown");
+        assert_eq!(rendered["delivery_id"], "livraison-7");
+        // Forme CLOSE : diagnostic puis consigne, rien avant, rien après. Un
+        // `contains` laissait passer tout préfixe ajouté — dont un préfixe qui
+        // affirme un dépôt que personne n'a constaté.
+        assert_eq!(
+            rendered["reason"].as_str().unwrap(),
+            format!("{DIAGNOSTIC_REMISE_EN_VOL} ; {REJEU_A_L_IDENTIQUE}")
+        );
+    }
+
+    /// Gardien du point de vérité : les autres oracles vérifient que chaque
+    /// ancrage porte CETTE chaîne, celui-ci vérifie ce que la chaîne dit. Sans
+    /// lui, la consigne pourrait se vider de son sens sans faire rougir un
+    /// seul test — c'est exactement ainsi que le troisième invariant avait
+    /// disparu de la version précédente.
+    #[test]
+    fn la_consigne_de_rejeu_nomme_ses_trois_invariants_et_l_absence_de_doublon() {
+        // Chercher « id » ne gardait RIEN : « id » est déjà contenu dans
+        // « à l'identique ». Amputer la consigne de « même id, » laissait donc
+        // ce gardien vert — sur l'invariant précisément qui avait disparu de la
+        // version précédente, celui qu'il était censé protéger. Chaque
+        // invariant se vérifie sous la forme qui l'énonce, pas sous un fragment
+        // que le reste de la phrase fournit déjà.
+        for invariant in ["même id", "même issued_at", "même corps"] {
+            assert!(
+                REJEU_A_L_IDENTIQUE.contains(invariant),
+                "la consigne doit nommer l'invariant « {invariant} »"
+            );
+        }
+        assert!(
+            REJEU_A_L_IDENTIQUE.contains("dupliquer"),
+            "sans la promesse de non-duplication, le rejeu reste redouté et personne ne l'ose"
+        );
+    }
+
+    /// Gardien des diagnostics : la forme close verrouille la COMPOSITION du
+    /// motif, celui-ci verrouille ce que chaque morceau affirme. Sans lui, il
+    /// suffirait de réécrire une constante pour qu'un sort inconnu s'annonce
+    /// comme un dépôt attesté — les oracles de forme resteraient verts, car ils
+    /// compareraient le rendu à la constante mensongère elle-même.
+    ///
+    /// Une seule des trois formes atteste une remise. Les deux autres portent
+    /// sur des cas où rien n'est constaté : elles ne doivent rien promettre.
+    #[test]
+    fn seul_le_diagnostic_de_remise_en_vol_atteste_quelque_chose() {
+        assert!(
+            DIAGNOSTIC_REMISE_EN_VOL.contains("remise en vol"),
+            "le seul cas où le daemon a pris la remise doit le dire"
+        );
+        for (diagnostic, nom) in [
+            (DIAGNOSTIC_SORT_INDETERMINE, "sort indéterminé"),
+            (DIAGNOSTIC_ACCUSE_PERDU, "accusé perdu"),
+        ] {
+            for promesse in ["remise en vol", "attesté", "atteste", "réussi", "déposé"] {
+                assert!(
+                    !diagnostic.contains(promesse),
+                    "le diagnostic « {nom} » porte sur un sort NON constaté : \
+                     il ne doit rien promettre, or il contient « {promesse} »"
+                );
+            }
+        }
+    }
+
+    /// Contre-épreuve : sans `delivery_id`, le sort est vraiment inconnu et le
+    /// retour ne doit pas rassurer. Si ce test tombe, le correctif a effacé la
+    /// distinction qu'il avait pour but d'établir.
+    #[test]
+    fn un_sort_indetermine_ne_promet_pas_une_remise() {
+        let issue = IdempotencyIssue::OutcomeUnknown {
+            expires_at: 1_700_000_060,
+            delivery_id: None,
+        };
+        let rendered = send_issue_result("msg-2", 1_700_000_000, issue);
+        assert_eq!(rendered["status"], "outcome_unknown");
+        assert!(rendered.get("delivery_id").is_none());
+        assert_eq!(
+            rendered["reason"].as_str().unwrap(),
+            format!("{DIAGNOSTIC_SORT_INDETERMINE} ; {REJEU_A_L_IDENTIQUE}")
+        );
+    }
+
     #[test]
     fn coupure_apres_transmission_devient_outcome_unknown_et_le_retry_reste_identique() {
         let socket = test_socket("cut-after-send");
@@ -1662,6 +1797,206 @@ mod tests {
         )
         .unwrap();
         assert_eq!(retry["status"], "accepted");
+        server.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    /// L'oracle du mandat : un envoi dont l'accusé aval est retardé rend un
+    /// statut HONNÊTE (remise en vol, avec sa preuve), et le rejeu de la même
+    /// clé lit le sort réel — en portant EXACTEMENT la même enveloppe, jamais
+    /// une nouvelle émission. C'est le geste que le libellé d'origine faisait
+    /// redouter alors qu'il est le seul chemin correct.
+    #[test]
+    fn accuse_retarde_rend_un_statut_honnete_puis_le_rejeu_lit_le_sort_sans_dupliquer() {
+        let socket = test_socket("ack-differe");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let mut envelopes = Vec::new();
+            for issue in [
+                IdempotencyIssue::OutcomeUnknown {
+                    expires_at: 1_700_000_060,
+                    delivery_id: Some("livraison-differee".to_string()),
+                },
+                IdempotencyIssue::Accepted {
+                    expires_at: 1_700_000_060,
+                },
+            ] {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                assert!(matches!(
+                    read_command(&mut reader),
+                    WrapperToDaemon::RoleHandshake { .. }
+                ));
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::RoleAccepted {
+                        role: ConnectionRole::Client,
+                    },
+                );
+                assert!(matches!(
+                    read_command(&mut reader),
+                    WrapperToDaemon::ClientHello { .. }
+                ));
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::ClientWelcome {
+                        version: CLIENT_CONTRACT_VERSION,
+                        build_id: "test-build".to_string(),
+                        horizon_secs: 60,
+                        issued_at_tolerance_secs: 5,
+                        capabilities: vec![ClientCapability::SendIdempotent],
+                    },
+                );
+                match read_command(&mut reader) {
+                    WrapperToDaemon::SendIdempotent {
+                        message_id,
+                        issued_at,
+                        message,
+                        ..
+                    } => envelopes.push((message_id, issued_at, message.body)),
+                    other => panic!("send attendu: {other:?}"),
+                }
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::IdempotencyResult {
+                        operation_kind: "send".to_string(),
+                        idempotency_key: "ack-differe-1".to_string(),
+                        issue,
+                    },
+                );
+            }
+            envelopes
+        });
+        let arguments = json!({
+            "to":"bridget", "body":"livraison", "id":"ack-differe-1", "issued_at":1_700_000_000
+        });
+        let first = execute_tool_at_with_scope(
+            "fable2",
+            "instance",
+            "bridget_send",
+            arguments.as_object().unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(first["status"], "outcome_unknown");
+        assert_eq!(first["delivery_id"], "livraison-differee");
+        assert!(!first["reason"].as_str().unwrap().contains("perdu"));
+
+        let replay = execute_tool_at_with_scope(
+            "fable2",
+            "instance",
+            "bridget_send",
+            arguments.as_object().unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(replay["status"], "accepted");
+
+        let envelopes = server.join().unwrap();
+        assert_eq!(
+            envelopes[0], envelopes[1],
+            "le rejeu doit porter la même enveloppe, sinon il duplique au lieu de consulter"
+        );
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    /// ORACLE C4 — la TROISIÈME forme d'`outcome_unknown`, celle qui naît côté
+    /// client sans aucune issue du daemon : la connexion tombe APRÈS l'écriture
+    /// de la commande, donc l'outil ne lira jamais la réponse.
+    ///
+    /// Ce chemin était le seul des trois à n'avoir aucun filet sur son
+    /// contenu : le banc de coupure voisin ne vérifie que le `status`, si bien
+    /// qu'une mutation du corps du retour y survivait. Or c'est justement le
+    /// cas où l'appelant a le plus besoin de la consigne de rejeu — le message
+    /// a pu partir, et lui seul l'ignore.
+    ///
+    /// L'oracle verrouille donc le contrat ENTIER de ce bras : le statut, les
+    /// deux clés sans lesquelles aucun rejeu n'est possible, et les trois
+    /// invariants du rejeu à l'identique.
+    #[test]
+    fn la_coupure_apres_ecriture_rend_les_cles_de_rejeu_et_les_trois_invariants() {
+        let socket = test_socket("coupure-contrat");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::RoleHandshake { .. }
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client,
+                },
+            );
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::ClientHello { .. }
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "test-build".to_string(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![ClientCapability::SendIdempotent],
+                },
+            );
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::SendIdempotent { .. }
+            ));
+            // La coupure : la commande est écrite et lue, aucune réponse ne
+            // vient. C'est ce qui distingue ce cas des deux autres.
+            drop(writer);
+            drop(reader);
+        });
+        let rendered = execute_tool_at_with_scope(
+            "fable2",
+            "instance",
+            "bridget_send",
+            json!({
+                "to":"bridget", "body":"coupure", "id":"coupure-1", "issued_at":1_700_000_000
+            })
+            .as_object()
+            .unwrap(),
+            &socket,
+        )
+        .unwrap();
+
+        assert_eq!(rendered["status"], "outcome_unknown");
+        assert!(
+            rendered.get("delivery_id").is_none(),
+            "aucune issue n'a été lue : rien n'atteste une remise, et rien ne doit le prétendre"
+        );
+        // Sans ces deux clés, la consigne de rejeu est irréalisable.
+        assert_eq!(rendered["id"], "coupure-1");
+        assert_eq!(rendered["issued_at"], 1_700_000_000i64);
+
+        // Forme CLOSE. Porter la consigne ne suffit pas : un motif peut la
+        // citer mot pour mot et affirmer juste avant un dépôt que personne n'a
+        // constaté. Sur CE chemin le mensonge optimiste est le pire de tous —
+        // aucune issue n'a été lue, le message a pu ne jamais partir.
+        //
+        // Le seul ajout tolérable est le détail technique final entre
+        // parenthèses : il vient de l'erreur d'entrée-sortie, il n'est pas
+        // rédigé, et il varie d'une plateforme à l'autre. Tout le reste est
+        // verrouillé au caractère près.
+        let reason = rendered["reason"].as_str().unwrap();
+        let attendu = format!("{DIAGNOSTIC_ACCUSE_PERDU} — {REJEU_A_L_IDENTIQUE} (");
+        assert!(
+            reason.starts_with(&attendu),
+            "le motif doit être exactement le diagnostic puis la consigne, sans rien avant ni entre: {reason}"
+        );
+        assert!(
+            reason.ends_with(')'),
+            "seul le détail technique entre parenthèses peut suivre la consigne: {reason}"
+        );
+
         server.join().unwrap();
         std::fs::remove_file(socket).unwrap();
     }
