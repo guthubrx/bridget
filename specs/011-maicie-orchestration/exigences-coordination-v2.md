@@ -986,10 +986,21 @@ ce qui existe ici :
   pose les liens, et VÉRIFIE son travail — daemon joignable, un agent de test
   lancé puis arrêté, un dépôt au guichet relevé. Un installateur qui ne
   vérifie pas est un générateur de fausse confiance.
+  **État 2026-08-24** : `scripts/install-k1.sh` + `make install-k1` (macOS).
+  Preuves à trois niveaux — (1) **prouvé ici** : idempotence sur la machine
+  réelle (créés=0 au second passage, aucun artefact préexistant modifié,
+  daemon joignable) ; (2) **prouvé bac à sable** : HOME jetable avec
+  `--skip-launchd`, pose des fichiers, modes 0600 sur les registres, gabarits
+  vides `profiles=[]` ; (3) **non prouvé** : activation launchd sur machine
+  vierge, spawn/stop agent test, dépôt guichet relevé bout en bout. Cible
+  Linux / cartae.app : voir note machine d'essai plus bas — hors preuve Mac.
 - **K2 — Rendre la ronde portable.** Elle doit vivre dans le dépôt, pas dans
   la session d'un référent. Soit un service au même titre que la relève, soit
   une commande que n'importe quel référent lance. Aujourd'hui, changer de
   machine ou de session la fait disparaître — c'est arrivé le 24/08.
+  **Arbitrage 2026-08-24** : hors lot K1 ; la ronde vivra en service ou en
+  commande versionnée dans le dépôt, pas dans la session interactive du
+  référent.
 - **K3 — Séparer ce qui est propre au projet de ce qui est propre à l'outil.**
   Les règles de chantier, les profils d'agents et le catalogue sont
   spécifiques à CE projet ; le daemon, le guichet et la greffière ne le sont

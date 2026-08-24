@@ -6,6 +6,18 @@
 #   2. Jamais d'écrasement silencieux : --force exigé pour remplacer.
 #   3. Outil vs projet : pose le générique ; profils et catalogue restent des gabarits vides.
 #
+# Preuves runtime (2026-08-24) — trois niveaux :
+#   PROUVÉ ICI (machine réelle) : second passage créés=0 / remplacés=0 ;
+#     checksums des artefacts préexistants inchangés ; daemon joignable
+#     (--verify-daemon-only). Premier passage a seulement comblé les trous
+#     (maicie manquant, adapter test) sans toucher agents.json ni configs.
+#   PROUVÉ BAC À SABLE (HOME jetable, --skip-launchd) : pose des binaires,
+#     registres en 0600, plists, gabarits profiles=[] / type test seul ;
+#     second passage créés=0.
+#   NON PROUVÉ : activation launchd sur machine vierge ; spawn/stop agent
+#     test + dépôt guichet relevé bout en bout (déclarés NON FAIT / NON
+#     VÉRIFIÉ dans le rapport du script).
+#
 # Flags :
 #   --catalogue-path PATH   journal du dû (défaut: $HOME/.cache/bridget/catalogue.jsonl)
 #   --force                 autorise le remplacement explicite
