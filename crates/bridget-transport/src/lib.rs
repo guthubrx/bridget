@@ -4,6 +4,7 @@
 
 pub mod acp;
 pub mod claude_stream_json;
+pub mod codex_app_server;
 pub mod fsutil;
 pub mod journal;
 pub mod managed_session;
@@ -13,6 +14,7 @@ pub mod transport;
 
 pub use acp::{AcpEvent, AcpEventQueue, AcpOptions, AcpTransport, TurnState};
 pub use claude_stream_json::{ClaudeStreamJsonOptions, ClaudeStreamJsonTransport};
+pub use codex_app_server::{CodexAppServerOptions, CodexAppServerTransport};
 pub use managed_session::{
     ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource, ManagedSession,
     ManagedSessionDescriptor, ManagedTerminal,

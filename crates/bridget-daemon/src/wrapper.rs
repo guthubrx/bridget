@@ -11,7 +11,8 @@ use bridget_transport::journal::{
 use bridget_transport::protocol::{PresenceMode, decode, encode};
 use bridget_transport::{
     AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ClaudeStreamJsonOptions,
-    ClaudeStreamJsonTransport, DaemonToWrapper, MAX_ATTACH_FRAGMENT_BYTES,
+    ClaudeStreamJsonTransport, CodexAppServerOptions, CodexAppServerTransport, DaemonToWrapper,
+    MAX_ATTACH_FRAGMENT_BYTES,
     MAX_ATTACH_SERIALIZED_FRAME_BYTES, ManagedEvent, ManagedEventKind, ManagedSession,
     ManagedSessionDescriptor, ManagedTerminal, TmuxTransport, Transport, WrapperToDaemon,
 };
@@ -2527,7 +2528,10 @@ fn launch_acp_with_status(
         return Err("le mode --equipier n'accepte pas d'arguments d'agent".into());
     }
     let definition = registry.get(agent_type)?;
-    if !matches!(definition.protocol.as_str(), "acp" | "claude_stream_json") {
+    if !matches!(
+        definition.protocol.as_str(),
+        "acp" | "claude_stream_json" | "codex_app_server"
+    ) {
         return Err(
             format!("le type '{agent_type}' n'utilise pas une session gérée supportée").into(),
         );
@@ -2614,6 +2618,38 @@ fn launch_acp_with_status(
                 )
             } else {
                 Box::new(ClaudeStreamJsonTransport::spawn_with_environment(
+                    options,
+                    &environment,
+                    false,
+                )?)
+            }
+        }
+        "codex_app_server" => {
+            let options = CodexAppServerOptions {
+                command: definition.command.clone(),
+                args: definition.args.clone(),
+                queue_capacity: definition.queue_capacity,
+                notify_timeout_secs: definition.notify_timeout_secs,
+                model: codex_model_from_args(&definition.args),
+            };
+            let environment = mcp_environment
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if managed_reporter.is_some() {
+                Box::new(
+                    CodexAppServerTransport::spawn_inheriting_stderr_with_environment(
+                        options,
+                        &environment,
+                    )?,
+                )
+            } else {
+                Box::new(CodexAppServerTransport::spawn_with_environment(
                     options,
                     &environment,
                     false,
@@ -3183,7 +3219,8 @@ fn forward_managed_events(
                         source: bridget_transport::protocol::RateLimitSource::ClaudeStreamJson,
                     },
                 ),
-                bridget_transport::ManagedEventSource::Acp => {
+                bridget_transport::ManagedEventSource::Acp
+                | bridget_transport::ManagedEventSource::CodexAppServer => {
                     warn!("fait de limite ignoré : source ACP non autorisée")
                 }
             },
@@ -3191,6 +3228,22 @@ fn forward_managed_events(
         }
     }
     journal_failed
+}
+
+/// Le modèle est une propriété de la définition figée : le pont ne réinterprète
+/// aucun autre réglage du fournisseur et ne peut donc pas dériver au rejeu.
+fn codex_model_from_args(args: &[String]) -> Option<String> {
+    args.windows(2)
+        .find(|pair| pair[0] == "-c" || pair[0] == "--config")
+        .and_then(|pair| pair[1].strip_prefix("model="))
+        .map(|value| {
+            value
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string()
+        })
+        .filter(|model| !model.is_empty())
 }
 
 #[cfg(test)]

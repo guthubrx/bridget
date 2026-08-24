@@ -13,6 +13,10 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_QUEUE_CAPACITY: usize = 32;
 const DEFAULT_NOTIFY_TIMEOUT_SECS: u64 = 600;
+// launchd démarre le daemon avec un PATH minimal : les pilotes embarqués ne
+// doivent pas dépendre de la configuration interactive de l'utilisateur.
+const NATIVE_CODEX_COMMAND: &str = "/opt/homebrew/bin/codex";
+const NATIVE_CLAUDE_COMMAND: &str = "/Users/moi/.local/bin/claude";
 const MAX_PASS_ENV_ENTRIES: usize = 64;
 const MAX_ENV_NAME_BYTES: usize = 128;
 const MAX_CAPABILITY_VALUE_CHARS: usize = 100;
@@ -617,7 +621,7 @@ fn validate_registry(
         }
         if !matches!(
             definition.protocol.as_str(),
-            "acp" | "claude_stream_json" | "tmux"
+            "acp" | "claude_stream_json" | "codex_app_server" | "tmux"
         ) {
             return Err(format!(
                 "registre invalide {}: protocol invalide pour '{name}'",
@@ -779,7 +783,7 @@ fn definition(
 
 fn native_claude_definition() -> AgentDefinition {
     AgentDefinition {
-        command: "claude".to_string(),
+        command: NATIVE_CLAUDE_COMMAND.to_string(),
         args: vec!["--model".to_string(), "claude-opus-5".to_string()],
         protocol: "claude_stream_json".to_string(),
         forbidden_env: vec!["ANTHROPIC_API_KEY".to_string()],
@@ -811,16 +815,17 @@ fn native_claude_definition() -> AgentDefinition {
     }
 }
 
-fn default_agents() -> BTreeMap<String, AgentDefinition> {
-    let mut codex = definition(
-        "npx",
-        &[
-            "@zed-industries/codex-acp@0.16.0",
-            "-c",
-            "model=\"gpt-5.5\"",
+fn native_codex_definition() -> AgentDefinition {
+    AgentDefinition {
+        command: NATIVE_CODEX_COMMAND.to_string(),
+        args: vec![
+            "-c".to_string(),
+            "model=\"gpt-5.6-terra\"".to_string(),
+            "app-server".to_string(),
         ],
-        &["OPENAI_API_KEY", "CODEX_API_KEY"],
-        &[
+        protocol: "codex_app_server".to_string(),
+        forbidden_env: vec!["OPENAI_API_KEY".to_string(), "CODEX_API_KEY".to_string()],
+        pass_env: [
             "CODEX_HOME",
             "XDG_CONFIG_HOME",
             "XDG_CACHE_HOME",
@@ -833,15 +838,27 @@ fn default_agents() -> BTreeMap<String, AgentDefinition> {
             "NO_PROXY",
             "SSL_CERT_FILE",
             "SSL_CERT_DIR",
-        ],
-        "codex",
-    );
-    codex
-        .capabilities
-        .models
-        .insert("gpt-5.5".to_string(), ModelCapabilities::default());
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        permissions: "allow".to_string(),
+        queue_capacity: DEFAULT_QUEUE_CAPACITY,
+        notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
+        mcp: McpDefinition {
+            interactive: "codex".to_string(),
+            acp_session: false,
+        },
+        capabilities: AdapterCapabilities {
+            execution_paths: vec!["codex_app_server".to_string()],
+            models: BTreeMap::from([("gpt-5.6-terra".to_string(), ModelCapabilities::default())]),
+        },
+    }
+}
+
+fn default_agents() -> BTreeMap<String, AgentDefinition> {
     BTreeMap::from([
-        ("codex".to_string(), codex),
+        ("codex".to_string(), native_codex_definition()),
         ("claude".to_string(), native_claude_definition()),
         (
             "gemini".to_string(),
@@ -883,17 +900,14 @@ mod tests {
     fn defaults_cover_the_three_priorities() {
         let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
         let codex = registry.get("codex").unwrap();
-        assert_eq!(codex.command, "npx");
+        assert_eq!(codex.command, NATIVE_CODEX_COMMAND);
+        assert!(Path::new(&codex.command).is_absolute());
         assert_eq!(
             codex.args,
-            vec![
-                "@zed-industries/codex-acp@0.16.0",
-                "-c",
-                "model=\"gpt-5.5\""
-            ]
+            vec!["-c", "model=\"gpt-5.6-terra\"", "app-server"]
         );
         assert_eq!(codex.forbidden_env, vec!["OPENAI_API_KEY", "CODEX_API_KEY"]);
-        assert_eq!(codex.protocol, "acp");
+        assert_eq!(codex.protocol, "codex_app_server");
         assert_eq!(codex.permissions, "allow");
         assert_eq!(codex.queue_capacity, 32);
         assert_eq!(codex.notify_timeout_secs, 600);
@@ -901,9 +915,18 @@ mod tests {
         assert!(!codex.pass_env.contains(&"OPENAI_API_KEY".to_string()));
         assert_eq!(registry.get("gemini").unwrap().args, vec!["--acp"]);
         assert_eq!(codex.mcp.interactive, "codex");
-        assert!(codex.mcp.acp_session);
+        assert!(!codex.mcp.acp_session);
+        assert_eq!(
+            codex.capabilities.execution_paths,
+            vec!["codex_app_server"]
+        );
+        assert_eq!(
+            codex.capabilities.models.get("gpt-5.6-terra"),
+            Some(&ModelCapabilities::default())
+        );
         let claude = registry.get("claude").unwrap();
-        assert_eq!(claude.command, "claude");
+        assert_eq!(claude.command, NATIVE_CLAUDE_COMMAND);
+        assert!(Path::new(&claude.command).is_absolute());
         assert_eq!(claude.protocol, "claude_stream_json");
         assert_eq!(claude.args, ["--model", "claude-opus-5"]);
         assert!(!claude.mcp.acp_session);
@@ -957,18 +980,18 @@ mod tests {
         let first = registry.resolved_definition("codex").unwrap();
         let second = registry.resolved_definition("codex").unwrap();
         assert_eq!(first, second);
-        assert_eq!(first.command, "npx");
-        assert_eq!(first.args[0], "@zed-industries/codex-acp@0.16.0");
-        assert_eq!(first.protocol, "acp");
+        assert_eq!(first.command, NATIVE_CODEX_COMMAND);
+        assert_eq!(first.args, vec!["-c", "model=\"gpt-5.6-terra\"", "app-server"]);
+        assert_eq!(first.protocol, "codex_app_server");
         assert_eq!(first.forbidden_env, vec!["OPENAI_API_KEY", "CODEX_API_KEY"]);
         assert!(first.pass_env.contains(&"CODEX_HOME".to_string()));
         assert_eq!(first.permissions, "allow");
         assert_eq!(first.queue_capacity, 32);
         assert_eq!(first.notify_timeout_secs, 600);
         assert_eq!(first.mcp.interactive, "codex");
-        assert!(first.mcp.acp_session);
+        assert!(!first.mcp.acp_session);
         assert_eq!(
-            first.capabilities.models.get("gpt-5.5"),
+            first.capabilities.models.get("gpt-5.6-terra"),
             Some(&ModelCapabilities::default())
         );
         assert_eq!(first.digest.len(), 64);
@@ -1007,7 +1030,7 @@ mod tests {
         mutations.push(("mcp.acp_session", changed));
         let mut changed = baseline.clone();
         changed.capabilities.models.insert(
-            "gpt-5.5".to_string(),
+            "gpt-5.6-terra".to_string(),
             ModelCapabilities {
                 efforts: vec!["high".to_string()],
             },
@@ -1220,6 +1243,6 @@ mod tests {
         let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
         let error = registry.type_for_command("not-declared").unwrap_err();
         assert!(error.contains("/tmp/agents.json"));
-        assert!(error.contains("codex (npx)"));
+        assert!(error.contains(&format!("codex ({NATIVE_CODEX_COMMAND})")));
     }
 }

@@ -173,7 +173,10 @@ fn prepare_spawn_parts(
     ) {
         return Err(SpawnRefusal::BillingGuard { variable });
     }
-    if !matches!(definition.protocol.as_str(), "acp" | "claude_stream_json") {
+    if !matches!(
+        definition.protocol.as_str(),
+        "acp" | "claude_stream_json" | "codex_app_server"
+    ) {
         return Err(SpawnRefusal::NegotiationFailed {
             detail: format!("le protocole '{}' n'est pas ACP", definition.protocol),
         });

@@ -20,6 +20,7 @@ use std::path::Path;
 pub enum ManagedEventSource {
     Acp,
     ClaudeStreamJson,
+    CodexAppServer,
 }
 
 /// Provenance des octets portés par un événement.
