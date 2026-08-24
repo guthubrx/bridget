@@ -181,6 +181,7 @@ fn wrapper_claude_gere_annonce_un_register_natif_complet() {
     fs::write(
         &adapter,
         r#"#!/bin/sh
+printf '%s' "$HOME" > "$HOME/claude-home-seen"
 while IFS= read -r line; do :; done
 "#,
     )
@@ -294,7 +295,6 @@ while IFS= read -r line; do :; done
         }
         other => panic!("Register Claude géré attendu, reçu : {other:?}"),
     }
-
     let mut line = String::new();
     running
         .status_reader()
@@ -305,6 +305,11 @@ while IFS= read -r line; do :; done
     running.close_status();
     assert_eq!(running.child_mut().wait().unwrap().code(), Some(0));
     daemon.join().unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join("claude-home-seen")).unwrap(),
+        root.display().to_string(),
+        "le CLI Claude géré doit recevoir le HOME transmis par le daemon"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
