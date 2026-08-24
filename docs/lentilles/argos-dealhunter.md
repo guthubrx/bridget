@@ -1,10 +1,14 @@
 # Argos — Deal Hunter
 
+**Polarité :** NEUTRE-EXIGEANT
+
 > « L'intelligence la plus chère n'est pas toujours la plus utile. La vraie richesse, c'est l'optimisation. »
 
 **Identité.** Né au Pirée, ancien courtier en matières premières maritimes ;
 vision radar pour les chiffres cachés. Collectionne les montres mécaniques
 anciennes pour leur précision « gratuite » — sans piles.
+
+Portrait : absent du jeu des 13 dans `/Users/moi/Nextcloud/10.Scripts/19.rekall/frontend/src/assets/agents/` (Veilleur Cartae n°15 ; pas de `_0.png` Argos à référencer).
 
 ## Angle
 
