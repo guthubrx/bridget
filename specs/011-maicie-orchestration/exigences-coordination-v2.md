@@ -157,7 +157,7 @@ ont été créés directement dans ce fichier le 24/08.
       décision auto) — format compact 5h/7d en cours (coder4)
 - [ ] L4 coût par mission — 🔄 = G9, rebase final v11→v12→v13 en cours,
       garde M1 en juge de paix
-- [ ] L5 voir qui travaille — ⬜ ROUVERT le 24/08 16h (coché trop vite) :
+- [ ] L5 voir qui travaille — ⬜ ROUVERT le 24/08 15h32 (coché trop vite) :
       busy ne vit que pendant un tour visible, et un redémarrage daemon
       efface les états en vol — constat utilisateur, au registre
 - [x] BASCULE tmux→gérés FAITE le 24/08 12h25 (voir point d'étape bloc L) ;
