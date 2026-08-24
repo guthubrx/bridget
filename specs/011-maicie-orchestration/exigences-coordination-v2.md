@@ -1117,3 +1117,39 @@ CONDITIONS CUMULATIVES avant toute bascule :
 ORDRE : L1 puis L3 (ils évitent des pannes déjà survenues), puis G5 (pont
 Claude), puis la reprise de session, puis la bascule. Le retrait des panes
 est le DERNIER geste, pas le premier.
+
+### Exigence de fond rappelée par l'utilisateur (2026-08-24)
+
+**Trois vues sur le même monde, et le contrôle à distance.** Site web,
+application, ligne de commande : ce ne sont pas trois produits mais trois
+FENÊTRES sur un état unique. Et il doit être possible de piloter depuis
+l'extérieur de la machine.
+
+CE QUE ÇA VALIDE dans l'instruction rendue : le relais est le bon choix
+précisément parce qu'il ne crée pas de canal propre à l'interface. Les trois
+vues consomment les MÊMES projections — annuaire, demandes, journal
+d'attache, état des missions. Une vue qui aurait son propre canal
+divergerait des autres au premier changement ; c'est le défaut qu'on vient
+de payer deux fois avec les conflits sémantiques.
+
+CE QUE ÇA AJOUTE, et qui n'était pas dans le périmètre instruit :
+- **Le distant est une décision de sécurité, pas d'affichage.** Aujourd'hui
+  tout passe par une socket locale. La recommandation ajoute une boucle
+  locale avec jeton — donc déjà un cran. Exposer hors machine change la
+  nature du problème : qui a le droit d'agir, avec quelle authentification,
+  et surtout la garde qui doit tenir en priorité — l'approbation Maicie
+  exige une frappe humaine sur un vrai terminal, aucun paramètre ne la
+  script. Cette garde ne doit PAS être affaiblie pour rendre le distant
+  possible.
+- **Il existe déjà de la matière** : `scripts/deploy-remote.sh` et
+  `scripts/federate-ssh.sh` dans le dépôt. À instruire avant d'inventer :
+  peut-être que le chemin distant est un tunnel plutôt qu'une exposition.
+- **Lecture et écriture ne se valent pas.** Consulter l'état à distance est
+  peu risqué ; lancer un agent, arrêter un daemon ou approuver depuis
+  l'extérieur ne l'est pas. Un premier distant en LECTURE SEULE livrerait
+  l'essentiel du besoin — voir où on en est depuis ailleurs — sans ouvrir la
+  surface d'action.
+
+ORDRE PROPOSÉ : la page locale d'abord (elle fait la projection et le
+relais, communs aux trois vues), puis le distant en lecture, puis les
+actions à distance avec leur propre arbitrage de sécurité.
