@@ -296,6 +296,71 @@ fn deadline_question_est_passive_factuelle_et_durable() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Mutation discriminante : si `NotFound` redevenait fatal, le premier appel
+/// retournerait une erreur et aucun reçu ne serait durable. Si le replay
+/// reconstruisait le reçu, ses octets ou son message_id changeraient.
+#[test]
+fn delegation_absente_devient_un_rejet_atteste_rejouable() {
+    let root = root("refusal-missing-delegation");
+    let database = root.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let claim = query_claim(
+        "mission_status",
+        "request-missing-delegation",
+        Uuid::new_v4(),
+        1,
+    );
+    let first = process_guichet_claim(&mut store, &claim, "response-refused", 1_010).unwrap();
+    assert_eq!(first.refusal_reason, Some(maicie::domain::MotifRefusGreffe::DelegationAbsente));
+    let value: Value = serde_json::from_slice(&first.reply_bytes).unwrap();
+    assert_eq!(value["outcome"], "refused");
+    assert_eq!(value["payload"]["reason"], "delegation_missing");
+    let replay = process_guichet_claim(&mut store, &claim, "ignored", 1_020).unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.reply_bytes, first.reply_bytes);
+    drop(store);
+    let connection = Connection::open(&database).unwrap();
+    let receipts: i64 = connection
+        .query_row("SELECT COUNT(*) FROM guichet_refusal_receptions", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(receipts, 1);
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Une clé réutilisée avec des octets canoniques différents conserve le reçu
+/// initial et persiste un refus séparé : aucun des deux faits ne s'écrase.
+#[test]
+fn enveloppe_divergente_devient_un_rejet_sans_mutation_du_recu_initial() {
+    let root = root("refusal-envelope-mismatch");
+    let database = root.join("maicie.sqlite3");
+    let created = seed(&database);
+    let mut store = MaicieStore::open(&database).unwrap();
+    let first_claim = query_claim("deadline_question", "request-shared", created.delegation_id, 1);
+    let accepted = process_guichet_claim(&mut store, &first_claim, "response-accepted", 1_010).unwrap();
+    let divergent = query_claim("deadline_question", "request-shared", Uuid::new_v4(), 1);
+    let refused = process_guichet_claim(&mut store, &divergent, "response-refused", 1_020).unwrap();
+    assert_eq!(refused.refusal_reason, Some(maicie::domain::MotifRefusGreffe::EnveloppeDivergente));
+    assert_eq!(serde_json::from_slice::<Value>(&refused.reply_bytes).unwrap()["payload"]["reason"], "envelope_mismatch");
+    let replay = process_guichet_claim(&mut store, &divergent, "ignored", 1_030).unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.reply_bytes, refused.reply_bytes);
+    drop(store);
+    let connection = Connection::open(&database).unwrap();
+    let original: Vec<u8> = connection
+        .query_row(
+            "SELECT reply_bytes FROM guichet_receptions WHERE request_id = 'request-shared'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(original, accepted.reply_bytes);
+    let refusals: i64 = connection
+        .query_row("SELECT COUNT(*) FROM guichet_refusal_receptions", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(refusals, 1);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn projection_verrouille_lecture_et_recu_puis_reprend_une_faute_sans_doublon() {
     let root = root("atomic");

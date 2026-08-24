@@ -33,7 +33,7 @@ fn migrations_idempotentes_et_base_privee() {
     let database = root.join("maicie.sqlite3");
     let first_scope = {
         let store = MaicieStore::open(&database).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 7);
+        assert_eq!(store.schema_version().unwrap(), 8);
         store.issuer_scope().to_string()
     };
     let connection = rusqlite::Connection::open(&database).unwrap();
@@ -43,7 +43,7 @@ fn migrations_idempotentes_et_base_privee() {
         .unwrap();
     drop(connection);
     let reopened = MaicieStore::open(&database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 7);
+    assert_eq!(reopened.schema_version().unwrap(), 8);
     assert_eq!(reopened.issuer_scope(), first_scope);
     assert_eq!(mode(&root), 0o700);
     assert_eq!(mode(&database), 0o600);
@@ -56,7 +56,7 @@ fn schema_futur_et_enveloppe_corrompue_sont_refuses_fail_closed() {
     let future_database = future_root.join("maicie.sqlite3");
     drop(MaicieStore::open(&future_database).unwrap());
     let connection = rusqlite::Connection::open(&future_database).unwrap();
-    connection.pragma_update(None, "user_version", 8).unwrap();
+    connection.pragma_update(None, "user_version", 9).unwrap();
     drop(connection);
     assert!(MaicieStore::open(&future_database).is_err());
     fs::remove_dir_all(future_root).unwrap();
@@ -189,7 +189,7 @@ fn migration_v1_convertit_un_refus_terminal_historique_en_rejected() {
     drop(connection);
 
     let store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 7);
+    assert_eq!(store.schema_version().unwrap(), 8);
     let snapshot = store.recovery_snapshot(uuid(MESSAGE_ID)).unwrap().unwrap();
     assert_eq!(snapshot.outbox.state, EtatOutboxDelegation::Rejected);
     assert_eq!(snapshot.last_issue.unwrap()["kind"], "invalid_issued_at");
@@ -226,7 +226,7 @@ fn migration_v2_vers_v6_conserve_les_donnees_historiques_et_cree_les_tables_requ
     drop(connection);
 
     let store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 7);
+    assert_eq!(store.schema_version().unwrap(), 8);
     let pending = store.pending_delegation_outboxes().unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].message_bytes, prepared.message_bytes);
@@ -282,7 +282,7 @@ fn migration_v3_vers_v6_ajoute_les_preuves_et_la_reservation_delegate() {
     drop(connection);
 
     let store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 7);
+    assert_eq!(store.schema_version().unwrap(), 8);
     drop(store);
 
     let connection = rusqlite::Connection::open(&database).unwrap();

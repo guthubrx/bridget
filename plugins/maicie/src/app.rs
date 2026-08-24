@@ -18,7 +18,7 @@ use crate::domain::guichet::{
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
     EtatDecision, EtatFlux, EtatObjectif, EtatOutboxDelegation, ModeObjectif, ObjectifCoordonne,
-    OutboxDelegation, SnapshotTransport, SourceSnapshot, TypeDecision,
+    MotifRefusGreffe, OutboxDelegation, SnapshotTransport, SourceSnapshot, TypeDecision,
 };
 use crate::outbox::{PreparedDelegation, stable_body_hash};
 pub use crate::store::GuichetLifecycleResult;
@@ -98,6 +98,7 @@ pub struct GuichetProcessResult {
     pub response_message_id: String,
     pub reply_bytes: Vec<u8>,
     pub replayed: bool,
+    pub refusal_reason: Option<MotifRefusGreffe>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,12 +133,9 @@ pub fn process_guichet_claim(
     now: i64,
 ) -> Result<GuichetProcessResult, GuichetError> {
     let canonical = parse_claim(claim).map_err(guichet_domain_error)?;
-    match &canonical.request {
+    let stored = match &canonical.request {
         RequeteGuichet::DeliveryReport(report) => {
-            let stored = store
-                .graft_delivery_report(claim, &canonical, report, response_message_id, now)
-                .map_err(guichet_store_error)?;
-            Ok(guichet_process_result(stored))
+            store.graft_delivery_report(claim, &canonical, report, response_message_id, now)
         }
         RequeteGuichet::MissionStatus { .. } => process_mission_status_canonical(
             store,
@@ -149,6 +147,18 @@ pub fn process_guichet_claim(
         ),
         RequeteGuichet::DeadlineQuestion { .. } => {
             process_deadline_question_canonical(store, claim, &canonical, response_message_id, now)
+        }
+    };
+    match stored {
+        Ok(stored) => Ok(guichet_process_result(stored, None)),
+        Err(error) => {
+            let Some(reason) = deterministic_refusal_reason(&error) else {
+                return Err(guichet_store_error(error));
+            };
+            let stored = store
+                .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+                .map_err(guichet_store_error)?;
+            Ok(guichet_process_result(stored, Some(reason)))
         }
     }
 }
@@ -172,6 +182,8 @@ pub fn process_mission_status_claim(
         transport,
         now,
     )
+    .map(|stored| guichet_process_result(stored, None))
+    .map_err(guichet_store_error)
 }
 
 /// Produit et persiste l'échéance contractuelle sans créer de timer, de
@@ -184,6 +196,8 @@ pub fn process_deadline_question_claim(
 ) -> Result<GuichetProcessResult, GuichetError> {
     let canonical = parse_claim(claim).map_err(guichet_domain_error)?;
     process_deadline_question_canonical(store, claim, &canonical, response_message_id, now)
+        .map(|stored| guichet_process_result(stored, None))
+        .map_err(guichet_store_error)
 }
 
 fn process_mission_status_canonical(
@@ -193,9 +207,9 @@ fn process_mission_status_canonical(
     response_message_id: &str,
     transport: Option<&SnapshotTransport>,
     now: i64,
-) -> Result<GuichetProcessResult, GuichetError> {
+) -> Result<StoredGuichetReply, StoreError> {
     let RequeteGuichet::MissionStatus { delegation_id } = canonical.request else {
-        return Err(GuichetError::UnsupportedOperation);
+        return Err(StoreError::Invalid("projection mission_status incohérente"));
     };
     let stored = store
         .persist_guichet_projection(claim, canonical, response_message_id, now, |facts| {
@@ -209,8 +223,8 @@ fn process_mission_status_canonical(
                 freshness,
             })
         })
-        .map_err(guichet_store_error)?;
-    Ok(guichet_process_result(stored))
+        ?;
+    Ok(stored)
 }
 
 fn process_deadline_question_canonical(
@@ -219,9 +233,9 @@ fn process_deadline_question_canonical(
     canonical: &RequeteCanonique,
     response_message_id: &str,
     now: i64,
-) -> Result<GuichetProcessResult, GuichetError> {
+) -> Result<StoredGuichetReply, StoreError> {
     let RequeteGuichet::DeadlineQuestion { delegation_id } = canonical.request else {
-        return Err(GuichetError::UnsupportedOperation);
+        return Err(StoreError::Invalid("projection deadline_question incohérente"));
     };
     let stored = store
         .persist_guichet_projection(claim, canonical, response_message_id, now, |facts| {
@@ -231,8 +245,8 @@ fn process_deadline_question_canonical(
                 deadline_at: facts.deadline_at,
             })
         })
-        .map_err(guichet_store_error)?;
-    Ok(guichet_process_result(stored))
+        ?;
+    Ok(stored)
 }
 
 fn local_delivery_projection(
@@ -324,7 +338,10 @@ fn duration_projection(duration: ClasseDuree) -> ProjectionDurationClass {
     }
 }
 
-fn guichet_process_result(stored: StoredGuichetReply) -> GuichetProcessResult {
+fn guichet_process_result(
+    stored: StoredGuichetReply,
+    refusal_reason: Option<MotifRefusGreffe>,
+) -> GuichetProcessResult {
     GuichetProcessResult {
         request_id: stored.reception.request_id,
         objective_id: stored.reception.objective_id,
@@ -332,6 +349,19 @@ fn guichet_process_result(stored: StoredGuichetReply) -> GuichetProcessResult {
         response_message_id: stored.reception.response_message_id,
         reply_bytes: stored.reception.reply_bytes,
         replayed: stored.replayed,
+        refusal_reason,
+    }
+}
+
+fn deterministic_refusal_reason(error: &StoreError) -> Option<MotifRefusGreffe> {
+    match error {
+        StoreError::NotFound(_) => Some(MotifRefusGreffe::DelegationAbsente),
+        StoreError::EnvelopeMismatch => Some(MotifRefusGreffe::EnveloppeDivergente),
+        StoreError::Invalid("relations du rapport invalides")
+        | StoreError::Invalid("relations de projection invalides") => {
+            Some(MotifRefusGreffe::RelationsInvalides)
+        }
+        _ => None,
     }
 }
 

@@ -125,6 +125,19 @@ pub enum GuichetOutcome {
     Refused,
 }
 
+/// Motif fermé d'un refus déterministe rendu par Maicie après la relève.
+///
+/// Il décrit une demande bien formée mais impossible à appliquer au registre
+/// local. Une corruption du store ou une erreur de transport ne passe jamais
+/// par cette voie : ces situations restent des erreurs techniques.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuichetRefusalReason {
+    DelegationMissing,
+    RelationInvalid,
+    EnvelopeMismatch,
+}
+
 /// Fait terminal attesté uniquement par Bridget pour une demande du guichet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -157,6 +170,12 @@ pub enum GuichetReplyPayload {
         delegation_id: String,
         duration_class: GuichetDurationClass,
         deadline_at: i64,
+    },
+    /// Refus fermé sans projection inventée quand les faits locaux demandés
+    /// par la requête n'existent pas ou ne sont pas corrélés.
+    Refused {
+        operation: ServiceRequestOperation,
+        reason: GuichetRefusalReason,
     },
 }
 
@@ -1521,6 +1540,32 @@ mod tests {
             reply.attach_refusal(),
             Some(AttachRefusal::MessageOutsideAttachRole)
         );
+
+        let refused = WrapperToDaemon::GuichetReply {
+            version: SERVICE_CONTRACT_VERSION,
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+            request_id: "req-refused".to_string(),
+            claim_generation: 1,
+            claim_token: "claim-refused".to_string(),
+            response_message_id: "msg-refused".to_string(),
+            in_reply_to: "message-refused".to_string(),
+            outcome: GuichetOutcome::Refused,
+            payload: GuichetReplyPayload::Refused {
+                operation: ServiceRequestOperation::MissionStatus,
+                reason: GuichetRefusalReason::DelegationMissing,
+            },
+        };
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encode(&refused).unwrap()).unwrap(),
+            WrapperToDaemon::GuichetReply {
+                outcome: GuichetOutcome::Refused,
+                payload: GuichetReplyPayload::Refused {
+                    operation: ServiceRequestOperation::MissionStatus,
+                    reason: GuichetRefusalReason::DelegationMissing,
+                },
+                ..
+            }
+        ));
 
         let status = WrapperToDaemon::GuichetReply {
             version: SERVICE_CONTRACT_VERSION,

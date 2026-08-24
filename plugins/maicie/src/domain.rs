@@ -187,6 +187,18 @@ pub enum EtatRequeteGuichet {
 pub enum IssueGreffe {
     Accepted,
     DemandeDejaTerminale,
+    Refusee,
+}
+
+/// Motif fermé d'un refus de relève. Il ne représente jamais une corruption
+/// SQLite ou une panne de transport : ces deux familles restent des erreurs
+/// techniques, sans reçu métier fabriqué.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MotifRefusGreffe {
+    DelegationAbsente,
+    RelationsInvalides,
+    EnveloppeDivergente,
 }
 
 /// Preuve locale durable qu'une requête structurée a été traitée.
