@@ -1,7 +1,7 @@
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
-    ConnectionRole, GuichetOutcome, GuichetReplyPayload, SERVICE_CONTRACT_VERSION,
-    ServiceCapability, ServiceRequestOperation, ServiceRequestPayload, decode, encode,
+    decode, encode, ConnectionRole, GuichetOutcome, GuichetReplyPayload, ServiceCapability,
+    ServiceRequestOperation, ServiceRequestPayload, SERVICE_CONTRACT_VERSION,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -12,6 +12,28 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SCOPE: &str = "015_scope_0123456789abcdef0123456789abcdef";
 const SERVICE_SCOPE: &str = "015_service_abcdef0123456789abcdef0123456789";
+
+// Le daemon et ses wrappers propagent ces variables à leurs descendants. Un
+// harnais qui remplace seulement HOME hériterait sinon l'identité de l'agent
+// qui lance cargo, notamment son fichier de nom absolu.
+const INHERITED_BRIDGET_ENV: &[&str] = &[
+    "BRIDGET_AGENT_NAME",
+    "BRIDGET_AGENT_NAME_FILE",
+    "BRIDGET_AGENT_INSTANCE_ID",
+    "BRIDGET_MANAGED_STATUS_FD",
+    "BRIDGET_MANAGED_INSTANCE_ID",
+    "BRIDGET_MANAGED_COMMAND_ID",
+    "BRIDGET_MANAGED_GENERATION",
+    "BRIDGET_TRANSPORT",
+];
+
+fn isolated_bridget_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
+    for variable in INHERITED_BRIDGET_ENV {
+        command.env_remove(variable);
+    }
+    command
+}
 
 fn unique_home() -> PathBuf {
     let nonce = SystemTime::now()
@@ -29,7 +51,7 @@ fn socket(home: &Path) -> PathBuf {
 
 fn start_daemon(home: &Path) -> Child {
     std::fs::create_dir_all(home).unwrap();
-    let child = Command::new(env!("CARGO_BIN_EXE_bridget"))
+    let child = isolated_bridget_command()
         .arg("daemon")
         .env("HOME", home)
         .spawn()
@@ -329,7 +351,7 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
         "--issuer-scope",
         SCOPE,
     ];
-    let output = Command::new(env!("CARGO_BIN_EXE_bridget"))
+    let output = isolated_bridget_command()
         .args(&cli_args)
         .env("HOME", &home)
         .env("BRIDGET_AGENT_NAME", "codex-1")
@@ -341,7 +363,7 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("DÉPÔT: queued"));
-    let retry = Command::new(env!("CARGO_BIN_EXE_bridget"))
+    let retry = isolated_bridget_command()
         .args(&cli_args)
         .env("HOME", &home)
         .env("BRIDGET_AGENT_NAME", "codex-1")
