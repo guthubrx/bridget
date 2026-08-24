@@ -5,9 +5,27 @@ tenue par le référent humain-agent. Chaque règle exécutée à la main ici es
 candidate à devenir un comportement produit de Maicie. Hors périmètre de la
 v1 (spec 011) — intrants pour les itérations suivantes.
 
-## Tableau de bord — mis à jour le 2026-08-24, 19h15
+## Tableau de bord — mis à jour le 2026-08-24, 20:40
 
-**État du soir (19h15)** : jury n°2 rendu — les deux collèges (à charge :
+**État de nuit (20:40)** : REDÉMARRAGE GROUPÉ FAIT (19h39, boot 8 s, daemon
+a3707b8) — format LIMITE vivant flotte entière, colonne du référent attestée
+par le hook statusline (mergé, revu). MERGÉS ce soir : correctif boot,
+spawn-fantôme, hook StatusLine, checklist redémarrage. Jury n°2 RÉCONCILIÉ
+(docs/lentilles/jury-002-outcome-unknown.md) ; témoins clos en non-remise.
+DOCTRINE DE REVUE À DEUX ÉTAGES gravée (règles de chantier) + F38/F38-b
+(carte de criticité auto-élue, germe générique). Jury n°3 annulé ; MANCHE 4
+(3 bras, 1+1±personas vs solo) part sur le lot routines — livraison cursor7
+imminente ; règle de décision pré-engagée, résultat installé la nuit même.
+DÉGEL fable2 : livré @ 757eaa3, collège 1+1 (ex-témoins) — C1 tenue 0/2 sous
+mutant, reste C4-bis (oracle du 3e chemin à durcir, en cours chez l'auteur).
+DISQUE : 6,7 → 52 Gi (cursor8 : 33 targets + 57 worktrees mergés purgés).
+Incidents du soir consignés : pannes migration v16 ×2 (base restaurée puis
+rétrogradée, constat + mission consentement chaînée), cartes de reprise
+aveugles (constat, 3 occurrences), présences fantômes post-tour (constat,
+contourné). File de nuit : manche 4 → doctrine installée → merges routines/
+dégel/v16 → chaîne cursor6 → correctif L4 (diagnostic coder2 en cours).
+
+**Archive — état du soir (19h15)** : jury n°2 rendu — les deux collèges (à charge :
 j2-ingrid/j2-viktor ; constructif : j2-aminata/j2-hiroshi) signent le même
 APPROVE_WITH_CHANGES avec C1 bloquante sur le lot outcome_unknown de fable2
 (la quarantaine, trouvaille Viktor, sort en rc=0 ; 3 portes dont une
