@@ -655,3 +655,55 @@ plus vite ; le coût net est un report, pas une perte.
   ANTICIPE — vérifier le quota avant d'affecter, connaître l'heure de
   retour, voir la dégradation de modèle, mesurer le coût de chaque mission.
   C'est un changement de nature, pas de confort.
+
+## Bloc G — Sortir du pont Zed vers les protocoles natifs
+
+Ajouté au plan le 2026-08-24. Ordre recommandé : G1 à G4 forment le socle
+Codex (le cas urgent, celui qui a tué des agents) ; G5-G6 sont le socle
+Claude ; G7-G9 sont les gains qui justifient l'opération ; G10 est la sortie.
+Chaque étape doit laisser le projet buildable et l'équipe opérationnelle :
+aucune ne coupe le pont existant avant que son remplaçant soit prouvé.
+
+- **G1 — Décider du vocabulaire interne.** Aujourd'hui le daemon écrit
+  directement les messages ACP. Deux protocoles natifs vont s'ajouter, aux
+  noms différents (`thread/start` + `turn/start` côté Codex, messages typés
+  côté Claude). Trancher : soit une couche interne neutre avec un traducteur
+  par fournisseur, soit du code par fournisseur assumé. ADR obligatoire —
+  c'est LA décision structurante, tout le reste en découle.
+- **G2 — Pont Codex app-server, minimal et prouvé.** Lancer `codex
+  app-server` au lieu de `npx @zed-industries/codex-acp`, faire la séquence
+  `initialize`/`initialized`, ouvrir un fil, envoyer un tour, lire le flux.
+  Pièges déjà connus : JSON-RPC délimité par newline SANS le champ
+  `"jsonrpc":"2.0"` ; saturation signalée par le code -32001, à retenter en
+  backoff exponentiel avec gigue. Preuve exigée : un agent Codex géré,
+  spawné, qui reçoit une mission et répond — avec `gpt-5.6-terra`, le modèle
+  qui échoue aujourd'hui.
+- **G3 — Types du protocole.** Évaluer `codex-app-server-protocol` (crate
+  officielle, 0.63.0) contre une génération depuis le schéma
+  (`generate-json-schema`, 579 définitions). Vérifier la correspondance de
+  versions avec le CLI local (0.149.0) — numérotations différentes, à ne pas
+  supposer alignées.
+- **G4 — Parité d'observabilité Codex.** `who` et `attach` doivent rendre au
+  moins autant qu'aujourd'hui : mode, localisation, appels d'outils titrés,
+  journal. Gate de non-régression : rejouer les scénarios de la 014 sur le
+  nouveau pont, comparer les sorties.
+- **G5 — Pont Claude en flux natif.** `claude -p --input-format stream-json
+  --output-format stream-json --include-partial-messages`. Vérifié en réel :
+  le flux porte le modèle exact, l'état d'occupation, les deltas, la
+  corrélation d'outils, la consommation et les limites.
+- **G6 — Parité d'observabilité Claude**, même gate que G4.
+- **G7 — Modèle véridique et dégradation détectée.** Afficher le modèle réel
+  dans `who` depuis le flux, et lever une alerte sur reroutage
+  (`ModelReroutedNotification` côté Codex). Ferme l'angle mort « colonne
+  modèle aveugle » ET le cas Opus 5 demandé / Opus 4.6 servi.
+- **G8 — Quota anticipé.** Lire les limites et l'instant de réinitialisation,
+  les exposer dans `who`, et VÉRIFIER AVANT D'AFFECTER une mission longue.
+  Côté Codex on peut aussi interroger activement. C'est la panne du
+  2026-08-23 22h27 rendue prévisible.
+- **G9 — Coût par mission.** Brancher la consommation par fil sur le greffe :
+  chaque objectif clos porte ce qu'il a coûté. Ferme le trou « tokens par
+  mission : non mesurable » des métriques d'efficience.
+- **G10 — Retirer le pont Zed.** Seulement une fois G2 et G5 prouvés en
+  production. Décider du sort de Gemini, qui n'a pas d'alternative native
+  connue : soit on garde le pont ACP pour lui seul, soit on inscrit Gemini
+  aux dépréciations. Zéro code mort — pas de pont conservé « au cas où ».
