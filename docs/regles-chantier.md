@@ -27,7 +27,15 @@ l'incident.
    — le commit de docs du référent a atterri dessus — pendant qu'un second
    agent y modifiait wrapper.rs : course à deux mains dans le même arbre,
    travail extrait en patchs de sauvetage, checkout rendu à main.)*
-7. **`maicie delegate --constat-id` exige l'identifiant COMPLET du registre**,
+7. **Le worktree de l'auteur n'est JAMAIS ouvert au relecteur.** Toute revue
+   (lecture appuyée exceptée) se fait sur une COPIE DÉTACHÉE du SHA gelé :
+   mutants plantés et restaurés chez soi, jamais chez l'auteur. *(Incident
+   2026-08-24 ~21h : une restauration de mutants dans le worktree de l'auteur
+   a effacé son C4-bis non commité ; seul un garde-fou de script a évité un
+   faux vert sur mutant jamais posé.)* En miroir, l'auteur committe tôt et
+   souvent pendant une revue active : un WIP à découvert n'est protégé par
+   rien.
+8. **`maicie delegate --constat-id` exige l'identifiant COMPLET du registre**,
    préfixe de kind inclus (`review_amender:constat/…`, `gate_failed:…`) —
    celui affiché par `registre list`. Un identifiant court passe au delegate
    mais casse la réconciliation du catalogue à la clôture de l'objectif
