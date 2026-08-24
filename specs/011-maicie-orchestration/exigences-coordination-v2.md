@@ -10,33 +10,73 @@ v1 (spec 011) — intrants pour les itérations suivantes.
 Vue d'avancement des blocs. Détail et jurisprudence dans chaque bloc plus
 bas ; ce tableau ne remplace pas la lecture, il dit où on en est.
 
-Note de lettrage (corrigée le 24/08 après doute utilisateur, reconstruction
-depuis les transcripts de session — le plan complet a été rogné par les
-compactages et n'avait jamais été recopié ici) : les blocs A à F ÉTAIENT le
-plan de déroulé tenu en session, à points numérotés ; G et suivants ont été
-créés directement dans ce fichier le 24/08. État reconstruit :
-- **A — guichet et chaîne 015** : LIVRÉ (sessions 015/016).
-- **B — journal enrichi, traducteur, GUI** (points B6-B9) : PARTIEL —
-  première tranche livrée (page locale 3 zones + tunnel lecture + SSE).
-- **C — micro-bloc toolchain épinglée, T008, C11, skill maicie** : SOLDÉ
-  (nuit du 23/08 ; ses suivis C1-C7 restent ouverts non bloquants).
-- **D — suivis Bridget numérotés** : D18 identité joignable LIVRÉE (le
-  guichet), D24 parité de repli LIVRÉE ; D23 clos administrativement.
-- **E — aucune trace retrouvée** (ni dépôt ni transcripts) : soit jamais
-  attribué, soit perdu — à confirmer par l'utilisateur.
-- **F — automatisation du référent** : F27-29 (messager, déblocage,
-  réassignation) LIVRÉES par la 016 ; greffière du catalogue LIVRÉE par la
-  017 (registre du dû) ; RESTE : politiques 4-8 en produit, routines
-  planifiées, état « en pause ».
+Note de lettrage : les blocs A à F sont le plan de déroulé à 34 points tenu
+en session (l'énumération complète, rognée par les compactages, a été
+RETROUVÉE par l'utilisateur le 24/08 et regravée ci-dessous — leçon : un
+plan qui ne vit que dans la conversation meurt avec elle). G et suivants
+ont été créés directement dans ce fichier le 24/08.
 
-**Sections antérieures (non lettrées)**
-- [x] Politiques de délégation 1-3 : messager, déblocage des dépendants,
-      réassignation — PRODUITES par la session 016 (clôture+notifications
-      transactionnelles, graphe F28, chaîne F29)
-- [ ] Politiques 4-8 (contrat d'interface avant commit, propriété des
-      ressources, vérification factuelle, diffusion de groupe, escalade
-      bornée) — 🔄 pratiquées à la main + règles de chantier (dont la
-      règle 17 née le 24/08) ; pas encore des comportements produit Maicie
+**A. Session 014 — Observabilité** — ✅ SOLDÉ (mergée 7/7 le 23/08)
+- [x] 1 dissocier mode d'attelage et transport
+- [x] 2 colonne mode dans who + session:window.pane
+- [x] 3 sonde modèle/effort claude
+- [x] 4 corrélation toolCallId
+- [x] 5 heure locale dans attach
+
+**B. Piste GUI**
+- [ ] 6 journal enrichi (pensée, arguments/résultats d'outils) — ⬜
+- [ ] 7 traducteur de sessions interactives (rollout/JSONL → journal v1) — ⬜
+- [x] 8 abonnement ledger/who — livré en SSE (/v1/watch, abonnement AVANT
+      snapshot)
+- [x] 9 agrégateur local — première version : /v1/snapshot fusionne
+      annuaire+ledger+projection Maicie (un read-model)
+- [ ] 10 client GUI complet (grokbot×Cursor) — 🔄 première tranche livrée
+      (page locale 3 zones + tunnel lecture seule) ; le client riche reste
+- [ ] 11 affinements attach (séparateur de génération, titres enrichis) — ⬜
+
+**C. Micro-tâches** — ✅ SOLDÉ (nuit du 23/08)
+- [x] 12 worktree 013 + branche supprimés (vérifié 24/08 : zéro trace)
+- [x] 13 T008 tests de renommage
+- [x] 14 toolchain épinglée (rust-toolchain.toml 1.92.0) + rustfmt assumé
+- [x] 15 C11 code mort purgé
+- [x] 16 profile refuse : vérifié ABSENT — la commande reste à livrer (v2)
+- [x] 17 skill maicie livrée
+
+**D. Chantiers v2 substantiels**
+- [x] 18 identité Maicie joignable + demandes corrélées — LE GUICHET
+      (sessions 015/016)
+- [x] 19 carte de réveil + préambule codex resume — livrés, reprise avec
+      mission active prouvée 2× le 24/08
+- [ ] 20 reprise d'équipe (domain dans fleet.json, trace des pertes
+      silencieuses) — ⬜ à vérifier/faire
+- [ ] 21 opposabilité des SpawnOrder (C5) — ⬜
+- [ ] 22 fond du backlog Maicie (SpawnLookup, dry-run, plafond, classe,
+      boucle résidente) — ⬜
+- [x] 23 build-id dans who (détection binaire périmé) — livré, a servi 2×
+      le 24/08
+- [x] 24 --in-reply-to sur le binaire (parité de repli)
+
+**E. À la main de l'utilisateur** — ✅ SOLDÉ
+- [x] 25 prospective relancé via resume (agent depuis éteint — bascule)
+- [x] 26 branches distantes session-06..13 nettoyées (vérifié 24/08 : zéro)
+- [x] arbitrage « zéro trace IA » tranché : métadonnées ET contenu
+      (décision 1b)
+
+**F. Maicie v2 comportementale — automatiser le référent**
+- [x] 27 messager des événements attendus — 016
+- [x] 28 déblocage automatique des dépendants (graphe) — 016
+- [x] 29 réassignation après relances sans livraison — 016
+- [ ] 30 négociation d'interface orchestrée — ⬜ (pratique manuelle,
+      politique 4)
+- [ ] 31 propriété des ressources partagées — ⬜ (règle 17 manuelle depuis
+      le 24/08, deux applications spontanées le jour même)
+- [ ] 32 vérification factuelle avant relais — ⬜ (pratique référent)
+- [ ] 33 diffusion de groupe — ⬜
+- [ ] 34 escalade humaine bornée — ⬜ (pratique référent)
+- [x] 35 (ajout post-plan) greffière du catalogue — 017, registre du dû
+      avec transitions automatiques, en production depuis le 24/08
+
+**Sections antérieures complémentaires (hors plan A-F)**
 - [x] Exigence Phase 5 : l'écran d'approbation montre type/modèle/effort de
       la définition RÉSOLUE avec digest (livré avec L1 ; ADR 011)
 - [ ] Amendement palette (prérequis T021) — 🔄 digest de définition livré ;
