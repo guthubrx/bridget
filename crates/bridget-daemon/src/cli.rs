@@ -135,6 +135,7 @@ pub fn run() {
         "status" => cmd_status(),
         "ledger" => cmd_ledger(),
         "reprise" => cmd_reprise(&args[2..]),
+        "reaper" => cmd_reaper(&args[2..]),
         "version" | "--version" | "-v" => {
             println!("bridget {}", env!("CARGO_PKG_VERSION"));
         }
@@ -256,6 +257,7 @@ fn print_usage() {
            status                 Santé du daemon\n  \
            ledger                 Historique des messages\n  \
            reprise [--write P]    Carte de reprise du référent\n  \
+           reaper report          Observateur J2 (ne tue jamais)\n  \
            version                Version\n  \
            help                   Cette aide\n\n\
          Options de send :\n  \
@@ -2437,6 +2439,78 @@ fn cmd_reprise(args: &[String]) {
             println!("carte écrite: {}", path.display());
         }
         None => print!("{card}"),
+    }
+}
+
+fn cmd_reaper(args: &[String]) {
+    let sub = args.first().map(String::as_str).unwrap_or("");
+    if sub != "report" {
+        eprintln!(
+            "usage: bridget reaper report [--json] [--state-dir DIR] [--tmp DIR] [--min-age-secs N]"
+        );
+        eprintln!("phase observer uniquement — aucune action destructive n'existe");
+        std::process::exit(2);
+    }
+    let mut json_output = false;
+    let mut state_dir = crate::reaper::default_state_dir();
+    let mut tmp_dir = std::env::temp_dir();
+    let mut min_age_secs = crate::reaper::DEFAULT_MIN_AGE_SECS;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => {
+                json_output = true;
+            }
+            "--state-dir" => match option_value(args, &mut i, "--state-dir") {
+                Ok(value) => state_dir = PathBuf::from(value),
+                Err(error) => {
+                    eprintln!("bridget reaper: {error}");
+                    std::process::exit(2);
+                }
+            },
+            "--tmp" => match option_value(args, &mut i, "--tmp") {
+                Ok(value) => tmp_dir = PathBuf::from(value),
+                Err(error) => {
+                    eprintln!("bridget reaper: {error}");
+                    std::process::exit(2);
+                }
+            },
+            "--min-age-secs" => match option_value(args, &mut i, "--min-age-secs") {
+                Ok(value) => match value.parse::<u64>() {
+                    Ok(secs) => min_age_secs = secs,
+                    Err(_) => {
+                        eprintln!("bridget reaper: --min-age-secs attend un entier");
+                        std::process::exit(2);
+                    }
+                },
+                Err(error) => {
+                    eprintln!("bridget reaper: {error}");
+                    std::process::exit(2);
+                }
+            },
+            other => {
+                eprintln!("bridget reaper: option inconnue: {other}");
+                std::process::exit(2);
+            }
+        }
+        i += 1;
+    }
+
+    match crate::reaper::observe_live(&state_dir, &tmp_dir, min_age_secs) {
+        Ok(report) => {
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string())
+                );
+            } else {
+                print!("{}", crate::reaper::render_human(&report));
+            }
+        }
+        Err(error) => {
+            eprintln!("bridget reaper report: {error}");
+            std::process::exit(1);
+        }
     }
 }
 
