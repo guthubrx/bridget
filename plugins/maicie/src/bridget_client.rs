@@ -1103,12 +1103,8 @@ impl CoordinationClient {
                 "max_items coordination doit être strictement positif".to_string(),
             ));
         }
-        self.connection.send_until(
-            json!({
-                "type":"coordination_subscribe",
-                "v":COORDINATION_STREAM_VERSION,
-                "after_cursor":after_cursor,
-            }),
+        self.connection.send_bytes_until(
+            &canonical_coordination_subscribe(after_cursor)?,
             self.deadline,
         )?;
         let mut items = Vec::new();
@@ -1250,6 +1246,16 @@ struct CanonicalServiceHello<'a> {
     capabilities: &'a [&'a str],
 }
 
+#[derive(Serialize)]
+struct CanonicalCoordinationSubscribe {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(rename = "v")]
+    version: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_cursor: Option<u64>,
+}
+
 fn canonical_service_role_handshake() -> Result<Vec<u8>, BridgetClientError> {
     serde_json::to_vec(&CanonicalServiceRoleHandshake {
         kind: "RoleHandshake",
@@ -1281,6 +1287,17 @@ fn canonical_coordination_service_hello(issuer_scope: &str) -> Result<Vec<u8>, B
         service: "maicie",
         issuer_scope,
         capabilities: &capabilities,
+    })
+    .map_err(BridgetClientError::Encode)
+}
+
+fn canonical_coordination_subscribe(
+    after_cursor: Option<u64>,
+) -> Result<Vec<u8>, BridgetClientError> {
+    serde_json::to_vec(&CanonicalCoordinationSubscribe {
+        kind: "coordination_subscribe",
+        version: COORDINATION_STREAM_VERSION,
+        after_cursor,
     })
     .map_err(BridgetClientError::Encode)
 }

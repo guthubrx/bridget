@@ -277,7 +277,7 @@ fn serve_coordination_empty(stream: UnixStream) {
     );
     assert_eq!(
         read_json(&mut reader),
-        json!({"type":"coordination_subscribe","v":2,"after_cursor":null})
+        json!({"type":"coordination_subscribe","v":2})
     );
     write_json(
         &mut writer,
