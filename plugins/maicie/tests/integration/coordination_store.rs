@@ -1,7 +1,7 @@
 use maicie::domain::{
     AttenteNotification, ClasseDuree, DefinitionCoordination, Delegation, DependanceDelegation,
     EtatOutboxDelegation, FaitAppartenanceRepli, ModeObjectif, ModeQualificationDependance,
-    ObjectifCoordonne, OutboxDelegation, PolitiqueReassignation, TypeEvenementCoordination,
+    ObjectifCoordonne, OutboxDelegation, PolitiqueReassignation, TypeEvenementAttendu,
 };
 use maicie::outbox::{PreparedDelegation, stable_body_hash};
 use maicie::store::MaicieStore;
@@ -33,7 +33,7 @@ fn migration_v7_puis_seconde_ouverture_conservent_l_historique() {
              DROP TABLE evaluated_closure_acts;
              DROP TABLE delegation_dependencies;
              DROP TABLE coordination_expectations;
-             DROP TABLE coordination_events_v1;",
+             DROP TABLE coordination_events;",
         )
         .unwrap();
     connection.pragma_update(None, "user_version", 7).unwrap();
@@ -53,7 +53,7 @@ fn migration_v7_puis_seconde_ouverture_conservent_l_historique() {
     let coordination_tables: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN (
-                 'coordination_events_v1', 'coordination_expectations',
+                 'coordination_events', 'coordination_expectations',
                  'delegation_dependencies', 'evaluated_closure_acts',
                  'reassignment_policies', 'delegation_lineages',
                  'delegation_generations', 'reminder_episodes',
@@ -223,7 +223,7 @@ fn definition(
             attente_id: Uuid::new_v4(),
             objectif_id,
             delegation_id: None,
-            kind: TypeEvenementCoordination::ClotureObjectif,
+            kind: TypeEvenementAttendu::ClotureObjectif,
             recipient: "referent".into(),
             policy_version: 1,
         }],

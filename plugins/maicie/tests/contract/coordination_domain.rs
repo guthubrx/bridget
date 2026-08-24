@@ -1,40 +1,46 @@
 use maicie::domain::{
     ClasseDuree, DefinitionCoordination, DependanceDelegation, DomainError, EvenementCoordination,
-    FaitAppartenanceRepli, FraicheurCoordination, MAX_COORDINATION_EDGES,
-    ModeQualificationDependance, PolitiqueReassignation, TypeEvenementCoordination,
+    FaitAppartenanceRepli, FraicheurCoordination, MAX_COORDINATION_EDGES, MAX_COORDINATION_NODES,
+    ModeQualificationDependance, PolitiqueReassignation,
 };
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
 #[test]
-fn les_evenements_de_cycle_ne_qualifient_jamais_une_arete() {
-    for kind in [
-        TypeEvenementCoordination::Answered,
-        TypeEvenementCoordination::Cancelled,
-        TypeEvenementCoordination::TimedOut,
-        TypeEvenementCoordination::ReminderSent,
-    ] {
-        let event = EvenementCoordination {
-            event_id: format!("event-{kind:?}"),
-            objectif_id: Uuid::new_v4(),
-            delegation_id: Some(Uuid::new_v4()),
-            generation: Some(1),
-            kind,
-            observed_at: 1,
-            freshness: FraicheurCoordination::Fresh,
-        };
-        assert!(!event.peut_qualifier_une_arete());
-    }
-    let report = EvenementCoordination {
-        event_id: "delivery-report".into(),
-        objectif_id: Uuid::new_v4(),
-        delegation_id: Some(Uuid::new_v4()),
-        generation: Some(1),
-        kind: TypeEvenementCoordination::DeliveryReport,
-        observed_at: 1,
-        freshness: FraicheurCoordination::Gap,
-    };
-    assert!(!report.peut_qualifier_une_arete());
+fn la_frontiere_a_parse_le_dto_public_et_conserve_les_octets_attestes() {
+    const STREAM_A: &[u8] = include_bytes!(
+        "../../../../specs/016-coordination-active/contracts/fixtures/coordination-stream-v2.jsonl"
+    );
+    let event_bytes = STREAM_A
+        .split(|byte| *byte == b'\n')
+        .nth(5)
+        .expect("événement A dans le corpus gelé");
+    let event =
+        EvenementCoordination::depuis_trame_attestee(event_bytes, FraicheurCoordination::Fresh)
+            .unwrap();
+    assert_eq!(event.canonical_bytes(), event_bytes);
+    assert_eq!(event.event_id(), "evt-reminder-1");
+    assert_eq!(event.request_id(), "request-1");
+    assert_eq!(event.reminder_message_id(), "message-reminder-1");
+    assert_eq!(event.recipient(), "codex-1");
+    assert_eq!(event.generation(), 1);
+    assert_eq!(event.observed_at(), 1_787_500_003);
+    assert_eq!(event.cursor(), 1);
+    assert_eq!(event.freshness(), FraicheurCoordination::Fresh);
+
+    // Mutation discriminante : le type fermé public devient inconnu. Le fait
+    // est refusé à la frontière, avant que T1606 puisse calculer une décision.
+    let mut mutated = event_bytes.to_vec();
+    let marker = b"reminder_sent";
+    let offset = mutated
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .expect("kind public dans la fixture");
+    mutated[offset + marker.len() - 1] = b'x';
+    assert!(
+        EvenementCoordination::depuis_trame_attestee(&mutated, FraicheurCoordination::Fresh)
+            .is_err()
+    );
 }
 
 #[test]
@@ -111,6 +117,44 @@ fn definition_refuse_doublon_inter_objectif_et_borne_avant_store() {
         })
         .collect();
     assert!(definition.verifier_bornes().is_err());
+}
+
+#[test]
+fn borne_de_noeuds_accepte_cent_et_refuse_cent_un_independamment_des_aretes() {
+    let objectif_id = Uuid::new_v4();
+    let accepted = chain_definition(objectif_id, MAX_COORDINATION_NODES);
+    assert_eq!(accepted.dependencies.len(), 99);
+    accepted.verifier_bornes().unwrap();
+
+    let rejected = chain_definition(objectif_id, MAX_COORDINATION_NODES + 1);
+    assert_eq!(rejected.dependencies.len(), 100);
+    assert!(rejected.dependencies.len() < MAX_COORDINATION_EDGES);
+    assert_eq!(
+        rejected.verifier_bornes(),
+        Err(DomainError::DonneeInvalide(
+            "graphe de coordination hors borne"
+        ))
+    );
+}
+
+fn chain_definition(objectif_id: Uuid, nodes: usize) -> DefinitionCoordination {
+    let ids: Vec<Uuid> = (1..=nodes)
+        .map(|index| Uuid::from_u128(index as u128))
+        .collect();
+    DefinitionCoordination {
+        objectif_id,
+        dependencies: ids
+            .windows(2)
+            .map(|pair| DependanceDelegation {
+                objectif_id,
+                prerequis_id: pair[0],
+                dependant_id: pair[1],
+                mode: ModeQualificationDependance::HashGreffe,
+            })
+            .collect(),
+        policies: vec![],
+        attentes: vec![],
+    }
 }
 
 fn membership(objectif_id: Uuid, participant_id: &str, est_pilote: bool) -> FaitAppartenanceRepli {

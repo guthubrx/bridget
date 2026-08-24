@@ -3,6 +3,9 @@
 //! Les états de ce module décrivent uniquement la coordination. Les faits de
 //! présence, livraison et délai restent détenus par Bridget.
 
+use bridget_transport::protocol::{
+    COORDINATION_STREAM_VERSION, CoordinationEventKind, DaemonToWrapper,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uuid::Uuid;
@@ -167,19 +170,14 @@ pub enum EtatDelegation {
     Annulee,
 }
 
-/// Types de faits structurés consommables par la coordination active.
-/// `Answered`, `Cancelled` et `TimedOut` restent des faits de cycle Bridget :
-/// ils ne qualifient jamais une arête du DAG.
+/// Types d'événements produits par le registre Maicie lui-même. Les faits
+/// transport A utilisent directement `CoordinationEventKind` du protocole
+/// public et ne sont jamais recopiés dans cette énumération.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TypeEvenementCoordination {
+pub enum TypeEvenementAttendu {
     ClotureObjectif,
     OuvertureDelegation,
-    DeliveryReport,
-    ReminderSent,
-    Answered,
-    Cancelled,
-    TimedOut,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,35 +189,118 @@ pub enum FraicheurCoordination {
     Unavailable,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvenementCoordination {
-    pub event_id: String,
-    pub objectif_id: Uuid,
-    pub delegation_id: Option<Uuid>,
-    pub generation: Option<u64>,
-    pub kind: TypeEvenementCoordination,
-    pub observed_at: i64,
-    pub freshness: FraicheurCoordination,
+    canonical_bytes: Vec<u8>,
+    event_id: String,
+    request_id: String,
+    kind: CoordinationEventKind,
+    reminder_message_id: String,
+    recipient: String,
+    generation: u64,
+    observed_at: i64,
+    cursor: u64,
+    freshness: FraicheurCoordination,
 }
 
 impl EvenementCoordination {
-    pub fn verifier(&self) -> Result<(), DomainError> {
-        if self.event_id.trim().is_empty() || self.observed_at <= 0 {
+    /// Parse l'unique DTO public A et conserve les octets canoniques exacts.
+    /// La comparaison après sérialisation refuse aussi une forme JSON locale
+    /// équivalente mais non canonique avant toute décision du réducteur.
+    pub fn depuis_trame_attestee(
+        canonical_bytes: &[u8],
+        freshness: FraicheurCoordination,
+    ) -> Result<Self, DomainError> {
+        let frame: DaemonToWrapper = serde_json::from_slice(canonical_bytes)
+            .map_err(|_| DomainError::DonneeInvalide("trame attestée invalide"))?;
+        let rendered = serde_json::to_vec(&frame)
+            .map_err(|_| DomainError::DonneeInvalide("trame attestée invalide"))?;
+        if rendered != canonical_bytes {
+            return Err(DomainError::DonneeInvalide(
+                "octets attestés non canoniques",
+            ));
+        }
+        let DaemonToWrapper::CoordinationEvent {
+            version,
+            event_id,
+            request_id,
+            kind,
+            reminder_message_id,
+            recipient,
+            generation,
+            observed_at,
+            cursor: Some(cursor),
+        } = frame
+        else {
+            return Err(DomainError::DonneeInvalide(
+                "trame hors événement de coordination cursé",
+            ));
+        };
+        if version != COORDINATION_STREAM_VERSION
+            || event_id.trim().is_empty()
+            || request_id.trim().is_empty()
+            || reminder_message_id.trim().is_empty()
+            || recipient.trim().is_empty()
+            || generation == 0
+            || observed_at <= 0
+            || cursor == 0
+        {
             return Err(DomainError::DonneeInvalide(
                 "événement de coordination incomplet",
             ));
         }
-        if self.generation == Some(0) {
-            return Err(DomainError::DonneeInvalide("génération nulle"));
-        }
-        Ok(())
+        Ok(Self {
+            canonical_bytes: canonical_bytes.to_vec(),
+            event_id,
+            request_id,
+            kind,
+            reminder_message_id,
+            recipient,
+            generation,
+            observed_at,
+            cursor,
+            freshness,
+        })
     }
 
-    /// Une arête n'est qualifiée que par les deux preuves durables prévues par
-    /// FR-1603. Les événements de cycle 015 ne sont jamais promus implicitement.
-    pub fn peut_qualifier_une_arete(&self) -> bool {
-        self.freshness == FraicheurCoordination::Fresh
-            && matches!(self.kind, TypeEvenementCoordination::DeliveryReport)
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    pub fn event_id(&self) -> &str {
+        &self.event_id
+    }
+
+    pub fn request_id(&self) -> &str {
+        &self.request_id
+    }
+
+    pub fn kind(&self) -> CoordinationEventKind {
+        self.kind
+    }
+
+    pub fn reminder_message_id(&self) -> &str {
+        &self.reminder_message_id
+    }
+
+    pub fn recipient(&self) -> &str {
+        &self.recipient
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn observed_at(&self) -> i64 {
+        self.observed_at
+    }
+
+    pub fn cursor(&self) -> u64 {
+        self.cursor
+    }
+
+    pub fn freshness(&self) -> FraicheurCoordination {
+        self.freshness
     }
 }
 
@@ -286,7 +367,7 @@ pub struct AttenteNotification {
     pub attente_id: Uuid,
     pub objectif_id: Uuid,
     pub delegation_id: Option<Uuid>,
-    pub kind: TypeEvenementCoordination,
+    pub kind: TypeEvenementAttendu,
     pub recipient: String,
     pub policy_version: u64,
 }
@@ -296,15 +377,6 @@ impl AttenteNotification {
         if self.recipient.trim().is_empty() || self.policy_version == 0 {
             return Err(DomainError::DonneeInvalide(
                 "attente de notification invalide",
-            ));
-        }
-        if !matches!(
-            self.kind,
-            TypeEvenementCoordination::ClotureObjectif
-                | TypeEvenementCoordination::OuvertureDelegation
-        ) {
-            return Err(DomainError::DonneeInvalide(
-                "type de notification non supporté en v1",
             ));
         }
         Ok(())

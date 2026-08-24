@@ -3164,12 +3164,11 @@ fn dependency_mode_name(mode: crate::domain::ModeQualificationDependance) -> &'s
 }
 
 fn expected_event_name(
-    kind: crate::domain::TypeEvenementCoordination,
+    kind: crate::domain::TypeEvenementAttendu,
 ) -> Result<&'static str, StoreError> {
     match kind {
-        crate::domain::TypeEvenementCoordination::ClotureObjectif => Ok("cloture_objectif"),
-        crate::domain::TypeEvenementCoordination::OuvertureDelegation => Ok("ouverture_delegation"),
-        _ => Err(StoreError::Invalid("type d'attente non supporté par la v1")),
+        crate::domain::TypeEvenementAttendu::ClotureObjectif => Ok("cloture_objectif"),
+        crate::domain::TypeEvenementAttendu::OuvertureDelegation => Ok("ouverture_delegation"),
     }
 }
 
@@ -3380,15 +3379,17 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     }
     if current_version < 9 {
         tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS coordination_events_v1 (
+            "CREATE TABLE IF NOT EXISTS coordination_events (
                  event_id TEXT PRIMARY KEY,
-                 objective_id TEXT NOT NULL REFERENCES objectives(id),
-                 delegation_id TEXT REFERENCES delegations(id),
-                 generation INTEGER CHECK(generation IS NULL OR generation > 0),
-                 kind TEXT NOT NULL,
+                 request_id TEXT NOT NULL,
+                 kind TEXT NOT NULL CHECK(kind = 'reminder_sent'),
+                 reminder_message_id TEXT NOT NULL,
+                 recipient TEXT NOT NULL,
+                 transport_generation INTEGER NOT NULL CHECK(transport_generation > 0),
+                 cursor INTEGER NOT NULL UNIQUE CHECK(cursor > 0),
                  freshness TEXT NOT NULL CHECK(freshness IN ('fresh','gap','ended','unavailable')),
                  observed_at INTEGER NOT NULL CHECK(observed_at > 0),
-                 payload_json BLOB NOT NULL
+                 canonical_bytes BLOB NOT NULL
              );
              CREATE TABLE IF NOT EXISTS coordination_expectations (
                  expectation_id TEXT PRIMARY KEY,
