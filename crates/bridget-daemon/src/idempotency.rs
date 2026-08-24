@@ -990,6 +990,17 @@ impl IdempotencyStore {
         Ok(())
     }
 
+    /// Remise ENCORE EN VOL pour cette clé, et elle seule.
+    ///
+    /// Le filtre de phase n'est pas cosmétique : une remise passée en
+    /// `indeterminate` — par échec de reprise, par `DeliveryIndeterminate`, ou
+    /// par la migration v2 qui écarte les enveloppes absentes — est un état
+    /// ABSORBANT. Plus rien ne l'accusera jamais, et elle occupe pourtant sa
+    /// clé jusqu'à l'expiration de l'horizon (7 jours). Sans ce filtre, elle
+    /// remontait comme une remise en vol : l'appelant lisait « le dépôt a
+    /// réussi, rejouez pour lire le sort », rc=0, sur un message qui ne
+    /// partirait plus jamais. Le mensonge optimiste est pire que celui qu'on
+    /// corrige — d'où `dispatching` seul.
     pub fn send_delivery(
         &self,
         key: &IdempotencyKey,
@@ -998,7 +1009,8 @@ impl IdempotencyStore {
             .query_row(
                 "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at, message_bytes
                  FROM send_deliveries
-                 WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2",
+                 WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2
+                   AND phase = 'dispatching'",
                 params![key.issuer_scope, key.idempotency_key],
                 |row| {
                     Ok(SendDelivery {
@@ -2063,6 +2075,144 @@ mod tests {
                 )
                 .unwrap(),
             1
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// ORACLE C1 — chemin RUNTIME, enveloppe PRÉSENTE.
+    ///
+    /// C'est le cas de l'unique occurrence réelle relevée en production : une
+    /// remise que le daemon n'a pas pu redéployer (échec de reprise) ou que le
+    /// wrapper a déclarée indéterminée passe en quarantaine. Son enveloppe est
+    /// intacte, sa ligne est là — et c'est précisément ce qui la rendait
+    /// crédible : `send_delivery` la remontait, l'appelant lisait « en vol,
+    /// rejouez », rc=0, pendant les 7 jours de l'horizon. Or la quarantaine est
+    /// un état ABSORBANT : plus aucune transition n'en sort, ce message ne sera
+    /// jamais accusé.
+    ///
+    /// Cet oracle meurt si le filtre de phase disparaît.
+    #[test]
+    fn une_remise_en_quarantaine_ne_remonte_plus_comme_une_remise_en_vol() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let key = key();
+        assert!(matches!(
+            reserve(&store, b"canon"),
+            Reservation::Prepared { .. }
+        ));
+        let delivery = SendDelivery {
+            delivery_id: "delivery-quarantaine".to_string(),
+            recipient_instance_id: "instance-1".to_string(),
+            delivery_generation: 4,
+            expires_at: NOW + HORIZON,
+            message_bytes: b"enveloppe-intacte".to_vec(),
+        };
+        store.begin_send_delivery(&key, &delivery).unwrap();
+        // Avant la quarantaine, la remise est bien en vol : sans ce constat,
+        // l'oracle passerait aussi pour une clé qui n'a jamais rien déposé.
+        assert_eq!(store.send_delivery(&key).unwrap(), Some(delivery));
+
+        store
+            .mark_delivery_indeterminate("delivery-quarantaine", "instance-1", 4)
+            .unwrap();
+
+        assert_eq!(
+            store.send_delivery(&key).unwrap(),
+            None,
+            "une remise en quarantaine doit cesser d'attester un dépôt : \
+             sans cela, l'appelant lit « en vol, rejouez » sur un message \
+             que plus rien n'accusera jamais"
+        );
+        // L'enveloppe reste en base — la ligne n'est pas supprimée, elle est
+        // seulement écartée de ce que « remise en vol » désigne.
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT phase FROM send_deliveries WHERE delivery_id = 'delivery-quarantaine'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "indeterminate"
+        );
+    }
+
+    /// ORACLE C1 — chemin MIGRATION, enveloppe ABSENTE.
+    ///
+    /// La seconde porte vers la quarantaine, et la plus large : la migration v2
+    /// écarte d'un coup toutes les remises v1 dépourvues d'enveloppe. Une
+    /// montée de version pouvait donc fabriquer en masse des remises
+    /// définitivement inaccusables qui continuaient à s'annoncer comme des
+    /// dépôts réussis.
+    ///
+    /// Cet oracle meurt si le filtre de phase disparaît.
+    #[test]
+    fn une_remise_mise_en_quarantaine_par_la_migration_n_atteste_plus_un_depot() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-idempotency-quarantaine-migration-{}-{}.db",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE idempotency_records (
+                issuer_scope TEXT NOT NULL,
+                operation_kind TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                canonical_bytes BLOB NOT NULL,
+                state TEXT NOT NULL,
+                public_result_kind TEXT,
+                public_result_category TEXT,
+                public_result_reason TEXT,
+                issued_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                PRIMARY KEY (issuer_scope, operation_kind, idempotency_key)
+            );
+            CREATE TABLE send_deliveries (
+                delivery_id TEXT PRIMARY KEY,
+                issuer_scope TEXT NOT NULL,
+                operation_kind TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                recipient_instance_id TEXT NOT NULL,
+                delivery_generation INTEGER NOT NULL,
+                phase TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                message_bytes BLOB
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO idempotency_records VALUES (?1, 'send', 'message-1', X'00', 'dispatching', NULL, NULL, NULL, ?2, ?3)",
+            params!["012_scope_aaaaaaaaaaaa", NOW, NOW + HORIZON],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO send_deliveries VALUES ('delivery-sans-enveloppe', ?1, 'send', 'message-1', 'instance-1', 1, 'dispatching', ?2, NULL)",
+            params!["012_scope_aaaaaaaaaaaa", NOW + HORIZON],
+        )
+        .unwrap();
+        drop(conn);
+
+        // L'ouverture applique la migration, qui met la remise en quarantaine.
+        let store = IdempotencyStore::open(&path).unwrap();
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT phase FROM send_deliveries WHERE delivery_id = 'delivery-sans-enveloppe'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "indeterminate",
+            "prémisse de l'oracle : la migration doit bien avoir mis en quarantaine"
+        );
+
+        assert_eq!(
+            store.send_delivery(&key()).unwrap(),
+            None,
+            "une remise mise en quarantaine par la migration ne doit pas \
+             attester un dépôt : une montée de version en fabriquerait en masse"
         );
         std::fs::remove_file(path).unwrap();
     }
