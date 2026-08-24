@@ -1003,3 +1003,22 @@ Priorité : après les blocs en cours. Aucune urgence déclarée par
 l'utilisateur, mais le coût augmente à chaque geste manuel non consigné —
 c'est pour cela que l'inventaire ci-dessus est écrit MAINTENANT, tant que je
 me souviens de chaque pièce.
+- **Le guichet est inutilisable tant que le référent ne transmet pas les
+  identifiants — constat du 2026-08-24, ma faute.** J'ai écrit dans les
+  règles de chantier que tout agent doit déposer son rapport au guichet, et
+  j'ai ajouté la consigne à mes mandats. Un agent m'a répondu qu'il ne
+  pouvait pas : le dépôt exige un identifiant d'objectif et de délégation, et
+  il ne les avait pas. Il a refusé de les inventer.
+  Il a raison, et le défaut est dans MA pratique : Maicie me rend ces deux
+  identifiants à CHAQUE délégation, dans le JSON de retour. Je ne les
+  transmets jamais. La consigne était donc inapplicable dès son écriture.
+  CORRECTIF : inscrire l'identifiant d'objectif et de délégation dans chaque
+  mandat, comme une ligne fixe. Sans eux, la voie de dépôt reste théorique et
+  tous les rapports continueront de passer par moi — c'est-à-dire que le
+  bénéfice du guichet reste nul en pratique.
+  LEÇON PLUS LARGE, la troisième de cette nature cette nuit : une capacité
+  livrée n'est pas une capacité utilisée. Le guichet fonctionne depuis six
+  heures, il est prouvé par un gate, et il n'a servi à personne — d'abord
+  parce que les agents ne savaient pas qu'il existait, ensuite parce que je
+  ne leur donne pas de quoi s'en servir. Vérifier qu'une chose marche et
+  vérifier qu'elle sert sont deux gestes différents.
