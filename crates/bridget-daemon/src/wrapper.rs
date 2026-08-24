@@ -3559,7 +3559,12 @@ mod prompt_tests {
             "{context}"
         );
         assert!(context.contains(&format!("delegation_id={}", mission.delegation_id)));
-        assert!(context.contains(&format!("message_id={}", mission.message_id)));
+        assert!(context.contains(&format!(
+            "message_id={}",
+            mission
+                .message_id
+                .expect("délégation créée sans prérequis porte un message_id")
+        )));
         assert!(context.contains("reprendre la bissection durable"));
         assert!(context.contains("branche=master") || context.contains("branche=main"));
         assert!(context.contains(" M tracked.txt"));

@@ -7156,7 +7156,14 @@ mod presence_tests {
         };
         assert!(prompts.contains(&mission.objective_id.to_string()));
         assert!(prompts.contains(&mission.delegation_id.to_string()));
-        assert!(prompts.contains(&mission.message_id.to_string()));
+        assert!(
+            prompts.contains(
+                &mission
+                    .message_id
+                    .expect("délégation créée sans prérequis porte un message_id")
+                    .to_string()
+            )
+        );
         assert!(prompts.contains("reprendre la bissection"));
         assert!(prompts.contains("wip.txt"));
         assert!(
