@@ -1,7 +1,7 @@
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
-    COORDINATION_STREAM_VERSION, ConnectionRole, CoordinationEventKind, SERVICE_CONTRACT_VERSION,
-    ServiceCapability, decode, encode,
+    decode, encode, ConnectionRole, CoordinationEventKind, ServiceCapability,
+    COORDINATION_STREAM_VERSION, SERVICE_CONTRACT_VERSION,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -471,7 +471,17 @@ fn texte_relance_ne_fabrique_jamais_un_fait_de_coordination() {
     let _ = std::fs::remove_dir_all(home);
 }
 
+// Les jalons `before/after_coordination_persist` ne vivent que derrière
+// `feature = "test-support"`. Sans elle le binaire est muet et le banc
+// attendait un `.ready` qui n'arrive jamais (« jalon de crash absent ») —
+// rouge permanent sur `cargo test --workspace` nu. Skip honnête nommé ;
+// la couverture crash reste exercée avec `--features test-support`
+// (specs/012, gates crash, `cargo test -p bridget-daemon --features test-support`).
 #[test]
+#[cfg_attr(
+    not(feature = "test-support"),
+    ignore = "exige --features test-support"
+)]
 fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {
     let home = unique_home();
     let sync = home.join("sync");
