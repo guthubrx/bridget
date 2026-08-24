@@ -248,15 +248,35 @@ pub enum ClientRefusal {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SpawnRefusal {
-    UnknownType,
-    CommandMissing { command: String, registry: String },
-    BillingGuard { variable: String },
+    /// Le daemon joint son instantané du registre : le CLI ne relit jamais le
+    /// fichier utilisateur et ne peut donc pas présenter une liste divergente.
+    UnknownType {
+        #[serde(default)]
+        requested_type: String,
+        #[serde(default)]
+        known_types: Vec<String>,
+        #[serde(default)]
+        registry: String,
+    },
+    CommandMissing {
+        command: String,
+        registry: String,
+    },
+    BillingGuard {
+        variable: String,
+    },
     NameActive,
-    EnvUnfit { detail: String },
+    EnvUnfit {
+        detail: String,
+    },
     CwdGone,
-    NegotiationFailed { detail: String },
+    NegotiationFailed {
+        detail: String,
+    },
     SpawnTimeout,
-    QuotaExceeded { limit: usize },
+    QuotaExceeded {
+        limit: usize,
+    },
     DaemonRecovering,
     IdempotencyExpired,
 }
@@ -1834,6 +1854,19 @@ mod tests {
         assert!(matches!(
             decode::<WrapperToDaemon>(json).unwrap(),
             WrapperToDaemon::Register { agent_type, .. } if agent_type == "codex"
+        ));
+    }
+
+    #[test]
+    fn refus_type_inconnu_historique_reste_lisible_apres_l_ajout_du_diagnostic() {
+        let legacy: SpawnRefusal = serde_json::from_str(r#"{"kind":"unknown_type"}"#).unwrap();
+        assert!(matches!(
+            legacy,
+            SpawnRefusal::UnknownType {
+                requested_type,
+                known_types,
+                registry,
+            } if requested_type.is_empty() && known_types.is_empty() && registry.is_empty()
         ));
     }
 

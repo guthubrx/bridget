@@ -124,7 +124,36 @@ fn echec_d_expedition_post_commit_conserve_une_unique_outbox_prepared() {
     assert_eq!(pending[0].state, EtatOutboxDelegation::Prepared);
 }
 
+#[test]
+fn cible_connectee_sans_profil_explique_l_inscription_maicie_manquante() {
+    let fixture = Fixture::new();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let socket = fixture.socket.clone();
+    let server = thread::spawn(move || {
+        serve_list_only_fixture_with_agent(&socket, ready_tx, "cursorbridget")
+    });
+    ready_rx.recv().unwrap();
+
+    let output = run_delegate_to(&fixture, "cursorbridget", "registration/missing-profile");
+
+    assert_eq!(output.status.code(), Some(5));
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "target_missing_maicie_profile");
+    assert_eq!(
+        error["error"]["message"],
+        format!(
+            "agent Bridget connecté mais sans profil Maicie : cursorbridget; ajoutez un profil dans {} avec \"agent_name\": \"cursorbridget\"",
+            fixture.config.display()
+        )
+    );
+    server.join().unwrap();
+}
+
 fn run_delegate(fixture: &Fixture, idempotency_key: &str) -> std::process::Output {
+    run_delegate_to(fixture, "prospective", idempotency_key)
+}
+
+fn run_delegate_to(fixture: &Fixture, target: &str, idempotency_key: &str) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_maicie"))
         .args([
             "delegate",
@@ -133,7 +162,7 @@ fn run_delegate(fixture: &Fixture, idempotency_key: &str) -> std::process::Outpu
             "--goal",
             "vérifier le contrat CLI",
             "--to",
-            "prospective",
+            target,
             "--duration",
             "courte",
             "--idempotency-key",
@@ -164,6 +193,10 @@ fn serve_delegate_fixture(socket: &Path, ready: mpsc::Sender<()>) {
 }
 
 fn serve_list_only_fixture(socket: &Path, ready: mpsc::Sender<()>) {
+    serve_list_only_fixture_with_agent(socket, ready, "prospective");
+}
+
+fn serve_list_only_fixture_with_agent(socket: &Path, ready: mpsc::Sender<()>, agent: &str) {
     let listener = UnixListener::bind(socket).unwrap();
     ready.send(()).unwrap();
     let (stream, _) = listener.accept().unwrap();
@@ -171,7 +204,7 @@ fn serve_list_only_fixture(socket: &Path, ready: mpsc::Sender<()>) {
     let (stream, _) = listener.accept().unwrap();
     serve_client_handshake(stream);
     let (stream, _) = listener.accept().unwrap();
-    serve_agent_list(stream);
+    serve_agent_list_named(stream, agent);
 }
 
 /// Toute commande Maicie relève d'abord le guichet en rôle `service`. La
@@ -241,6 +274,10 @@ fn serve_client_handshake_io(reader: &mut BufReader<UnixStream>, writer: &mut Un
 }
 
 fn serve_agent_list(stream: UnixStream) {
+    serve_agent_list_named(stream, "prospective");
+}
+
+fn serve_agent_list_named(stream: UnixStream, name: &str) {
     let mut writer = stream.try_clone().unwrap();
     let mut reader = BufReader::new(stream);
     assert_eq!(read_json(&mut reader), json!({"type": "ListAgents"}));
@@ -249,7 +286,7 @@ fn serve_agent_list(stream: UnixStream) {
         json!({
             "type": "AgentList",
             "agents": [{
-                "name": "prospective",
+                "name": name,
                 "agent_type": "codex",
                 "connection_id": "fixture-1",
                 "host": "fixture",
