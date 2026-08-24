@@ -29,6 +29,13 @@ const MAX_IN_FLIGHT_TOOL_CALLS: usize = 8;
 /// une seconde émission, que le daemon refusera en `envelope_mismatch` — et
 /// affirme l'absence de doublon, sans quoi le geste reste redouté et personne
 /// ne l'ose.
+///
+/// Provenance, pour qui voudra la vérifier : la SUBSTANCE vient de
+/// `README.md` (« rejouez exactement le même corps avec les valeurs
+/// affichées »), qui portait déjà le troisième invariant quand les retours ne
+/// nommaient que les deux premiers. La FORMULATION est celle du mandat de
+/// dégel, adaptée en ponctuation pour tenir dans un motif. Ce n'est donc pas
+/// une recopie littérale du README, et il ne faut pas l'annoncer comme telle.
 pub(crate) const REJEU_A_L_IDENTIQUE: &str = "rejouer à l'identique — même id, même issued_at, même corps — lit le sort réel sans jamais dupliquer";
 
 /// Diagnostics des trois formes d'`outcome_unknown`, un par chemin.
