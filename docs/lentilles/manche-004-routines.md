@@ -97,3 +97,50 @@ au moins aussi bien ; polarité nue adoptée si les fiches n'apportent rien ;
 - Coût observé : cinq éphémères, ~50 minutes, targets isolés rendus (~10 Gi
   au total), aucune saturation machine cette fois — la leçon de la manche 2
   a tenu. Factures L4 toujours indisponibles (diagnostic en cours).
+
+## Amendements post-consolidation (les relecteurs ont continué)
+
+**B3 s'aggrave, et c'est décisif pour le correctif.** relec4 a corroboré la
+faille de sa main (3e source indépendante, avec son propre contrôle positif
+prouvant que la garde n'est pas morte mais MAL ALIMENTÉE — le défaut est en
+`main.rs:1043`, pas en `routines.rs:192`), puis a lu l'affichage de
+confirmation : `confirm_local_routine_approval` imprime le goal altéré ET,
+juste à côté, `hash=` — qui est le hash STOCKÉ, donc celui d'AVANT
+l'altération. **L'humain qui vérifie l'empreinte, geste que l'ADR 011
+institue précisément, lit la même empreinte qu'à la proposition et en conclut
+que rien n'a bougé.** Ce n'est pas une garde dégradée en vigilance visuelle :
+c'est une garde dégradée en vigilance visuelle PIÉGÉE. Seul est protégé celui
+qui relit le goal mot à mot. (À créditer à l'auteur au passage :
+`sanitize_terminal` protège bien l'affichage contre l'injection de séquences
+terminal — le réflexe est bon, c'est le chaînage qui manque.)
+
+**Une condition dure s'ajoute, meilleure que celles déjà listées** (relec1,
+reprise par relec2 contre son propre point) : l'oracle de rejeu doit
+EXERCER la garde applicative et mourir sous mutation. Aujourd'hui le test
+rejoue au même instant, sort au court-circuit `if after >= current` et
+n'atteint jamais la garde ; retirer la garde seule laisse le contrat VERT.
+L'argument de fond, qui vaut plus que la liste d'absences : *un geste sans
+oracle est un trou visible, qui se comble ; un oracle présent, nommé d'après
+un invariant et vert sous mutation de cet invariant, est une fausse
+assurance* — la leçon de la manche 2, retrouvée ici sur l'oracle central du
+lot.
+
+**Corrections d'attribution, à ne pas gonfler** (signalées par les
+relecteurs eux-mêmes, contre leur propre crédit) :
+- Clôture d'occurrence : « BLOCKED avec bascule si attesté » (relec4) et
+  « AWC si attesté » (relec2) sont **la même position dans deux sens** — une
+  seule voix, pas deux.
+- Rattrapage non borné : trouvé SÉPARÉMENT par relec3 et relec1, avec des
+  bornes différentes (1 j / 30 j d'un côté, 7 j de l'autre) — c'est une
+  corroboration forte à deux mains, pas deux trouvailles.
+- Ce qui s'additionne réellement : deux motifs de BLOCKED INDÉPENDANTS,
+  découverts par des chemins différents (la clôture par le bras nu, la garde
+  par le bras seul).
+
+**Ce que ces amendements disent du dispositif** — et c'est la mesure la plus
+solide de la manche : après avoir rendu leurs verdicts, quatre relecteurs
+sur cinq ont continué à se corriger *contre leur propre crédit* — retirer un
+point de son « ce qui tient » parce qu'un pair l'a muté, refuser qu'on
+compte deux voix là où il n'y en a qu'une, signaler l'antériorité d'un autre,
+corriger une motivation fausse qui soutenait une conclusion juste. Aucune de
+ces corrections ne leur profitait.
