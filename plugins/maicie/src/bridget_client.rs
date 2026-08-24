@@ -22,6 +22,14 @@ pub const CLIENT_CONTRACT_VERSION: u16 = 1;
 /// Capacites du contrat idempotent que Maicie exige avant tout envoi.
 pub const REQUIRED_CLIENT_CAPABILITIES: [&str; 2] = ["send_idempotent", "lookup"];
 
+/// Version du contrat public du guichet Maicie.
+pub const GUICHET_CONTRACT_VERSION: u16 = 1;
+
+/// La relève, la réponse et les événements ne sont accessibles que par cette
+/// capacité explicitement négociée. Un nom déclaré ne remplace jamais ce
+/// contrôle de protocole.
+pub const REQUIRED_GUICHET_CAPABILITY: &str = "maicie_guichet";
+
 /// Bornes de la frontière locale : une réponse Bridget ne peut ni suspendre
 /// Maicie indéfiniment ni lui faire accumuler une ligne JSONL illimitée.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,6 +250,62 @@ pub struct NegotiatedContract {
     pub horizon_secs: i64,
     pub issued_at_tolerance_secs: i64,
     pub capabilities: BTreeSet<String>,
+}
+
+/// Contrat effectivement accepté pour la connexion de service Maicie.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NegotiatedGuichetContract {
+    pub version: u16,
+    pub horizon_secs: i64,
+    pub issued_at_tolerance_secs: i64,
+    pub capabilities: BTreeSet<String>,
+}
+
+/// Résultat durable d'une opération de guichet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuichetResult {
+    pub issuer_scope: String,
+    pub request_id: String,
+    pub issue: String,
+    pub expires_at: i64,
+}
+
+/// Demande relevée de manière exclusive par le service Maicie.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuichetClaim {
+    pub issuer_scope: String,
+    pub request_id: String,
+    pub canonical_request: Vec<u8>,
+    pub claimed_at: i64,
+    pub claim_generation: u64,
+    pub claim_token: String,
+    pub claim_lease_expires_at: i64,
+    pub expires_at: i64,
+}
+
+/// Événement terminal produit exclusivement par Bridget pour le guichet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuichetLifecycleEvent {
+    pub issuer_scope: String,
+    pub event_id: String,
+    pub request_id: String,
+    pub state: String,
+    pub observed_at: i64,
+    pub in_reply_to: Option<String>,
+    pub response_message_id: Option<String>,
+}
+
+/// Connexion de service Maicie au guichet public Bridget.
+///
+/// Elle ne crée aucun runtime résident : son appelant l'ouvre à l'entrée d'une
+/// commande locale et lui transmet, si nécessaire, une échéance absolue unique.
+pub struct GuichetClient {
+    socket_path: PathBuf,
+    issuer_scope: String,
+    limits: BridgetClientLimits,
+    connection: WireConnection,
+    negotiated: NegotiatedGuichetContract,
+    deadline: Option<Instant>,
 }
 
 /// Information factuelle issue de l'annuaire Bridget.
@@ -727,6 +791,181 @@ impl BridgetClient {
     }
 }
 
+impl GuichetClient {
+    /// Ouvre le rôle de service et négocie exclusivement la capacité guichet.
+    pub fn connect(
+        socket_path: impl AsRef<Path>,
+        issuer_scope: impl Into<String>,
+    ) -> Result<Self, BridgetClientError> {
+        Self::connect_with_limits(socket_path, issuer_scope, BridgetClientLimits::default())
+    }
+
+    pub fn connect_with_limits(
+        socket_path: impl AsRef<Path>,
+        issuer_scope: impl Into<String>,
+        limits: BridgetClientLimits,
+    ) -> Result<Self, BridgetClientError> {
+        Self::connect_with_optional_deadline(socket_path, issuer_scope, limits, None)
+    }
+
+    /// Variante de relève : connexion, négociation et chaque requête consomment
+    /// la même échéance absolue détenue par la commande locale appelante.
+    pub fn connect_with_limits_until(
+        socket_path: impl AsRef<Path>,
+        issuer_scope: impl Into<String>,
+        limits: BridgetClientLimits,
+        deadline: Instant,
+    ) -> Result<Self, BridgetClientError> {
+        Self::connect_with_optional_deadline(socket_path, issuer_scope, limits, Some(deadline))
+    }
+
+    fn connect_with_optional_deadline(
+        socket_path: impl AsRef<Path>,
+        issuer_scope: impl Into<String>,
+        limits: BridgetClientLimits,
+        deadline: Option<Instant>,
+    ) -> Result<Self, BridgetClientError> {
+        validate_limits(limits)?;
+        let socket_path = socket_path.as_ref().to_path_buf();
+        let issuer_scope = issuer_scope.into();
+        if issuer_scope.len() < 16 || issuer_scope.trim().is_empty() {
+            return Err(BridgetClientError::InvalidEnvelope(
+                "issuer_scope guichet doit contenir au moins 128 bits opaques".to_string(),
+            ));
+        }
+        let connect_deadline = deadline.unwrap_or_else(|| Instant::now() + limits.connect_timeout);
+        let mut connection = WireConnection::connect(&socket_path, limits, connect_deadline)?;
+        let role = request_raw_with_deadline(
+            &mut connection,
+            &canonical_service_role_handshake()?,
+            deadline,
+        )?;
+        expect_role_accepted(&role, "service")?;
+        let welcome = request_raw_with_deadline(
+            &mut connection,
+            &canonical_service_hello(&issuer_scope)?,
+            deadline,
+        )?;
+        let negotiated = parse_service_welcome(welcome)?;
+        if negotiated.version != GUICHET_CONTRACT_VERSION {
+            return Err(BridgetClientError::VersionUnsupported {
+                requested: GUICHET_CONTRACT_VERSION,
+                received: negotiated.version,
+            });
+        }
+        if !negotiated
+            .capabilities
+            .contains(REQUIRED_GUICHET_CAPABILITY)
+        {
+            return Err(BridgetClientError::CapabilityMissing {
+                capability: REQUIRED_GUICHET_CAPABILITY.to_string(),
+            });
+        }
+        Ok(Self {
+            socket_path,
+            issuer_scope,
+            limits,
+            connection,
+            negotiated,
+            deadline,
+        })
+    }
+
+    pub fn issuer_scope(&self) -> &str {
+        &self.issuer_scope
+    }
+
+    pub fn socket_path(&self) -> &Path {
+        &self.socket_path
+    }
+
+    pub fn negotiated(&self) -> &NegotiatedGuichetContract {
+        &self.negotiated
+    }
+
+    pub fn limits(&self) -> BridgetClientLimits {
+        self.limits
+    }
+
+    /// Relève exactement une entrée FIFO, ou constate explicitement un guichet
+    /// vide. La sélection, le claim et son token restent côté Bridget.
+    pub fn claim_next(&mut self) -> Result<Option<GuichetClaim>, BridgetClientError> {
+        let response = self.request(json!({"type": "guichet_claim_next", "v": 1}))?;
+        parse_guichet_claim(response)
+    }
+
+    /// Rejoue le claim strictement possédé par cette connexion, sans prolonger
+    /// son lease ni lui attribuer une nouvelle génération.
+    pub fn claim(
+        &mut self,
+        issuer_scope: &str,
+        request_id: &str,
+        claim_token: &str,
+    ) -> Result<GuichetClaim, BridgetClientError> {
+        let response = self.request(json!({
+            "type": "guichet_claim",
+            "v": 1,
+            "issuer_scope": issuer_scope,
+            "request_id": request_id,
+            "claim_token": claim_token,
+        }))?;
+        parse_guichet_claim(response)?.ok_or_else(|| {
+            BridgetClientError::Protocol(
+                "guichet_claim ne peut pas retourner guichet_empty".to_string(),
+            )
+        })
+    }
+
+    /// Consulte l'issue d'une demande sans jamais créer une nouvelle entrée.
+    pub fn lookup(
+        &mut self,
+        issuer_scope: &str,
+        request_id: &str,
+    ) -> Result<GuichetResult, BridgetClientError> {
+        let response = self.request(json!({
+            "type": "guichet_lookup",
+            "v": 1,
+            "issuer_scope": issuer_scope,
+            "request_id": request_id,
+        }))?;
+        parse_guichet_result(response)
+    }
+
+    /// Envoie les octets canoniques déjà persistés d'une réponse de guichet.
+    /// Cette méthode est la voie de retry : elle ne désérialise/résérialise pas
+    /// l'enveloppe et préserve donc token, génération et charge à l'octet.
+    pub fn reply_exact_bytes(
+        &mut self,
+        response_bytes: &[u8],
+    ) -> Result<GuichetResult, BridgetClientError> {
+        validate_guichet_reply_bytes(response_bytes, self.limits.max_frame_bytes)?;
+        let response = self.request_raw_json(response_bytes)?;
+        parse_guichet_result(response)
+    }
+
+    /// Lit un événement poussé par Bridget après une réponse durable ou une
+    /// transition terminale. Il n'existe aucune émission cliente de cet événement.
+    pub fn next_lifecycle_event(&mut self) -> Result<GuichetLifecycleEvent, BridgetClientError> {
+        let deadline = self
+            .deadline
+            .unwrap_or_else(|| Instant::now() + self.limits.io_timeout);
+        let event = self.connection.receive_until(deadline);
+        self.connection.poison_after(&event);
+        parse_guichet_lifecycle_event(event?)
+    }
+
+    fn request(&mut self, value: Value) -> Result<Value, BridgetClientError> {
+        request_with_deadline(&mut self.connection, value, self.deadline)
+    }
+
+    fn request_raw_json(&mut self, json_bytes: &[u8]) -> Result<Value, BridgetClientError> {
+        match self.deadline {
+            Some(deadline) => self.connection.request_raw_json_until(json_bytes, deadline),
+            None => self.connection.request_raw_json(json_bytes),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct PersistedSpawnOrder {
     #[serde(rename = "type")]
@@ -817,6 +1056,53 @@ fn request_with_deadline(
         Some(deadline) => connection.request_until(value, deadline),
         None => connection.request(value),
     }
+}
+
+fn request_raw_with_deadline(
+    connection: &mut WireConnection,
+    bytes: &[u8],
+    deadline: Option<Instant>,
+) -> Result<Value, BridgetClientError> {
+    match deadline {
+        Some(deadline) => connection.request_raw_json_until(bytes, deadline),
+        None => connection.request_raw_json(bytes),
+    }
+}
+
+#[derive(Serialize)]
+struct CanonicalServiceRoleHandshake<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+    role: &'a str,
+}
+
+#[derive(Serialize)]
+struct CanonicalServiceHello<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+    version: u16,
+    service: &'a str,
+    issuer_scope: &'a str,
+    capabilities: [&'a str; 1],
+}
+
+fn canonical_service_role_handshake() -> Result<Vec<u8>, BridgetClientError> {
+    serde_json::to_vec(&CanonicalServiceRoleHandshake {
+        kind: "RoleHandshake",
+        role: "service",
+    })
+    .map_err(BridgetClientError::Encode)
+}
+
+fn canonical_service_hello(issuer_scope: &str) -> Result<Vec<u8>, BridgetClientError> {
+    serde_json::to_vec(&CanonicalServiceHello {
+        kind: "ServiceHello",
+        version: GUICHET_CONTRACT_VERSION,
+        service: "maicie",
+        issuer_scope,
+        capabilities: [REQUIRED_GUICHET_CAPABILITY],
+    })
+    .map_err(BridgetClientError::Encode)
 }
 
 /// Vérifie la trame complète `SendIdempotent` avant sa persistance par
@@ -1277,6 +1563,157 @@ fn write_error(source: std::io::Error) -> BridgetClientError {
     } else {
         BridgetClientError::Write(source)
     }
+}
+
+fn parse_service_welcome(response: Value) -> Result<NegotiatedGuichetContract, BridgetClientError> {
+    match response_type(&response)? {
+        "ServiceWelcome" => {
+            let version = u16::try_from(required_u64(&response, "version")?).map_err(|_| {
+                BridgetClientError::Protocol("version service Bridget hors plage u16".to_string())
+            })?;
+            let horizon_secs = required_i64(&response, "horizon_secs")?;
+            let issued_at_tolerance_secs = required_i64(&response, "issued_at_tolerance_secs")?;
+            if horizon_secs <= 0 || issued_at_tolerance_secs < 0 {
+                return Err(BridgetClientError::Protocol(
+                    "horizon ou tolerance guichet invalide".to_string(),
+                ));
+            }
+            let capabilities = response
+                .get("capabilities")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    BridgetClientError::Protocol("ServiceWelcome sans capabilities".to_string())
+                })?
+                .iter()
+                .map(|value| {
+                    value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                        BridgetClientError::Protocol("capabilite guichet non textuelle".to_string())
+                    })
+                })
+                .collect::<Result<BTreeSet<_>, _>>()?;
+            Ok(NegotiatedGuichetContract {
+                version,
+                horizon_secs,
+                issued_at_tolerance_secs,
+                capabilities,
+            })
+        }
+        "ClientRejected" | "ServiceRejected" => Err(BridgetClientError::ClientRejected {
+            reason: response.get("reason").cloned().unwrap_or(Value::Null),
+        }),
+        other => Err(unexpected("ServiceWelcome", other)),
+    }
+}
+
+fn parse_guichet_claim(response: Value) -> Result<Option<GuichetClaim>, BridgetClientError> {
+    match response_type(&response)? {
+        "guichet_empty" => Ok(None),
+        "guichet_claimed" => Ok(Some(GuichetClaim {
+            issuer_scope: required_string(&response, "issuer_scope")?,
+            request_id: required_string(&response, "request_id")?,
+            canonical_request: decode_base64_bytes(&response, "canonical_request")?,
+            claimed_at: required_i64(&response, "claimed_at")?,
+            claim_generation: required_u64(&response, "claim_generation")?,
+            claim_token: required_string(&response, "claim_token")?,
+            claim_lease_expires_at: required_i64(&response, "claim_lease_expires_at")?,
+            expires_at: required_i64(&response, "expires_at")?,
+        })),
+        "Nack" => Err(parse_nack(response)?),
+        "ClientRejected" | "ServiceRejected" => Err(BridgetClientError::ClientRejected {
+            reason: response.get("reason").cloned().unwrap_or(Value::Null),
+        }),
+        other => Err(unexpected("guichet_claimed", other)),
+    }
+}
+
+fn parse_guichet_result(response: Value) -> Result<GuichetResult, BridgetClientError> {
+    match response_type(&response)? {
+        "guichet_result" => Ok(GuichetResult {
+            issuer_scope: required_string(&response, "issuer_scope")?,
+            request_id: required_string(&response, "request_id")?,
+            issue: required_string(&response, "issue")?,
+            expires_at: required_i64(&response, "expires_at")?,
+        }),
+        "Nack" => Err(parse_nack(response)?),
+        "ClientRejected" | "ServiceRejected" => Err(BridgetClientError::ClientRejected {
+            reason: response.get("reason").cloned().unwrap_or(Value::Null),
+        }),
+        other => Err(unexpected("guichet_result", other)),
+    }
+}
+
+fn parse_guichet_lifecycle_event(
+    response: Value,
+) -> Result<GuichetLifecycleEvent, BridgetClientError> {
+    if response_type(&response)? != "request_lifecycle_event" {
+        return Err(unexpected(
+            "request_lifecycle_event",
+            response_type(&response)?,
+        ));
+    }
+    let state = required_string(&response, "state")?;
+    if !matches!(state.as_str(), "answered" | "cancelled" | "timed_out") {
+        return Err(BridgetClientError::Protocol(
+            "etat terminal guichet inconnu".to_string(),
+        ));
+    }
+    Ok(GuichetLifecycleEvent {
+        issuer_scope: required_string(&response, "issuer_scope")?,
+        event_id: required_string(&response, "event_id")?,
+        request_id: required_string(&response, "request_id")?,
+        state,
+        observed_at: required_i64(&response, "observed_at")?,
+        in_reply_to: optional_string(&response, "in_reply_to")?,
+        response_message_id: optional_string(&response, "response_message_id")?,
+    })
+}
+
+fn validate_guichet_reply_bytes(
+    bytes: &[u8],
+    max_frame_bytes: usize,
+) -> Result<(), BridgetClientError> {
+    if bytes.len() + 1 > max_frame_bytes {
+        return Err(BridgetClientError::FrameTooLarge { max_frame_bytes });
+    }
+    let value: Value =
+        serde_json::from_slice(bytes).map_err(|source| BridgetClientError::Decode {
+            line: String::from_utf8_lossy(bytes).into_owned(),
+            source,
+        })?;
+    if value.get("type").and_then(Value::as_str) != Some("guichet_reply")
+        || value.get("v").and_then(Value::as_u64) != Some(1)
+    {
+        return Err(BridgetClientError::InvalidEnvelope(
+            "reponse guichet persistée invalide".to_string(),
+        ));
+    }
+    for field in [
+        "issuer_scope",
+        "request_id",
+        "claim_token",
+        "response_message_id",
+        "outcome",
+    ] {
+        if value
+            .get(field)
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            return Err(BridgetClientError::InvalidEnvelope(format!(
+                "reponse guichet sans {field}"
+            )));
+        }
+    }
+    if value
+        .get("claim_generation")
+        .and_then(Value::as_u64)
+        .is_none()
+    {
+        return Err(BridgetClientError::InvalidEnvelope(
+            "reponse guichet sans claim_generation".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_client_welcome(response: Value) -> Result<NegotiatedContract, BridgetClientError> {

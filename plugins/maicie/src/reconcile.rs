@@ -5,8 +5,10 @@
 //! puis ne rejoue que l'enveloppe filaire strictement identique enregistrée
 //! avant la première I/O.
 
+use crate::app::{GuichetError, process_guichet_claim, record_guichet_lifecycle_event};
 use crate::bridget_client::{
-    BridgetClient, BridgetClientError, BridgetClientLimits, IdempotencyIssue, SpawnOutcome,
+    BridgetClient, BridgetClientError, BridgetClientLimits, GuichetClient, IdempotencyIssue,
+    SpawnOutcome,
 };
 use crate::outbox::{OutboxError, PendingDelegationOutbox};
 use crate::profiles::definition_digest_matches;
@@ -90,6 +92,34 @@ pub struct ActivationReconcileReport {
     pub actions: Vec<ActivationReconcileAction>,
 }
 
+/// Fait constaté pendant une relève pull-only du guichet. Cette projection ne
+/// devient jamais un runtime : chaque commande lui fournit une échéance unique.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuichetReconcileAction {
+    ReponseAttestee { request_id: String, issue: String },
+    EvenementAtteste { request_id: String, state: String },
+    ClaimPerime { request_id: String },
+    Vide,
+    BudgetEpuise,
+    TransportIndisponible,
+    TransportIncertain,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct GuichetReconcileReport {
+    pub actions: Vec<GuichetReconcileAction>,
+}
+
+/// Jalons réservés aux crash-tests de la relève guichet. Ils encadrent la
+/// frontière entre le claim Bridget, la greffe SQLite Maicie et la réponse
+/// liée ; aucune commande de production ne les observe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuichetReconcilePhase {
+    BeforeClaim,
+    AfterClaimBeforeStoreCommit,
+    AfterStoreCommitBeforeReply,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivationReconcilePhase {
     BeforeSocket,
@@ -102,6 +132,7 @@ pub enum ReconcileError {
     Store(StoreError),
     Outbox(OutboxError),
     Client(BridgetClientError),
+    Guichet(GuichetError),
     InvalidSnapshot(&'static str),
     Clock,
 }
@@ -112,6 +143,7 @@ impl fmt::Display for ReconcileError {
             Self::Store(error) => write!(formatter, "store Maicie impossible : {error}"),
             Self::Outbox(error) => write!(formatter, "outbox Maicie invalide : {error}"),
             Self::Client(error) => write!(formatter, "contrat Bridget invalide : {error}"),
+            Self::Guichet(error) => write!(formatter, "traitement guichet impossible : {error}"),
             Self::InvalidSnapshot(reason) => {
                 write!(formatter, "snapshot de reprise invalide : {reason}")
             }
@@ -126,6 +158,9 @@ impl std::error::Error for ReconcileError {
             Self::Store(error) => Some(error),
             Self::Outbox(error) => Some(error),
             Self::Client(error) => Some(error),
+            // `GuichetError` reste un contrat applicatif de lot B et
+            // n'expose volontairement pas de chaîne d'erreurs technique.
+            Self::Guichet(_) => None,
             Self::InvalidSnapshot(_) | Self::Clock => None,
         }
     }
@@ -266,6 +301,144 @@ pub fn reconcile_startup_at_observed_with_limits(
         }
     }
     Ok(report)
+}
+
+/// Relève le guichet au début d'une commande sans conserver de connexion ni
+/// de curseur après son retour. Tous les échanges consomment la même échéance
+/// absolue : une boîte aux lettres indisponible ne peut donc pas transformer
+/// une commande Maicie en boucle de polling ou en attente non bornée.
+pub fn reconcile_guichet_startup_with_limits(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    observed_at: i64,
+    limits: BridgetClientLimits,
+) -> Result<GuichetReconcileReport, ReconcileError> {
+    reconcile_guichet_startup_observed_with_limits(
+        store,
+        bridget_socket,
+        observed_at,
+        limits,
+        |_| Ok(()),
+    )
+}
+
+/// Variante des crash-tests : les jalons ne modifient aucun état et servent
+/// uniquement à interrompre un vrai processus aux trois frontières durables.
+pub fn reconcile_guichet_startup_observed_with_limits(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    observed_at: i64,
+    limits: BridgetClientLimits,
+    mut observer: impl FnMut(GuichetReconcilePhase) -> Result<(), ReconcileError>,
+) -> Result<GuichetReconcileReport, ReconcileError> {
+    if observed_at <= 0 {
+        return Err(ReconcileError::InvalidSnapshot("observed_at invalide"));
+    }
+    let deadline = Instant::now() + reconciliation_budget(limits);
+    let mut report = GuichetReconcileReport::default();
+    let mut client = match GuichetClient::connect_with_limits_until(
+        bridget_socket,
+        store.issuer_scope(),
+        limits,
+        deadline,
+    ) {
+        Ok(client) => client,
+        Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {
+            report
+                .actions
+                .push(GuichetReconcileAction::TransportIndisponible);
+            return Ok(report);
+        }
+        Err(error) => return Err(ReconcileError::Client(error)),
+    };
+
+    loop {
+        if Instant::now() >= deadline {
+            report.actions.push(GuichetReconcileAction::BudgetEpuise);
+            return Ok(report);
+        }
+        observer(GuichetReconcilePhase::BeforeClaim)?;
+        let Some(claim) = (match client.claim_next() {
+            Ok(claim) => claim,
+            Err(error) => {
+                record_guichet_transport_error(&mut report, error)?;
+                return Ok(report);
+            }
+        }) else {
+            report.actions.push(GuichetReconcileAction::Vide);
+            return Ok(report);
+        };
+
+        observer(GuichetReconcilePhase::AfterClaimBeforeStoreCommit)?;
+
+        // Le résultat applicatif est greffé avant toute réponse socket. Au
+        // rejeu, l'app réutilise ou régénère le seul `reply_bytes` durable
+        // pour le claim courant : ce réconciliateur ne reconstruit jamais de
+        // réponse ni de token par lui-même.
+        let response_message_id = Uuid::new_v4().to_string();
+        let processed = process_guichet_claim(store, &claim, &response_message_id, observed_at)
+            .map_err(ReconcileError::Guichet)?;
+        observer(GuichetReconcilePhase::AfterStoreCommitBeforeReply)?;
+        let response = match client.reply_exact_bytes(&processed.reply_bytes) {
+            Ok(response) => response,
+            Err(error) => {
+                record_guichet_transport_error(&mut report, error)?;
+                return Ok(report);
+            }
+        };
+        if response.issue == "claim_stale" {
+            report.actions.push(GuichetReconcileAction::ClaimPerime {
+                request_id: claim.request_id,
+            });
+            continue;
+        }
+        report
+            .actions
+            .push(GuichetReconcileAction::ReponseAttestee {
+                request_id: processed.request_id,
+                issue: response.issue,
+            });
+
+        // Bridget pousse l'événement seulement après avoir rendu l'issue de
+        // réponse durable. Son absence à l'échéance reste un fait transport :
+        // la greffe locale déjà durable n'est ni annulée ni réinterprétée.
+        match client.next_lifecycle_event() {
+            Ok(event) => {
+                let request_id = event.request_id.clone();
+                let state = event.state.clone();
+                record_guichet_lifecycle_event(store, &event).map_err(ReconcileError::Guichet)?;
+                report
+                    .actions
+                    .push(GuichetReconcileAction::EvenementAtteste { request_id, state });
+            }
+            Err(BridgetClientError::Timeout { .. }) => {}
+            Err(error) => {
+                record_guichet_transport_error(&mut report, error)?;
+                return Ok(report);
+            }
+        }
+    }
+}
+
+fn record_guichet_transport_error(
+    report: &mut GuichetReconcileReport,
+    error: BridgetClientError,
+) -> Result<(), ReconcileError> {
+    match error {
+        BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. } => {
+            report
+                .actions
+                .push(GuichetReconcileAction::TransportIndisponible);
+            Ok(())
+        }
+        error if transport_is_ambiguous(&error) => {
+            report
+                .actions
+                .push(GuichetReconcileAction::TransportIncertain);
+            Ok(())
+        }
+        error => Err(ReconcileError::Client(error)),
+    }
 }
 
 /// Reprend les SpawnOrder non terminaux. Pour cette frontière, le replay des

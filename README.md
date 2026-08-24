@@ -16,14 +16,14 @@ la coordination pénible : relancer celui qui ne répond pas, rattraper une
 connexion coupée, empêcher deux agents de boucler indéfiniment.
 
 ```console
-$ bridget who
+$ /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget who
 Agents connectés :
   NOM      TYPE    HÔTE         OS     TRANSPORT  DOMAINE    MODÈLE         EFFORT  ÉTAT
   agent-1  claude  poste-local  macOS  unix       bridget    claude-opus-5  high    connected
   agent-2  codex   poste-local  macOS  unix       projet-b   gpt-5.6-terra  xhigh   dnd
   distant  claude  serveur      Linux  ssh        projet-b   claude-opus-5  high    connected
 
-$ bridget send --to distant --reply "Peux-tu relire crates/bridget-core ?"
+$ /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget send --to distant --reply "Peux-tu relire crates/bridget-core ?"
 OK: envoyé à « distant » (id=fa09fa7800694, hops=4) [réponse attendue]
 ```
 
@@ -70,19 +70,19 @@ demain — et tient dans trois crates Rust sans dépendance exotique.
 
 ```bash
 # Compiler
-cargo build --release
+cargo build --manifest-path /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/Cargo.toml --release
 
 # Lancer le daemon
-./target/release/bridget daemon &
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget daemon
 
 # Lancer un agent dans tmux
-bridget codex
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget codex
 
 # Dans un autre terminal, envoyer un message
-bridget send --to codex-1 "Analyse ce fichier" --reply
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget send --to codex-1 "Analyse ce fichier" --reply
 
 # Voir les agents connectés
-bridget who
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget who
 ```
 
 ## Coordonner avec Maicie
@@ -92,16 +92,19 @@ délégations durables. Elle reste déterministe : aucun LLM, scheduler ou
 interprétation de texte libre ne choisit à la place de l'utilisateur.
 
 ```bash
-cargo build --release -p maicie
-./target/release/maicie delegate \
-  --config /chemin/absolu/maicie.json \
+cargo build --manifest-path /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/Cargo.toml --release -p maicie
+```
+
+```bash
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/maicie delegate \
+  --config /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/.local/maicie/maicie.json \
   --goal "Relire le plan de reprise" \
   --to reviewer \
   --duration normale \
   --idempotency-key revue-plan-1 \
   --json
 
-./target/release/maicie status --config /chemin/absolu/maicie.json --json
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/maicie status --config /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/.local/maicie/maicie.json --json
 ```
 
 Chaque commande ouvre la SQLite privée de Maicie puis rend la main. Les voies
@@ -124,7 +127,44 @@ envoi implicite. Le digest reçu dans `SpawnAccepted` est comparé au hash
 épinglé lors de l'approbation, sans relire le registre.
 
 Le démarrage, la configuration et les limites détaillées sont documentés dans
-`plugins/maicie/README.md`.
+`/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/plugins/maicie/README.md`.
+
+### Guichet Maicie
+
+La session 015 ajoute un contrat de guichet pour rendre la cible de service
+`maicie` joignable pendant l'absence du compagnon CLI. Bridget tient la boîte
+aux lettres de transport ; Maicie relève ensuite en pull-only au début d'une
+commande locale, sous budget absolu, puis rend la main. La relève se fait par
+`GuichetClaimNext`, au plus une demande à la fois, dans l'ordre FIFO durable.
+
+La capacité `maicie_guichet` est la borne d'autorisation de la relève, des
+réponses et des événements du guichet. Elle ne doit jamais être présentée comme
+un droit obtenu par le nom déclaré `from: "maicie"`. Limite C5 conservée :
+dans le modèle local coopératif v1, cette capacité n'authentifie pas
+cryptographiquement un processus hostile du même compte.
+
+Le guichet v1 refuse fermement le texte libre, les opérations inconnues, les
+champs inconnus, les enveloppes divergentes, les claims sans capacité et toute
+approbation distante. Il n'expose aucune route pour créer une approbation,
+consommer une activation de profil ou lancer un agent. Une boucle résidente
+`maicie serve` est explicitement hors version livrée et devra passer par une
+spécification v2.
+
+Les trois opérations structurées livrées sont `delivery-report`,
+`mission-status` et `deadline-question`. Un dépôt est idempotent par la clé
+`(issuer_scope, service_request, request_id)` et ses octets canoniques : un
+rejeu conserve donc exactement le même triplet, `issued_at` et le même corps.
+La relève `GuichetClaimNext` est FIFO durable et loue au plus une demande ; la
+réponse exige le propriétaire, le token, la génération et le bail courants.
+Bridget garde la demande liée et son événement de cycle ; Maicie garde le reçu
+de greffe et la décision de coordination.
+
+Le parcours réel G1504 a vérifié l'ensemble : un wrapper ACP dépose pendant
+l'absence de Maicie, une commande Maicie relève, greffe et répond, Bridget
+marque la demande `answered` et l'événement est relevé une seule fois. Le
+rejeu ne crée ni seconde décision ni second événement ; mesure : **925 ms**
+(commit `69ad00d`). Le guide exécutable est
+`/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/specs/015-guichet-maicie/quickstart.md`.
 
 ## Envois idempotents
 
@@ -134,7 +174,7 @@ clé métier et son instant Unix d'émission. Bridget ne génère jamais ces val
 à la place du client.
 
 ```bash
-bridget send --to codex-1 \
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget send --to codex-1 \
   --id delegation-42 \
   --issued-at "$(date +%s)" \
   --issuer-scope "012_scope_aaaaaaaaaaaa" \
@@ -168,8 +208,8 @@ Un équipier ACP reçoit les livraisons directement via l’Agent Client Protoco
 `--equipier` :
 
 ```bash
-bridget codex --equipier
-bridget claude --equipier
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget codex --equipier
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget claude --equipier
 ```
 
 Les types, commandes et politiques sont déclarés dans
@@ -190,9 +230,9 @@ Le daemon peut devenir propriétaire du cycle de vie d’un équipier ACP. Le
 terminal qui donne l’ordre peut alors se fermer sans arrêter l’équipier :
 
 ```bash
-bridget spawn codex --name analyse --persistent
-bridget who
-bridget stop analyse
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget spawn codex --name analyse --persistent
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget who
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget stop analyse
 ```
 
 `--persistent` demande au daemon de relancer l’équipier après son propre
@@ -400,7 +440,7 @@ close. Ajouter `--reply` en fait tout autre chose — une **demande suivie**, av
 un identifiant, une échéance et un cycle de vie que le daemon prend en charge.
 
 ```bash
-bridget send --to agent-2 --reply "Peux-tu relire crates/bridget-core ?"
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget send --to agent-2 --reply "Peux-tu relire crates/bridget-core ?"
 # OK: envoyé à « agent-2 » (id=fa09fa7800694, hops=4) [réponse attendue]
 ```
 
@@ -422,8 +462,8 @@ pour une relecture de code, quelques secondes pour une question triviale.
 L'émetteur garde la main :
 
 ```bash
-bridget requests                      # mes demandes et leur état
-bridget cancel <id> --reason "plus utile"
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget requests
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget cancel fa09fa7800694 --reason "plus utile"
 ```
 
 Un agent privé des outils MCP natifs peut répondre sans perdre la corrélation :
@@ -487,8 +527,8 @@ la même façon :
 ### Installer la détection pour Claude Code
 
 ```bash
-bridget install-hooks            # ajoute un hook Stop dans ~/.claude/settings.json
-bridget install-hooks --remove   # le retire
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget install-hooks
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget install-hooks --remove
 ```
 
 La commande **modifie un fichier hors du dépôt** : elle écrit d'abord une
@@ -520,10 +560,10 @@ mécanisme de sécurité — la communication croisée entre projets est un usag
 courant, notamment pour faire relire du code par un agent d'un autre dépôt.
 
 ```bash
-bridget who                       # tous les agents, avec leur domaine
-bridget who --domain bridget      # seulement ce domaine
-bridget domain revue-croisee      # surcharge, conservée après reconnexion
-bridget domain --reset            # retour au domaine dérivé du dépôt
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget who
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget who --domain bridget
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget domain revue-croisee
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget domain --reset
 ```
 
 Le nom est rendu brut, tel que le répertoire s'appelle : un dépôt rangé sous
@@ -536,9 +576,9 @@ est là pour les cas où le nom du dépôt ne convient pas.
 Un agent en pleine tâche peut refuser les interruptions :
 
 ```bash
-bridget dnd                    # 60 minutes par défaut
-bridget dnd --duration 15m     # ou 90s, 2h
-bridget dnd off                # levée immédiate
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget dnd
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget dnd --duration 15m
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget dnd off
 ```
 
 Son état devient `dnd` dans l'annuaire, et tout message qui lui est adressé est
@@ -557,13 +597,13 @@ redevient joignable seul, sans que personne ait à y penser.
 ## Tests
 
 ```bash
-cargo test          # 86 tests (unitaires + intégration)
+cargo test --manifest-path /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/Cargo.toml
 ```
 
 ## Déploiement distant
 
 ```bash
-./scripts/deploy-remote.sh <utilisateur@hôte> [port] [daemon|client-only]
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/scripts/deploy-remote.sh user@exemple.tld 2222 daemon
 ```
 
 Cette procédure cible Linux : elle installe Rust, compile, déploie le binaire et configure
@@ -576,9 +616,9 @@ de ne pas créer un second daemon et un socket concurrent.
 Pour enrôler n'importe quelle machine SSH dans le daemon local unique, sans port public :
 
 ```bash
-./scripts/federate-ssh.sh install projet-a --host exemple.tld --user user --port 2222
-./scripts/federate-ssh.sh status projet-a
-./scripts/federate-ssh.sh remove projet-a
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/scripts/federate-ssh.sh install projet-a --host exemple.tld --user user --port 2222
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/scripts/federate-ssh.sh status projet-a
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/scripts/federate-ssh.sh remove projet-a
 ```
 
 Le tunnel inverse publie le socket Unix du daemon maître sur la machine distante. Les agents
@@ -588,7 +628,7 @@ chemin de socket distant sont paramétrables. Sans `--remote-socket`, le script 
 n'est supposé. Pour installer le binaire client sur cet hôte sans daemon distant :
 
 ```bash
-./scripts/deploy-remote.sh user@exemple.tld 2222 client-only
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/scripts/deploy-remote.sh user@exemple.tld 2222 client-only
 ```
 
 Lorsqu'un tunnel est temporairement coupé, le processus IA distant continue son travail. Son

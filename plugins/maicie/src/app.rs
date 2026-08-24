@@ -4,16 +4,24 @@
 //! annuaire factuel, puis l'application choisit de façon déterministe avant
 //! d'écrire l'agrégat objectif/délégation/outbox dans le store privé.
 
+use crate::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use crate::config::DurationClasses;
+use crate::domain::guichet::{
+    GuichetDomainError, ProjectionCoordinationState, ProjectionDurationClass, ProjectionFreshness,
+    ProjectionLocalDelivery, ProjectionLocalDeliveryState, ProjectionReply,
+    ProjectionTransportObservation, ProjectionTransportState, RequeteCanonique, RequeteGuichet,
+    parse_claim, parse_lifecycle_event,
+};
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
-    EtatDecision, EtatObjectif, EtatOutboxDelegation, ModeObjectif, ObjectifCoordonne,
-    OutboxDelegation, TypeDecision,
+    EtatDecision, EtatFlux, EtatObjectif, EtatOutboxDelegation, ModeObjectif, ObjectifCoordonne,
+    OutboxDelegation, SnapshotTransport, SourceSnapshot, TypeDecision,
 };
 use crate::outbox::{PreparedDelegation, stable_body_hash};
+pub use crate::store::GuichetLifecycleResult;
 use crate::store::{
-    ActivationApprovalRequest, DelegateReservation, MaicieStore, ObjectiveSnapshot, StoreError,
-    StoredDelegateResult,
+    ActivationApprovalRequest, DelegateReservation, GuichetProjectionFacts, MaicieStore,
+    ObjectiveSnapshot, StoreError, StoredDelegateResult, StoredGuichetReply,
 };
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -75,6 +83,285 @@ pub enum DirectMessageHandling {
         record: ConversationRecord,
         help: ConversationHelp,
     },
+}
+
+/// Résultat applicatif d'une relève. Les octets de réponse sont exactement
+/// ceux du reçu durable ; ils ne doivent jamais être reconstruits par le CLI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuichetProcessResult {
+    pub request_id: String,
+    pub objective_id: Option<Uuid>,
+    pub delegation_id: Option<Uuid>,
+    pub response_message_id: String,
+    pub reply_bytes: Vec<u8>,
+    pub replayed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuichetError {
+    InvalidEnvelope(String),
+    UnsupportedOperation,
+    EnvelopeMismatch,
+    Store(String),
+}
+
+impl fmt::Display for GuichetError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidEnvelope(reason) => {
+                write!(formatter, "requête guichet invalide : {reason}")
+            }
+            Self::UnsupportedOperation => {
+                formatter.write_str("opération guichet non prise en charge")
+            }
+            Self::EnvelopeMismatch => formatter.write_str("enveloppe guichet divergente"),
+            Self::Store(reason) => write!(formatter, "greffe guichet impossible : {reason}"),
+        }
+    }
+}
+
+/// Traite une relève sans I/O réseau. En l'absence d'observation transport,
+/// `mission_status` rend explicitement une fraîcheur `unavailable`.
+pub fn process_guichet_claim(
+    store: &mut MaicieStore,
+    claim: &GuichetClaim,
+    response_message_id: &str,
+    now: i64,
+) -> Result<GuichetProcessResult, GuichetError> {
+    let canonical = parse_claim(claim).map_err(guichet_domain_error)?;
+    match &canonical.request {
+        RequeteGuichet::DeliveryReport(report) => {
+            let stored = store
+                .graft_delivery_report(claim, &canonical, report, response_message_id, now)
+                .map_err(guichet_store_error)?;
+            Ok(guichet_process_result(stored))
+        }
+        RequeteGuichet::MissionStatus { .. } => process_mission_status_canonical(
+            store,
+            claim,
+            &canonical,
+            response_message_id,
+            None,
+            now,
+        ),
+        RequeteGuichet::DeadlineQuestion { .. } => {
+            process_deadline_question_canonical(store, claim, &canonical, response_message_id, now)
+        }
+    }
+}
+
+/// Produit et persiste un statut de mission en gardant les deux vérités
+/// séparées : le registre local d'un côté, l'observation Bridget attestée de
+/// l'autre. `None` ne signifie jamais absence d'activité, mais indisponibilité.
+pub fn process_mission_status_claim(
+    store: &mut MaicieStore,
+    claim: &GuichetClaim,
+    response_message_id: &str,
+    transport: Option<&SnapshotTransport>,
+    now: i64,
+) -> Result<GuichetProcessResult, GuichetError> {
+    let canonical = parse_claim(claim).map_err(guichet_domain_error)?;
+    process_mission_status_canonical(
+        store,
+        claim,
+        &canonical,
+        response_message_id,
+        transport,
+        now,
+    )
+}
+
+/// Produit et persiste l'échéance contractuelle sans créer de timer, de
+/// relance ou de qualification implicite du retard.
+pub fn process_deadline_question_claim(
+    store: &mut MaicieStore,
+    claim: &GuichetClaim,
+    response_message_id: &str,
+    now: i64,
+) -> Result<GuichetProcessResult, GuichetError> {
+    let canonical = parse_claim(claim).map_err(guichet_domain_error)?;
+    process_deadline_question_canonical(store, claim, &canonical, response_message_id, now)
+}
+
+fn process_mission_status_canonical(
+    store: &mut MaicieStore,
+    claim: &GuichetClaim,
+    canonical: &RequeteCanonique,
+    response_message_id: &str,
+    transport: Option<&SnapshotTransport>,
+    now: i64,
+) -> Result<GuichetProcessResult, GuichetError> {
+    let RequeteGuichet::MissionStatus { delegation_id } = canonical.request else {
+        return Err(GuichetError::UnsupportedOperation);
+    };
+    let stored = store
+        .persist_guichet_projection(claim, canonical, response_message_id, now, |facts| {
+            let (transport_observation, freshness) = transport_projection(facts, transport)?;
+            Ok(ProjectionReply::MissionStatus {
+                delegation_id: delegation_id.to_string(),
+                objective_id: facts.objective.id.to_string(),
+                coordination_state: coordination_projection(facts.objective.etat),
+                local_delivery: local_delivery_projection(facts)?,
+                transport_observation,
+                freshness,
+            })
+        })
+        .map_err(guichet_store_error)?;
+    Ok(guichet_process_result(stored))
+}
+
+fn process_deadline_question_canonical(
+    store: &mut MaicieStore,
+    claim: &GuichetClaim,
+    canonical: &RequeteCanonique,
+    response_message_id: &str,
+    now: i64,
+) -> Result<GuichetProcessResult, GuichetError> {
+    let RequeteGuichet::DeadlineQuestion { delegation_id } = canonical.request else {
+        return Err(GuichetError::UnsupportedOperation);
+    };
+    let stored = store
+        .persist_guichet_projection(claim, canonical, response_message_id, now, |facts| {
+            Ok(ProjectionReply::DeadlineQuestion {
+                delegation_id: delegation_id.to_string(),
+                duration_class: duration_projection(facts.delegation.duree),
+                deadline_at: facts.deadline_at,
+            })
+        })
+        .map_err(guichet_store_error)?;
+    Ok(guichet_process_result(stored))
+}
+
+fn local_delivery_projection(
+    facts: &GuichetProjectionFacts,
+) -> Result<ProjectionLocalDelivery, StoreError> {
+    let issue = facts
+        .local_delivery
+        .issue
+        .as_ref()
+        .map(|value| {
+            value
+                .get("kind")
+                .and_then(|kind| kind.as_str())
+                .filter(|kind| !kind.is_empty())
+                .map(str::to_string)
+                .ok_or(StoreError::Corrupt("issue locale sans kind attesté"))
+        })
+        .transpose()?;
+    let state = match facts.local_delivery.state {
+        EtatOutboxDelegation::Prepared => ProjectionLocalDeliveryState::Pending,
+        EtatOutboxDelegation::Accepted => ProjectionLocalDeliveryState::Accepted,
+        EtatOutboxDelegation::OutcomeUnknown => ProjectionLocalDeliveryState::OutcomeUnknown,
+        EtatOutboxDelegation::Rejected => ProjectionLocalDeliveryState::Rejected,
+    };
+    Ok(ProjectionLocalDelivery {
+        state,
+        issue,
+        observed_at: facts.local_delivery.observed_at,
+    })
+}
+
+fn transport_projection(
+    facts: &GuichetProjectionFacts,
+    transport: Option<&SnapshotTransport>,
+) -> Result<(Option<ProjectionTransportObservation>, ProjectionFreshness), StoreError> {
+    let Some(transport) = transport else {
+        return Ok((None, ProjectionFreshness::Unavailable));
+    };
+    transport
+        .verifier()
+        .map_err(|_| StoreError::Invalid("snapshot transport invalide"))?;
+    if transport.message_id != facts.local_delivery.message_id {
+        return Err(StoreError::Invalid("snapshot transport non corrélé"));
+    }
+    let (state, freshness) = match transport.stream_state {
+        EtatFlux::Fresh => (
+            ProjectionTransportState::Connected,
+            ProjectionFreshness::Fresh,
+        ),
+        EtatFlux::Gap => (ProjectionTransportState::Gap, ProjectionFreshness::Gap),
+        EtatFlux::Ended => (ProjectionTransportState::Ended, ProjectionFreshness::Ended),
+        EtatFlux::Unavailable => (
+            ProjectionTransportState::Unavailable,
+            ProjectionFreshness::Unavailable,
+        ),
+    };
+    let source = match transport.source {
+        SourceSnapshot::Bridget => "bridget",
+        SourceSnapshot::AcpSubscription => "acp_subscription",
+    };
+    Ok((
+        Some(ProjectionTransportObservation {
+            state,
+            request_state: transport.request_state.clone(),
+            observed_at: transport.observed_at,
+            source: source.to_string(),
+            subscription_id: transport.subscription_id.clone(),
+            seq: transport.seq,
+        }),
+        freshness,
+    ))
+}
+
+fn coordination_projection(state: EtatObjectif) -> ProjectionCoordinationState {
+    match state {
+        EtatObjectif::Ouvert => ProjectionCoordinationState::Open,
+        EtatObjectif::EnCoordination => ProjectionCoordinationState::EnCoordination,
+        EtatObjectif::AEvaluer => ProjectionCoordinationState::AEvaluer,
+        EtatObjectif::Synthetise => ProjectionCoordinationState::Synthetise,
+        EtatObjectif::Clos => ProjectionCoordinationState::Clos,
+    }
+}
+
+fn duration_projection(duration: ClasseDuree) -> ProjectionDurationClass {
+    match duration {
+        ClasseDuree::Courte => ProjectionDurationClass::Courte,
+        ClasseDuree::Normale => ProjectionDurationClass::Normale,
+        ClasseDuree::Longue => ProjectionDurationClass::Longue,
+    }
+}
+
+fn guichet_process_result(stored: StoredGuichetReply) -> GuichetProcessResult {
+    GuichetProcessResult {
+        request_id: stored.reception.request_id,
+        objective_id: stored.reception.objective_id,
+        delegation_id: stored.reception.delegation_id,
+        response_message_id: stored.reception.response_message_id,
+        reply_bytes: stored.reception.reply_bytes,
+        replayed: stored.replayed,
+    }
+}
+
+/// Enregistre le fait terminal poussé par Bridget. Cette voie ne crée aucune
+/// décision : le rapport structuré reste l'unique source de l'effet métier.
+pub fn record_guichet_lifecycle_event(
+    store: &mut MaicieStore,
+    event: &GuichetLifecycleEvent,
+) -> Result<GuichetLifecycleResult, GuichetError> {
+    let event = parse_lifecycle_event(event).map_err(guichet_domain_error)?;
+    store
+        .record_guichet_lifecycle_event(&event)
+        .map_err(guichet_store_error)
+}
+
+fn guichet_domain_error(error: GuichetDomainError) -> GuichetError {
+    match error {
+        GuichetDomainError::UnsupportedOperation => GuichetError::UnsupportedOperation,
+        GuichetDomainError::CanonicalBytesMismatch => GuichetError::EnvelopeMismatch,
+        GuichetDomainError::InvalidEnvelope(reason) => {
+            GuichetError::InvalidEnvelope(reason.to_string())
+        }
+    }
+}
+
+fn guichet_store_error(error: StoreError) -> GuichetError {
+    match error {
+        StoreError::EnvelopeMismatch => GuichetError::EnvelopeMismatch,
+        StoreError::Invalid(reason) | StoreError::NotFound(reason) => {
+            GuichetError::InvalidEnvelope(reason.to_string())
+        }
+        other => GuichetError::Store(other.to_string()),
+    }
 }
 
 /// Garde structurel de la frontière conversationnelle : cette fonction est

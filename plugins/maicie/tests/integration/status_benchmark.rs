@@ -94,10 +94,40 @@ fn serve_statuses(socket: &std::path::Path, runs: usize, ready: mpsc::Sender<()>
     let listener = UnixListener::bind(socket).expect("socket benchmark");
     ready.send(()).expect("signal prêt");
     for run in 0..runs {
+        accept_empty_guichet(&listener);
         accept_client(&listener);
         send_agent_list(&listener);
         send_snapshot(&listener, run);
     }
+}
+
+fn accept_empty_guichet(listener: &UnixListener) {
+    let (stream, _) = listener.accept().expect("connexion service guichet status");
+    let (mut reader, mut writer) = split(stream);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"RoleHandshake","role":"service"})
+    );
+    write_json(&mut writer, json!({"type":"RoleAccepted","role":"service"}));
+    let hello = read_json(&mut reader);
+    assert_eq!(hello["type"], "ServiceHello");
+    assert_eq!(hello["service"], "maicie");
+    assert_eq!(hello["capabilities"], json!(["maicie_guichet"]));
+    write_json(
+        &mut writer,
+        json!({
+            "type":"ServiceWelcome",
+            "version":1,
+            "horizon_secs":3600,
+            "issued_at_tolerance_secs":30,
+            "capabilities":["maicie_guichet"]
+        }),
+    );
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"guichet_claim_next","v":1})
+    );
+    write_json(&mut writer, json!({"type":"guichet_empty","v":1}));
 }
 
 fn accept_client(listener: &UnixListener) {

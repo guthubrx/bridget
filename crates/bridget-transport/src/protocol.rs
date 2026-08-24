@@ -18,6 +18,7 @@ pub enum ConnectionRole {
     Wrapper,
     Attach,
     Client,
+    Service,
 }
 
 /// Mode réel de présence d'un agent.
@@ -46,6 +47,8 @@ impl PresenceMode {
 
 /// Version actuellement publiée du contrat idempotent local.
 pub const CLIENT_CONTRACT_VERSION: u16 = 1;
+/// Version du contrat de service du guichet Maicie.
+pub const SERVICE_CONTRACT_VERSION: u16 = 1;
 
 /// Capacité optionnelle du client idempotent. L'énumération fermée évite une
 /// dégradation silencieuse lorsqu'un client demande une capacité inconnue.
@@ -54,6 +57,176 @@ pub const CLIENT_CONTRACT_VERSION: u16 = 1;
 pub enum ClientCapability {
     SendIdempotent,
     Lookup,
+}
+
+/// Capacité explicitement négociée par un service local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceCapability {
+    MaicieGuichet,
+}
+
+/// Refus structurés de la frontière réservée aux services.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ServiceRefusal {
+    RoleHandshakeRequired,
+    ServiceRoleRequired,
+    NegotiationRequired,
+    AlreadyNegotiated,
+    UnsupportedVersion { supported_versions: Vec<u16> },
+    InvalidIssuerScope,
+    ReservedServiceRequired,
+    InvalidEnvelope,
+    CapabilityRequired,
+    MessageOutsideServiceRole,
+    TransitionInvalid,
+    CanonicalBytesMismatch,
+    IdempotencyExpired,
+    ClaimStale,
+    DeclaredSenderMismatch,
+    ReservedTargetRequired,
+    InvalidIssuedAt,
+    FrameTooLarge,
+}
+
+/// Opérations fermées que Bridget peut déposer dans le guichet Maicie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceRequestOperation {
+    DeliveryReport,
+    MissionStatus,
+    DeadlineQuestion,
+}
+
+/// Charge canonique d'un dépôt de guichet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ServiceRequestPayload {
+    DeliveryReport {
+        objective_id: String,
+        delegation_id: String,
+        delivery_hash: String,
+        in_reply_to: String,
+    },
+    Delegation {
+        delegation_id: String,
+    },
+}
+
+/// Issue fermée qu'un service Maicie atteste au guichet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuichetOutcome {
+    Accepted,
+    RequestAlreadyTerminal,
+    RecipientUnavailable,
+    Refused,
+}
+
+/// Fait terminal attesté uniquement par Bridget pour une demande du guichet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuichetLifecycleState {
+    Answered,
+    Cancelled,
+    TimedOut,
+}
+
+/// Charge canonique d'une réponse Maicie. L'ordre de déclaration est l'ordre
+/// filaire normatif du contrat 015.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GuichetReplyPayload {
+    DeliveryReport {
+        objective_id: String,
+        delegation_id: String,
+        delivery_hash: String,
+    },
+    MissionStatus {
+        delegation_id: String,
+        objective_id: String,
+        coordination_state: GuichetCoordinationState,
+        local_delivery: GuichetLocalDelivery,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transport_observation: Option<GuichetTransportObservation>,
+        freshness: GuichetFreshness,
+    },
+    DeadlineQuestion {
+        delegation_id: String,
+        duration_class: GuichetDurationClass,
+        deadline_at: i64,
+    },
+}
+
+/// Projection fermée d'une coordination Maicie : Bridget la transporte sans
+/// jamais en déduire ni la compléter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuichetCoordinationState {
+    Open,
+    EnCoordination,
+    AEvaluer,
+    Synthetise,
+    Clos,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuichetLocalDeliveryState {
+    Pending,
+    Accepted,
+    OutcomeUnknown,
+    Rejected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuichetLocalDelivery {
+    pub state: GuichetLocalDeliveryState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuichetTransportState {
+    Connected,
+    Unavailable,
+    Gap,
+    Ended,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuichetTransportObservation {
+    pub state: GuichetTransportState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_state: Option<String>,
+    pub observed_at: i64,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuichetFreshness {
+    Fresh,
+    Gap,
+    Ended,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuichetDurationClass {
+    Courte,
+    Normale,
+    Longue,
 }
 
 /// Refus structurés de la frontière publique client.
@@ -232,6 +405,63 @@ pub enum WrapperToDaemon {
         contract_version: u16,
         issuer_scope: String,
         capabilities: Vec<ClientCapability>,
+    },
+    /// Négocie le contrat du service Maicie, uniquement après RoleAccepted(Service).
+    ServiceHello {
+        version: u16,
+        service: String,
+        issuer_scope: String,
+        capabilities: Vec<ServiceCapability>,
+    },
+    /// Dépôt durable produit par un wrapper enregistré vers le guichet Maicie.
+    #[serde(rename = "service_request")]
+    ServiceRequest {
+        #[serde(rename = "v")]
+        version: u16,
+        issuer_scope: String,
+        request_id: String,
+        issued_at: i64,
+        from: String,
+        to: String,
+        operation: ServiceRequestOperation,
+        payload: ServiceRequestPayload,
+    },
+    /// Relève FIFO bornée d'une demande du guichet. T1504 en assure la persistance.
+    #[serde(rename = "guichet_claim_next")]
+    GuichetClaimNext {
+        #[serde(rename = "v")]
+        version: u16,
+    },
+    /// Rejeu strict d'un claim existant, sous son token de lease courant.
+    #[serde(rename = "guichet_claim")]
+    GuichetClaim {
+        #[serde(rename = "v")]
+        version: u16,
+        issuer_scope: String,
+        request_id: String,
+        claim_token: String,
+    },
+    /// Consultation bornée d'une demande du guichet.
+    #[serde(rename = "guichet_lookup")]
+    GuichetLookup {
+        #[serde(rename = "v")]
+        version: u16,
+        issuer_scope: String,
+        request_id: String,
+    },
+    /// Réponse de service corrélée à un claim. T1504 valide et persiste son canon.
+    #[serde(rename = "guichet_reply")]
+    GuichetReply {
+        #[serde(rename = "v")]
+        version: u16,
+        issuer_scope: String,
+        request_id: String,
+        claim_generation: u64,
+        claim_token: String,
+        response_message_id: String,
+        in_reply_to: String,
+        outcome: GuichetOutcome,
+        payload: GuichetReplyPayload,
     },
     /// Envoi à clé client. T1205 raccorde cette variante au socle durable.
     SendIdempotent {
@@ -486,6 +716,62 @@ pub enum DaemonToWrapper {
     },
     /// Refus motivé de la négociation ou de la matrice client.
     ClientRejected { reason: ClientRefusal },
+    /// Contrat et capacité réellement négociés avec un service Maicie.
+    ServiceWelcome {
+        version: u16,
+        horizon_secs: i64,
+        issued_at_tolerance_secs: i64,
+        capabilities: Vec<ServiceCapability>,
+    },
+    /// Refus motivé de la négociation ou de la matrice de service.
+    ServiceRejected { reason: ServiceRefusal },
+    /// Issue durable ou calculée d'une opération du guichet.
+    #[serde(rename = "guichet_result")]
+    GuichetResult {
+        #[serde(rename = "v")]
+        version: u16,
+        issuer_scope: String,
+        request_id: String,
+        issue: String,
+        expires_at: i64,
+    },
+    /// Une seule demande a été relevée sous une lease durable.
+    #[serde(rename = "guichet_claimed")]
+    GuichetClaimed {
+        #[serde(rename = "v")]
+        version: u16,
+        issuer_scope: String,
+        request_id: String,
+        #[serde(with = "base64_bytes")]
+        canonical_request: Vec<u8>,
+        claimed_at: i64,
+        claim_generation: u64,
+        claim_token: String,
+        claim_lease_expires_at: i64,
+        expires_at: i64,
+    },
+    /// Aucun élément FIFO n'est actuellement relevable.
+    #[serde(rename = "guichet_empty")]
+    GuichetEmpty {
+        #[serde(rename = "v")]
+        version: u16,
+    },
+    /// Fait terminal durable, émis exclusivement par Bridget vers le service
+    /// Maicie après la transition SQLite correspondante.
+    #[serde(rename = "request_lifecycle_event")]
+    RequestLifecycleEvent {
+        #[serde(rename = "v")]
+        version: u16,
+        issuer_scope: String,
+        event_id: String,
+        request_id: String,
+        state: GuichetLifecycleState,
+        observed_at: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        in_reply_to: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response_message_id: Option<String>,
+    },
     /// Issue durable ou calculée d'un `SendIdempotent`.
     IdempotencyResult {
         operation_kind: String,
@@ -732,6 +1018,44 @@ pub struct RequestInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SERVICE_NEGOTIATION_FIXTURE: &str = include_str!(
+        "../../../specs/015-guichet-maicie/contracts/fixtures/service-negotiation-v1.jsonl"
+    );
+
+    #[test]
+    fn service_negotiation_v1_emploie_la_fixture_canonique_partagee() {
+        let lines = SERVICE_NEGOTIATION_FIXTURE.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 5, "la fixture couvre hello, welcome et refus");
+
+        let role: WrapperToDaemon = decode(lines[0]).unwrap();
+        assert_eq!(encode(&role).unwrap(), lines[0]);
+        assert!(matches!(
+            role,
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Service
+            }
+        ));
+
+        let accepted: DaemonToWrapper = decode(lines[1]).unwrap();
+        assert_eq!(encode(&accepted).unwrap(), lines[1]);
+        let hello: WrapperToDaemon = decode(lines[2]).unwrap();
+        assert_eq!(encode(&hello).unwrap(), lines[2]);
+        assert!(matches!(hello, WrapperToDaemon::ServiceHello { .. }));
+
+        let welcome: DaemonToWrapper = decode(lines[3]).unwrap();
+        assert_eq!(encode(&welcome).unwrap(), lines[3]);
+        assert!(matches!(welcome, DaemonToWrapper::ServiceWelcome { .. }));
+
+        let rejected: DaemonToWrapper = decode(lines[4]).unwrap();
+        assert_eq!(encode(&rejected).unwrap(), lines[4]);
+        assert!(matches!(
+            rejected,
+            DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::CapabilityRequired
+            }
+        ));
+    }
 
     #[test]
     fn test_encode_decode_register() {
@@ -983,6 +1307,129 @@ mod tests {
             decode(&encode(&unsubscribe).unwrap()).unwrap(),
             WrapperToDaemon::Unsubscribe { subscription_id } if subscription_id == "sub-1"
         ));
+    }
+
+    #[test]
+    fn service_guichet_messages_roundtrip_et_restent_hors_attach() {
+        let hello = WrapperToDaemon::ServiceHello {
+            version: SERVICE_CONTRACT_VERSION,
+            service: "maicie".to_string(),
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+            capabilities: vec![ServiceCapability::MaicieGuichet],
+        };
+        assert_eq!(
+            encode(&hello).unwrap(),
+            SERVICE_NEGOTIATION_FIXTURE.lines().nth(2).unwrap()
+        );
+        assert!(matches!(
+            decode(&encode(&hello).unwrap()).unwrap(),
+            WrapperToDaemon::ServiceHello {
+                version: SERVICE_CONTRACT_VERSION,
+                capabilities,
+                ..
+            } if capabilities == vec![ServiceCapability::MaicieGuichet]
+        ));
+
+        let reply = WrapperToDaemon::GuichetReply {
+            version: SERVICE_CONTRACT_VERSION,
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+            request_id: "req-1".to_string(),
+            claim_generation: 3,
+            claim_token: "claim-1".to_string(),
+            response_message_id: "msg-1".to_string(),
+            in_reply_to: "message-1".to_string(),
+            outcome: GuichetOutcome::Accepted,
+            payload: GuichetReplyPayload::DeliveryReport {
+                objective_id: "objective-1".to_string(),
+                delegation_id: "delegation-1".to_string(),
+                delivery_hash: "0".repeat(64),
+            },
+        };
+        assert!(matches!(
+            decode(&encode(&reply).unwrap()).unwrap(),
+            WrapperToDaemon::GuichetReply {
+                claim_generation: 3,
+                claim_token,
+                ..
+            } if claim_token == "claim-1"
+        ));
+        assert_eq!(
+            reply.attach_refusal(),
+            Some(AttachRefusal::MessageOutsideAttachRole)
+        );
+
+        let status = WrapperToDaemon::GuichetReply {
+            version: SERVICE_CONTRACT_VERSION,
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+            request_id: "req-status".to_string(),
+            claim_generation: 4,
+            claim_token: "claim-2".to_string(),
+            response_message_id: "message-2".to_string(),
+            in_reply_to: "request-status".to_string(),
+            outcome: GuichetOutcome::Accepted,
+            payload: GuichetReplyPayload::MissionStatus {
+                delegation_id: "delegation-1".to_string(),
+                objective_id: "objective-1".to_string(),
+                coordination_state: GuichetCoordinationState::EnCoordination,
+                local_delivery: GuichetLocalDelivery {
+                    state: GuichetLocalDeliveryState::Accepted,
+                    issue: Some("accepted".to_string()),
+                    observed_at: Some(1_787_500_001),
+                },
+                transport_observation: Some(GuichetTransportObservation {
+                    state: GuichetTransportState::Connected,
+                    request_state: Some("answered".to_string()),
+                    observed_at: 1_787_500_002,
+                    source: "attach".to_string(),
+                    subscription_id: Some("subscription-1".to_string()),
+                    seq: Some(7),
+                }),
+                freshness: GuichetFreshness::Fresh,
+            },
+        };
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encode(&status).unwrap()).unwrap(),
+            WrapperToDaemon::GuichetReply {
+                payload: GuichetReplyPayload::MissionStatus {
+                    freshness: GuichetFreshness::Fresh,
+                    transport_observation: Some(GuichetTransportObservation { seq: Some(7), .. }),
+                    ..
+                },
+                ..
+            }
+        ));
+
+        let rejected = DaemonToWrapper::ServiceRejected {
+            reason: ServiceRefusal::CapabilityRequired,
+        };
+        assert!(matches!(
+            decode(&encode(&rejected).unwrap()).unwrap(),
+            DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::CapabilityRequired
+            }
+        ));
+        assert!(!rejected.allowed_for_attach());
+
+        let lifecycle = DaemonToWrapper::RequestLifecycleEvent {
+            version: SERVICE_CONTRACT_VERSION,
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+            event_id: "evt-1".to_string(),
+            request_id: "request-1".to_string(),
+            state: GuichetLifecycleState::Answered,
+            observed_at: 1_787_500_000,
+            in_reply_to: Some("message-1".to_string()),
+            response_message_id: Some("response-1".to_string()),
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(&encode(&lifecycle).unwrap()).unwrap(),
+            DaemonToWrapper::RequestLifecycleEvent {
+                state: GuichetLifecycleState::Answered,
+                in_reply_to: Some(in_reply_to),
+                response_message_id: Some(response_message_id),
+                ..
+            } if in_reply_to == "message-1" && response_message_id == "response-1"
+        ));
+        assert!(!lifecycle.allowed_for_attach());
     }
 
     #[test]

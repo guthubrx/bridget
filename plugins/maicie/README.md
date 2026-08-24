@@ -10,18 +10,23 @@ processus.
 Compiler Bridget et Maicie depuis la racine du dépôt :
 
 ```bash
-cargo build --release -p bridget-daemon -p maicie
-./target/release/bridget daemon
+cargo build --manifest-path /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/Cargo.toml --release -p bridget-daemon -p maicie
+```
+
+```bash
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget daemon
 ```
 
 Dans un autre terminal, créer un fichier de configuration. Tous les chemins
-doivent être absolus et la base Maicie doit rester distincte de `bridget.db` :
+doivent être absolus et la base Maicie doit rester distincte de `bridget.db`.
+Les exemples suivants supposent que ce fichier est enregistré dans
+`/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/.local/maicie/maicie.json` :
 
 ```json
 {
   "version": 1,
-  "bridget_socket": "/chemin/absolu/.cache/bridget/bridget.sock",
-  "database_path": "/chemin/absolu/.local/state/maicie/maicie.sqlite3",
+  "bridget_socket": "/Users/moi/.cache/bridget/bridget.sock",
+  "database_path": "/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/.local/maicie/maicie.sqlite3",
   "durations": {
     "short_secs": 30,
     "normal_secs": 300,
@@ -36,9 +41,9 @@ doivent être absolus et la base Maicie doit rester distincte de `bridget.db` :
     "effort": "high",
     "display_name": "Relecture",
     "tags": ["review"],
-    "personality_ref": "profiles/reviewer.md",
+    "personality_ref": "/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/profiles/reviewer.md",
     "tools": ["bridget_send"],
-    "spawn_order_ref": "agents/reviewer"
+    "spawn_order_ref": "/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/agents/reviewer"
   }]
 }
 ```
@@ -49,15 +54,15 @@ outboxes non terminales avant leur action ; les commandes d'objectif restent
 strictement locales. Toutes rendent ensuite la main :
 
 ```bash
-./target/release/maicie delegate \
-  --config /chemin/absolu/maicie.json \
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/maicie delegate \
+  --config /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/.local/maicie/maicie.json \
   --goal "Relire le risque de reprise" \
   --to reviewer \
   --duration normale \
   --idempotency-key delegation-review-1 \
   --json
 
-./target/release/maicie status --config /chemin/absolu/maicie.json --json
+/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/maicie status --config /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/.local/maicie/maicie.json --json
 ```
 
 Réutiliser la même clé d'idempotence avec le même contenu rejoue le même
@@ -74,6 +79,52 @@ Le daemon et les équipiers restent sous la responsabilité de Bridget
 Si Bridget utilise un registre utilisateur `agents.json`, ce fichier doit être
 régulier, non symbolique et avoir le mode `0600` ou plus restrictif ; le daemon
 refuse de démarrer avec un registre plus permissif.
+
+## Guichet Maicie
+
+La session 015 ajoute le contrat du guichet Maicie : Bridget peut tenir une
+boîte aux lettres durable pour la cible de service `maicie`, sans annoncer un
+processus Maicie vivant et sans recopier l'état métier dans `bridget.db`.
+Maicie reste pull-only : au début d'une commande locale, elle relève sous budget
+absolu les demandes non terminales, puis rend la main.
+
+La capacité `maicie_guichet` est la borne de protocole des opérations sensibles
+du guichet : relève `GuichetClaimNext`/`GuichetClaim`, réponse `GuichetReply`
+et événements `RequestLifecycleEvent`. Un nom déclaré, y compris
+`from: "maicie"`, n'ouvre jamais ces droits. C'est une limite coopérative v1,
+pas une identité opposable : un processus hostile du même compte local n'est
+pas authentifié cryptographiquement par cette capacité.
+
+Le modèle de relève est FIFO et borné. `GuichetClaimNext` sélectionne au plus
+une demande relivable selon `deposited_sequence ASC`; le client répète cette
+relève seulement tant que son échéance globale le permet. Il n'existe pas de
+polling, de worker caché ou de boucle résidente dans cette version. Une boucle
+`maicie serve` visible, avec arrêt propre, est une évolution v2 à spécifier
+séparément.
+
+Les seules opérations admises par le contrat v1 sont `delivery_report`,
+`mission_status` et `deadline_question`. Les refus sont fermes :
+`service_role_required`, `capability_required`, `reserved_target_required`,
+`declared_sender_mismatch`, `unsupported_version`, `frame_too_large`,
+`invalid_envelope`, `canonical_bytes_mismatch`, `request_already_terminal`,
+`idempotency_expired`, `claim_stale` et `transition_invalid`. Une opération
+d'approbation, un texte libre, un champ inconnu ou une enveloppe divergente est
+refusé sans créer d'objectif, de délégation, d'approbation ou de `SpawnOrder`.
+
+Le dépôt producteur est idempotent sur
+`(issuer_scope, service_request, request_id)`. Il faut donc rejouer les mêmes
+octets, le même `issued_at`, le même `issuer_scope` et le même `request_id` ;
+une divergence canonique est refusée et `idempotency_expired` est terminal. La
+relève est atomique et FIFO : un claim retourne un propriétaire, un token, une
+génération et un bail. Seul ce quatuor encore courant peut produire
+`GuichetReply`; un détenteur devenu périmé reçoit `claim_stale` sans mutation.
+
+Le scénario réel G1504 a validé la chaîne complète en 925 ms (commit
+`69ad00d`) : wrapper ACP réel, dépôt alors que Maicie est absente, relève
+pull-only par une commande, greffe SQLite unique, réponse corrélée, demande
+Bridget `answered`, événement durable relevé et retry sans doublon. Pour les
+commandes producteur et le harnais reproductible, voir
+`/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/specs/015-guichet-maicie/quickstart.md`.
 
 ## Deux autorités, jamais une vérité fusionnée
 
@@ -128,6 +179,14 @@ du côté transport.
   connexion, replay et accusé ; ses délais locaux peuvent se cumuler ;
 - aucune lecture de `bridget.db`, du journal ACP ou d'un fichier interne
   Bridget : seul le protocole public est consommé.
+- le guichet 015 utilise `maicie_guichet` comme borne de capacité, mais cette
+  borne reste coopérative v1 et non opposable entre processus locaux hostiles ;
+- `bridget guichet deposer` expose les trois dépôts fermés aux wrappers
+  enregistrés ; la relève reste volontairement interne à l'ouverture bornée
+  d'une commande Maicie, sans CLI de claim séparé ;
+- la boucle résidente `maicie serve` est explicitement v2.
 
 Les scénarios de validation sont décrits dans
-`specs/011-maicie-orchestration/quickstart.md`.
+`/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/specs/011-maicie-orchestration/quickstart.md`
+et, pour le guichet 015, dans
+`/Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/specs/015-guichet-maicie/quickstart.md`.

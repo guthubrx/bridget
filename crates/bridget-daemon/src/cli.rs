@@ -4,7 +4,8 @@ use crate::daemon::{self, DaemonConfig};
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole,
-    IdempotencyIssue, LedgerMessage, LedgerScope, PresenceMode, RuntimeSource, decode, encode,
+    IdempotencyIssue, LedgerMessage, LedgerScope, PresenceMode, RuntimeSource,
+    SERVICE_CONTRACT_VERSION, ServiceRequestOperation, ServiceRequestPayload, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::fmt::Write as _;
@@ -117,6 +118,7 @@ pub fn run() {
         "spawn" => cmd_spawn(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
         "send" => cmd_send(&args[2..]),
+        "guichet" => cmd_guichet(&args[2..]),
         "cancel" => cmd_cancel(&args[2..]),
         "requests" => cmd_requests(&args[2..]),
         "rename" => cmd_rename(&args[2..]),
@@ -854,6 +856,143 @@ fn option_value(args: &[String], index: &mut usize, option: &str) -> Result<Stri
         .cloned()
         .filter(|value| !value.starts_with("--"))
         .ok_or_else(|| format!("{option} requiert une valeur"))
+}
+
+fn cmd_guichet(args: &[String]) {
+    let request = match parse_guichet_deposit(args) {
+        Ok(request) => request,
+        Err(error) => {
+            eprintln!("erreur: {error}");
+            eprintln!(
+                "usage: bridget guichet deposer <delivery-report|mission-status|deadline-question> [options]"
+            );
+            std::process::exit(2);
+        }
+    };
+    let (issuer_scope, request_id, issued_at) = match &request {
+        WrapperToDaemon::ServiceRequest {
+            issuer_scope,
+            request_id,
+            issued_at,
+            ..
+        } => (issuer_scope.clone(), request_id.clone(), *issued_at),
+        _ => unreachable!("le parseur ne construit que des dépôts guichet"),
+    };
+    match send_control_to_daemon(request) {
+        Ok(DaemonToWrapper::GuichetResult {
+            issue, expires_at, ..
+        }) => {
+            println!(
+                "DÉPÔT: {issue} (id={request_id}, issued_at={issued_at}, issuer_scope={issuer_scope}, expire={expires_at})"
+            );
+            if issue != "queued" && issue != "outcome_unknown" {
+                std::process::exit(1);
+            }
+        }
+        Ok(DaemonToWrapper::ServiceRejected { reason }) => {
+            eprintln!("REJET: {reason:?}");
+            std::process::exit(1);
+        }
+        Ok(response) => {
+            eprintln!("réponse inattendue du daemon: {response:?}");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("daemon inaccessible: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
+    if args.first().map(String::as_str) != Some("deposer") {
+        return Err("la seule opération guichet disponible est « deposer »".to_string());
+    }
+    let kind = args
+        .get(1)
+        .map(String::as_str)
+        .ok_or_else(|| "type de dépôt manquant".to_string())?;
+    let mut objective_id = None;
+    let mut delegation_id = None;
+    let mut delivery_hash = None;
+    let mut in_reply_to = None;
+    let mut from = None;
+    let mut id = None;
+    let mut issued_at = None;
+    let mut issuer_scope = None;
+    let mut index = 2;
+    while index < args.len() {
+        let option = args[index].as_str();
+        let value = option_value(args, &mut index, option)?;
+        match option {
+            "--objective" => objective_id = Some(value),
+            "--delegation" => delegation_id = Some(value),
+            "--hash" => delivery_hash = Some(value),
+            "--in-reply-to" => in_reply_to = Some(value),
+            "--from" => from = Some(value),
+            "--id" => id = Some(value),
+            "--issued-at" => issued_at = Some(value),
+            "--issuer-scope" => issuer_scope = Some(value),
+            _ => return Err(format!("option guichet inconnue: {option}")),
+        }
+        index += 1;
+    }
+
+    let from = from.unwrap_or_else(current_agent_name);
+    if from == "human" {
+        return Err("--from est requis hors wrapper Bridget".to_string());
+    }
+    validate_agent_name(&from)?;
+    let retry = idempotent_options(id, issued_at, issuer_scope)?;
+    let scope_identity =
+        std::env::var("BRIDGET_AGENT_INSTANCE_ID").unwrap_or_else(|_| from.clone());
+    let (request_id, issued_at, issuer_scope) = retry
+        .map(|retry| (retry.id, retry.issued_at, retry.issuer_scope))
+        .unwrap_or_else(|| {
+            (
+                uuid::Uuid::new_v4().to_string(),
+                unix_timestamp(),
+                crate::mcp::issuer_scope(&scope_identity),
+            )
+        });
+    let (operation, payload) = match kind {
+        "delivery-report" => (
+            ServiceRequestOperation::DeliveryReport,
+            ServiceRequestPayload::DeliveryReport {
+                objective_id: objective_id.ok_or_else(|| "--objective est requis".to_string())?,
+                delegation_id: delegation_id
+                    .ok_or_else(|| "--delegation est requis".to_string())?,
+                delivery_hash: delivery_hash.ok_or_else(|| "--hash est requis".to_string())?,
+                in_reply_to: in_reply_to
+                    .ok_or_else(|| "--in-reply-to est requis pour delivery-report".to_string())?,
+            },
+        ),
+        "mission-status" => (
+            ServiceRequestOperation::MissionStatus,
+            ServiceRequestPayload::Delegation {
+                delegation_id: delegation_id
+                    .ok_or_else(|| "--delegation est requis".to_string())?,
+            },
+        ),
+        "deadline-question" => (
+            ServiceRequestOperation::DeadlineQuestion,
+            ServiceRequestPayload::Delegation {
+                delegation_id: delegation_id
+                    .ok_or_else(|| "--delegation est requis".to_string())?,
+            },
+        ),
+        _ => return Err(format!("type de dépôt fermé inconnu: {kind}")),
+    };
+    Ok(WrapperToDaemon::ServiceRequest {
+        version: SERVICE_CONTRACT_VERSION,
+        issuer_scope,
+        request_id,
+        issued_at,
+        from,
+        to: "maicie".to_string(),
+        operation,
+        payload,
+    })
 }
 
 fn idempotent_options(
@@ -2761,6 +2900,73 @@ mod idempotency_projection_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn depot_guichet_rejoue_le_canon_ferme_avec_les_trois_cles() {
+        let args = vec![
+            "deposer",
+            "delivery-report",
+            "--from",
+            "codex-1",
+            "--objective",
+            "objective-1",
+            "--delegation",
+            "delegation-1",
+            "--hash",
+            "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
+            "--in-reply-to",
+            "message-1",
+            "--id",
+            "deposit-1",
+            "--issued-at",
+            "1787500000",
+            "--issuer-scope",
+            "015_scope_0123456789abcdef0123456789abcdef",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let first = parse_guichet_deposit(&args).unwrap();
+        let second = parse_guichet_deposit(&args).unwrap();
+        assert_eq!(encode(&first).unwrap(), encode(&second).unwrap());
+        assert!(matches!(
+            first,
+            WrapperToDaemon::ServiceRequest {
+                version: SERVICE_CONTRACT_VERSION,
+                request_id,
+                issued_at: 1_787_500_000,
+                operation: ServiceRequestOperation::DeliveryReport,
+                payload: ServiceRequestPayload::DeliveryReport { in_reply_to, .. },
+                ..
+            } if request_id == "deposit-1" && in_reply_to == "message-1"
+        ));
+    }
+
+    #[test]
+    fn depot_guichet_refuse_les_formes_ouvertes_ou_incompletes() {
+        let hash = "0".repeat(64);
+        let missing_link = vec![
+            "deposer",
+            "delivery-report",
+            "--from",
+            "codex-1",
+            "--objective",
+            "objective-1",
+            "--delegation",
+            "delegation-1",
+            "--hash",
+            hash.as_str(),
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        assert!(parse_guichet_deposit(&missing_link).is_err());
+        let free_form = vec!["deposer", "message-libre", "--from", "codex-1"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(parse_guichet_deposit(&free_form).is_err());
     }
 
     #[test]

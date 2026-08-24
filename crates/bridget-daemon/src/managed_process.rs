@@ -1509,12 +1509,13 @@ mod tests {
         .unwrap()
         .release()
         .unwrap();
-        wait_for_path(&descendant_path);
-        let descendant = fs::read_to_string(&descendant_path)
-            .unwrap()
-            .trim()
-            .parse::<u32>()
-            .unwrap();
+        let descendant = wait_for_path(&descendant_path, |content| {
+            std::str::from_utf8(content)
+                .ok()?
+                .trim()
+                .parse::<u32>()
+                .ok()
+        });
 
         assert!(matches!(
             child
@@ -1796,9 +1797,15 @@ mod tests {
         .unwrap();
     }
 
-    fn wait_for_path(path: &Path) {
+    fn wait_for_path<T>(path: &Path, parse: impl Fn(&[u8]) -> Option<T>) -> T {
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !path.exists() {
+        loop {
+            if let Ok(content) = fs::read(path)
+                && !content.is_empty()
+                && let Some(value) = parse(&content)
+            {
+                return value;
+            }
             assert!(
                 Instant::now() < deadline,
                 "barrière absente: {}",
@@ -1847,9 +1854,8 @@ mod tests {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
             let mut controller = controller.spawn().unwrap();
-            wait_for_path(&boundary);
             let ready: BootstrapReady =
-                serde_json::from_slice(&fs::read(&boundary).unwrap()).unwrap();
+                wait_for_path(&boundary, |content| serde_json::from_slice(content).ok());
             let status = terminate_controller(&mut controller);
             assert!(!status.success());
             wait_pid_gone(ready.pid);

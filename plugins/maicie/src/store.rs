@@ -5,11 +5,16 @@
 //! les octets préparés avant I/O sont l'autorité.
 
 use crate::app::ConversationRecord;
-use crate::bridget_client::{IdempotencyIssue, SpawnOutcome};
+use crate::bridget_client::{GuichetClaim, IdempotencyIssue, SpawnOutcome};
+use crate::domain::guichet::{
+    EvenementCycleGuichet, ProjectionReply, RapportLivraison, RequeteCanonique,
+    delivery_reply_bytes, projection_reply_bytes, reclaim_projection_reply_bytes,
+};
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
     DomainError, EtatActivationOutbox, EtatDecision, EtatDelegation, EtatObjectif,
-    EtatOutboxDelegation, ObjectifCoordonne, TypeDecision,
+    EtatOutboxDelegation, EtatRequeteGuichet, IssueGreffe, ObjectifCoordonne, OperationGuichet,
+    ReceptionGreffe, RecuCorrelation, TypeDecision,
 };
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
@@ -27,7 +32,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -105,6 +110,16 @@ pub struct RemiseLocale {
     pub observed_at: Option<i64>,
 }
 
+/// Faits locaux nécessaires aux projections du guichet. Ils sont lus depuis
+/// une seule jointure SQLite ; aucune observation Bridget n'est reconstruite.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuichetProjectionFacts {
+    pub objective: ObjectifCoordonne,
+    pub delegation: Delegation,
+    pub local_delivery: RemiseLocale,
+    pub deadline_at: i64,
+}
+
 /// Motif local fermé quand les octets durables ne peuvent jamais produire une
 /// remise valide. Il ne crée aucun nouvel état de domaine : l'outbox converge
 /// vers `Rejected`.
@@ -154,6 +169,28 @@ pub struct ActivationApprovalRequest<'a> {
     pub spawn_order_bytes: &'a [u8],
     pub retry_until: i64,
     pub dedup_retained_until: i64,
+}
+
+/// Résultat durable d'une greffe. `reply_bytes` est l'autorité de reprise :
+/// aucun appelant ne doit reconstruire la réponse depuis les autres champs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredGuichetReply {
+    pub reception: ReceptionGreffe,
+    pub correlation: Option<RecuCorrelation>,
+    pub replayed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuichetLifecycleResult {
+    Recorded,
+    Replayed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuichetCommitPhase {
+    AfterDecisionInsert,
+    BeforeCommit,
+    AfterCommit,
 }
 
 #[derive(Deserialize)]
@@ -211,6 +248,351 @@ impl MaicieStore {
         self.connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(StoreError::Sql)
+    }
+
+    /// Greffe un rapport de livraison et son effet de coordination dans une
+    /// transaction `IMMEDIATE` unique. Le reçu, les agrégats, la décision et
+    /// les octets exacts de réponse deviennent visibles ensemble.
+    pub fn graft_delivery_report(
+        &mut self,
+        claim: &GuichetClaim,
+        canonical: &RequeteCanonique,
+        report: &RapportLivraison,
+        response_message_id: &str,
+        now: i64,
+    ) -> Result<StoredGuichetReply, StoreError> {
+        self.graft_delivery_report_observed(
+            claim,
+            canonical,
+            report,
+            response_message_id,
+            now,
+            |_| Ok(()),
+        )
+    }
+
+    /// Variante de test aux frontières transactionnelles. L'observateur ne
+    /// remplace aucune faute d'I/O : il sert seulement de barrière pour tuer
+    /// un vrai processus avant ou après le commit SQLite.
+    pub fn graft_delivery_report_observed(
+        &mut self,
+        claim: &GuichetClaim,
+        canonical: &RequeteCanonique,
+        report: &RapportLivraison,
+        response_message_id: &str,
+        now: i64,
+        mut observer: impl FnMut(GuichetCommitPhase) -> Result<(), StoreError>,
+    ) -> Result<StoredGuichetReply, StoreError> {
+        if now <= 0 || response_message_id.trim().is_empty() {
+            return Err(StoreError::Invalid("réponse guichet incomplète"));
+        }
+        if canonical.issuer_scope != claim.issuer_scope
+            || canonical.request_id != claim.request_id
+            || canonical.request.operation() != OperationGuichet::DeliveryReport
+        {
+            return Err(StoreError::Invalid("claim et greffe divergents"));
+        }
+
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        if let Some(reception) =
+            load_guichet_reception(&tx, &canonical.issuer_scope, &canonical.request_id)?
+        {
+            if reception.canonical_request_bytes != claim.canonical_request {
+                return Err(StoreError::EnvelopeMismatch);
+            }
+            let reception = refresh_reception_for_claim(&tx, reception, claim, report)?;
+            let correlation = load_guichet_correlation(
+                &tx,
+                report.in_reply_to.as_str(),
+                reception.response_message_id.as_str(),
+            )?;
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(StoredGuichetReply {
+                reception,
+                correlation,
+                replayed: true,
+            });
+        }
+
+        let row: Option<StoredGuichetAggregates> = tx
+            .query_row(
+                "SELECT obj.state, obj.payload_json, d.state, d.payload_json, o.message_id\n\
+                 FROM delegations d\n\
+                 JOIN objectives obj ON obj.id = d.objective_id\n\
+                 JOIN delegation_outbox o ON o.delegation_id = d.id\n\
+                 WHERE d.id = ?1",
+                [report.delegation_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let Some((objective_state, objective_json, delegation_state, delegation_json, message_id)) =
+            row
+        else {
+            return Err(StoreError::NotFound("délégation guichet absente"));
+        };
+        let mut objective: ObjectifCoordonne =
+            serde_json::from_slice(&objective_json).map_err(StoreError::Json)?;
+        let mut delegation: Delegation =
+            serde_json::from_slice(&delegation_json).map_err(StoreError::Json)?;
+        if objective.id != report.objective_id
+            || delegation.objectif_id != objective.id
+            || delegation.id != report.delegation_id
+            || delegation.participant != canonical.from
+            || message_id != report.in_reply_to
+            || objective.etat != parse_objective_state(&objective_state)?
+            || delegation.etat != parse_delegation_state(&delegation_state)?
+        {
+            return Err(StoreError::Invalid("relations du rapport invalides"));
+        }
+        if !matches!(
+            objective.etat,
+            EtatObjectif::EnCoordination | EtatObjectif::AEvaluer
+        ) || !matches!(
+            delegation.etat,
+            EtatDelegation::Creee | EtatDelegation::AEvaluer
+        ) {
+            return Err(StoreError::Invalid(
+                "état métier incompatible avec la greffe",
+            ));
+        }
+
+        let lifecycle_state: Option<String> = tx
+            .query_row(
+                "SELECT state FROM guichet_lifecycle_events\n\
+                 WHERE issuer_scope = ?1 AND request_id = ?2",
+                params![canonical.issuer_scope, canonical.request_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let issue = match lifecycle_state.as_deref() {
+            Some("cancelled" | "timed_out") => IssueGreffe::DemandeDejaTerminale,
+            Some("answered") | None => IssueGreffe::Accepted,
+            Some(_) => return Err(StoreError::Corrupt("terminal guichet inconnu")),
+        };
+        let reply_bytes = delivery_reply_bytes(claim, report, response_message_id, issue)
+            .map_err(|_| StoreError::Invalid("réponse guichet non sérialisable"))?;
+
+        let previous_objective = objective.clone();
+        let previous_delegation = delegation.clone();
+        if objective.etat == EtatObjectif::EnCoordination {
+            objective
+                .transition(EtatObjectif::AEvaluer, now)
+                .map_err(StoreError::Domain)?;
+        }
+        if delegation.etat == EtatDelegation::Creee {
+            delegation
+                .transition(EtatDelegation::AEvaluer)
+                .map_err(StoreError::Domain)?;
+        }
+        update_guichet_aggregates(
+            &tx,
+            &previous_objective,
+            &objective,
+            &previous_delegation,
+            &delegation,
+        )?;
+
+        let decision = DecisionCoordination {
+            id: Uuid::new_v4(),
+            objectif_id: objective.id,
+            kind: TypeDecision::ConstaterIssue,
+            proposee_par: "maicie".to_string(),
+            etat: EtatDecision::Appliquee,
+            motif: match issue {
+                IssueGreffe::Accepted => {
+                    format!("rapport de livraison greffé : {}", report.delivery_hash)
+                }
+                IssueGreffe::DemandeDejaTerminale => format!(
+                    "rapport tardif greffé sans réouverture : {}",
+                    report.delivery_hash
+                ),
+            },
+        };
+        decision.verifier().map_err(StoreError::Domain)?;
+        let decision_json = serde_json::to_vec(&decision).map_err(StoreError::Json)?;
+        let inserted = tx
+            .execute(
+                "INSERT INTO coordination_decisions(id, objective_id, state, payload_json)\n\
+                 VALUES (?1, ?2, 'applied', ?3)",
+                params![
+                    decision.id.to_string(),
+                    objective.id.to_string(),
+                    decision_json
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("décision de greffe non enregistrée"));
+        }
+        observer(GuichetCommitPhase::AfterDecisionInsert)?;
+
+        let operation = operation_name(OperationGuichet::DeliveryReport);
+        let outcome = issue_name(issue);
+        let inserted = tx
+            .execute(
+                "INSERT INTO guichet_receptions(\n\
+                     issuer_scope, request_id, operation, canonical_request_bytes,\n\
+                     objective_id, delegation_id, delivery_hash, in_reply_to,\n\
+                     response_message_id, outcome, reply_bytes, decision_id, processed_at,\n\
+                     claim_generation, claim_token\n\
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                params![
+                    canonical.issuer_scope,
+                    canonical.request_id,
+                    operation,
+                    claim.canonical_request,
+                    objective.id.to_string(),
+                    delegation.id.to_string(),
+                    report.delivery_hash,
+                    report.in_reply_to,
+                    response_message_id,
+                    outcome,
+                    reply_bytes,
+                    decision.id.to_string(),
+                    now,
+                    i64::try_from(claim.claim_generation)
+                        .map_err(|_| StoreError::Invalid("génération de claim hors borne"))?,
+                    claim.claim_token,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("reçu de greffe non enregistré"));
+        }
+
+        let correlation = upsert_guichet_correlation(
+            &tx,
+            &canonical.issuer_scope,
+            &canonical.request_id,
+            &report.in_reply_to,
+            response_message_id,
+        )?;
+        let reception =
+            load_guichet_reception(&tx, &canonical.issuer_scope, &canonical.request_id)?.ok_or(
+                StoreError::Corrupt("reçu de greffe introuvable après insertion"),
+            )?;
+        observer(GuichetCommitPhase::BeforeCommit)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        observer(GuichetCommitPhase::AfterCommit)?;
+        Ok(StoredGuichetReply {
+            reception,
+            correlation: Some(correlation),
+            replayed: false,
+        })
+    }
+
+    /// Persiste un fait terminal Bridget sans lui attribuer d'effet métier.
+    /// Un événement arrivé avant le rapport prépare seulement sa corrélation.
+    pub fn record_guichet_lifecycle_event(
+        &mut self,
+        event: &EvenementCycleGuichet,
+    ) -> Result<GuichetLifecycleResult, StoreError> {
+        if event.state == EtatRequeteGuichet::Answered
+            && (event.in_reply_to.is_none() || event.response_message_id.is_none())
+        {
+            return Err(StoreError::Invalid("événement answered non corrélé"));
+        }
+        let event_json = serde_json::to_vec(event).map_err(StoreError::Json)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let existing: Option<Vec<u8>> = tx
+            .query_row(
+                "SELECT payload_json FROM guichet_lifecycle_events\n\
+                 WHERE issuer_scope = ?1 AND event_id = ?2",
+                params![event.issuer_scope, event.event_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        if let Some(existing) = existing {
+            if existing != event_json {
+                return Err(StoreError::EnvelopeMismatch);
+            }
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(GuichetLifecycleResult::Replayed);
+        }
+        let terminal: Option<(String, String)> = tx
+            .query_row(
+                "SELECT event_id, state FROM guichet_lifecycle_events\n\
+                 WHERE issuer_scope = ?1 AND request_id = ?2",
+                params![event.issuer_scope, event.request_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        if terminal.is_some() {
+            return Err(StoreError::Conflict("terminal guichet déjà attesté"));
+        }
+        let inserted = tx
+            .execute(
+                "INSERT INTO guichet_lifecycle_events(\n\
+                     issuer_scope, event_id, request_id, state, observed_at,\n\
+                     in_reply_to, response_message_id, payload_json\n\
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![
+                    event.issuer_scope,
+                    event.event_id,
+                    event.request_id,
+                    lifecycle_state_name(event.state),
+                    event.observed_at,
+                    event.in_reply_to,
+                    event.response_message_id,
+                    event_json,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("événement guichet non enregistré"));
+        }
+        if let (Some(in_reply_to), Some(response_message_id)) =
+            (&event.in_reply_to, &event.response_message_id)
+        {
+            upsert_guichet_correlation(
+                &tx,
+                &event.issuer_scope,
+                &event.request_id,
+                in_reply_to,
+                response_message_id,
+            )?;
+            let changed = tx
+                .execute(
+                    "UPDATE guichet_correlations\n\
+                     SET lifecycle_event_id = ?1, lifecycle_state = ?2\n\
+                     WHERE in_reply_to = ?3 AND response_message_id = ?4\n\
+                       AND issuer_scope = ?5 AND request_id = ?6",
+                    params![
+                        event.event_id,
+                        lifecycle_state_name(event.state),
+                        in_reply_to,
+                        response_message_id,
+                        event.issuer_scope,
+                        event.request_id,
+                    ],
+                )
+                .map_err(StoreError::Sql)?;
+            if changed != 1 {
+                return Err(StoreError::Conflict(
+                    "corrélation terminale non enregistrée",
+                ));
+            }
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(GuichetLifecycleResult::Recorded)
     }
 
     /// Ajoute un message libre destiné à Maicie au journal privé append-only.
@@ -296,6 +678,166 @@ impl MaicieStore {
             })
         })
         .collect()
+    }
+
+    /// Persiste les octets exacts d'une projection consultative. Une relève
+    /// répétée rejoue le reçu ; une nouvelle génération ne change que
+    /// l'enveloppe de claim, jamais les faits déjà répondus.
+    pub fn persist_guichet_projection(
+        &mut self,
+        claim: &GuichetClaim,
+        canonical: &RequeteCanonique,
+        response_message_id: &str,
+        now: i64,
+        build: impl FnOnce(&GuichetProjectionFacts) -> Result<ProjectionReply, StoreError>,
+    ) -> Result<StoredGuichetReply, StoreError> {
+        if now <= 0 || response_message_id.trim().is_empty() {
+            return Err(StoreError::Invalid("réponse guichet incomplète"));
+        }
+        if canonical.issuer_scope != claim.issuer_scope
+            || canonical.request_id != claim.request_id
+            || canonical.request.operation() == OperationGuichet::DeliveryReport
+        {
+            return Err(StoreError::Invalid("claim et projection divergents"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+
+        if let Some(mut reception) =
+            load_guichet_reception(&tx, &canonical.issuer_scope, &canonical.request_id)?
+        {
+            if reception.canonical_request_bytes != claim.canonical_request
+                || reception.operation != canonical.request.operation()
+            {
+                return Err(StoreError::EnvelopeMismatch);
+            }
+            if claim.claim_generation == reception.claim_generation
+                && claim.claim_token == reception.claim_token
+            {
+                tx.commit().map_err(StoreError::Sql)?;
+                return Ok(StoredGuichetReply {
+                    reception,
+                    correlation: None,
+                    replayed: true,
+                });
+            }
+            if claim.claim_generation <= reception.claim_generation {
+                return Err(StoreError::EnvelopeMismatch);
+            }
+            let (reply_bytes, stored_projection, stored_response_message_id) =
+                reclaim_projection_reply_bytes(claim, &reception.reply_bytes)
+                    .map_err(|_| StoreError::Corrupt("projection durable invalide"))?;
+            if stored_projection.operation() != reception.operation
+                || stored_projection
+                    .delegation_id()
+                    .map_err(|_| StoreError::Corrupt("référence de projection invalide"))?
+                    != reception
+                        .delegation_id
+                        .ok_or(StoreError::Corrupt("projection sans délégation"))?
+                || stored_response_message_id != reception.response_message_id
+            {
+                return Err(StoreError::Corrupt("projection et reçu divergents"));
+            }
+            let updated = tx
+                .execute(
+                    "UPDATE guichet_receptions\n\
+                     SET claim_generation = ?1, claim_token = ?2, reply_bytes = ?3\n\
+                     WHERE issuer_scope = ?4 AND request_id = ?5\n\
+                       AND claim_generation = ?6 AND claim_token = ?7",
+                    params![
+                        i64::try_from(claim.claim_generation)
+                            .map_err(|_| StoreError::Invalid("génération de claim hors borne"))?,
+                        claim.claim_token,
+                        reply_bytes,
+                        canonical.issuer_scope,
+                        canonical.request_id,
+                        i64::try_from(reception.claim_generation).map_err(|_| {
+                            StoreError::Corrupt("génération de reçu hors borne")
+                        })?,
+                        reception.claim_token,
+                    ],
+                )
+                .map_err(StoreError::Sql)?;
+            if updated != 1 {
+                return Err(StoreError::Conflict(
+                    "reçu de projection modifié concurremment",
+                ));
+            }
+            reception =
+                load_guichet_reception(&tx, &canonical.issuer_scope, &canonical.request_id)?
+                    .ok_or(StoreError::Corrupt("projection absente après mise à jour"))?;
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(StoredGuichetReply {
+                reception,
+                correlation: None,
+                replayed: true,
+            });
+        }
+
+        let delegation_id = match &canonical.request {
+            crate::domain::guichet::RequeteGuichet::MissionStatus { delegation_id }
+            | crate::domain::guichet::RequeteGuichet::DeadlineQuestion { delegation_id } => {
+                *delegation_id
+            }
+            crate::domain::guichet::RequeteGuichet::DeliveryReport(_) => {
+                return Err(StoreError::Invalid("projection de livraison interdite"));
+            }
+        };
+        let facts = load_guichet_projection_facts(&tx, delegation_id)?;
+        if facts.delegation.participant != canonical.from {
+            return Err(StoreError::Invalid("relations de projection invalides"));
+        }
+        let projection = build(&facts)?;
+        if projection.operation() != canonical.request.operation()
+            || projection
+                .delegation_id()
+                .map_err(|_| StoreError::Invalid("référence de projection invalide"))?
+                != delegation_id
+        {
+            return Err(StoreError::Invalid("projection et requête divergentes"));
+        }
+        let reply_bytes = projection_reply_bytes(claim, response_message_id, &projection)
+            .map_err(|_| StoreError::Invalid("projection guichet non sérialisable"))?;
+        let inserted = tx
+            .execute(
+                "INSERT INTO guichet_receptions(\n\
+                     issuer_scope, request_id, operation, canonical_request_bytes,\n\
+                     objective_id, delegation_id, delivery_hash, in_reply_to,\n\
+                     response_message_id, outcome, reply_bytes, decision_id, processed_at,\n\
+                     claim_generation, claim_token\n\
+                 ) VALUES (?1,?2,?3,?4,?5,?6,NULL,?7,?8,'accepted',?9,NULL,?10,?11,?12)",
+                params![
+                    canonical.issuer_scope,
+                    canonical.request_id,
+                    operation_name(projection.operation()),
+                    claim.canonical_request,
+                    facts.objective.id.to_string(),
+                    delegation_id.to_string(),
+                    canonical.request_id,
+                    response_message_id,
+                    reply_bytes,
+                    now,
+                    i64::try_from(claim.claim_generation)
+                        .map_err(|_| StoreError::Invalid("génération de claim hors borne"))?,
+                    claim.claim_token,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("projection guichet non enregistrée"));
+        }
+        let reception =
+            load_guichet_reception(&tx, &canonical.issuer_scope, &canonical.request_id)?.ok_or(
+                StoreError::Corrupt("projection introuvable après insertion"),
+            )?;
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(StoredGuichetReply {
+            reception,
+            correlation: None,
+            replayed: false,
+        })
     }
 
     fn remises_locales_for(&self, objective_id: Uuid) -> Result<Vec<RemiseLocale>, StoreError> {
@@ -1511,6 +2053,423 @@ fn prepare_private_database(path: &Path) -> Result<(), StoreError> {
     Ok(())
 }
 
+type StoredGuichetAggregates = (String, Vec<u8>, String, Vec<u8>, String);
+
+type RawGuichetProjectionFacts = (
+    String,
+    Vec<u8>,
+    String,
+    Vec<u8>,
+    String,
+    String,
+    Option<Vec<u8>>,
+    Option<i64>,
+    i64,
+);
+
+fn load_guichet_projection_facts(
+    connection: &Connection,
+    delegation_id: Uuid,
+) -> Result<GuichetProjectionFacts, StoreError> {
+    let raw: Option<RawGuichetProjectionFacts> = connection
+        .query_row(
+            "SELECT obj.state, obj.payload_json, d.state, d.payload_json,\n\
+                    o.message_id, o.state, o.last_issue_json, o.issue_observed_at,\n\
+                    o.deadline_contractuelle\n\
+             FROM delegations d\n\
+             JOIN objectives obj ON obj.id = d.objective_id\n\
+             JOIN delegation_outbox o ON o.delegation_id = d.id\n\
+             WHERE d.id = ?1",
+            [delegation_id.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    let Some((
+        objective_state,
+        objective_json,
+        delegation_state,
+        delegation_json,
+        message_id,
+        local_state,
+        local_issue,
+        local_observed_at,
+        deadline_at,
+    )) = raw
+    else {
+        return Err(StoreError::NotFound("délégation de projection absente"));
+    };
+    let objective: ObjectifCoordonne =
+        serde_json::from_slice(&objective_json).map_err(StoreError::Json)?;
+    let delegation: Delegation =
+        serde_json::from_slice(&delegation_json).map_err(StoreError::Json)?;
+    if objective.id != delegation.objectif_id
+        || delegation.id != delegation_id
+        || objective.etat != parse_objective_state(&objective_state)?
+        || delegation.etat != parse_delegation_state(&delegation_state)?
+        || deadline_at <= 0
+    {
+        return Err(StoreError::Corrupt("faits de projection divergents"));
+    }
+    Ok(GuichetProjectionFacts {
+        objective,
+        delegation,
+        local_delivery: RemiseLocale {
+            delegation_id,
+            message_id: parse_uuid(&message_id)?,
+            state: parse_outbox_state(&local_state)?,
+            issue: local_issue
+                .map(|bytes| serde_json::from_slice(&bytes).map_err(StoreError::Json))
+                .transpose()?,
+            observed_at: local_observed_at,
+        },
+        deadline_at,
+    })
+}
+
+type RawGuichetReception = (
+    String,
+    Vec<u8>,
+    String,
+    Vec<u8>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    i64,
+    i64,
+    String,
+);
+
+fn load_guichet_reception(
+    tx: &Transaction<'_>,
+    issuer_scope: &str,
+    request_id: &str,
+) -> Result<Option<ReceptionGreffe>, StoreError> {
+    let raw: Option<RawGuichetReception> = tx
+        .query_row(
+            "SELECT operation, canonical_request_bytes, response_message_id, reply_bytes,\n\
+                    objective_id, delegation_id, delivery_hash, outcome, decision_id,\n\
+                    in_reply_to, issuer_scope, processed_at, claim_generation, claim_token\n\
+             FROM guichet_receptions WHERE issuer_scope = ?1 AND request_id = ?2",
+            params![issuer_scope, request_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
+                    row.get(12)?,
+                    row.get(13)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    raw.map(|raw| decode_guichet_reception(request_id, raw))
+        .transpose()
+}
+
+fn decode_guichet_reception(
+    request_id: &str,
+    raw: RawGuichetReception,
+) -> Result<ReceptionGreffe, StoreError> {
+    let (
+        operation,
+        canonical_request_bytes,
+        response_message_id,
+        reply_bytes,
+        objective_id,
+        delegation_id,
+        delivery_hash,
+        outcome,
+        decision_id,
+        _in_reply_to,
+        issuer_scope,
+        processed_at,
+        claim_generation,
+        claim_token,
+    ) = raw;
+    Ok(ReceptionGreffe {
+        issuer_scope,
+        request_id: request_id.to_string(),
+        operation: parse_operation_name(&operation)?,
+        canonical_request_bytes,
+        objective_id: objective_id.as_deref().map(parse_uuid).transpose()?,
+        delegation_id: delegation_id.as_deref().map(parse_uuid).transpose()?,
+        delivery_hash,
+        response_message_id,
+        claim_generation: u64::try_from(claim_generation)
+            .map_err(|_| StoreError::Corrupt("génération de claim invalide"))?,
+        claim_token,
+        reply_bytes,
+        issue: parse_issue_name(&outcome)?,
+        decision_id: decision_id.as_deref().map(parse_uuid).transpose()?,
+        processed_at,
+    })
+}
+
+/// Une génération supérieure prouve que Bridget a libéré l'ancien claim sans
+/// persister sa réponse. Le fait métier et `response_message_id` restent
+/// immuables ; seule l'enveloppe de claim est régénérée. À génération égale,
+/// les octets doivent être rejoués strictement à l'identique.
+fn refresh_reception_for_claim(
+    tx: &Transaction<'_>,
+    mut reception: ReceptionGreffe,
+    claim: &GuichetClaim,
+    report: &RapportLivraison,
+) -> Result<ReceptionGreffe, StoreError> {
+    if claim.claim_generation == reception.claim_generation
+        && claim.claim_token == reception.claim_token
+    {
+        return Ok(reception);
+    }
+    if claim.claim_generation <= reception.claim_generation {
+        return Err(StoreError::Conflict("claim guichet obsolète ou divergent"));
+    }
+    let reply_bytes = delivery_reply_bytes(
+        claim,
+        report,
+        &reception.response_message_id,
+        reception.issue,
+    )
+    .map_err(|_| StoreError::Invalid("réponse guichet non sérialisable"))?;
+    let changed = tx
+        .execute(
+            "UPDATE guichet_receptions\n\
+             SET claim_generation = ?1, claim_token = ?2, reply_bytes = ?3\n\
+             WHERE issuer_scope = ?4 AND request_id = ?5\n\
+               AND claim_generation = ?6 AND claim_token = ?7 AND reply_bytes = ?8",
+            params![
+                i64::try_from(claim.claim_generation)
+                    .map_err(|_| StoreError::Invalid("génération de claim hors borne"))?,
+                claim.claim_token,
+                reply_bytes,
+                reception.issuer_scope,
+                reception.request_id,
+                i64::try_from(reception.claim_generation)
+                    .map_err(|_| StoreError::Corrupt("génération de claim hors borne"))?,
+                reception.claim_token,
+                reception.reply_bytes,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    if changed != 1 {
+        return Err(StoreError::Conflict("reçu de greffe modifié concurremment"));
+    }
+    reception.claim_generation = claim.claim_generation;
+    reception.claim_token = claim.claim_token.clone();
+    reception.reply_bytes = reply_bytes;
+    Ok(reception)
+}
+
+fn load_guichet_correlation(
+    tx: &Transaction<'_>,
+    in_reply_to: &str,
+    response_message_id: &str,
+) -> Result<Option<RecuCorrelation>, StoreError> {
+    tx.query_row(
+        "SELECT issuer_scope, request_id, lifecycle_event_id, lifecycle_state\n\
+         FROM guichet_correlations\n\
+         WHERE in_reply_to = ?1 AND response_message_id = ?2",
+        params![in_reply_to, response_message_id],
+        |row| {
+            let state: Option<String> = row.get(3)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                state,
+            ))
+        },
+    )
+    .optional()
+    .map_err(StoreError::Sql)?
+    .map(
+        |(issuer_scope, request_id, lifecycle_event_id, lifecycle_state)| {
+            Ok(RecuCorrelation {
+                issuer_scope,
+                request_id,
+                in_reply_to: in_reply_to.to_string(),
+                response_message_id: response_message_id.to_string(),
+                lifecycle_event_id,
+                lifecycle_state: lifecycle_state
+                    .as_deref()
+                    .map(parse_lifecycle_state_name)
+                    .transpose()?,
+            })
+        },
+    )
+    .transpose()
+}
+
+fn upsert_guichet_correlation(
+    tx: &Transaction<'_>,
+    issuer_scope: &str,
+    request_id: &str,
+    in_reply_to: &str,
+    response_message_id: &str,
+) -> Result<RecuCorrelation, StoreError> {
+    if let Some(existing) = load_guichet_correlation(tx, in_reply_to, response_message_id)? {
+        if existing.issuer_scope != issuer_scope || existing.request_id != request_id {
+            return Err(StoreError::Conflict("corrélation guichet déjà attribuée"));
+        }
+        return Ok(existing);
+    }
+    let existing_for_request: Option<(String, String)> = tx
+        .query_row(
+            "SELECT in_reply_to, response_message_id FROM guichet_correlations\n\
+             WHERE issuer_scope = ?1 AND request_id = ?2",
+            params![issuer_scope, request_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    if existing_for_request.is_some() {
+        return Err(StoreError::Conflict(
+            "requête guichet corrélée différemment",
+        ));
+    }
+    let inserted = tx
+        .execute(
+            "INSERT INTO guichet_correlations(\n\
+                 in_reply_to, response_message_id, issuer_scope, request_id,\n\
+                 lifecycle_event_id, lifecycle_state\n\
+             ) VALUES (?1,?2,?3,?4,NULL,NULL)",
+            params![in_reply_to, response_message_id, issuer_scope, request_id],
+        )
+        .map_err(StoreError::Sql)?;
+    if inserted != 1 {
+        return Err(StoreError::Conflict("corrélation guichet non enregistrée"));
+    }
+    load_guichet_correlation(tx, in_reply_to, response_message_id)?
+        .ok_or(StoreError::Corrupt("corrélation guichet introuvable"))
+}
+
+fn update_guichet_aggregates(
+    tx: &Transaction<'_>,
+    previous_objective: &ObjectifCoordonne,
+    objective: &ObjectifCoordonne,
+    previous_delegation: &Delegation,
+    delegation: &Delegation,
+) -> Result<(), StoreError> {
+    if previous_objective != objective {
+        let previous_json = serde_json::to_vec(previous_objective).map_err(StoreError::Json)?;
+        let next_json = serde_json::to_vec(objective).map_err(StoreError::Json)?;
+        let changed = tx
+            .execute(
+                "UPDATE objectives SET state = ?1, payload_json = ?2\n\
+                 WHERE id = ?3 AND state = ?4 AND payload_json = ?5",
+                params![
+                    objective_state_name(objective.etat),
+                    next_json,
+                    objective.id.to_string(),
+                    objective_state_name(previous_objective.etat),
+                    previous_json,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict("objectif modifié pendant la greffe"));
+        }
+    }
+    if previous_delegation != delegation {
+        let previous_json = serde_json::to_vec(previous_delegation).map_err(StoreError::Json)?;
+        let next_json = serde_json::to_vec(delegation).map_err(StoreError::Json)?;
+        let changed = tx
+            .execute(
+                "UPDATE delegations SET state = ?1, payload_json = ?2\n\
+                 WHERE id = ?3 AND state = ?4 AND payload_json = ?5",
+                params![
+                    delegation_state_name(delegation.etat),
+                    next_json,
+                    delegation.id.to_string(),
+                    delegation_state_name(previous_delegation.etat),
+                    previous_json,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict(
+                "délégation modifiée pendant la greffe",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn operation_name(operation: OperationGuichet) -> &'static str {
+    match operation {
+        OperationGuichet::DeliveryReport => "delivery_report",
+        OperationGuichet::MissionStatus => "mission_status",
+        OperationGuichet::DeadlineQuestion => "deadline_question",
+    }
+}
+
+fn parse_operation_name(value: &str) -> Result<OperationGuichet, StoreError> {
+    match value {
+        "delivery_report" => Ok(OperationGuichet::DeliveryReport),
+        "mission_status" => Ok(OperationGuichet::MissionStatus),
+        "deadline_question" => Ok(OperationGuichet::DeadlineQuestion),
+        _ => Err(StoreError::Corrupt("opération guichet inconnue")),
+    }
+}
+
+fn issue_name(issue: IssueGreffe) -> &'static str {
+    match issue {
+        IssueGreffe::Accepted => "accepted",
+        IssueGreffe::DemandeDejaTerminale => "request_already_terminal",
+    }
+}
+
+fn parse_issue_name(value: &str) -> Result<IssueGreffe, StoreError> {
+    match value {
+        "accepted" => Ok(IssueGreffe::Accepted),
+        "request_already_terminal" => Ok(IssueGreffe::DemandeDejaTerminale),
+        _ => Err(StoreError::Corrupt("issue de greffe inconnue")),
+    }
+}
+
+fn lifecycle_state_name(state: EtatRequeteGuichet) -> &'static str {
+    match state {
+        EtatRequeteGuichet::Answered => "answered",
+        EtatRequeteGuichet::Cancelled => "cancelled",
+        EtatRequeteGuichet::TimedOut => "timed_out",
+    }
+}
+
+fn parse_lifecycle_state_name(value: &str) -> Result<EtatRequeteGuichet, StoreError> {
+    match value {
+        "answered" => Ok(EtatRequeteGuichet::Answered),
+        "cancelled" => Ok(EtatRequeteGuichet::Cancelled),
+        "timed_out" => Ok(EtatRequeteGuichet::TimedOut),
+        _ => Err(StoreError::Corrupt("état terminal guichet inconnu")),
+    }
+}
+
 fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     // L'ouverture est un chemin concurrent normal : plusieurs processus
     // Maicie peuvent démarrer avant qu'un seul ait fini de poser le schéma.
@@ -1639,6 +2598,52 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
              CREATE TRIGGER IF NOT EXISTS conversation_records_append_only_delete
                  BEFORE DELETE ON conversation_records
                  BEGIN SELECT RAISE(ABORT, 'conversation append-only'); END;",
+        )
+        .map_err(StoreError::Sql)?;
+    }
+    if current_version < 7 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS guichet_receptions (
+                 issuer_scope TEXT NOT NULL,
+                 request_id TEXT NOT NULL,
+                 operation TEXT NOT NULL CHECK(operation IN ('delivery_report','mission_status','deadline_question')),
+                 canonical_request_bytes BLOB NOT NULL,
+                 objective_id TEXT,
+                 delegation_id TEXT,
+                 delivery_hash TEXT,
+                 in_reply_to TEXT,
+                 response_message_id TEXT NOT NULL,
+                 claim_generation INTEGER NOT NULL CHECK(claim_generation >= 0),
+                 claim_token TEXT NOT NULL,
+                 outcome TEXT NOT NULL CHECK(outcome IN ('accepted','request_already_terminal')),
+                 reply_bytes BLOB NOT NULL,
+                 decision_id TEXT,
+                 processed_at INTEGER NOT NULL,
+                 PRIMARY KEY(issuer_scope, request_id),
+                 UNIQUE(in_reply_to, response_message_id)
+             );
+             CREATE TABLE IF NOT EXISTS guichet_lifecycle_events (
+                 issuer_scope TEXT NOT NULL,
+                 event_id TEXT NOT NULL,
+                 request_id TEXT NOT NULL,
+                 state TEXT NOT NULL CHECK(state IN ('answered','cancelled','timed_out')),
+                 observed_at INTEGER NOT NULL,
+                 in_reply_to TEXT,
+                 response_message_id TEXT,
+                 payload_json BLOB NOT NULL,
+                 PRIMARY KEY(issuer_scope, event_id),
+                 UNIQUE(issuer_scope, request_id)
+             );
+             CREATE TABLE IF NOT EXISTS guichet_correlations (
+                 in_reply_to TEXT NOT NULL,
+                 response_message_id TEXT NOT NULL,
+                 issuer_scope TEXT NOT NULL,
+                 request_id TEXT NOT NULL,
+                 lifecycle_event_id TEXT,
+                 lifecycle_state TEXT CHECK(lifecycle_state IN ('answered','cancelled','timed_out')),
+                 PRIMARY KEY(in_reply_to, response_message_id),
+                 UNIQUE(issuer_scope, request_id)
+             );",
         )
         .map_err(StoreError::Sql)?;
     }
