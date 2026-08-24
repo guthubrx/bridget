@@ -9,9 +9,10 @@ use maicie::MAICIE_IDENTITY;
 use maicie::app::{
     CatalogueReconcileError, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate,
     LocalProfileApproval, ObjectiveError, ProfileActivationError, ProfileActivationProposalRequest,
-    add_participant, approve_profile_activation, close_with_costs, delegate, delegated_participants,
-    pin_coordination_policy, propose_profile_activation, reconcile_catalogue_from_store,
-    remove_participant, status, stored_profile_activation_proposal, summarize,
+    add_participant, approve_profile_activation, close_with_costs, delegate,
+    delegated_participants, pin_coordination_policy, propose_profile_activation,
+    reconcile_catalogue_from_store, remove_participant, status, stored_profile_activation_proposal,
+    summarize,
 };
 use maicie::bridget_client::{
     AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits,
@@ -993,8 +994,7 @@ fn run_registre(arguments: RegistreArgs) -> Result<String, CliError> {
                 eprintln!("avertissement: {warning}");
             }
             let view = catalogue::project_registre(&parsed.entries);
-            let mut rendered =
-                catalogue::render_registre_list_with_attente(&view, attente);
+            let mut rendered = catalogue::render_registre_list_with_attente(&view, attente);
             let costs = store.all_mission_costs().map_err(CliError::Store)?;
             rendered.push_str(&render_mission_costs_section(&costs));
             Ok(rendered)

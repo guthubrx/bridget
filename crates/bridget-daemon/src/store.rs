@@ -311,7 +311,15 @@ impl Store {
                  FROM usage_samples
                  WHERE agent = ?1 AND observed_at >= ?2 AND observed_at <= ?3",
                 params![agent, from_secs, to_secs],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .optional()
             .map_err(StoreError::Sqlite)?;
@@ -2117,7 +2125,9 @@ mod tests {
         let path = std::env::temp_dir().join(format!("bridget-usage-{}.db", Uuid::new_v4()));
         let store = Store::open(&path).unwrap();
         assert_eq!(
-            store.aggregate_usage_window("tmux-sans-sonde", 1, 100).unwrap(),
+            store
+                .aggregate_usage_window("tmux-sans-sonde", 1, 100)
+                .unwrap(),
             None
         );
         store

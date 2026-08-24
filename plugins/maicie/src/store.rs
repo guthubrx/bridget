@@ -1444,10 +1444,7 @@ impl MaicieStore {
 
     /// Coûts portés par un objectif clos. Vide tant que l'objectif n'est pas
     /// clôturé : le greffe n'anticipe jamais une consommation.
-    pub fn mission_costs(
-        &self,
-        objective_id: Uuid,
-    ) -> Result<Vec<CoutMissionAgent>, StoreError> {
+    pub fn mission_costs(&self, objective_id: Uuid) -> Result<Vec<CoutMissionAgent>, StoreError> {
         self.query_mission_costs(Some(objective_id))
     }
 
@@ -5454,17 +5451,14 @@ fn persist_objective_costs(
 ) -> Result<(), StoreError> {
     let mut windows: BTreeMap<String, i64> = BTreeMap::new();
     let mut statement = tx
-        .prepare(
-            "SELECT payload_json FROM delegations WHERE objective_id = ?1 ORDER BY id",
-        )
+        .prepare("SELECT payload_json FROM delegations WHERE objective_id = ?1 ORDER BY id")
         .map_err(StoreError::Sql)?;
     let rows = statement
         .query_map([objective.id.to_string()], |row| row.get::<_, Vec<u8>>(0))
         .map_err(StoreError::Sql)?;
     for row in rows {
         let payload = row.map_err(StoreError::Sql)?;
-        let delegation: Delegation =
-            serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        let delegation: Delegation = serde_json::from_slice(&payload).map_err(StoreError::Json)?;
         windows
             .entry(delegation.participant)
             .or_insert(objective.cree_at.max(1));
@@ -5495,7 +5489,10 @@ fn persist_objective_costs(
                 objective.cree_at.max(1)
             };
             let to_secs = closed_at.max(from_secs);
-            (agent.clone(), CoutMissionAgent::unknown(agent, from_secs, to_secs))
+            (
+                agent.clone(),
+                CoutMissionAgent::unknown(agent, from_secs, to_secs),
+            )
         })
         .collect();
     if let Some(overrides) = overrides {

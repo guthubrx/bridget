@@ -764,13 +764,7 @@ impl BridgetClient {
         from_secs: i64,
         to_secs: i64,
     ) -> Result<Option<UsageWindowAggregate>, BridgetClientError> {
-        Self::usage_window_at_with_limits(
-            &self.socket_path,
-            self.limits,
-            agent,
-            from_secs,
-            to_secs,
-        )
+        Self::usage_window_at_with_limits(&self.socket_path, self.limits, agent, from_secs, to_secs)
     }
 
     pub fn usage_window_at_with_limits(
@@ -802,12 +796,12 @@ impl BridgetClient {
                 if aggregate.is_null() {
                     return Ok(None);
                 }
-                serde_json::from_value(aggregate).map(Some).map_err(|source| {
-                    BridgetClientError::Decode {
+                serde_json::from_value(aggregate)
+                    .map(Some)
+                    .map_err(|source| BridgetClientError::Decode {
                         line: response.to_string(),
                         source,
-                    }
-                })
+                    })
             }
             "Nack" => Err(parse_nack(response)?),
             other => Err(unexpected("UsageWindowResult", other)),
