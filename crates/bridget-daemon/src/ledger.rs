@@ -88,4 +88,45 @@ mod tests {
         drop(store);
         std::fs::remove_file(path).unwrap();
     }
+
+    #[test]
+    fn projection_requests_est_globale_tous_emetteurs() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-ledger-req-{}-{}.sqlite",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(&path).unwrap();
+        store
+            .create_request("req-alice", "alice", "bob", 60)
+            .unwrap();
+        store
+            .create_request("req-carol", "carol", "dave", 60)
+            .unwrap();
+
+        let projection = read_projection(&store, LedgerScope::Requests, 40).unwrap();
+        let ids: Vec<_> = projection
+            .requests
+            .iter()
+            .map(|request| request.id.as_str())
+            .collect();
+        assert!(
+            ids.contains(&"req-alice") && ids.contains(&"req-carol"),
+            "{ids:?}"
+        );
+        assert!(
+            projection
+                .requests
+                .iter()
+                .any(|request| request.sender == "alice" && request.target == "bob")
+        );
+        assert!(
+            projection
+                .requests
+                .iter()
+                .any(|request| request.sender == "carol" && request.target == "dave")
+        );
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
 }

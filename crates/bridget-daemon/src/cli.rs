@@ -4,7 +4,7 @@ use crate::daemon::{self, DaemonConfig};
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole,
-    IdempotencyIssue, LedgerMessage, LedgerScope, PresenceMode, RuntimeSource,
+    IdempotencyIssue, LedgerMessage, LedgerScope, PresenceMode, RequestInfo, RuntimeSource,
     SERVICE_CONTRACT_VERSION, ServiceRequestOperation, ServiceRequestPayload, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
@@ -243,7 +243,7 @@ fn print_usage() {
            send --to <N> <MSG>    Envoie un message\n  \
            reply <MSG>            Répond au dernier expéditeur\n  \
            cancel <ID>            Annule une demande suivie [--reason <T>]\n  \
-           requests               Liste mes demandes suivies\n  \
+           requests [--all]       Mes demandes (défaut) ou toutes les ouvertes\n  \
            rename <N>             Renomme l'agent courant\n  \
            runtime --model <M>    Déclare le modèle courant [--effort <E>]\n  \
            domain <N> | --reset   Change le domaine de l'agent courant\n  \
@@ -1332,58 +1332,40 @@ fn cmd_cancel(args: &[String]) {
 }
 
 fn cmd_requests(args: &[String]) {
-    let json_output = args.iter().any(|arg| arg == "--json");
-    match send_control_to_daemon(WrapperToDaemon::ListRequests {
-        sender: current_agent_name(),
-        limit: 200,
-    }) {
-        Ok(DaemonToWrapper::RequestList { requests }) if json_output => println!(
+    let options = match parse_requests_args(args) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("{error}");
+            eprintln!("usage: bridget requests [--all] [--json]");
+            std::process::exit(2);
+        }
+    };
+    let response = if options.all {
+        // Vue globale : primitive ledger/open_requests, pas ListRequests.
+        send_control_to_daemon(WrapperToDaemon::LedgerProjection {
+            scope: LedgerScope::Requests,
+            limit: 200,
+        })
+        .and_then(|response| match response {
+            DaemonToWrapper::LedgerProjection { requests, .. } => {
+                Ok(DaemonToWrapper::RequestList { requests })
+            }
+            DaemonToWrapper::Nack { reason, .. } => Err(format!("erreur ledger: {reason}")),
+            _ => Err("réponse inattendue du daemon".to_string()),
+        })
+    } else {
+        send_control_to_daemon(WrapperToDaemon::ListRequests {
+            sender: current_agent_name(),
+            limit: 200,
+        })
+    };
+    match response {
+        Ok(DaemonToWrapper::RequestList { requests }) if options.json => println!(
             "{}",
             serde_json::to_string(&requests).unwrap_or_else(|_| "[]".to_string())
         ),
         Ok(DaemonToWrapper::RequestList { requests }) => {
-            if requests.is_empty() {
-                println!("Aucune demande suivie.");
-                return;
-            }
-            let id_width = requests
-                .iter()
-                .map(|request| request.id.len())
-                .max()
-                .unwrap_or(2)
-                .max(2);
-            let target_width = requests
-                .iter()
-                .map(|request| request.target.len())
-                .max()
-                .unwrap_or(11)
-                .max(11);
-            let state_width = requests
-                .iter()
-                .map(|request| request.state.len())
-                .max()
-                .unwrap_or(4)
-                .max(4);
-            println!(
-                "{:<id_width$}  {:<target_width$}  {:<state_width$}  ÉCHÉANCE  REPORT",
-                "ID", "DESTINATAIRE", "ÉTAT"
-            );
-            for request in requests {
-                println!(
-                    "{:<id_width$}  {:<target_width$}  {:<state_width$}  {}  {}",
-                    request.id,
-                    request.target,
-                    request.state,
-                    request.deadline_at,
-                    request
-                        .deferred_reminder_level
-                        .map(|level| format!(
-                            "palier {level} @ {}",
-                            request.deferred_reminder_at.unwrap_or_default()
-                        ))
-                        .unwrap_or_else(|| "—".to_string())
-                );
-            }
+            print!("{}", render_requests(&requests, options.all));
         }
         Ok(DaemonToWrapper::Nack { reason, .. }) => {
             eprintln!("REJET: {}", reason);
@@ -1398,6 +1380,118 @@ fn cmd_requests(args: &[String]) {
             std::process::exit(1);
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RequestsOptions {
+    all: bool,
+    json: bool,
+}
+
+fn parse_requests_args(args: &[String]) -> Result<RequestsOptions, String> {
+    let mut options = RequestsOptions {
+        all: false,
+        json: false,
+    };
+    for arg in args {
+        match arg.as_str() {
+            "--all" => options.all = true,
+            "--json" => options.json = true,
+            other => return Err(format!("option requests inconnue: {other}")),
+        }
+    }
+    Ok(options)
+}
+
+/// Rend la table des demandes. `global` ajoute la colonne émetteur (de → vers).
+pub(crate) fn render_requests(requests: &[RequestInfo], global: bool) -> String {
+    if requests.is_empty() {
+        return if global {
+            "Aucune demande ouverte.\n".to_string()
+        } else {
+            "Aucune demande suivie.\n".to_string()
+        };
+    }
+    let id_width = requests
+        .iter()
+        .map(|request| request.id.len())
+        .max()
+        .unwrap_or(2)
+        .max(2);
+    let state_width = requests
+        .iter()
+        .map(|request| request.state.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    let mut output = String::new();
+    if global {
+        let from_width = requests
+            .iter()
+            .map(|request| request.sender.len())
+            .max()
+            .unwrap_or(2)
+            .max(2);
+        let to_width = requests
+            .iter()
+            .map(|request| request.target.len())
+            .max()
+            .unwrap_or(4)
+            .max(4);
+        let _ = writeln!(
+            output,
+            "{:<id_width$}  {:<from_width$}  {:<to_width$}  {:<state_width$}  ÉCHÉANCE  REPORT",
+            "ID", "DE", "VERS", "ÉTAT"
+        );
+        for request in requests {
+            let _ = writeln!(
+                output,
+                "{:<id_width$}  {:<from_width$}  {:<to_width$}  {:<state_width$}  {}  {}",
+                request.id,
+                request.sender,
+                request.target,
+                request.state,
+                request.deadline_at,
+                request_report(request)
+            );
+        }
+    } else {
+        let target_width = requests
+            .iter()
+            .map(|request| request.target.len())
+            .max()
+            .unwrap_or(11)
+            .max(11);
+        let _ = writeln!(
+            output,
+            "{:<id_width$}  {:<target_width$}  {:<state_width$}  ÉCHÉANCE  REPORT",
+            "ID", "DESTINATAIRE", "ÉTAT"
+        );
+        for request in requests {
+            let _ = writeln!(
+                output,
+                "{:<id_width$}  {:<target_width$}  {:<state_width$}  {}  {}",
+                request.id,
+                request.target,
+                request.state,
+                request.deadline_at,
+                request_report(request)
+            );
+        }
+    }
+    output
+}
+
+fn request_report(request: &RequestInfo) -> String {
+    request
+        .deferred_reminder_level
+        .map(|level| {
+            format!(
+                "palier {level} @ {}",
+                request.deferred_reminder_at.unwrap_or_default()
+            )
+        })
+        .unwrap_or_else(|| "—".to_string())
 }
 
 fn send_rename_to_daemon(current_name: &str, name: &str) -> Result<DaemonToWrapper, String> {
@@ -2387,6 +2481,76 @@ mod hook_tests {
             render_ledger(&entries),
             "Derniers 2 messages :\n  [2] bob → alice: corps riche $VAR\nintact\n  [1] alice → bob: premier\n"
         );
+    }
+
+    #[test]
+    fn requests_defaut_reste_participant_et_all_expose_de_vers() {
+        assert_eq!(
+            parse_requests_args(&[]).unwrap(),
+            RequestsOptions {
+                all: false,
+                json: false
+            }
+        );
+        assert_eq!(
+            parse_requests_args(&["--all".into(), "--json".into()]).unwrap(),
+            RequestsOptions {
+                all: true,
+                json: true
+            }
+        );
+        assert!(parse_requests_args(&["--global".into()]).is_err());
+
+        let requests = vec![
+            RequestInfo {
+                id: "req-a".to_string(),
+                sender: "maicie".to_string(),
+                target: "coderBridget".to_string(),
+                state: "open".to_string(),
+                created_at: 10,
+                deadline_at: 100,
+                cancel_reason: None,
+                deferred_reminder_level: None,
+                deferred_reminder_at: None,
+            },
+            RequestInfo {
+                id: "req-b".to_string(),
+                sender: "prospective".to_string(),
+                target: "reviewer2".to_string(),
+                state: "open".to_string(),
+                created_at: 11,
+                deadline_at: 200,
+                cancel_reason: None,
+                deferred_reminder_level: Some(1),
+                deferred_reminder_at: Some(50),
+            },
+        ];
+
+        let participant = render_requests(&requests, false);
+        let participant_header = participant.lines().next().unwrap();
+        assert!(participant_header.contains("DESTINATAIRE"), "{participant}");
+        assert!(
+            !participant_header
+                .split_whitespace()
+                .any(|cell| cell == "DE")
+        );
+        assert!(
+            !participant_header
+                .split_whitespace()
+                .any(|cell| cell == "VERS")
+        );
+        assert!(participant.contains("coderBridget"));
+        assert!(!participant.contains("maicie"));
+        assert!(!participant.contains("prospective"));
+
+        let global = render_requests(&requests, true);
+        let global_header = global.lines().next().unwrap();
+        assert!(global_header.split_whitespace().any(|cell| cell == "DE"));
+        assert!(global_header.split_whitespace().any(|cell| cell == "VERS"));
+        assert!(!global_header.contains("DESTINATAIRE"));
+        assert!(global.contains("maicie") && global.contains("coderBridget"));
+        assert!(global.contains("prospective") && global.contains("reviewer2"));
+        assert!(global.contains("100") && global.contains("open"));
     }
 
     /// Configuration réaliste : quatre hooks utilisateur déjà en place, dont
