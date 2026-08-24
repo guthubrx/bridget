@@ -810,6 +810,11 @@ fn runtime_from_thread_start(value: &Value) -> Option<(String, Option<String>)> 
 /// explicitement qu'aucun dépassement n'est attesté ; l'étiquette `available`
 /// est une projection de ce null, sans effet de routage ou de lancement.
 /// Une fenêtre absente du snapshot reste absente — jamais inventée.
+///
+/// Projection partagée du statut : `rateLimitReachedType` est un champ du
+/// *snapshot* (pas par fenêtre). La même valeur est donc recopiée sur primary
+/// et secondary — ce n'est pas un statut indépendant par fenêtre, c'est la
+/// projection honnête du schéma Codex.
 fn rate_limits_from_snapshot(
     snapshot: Option<&Value>,
 ) -> Vec<(String, String, Option<i64>, Option<u8>)> {
@@ -839,19 +844,15 @@ fn window_fact_from_codex(
     // `usedPercent` est le seul champ obligatoire de la fenêtre dans le
     // schéma app-server : sans lui, une mise à jour sparse ne prouve aucune
     // limite complète et reste donc inconnue à l'annuaire.
-    let used_percent = window.get("usedPercent")?.as_i64().and_then(|pct| {
-        if (0..=100).contains(&pct) {
-            Some(pct as u8)
-        } else {
-            None
-        }
-    })?;
+    // Hors 0..=100 : la fenêtre reste (mandat « % omis »), le pourcentage non.
+    let used_raw = window.get("usedPercent")?.as_i64()?;
+    let used_percent = ((0..=100).contains(&used_raw)).then_some(used_raw as u8);
     let minutes = window.get("windowDurationMins").and_then(Value::as_i64);
     let name = minutes
         .map(|minutes| format!("{key}/{minutes}m"))
         .unwrap_or_else(|| key.to_string());
     let resets_at = window.get("resetsAt").and_then(Value::as_i64);
-    Some((name, status.to_string(), resets_at, Some(used_percent)))
+    Some((name, status.to_string(), resets_at, used_percent))
 }
 
 fn write_notification(writer: &Writer, method: &str, params: Value) -> Result<(), TransportError> {
@@ -1212,6 +1213,28 @@ mod tests {
                 Some(61)
             )
         );
+    }
+
+    #[test]
+    fn percent_hors_bornes_conserve_la_fenetre_sans_pourcent() {
+        // Mandat : % omis, fenêtre conservée — pas d'effacement via `?`.
+        let facts = rate_limits_from_snapshot(Some(&json!({
+            "primary": {
+                "usedPercent": 250,
+                "windowDurationMins": 300,
+                "resetsAt": 1_787_572_200
+            },
+            "rateLimitReachedType": null
+        })));
+        assert_eq!(
+            facts.len(),
+            1,
+            "la fenêtre doit survivre à un % hors bornes"
+        );
+        assert_eq!(facts[0].0, "primary/300m");
+        assert_eq!(facts[0].1, "available");
+        assert_eq!(facts[0].2, Some(1_787_572_200));
+        assert_eq!(facts[0].3, None, "% omis, pas fenêtre effacée");
     }
 
     #[test]

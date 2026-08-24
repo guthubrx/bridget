@@ -2494,18 +2494,32 @@ fn format_one_rate_limit(limit: &bridget_transport::protocol::RateLimitFact) -> 
 /// Abrège un nom de fenêtre attesté sans jeter les inconnues.
 /// `five_hour`→`5h`, `seven_day`/`weekly`→`7d`, `primary/300m`→`5h` via
 /// la durée ; sinon raccourci du nom brut.
+///
+/// Les motifs connus ne matchent qu'en égalité exacte ou comme jeton entier
+/// (frontière hors `[A-Za-z0-9_]`). Un faux-ami du type `not_five_hour_custom`
+/// n'est donc pas abrégé en `5h`.
 fn abbreviate_window(name: &str) -> String {
     let lower = name.to_ascii_lowercase();
-    if lower.contains("five_hour") {
+    if window_token_matches(&lower, "five_hour") {
         return "5h".to_string();
     }
-    if lower.contains("seven_day") || lower.contains("weekly") {
+    if window_token_matches(&lower, "seven_day") || window_token_matches(&lower, "weekly") {
         return "7d".to_string();
     }
     if let Some(mins) = duration_mins_from_window(name) {
         return abbreviate_minutes(mins);
     }
     shorten_raw_window(name)
+}
+
+/// Vrai si `needle` est le nom entier ou un jeton délimité (pas un sous-mot).
+fn window_token_matches(haystack: &str, needle: &str) -> bool {
+    if haystack == needle {
+        return true;
+    }
+    haystack
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .any(|part| part == needle)
 }
 
 fn duration_mins_from_window(name: &str) -> Option<i64> {
@@ -3845,6 +3859,14 @@ mod idempotency_projection_tests {
         assert_eq!(abbreviate_window("primary/300m"), "5h");
         assert_eq!(abbreviate_window("secondary/10080m"), "7d");
         assert_eq!(abbreviate_window("exotic_quota_xyz"), "exoticquotax");
+        // Faux-ami : contains("five_hour") aurait menti ; frontière de jeton non.
+        assert_ne!(abbreviate_window("not_five_hour_custom"), "5h");
+        assert_eq!(
+            abbreviate_window("not_five_hour_custom"),
+            shorten_raw_window("not_five_hour_custom")
+        );
+        assert_eq!(abbreviate_window("five_hour"), "5h");
+        assert_eq!(abbreviate_window("x/five_hour"), "5h");
     }
 
     #[test]
