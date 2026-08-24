@@ -632,3 +632,26 @@ plus vite ; le coût net est un report, pas une perte.
   streaming, NI who. Il les enrichit sur les quatre points que le catalogue
   listait comme angles morts. L'arbitrage « un protocole unique contre deux
   ponts natifs » penche nettement du côté natif — mais reste à l'utilisateur.
+- **Côté Codex, le protocole natif va PLUS loin que celui de Claude —
+  inventaire fait sur le schéma généré.** Là où le flux Claude ÉMET des
+  événements qu'on subit, l'app-server permet aussi d'INTERROGER. Relevé sur
+  les 579 définitions : 17 types de limites, dont
+  `AccountRateLimitsUpdatedNotification` (avertissement proactif quand les
+  limites bougent), `GetAccountRateLimits` (on peut demander l'état AVANT de
+  confier une mission : cet agent a-t-il de quoi finir ?), `CreditsSnapshot`
+  et `RateLimitResetCredit` ; 11 types de consommation, dont
+  `ThreadTokenUsageUpdatedNotification` — la consommation PAR FIL mise à
+  jour en continu, c'est-à-dire le coût par mission que les métriques
+  d'efficience déclarent non-mesurable ; 15 types autour du modèle, dont
+  `ModelListResponse` (la liste des modèles réellement disponibles — la
+  panne `terra` de cette nuit aurait été détectée AVANT de lancer l'agent,
+  pas après sa mort) et surtout `ModelReroutedNotification`, qui signale
+  qu'un modèle a été remplacé par un autre. Ce dernier point répond
+  exactement au cas fable-reviewer, qui tournait en Opus 4.6 alors qu'on lui
+  demandait Opus 5, sans que rien ne le signale : la dégradation silencieuse
+  deviendrait détectable.
+  CE QUE ÇA CHANGE POUR LA CONDUITE D'ÉQUIPE, au-delà de l'observabilité :
+  on passe d'un référent qui CONSTATE les morts à un référent qui les
+  ANTICIPE — vérifier le quota avant d'affecter, connaître l'heure de
+  retour, voir la dégradation de modèle, mesurer le coût de chaque mission.
+  C'est un changement de nature, pas de confort.
