@@ -4,8 +4,9 @@ use maicie::domain::{
     EvaluationCloture, EvenementCoordination, FaitAppartenanceRepli, FaitReassignation,
     FraicheurCoordination, GenerationDelegation, IssueClotureEvaluee, LotReassignation,
     MAX_COORDINATION_EDGES, MAX_COORDINATION_NODES, ModeQualificationDependance,
-    PolitiqueReassignation, TransitionCoordinationActive, TypeDecisionCoordinationActive,
-    TypeFaitReassignation, reduire_coordination, reduire_reassignation,
+    PolitiqueReassignation, QualificationDependance, TransitionCoordinationActive,
+    TypeDecisionCoordinationActive, TypeFaitReassignation, reduire_coordination,
+    reduire_ouverture_dependance, reduire_reassignation,
 };
 use std::collections::BTreeSet;
 use uuid::Uuid;
@@ -210,6 +211,54 @@ fn borne_de_noeuds_accepte_cent_et_refuse_cent_un_independamment_des_aretes() {
             "graphe de coordination hors borne"
         ))
     );
+}
+
+#[test]
+fn ouverture_f28_qualifie_chaque_arete_selon_son_mode_epingle() {
+    let objectif_id = Uuid::new_v4();
+    let dependant_id = Uuid::new_v4();
+    let mut dependant = generation(objectif_id, dependant_id, "carol");
+    dependant.etat = EtatGenerationDelegation::Bloquee;
+    let hash_edge = DependanceDelegation {
+        objectif_id,
+        prerequis_id: Uuid::new_v4(),
+        dependant_id,
+        mode: ModeQualificationDependance::HashGreffe,
+    };
+    let strict_edge = DependanceDelegation {
+        objectif_id,
+        prerequis_id: Uuid::new_v4(),
+        dependant_id,
+        mode: ModeQualificationDependance::ClotureEvalueeExigee,
+    };
+    let mut qualifications = vec![
+        QualificationDependance {
+            dependance: hash_edge,
+            hash_greffe: true,
+            cloture_evaluee: false,
+        },
+        QualificationDependance {
+            dependance: strict_edge,
+            hash_greffe: true,
+            cloture_evaluee: false,
+        },
+    ];
+
+    assert_eq!(
+        reduire_ouverture_dependance(&dependant, &qualifications, "event-strict").unwrap(),
+        None
+    );
+    qualifications[1].cloture_evaluee = true;
+    let opened = reduire_ouverture_dependance(&dependant, &qualifications, "event-strict")
+        .unwrap()
+        .unwrap();
+    assert_eq!(opened.generation.etat, EtatGenerationDelegation::Ouverte);
+    assert_eq!(
+        opened.generation.trigger_event_id.as_deref(),
+        Some("event-strict")
+    );
+    assert_eq!(opened.decision.kind, TypeDecisionCoordinationActive::Ouvrir);
+    assert_eq!(opened.notification.recipient, "carol");
 }
 
 #[test]

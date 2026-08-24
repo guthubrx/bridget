@@ -15,6 +15,7 @@ pub const MAX_COORDINATION_NODES: usize = 100;
 pub const MAX_COORDINATION_EDGES: usize = 300;
 pub const MAX_FALLBACK_CANDIDATES: usize = 32;
 pub const MAX_REEMISSIONS: u8 = 8;
+pub const DEPENDENCY_POLICY_VERSION: u64 = 1;
 
 #[path = "guichet.rs"]
 pub mod guichet;
@@ -728,6 +729,116 @@ pub struct NotificationReassignation {
     pub generation: u64,
     pub recipient: String,
     pub kind: TypeNotificationReassignation,
+}
+
+/// Faits locaux durables nécessaires pour qualifier une arête F28. Le store
+/// construit cette vue depuis ses reçus et actes ; aucun état de transport
+/// terminal (`answered`, `cancelled`, `timed_out`) n'entre dans ce type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QualificationDependance {
+    pub dependance: DependanceDelegation,
+    pub hash_greffe: bool,
+    pub cloture_evaluee: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationOuvertureDelegation {
+    pub message_id: Uuid,
+    pub recipient: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReductionOuvertureDelegation {
+    pub decision: DecisionCoordinationActive,
+    pub generation: GenerationDelegation,
+    pub notification: NotificationOuvertureDelegation,
+}
+
+/// Ouvre un dépendant si toutes ses arêtes sont qualifiées selon leur mode
+/// épinglé. Le calcul ne consulte ni horloge, ni texte, ni transport.
+pub fn reduire_ouverture_dependance(
+    generation: &GenerationDelegation,
+    qualifications: &[QualificationDependance],
+    event_id: &str,
+) -> Result<Option<ReductionOuvertureDelegation>, DomainError> {
+    generation.verifier()?;
+    if event_id.trim().is_empty() || qualifications.is_empty() {
+        return Err(DomainError::DonneeInvalide(
+            "contexte d'ouverture F28 incomplet",
+        ));
+    }
+    if generation.etat == EtatGenerationDelegation::Ouverte {
+        return Ok(None);
+    }
+    if generation.etat != EtatGenerationDelegation::Bloquee {
+        return Err(DomainError::DonneeInvalide(
+            "délégation F28 hors état bloqué",
+        ));
+    }
+
+    let mut prerequis = BTreeSet::new();
+    for qualification in qualifications {
+        let edge = &qualification.dependance;
+        edge.verifier()?;
+        if edge.objectif_id != generation.objectif_id
+            || edge.dependant_id != generation.delegation_id
+            || !prerequis.insert(edge.prerequis_id)
+        {
+            return Err(DomainError::DonneeInvalide(
+                "graphe et génération F28 divergents",
+            ));
+        }
+        let qualifies = match edge.mode {
+            ModeQualificationDependance::HashGreffe => qualification.hash_greffe,
+            ModeQualificationDependance::ClotureEvalueeExigee => {
+                qualification.hash_greffe && qualification.cloture_evaluee
+            }
+        };
+        if !qualifies {
+            return Ok(None);
+        }
+    }
+
+    let mut opened = generation.clone();
+    opened.etat = EtatGenerationDelegation::Ouverte;
+    opened.trigger_event_id = Some(event_id.to_string());
+    opened.verifier()?;
+    let decision_id = identifiant_deterministe(
+        b"decision-ouverture-dependance-v1",
+        &[
+            opened.objectif_id.as_bytes(),
+            opened.delegation_id.as_bytes(),
+            &opened.generation.to_be_bytes(),
+            event_id.as_bytes(),
+        ],
+    );
+    let message_id = identifiant_deterministe(
+        b"notification-ouverture-dependance-v1",
+        &[
+            opened.delegation_id.as_bytes(),
+            &opened.generation.to_be_bytes(),
+            event_id.as_bytes(),
+        ],
+    );
+    let decision = DecisionCoordinationActive {
+        decision_id,
+        objectif_id: opened.objectif_id,
+        delegation_id: opened.delegation_id,
+        generation: opened.generation,
+        event_id: event_id.to_string(),
+        policy_version: DEPENDENCY_POLICY_VERSION,
+        kind: TypeDecisionCoordinationActive::Ouvrir,
+        motif: "prerequis_qualifies".to_string(),
+    };
+    decision.verifier()?;
+    Ok(Some(ReductionOuvertureDelegation {
+        decision,
+        generation: opened,
+        notification: NotificationOuvertureDelegation {
+            message_id,
+            recipient: generation.participant_id.clone(),
+        },
+    }))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

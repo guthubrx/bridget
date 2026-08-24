@@ -13,17 +13,19 @@ use crate::domain::guichet::{
 };
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, AttenteNotification, ClasseDuree,
-    DecisionCoordination, DecisionCoordinationActive, DefinitionCoordination, Delegation,
-    DependanceDelegation, DomainError, EffetDemandeSuivie, EntreeReductionCoordination,
-    EpisodeRelance, EtatActivationOutbox, EtatDecision, EtatDelegation, EtatEpisodeRelance,
-    EtatGenerationDelegation, EtatNotificationOutbox, EtatObjectif, EtatOutboxDelegation,
-    EtatRequeteGuichet, FraicheurCoordination, GenerationDelegation, IssueGreffe, LienArbitrage,
-    LigneeDelegation, LotReassignation, MotifRefusGreffe, NotificationOutbox,
-    NotificationReassignation, ObjectifCoordonne, OperationGuichet, PolitiqueReassignation,
-    ReceptionGreffe, RecuCorrelation, ReductionCoordinationActive, ReductionReassignation,
-    TransitionCoordinationActive, TypeDecision, TypeEffetDemandeSuivie, TypeEvenementAttendu,
-    TypeFaitReassignation, TypeNotificationReassignation, identifiant_deterministe,
-    reduire_coordination, reduire_reassignation,
+    DEPENDENCY_POLICY_VERSION, DecisionCoordination, DecisionCoordinationActive,
+    DefinitionCoordination, Delegation, DependanceDelegation, DomainError, EffetDemandeSuivie,
+    EntreeReductionCoordination, EpisodeRelance, EtatActivationOutbox, EtatDecision,
+    EtatDelegation, EtatEpisodeRelance, EtatGenerationDelegation, EtatNotificationOutbox,
+    EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, FraicheurCoordination,
+    GenerationDelegation, IssueGreffe, LienArbitrage, LigneeDelegation, LotReassignation,
+    MotifRefusGreffe, NotificationOutbox, NotificationReassignation, ObjectifCoordonne,
+    OperationGuichet, PolitiqueReassignation, QualificationDependance, ReceptionGreffe,
+    RecuCorrelation, ReductionCoordinationActive, ReductionOuvertureDelegation,
+    ReductionReassignation, TransitionCoordinationActive, TypeDecision, TypeEffetDemandeSuivie,
+    TypeEvenementAttendu, TypeFaitReassignation, TypeNotificationReassignation,
+    identifiant_deterministe, reduire_coordination, reduire_ouverture_dependance,
+    reduire_reassignation,
 };
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
@@ -253,6 +255,9 @@ pub enum GuichetLifecycleResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuichetCommitPhase {
     AfterDecisionInsert,
+    AfterDependentDecision,
+    AfterDependentTransition,
+    AfterDependentOutbox,
     BeforeCommit,
     AfterCommit,
 }
@@ -264,8 +269,18 @@ pub enum CoordinationCommitPhase {
     AfterDecisionInsert,
     AfterTransition,
     AfterOutboxes,
+    AfterDependentDecision,
+    AfterDependentTransition,
+    AfterDependentOutbox,
     BeforeCommit,
     AfterCommit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DependencyOpeningCommitPhase {
+    Decision,
+    Generation,
+    Notification,
 }
 
 /// Frontières de la transaction F29. Elles permettent de prouver qu'aucune
@@ -402,6 +417,27 @@ impl MaicieStore {
             {
                 return Err(StoreError::Invalid(
                     "dépendance liée à une délégation étrangère",
+                ));
+            }
+            if delegations[&edge.dependant_id].etat != EtatDelegation::Creee {
+                return Err(StoreError::Invalid(
+                    "dépendance déclarée après activation du dépendant",
+                ));
+            }
+            let prerequisite_already_delivered: bool = tx
+                .query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM guichet_receptions
+                         WHERE operation='delivery_report' AND outcome='accepted'
+                           AND objective_id=?1 AND delegation_id=?2
+                     )",
+                    params![edge.objectif_id.to_string(), edge.prerequis_id.to_string(),],
+                    |row| row.get(0),
+                )
+                .map_err(StoreError::Sql)?;
+            if prerequisite_already_delivered {
+                return Err(StoreError::Invalid(
+                    "dépendance déclarée après fait qualifiant",
                 ));
             }
         }
@@ -568,6 +604,27 @@ impl MaicieStore {
         }
         observer(CoordinationCommitPhase::AfterEventInsert)?;
         persist_coordination_effects(&tx, &generation, &reduction, &decision_bytes, &mut observer)?;
+        if let EntreeReductionCoordination::ClotureEvaluee(evaluation) = input {
+            open_ready_dependents(
+                &tx,
+                evaluation.delegation_id,
+                &evaluation.event_id,
+                evaluation.evaluated_at,
+                |phase| {
+                    observer(match phase {
+                        DependencyOpeningCommitPhase::Decision => {
+                            CoordinationCommitPhase::AfterDependentDecision
+                        }
+                        DependencyOpeningCommitPhase::Generation => {
+                            CoordinationCommitPhase::AfterDependentTransition
+                        }
+                        DependencyOpeningCommitPhase::Notification => {
+                            CoordinationCommitPhase::AfterDependentOutbox
+                        }
+                    })
+                },
+            )?;
+        }
         observer(CoordinationCommitPhase::BeforeCommit)?;
         tx.commit().map_err(StoreError::Sql)?;
         observer(CoordinationCommitPhase::AfterCommit)?;
@@ -1172,6 +1229,23 @@ impl MaicieStore {
             &report.in_reply_to,
             response_message_id,
         )?;
+        let opening_event_id = format!(
+            "delivery-report:{}:{}",
+            canonical.issuer_scope, canonical.request_id
+        );
+        open_ready_dependents(&tx, report.delegation_id, &opening_event_id, now, |phase| {
+            observer(match phase {
+                DependencyOpeningCommitPhase::Decision => {
+                    GuichetCommitPhase::AfterDependentDecision
+                }
+                DependencyOpeningCommitPhase::Generation => {
+                    GuichetCommitPhase::AfterDependentTransition
+                }
+                DependencyOpeningCommitPhase::Notification => {
+                    GuichetCommitPhase::AfterDependentOutbox
+                }
+            })
+        })?;
         let reception =
             load_guichet_reception(&tx, &canonical.issuer_scope, &canonical.request_id)?.ok_or(
                 StoreError::Corrupt("reçu de greffe introuvable après insertion"),
@@ -4234,6 +4308,249 @@ fn insert_active_coordination_decision(
         return Err(StoreError::Conflict("décision active non enregistrée"));
     }
     Ok(())
+}
+
+fn open_ready_dependents(
+    tx: &Transaction<'_>,
+    prerequisite_id: Uuid,
+    event_id: &str,
+    issued_at: i64,
+    mut observer: impl FnMut(DependencyOpeningCommitPhase) -> Result<(), StoreError>,
+) -> Result<(), StoreError> {
+    if event_id.trim().is_empty() || issued_at <= 0 {
+        return Err(StoreError::Invalid("fait d'ouverture F28 incomplet"));
+    }
+    let mut statement = tx
+        .prepare(
+            "SELECT dependent_id FROM delegation_dependencies
+             WHERE prerequisite_id=?1 ORDER BY dependent_id",
+        )
+        .map_err(StoreError::Sql)?;
+    let dependants = statement
+        .query_map([prerequisite_id.to_string()], |row| row.get::<_, String>(0))
+        .map_err(StoreError::Sql)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::Sql)?;
+    drop(statement);
+
+    for dependant in dependants {
+        let dependant_id = parse_uuid(&dependant)?;
+        let generation = load_active_generation(tx, dependant_id)?;
+        let qualifications = load_dependency_qualifications(tx, &generation)?;
+        let Some(opening) = reduire_ouverture_dependance(&generation, &qualifications, event_id)
+            .map_err(StoreError::Domain)?
+        else {
+            continue;
+        };
+        persist_dependent_opening(tx, &generation, &opening, issued_at, &mut observer)?;
+    }
+    Ok(())
+}
+
+fn load_active_generation(
+    tx: &Transaction<'_>,
+    delegation_id: Uuid,
+) -> Result<GenerationDelegation, StoreError> {
+    let payload: Vec<u8> = tx
+        .query_row(
+            "SELECT g.payload_json
+             FROM delegation_lineages l
+             JOIN delegation_generations g
+               ON g.delegation_id=l.delegation_id AND g.generation=l.active_generation
+             WHERE l.delegation_id=?1",
+            [delegation_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::Sql)?;
+    let generation: GenerationDelegation =
+        serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+    generation.verifier().map_err(StoreError::Domain)?;
+    if generation.delegation_id != delegation_id {
+        return Err(StoreError::Corrupt(
+            "génération active et index F28 divergents",
+        ));
+    }
+    Ok(generation)
+}
+
+fn load_dependency_qualifications(
+    tx: &Transaction<'_>,
+    dependent: &GenerationDelegation,
+) -> Result<Vec<QualificationDependance>, StoreError> {
+    let mut statement = tx
+        .prepare(
+            "SELECT objective_id,prerequisite_id,qualification_mode,payload_json
+             FROM delegation_dependencies WHERE dependent_id=?1 ORDER BY prerequisite_id",
+        )
+        .map_err(StoreError::Sql)?;
+    let rows = statement
+        .query_map([dependent.delegation_id.to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+            ))
+        })
+        .map_err(StoreError::Sql)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::Sql)?;
+    drop(statement);
+    let mut qualifications = Vec::with_capacity(rows.len());
+    for (objective_id, prerequisite_id, mode, payload) in rows {
+        let edge: DependanceDelegation =
+            serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        if edge.objectif_id.to_string() != objective_id
+            || edge.prerequis_id.to_string() != prerequisite_id
+            || edge.dependant_id != dependent.delegation_id
+            || dependency_mode_name(edge.mode) != mode
+        {
+            return Err(StoreError::Corrupt(
+                "dépendance F28 et index SQLite divergents",
+            ));
+        }
+        let (hash_greffe, cloture_evaluee) = dependency_qualification(tx, &edge)?;
+        qualifications.push(QualificationDependance {
+            dependance: edge,
+            hash_greffe,
+            cloture_evaluee,
+        });
+    }
+    Ok(qualifications)
+}
+
+fn dependency_qualification(
+    tx: &Transaction<'_>,
+    edge: &DependanceDelegation,
+) -> Result<(bool, bool), StoreError> {
+    let (active_generation, prerequisite_state): (i64, String) = tx
+        .query_row(
+            "SELECT l.active_generation,g.state
+             FROM delegation_lineages l
+             JOIN delegation_generations g
+               ON g.delegation_id=l.delegation_id AND g.generation=l.active_generation
+             WHERE l.delegation_id=?1",
+            [edge.prerequis_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(StoreError::Sql)?;
+    if prerequisite_state != "ouverte" {
+        return Ok((false, false));
+    }
+    let original_request_id: Option<String> = tx
+        .query_row(
+            "SELECT message_id FROM delegation_outbox WHERE delegation_id=?1",
+            [edge.prerequis_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    let mut statement = tx
+        .prepare(
+            "SELECT delivery_hash,in_reply_to FROM guichet_receptions
+             WHERE operation='delivery_report' AND outcome='accepted'
+               AND objective_id=?1 AND delegation_id=?2
+             ORDER BY request_id",
+        )
+        .map_err(StoreError::Sql)?;
+    let reports = statement
+        .query_map(
+            params![edge.objectif_id.to_string(), edge.prerequis_id.to_string(),],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )
+        .map_err(StoreError::Sql)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::Sql)?;
+    drop(statement);
+
+    let mut hash_greffe = false;
+    let mut cloture_evaluee = false;
+    for (delivery_hash, request_id) in reports {
+        let (Some(delivery_hash), Some(request_id)) = (delivery_hash, request_id) else {
+            return Err(StoreError::Corrupt("rapport F28 incomplet"));
+        };
+        let episode_generation: Option<i64> = tx
+            .query_row(
+                "SELECT generation FROM reminder_episodes WHERE request_id=?1",
+                [&request_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let request_matches_generation = episode_generation == Some(active_generation)
+            || (active_generation == 1 && original_request_id.as_deref() == Some(&request_id));
+        if !request_matches_generation {
+            continue;
+        }
+        hash_greffe = true;
+        let evaluated: bool = tx
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM evaluated_closure_acts
+                     WHERE objective_id=?1 AND delegation_id=?2
+                       AND generation=?3 AND delivery_hash=?4
+                 )",
+                params![
+                    edge.objectif_id.to_string(),
+                    edge.prerequis_id.to_string(),
+                    active_generation,
+                    delivery_hash,
+                ],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::Sql)?;
+        cloture_evaluee |= evaluated;
+    }
+    Ok((hash_greffe, cloture_evaluee))
+}
+
+fn persist_dependent_opening(
+    tx: &Transaction<'_>,
+    current: &GenerationDelegation,
+    opening: &ReductionOuvertureDelegation,
+    issued_at: i64,
+    observer: &mut impl FnMut(DependencyOpeningCommitPhase) -> Result<(), StoreError>,
+) -> Result<(), StoreError> {
+    let decision_bytes = serde_json::to_vec(&opening.decision).map_err(StoreError::Json)?;
+    insert_active_coordination_decision(tx, &opening.decision, &decision_bytes)?;
+    observer(DependencyOpeningCommitPhase::Decision)?;
+    apply_coordination_transition(
+        tx,
+        current,
+        &TransitionCoordinationActive::Generation(opening.generation.clone()),
+    )?;
+    observer(DependencyOpeningCommitPhase::Generation)?;
+    let message = PublicMessage {
+        id: opening.notification.message_id.to_string(),
+        from: crate::MAICIE_IDENTITY.to_string(),
+        to: opening.notification.recipient.clone(),
+        body: format!("Délégation {} ouverte", opening.generation.delegation_id),
+        reply: false,
+        hops: 4,
+        reply_timeout: None,
+        deadline_at: None,
+        in_reply_to: None,
+    };
+    let outbox = NotificationOutbox {
+        message_id: opening.notification.message_id,
+        idempotency_key: format!("notification:{}", opening.notification.message_id),
+        issued_at,
+        objectif_id: opening.generation.objectif_id,
+        delegation_id: Some(opening.generation.delegation_id),
+        generation: Some(opening.generation.generation),
+        event_id: opening.decision.event_id.clone(),
+        policy_version: DEPENDENCY_POLICY_VERSION,
+        recipient: opening.notification.recipient.clone(),
+        message_bytes: serde_json::to_vec(&message).map_err(StoreError::Json)?,
+        etat: EtatNotificationOutbox::Prepared,
+    };
+    insert_notification_outbox(tx, &outbox)?;
+    observer(DependencyOpeningCommitPhase::Notification)
 }
 
 fn persist_coordination_effects(

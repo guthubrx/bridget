@@ -1,5 +1,6 @@
 use bridget_transport::protocol::WrapperToDaemon;
-use maicie::bridget_client::PublicMessage;
+use maicie::bridget_client::{GuichetClaim, PublicMessage};
+use maicie::domain::guichet::{RequeteGuichet, parse_claim};
 use maicie::domain::{
     AttenteNotification, ClasseDuree, DecisionCoordination, DefinitionCoordination, Delegation,
     DependanceDelegation, EntreeReductionCoordination, EtatDecision, EtatGenerationDelegation,
@@ -11,8 +12,8 @@ use maicie::domain::{
 };
 use maicie::outbox::{PreparedDelegation, stable_body_hash};
 use maicie::store::{
-    CoordinationCommitPhase, MaicieStore, ObjectiveClosureCommitPhase, ReassignmentCommitPhase,
-    StoreError,
+    CoordinationCommitPhase, GuichetCommitPhase, MaicieStore, ObjectiveClosureCommitPhase,
+    ReassignmentCommitPhase, StoreError,
 };
 use rusqlite::{Connection, ErrorCode, params};
 use std::fs;
@@ -393,6 +394,440 @@ fn snapshot_epingle_politique_lignee_et_index_inverse_sans_relire_la_config() {
         )
         .unwrap();
     assert_eq!(index_count, 1);
+}
+
+#[test]
+fn losange_ouvre_et_notifie_une_fois_apres_le_dernier_prerequis() {
+    let fixture = Fixture::new("f28-losange");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let mut objectif = ObjectifCoordonne::nouveau("losange", ModeObjectif::Delegue, 1).unwrap();
+    objectif
+        .transition(EtatObjectif::EnCoordination, 2)
+        .unwrap();
+    let a = create_delegation(&mut store, &objectif, "alice");
+    let b = create_delegation(&mut store, &objectif, "bob");
+    let dependant = create_delegation(&mut store, &objectif, "carol");
+    let request_a = initial_request_id(&store, a);
+    let request_b = initial_request_id(&store, b);
+    let snapshot = definition(
+        objectif.id,
+        a,
+        vec![
+            edge(objectif.id, a, dependant),
+            edge(objectif.id, b, dependant),
+        ],
+        "bob",
+    );
+    store.register_coordination_snapshot(&snapshot).unwrap();
+
+    graft_delivery(
+        &mut store,
+        DeliveryFixture {
+            objective_id: objectif.id,
+            delegation_id: a,
+            participant: "alice",
+            in_reply_to: &request_a,
+            request_id: "f28-report-a",
+            response_id: "f28-response-a",
+            hash: &"aa".repeat(32),
+            now: 1_787_500_100,
+        },
+    );
+    let after_first = store.coordination_snapshot(objectif.id).unwrap().unwrap();
+    assert_eq!(
+        active_state(&after_first, dependant),
+        EtatGenerationDelegation::Bloquee
+    );
+    assert!(store.pending_notification_outboxes().unwrap().is_empty());
+
+    let second = DeliveryFixture {
+        objective_id: objectif.id,
+        delegation_id: b,
+        participant: "bob",
+        in_reply_to: &request_b,
+        request_id: "f28-report-b",
+        response_id: "f28-response-b",
+        hash: &"bb".repeat(32),
+        now: 1_787_500_101,
+    };
+    graft_delivery(&mut store, second);
+    graft_delivery(&mut store, second);
+    let opened = store.coordination_snapshot(objectif.id).unwrap().unwrap();
+    assert_eq!(
+        active_state(&opened, dependant),
+        EtatGenerationDelegation::Ouverte
+    );
+    let notifications = store.pending_notification_outboxes().unwrap();
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].recipient, "carol");
+    drop(store);
+    let connection = Connection::open(&fixture.database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM active_coordination_decisions WHERE kind='ouvrir'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn chaine_f28_ouvre_les_trois_missions_dans_l_ordre_declare() {
+    let fixture = Fixture::new("f28-chaine");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let mut objectif = ObjectifCoordonne::nouveau("chaîne", ModeObjectif::Delegue, 1).unwrap();
+    objectif
+        .transition(EtatObjectif::EnCoordination, 2)
+        .unwrap();
+    let a = create_delegation(&mut store, &objectif, "alice");
+    let b = create_delegation(&mut store, &objectif, "bob");
+    let c = create_delegation(&mut store, &objectif, "carol");
+    let request_a = initial_request_id(&store, a);
+    let request_b = initial_request_id(&store, b);
+    store
+        .register_coordination_snapshot(&definition(
+            objectif.id,
+            a,
+            vec![edge(objectif.id, a, b), edge(objectif.id, b, c)],
+            "bob",
+        ))
+        .unwrap();
+
+    graft_delivery(
+        &mut store,
+        DeliveryFixture {
+            objective_id: objectif.id,
+            delegation_id: a,
+            participant: "alice",
+            in_reply_to: &request_a,
+            request_id: "f28-chain-a",
+            response_id: "f28-chain-response-a",
+            hash: &"78".repeat(32),
+            now: 1_787_500_100,
+        },
+    );
+    let first = store.coordination_snapshot(objectif.id).unwrap().unwrap();
+    assert_eq!(active_state(&first, b), EtatGenerationDelegation::Ouverte);
+    assert_eq!(active_state(&first, c), EtatGenerationDelegation::Bloquee);
+    assert_eq!(store.pending_notification_outboxes().unwrap().len(), 1);
+
+    graft_delivery(
+        &mut store,
+        DeliveryFixture {
+            objective_id: objectif.id,
+            delegation_id: b,
+            participant: "bob",
+            in_reply_to: &request_b,
+            request_id: "f28-chain-b",
+            response_id: "f28-chain-response-b",
+            hash: &"9a".repeat(32),
+            now: 1_787_500_101,
+        },
+    );
+    let second = store.coordination_snapshot(objectif.id).unwrap().unwrap();
+    assert_eq!(active_state(&second, b), EtatGenerationDelegation::Ouverte);
+    assert_eq!(active_state(&second, c), EtatGenerationDelegation::Ouverte);
+    let notifications = store.pending_notification_outboxes().unwrap();
+    assert_eq!(notifications.len(), 2);
+    let mut recipients = notifications
+        .iter()
+        .map(|notification| notification.recipient.as_str())
+        .collect::<Vec<_>>();
+    recipients.sort_unstable();
+    assert_eq!(recipients, vec!["bob", "carol"]);
+}
+
+#[test]
+fn deux_derniers_prerequis_concurrents_ouvrent_un_seul_dependant() {
+    let fixture = Fixture::new("f28-losange-concurrent");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let mut objectif =
+        ObjectifCoordonne::nouveau("losange concurrent", ModeObjectif::Delegue, 1).unwrap();
+    objectif
+        .transition(EtatObjectif::EnCoordination, 2)
+        .unwrap();
+    let a = create_delegation(&mut store, &objectif, "alice");
+    let b = create_delegation(&mut store, &objectif, "bob");
+    let dependant = create_delegation(&mut store, &objectif, "carol");
+    let request_a = initial_request_id(&store, a);
+    let request_b = initial_request_id(&store, b);
+    store
+        .register_coordination_snapshot(&definition(
+            objectif.id,
+            a,
+            vec![
+                edge(objectif.id, a, dependant),
+                edge(objectif.id, b, dependant),
+            ],
+            "bob",
+        ))
+        .unwrap();
+    drop(store);
+
+    let claim_a = delivery_claim(DeliveryFixture {
+        objective_id: objectif.id,
+        delegation_id: a,
+        participant: "alice",
+        in_reply_to: &request_a,
+        request_id: "f28-concurrent-a",
+        response_id: "f28-concurrent-response-a",
+        hash: &"34".repeat(32),
+        now: 1_787_500_100,
+    });
+    let claim_b = delivery_claim(DeliveryFixture {
+        objective_id: objectif.id,
+        delegation_id: b,
+        participant: "bob",
+        in_reply_to: &request_b,
+        request_id: "f28-concurrent-b",
+        response_id: "f28-concurrent-response-b",
+        hash: &"56".repeat(32),
+        now: 1_787_500_101,
+    });
+    let database_a = fixture.database.clone();
+    let (locked_tx, locked_rx) = mpsc::sync_channel(1);
+    let (release_tx, release_rx) = mpsc::sync_channel(1);
+    let first = thread::spawn(move || {
+        let canonical = parse_claim(&claim_a).unwrap();
+        let RequeteGuichet::DeliveryReport(report) = &canonical.request else {
+            panic!("rapport attendu")
+        };
+        let mut store = MaicieStore::open(database_a).unwrap();
+        store.graft_delivery_report_observed(
+            &claim_a,
+            &canonical,
+            report,
+            "f28-concurrent-response-a",
+            1_787_500_100,
+            |phase| {
+                if phase == GuichetCommitPhase::AfterDecisionInsert {
+                    locked_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+                }
+                Ok(())
+            },
+        )
+    });
+    locked_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+
+    let database_b = fixture.database.clone();
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let second = thread::spawn(move || {
+        let canonical = parse_claim(&claim_b).unwrap();
+        let RequeteGuichet::DeliveryReport(report) = &canonical.request else {
+            panic!("rapport attendu")
+        };
+        let mut store = MaicieStore::open(database_b).unwrap();
+        result_tx
+            .send(store.graft_delivery_report(
+                &claim_b,
+                &canonical,
+                report,
+                "f28-concurrent-response-b",
+                1_787_500_101,
+            ))
+            .unwrap();
+    });
+    assert!(result_rx.recv_timeout(Duration::from_millis(100)).is_err());
+    release_tx.send(()).unwrap();
+    first.join().unwrap().unwrap();
+    result_rx
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap()
+        .unwrap();
+    second.join().unwrap();
+
+    let store = MaicieStore::open(&fixture.database).unwrap();
+    let snapshot = store.coordination_snapshot(objectif.id).unwrap().unwrap();
+    assert_eq!(
+        active_state(&snapshot, dependant),
+        EtatGenerationDelegation::Ouverte
+    );
+    assert_eq!(store.pending_notification_outboxes().unwrap().len(), 1);
+    drop(store);
+    let connection = Connection::open(&fixture.database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM active_coordination_decisions WHERE kind='ouvrir'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn mode_strict_attend_l_acte_evalue_portant_le_hash_greffe() {
+    let fixture = Fixture::new("f28-strict");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let mut objectif = ObjectifCoordonne::nouveau("strict", ModeObjectif::Delegue, 1).unwrap();
+    objectif
+        .transition(EtatObjectif::EnCoordination, 2)
+        .unwrap();
+    let prerequis = create_delegation(&mut store, &objectif, "alice");
+    let dependant = create_delegation(&mut store, &objectif, "bob");
+    let request_id = initial_request_id(&store, prerequis);
+    let mut strict = edge(objectif.id, prerequis, dependant);
+    strict.mode = ModeQualificationDependance::ClotureEvalueeExigee;
+    store
+        .register_coordination_snapshot(&definition(objectif.id, prerequis, vec![strict], "bob"))
+        .unwrap();
+    let delivery_hash = "cd".repeat(32);
+    graft_delivery(
+        &mut store,
+        DeliveryFixture {
+            objective_id: objectif.id,
+            delegation_id: prerequis,
+            participant: "alice",
+            in_reply_to: &request_id,
+            request_id: "f28-report-strict",
+            response_id: "f28-response-strict",
+            hash: &delivery_hash,
+            now: 1_787_500_100,
+        },
+    );
+    let hash_only = store.coordination_snapshot(objectif.id).unwrap().unwrap();
+    assert_eq!(
+        active_state(&hash_only, dependant),
+        EtatGenerationDelegation::Bloquee
+    );
+    assert!(store.pending_notification_outboxes().unwrap().is_empty());
+
+    store
+        .apply_coordination_reduction(&EntreeReductionCoordination::ClotureEvaluee(
+            EvaluationCloture {
+                event_id: "f28-evaluation-strict".to_string(),
+                objectif_id: objectif.id,
+                delegation_id: prerequis,
+                generation: 1,
+                delivery_hash,
+                issue: IssueClotureEvaluee::LivraisonValidee,
+                evaluated_at: 1_787_500_101,
+            },
+        ))
+        .unwrap();
+    let evaluated = store.coordination_snapshot(objectif.id).unwrap().unwrap();
+    assert_eq!(
+        active_state(&evaluated, dependant),
+        EtatGenerationDelegation::Ouverte
+    );
+    assert_eq!(store.pending_notification_outboxes().unwrap().len(), 1);
+}
+
+#[test]
+fn declaration_f28_apres_un_fait_qualifiant_est_refusee_sans_snapshot() {
+    let fixture = Fixture::new("f28-retroactive");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let mut objectif = ObjectifCoordonne::nouveau("rétroactif", ModeObjectif::Delegue, 1).unwrap();
+    objectif
+        .transition(EtatObjectif::EnCoordination, 2)
+        .unwrap();
+    let prerequis = create_delegation(&mut store, &objectif, "alice");
+    let dependant = create_delegation(&mut store, &objectif, "bob");
+    let request_id = initial_request_id(&store, prerequis);
+    graft_delivery(
+        &mut store,
+        DeliveryFixture {
+            objective_id: objectif.id,
+            delegation_id: prerequis,
+            participant: "alice",
+            in_reply_to: &request_id,
+            request_id: "f28-report-before-definition",
+            response_id: "f28-response-before-definition",
+            hash: &"ef".repeat(32),
+            now: 1_787_500_100,
+        },
+    );
+    let retroactive = definition(
+        objectif.id,
+        prerequis,
+        vec![edge(objectif.id, prerequis, dependant)],
+        "bob",
+    );
+    assert!(matches!(
+        store.register_coordination_snapshot(&retroactive),
+        Err(StoreError::Invalid(
+            "dépendance déclarée après fait qualifiant"
+        ))
+    ));
+    assert!(store.coordination_snapshot(objectif.id).unwrap().is_none());
+}
+
+#[test]
+fn fautes_f28_annulent_ensemble_recu_decision_ouverture_et_notification() {
+    for phase in [
+        GuichetCommitPhase::AfterDependentDecision,
+        GuichetCommitPhase::AfterDependentTransition,
+        GuichetCommitPhase::AfterDependentOutbox,
+    ] {
+        let fixture = Fixture::new(&format!("f28-rollback-{phase:?}"));
+        let mut store = MaicieStore::open(&fixture.database).unwrap();
+        let mut objectif =
+            ObjectifCoordonne::nouveau("rollback", ModeObjectif::Delegue, 1).unwrap();
+        objectif
+            .transition(EtatObjectif::EnCoordination, 2)
+            .unwrap();
+        let prerequis = create_delegation(&mut store, &objectif, "alice");
+        let dependant = create_delegation(&mut store, &objectif, "bob");
+        let request_id = initial_request_id(&store, prerequis);
+        store
+            .register_coordination_snapshot(&definition(
+                objectif.id,
+                prerequis,
+                vec![edge(objectif.id, prerequis, dependant)],
+                "bob",
+            ))
+            .unwrap();
+        let claim = delivery_claim(DeliveryFixture {
+            objective_id: objectif.id,
+            delegation_id: prerequis,
+            participant: "alice",
+            in_reply_to: &request_id,
+            request_id: "f28-report-rollback",
+            response_id: "f28-response-rollback",
+            hash: &"12".repeat(32),
+            now: 1_787_500_100,
+        });
+        let canonical = parse_claim(&claim).unwrap();
+        let RequeteGuichet::DeliveryReport(report) = &canonical.request else {
+            panic!("rapport attendu")
+        };
+        let failed = store.graft_delivery_report_observed(
+            &claim,
+            &canonical,
+            report,
+            "f28-response-rollback",
+            1_787_500_100,
+            |observed| {
+                if observed == phase {
+                    return Err(StoreError::Conflict("faute F28 injectée"));
+                }
+                Ok(())
+            },
+        );
+        assert!(matches!(
+            failed,
+            Err(StoreError::Conflict("faute F28 injectée"))
+        ));
+        drop(store);
+        let connection = Connection::open(&fixture.database).unwrap();
+        assert_eq!(table_count(&connection, "guichet_receptions"), 0);
+        assert_eq!(table_count(&connection, "active_coordination_decisions"), 0);
+        assert_eq!(table_count(&connection, "notification_outbox"), 0);
+        let state: String = connection
+            .query_row(
+                "SELECT state FROM delegation_generations WHERE delegation_id=?1",
+                [dependant.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "bloquee");
+    }
 }
 
 #[test]
@@ -1137,6 +1572,66 @@ fn reassignment_lot(
         next_deadline_at: 1_787_500_200,
         faits,
     }
+}
+
+#[derive(Clone, Copy)]
+struct DeliveryFixture<'a> {
+    objective_id: Uuid,
+    delegation_id: Uuid,
+    participant: &'a str,
+    in_reply_to: &'a str,
+    request_id: &'a str,
+    response_id: &'a str,
+    hash: &'a str,
+    now: i64,
+}
+
+fn delivery_claim(fixture: DeliveryFixture<'_>) -> GuichetClaim {
+    let issuer_scope = "scope-f28-0123456789abcdef0123456789abcdef";
+    let canonical_request = format!(
+        "{{\"type\":\"service_request\",\"v\":1,\"issuer_scope\":\"{issuer_scope}\",\"request_id\":\"{}\",\"issued_at\":{},\"from\":\"{}\",\"to\":\"maicie\",\"operation\":\"delivery_report\",\"payload\":{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\",\"delivery_hash\":\"{}\",\"in_reply_to\":\"{}\"}}}}",
+        fixture.request_id,
+        fixture.now,
+        fixture.participant,
+        fixture.objective_id,
+        fixture.delegation_id,
+        fixture.hash,
+        fixture.in_reply_to,
+    )
+    .into_bytes();
+    GuichetClaim {
+        issuer_scope: issuer_scope.to_string(),
+        request_id: fixture.request_id.to_string(),
+        canonical_request,
+        claimed_at: fixture.now,
+        claim_generation: 1,
+        claim_token: format!("claim-f28-{}-0123456789abcdef", fixture.request_id),
+        claim_lease_expires_at: fixture.now + 100,
+        expires_at: fixture.now + 200,
+    }
+}
+
+fn graft_delivery(store: &mut MaicieStore, fixture: DeliveryFixture<'_>) {
+    let claim = delivery_claim(fixture);
+    let canonical = parse_claim(&claim).unwrap();
+    let RequeteGuichet::DeliveryReport(report) = &canonical.request else {
+        panic!("rapport attendu")
+    };
+    store
+        .graft_delivery_report(&claim, &canonical, report, fixture.response_id, fixture.now)
+        .unwrap();
+}
+
+fn active_state(
+    snapshot: &maicie::store::StoredCoordinationSnapshot,
+    delegation_id: Uuid,
+) -> EtatGenerationDelegation {
+    snapshot
+        .generations
+        .iter()
+        .find(|generation| generation.delegation_id == delegation_id)
+        .unwrap()
+        .etat
 }
 
 struct Fixture {
