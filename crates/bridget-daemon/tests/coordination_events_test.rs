@@ -24,6 +24,34 @@ fn socket(home: &Path) -> PathBuf {
     home.join(".cache/bridget/bridget.sock")
 }
 
+fn wait_for_coordination_schema(home: &Path) {
+    let database = home.join(".cache/bridget/bridget.db");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let schema_ready = rusqlite::Connection::open(&database)
+            .and_then(|connection| {
+                connection.query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM sqlite_master
+                         WHERE type = 'table'
+                           AND name = 'guichet_coordination_stream_state'
+                     )",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )
+            })
+            .unwrap_or(false);
+        if schema_ready {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "schéma de coordination du daemon non initialisé"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn start_daemon(home: &Path) -> Child {
     std::fs::create_dir_all(home).unwrap();
     let child = Command::new(env!("CARGO_BIN_EXE_bridget"))
@@ -39,6 +67,9 @@ fn start_daemon(home: &Path) -> Child {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+    // `listen(2)` précède l'ouverture du Store dans le daemon : une connexion
+    // réussie ne prouve donc pas encore que les migrations sont terminées.
+    wait_for_coordination_schema(home);
     child
 }
 
@@ -58,6 +89,7 @@ fn start_daemon_with_sync(home: &Path, sync: &Path) -> Child {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+    wait_for_coordination_schema(home);
     child
 }
 
