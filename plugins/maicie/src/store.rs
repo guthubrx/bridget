@@ -356,17 +356,16 @@ impl MaicieStore {
         {
             return Err(StoreError::Invalid("relations du rapport invalides"));
         }
-        if !matches!(
+        // Un objectif déjà clos (ou une délégation hors greffe) n'est pas une
+        // faute fatale : c'est le cas `request_already_terminal` du contrat.
+        // On refuse sans rouvrir, on journalise, et le reçu empêche le rejeu.
+        let graftable = matches!(
             objective.etat,
             EtatObjectif::EnCoordination | EtatObjectif::AEvaluer
-        ) || !matches!(
+        ) && matches!(
             delegation.etat,
             EtatDelegation::Creee | EtatDelegation::AEvaluer
-        ) {
-            return Err(StoreError::Invalid(
-                "état métier incompatible avec la greffe",
-            ));
-        }
+        );
 
         let lifecycle_state: Option<String> = tx
             .query_row(
@@ -379,7 +378,8 @@ impl MaicieStore {
             .map_err(StoreError::Sql)?;
         let issue = match lifecycle_state.as_deref() {
             Some("cancelled" | "timed_out") => IssueGreffe::DemandeDejaTerminale,
-            Some("answered") | None => IssueGreffe::Accepted,
+            Some("answered") | None if graftable => IssueGreffe::Accepted,
+            Some("answered") | None => IssueGreffe::DemandeDejaTerminale,
             Some(_) => return Err(StoreError::Corrupt("terminal guichet inconnu")),
         };
         let reply_bytes = delivery_reply_bytes(claim, report, response_message_id, issue)
@@ -387,12 +387,12 @@ impl MaicieStore {
 
         let previous_objective = objective.clone();
         let previous_delegation = delegation.clone();
-        if objective.etat == EtatObjectif::EnCoordination {
+        if graftable && objective.etat == EtatObjectif::EnCoordination {
             objective
                 .transition(EtatObjectif::AEvaluer, now)
                 .map_err(StoreError::Domain)?;
         }
-        if delegation.etat == EtatDelegation::Creee {
+        if graftable && delegation.etat == EtatDelegation::Creee {
             delegation
                 .transition(EtatDelegation::AEvaluer)
                 .map_err(StoreError::Domain)?;
@@ -411,14 +411,21 @@ impl MaicieStore {
             kind: TypeDecision::ConstaterIssue,
             proposee_par: "maicie".to_string(),
             etat: EtatDecision::Appliquee,
-            motif: match issue {
-                IssueGreffe::Accepted => {
-                    format!("rapport de livraison greffé : {}", report.delivery_hash)
-                }
-                IssueGreffe::DemandeDejaTerminale => format!(
-                    "rapport tardif greffé sans réouverture : {}",
+            motif: if !graftable {
+                format!(
+                    "rapport refusé sans réouverture : état métier incompatible : {}",
                     report.delivery_hash
-                ),
+                )
+            } else {
+                match issue {
+                    IssueGreffe::Accepted => {
+                        format!("rapport de livraison greffé : {}", report.delivery_hash)
+                    }
+                    IssueGreffe::DemandeDejaTerminale => format!(
+                        "rapport tardif greffé sans réouverture : {}",
+                        report.delivery_hash
+                    ),
+                }
             },
         };
         decision.verifier().map_err(StoreError::Domain)?;
