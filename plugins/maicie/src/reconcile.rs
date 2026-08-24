@@ -120,6 +120,15 @@ pub struct NotificationReconcileReport {
     pub actions: Vec<NotificationReconcileAction>,
 }
 
+/// Frontières de crash du dispatch F27. Elles restent absentes du chemin CLI
+/// normal et servent seulement à tuer un processus de test à un état précis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationReconcilePhase {
+    BeforeSocket,
+    AfterWriteBeforeAck,
+    AfterIssueBeforeStoreCommit,
+}
+
 /// Fait constaté pendant une relève pull-only du guichet. Cette projection ne
 /// devient jamais un runtime : chaque commande lui fournit une échéance unique.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -346,6 +355,19 @@ pub fn reconcile_notification_startup_with_limits(
     bridget_socket: impl AsRef<Path>,
     limits: BridgetClientLimits,
 ) -> Result<NotificationReconcileReport, ReconcileError> {
+    reconcile_notification_startup_observed_with_limits(store, bridget_socket, limits, |_| Ok(()))
+}
+
+/// Variante réservée aux crash-tests : les jalons entourent la seule
+/// frontière I/O et le commit local de consommation, sans modifier les
+/// octets envoyés ni la machine d'état de production.
+#[doc(hidden)]
+pub fn reconcile_notification_startup_observed_with_limits(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    limits: BridgetClientLimits,
+    mut observer: impl FnMut(NotificationReconcilePhase) -> Result<(), ReconcileError>,
+) -> Result<NotificationReconcileReport, ReconcileError> {
     let socket = bridget_socket.as_ref();
     let deadline = Instant::now() + reconciliation_budget(limits);
     let mut report = NotificationReconcileReport::default();
@@ -358,7 +380,9 @@ pub fn reconcile_notification_startup_with_limits(
             break;
         }
 
-        let action = reconcile_notification_one(store, socket, &outbox, limits, deadline)?;
+        observer(NotificationReconcilePhase::BeforeSocket)?;
+        let action =
+            reconcile_notification_one(store, socket, &outbox, limits, deadline, &mut observer)?;
         let stop = matches!(
             action,
             NotificationReconcileAction::TransportIndisponible { .. }
@@ -379,6 +403,7 @@ fn reconcile_notification_one(
     outbox: &NotificationOutbox,
     limits: BridgetClientLimits,
     deadline: Instant,
+    observer: &mut impl FnMut(NotificationReconcilePhase) -> Result<(), ReconcileError>,
 ) -> Result<NotificationReconcileAction, ReconcileError> {
     outbox.verifier().map_err(|_| {
         ReconcileError::InvalidSnapshot("notification durable invalide avant la reprise")
@@ -406,12 +431,24 @@ fn reconcile_notification_one(
         Err(error) => return Err(ReconcileError::Client(error)),
     };
 
-    match client.replay_idempotent_bytes(
+    let mut observer_error = None;
+    let replay = client.replay_idempotent_bytes_observed(
         &outbox.message_bytes,
         &outbox.message_id.to_string(),
         outbox.issued_at,
-    ) {
+        |_| {
+            if let Err(error) = observer(NotificationReconcilePhase::AfterWriteBeforeAck) {
+                observer_error = Some(error);
+            }
+        },
+    );
+    if let Some(error) = observer_error {
+        return Err(error);
+    }
+
+    match replay {
         Ok(issue) => {
+            observer(NotificationReconcilePhase::AfterIssueBeforeStoreCommit)?;
             store.record_notification_issue(outbox.message_id, &issue)?;
             Ok(NotificationReconcileAction::Issue {
                 objective_id: outbox.objectif_id,
