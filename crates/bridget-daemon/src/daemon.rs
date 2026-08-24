@@ -2878,8 +2878,8 @@ fn definition_presence_mode(definition: &ResolvedAgentDefinition) -> Option<Pres
 }
 
 /// Transport et mode affichés pour un géré : toujours `definition.protocol`,
-/// jamais un canal inventé. Partagé entre `handle_register` et la projection
-/// `recovering` de `who`.
+/// jamais un canal inventé. Unique dérivation, partagée par `handle_register`
+/// et la projection `recovering` de `who`.
 fn definition_presence_fields(
     definition: &ResolvedAgentDefinition,
 ) -> (String, Option<PresenceMode>) {
@@ -2887,6 +2887,31 @@ fn definition_presence_fields(
         definition.protocol.clone(),
         definition_presence_mode(definition),
     )
+}
+
+/// Définition figée d'un géré déjà connu. L'instance courante est la clé
+/// nominale ; une ré-inscription (reprise, wrapper antérieur) peut arriver
+/// avec un autre identifiant tout en portant le même nom de lease.
+fn managed_definition_for_register(
+    state: &DaemonState,
+    instance_id: &str,
+    name: &str,
+) -> Option<ResolvedAgentDefinition> {
+    state
+        .managed_by_instance
+        .get(instance_id)
+        .and_then(|command_id| state.fleet.resolved_definition_for_command(command_id))
+        .or_else(|| {
+            state.managed_spawns.values().find_map(|record| {
+                (record.lease.name == name)
+                    .then(|| {
+                        state
+                            .fleet
+                            .resolved_definition_for_command(&record.lease.command_id)
+                    })
+                    .flatten()
+            })
+        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2960,17 +2985,24 @@ fn handle_register(
                     return DaemonToWrapper::Registered { name: final_name };
                 }
 
-                let previous = state.presences.get(&instance_id).cloned();
+                let previous = state.presences.get(&instance_id).cloned().or_else(|| {
+                    // Ré-inscription d'un géré déjà connu : la présence riche
+                    // peut encore vivre sous l'ancienne instance après une
+                    // reprise qui a émis un nouvel identifiant.
+                    state
+                        .presences
+                        .values()
+                        .find(|presence| presence.name == final_name)
+                        .cloned()
+                });
                 let reconnect_count = previous
                     .as_ref()
                     .map(|presence| {
                         presence.reconnect_count + u32::from(presence.state != "connected")
                     })
                     .unwrap_or(0);
-                let managed_definition = state
-                    .managed_by_instance
-                    .get(&instance_id)
-                    .and_then(|command_id| state.fleet.resolved_definition_for_command(command_id));
+                let managed_definition =
+                    managed_definition_for_register(state, &instance_id, &final_name);
                 let managed_runtime = managed_definition
                     .as_ref()
                     .and_then(definition_runtime)
@@ -2992,7 +3024,12 @@ fn handle_register(
                 });
                 let derived_domain = previous
                     .as_ref()
-                    .and_then(|presence| presence.derived_domain.clone())
+                    .and_then(|presence| {
+                        presence
+                            .derived_domain
+                            .clone()
+                            .or_else(|| presence.domain.clone())
+                    })
                     .or_else(|| domain.clone());
                 let dnd_until = previous.as_ref().and_then(|presence| presence.dnd_until);
                 // Un fait de limite reste la dernière observation attestée à
@@ -8980,6 +9017,188 @@ mod presence_tests {
             attach_refusal_for_subscription(&state, "coder-terra").unwrap(),
             "managed-terra"
         );
+
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    fn install_gere_acp_pour_reconnexion(state: &mut DaemonState, label: &str) -> SpawnLease {
+        state.registry = AgentRegistry::from_json(
+            r#"{"agents":{"cursor":{"command":"cursor-agent","args":["acp"],"protocol":"acp"}}}"#,
+            "/tmp/agents-cursor.json",
+        )
+        .unwrap();
+        let definition = state.registry.resolved_definition("cursor").unwrap();
+        let now = unix_timestamp();
+        let order = FleetSpawnOrder {
+            agent_type: "cursor".to_string(),
+            requested_name: Some("cursor5".to_string()),
+            cwd: PathBuf::from("/tmp"),
+            persistent: false,
+            command_id: label.to_string(),
+            issued_at: now,
+            deadline_at: now + 60,
+        };
+        let lease = match state.fleet.request_spawn(&order, now).unwrap() {
+            crate::fleet::SpawnSubmission::Start(lease) => lease,
+            other => panic!("réservation inattendue: {other:?}"),
+        };
+        state.fleet.mark_starting(&lease, now, &definition).unwrap();
+        state
+            .managed_by_instance
+            .insert(lease.instance_id.clone(), lease.command_id.clone());
+        state.managed_spawns.insert(
+            lease.command_id.clone(),
+            ManagedSpawnRecord {
+                lease: lease.clone(),
+                agent_type: "cursor".to_string(),
+                requester_conns: Vec::new(),
+                wrapper_conn: None,
+                stop: Arc::new(ManagedStopControl::new()),
+            },
+        );
+        let (wrapper_writer, _wrapper_reader) = control_socket(label);
+        state.connections.insert(label.to_string(), wrapper_writer);
+        lease
+    }
+
+    #[test]
+    fn gere_acp_reconnecte_sans_champs_wrapper_tient_mode_et_domaine() {
+        let (mut state, config) = state_with_registered_agent("managed-reconnect-hostile");
+        state.router.unregister_by_conn("conn-1");
+        state.conn_instances.remove("conn-1");
+        state.presences.clear();
+        let lease = install_gere_acp_pour_reconnexion(&mut state, "managed-reconnect-hostile");
+        let instance_id = lease.instance_id.clone();
+
+        assert!(matches!(
+            handle_register(
+                "managed-reconnect-hostile",
+                "cursor".to_string(),
+                Some("cursor5".to_string()),
+                Some("local".to_string()),
+                Some("unix".to_string()),
+                None,
+                None,
+                Some("macOS".to_string()),
+                Some(instance_id.clone()),
+                Some("bridget".to_string()),
+                false,
+                None,
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        let first = state.agent_infos().pop().expect("inscription initiale");
+        assert_eq!(first.mode, Some(PresenceMode::Acp));
+        assert_eq!(first.domain.as_deref(), Some("bridget"));
+        assert_eq!(first.reconnect_count, 0);
+
+        state.router.unregister_by_conn("managed-reconnect-hostile");
+        state.mark_unreachable("managed-reconnect-hostile");
+        // Mutation discriminante : la ré-inscription production d'un cursor
+        // déjà connu ne retrouve plus l'instance dans managed_by_instance
+        // (reprise = nouvel identifiant, ou carte instance périmée).
+        state.managed_by_instance.remove(&instance_id);
+
+        let (wrapper_writer, _wrapper_reader) = control_socket("managed-reconnect-hostile-2");
+        state
+            .connections
+            .insert("managed-reconnect-hostile-2".to_string(), wrapper_writer);
+        assert!(matches!(
+            handle_register(
+                "managed-reconnect-hostile-2",
+                "cursor".to_string(),
+                Some("cursor5".to_string()),
+                Some("local".to_string()),
+                Some("unix".to_string()),
+                None,
+                None,
+                Some("macOS".to_string()),
+                Some(instance_id.clone()),
+                None,
+                true,
+                None,
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        let reconnected = state.agent_infos().pop().expect("réinscrit");
+        assert_eq!(reconnected.name, "cursor5");
+        assert_eq!(reconnected.transport, "acp");
+        assert_eq!(reconnected.mode, Some(PresenceMode::Acp));
+        assert_eq!(reconnected.domain.as_deref(), Some("bridget"));
+        assert!(
+            reconnected.reconnect_count >= 1,
+            "la coupure doit incrémenter reconnect_count, reçu {}",
+            reconnected.reconnect_count
+        );
+
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn gere_acp_deja_connu_se_reinscrit_sous_nouvelle_instance_tient_mode_et_domaine() {
+        let (mut state, config) = state_with_registered_agent("managed-rebind-instance");
+        state.router.unregister_by_conn("conn-1");
+        state.conn_instances.remove("conn-1");
+        state.presences.clear();
+        let lease = install_gere_acp_pour_reconnexion(&mut state, "managed-rebind-instance");
+        let old_instance = lease.instance_id.clone();
+
+        assert!(matches!(
+            handle_register(
+                "managed-rebind-instance",
+                "cursor".to_string(),
+                Some("cursor5".to_string()),
+                Some("local".to_string()),
+                Some("unix".to_string()),
+                None,
+                None,
+                Some("macOS".to_string()),
+                Some(old_instance.clone()),
+                Some("bridget".to_string()),
+                false,
+                None,
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        state.router.unregister_by_conn("managed-rebind-instance");
+        state.mark_unreachable("managed-rebind-instance");
+        state.managed_by_instance.remove(&old_instance);
+
+        let new_instance = "cursor5-reprise-instance".to_string();
+        let (wrapper_writer, _wrapper_reader) = control_socket("managed-rebind-instance-2");
+        state
+            .connections
+            .insert("managed-rebind-instance-2".to_string(), wrapper_writer);
+        assert!(matches!(
+            handle_register(
+                "managed-rebind-instance-2",
+                "cursor".to_string(),
+                Some("cursor5".to_string()),
+                Some("local".to_string()),
+                Some("unix".to_string()),
+                None,
+                None,
+                Some("macOS".to_string()),
+                Some(new_instance),
+                None,
+                true,
+                None,
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        let reconnected = state
+            .agent_infos()
+            .into_iter()
+            .find(|agent| agent.name == "cursor5" && agent.state != "unreachable")
+            .expect("réinscrit visible");
+        assert_eq!(reconnected.transport, "acp");
+        assert_eq!(reconnected.mode, Some(PresenceMode::Acp));
+        assert_eq!(reconnected.domain.as_deref(), Some("bridget"));
+        assert!(reconnected.reconnect_count >= 1);
 
         let _ = std::fs::remove_file(config.db_path);
     }
