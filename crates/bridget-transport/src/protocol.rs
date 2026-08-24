@@ -607,6 +607,13 @@ pub enum WrapperToDaemon {
         /// État ACP re-déclaré après chaque reconnexion du wrapper.
         #[serde(default)]
         turn_in_progress: bool,
+        /// `Some(false)` est envoyé par les wrappers qui connaissent
+        /// `JournalReady`. L'absence est réservée à la transition des
+        /// wrappers historiques, dont le journal ACP est déjà une garantie du
+        /// chemin de lancement ; elle ne doit jamais faire rétrograder une
+        /// présence attachable lors d'un redémarrage de daemon.
+        #[serde(default)]
+        journal_available: Option<bool>,
     },
     /// Le pilote a ouvert son journal append-only pour cette connexion. Ce
     /// signal distinct du Register évite de déduire attach du mode ACP.
@@ -1098,6 +1105,7 @@ mod tests {
             instance_id: Some("instance-test".to_string()),
             domain: Some("bridget".to_string()),
             turn_in_progress: false,
+            journal_available: Some(false),
         };
         let json = encode(&msg).unwrap();
         assert!(json.contains("\"type\":\"Register\""));
@@ -1114,6 +1122,7 @@ mod tests {
                 instance_id,
                 domain,
                 turn_in_progress,
+                journal_available,
             } => {
                 assert_eq!(agent_type, "codex");
                 assert!(name.is_none());
@@ -1125,6 +1134,7 @@ mod tests {
                 assert_eq!(instance_id.as_deref(), Some("instance-test"));
                 assert_eq!(domain.as_deref(), Some("bridget"));
                 assert!(!turn_in_progress);
+                assert_eq!(journal_available, Some(false));
             }
             _ => panic!("mauvais type"),
         }

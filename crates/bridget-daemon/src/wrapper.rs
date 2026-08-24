@@ -12,7 +12,8 @@ use bridget_transport::protocol::{PresenceMode, decode, encode};
 use bridget_transport::{
     AcpOptions, AcpTransport, AttachRefusal, AttachWindow, DaemonToWrapper,
     MAX_ATTACH_FRAGMENT_BYTES, MAX_ATTACH_SERIALIZED_FRAME_BYTES, ManagedEvent, ManagedEventKind,
-    ManagedSession, TmuxTransport, Transport, WrapperToDaemon,
+    ManagedSession, ManagedSessionDescriptor, ManagedTerminal, TmuxTransport, Transport,
+    WrapperToDaemon,
 };
 use log::{debug, error, info, warn};
 use std::collections::{BTreeMap, HashSet, VecDeque};
@@ -896,6 +897,7 @@ fn connect_and_register_at(
         instance_id: Some(instance_id.to_string()),
         domain: domain.map(str::to_owned),
         turn_in_progress,
+        journal_available: Some(false),
     };
     writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
@@ -2385,30 +2387,6 @@ fn launch_acp_with_status(
         .as_deref()
         .and_then(effective_domain)
         .or_else(derive_domain);
-    let (mut reader, initial_writer, mut my_name) = connect_and_register_at(
-        socket,
-        agent_type,
-        effective_name.as_deref(),
-        &host,
-        "acp",
-        PresenceMode::Acp,
-        None,
-        &os,
-        &instance_id,
-        initial_domain.as_deref(),
-        false,
-    )?;
-    let writer = Arc::new(Mutex::new(Some(initial_writer)));
-    let mut idempotent_deliveries = IdempotentDeliveryTracker::open(home, &instance_id)?;
-    let name_state_path = socket
-        .parent()
-        .unwrap()
-        .join("agent-names")
-        .join(format!("active-{my_name}"));
-    if let Some(parent) = name_state_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&name_state_path, &my_name)?;
     let mcp_environment = vec![(
         "BRIDGET_AGENT_INSTANCE_ID".into(),
         instance_id.clone().into(),
@@ -2436,6 +2414,37 @@ fn launch_acp_with_status(
     } else {
         AcpTransport::spawn_with_environment_and_mcp(options, &mcp_environment, mcp_servers)
     }?);
+    let descriptor = transport.descriptor();
+    let (mut reader, initial_writer, mut my_name) = match connect_and_register_at(
+        socket,
+        agent_type,
+        effective_name.as_deref(),
+        &host,
+        &descriptor.transport,
+        descriptor.mode,
+        descriptor.location.as_deref(),
+        &os,
+        &instance_id,
+        initial_domain.as_deref(),
+        false,
+    ) {
+        Ok(connection) => connection,
+        Err(error) => {
+            transport.stop();
+            return Err(error.into());
+        }
+    };
+    let writer = Arc::new(Mutex::new(Some(initial_writer)));
+    let mut idempotent_deliveries = IdempotentDeliveryTracker::open(home, &instance_id)?;
+    let name_state_path = socket
+        .parent()
+        .unwrap()
+        .join("agent-names")
+        .join(format!("active-{my_name}"));
+    if let Some(parent) = name_state_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&name_state_path, &my_name)?;
     let marker_directory = socket.parent().unwrap().join("agent-pids");
     let adapter_pid = transport.process_id();
     crate::mcp_identity::write_marker(
@@ -2479,6 +2488,7 @@ fn launch_acp_with_status(
                     socket,
                     &writer,
                     transport.as_ref(),
+                    &descriptor,
                     agent_type,
                     &name_state_path,
                     &host,
@@ -2581,6 +2591,7 @@ fn launch_acp_with_status(
                     socket,
                     &writer,
                     transport.as_ref(),
+                    &descriptor,
                     agent_type,
                     &name_state_path,
                     &host,
@@ -2783,7 +2794,7 @@ fn send_wrapper_message(
         .as_mut()
         .map(|writer| writeln!(writer, "{}", json).and_then(|_| writer.flush()));
     if let Some(Err(error)) = write_result {
-        warn!("envoi wrapper ACP impossible: {}", error);
+        warn!("envoi wrapper géré impossible: {}", error);
     }
 }
 
@@ -2792,6 +2803,7 @@ fn reconnect_managed_session(
     socket: &std::path::Path,
     writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
     transport: &dyn ManagedSession,
+    descriptor: &ManagedSessionDescriptor,
     agent_type: &str,
     name_state_path: &std::path::Path,
     host: &str,
@@ -2810,9 +2822,9 @@ fn reconnect_managed_session(
             agent_type,
             Some(&wanted_name),
             host,
-            "acp",
-            PresenceMode::Acp,
-            None,
+            &descriptor.transport,
+            descriptor.mode,
+            descriptor.location.as_deref(),
             os,
             instance_id,
             effective_domain(&wanted_name).as_deref(),
@@ -2827,11 +2839,11 @@ fn reconnect_managed_session(
                 return Some((reader, registered_name));
             }
             Ok((_, _, registered_name)) => warn!(
-                "reconnexion ACP refusée : nom inattendu « {} »",
+                "reconnexion session gérée refusée : nom inattendu « {} »",
                 registered_name
             ),
             Err(error) => warn!(
-                "reconnexion ACP de « {} » impossible (tentative {}) : {}",
+                "reconnexion session gérée de « {} » impossible (tentative {}) : {}",
                 wanted_name, attempts, error
             ),
         }
@@ -2847,37 +2859,61 @@ fn forward_managed_events(
 ) -> bool {
     let mut journal_failed = false;
     for event in events {
-        match event.kind {
+        let ManagedEvent {
+            source,
+            origin,
+            raw,
+            kind,
+        } = event;
+        // La frontière commune transporte les octets d'origine jusqu'ici. Le
+        // wrapper n'en déduit pas une nouvelle sémantique, mais atteste leur
+        // réception avec leur provenance : un pilote inconnu ne peut donc pas
+        // être réduit silencieusement à une erreur interne.
+        log::debug!(
+            "événement session gérée observé: source={source:?}, origine={origin:?}, octets={}",
+            raw.len()
+        );
+        match kind {
             ManagedEventKind::TurnStarted { .. } => {
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: true })
             }
             ManagedEventKind::TurnFinished {
                 message,
                 response,
-                stop_reason,
+                terminal,
             } => {
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
-                if stop_reason_is_error(&stop_reason) {
-                    send_wrapper_message(
+                match terminal {
+                    ManagedTerminal::Completed if message.reply && !response.is_empty() => {
+                        let mut reply =
+                            bridget_core::BridgetMessage::new(my_name, &message.from, response);
+                        reply.in_reply_to = Some(message.id);
+                        send_wrapper_message(writer, WrapperToDaemon::Send(reply));
+                    }
+                    ManagedTerminal::Completed if message.reply => {
+                        send_wrapper_message(
+                            writer,
+                            WrapperToDaemon::DeliveryRejected {
+                                id: message.id,
+                                reason: "réponse vide".to_string(),
+                            },
+                        );
+                    }
+                    ManagedTerminal::Completed => {}
+                    ManagedTerminal::Cancelled => send_wrapper_message(
                         writer,
                         WrapperToDaemon::DeliveryRejected {
                             id: message.id,
-                            reason: format!("stopReason ACP d'erreur : {stop_reason}"),
+                            reason: "tour annulé par le pilote".to_string(),
                         },
-                    );
-                } else if message.reply && !response.is_empty() {
-                    let mut reply =
-                        bridget_core::BridgetMessage::new(my_name, &message.from, response);
-                    reply.in_reply_to = Some(message.id);
-                    send_wrapper_message(writer, WrapperToDaemon::Send(reply));
-                } else if message.reply {
-                    send_wrapper_message(
+                    ),
+                    ManagedTerminal::Failed { detail } => send_wrapper_message(
                         writer,
                         WrapperToDaemon::DeliveryRejected {
                             id: message.id,
-                            reason: "réponse vide".to_string(),
+                            reason: detail,
                         },
-                    );
+                    ),
                 }
             }
             ManagedEventKind::DeliveryRejected { message_id, reason } => {
@@ -2908,10 +2944,6 @@ fn forward_managed_events(
         }
     }
     journal_failed
-}
-
-fn stop_reason_is_error(stop_reason: &str) -> bool {
-    matches!(stop_reason, "error" | "failed" | "failure")
 }
 
 #[cfg(test)]
@@ -3519,6 +3551,7 @@ mod reconnect_tests {
     fn journal_failure_requires_an_immediate_transport_shutdown() {
         assert!(journal_failure_requires_shutdown(&[ManagedEvent {
             source: bridget_transport::ManagedEventSource::Acp,
+            origin: bridget_transport::ManagedEventOrigin::Internal,
             raw: "journal ACP saturé".as_bytes().to_vec(),
             kind: ManagedEventKind::JournalFailed {
                 detail: "journal ACP saturé".to_string(),
@@ -3526,6 +3559,7 @@ mod reconnect_tests {
         }]));
         assert!(!journal_failure_requires_shutdown(&[ManagedEvent {
             source: bridget_transport::ManagedEventSource::Acp,
+            origin: bridget_transport::ManagedEventOrigin::Internal,
             raw: b"diagnostic non terminal".to_vec(),
             kind: ManagedEventKind::Error {
                 detail: "diagnostic non terminal".to_string(),
@@ -3692,7 +3726,7 @@ mod reconnect_tests {
         let date = current_host_date();
         std::fs::write(root.join(format!("{date}.jsonl")), b"{\"v\":1,\"seq\":1}\n").unwrap();
         let feed = JournalLiveFeed::default();
-        let journal_events = Arc::new(Mutex::new(VecDeque::new()));
+        let journal_events = Arc::new(Mutex::new(bridget_transport::AcpEventQueue::default()));
         let writer = JournalWriter::start_with_live_feed(
             &journal_root,
             "agent-live",
@@ -3774,7 +3808,7 @@ mod reconnect_tests {
         let path = root.join(format!("{date}.jsonl"));
         std::fs::write(&path, b"{\"v\":1,\"seq\":1}\n").unwrap();
         let feed = JournalLiveFeed::new(1);
-        let journal_events = Arc::new(Mutex::new(VecDeque::new()));
+        let journal_events = Arc::new(Mutex::new(bridget_transport::AcpEventQueue::default()));
         let writer = JournalWriter::start_with_live_feed(
             &journal_root,
             "agent-gap",

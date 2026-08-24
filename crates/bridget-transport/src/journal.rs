@@ -1,6 +1,6 @@
 //! Journal JSONL versionné des sessions ACP.
 
-use crate::acp::AcpEvent;
+use crate::acp::{AcpEvent, AcpEventQueue};
 use crate::fsutil::create_private_dir;
 use crate::protocol::AttachWindow;
 use serde::Serialize;
@@ -262,7 +262,7 @@ impl JournalWriter {
         root: impl AsRef<Path>,
         agent: &str,
         session_id: &str,
-        events: Arc<Mutex<std::collections::VecDeque<AcpEvent>>>,
+        events: Arc<Mutex<AcpEventQueue>>,
     ) -> std::io::Result<Self> {
         Self::start_with_live_feed(root, agent, session_id, events, None)
     }
@@ -271,7 +271,7 @@ impl JournalWriter {
         root: impl AsRef<Path>,
         agent: &str,
         session_id: &str,
-        events: Arc<Mutex<std::collections::VecDeque<AcpEvent>>>,
+        events: Arc<Mutex<AcpEventQueue>>,
         live_feed: Option<JournalLiveFeed>,
     ) -> std::io::Result<Self> {
         let root = root.as_ref();
@@ -1017,7 +1017,7 @@ mod tests {
             &root,
             "codex-1",
             "session-1",
-            Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            Arc::new(Mutex::new(AcpEventQueue::default())),
         )
         .unwrap();
         writer
@@ -1039,7 +1039,7 @@ mod tests {
     #[test]
     fn writer_emits_a_terminal_event_when_an_append_fails() {
         let root = root("write-failure");
-        let events = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let events = Arc::new(Mutex::new(AcpEventQueue::default()));
         let writer = JournalWriter::start(&root, "codex-1", "session-1", events.clone()).unwrap();
         fs::remove_dir_all(root.join("codex-1")).unwrap();
         writer

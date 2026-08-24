@@ -250,6 +250,7 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
                 instance_id: Some("gate-wrapper-instance".to_string()),
                 domain: None,
                 turn_in_progress: false,
+                journal_available: None,
             },
         ),
         DaemonToWrapper::Registered { .. }
@@ -398,6 +399,7 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
                 instance_id: Some("codex-instance".to_string()),
                 domain: None,
                 turn_in_progress: false,
+                journal_available: None,
             },
         ),
         DaemonToWrapper::Registered { .. }
@@ -418,6 +420,7 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
                 instance_id: Some("maicie-instance".to_string()),
                 domain: None,
                 turn_in_progress: false,
+                journal_available: None,
             },
         ),
         DaemonToWrapper::Registered { .. }
