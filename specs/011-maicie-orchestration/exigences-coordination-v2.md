@@ -603,3 +603,32 @@ plus vite ; le coût net est un report, pas une perte.
   distinction que Bridget doit faire, et elle valide au passage que notre
   usage de MCP (outils exposés aux agents) et le futur pont app-server
   (pilotage des agents) sont deux couches distinctes, pas concurrentes.
+- **Le flux JSON du CLI Claude donne plus que ce qu'on a — mesuré en réel,
+  nuit du 24/08.** Test empirique lancé sur le CLI installé (`claude -p
+  --output-format stream-json --include-partial-messages --verbose`), pas
+  déduit d'une documentation. Ce que le flux contient, vérifié ligne par
+  ligne sur une exécution réelle :
+  (1) un message d'initialisation qui déclare la session, la liste complète
+  des outils, les serveurs MCP, le mode de permission, la version du CLI et
+  — surtout — LE MODÈLE EXACT (`claude-opus-5[1m]`). C'est la réponse
+  directe au « la colonne modèle reste aveugle pour les gérés » qui traîne
+  depuis la 014 ;
+  (2) des messages d'ÉTAT (`status: requesting`), c'est-à-dire la
+  distinction occupé/inactif qu'on n'a jamais pu établir proprement ;
+  (3) le streaming complet en deltas, avec `parent_tool_use_id` sur chaque
+  événement — donc la corrélation des appels d'outils que la 014 avait dû
+  reconstruire à la main (T1404) ;
+  (4) la consommation détaillée par tour : tokens d'entrée, de sortie,
+  création et lecture de cache, et le COÛT en dollars. Cela ferme le trou
+  des métriques d'efficience, où « tokens par mission » est noté
+  non-mesurable faute de télémétrie ;
+  (5) DÉCISIF : un `rate_limit_event` portant le statut, le type de fenêtre
+  (`five_hour`), l'INSTANT DE RÉINITIALISATION et la raison d'indisponibilité
+  (`out_of_credits`). Autrement dit, le transport saurait dire à l'avance
+  qu'un agent va tomber par quota, et quand il reviendra. C'est exactement
+  la panne qui a coûté 5 h 30 cette nuit, et elle était annoncée dans un
+  flux qu'on ne lit pas.
+  CONCLUSION : parler le protocole natif ne fait perdre NI attach, NI le
+  streaming, NI who. Il les enrichit sur les quatre points que le catalogue
+  listait comme angles morts. L'arbitrage « un protocole unique contre deux
+  ponts natifs » penche nettement du côté natif — mais reste à l'utilisateur.
