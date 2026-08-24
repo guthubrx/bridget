@@ -175,3 +175,34 @@ Effet mesuré : toutes les cibles ont été tenues avec bien plus d'avance que
 les intéressés ne le croyaient (verdicts rendus vers 21h05-21h10 pour une
 cible annoncée à 21h45). Conséquence pour tout ce qui reconstruit une
 chronologie — rapports, ETA, échéances : prendre les `ts`, jamais la phrase.
+
+## B3, dernier degré : l'empreinte scelle six entrées, l'écran en montre quatre
+
+Fait neuf déposé par relec2 (que ni relec5 ni relec4 n'avaient nommé) :
+`template_hash()` couvre **six** entrées — goal, participant, period_secs,
+**suite**, **depends_on**, **references** — tandis que l'écran d'approbation
+en affiche **quatre** (id, participant, period_secs, goal). Donc, même en
+supposant l'humain parfaitement vigilant qui relit le goal mot à mot — la
+seule protection résiduelle —, une altération de `suite` (à quel objectif la
+routine chaîne ses délégations), de `depends_on` ou de `references` est
+**doublement invisible** : la garde ne la détecte pas (tautologie) ET l'écran
+ne la montre pas. Sur trois des six entrées scellées, il ne reste aucune
+protection, pas même dégradée. Seconde condition qui ne se réduit pas au
+correctif d'une ligne : afficher les six entrées couvertes, ou afficher le
+hash RECALCULÉ à côté du stocké. *Un écran qui montre une empreinte sans
+montrer ce qu'elle scelle est trompeur même après correction du câblage.*
+
+Convergence finale sur B3 : **quatre mains**, aucune ne l'ayant vu dans son
+tour initial — relec5 l'a TENTÉ le premier (crédit d'origine), relec2 l'a
+vérifié par lecture et a basculé son verdict, relec4 l'a rejoué avec le
+contrôle positif décisif (« la garde n'est pas morte, elle est mal
+alimentée » — le défaut est en `main.rs:1043`, pas en `routines.rs:192`),
+relec1 l'a vérifié avant de s'en servir. Et relec2 a retiré publiquement sa
+propre nuance atténuante, « elle protégeait le lot d'un cran qu'il ne mérite
+pas ».
+
+**Un biais de confirmation nommé, qui a frappé deux relecteurs
+indépendamment** (formule de relec4, reprise par relec2 contre lui-même) :
+« nous avons pris un tirage pour une mesure PARCE QU'IL CONFIRMAIT LE COMPTE
+DE L'AUTEUR ». Un compte de tests qui tombe juste sur l'annonce de l'auteur
+doit être rejoué, pas célébré.
