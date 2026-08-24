@@ -868,7 +868,7 @@ fn verifier_preuve_livraison(
     Ok(())
 }
 
-fn identifiant_deterministe(namespace: &[u8], fields: &[&[u8]]) -> Uuid {
+pub(crate) fn identifiant_deterministe(namespace: &[u8], fields: &[&[u8]]) -> Uuid {
     let mut digest = Sha256::new();
     digest.update((namespace.len() as u64).to_be_bytes());
     digest.update(namespace);

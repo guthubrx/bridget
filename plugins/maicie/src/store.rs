@@ -20,7 +20,8 @@ use crate::domain::{
     IssueGreffe, LienArbitrage, LigneeDelegation, MotifRefusGreffe, NotificationOutbox,
     ObjectifCoordonne, OperationGuichet, PolitiqueReassignation, ReceptionGreffe,
     RecuCorrelation, ReductionCoordinationActive, TransitionCoordinationActive, TypeDecision,
-    reduire_coordination,
+    TypeEvenementAttendu,
+    identifiant_deterministe, reduire_coordination,
 };
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
@@ -236,6 +237,16 @@ pub enum CoordinationCommitPhase {
     AfterEventInsert,
     AfterDecisionInsert,
     AfterTransition,
+    AfterOutboxes,
+    BeforeCommit,
+    AfterCommit,
+}
+
+/// Frontières discriminantes de l'unique transaction de clôture FR-1602.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectiveClosureCommitPhase {
+    AfterObjectiveUpdate,
+    AfterDecisionInsert,
     AfterOutboxes,
     BeforeCommit,
     AfterCommit,
@@ -1523,6 +1534,11 @@ impl MaicieStore {
         if indexed_state != expected_state {
             return Err(StoreError::Conflict("objectif modifié concurremment"));
         }
+        if decision.kind == TypeDecision::Cloturer
+            || updated_objective.is_some_and(|objective| objective.etat == EtatObjectif::Clos)
+        {
+            return Err(StoreError::Invalid("clôture réservée à close_objective"));
+        }
         if let Some(objective) = updated_objective {
             let payload = serde_json::to_vec(objective).map_err(StoreError::Json)?;
             let changed = tx
@@ -1568,6 +1584,22 @@ impl MaicieStore {
         reason: &str,
         now: i64,
     ) -> Result<DecisionCoordination, StoreError> {
+        self.close_objective_observed(objective_id, reason, now, |_| Ok(()))
+    }
+
+    /// Variante à observateur utilisée par les tests de crash transactionnel.
+    /// L'observateur ne fait jamais partie du chemin de production normal.
+    #[doc(hidden)]
+    pub fn close_objective_observed<F>(
+        &mut self,
+        objective_id: Uuid,
+        reason: &str,
+        now: i64,
+        mut observer: F,
+    ) -> Result<DecisionCoordination, StoreError>
+    where
+        F: FnMut(ObjectiveClosureCommitPhase) -> Result<(), StoreError>,
+    {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1601,38 +1633,17 @@ impl MaicieStore {
             motif: reason.to_string(),
         };
         decision.verifier().map_err(StoreError::Domain)?;
-        let objective_json = serde_json::to_vec(&objective).map_err(StoreError::Json)?;
-        let changed = tx
-            .execute(
-                "UPDATE objectives SET state = 'clos', payload_json = ?1\n\
-                 WHERE id = ?2 AND state = ?3",
-                params![
-                    objective_json,
-                    objective_id.to_string(),
-                    objective_state_name(expected_state),
-                ],
-            )
-            .map_err(StoreError::Sql)?;
-        if changed != 1 {
-            return Err(StoreError::Conflict("objectif modifié concurremment"));
-        }
-        let decision_json = serde_json::to_vec(&decision).map_err(StoreError::Json)?;
-        let inserted = tx
-            .execute(
-                "INSERT INTO coordination_decisions(id, objective_id, state, payload_json)\n\
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    decision.id.to_string(),
-                    objective_id.to_string(),
-                    decision_state_name(decision.etat),
-                    decision_json,
-                ],
-            )
-            .map_err(StoreError::Sql)?;
-        if inserted != 1 {
-            return Err(StoreError::Conflict("décision non enregistrée"));
-        }
+        persist_objective_closure(
+            &tx,
+            &objective,
+            expected_state,
+            &decision,
+            now,
+            &mut observer,
+        )?;
+        observer(ObjectiveClosureCommitPhase::BeforeCommit)?;
         tx.commit().map_err(StoreError::Sql)?;
+        observer(ObjectiveClosureCommitPhase::AfterCommit)?;
         Ok(decision)
     }
 
@@ -3027,6 +3038,9 @@ fn update_guichet_aggregates(
     previous_delegation: &Delegation,
     delegation: &Delegation,
 ) -> Result<(), StoreError> {
+    if previous_objective.etat != EtatObjectif::Clos && objective.etat == EtatObjectif::Clos {
+        return Err(StoreError::Invalid("clôture réservée à close_objective"));
+    }
     if previous_objective != objective {
         let previous_json = serde_json::to_vec(previous_objective).map_err(StoreError::Json)?;
         let next_json = serde_json::to_vec(objective).map_err(StoreError::Json)?;
@@ -3606,6 +3620,174 @@ fn apply_coordination_transition(
             Ok(())
         }
     }
+}
+
+#[derive(Serialize)]
+struct ObjectiveClosureMessage<'a> {
+    id: String,
+    from: &'static str,
+    to: &'a str,
+    body: String,
+    reply: bool,
+    hops: u8,
+}
+
+fn persist_objective_closure<F>(
+    tx: &Transaction<'_>,
+    objective: &ObjectifCoordonne,
+    expected_state: EtatObjectif,
+    decision: &DecisionCoordination,
+    issued_at: i64,
+    observer: &mut F,
+) -> Result<(), StoreError>
+where
+    F: FnMut(ObjectiveClosureCommitPhase) -> Result<(), StoreError>,
+{
+    if objective.etat != EtatObjectif::Clos
+        || decision.kind != TypeDecision::Cloturer
+        || decision.objectif_id != objective.id
+        || issued_at <= 0
+    {
+        return Err(StoreError::Invalid("clôture transactionnelle invalide"));
+    }
+    let objective_json = serde_json::to_vec(objective).map_err(StoreError::Json)?;
+    let changed = tx
+        .execute(
+            "UPDATE objectives SET state = 'clos', payload_json = ?1\n\
+             WHERE id = ?2 AND state = ?3",
+            params![
+                objective_json,
+                objective.id.to_string(),
+                objective_state_name(expected_state),
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    if changed != 1 {
+        return Err(StoreError::Conflict("objectif modifié concurremment"));
+    }
+    observer(ObjectiveClosureCommitPhase::AfterObjectiveUpdate)?;
+
+    let decision_json = serde_json::to_vec(decision).map_err(StoreError::Json)?;
+    let inserted = tx
+        .execute(
+            "INSERT INTO coordination_decisions(id, objective_id, state, payload_json)\n\
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                decision.id.to_string(),
+                objective.id.to_string(),
+                decision_state_name(decision.etat),
+                decision_json,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    if inserted != 1 {
+        return Err(StoreError::Conflict("décision non enregistrée"));
+    }
+    observer(ObjectiveClosureCommitPhase::AfterDecisionInsert)?;
+
+    for outbox in objective_closure_outboxes(tx, objective.id, decision, issued_at)? {
+        insert_notification_outbox(tx, &outbox)?;
+    }
+    observer(ObjectiveClosureCommitPhase::AfterOutboxes)
+}
+
+fn objective_closure_outboxes(
+    tx: &Transaction<'_>,
+    objective_id: Uuid,
+    decision: &DecisionCoordination,
+    issued_at: i64,
+) -> Result<Vec<NotificationOutbox>, StoreError> {
+    let mut statement = tx
+        .prepare(
+            "SELECT expectation_id, recipient, policy_version, payload_json\n\
+             FROM coordination_expectations\n\
+             WHERE objective_id = ?1 AND event_kind = 'cloture_objectif'\n\
+             ORDER BY expectation_id",
+        )
+        .map_err(StoreError::Sql)?;
+    let rows = statement
+        .query_map([objective_id.to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+            ))
+        })
+        .map_err(StoreError::Sql)?;
+    let mut outboxes = Vec::new();
+    for row in rows {
+        let (expectation_id, recipient, policy_version, payload) = row.map_err(StoreError::Sql)?;
+        let expectation: AttenteNotification =
+            serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        if expectation.attente_id.to_string() != expectation_id
+            || expectation.objectif_id != objective_id
+            || expectation.kind != TypeEvenementAttendu::ClotureObjectif
+            || expectation.recipient != recipient
+            || i64::try_from(expectation.policy_version).ok() != Some(policy_version)
+        {
+            return Err(StoreError::Corrupt(
+                "attente de clôture et index SQLite divergents",
+            ));
+        }
+        let message_id = identifiant_deterministe(
+            b"notification-cloture-objectif-v1",
+            &[
+                objective_id.as_bytes(),
+                expectation.attente_id.as_bytes(),
+                decision.id.as_bytes(),
+            ],
+        );
+        let event_id = format!("objective-closed:{objective_id}:{}", decision.id);
+        let message_bytes = serde_json::to_vec(&ObjectiveClosureMessage {
+            id: message_id.to_string(),
+            from: crate::MAICIE_IDENTITY,
+            to: &expectation.recipient,
+            body: format!("Objectif {objective_id} clôturé"),
+            reply: false,
+            hops: 4,
+        })
+        .map_err(StoreError::Json)?;
+        let generation = expectation
+            .delegation_id
+            .map(|delegation_id| active_generation_optional(tx, delegation_id))
+            .transpose()?
+            .flatten();
+        let outbox = NotificationOutbox {
+            message_id,
+            idempotency_key: format!("notification:{message_id}"),
+            issued_at,
+            objectif_id: objective_id,
+            delegation_id: expectation.delegation_id,
+            generation,
+            event_id,
+            policy_version: expectation.policy_version,
+            recipient: expectation.recipient,
+            message_bytes,
+            etat: EtatNotificationOutbox::Prepared,
+        };
+        outbox.verifier().map_err(StoreError::Domain)?;
+        outboxes.push(outbox);
+    }
+    Ok(outboxes)
+}
+
+fn active_generation_optional(
+    tx: &Transaction<'_>,
+    delegation_id: Uuid,
+) -> Result<Option<u64>, StoreError> {
+    tx.query_row(
+        "SELECT active_generation FROM delegation_lineages WHERE delegation_id = ?1",
+        [delegation_id.to_string()],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .map_err(StoreError::Sql)?
+    .map(|generation| {
+        u64::try_from(generation)
+            .map_err(|_| StoreError::Corrupt("génération active de notification invalide"))
+    })
+    .transpose()
 }
 
 fn insert_notification_outbox(
@@ -4360,6 +4542,9 @@ fn validate_delegate_idempotency_key(key: &str) -> Result<(), StoreError> {
 }
 
 fn upsert_objective(tx: &Transaction<'_>, objective: &ObjectifCoordonne) -> Result<(), StoreError> {
+    if objective.etat == EtatObjectif::Clos {
+        return Err(StoreError::Invalid("clôture réservée à close_objective"));
+    }
     let id = objective.id.to_string();
     let incoming_json = serde_json::to_vec(objective).map_err(StoreError::Json)?;
     let current: Option<(String, Vec<u8>)> = tx
@@ -5024,6 +5209,34 @@ impl std::error::Error for StoreError {
 mod coordination_transaction_tests {
     use super::*;
     use crate::domain::{EtatGenerationDelegation, TypeDecisionCoordinationActive};
+
+    #[test]
+    fn upsert_interne_refuse_aussi_un_objectif_deja_clos() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE objectives(
+                     id TEXT PRIMARY KEY, state TEXT NOT NULL, payload_json BLOB NOT NULL
+                 );",
+            )
+            .unwrap();
+        let mut objective =
+            ObjectifCoordonne::nouveau("forge", crate::domain::ModeObjectif::Delegue, 10).unwrap();
+        objective.clore(11).unwrap();
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        assert!(matches!(
+            upsert_objective(&tx, &objective),
+            Err(StoreError::Invalid("clôture réservée à close_objective"))
+        ));
+        assert_eq!(
+            tx.query_row("SELECT COUNT(*) FROM objectives", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
 
     #[test]
     fn faute_apres_une_vraie_outbox_annule_decision_transition_et_notification() {

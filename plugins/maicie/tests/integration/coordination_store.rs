@@ -1,12 +1,15 @@
 use maicie::domain::{
-    AttenteNotification, ClasseDuree, DefinitionCoordination, Delegation, DependanceDelegation,
-    EntreeReductionCoordination, EtatGenerationDelegation, EtatOutboxDelegation, EvaluationCloture,
-    EvenementCoordination, FaitAppartenanceRepli, FraicheurCoordination, GenerationDelegation,
-    IssueClotureEvaluee, ModeObjectif, ModeQualificationDependance, ObjectifCoordonne,
-    OutboxDelegation, PolitiqueReassignation, TypeEvenementAttendu,
+    AttenteNotification, ClasseDuree, DecisionCoordination, DefinitionCoordination, Delegation,
+    DependanceDelegation, EntreeReductionCoordination, EtatDecision, EtatGenerationDelegation,
+    EtatObjectif, EtatOutboxDelegation, EvaluationCloture, EvenementCoordination,
+    FaitAppartenanceRepli, FraicheurCoordination, GenerationDelegation, IssueClotureEvaluee,
+    ModeObjectif, ModeQualificationDependance, ObjectifCoordonne, OutboxDelegation,
+    PolitiqueReassignation, TypeDecision, TypeEvenementAttendu,
 };
 use maicie::outbox::{PreparedDelegation, stable_body_hash};
-use maicie::store::{CoordinationCommitPhase, MaicieStore, StoreError};
+use maicie::store::{
+    CoordinationCommitPhase, MaicieStore, ObjectiveClosureCommitPhase, StoreError,
+};
 use rusqlite::{Connection, ErrorCode, params};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -144,6 +147,159 @@ fn migration_v8_refuse_de_rejouer_une_notification_sans_horodatage_atteste() {
         })
         .unwrap();
     assert_eq!(issued_at, None);
+}
+
+#[test]
+fn cent_clotures_a_trois_destinataires_produisent_trois_cents_cles_uniques() {
+    let fixture = Fixture::new("clotures-300");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    for index in 0..100 {
+        let objective_id = seed_with_closure_recipients(&mut store, index, 3);
+        store
+            .close_objective(objective_id, "clôture explicite", 1_787_501_000 + index)
+            .unwrap();
+    }
+    let pending = store.pending_notification_outboxes().unwrap();
+    assert_eq!(pending.len(), 300);
+    assert_eq!(
+        pending
+            .iter()
+            .map(|outbox| outbox.message_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        300
+    );
+    assert_eq!(
+        pending
+            .iter()
+            .map(|outbox| outbox.idempotency_key.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        300
+    );
+    assert!(pending.iter().all(|outbox| outbox.issued_at > 0));
+}
+
+#[test]
+fn cloture_et_notifications_sont_une_seule_transaction_rejouable() {
+    let fixture = Fixture::new("cloture-rollback");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let objective_id = seed_with_closure_recipients(&mut store, 1, 3);
+    let failed =
+        store.close_objective_observed(objective_id, "clôture atomique", 1_787_502_000, |phase| {
+            if phase == ObjectiveClosureCommitPhase::AfterOutboxes {
+                return Err(StoreError::Conflict("faute après notifications"));
+            }
+            Ok(())
+        });
+    assert!(matches!(
+        failed,
+        Err(StoreError::Conflict("faute après notifications"))
+    ));
+    let snapshot = store
+        .objective_snapshots(Some(objective_id))
+        .unwrap()
+        .remove(0);
+    assert_ne!(snapshot.objective.etat, EtatObjectif::Clos);
+    assert!(snapshot.decisions.is_empty());
+    assert!(store.pending_notification_outboxes().unwrap().is_empty());
+
+    store
+        .close_objective(objective_id, "clôture atomique", 1_787_502_000)
+        .unwrap();
+    let snapshot = store
+        .objective_snapshots(Some(objective_id))
+        .unwrap()
+        .remove(0);
+    assert_eq!(snapshot.objective.etat, EtatObjectif::Clos);
+    assert_eq!(snapshot.decisions.len(), 1);
+    assert_eq!(store.pending_notification_outboxes().unwrap().len(), 3);
+}
+
+#[test]
+fn toute_cloture_hors_primitive_est_refusee_et_un_texte_termine_ne_notifie_pas() {
+    let fixture = Fixture::new("cloture-bypass");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let objective_id = seed_with_closure_recipients(&mut store, 1, 1);
+    let snapshot = store
+        .objective_snapshots(Some(objective_id))
+        .unwrap()
+        .remove(0);
+    let mut forged = snapshot.objective.clone();
+    forged.clore(1_787_503_000).unwrap();
+    let close_decision = DecisionCoordination {
+        id: Uuid::new_v4(),
+        objectif_id: objective_id,
+        kind: TypeDecision::Cloturer,
+        proposee_par: "maicie".to_string(),
+        etat: EtatDecision::Appliquee,
+        motif: "contournement tenté".to_string(),
+    };
+    assert!(matches!(
+        store.apply_objective_decision(&close_decision, Some(&forged), snapshot.objective.etat,),
+        Err(StoreError::Invalid("clôture réservée à close_objective"))
+    ));
+
+    let text_only = DecisionCoordination {
+        id: Uuid::new_v4(),
+        objectif_id: objective_id,
+        kind: TypeDecision::AjouterParticipant,
+        proposee_par: "maicie".to_string(),
+        etat: EtatDecision::Appliquee,
+        motif: "travail terminé".to_string(),
+    };
+    store
+        .apply_objective_decision(&text_only, None, snapshot.objective.etat)
+        .unwrap();
+    let after = store
+        .objective_snapshots(Some(objective_id))
+        .unwrap()
+        .remove(0);
+    assert_ne!(after.objective.etat, EtatObjectif::Clos);
+    assert_eq!(after.decisions, vec![text_only]);
+    assert!(store.pending_notification_outboxes().unwrap().is_empty());
+
+    let mut terminal_at_creation =
+        ObjectifCoordonne::nouveau("terminal forgé", ModeObjectif::Delegue, 1_787_503_100).unwrap();
+    terminal_at_creation.clore(1_787_503_101).unwrap();
+    let delegation = Delegation::nouvelle(
+        terminal_at_creation.id,
+        "alice",
+        "instruction",
+        ClasseDuree::Normale,
+        "raison",
+    )
+    .unwrap();
+    let body = b"message".to_vec();
+    let outbox = OutboxDelegation {
+        message_id: Uuid::new_v4(),
+        delegation_id: delegation.id,
+        target: "alice".to_string(),
+        body_hash: stable_body_hash(&body),
+        body_bytes: body,
+        reply: true,
+        timeout_secs: 60,
+        deadline_contractuelle: 1_787_503_200,
+        etat: EtatOutboxDelegation::Prepared,
+        attempted_at: None,
+        retry_until: 1_787_503_150,
+        dedup_retained_until: 1_787_503_300,
+    };
+    let prepared = PreparedDelegation::new(
+        terminal_at_creation.clone(),
+        delegation,
+        outbox,
+        store.issuer_scope(),
+        1_787_503_110,
+        FRAME_LIMIT,
+    );
+    assert!(prepared.is_err());
+    assert!(
+        store
+            .objective_snapshots(Some(terminal_at_creation.id))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -495,6 +651,34 @@ fn definition(
             policy_version: 1,
         }],
     }
+}
+
+fn seed_with_closure_recipients(
+    store: &mut MaicieStore,
+    index: i64,
+    recipient_count: usize,
+) -> Uuid {
+    let objective = ObjectifCoordonne::nouveau(
+        format!("objectif-{index}"),
+        ModeObjectif::Delegue,
+        1_787_500_000 + index,
+    )
+    .unwrap();
+    let source = create_delegation(store, &objective, "alice");
+    create_delegation(store, &objective, "bob");
+    let mut snapshot = definition(objective.id, source, Vec::new(), "bob");
+    snapshot.attentes = (0..recipient_count)
+        .map(|recipient| AttenteNotification {
+            attente_id: Uuid::new_v4(),
+            objectif_id: objective.id,
+            delegation_id: None,
+            kind: TypeEvenementAttendu::ClotureObjectif,
+            recipient: format!("recipient-{recipient}"),
+            policy_version: 1,
+        })
+        .collect();
+    store.register_coordination_snapshot(&snapshot).unwrap();
+    objective.id
 }
 
 fn seed_coordination(database: &PathBuf, participant: &str) -> (Uuid, Uuid) {
