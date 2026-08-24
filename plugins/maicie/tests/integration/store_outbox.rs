@@ -42,7 +42,7 @@ fn migrations_idempotentes_et_base_privee() {
         .execute("DELETE FROM schema_migrations WHERE version = 2", [])
         .unwrap();
     drop(connection);
-    let reopened = MaicieStore::open(&database).unwrap();
+    let reopened = MaicieStore::open_and_migrate(&database).unwrap();
     assert_eq!(reopened.schema_version().unwrap(), 14);
     assert_eq!(reopened.issuer_scope(), first_scope);
     assert_eq!(mode(&root), 0o700);
@@ -188,7 +188,7 @@ fn migration_v1_convertit_un_refus_terminal_historique_en_rejected() {
         .unwrap();
     drop(connection);
 
-    let store = MaicieStore::open(&database).unwrap();
+    let store = MaicieStore::open_and_migrate(&database).unwrap();
     assert_eq!(store.schema_version().unwrap(), 14);
     let snapshot = store.recovery_snapshot(uuid(MESSAGE_ID)).unwrap().unwrap();
     assert_eq!(snapshot.outbox.state, EtatOutboxDelegation::Rejected);
@@ -225,7 +225,7 @@ fn migration_v2_vers_v6_conserve_les_donnees_historiques_et_cree_les_tables_requ
         .unwrap();
     drop(connection);
 
-    let store = MaicieStore::open(&database).unwrap();
+    let store = MaicieStore::open_and_migrate(&database).unwrap();
     assert_eq!(store.schema_version().unwrap(), 14);
     let pending = store.pending_delegation_outboxes().unwrap();
     assert_eq!(pending.len(), 1);
@@ -281,7 +281,7 @@ fn migration_v3_vers_v6_ajoute_les_preuves_et_la_reservation_delegate() {
         .unwrap();
     drop(connection);
 
-    let store = MaicieStore::open(&database).unwrap();
+    let store = MaicieStore::open_and_migrate(&database).unwrap();
     assert_eq!(store.schema_version().unwrap(), 14);
     drop(store);
 

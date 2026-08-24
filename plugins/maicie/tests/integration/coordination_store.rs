@@ -78,7 +78,7 @@ fn migration_v8_main_vers_v11_puis_seconde_ouverture_conservent_l_historique() {
         .unwrap();
     drop(connection);
 
-    let store = MaicieStore::open(&fixture.database).unwrap();
+    let store = MaicieStore::open_and_migrate(&fixture.database).unwrap();
     assert_eq!(store.schema_version().unwrap(), 14);
     assert_eq!(
         store.objective_snapshots(Some(objectif.id)).unwrap()[0].delegations[0].id,
@@ -176,7 +176,7 @@ fn migration_v9_refuse_de_rejouer_une_notification_sans_horodatage_atteste() {
         .unwrap();
     drop(connection);
 
-    let store = MaicieStore::open(&fixture.database).unwrap();
+    let store = MaicieStore::open_and_migrate(&fixture.database).unwrap();
     assert_eq!(store.schema_version().unwrap(), 14);
     assert!(matches!(
         store.pending_notification_outboxes(),
