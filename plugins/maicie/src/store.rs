@@ -7,8 +7,8 @@
 use crate::app::ConversationRecord;
 use crate::bridget_client::{GuichetClaim, IdempotencyIssue, SpawnOutcome};
 use crate::domain::guichet::{
-    delivery_reply_bytes, projection_reply_bytes, reclaim_projection_reply_bytes,
     EvenementCycleGuichet, ProjectionReply, RapportLivraison, RequeteCanonique,
+    delivery_reply_bytes, projection_reply_bytes, reclaim_projection_reply_bytes,
 };
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
@@ -17,14 +17,14 @@ use crate::domain::{
     ReceptionGreffe, RecuCorrelation, TypeDecision,
 };
 use crate::outbox::{
-    OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot, StoreCommitPhase,
-    MAX_MESSAGE_BYTES,
+    MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
+    StoreCommitPhase,
 };
 use rusqlite::{
-    params, Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior,
+    Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fmt;
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};

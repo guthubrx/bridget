@@ -63,8 +63,7 @@ fn seed_for(database: &std::path::Path, participant: &str) -> maicie::app::Deleg
             max_frame_bytes: 256 * 1024,
         },
     )
-    .unwrap()
-    else {
+    .unwrap() else {
         panic!("délégation attendue")
     };
     created
@@ -75,7 +74,10 @@ fn releve_pull_only_greffe_repond_et_enregistre_l_evenement() {
     let root = root("delivery");
     let database = root.join("maicie.sqlite3");
     let created = seed(&database);
-    let issuer_scope = MaicieStore::open(&database).unwrap().issuer_scope().to_string();
+    let issuer_scope = MaicieStore::open(&database)
+        .unwrap()
+        .issuer_scope()
+        .to_string();
     let fixture = SocketFixture::new("delivery");
     let listener = fixture.bind();
     let canonical_request = format!(
@@ -88,7 +90,10 @@ fn releve_pull_only_greffe_repond_et_enregistre_l_evenement() {
         let (mut reader, mut writer) = split(stream);
         assert_service_handshake(&mut reader, &mut writer, &issuer_scope);
         write_json(&mut writer, welcome());
-        assert_eq!(read_json(&mut reader), json!({"type":"guichet_claim_next","v":1}));
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"guichet_claim_next","v":1})
+        );
         write_json(
             &mut writer,
             json!({
@@ -133,18 +138,16 @@ fn releve_pull_only_greffe_repond_et_enregistre_l_evenement() {
                 "response_message_id":reply["response_message_id"].as_str().unwrap()
             }),
         );
-        assert_eq!(read_json(&mut reader), json!({"type":"guichet_claim_next","v":1}));
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"guichet_claim_next","v":1})
+        );
         write_json(&mut writer, json!({"type":"guichet_empty","v":1}));
     });
 
     let mut store = MaicieStore::open(&database).unwrap();
-    let report = reconcile_guichet_startup_with_limits(
-        &mut store,
-        fixture.path(),
-        1_010,
-        limits(),
-    )
-    .unwrap();
+    let report =
+        reconcile_guichet_startup_with_limits(&mut store, fixture.path(), 1_010, limits()).unwrap();
     assert!(report.actions.iter().any(|action| matches!(
         action,
         GuichetReconcileAction::ReponseAttestee { request_id, issue }
@@ -155,8 +158,18 @@ fn releve_pull_only_greffe_repond_et_enregistre_l_evenement() {
         GuichetReconcileAction::EvenementAtteste { request_id, state }
             if request_id == "request-gate-01" && state == "answered"
     )));
-    assert!(matches!(report.actions.last(), Some(GuichetReconcileAction::Vide)));
-    assert_eq!(store.objective_snapshots(Some(created.objective_id)).unwrap()[0].decisions.len(), 1);
+    assert!(matches!(
+        report.actions.last(),
+        Some(GuichetReconcileAction::Vide)
+    ));
+    assert_eq!(
+        store
+            .objective_snapshots(Some(created.objective_id))
+            .unwrap()[0]
+            .decisions
+            .len(),
+        1
+    );
     drop(store);
     server.join().unwrap();
     fs::remove_dir_all(root).unwrap();
@@ -171,7 +184,10 @@ fn issue_perdue_puis_releve_regeneree_ne_double_ni_decision_ni_reponse() {
     let root = root("reply-lost");
     let database = root.join("maicie.sqlite3");
     let created = seed(&database);
-    let issuer_scope = MaicieStore::open(&database).unwrap().issuer_scope().to_string();
+    let issuer_scope = MaicieStore::open(&database)
+        .unwrap()
+        .issuer_scope()
+        .to_string();
     let fixture = SocketFixture::new("reply-lost");
     let listener = fixture.bind();
     let canonical_request = format!(
@@ -184,13 +200,19 @@ fn issue_perdue_puis_releve_regeneree_ne_double_ni_decision_ni_reponse() {
         let (mut reader, mut writer) = split(stream);
         assert_service_handshake(&mut reader, &mut writer, &issuer_scope);
         write_json(&mut writer, welcome());
-        assert_eq!(read_json(&mut reader), json!({"type":"guichet_claim_next","v":1}));
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"guichet_claim_next","v":1})
+        );
         write_json(
             &mut writer,
             claimed(&issuer_scope, "request-reply-lost", &canonical_request, 1),
         );
         let first_reply = read_json(&mut reader);
-        let response_message_id = first_reply["response_message_id"].as_str().unwrap().to_string();
+        let response_message_id = first_reply["response_message_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let first_payload = first_reply["payload"].clone();
         drop(writer);
         drop(reader);
@@ -199,7 +221,10 @@ fn issue_perdue_puis_releve_regeneree_ne_double_ni_decision_ni_reponse() {
         let (mut reader, mut writer) = split(stream);
         assert_service_handshake(&mut reader, &mut writer, &issuer_scope);
         write_json(&mut writer, welcome());
-        assert_eq!(read_json(&mut reader), json!({"type":"guichet_claim_next","v":1}));
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"guichet_claim_next","v":1})
+        );
         write_json(
             &mut writer,
             claimed(&issuer_scope, "request-reply-lost", &canonical_request, 2),
@@ -233,21 +258,31 @@ fn issue_perdue_puis_releve_regeneree_ne_double_ni_decision_ni_reponse() {
                 "response_message_id":response_message_id
             }),
         );
-        assert_eq!(read_json(&mut reader), json!({"type":"guichet_claim_next","v":1}));
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"guichet_claim_next","v":1})
+        );
         write_json(&mut writer, json!({"type":"guichet_empty","v":1}));
     });
 
     let mut store = MaicieStore::open(&database).unwrap();
-    let first = reconcile_guichet_startup_with_limits(&mut store, fixture.path(), 1_010, limits())
-        .unwrap();
+    let first =
+        reconcile_guichet_startup_with_limits(&mut store, fixture.path(), 1_010, limits()).unwrap();
     assert!(matches!(
         first.actions.last(),
         Some(GuichetReconcileAction::TransportIncertain)
     ));
-    assert_eq!(store.objective_snapshots(Some(created.objective_id)).unwrap()[0].decisions.len(), 1);
+    assert_eq!(
+        store
+            .objective_snapshots(Some(created.objective_id))
+            .unwrap()[0]
+            .decisions
+            .len(),
+        1
+    );
 
-    let second = reconcile_guichet_startup_with_limits(&mut store, fixture.path(), 1_011, limits())
-        .unwrap();
+    let second =
+        reconcile_guichet_startup_with_limits(&mut store, fixture.path(), 1_011, limits()).unwrap();
     assert!(second.actions.iter().any(|action| matches!(
         action,
         GuichetReconcileAction::ReponseAttestee { request_id, issue }
@@ -258,7 +293,14 @@ fn issue_perdue_puis_releve_regeneree_ne_double_ni_decision_ni_reponse() {
         GuichetReconcileAction::EvenementAtteste { request_id, state }
             if request_id == "request-reply-lost" && state == "answered"
     )));
-    assert_eq!(store.objective_snapshots(Some(created.objective_id)).unwrap()[0].decisions.len(), 1);
+    assert_eq!(
+        store
+            .objective_snapshots(Some(created.objective_id))
+            .unwrap()[0]
+            .decisions
+            .len(),
+        1
+    );
     drop(store);
     server.join().unwrap();
     fs::remove_dir_all(root).unwrap();
@@ -273,7 +315,10 @@ fn budget_epuise_conserve_la_demande_sans_decision_locale() {
     let root = root("budget");
     let database = root.join("maicie.sqlite3");
     let created = seed(&database);
-    let issuer_scope = MaicieStore::open(&database).unwrap().issuer_scope().to_string();
+    let issuer_scope = MaicieStore::open(&database)
+        .unwrap()
+        .issuer_scope()
+        .to_string();
     let fixture = SocketFixture::new("budget");
     let listener = fixture.bind();
     let server = thread::spawn(move || {
@@ -281,7 +326,10 @@ fn budget_epuise_conserve_la_demande_sans_decision_locale() {
         let (mut reader, mut writer) = split(stream);
         assert_service_handshake(&mut reader, &mut writer, &issuer_scope);
         write_json(&mut writer, welcome());
-        assert_eq!(read_json(&mut reader), json!({"type":"guichet_claim_next","v":1}));
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"guichet_claim_next","v":1})
+        );
         thread::sleep(Duration::from_millis(120));
     });
 
@@ -292,16 +340,20 @@ fn budget_epuise_conserve_la_demande_sans_decision_locale() {
     };
     let started = Instant::now();
     let mut store = MaicieStore::open(&database).unwrap();
-    let report = reconcile_guichet_startup_with_limits(&mut store, fixture.path(), 1_010, limits)
-        .unwrap();
+    let report =
+        reconcile_guichet_startup_with_limits(&mut store, fixture.path(), 1_010, limits).unwrap();
     assert!(started.elapsed() < Duration::from_millis(100));
     assert!(matches!(
         report.actions.last(),
         Some(GuichetReconcileAction::TransportIndisponible)
     ));
-    assert!(store.objective_snapshots(Some(created.objective_id)).unwrap()[0]
-        .decisions
-        .is_empty());
+    assert!(
+        store
+            .objective_snapshots(Some(created.objective_id))
+            .unwrap()[0]
+            .decisions
+            .is_empty()
+    );
     drop(store);
     server.join().unwrap();
     fs::remove_dir_all(root).unwrap();
@@ -321,7 +373,10 @@ fn crash_reel_aux_trois_frontieres_releve_une_unique_decision() {
         let database = root.join("maicie.sqlite3");
         let marker = root.join("crash-barrier");
         let created = seed(&database);
-        let issuer_scope = MaicieStore::open(&database).unwrap().issuer_scope().to_string();
+        let issuer_scope = MaicieStore::open(&database)
+            .unwrap()
+            .issuer_scope()
+            .to_string();
         let fixture = SocketFixture::new(phase);
         let listener = fixture.bind();
         let request_id = format!("request-crash-{phase}");
@@ -436,8 +491,9 @@ fn crash_reel_aux_trois_frontieres_releve_une_unique_decision() {
         child.wait().unwrap();
 
         let mut store = MaicieStore::open(&database).unwrap();
-        let report = reconcile_guichet_startup_with_limits(&mut store, fixture.path(), 1_011, limits())
-            .unwrap();
+        let report =
+            reconcile_guichet_startup_with_limits(&mut store, fixture.path(), 1_011, limits())
+                .unwrap();
         assert!(report.actions.iter().any(|action| matches!(
             action,
             GuichetReconcileAction::ReponseAttestee { request_id: actual, issue }
@@ -448,7 +504,14 @@ fn crash_reel_aux_trois_frontieres_releve_une_unique_decision() {
             GuichetReconcileAction::EvenementAtteste { request_id: actual, state }
                 if actual == &request_id && state == "answered"
         )));
-        assert_eq!(store.objective_snapshots(Some(created.objective_id)).unwrap()[0].decisions.len(), 1);
+        assert_eq!(
+            store
+                .objective_snapshots(Some(created.objective_id))
+                .unwrap()[0]
+                .decisions
+                .len(),
+            1
+        );
         drop(store);
         server.join().unwrap();
         fs::remove_dir_all(root).unwrap();
@@ -535,7 +598,10 @@ fn assert_service_handshake(
     writer: &mut BufWriter<UnixStream>,
     issuer_scope: &str,
 ) {
-    assert_eq!(read_json(reader), json!({"type":"RoleHandshake","role":"service"}));
+    assert_eq!(
+        read_json(reader),
+        json!({"type":"RoleHandshake","role":"service"})
+    );
     write_json(writer, json!({"type":"RoleAccepted","role":"service"}));
     assert_eq!(
         read_json(reader),
@@ -550,7 +616,10 @@ fn assert_service_handshake(
 }
 
 fn split(stream: UnixStream) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
-    (BufReader::new(stream.try_clone().unwrap()), BufWriter::new(stream))
+    (
+        BufReader::new(stream.try_clone().unwrap()),
+        BufWriter::new(stream),
+    )
 }
 
 fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
@@ -573,8 +642,16 @@ fn base64(bytes: &[u8]) -> String {
             | u32::from(*chunk.get(2).unwrap_or(&0));
         encoded.push(TABLE[((value >> 18) & 0x3f) as usize] as char);
         encoded.push(TABLE[((value >> 12) & 0x3f) as usize] as char);
-        encoded.push(if chunk.len() > 1 { TABLE[((value >> 6) & 0x3f) as usize] as char } else { '=' });
-        encoded.push(if chunk.len() > 2 { TABLE[(value & 0x3f) as usize] as char } else { '=' });
+        encoded.push(if chunk.len() > 1 {
+            TABLE[((value >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        encoded.push(if chunk.len() > 2 {
+            TABLE[(value & 0x3f) as usize] as char
+        } else {
+            '='
+        });
     }
     encoded
 }
@@ -586,7 +663,10 @@ struct SocketFixture {
 impl SocketFixture {
     fn new(label: &str) -> Self {
         let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
-        Self { path: std::env::temp_dir().join(format!("mg-{label}-{}-{sequence}.sock", std::process::id())) }
+        Self {
+            path: std::env::temp_dir()
+                .join(format!("mg-{label}-{}-{sequence}.sock", std::process::id())),
+        }
     }
 
     fn bind(&self) -> UnixListener {
@@ -665,7 +745,10 @@ fn parcours_reel_g1504_releve_une_lettre_et_ne_la_duplique_pas() {
         )
         .unwrap();
     assert_eq!(decisions, 1, "la greffe réelle ne crée qu'une décision");
-    assert_eq!(lifecycle, 1, "l'événement answered est relevé une seule fois");
+    assert_eq!(
+        lifecycle, 1,
+        "l'événement answered est relevé une seule fois"
+    );
 
     // Mutation discriminante : sans clé tripartite durable ou sans rejet du
     // rejeu terminal, le second dépôt recréerait un claim, une décision ou un
@@ -690,7 +773,11 @@ fn parcours_reel_g1504_releve_une_lettre_et_ne_la_duplique_pas() {
         fixture.config.display().to_string(),
         "--json".to_string(),
     ]);
-    assert!(repeated_status.status.success(), "status rejeu: {:?}", repeated_status.stderr);
+    assert!(
+        repeated_status.status.success(),
+        "status rejeu: {:?}",
+        repeated_status.stderr
+    );
     let repeated_decisions: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM coordination_decisions
@@ -779,11 +866,22 @@ impl RealGateFixture {
     fn configure_agent(&self, created: &maicie::app::DelegationCreated) {
         let adapter = self.root.join("g1504-acp.sh");
         let emitter = self.root.join("maicie-emitter-acp.sh");
-        let issued_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let issued_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let scope = "015_scope_0123456789abcdef0123456789abcdef";
         let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        fs::write(self.root.join("objective-id"), created.objective_id.to_string()).unwrap();
-        fs::write(self.root.join("delegation-id"), created.delegation_id.to_string()).unwrap();
+        fs::write(
+            self.root.join("objective-id"),
+            created.objective_id.to_string(),
+        )
+        .unwrap();
+        fs::write(
+            self.root.join("delegation-id"),
+            created.delegation_id.to_string(),
+        )
+        .unwrap();
         fs::write(self.root.join("deposit-issued-at"), issued_at.to_string()).unwrap();
         fs::write(
             &adapter,
@@ -967,15 +1065,24 @@ impl RealGateFixture {
     }
 
     fn created_objective_id(&self) -> String {
-        fs::read_to_string(self.root.join("objective-id")).unwrap().trim().to_string()
+        fs::read_to_string(self.root.join("objective-id"))
+            .unwrap()
+            .trim()
+            .to_string()
     }
 
     fn created_delegation_id(&self) -> String {
-        fs::read_to_string(self.root.join("delegation-id")).unwrap().trim().to_string()
+        fs::read_to_string(self.root.join("delegation-id"))
+            .unwrap()
+            .trim()
+            .to_string()
     }
 
     fn deposit_issued_at(&self) -> String {
-        fs::read_to_string(self.root.join("deposit-issued-at")).unwrap().trim().to_string()
+        fs::read_to_string(self.root.join("deposit-issued-at"))
+            .unwrap()
+            .trim()
+            .to_string()
     }
 
     fn assert_request_answered(&self, request_id: &str) {
@@ -987,9 +1094,13 @@ impl RealGateFixture {
             .unwrap();
         assert!(requests.status.success(), "requests: {:?}", requests.stderr);
         let requests: Value = serde_json::from_slice(&requests.stdout).unwrap();
-        assert!(requests.as_array().unwrap().iter().any(|request| {
-            request["id"] == request_id && request["state"] == "answered"
-        }));
+        assert!(
+            requests
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|request| { request["id"] == request_id && request["state"] == "answered" })
+        );
     }
 
     fn stop_agent(&self) {
@@ -1002,8 +1113,16 @@ impl RealGateFixture {
                 .iter()
                 .any(|agent| agent.name == "g1504-agent" && agent.state == "stopped")
             {
-                let pgid: i32 = fs::read_to_string(&self.adapter_pgid).unwrap().trim().parse().unwrap();
-                assert_ne!(unsafe { libc::kill(-pgid, 0) }, 0, "groupe ACP G1504 encore vivant");
+                let pgid: i32 = fs::read_to_string(&self.adapter_pgid)
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
+                assert_ne!(
+                    unsafe { libc::kill(-pgid, 0) },
+                    0,
+                    "groupe ACP G1504 encore vivant"
+                );
                 return;
             }
             thread::sleep(Duration::from_millis(20));

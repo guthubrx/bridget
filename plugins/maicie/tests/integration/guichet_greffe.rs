@@ -1,10 +1,10 @@
 use maicie::app::{
-    delegate, process_guichet_claim, record_guichet_lifecycle_event, DelegateRequest,
-    DelegateResult, DelegationCandidate, GuichetError, GuichetProcessResult,
+    DelegateRequest, DelegateResult, DelegationCandidate, GuichetError, GuichetProcessResult,
+    delegate, process_guichet_claim, record_guichet_lifecycle_event,
 };
 use maicie::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use maicie::config::DurationClasses;
-use maicie::domain::guichet::{parse_claim, RequeteGuichet};
+use maicie::domain::guichet::{RequeteGuichet, parse_claim};
 use maicie::domain::{ClasseDuree, EtatDelegation, EtatObjectif};
 use maicie::store::{GuichetCommitPhase, MaicieStore};
 use rusqlite::Connection;
@@ -144,8 +144,10 @@ fn rapport_puis_answered_rejoue_les_memes_octets_sans_seconde_decision() {
     assert!(regenerated.replayed);
     assert_ne!(regenerated.reply_bytes, first.reply_bytes);
     assert!(String::from_utf8_lossy(&regenerated.reply_bytes).contains("\"claim_generation\":2"));
-    assert!(String::from_utf8_lossy(&regenerated.reply_bytes)
-        .contains("claim-abcdef0123456789abcdef0123456789"));
+    assert!(
+        String::from_utf8_lossy(&regenerated.reply_bytes)
+            .contains("claim-abcdef0123456789abcdef0123456789")
+    );
     let mut divergent = claim.clone();
     divergent.canonical_request = String::from_utf8(divergent.canonical_request)
         .unwrap()

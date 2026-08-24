@@ -62,7 +62,10 @@ fn releve_fifo_repond_octet_pour_octet_et_lit_evenement_brigde() {
         assert_service_handshake(&mut reader, &mut writer);
         write_welcome(&mut writer);
 
-        assert_eq!(read_json(&mut reader), json!({"type":"guichet_claim_next","v":1}));
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"guichet_claim_next","v":1})
+        );
         write_json(&mut writer, claimed());
 
         assert_eq!(read_raw(&mut reader), expected_reply);
@@ -118,8 +121,17 @@ fn retry_de_reponse_rejoue_les_memes_octets_sans_reserialisation() {
     });
 
     let mut client = GuichetClient::connect(fixture.path(), SCOPE).expect("negociation");
-    assert_eq!(client.reply_exact_bytes(reply).expect("premiere issue").issue, "outcome_unknown");
-    assert_eq!(client.reply_exact_bytes(reply).expect("retry exact").issue, "accepted");
+    assert_eq!(
+        client
+            .reply_exact_bytes(reply)
+            .expect("premiere issue")
+            .issue,
+        "outcome_unknown"
+    );
+    assert_eq!(
+        client.reply_exact_bytes(reply).expect("retry exact").issue,
+        "accepted"
+    );
     server.join().expect("serveur termine");
 }
 
@@ -132,10 +144,7 @@ fn chaque_phase_service_consomme_la_meme_echeance_absolue() {
         let (mut reader, mut writer) = split(stream);
         let _role = read_json(&mut reader);
         thread::sleep(Duration::from_millis(70));
-        let _ = write_json_checked(
-            &mut writer,
-            json!({"type":"RoleAccepted","role":"service"}),
-        );
+        let _ = write_json_checked(&mut writer, json!({"type":"RoleAccepted","role":"service"}));
     });
     let limits = BridgetClientLimits {
         connect_timeout: Duration::from_millis(80),
@@ -143,10 +152,11 @@ fn chaque_phase_service_consomme_la_meme_echeance_absolue() {
         max_frame_bytes: 64 * 1024,
     };
     let deadline = Instant::now() + Duration::from_millis(35);
-    let error = match GuichetClient::connect_with_limits_until(fixture.path(), SCOPE, limits, deadline) {
-        Ok(_) => panic!("le role seul doit depasser le budget global"),
-        Err(error) => error,
-    };
+    let error =
+        match GuichetClient::connect_with_limits_until(fixture.path(), SCOPE, limits, deadline) {
+            Ok(_) => panic!("le role seul doit depasser le budget global"),
+            Err(error) => error,
+        };
     assert!(matches!(error, BridgetClientError::Timeout { .. }));
     server.join().expect("serveur termine");
 }
@@ -168,7 +178,9 @@ fn client_public_et_daemon_reel_partagent_la_negociation_canonique() {
     let mut client = GuichetClient::connect(fixture.socket(), SCOPE)
         .expect("RoleHandshake, ServiceHello et ServiceWelcome canoniques");
     assert_eq!(
-        client.claim_next().expect("claim autorise apres negociation"),
+        client
+            .claim_next()
+            .expect("claim autorise apres negociation"),
         None,
         "un guichet négocié mais vide ne doit pas être confondu avec un refus de capacité"
     );
@@ -197,7 +209,10 @@ fn client_public_et_daemon_reel_partagent_la_negociation_canonique() {
     stop_daemon(&mut daemon);
 }
 
-fn assert_service_handshake(reader: &mut BufReader<UnixStream>, writer: &mut BufWriter<UnixStream>) {
+fn assert_service_handshake(
+    reader: &mut BufReader<UnixStream>,
+    writer: &mut BufWriter<UnixStream>,
+) {
     let fixture = SERVICE_NEGOTIATION_FIXTURE.lines().collect::<Vec<_>>();
     assert_eq!(read_raw(reader), fixture[0]);
     write_raw(writer, fixture[1]);
@@ -313,7 +328,10 @@ impl DaemonFixture {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("home du daemon");
         let socket = root.join(".cache/bridget/bridget.sock");
-        assert!(socket.as_os_str().len() < 104, "socket de harnais trop longue");
+        assert!(
+            socket.as_os_str().len() < 104,
+            "socket de harnais trop longue"
+        );
         Self {
             socket,
             root,

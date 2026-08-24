@@ -238,10 +238,7 @@ fn accept_empty_guichet(listener: &UnixListener) {
         read_json(&mut reader),
         json!({"type":"RoleHandshake","role":"service"})
     );
-    write_json(
-        &mut writer,
-        json!({"type":"RoleAccepted","role":"service"}),
-    );
+    write_json(&mut writer, json!({"type":"RoleAccepted","role":"service"}));
     let hello = read_json(&mut reader);
     assert_eq!(hello["type"], "ServiceHello");
     assert_eq!(hello["service"], "maicie");

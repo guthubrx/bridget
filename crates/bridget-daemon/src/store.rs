@@ -36,8 +36,12 @@ pub struct GuichetClaim {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuichetResult {
-    Queued { expires_at: i64 },
-    OutcomeUnknown { expires_at: i64 },
+    Queued {
+        expires_at: i64,
+    },
+    OutcomeUnknown {
+        expires_at: i64,
+    },
     Terminal {
         issue: String,
         expires_at: i64,
@@ -411,11 +415,7 @@ impl Store {
     /// Relève atomiquement le prochain dépôt FIFO. Une tête abandonnée est
     /// remise en file avant la sélection ; en v1, des crashes répétés sur la
     /// même tête peuvent donc la faire réapparaître jusqu'à son refus métier.
-    pub fn claim_next_guichet(
-        &mut self,
-        owner: &str,
-        now: i64,
-    ) -> Result<GuichetNext, StoreError> {
+    pub fn claim_next_guichet(&mut self, owner: &str, now: i64) -> Result<GuichetNext, StoreError> {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -441,7 +441,13 @@ impl Store {
                  SET state = 'claimed', claim_owner = ?1, claim_generation = ?2,
                      claim_token = ?3, claim_lease_expires_at = ?4
                  WHERE deposited_sequence = ?5 AND state = 'queued'",
-                params![owner, generation as i64, token, lease_expires_at, row.deposited_sequence],
+                params![
+                    owner,
+                    generation as i64,
+                    token,
+                    lease_expires_at,
+                    row.deposited_sequence
+                ],
             )
             .map_err(StoreError::Sqlite)?;
         if changed != 1 {
@@ -477,7 +483,9 @@ impl Store {
         if row.state != "claimed"
             || row.claim_owner.as_deref() != Some(owner)
             || row.claim_token.as_deref() != Some(token)
-            || row.claim_lease_expires_at.is_none_or(|expires| expires < now)
+            || row
+                .claim_lease_expires_at
+                .is_none_or(|expires| expires < now)
         {
             return Ok(Err(GuichetResult::ClaimStale));
         }
@@ -489,7 +497,9 @@ impl Store {
             claimed_at: now,
             claim_generation: row.claim_generation,
             claim_token: row.claim_token.expect("claim courant sans token"),
-            claim_lease_expires_at: row.claim_lease_expires_at.expect("claim courant sans lease"),
+            claim_lease_expires_at: row
+                .claim_lease_expires_at
+                .expect("claim courant sans lease"),
             expires_at: row.expires_at,
         }))
     }
@@ -549,7 +559,16 @@ impl Store {
                    AND request_id = ?4 AND state = 'claimed'
                    AND claim_owner = ?5 AND claim_generation = ?6
                    AND claim_token = ?7 AND claim_lease_expires_at >= ?8",
-                params![issue, input.reply_bytes, input.issuer_scope, input.request_id, owner, input.generation as i64, input.token, now],
+                params![
+                    issue,
+                    input.reply_bytes,
+                    input.issuer_scope,
+                    input.request_id,
+                    owner,
+                    input.generation as i64,
+                    input.token,
+                    now
+                ],
             )
             .map_err(StoreError::Sqlite)?;
         if changed != 1 {
@@ -562,8 +581,9 @@ impl Store {
             // La clôture, lorsqu'elle est encore ouverte, est indissociable
             // du résultat guichet durable. Une demande déjà terminale relève
             // de D-208 : le rapport reste traçable sans la rouvrir.
-            let answered = mark_answered_in_transaction(&tx, linked_request_id, &row.sender, "maicie")
-                .map_err(StoreError::Sqlite)?;
+            let answered =
+                mark_answered_in_transaction(&tx, linked_request_id, &row.sender, "maicie")
+                    .map_err(StoreError::Sqlite)?;
             if answered {
                 record_lifecycle_event_in_transaction(
                     &tx,
@@ -991,7 +1011,10 @@ fn guichet_existing_result(row: &GuichetRow, now: i64) -> GuichetResult {
             expires_at: row.expires_at,
         },
         "replied" | "rejected" => GuichetResult::Terminal {
-            issue: row.result_issue.clone().unwrap_or_else(|| "refused".to_string()),
+            issue: row
+                .result_issue
+                .clone()
+                .unwrap_or_else(|| "refused".to_string()),
             expires_at: row.expires_at,
             newly_finalized: false,
         },
@@ -1116,7 +1139,10 @@ mod tests {
             store.deposit_guichet(&second, 600, 60, second.issued_at),
             Ok(GuichetResult::Queued { .. })
         ));
-        let claim = match store.claim_next_guichet("service-a", first.issued_at).unwrap() {
+        let claim = match store
+            .claim_next_guichet("service-a", first.issued_at)
+            .unwrap()
+        {
             GuichetNext::Claimed(claim) => claim,
             GuichetNext::Empty => panic!("premier dépôt FIFO absent"),
         };
@@ -1127,7 +1153,10 @@ mod tests {
         // premier dépôt resterait bloqué claimed et request-2 serait relevé.
         let mut reopened = Store::open(&path).unwrap();
         reopened.recover_guichet_claims_after_restart().unwrap();
-        let replay = match reopened.claim_next_guichet("service-b", first.issued_at + 1).unwrap() {
+        let replay = match reopened
+            .claim_next_guichet("service-b", first.issued_at + 1)
+            .unwrap()
+        {
             GuichetNext::Claimed(claim) => claim,
             GuichetNext::Empty => panic!("dépôt persistant absent"),
         };
@@ -1139,7 +1168,12 @@ mod tests {
             Ok(GuichetResult::OutcomeUnknown { .. })
         ));
         assert!(matches!(
-            reopened.deposit_guichet(&guichet_deposit("request-1", br#"{\"request\":9}"#), 600, 60, first.issued_at + 1),
+            reopened.deposit_guichet(
+                &guichet_deposit("request-1", br#"{\"request\":9}"#),
+                600,
+                60,
+                first.issued_at + 1
+            ),
             Ok(GuichetResult::CanonicalBytesMismatch)
         ));
         drop(reopened);
@@ -1148,7 +1182,8 @@ mod tests {
 
     #[test]
     fn second_handle_ne_revoque_un_claim_qu_au_bootstrap_explicite() {
-        let path = std::env::temp_dir().join(format!("bridget-guichet-handles-{}.db", Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("bridget-guichet-handles-{}.db", Uuid::new_v4()));
         let mut first = Store::open(&path).unwrap();
         let now = 1_787_500_000;
         let finalized = guichet_deposit("request-finalized", br#"{\"request\":1}"#);
@@ -1195,9 +1230,15 @@ mod tests {
             GuichetNext::Claimed(claim) => claim,
             GuichetNext::Empty => panic!("claim B repris absent"),
         };
-        assert_eq!(claimed_by_b.deposited_sequence, claim_recovered.deposited_sequence);
+        assert_eq!(
+            claimed_by_b.deposited_sequence,
+            claim_recovered.deposited_sequence
+        );
         assert_eq!(claimed_by_b.request_id, claim_recovered.request_id);
-        assert_eq!(claimed_by_b.claim_generation, claim_recovered.claim_generation + 1);
+        assert_eq!(
+            claimed_by_b.claim_generation,
+            claim_recovered.claim_generation + 1
+        );
         assert_ne!(claimed_by_b.claim_token, claim_recovered.claim_token);
         drop(first);
         drop(second);
@@ -1206,7 +1247,8 @@ mod tests {
 
     #[test]
     fn guichet_reply_stale_ne_peut_pas_gagner_apres_lease_expire() {
-        let path = std::env::temp_dir().join(format!("bridget-guichet-lease-{}.db", Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("bridget-guichet-lease-{}.db", Uuid::new_v4()));
         let mut store = Store::open(&path).unwrap();
         let deposit = guichet_deposit("request-lease", br#"{\"request\":1}"#);
         let now = deposit.issued_at;
@@ -1224,11 +1266,15 @@ mod tests {
         };
         assert!(matches!(
             store.reply_guichet(
-                "service-a", GuichetReplyInput {
-                    issuer_scope: &a.issuer_scope, request_id: &a.request_id,
-                    generation: a.claim_generation, token: &a.claim_token,
+                "service-a",
+                GuichetReplyInput {
+                    issuer_scope: &a.issuer_scope,
+                    request_id: &a.request_id,
+                    generation: a.claim_generation,
+                    token: &a.claim_token,
                     response_message_id: "reply-stale",
-                    reply_bytes: br#"{\"reply\":\"a\"}"#, in_reply_to: "",
+                    reply_bytes: br#"{\"reply\":\"a\"}"#,
+                    in_reply_to: "",
                     outcome: GuichetOutcome::Accepted,
                 },
                 b.claim_lease_expires_at - 1,
@@ -1254,10 +1300,13 @@ mod tests {
 
     #[test]
     fn reponse_guichet_accepted_clot_atomiquement_la_demande_liee() {
-        let path = std::env::temp_dir().join(format!("bridget-guichet-answer-{}.db", Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("bridget-guichet-answer-{}.db", Uuid::new_v4()));
         let mut store = Store::open(&path).unwrap();
         let now = 1_787_500_000;
-        store.create_request("message-lie", "maicie", "codex-1", 60).unwrap();
+        store
+            .create_request("message-lie", "maicie", "codex-1", 60)
+            .unwrap();
         let deposit = GuichetDeposit {
             issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
             request_id: "request-answer".to_string(),
@@ -1331,7 +1380,10 @@ mod tests {
                 },
                 now + 1,
             ),
-            Ok(GuichetResult::Terminal { newly_finalized: false, .. })
+            Ok(GuichetResult::Terminal {
+                newly_finalized: false,
+                ..
+            })
         ));
         assert_eq!(store.guichet_lifecycle_events().unwrap().len(), 1);
         drop(store);
@@ -1373,7 +1425,10 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         // Mutation discriminante : un SELECT puis UPDATE non IMMEDIATE peut
         // donner request-a deux fois ou échouer au lieu de distribuer A puis B.
-        assert_eq!(claimed, ["request-a".to_string(), "request-b".to_string()].into());
+        assert_eq!(
+            claimed,
+            ["request-a".to_string(), "request-b".to_string()].into()
+        );
         let _ = std::fs::remove_file(path);
     }
 
@@ -1416,14 +1471,17 @@ mod tests {
 
     #[test]
     fn transitions_cancelled_et_timed_out_deposent_un_fait_guichet_unique() {
-        let path = std::env::temp_dir().join(format!("bridget-guichet-terminal-{}.db", Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("bridget-guichet-terminal-{}.db", Uuid::new_v4()));
         let mut store = Store::open(&path).unwrap();
         let now = 1_787_500_000;
         for (request_id, state) in [
             ("message-cancelled", GuichetLifecycleState::Cancelled),
             ("message-timed-out", GuichetLifecycleState::TimedOut),
         ] {
-            store.create_request(request_id, "alice", "bob", 60).unwrap();
+            store
+                .create_request(request_id, "alice", "bob", 60)
+                .unwrap();
             let deposit = GuichetDeposit {
                 issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
                 request_id: format!("request-{request_id}"),
@@ -1441,8 +1499,12 @@ mod tests {
             store.deposit_guichet(&deposit, 600, 60, now).unwrap();
             match state {
                 GuichetLifecycleState::Cancelled => {
-                    store.cancel_request(request_id, "alice", Some("annulé")).unwrap();
-                    store.cancel_request(request_id, "alice", Some("rejeu")).unwrap();
+                    store
+                        .cancel_request(request_id, "alice", Some("annulé"))
+                        .unwrap();
+                    store
+                        .cancel_request(request_id, "alice", Some("rejeu"))
+                        .unwrap();
                 }
                 GuichetLifecycleState::TimedOut => {
                     assert!(store.mark_timed_out(request_id).unwrap());
@@ -1462,7 +1524,11 @@ mod tests {
                 && event.state == GuichetLifecycleState::TimedOut
                 && event.in_reply_to.as_deref() == Some("message-timed-out")
         }));
-        assert_eq!(events.len(), 2, "chaque transition terminale ne dépose qu'un seul fait");
+        assert_eq!(
+            events.len(),
+            2,
+            "chaque transition terminale ne dépose qu'un seul fait"
+        );
         drop(store);
         let _ = std::fs::remove_file(path);
     }

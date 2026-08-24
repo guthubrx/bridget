@@ -3,9 +3,9 @@
 
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
 use bridget_transport::protocol::{
-    AttachRefusal, CLIENT_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION, ClientCapability,
-    ClientRefusal, ConnectionRole, IdempotencyIssue, PresenceMode, ServiceCapability,
-    ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
+    AttachRefusal, CLIENT_CONTRACT_VERSION, ClientCapability, ClientRefusal, ConnectionRole,
+    IdempotencyIssue, PresenceMode, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal,
+    SpawnRefusal, StopOutcome, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use log::{error, info, warn};
@@ -2424,9 +2424,7 @@ fn handle_connection(
             // Le guichet compare les octets, non une valeur JSON reparsée :
             // cette vérification rejette aussi champs inconnus, doublons et
             // ordre de clés divergent avant toute écriture SQLite.
-            if is_guichet_frame(&msg)
-                && encode(&msg).is_ok_and(|canonical| canonical != line)
-            {
+            if is_guichet_frame(&msg) && encode(&msg).is_ok_and(|canonical| canonical != line) {
                 let json = encode(&DaemonToWrapper::ServiceRejected {
                     reason: ServiceRefusal::CanonicalBytesMismatch,
                 })?;
@@ -2520,7 +2518,12 @@ fn guichet_frame_exceeds_wire_limit(line: &str) -> bool {
 fn raw_guichet_frame(line: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(line)
         .ok()
-        .and_then(|value| value.get("type").and_then(serde_json::Value::as_str).map(str::to_owned))
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
         .is_some_and(|kind| {
             matches!(
                 kind.as_str(),
@@ -2541,9 +2544,9 @@ fn guichet_request_is_valid(
     let identifier = |value: &str| {
         !value.is_empty()
             && value.len() <= 128
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-')
+            })
     };
     if !identifier(request_id) {
         return false;
@@ -2566,7 +2569,7 @@ fn guichet_request_is_valid(
         }
         (
             bridget_transport::protocol::ServiceRequestOperation::MissionStatus
-                | bridget_transport::protocol::ServiceRequestOperation::DeadlineQuestion,
+            | bridget_transport::protocol::ServiceRequestOperation::DeadlineQuestion,
             bridget_transport::protocol::ServiceRequestPayload::Delegation { delegation_id },
         ) => identifier(delegation_id),
         _ => false,
@@ -2582,9 +2585,9 @@ fn guichet_reply_is_valid(
     let identifier = |value: &str| {
         !value.is_empty()
             && value.len() <= 128
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-')
+            })
     };
     if !identifier(request_id) || !identifier(response_message_id) || !identifier(in_reply_to) {
         return false;
@@ -2618,9 +2621,10 @@ fn guichet_reply_is_valid(
                         && observation.request_state.as_deref().is_none_or(identifier)
                 })
         }
-        bridget_transport::protocol::GuichetReplyPayload::DeadlineQuestion { delegation_id, .. } => {
-            identifier(delegation_id)
-        }
+        bridget_transport::protocol::GuichetReplyPayload::DeadlineQuestion {
+            delegation_id,
+            ..
+        } => identifier(delegation_id),
     }
 }
 
@@ -3957,8 +3961,7 @@ fn handle_wrapper_message(
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let declared_sender_matches = st.conn_names.get(conn_id).is_some_and(|registered| {
                 registered == &from
-                    || (registered.starts_with("cli-send-")
-                        && st.router.get_agent(&from).is_some())
+                    || (registered.starts_with("cli-send-") && st.router.get_agent(&from).is_some())
             });
             if !declared_sender_matches {
                 return Some(DaemonToWrapper::ServiceRejected {
@@ -4040,25 +4043,44 @@ fn handle_wrapper_message(
                 });
             }
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
-            match st.store.claim_guichet(conn_id, &issuer_scope, &request_id, &claim_token, unix_timestamp()) {
+            match st.store.claim_guichet(
+                conn_id,
+                &issuer_scope,
+                &request_id,
+                &claim_token,
+                unix_timestamp(),
+            ) {
                 Ok(Ok(claim)) => Some(guichet_claim_response(claim)),
                 Ok(Err(result)) => Some(guichet_result_response(issuer_scope, request_id, result)),
                 Err(error) => {
                     error!("rejeu claim guichet: {error}");
-                    Some(DaemonToWrapper::ServiceRejected { reason: ServiceRefusal::TransitionInvalid })
+                    Some(DaemonToWrapper::ServiceRejected {
+                        reason: ServiceRefusal::TransitionInvalid,
+                    })
                 }
             }
         }
-        WrapperToDaemon::GuichetLookup { version, issuer_scope, request_id } => {
+        WrapperToDaemon::GuichetLookup {
+            version,
+            issuer_scope,
+            request_id,
+        } => {
             if version != SERVICE_CONTRACT_VERSION {
-                return Some(DaemonToWrapper::ServiceRejected { reason: ServiceRefusal::InvalidEnvelope });
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::InvalidEnvelope,
+                });
             }
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
-            match st.store.lookup_guichet(&issuer_scope, &request_id, unix_timestamp()) {
+            match st
+                .store
+                .lookup_guichet(&issuer_scope, &request_id, unix_timestamp())
+            {
                 Ok(result) => Some(guichet_result_response(issuer_scope, request_id, result)),
                 Err(error) => {
                     error!("lookup guichet: {error}");
-                    Some(DaemonToWrapper::ServiceRejected { reason: ServiceRefusal::TransitionInvalid })
+                    Some(DaemonToWrapper::ServiceRejected {
+                        reason: ServiceRefusal::TransitionInvalid,
+                    })
                 }
             }
         }
@@ -4074,9 +4096,16 @@ fn handle_wrapper_message(
             payload,
         } => {
             if version != SERVICE_CONTRACT_VERSION
-                || !guichet_reply_is_valid(&request_id, &response_message_id, &in_reply_to, &payload)
+                || !guichet_reply_is_valid(
+                    &request_id,
+                    &response_message_id,
+                    &in_reply_to,
+                    &payload,
+                )
             {
-                return Some(DaemonToWrapper::ServiceRejected { reason: ServiceRefusal::InvalidEnvelope });
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::InvalidEnvelope,
+                });
             }
             let canonical = match encode(&WrapperToDaemon::GuichetReply {
                 version,
@@ -4090,7 +4119,11 @@ fn handle_wrapper_message(
                 payload,
             }) {
                 Ok(bytes) => bytes.into_bytes(),
-                Err(_) => return Some(DaemonToWrapper::ServiceRejected { reason: ServiceRefusal::InvalidEnvelope }),
+                Err(_) => {
+                    return Some(DaemonToWrapper::ServiceRejected {
+                        reason: ServiceRefusal::InvalidEnvelope,
+                    });
+                }
             };
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             match st.store.reply_guichet(
@@ -4108,12 +4141,15 @@ fn handle_wrapper_message(
                 unix_timestamp(),
             ) {
                 Ok(result) => {
-                    if matches!(&result, GuichetResult::Terminal { issue, newly_finalized: true, .. } if issue == "accepted") {
+                    if matches!(&result, GuichetResult::Terminal { issue, newly_finalized: true, .. } if issue == "accepted")
+                    {
                         match st.store.guichet_lifecycle_events() {
                             Ok(events) => {
                                 if let Some(event) = events.into_iter().find(|event| {
-                                    event.issuer_scope == issuer_scope && event.request_id == request_id
-                                }) && let Some(writer) = st.connections.get(conn_id).cloned() {
+                                    event.issuer_scope == issuer_scope
+                                        && event.request_id == request_id
+                                }) && let Some(writer) = st.connections.get(conn_id).cloned()
+                                {
                                     st.pending_post_response_controls
                                         .entry(conn_id.to_string())
                                         .or_default()
@@ -4130,7 +4166,9 @@ fn handle_wrapper_message(
                 }
                 Err(error) => {
                     error!("réponse guichet: {error}");
-                    Some(DaemonToWrapper::ServiceRejected { reason: ServiceRefusal::TransitionInvalid })
+                    Some(DaemonToWrapper::ServiceRejected {
+                        reason: ServiceRefusal::TransitionInvalid,
+                    })
                 }
             }
         }
@@ -6394,7 +6432,13 @@ mod presence_tests {
             Some(DaemonToWrapper::Registered { .. })
         ));
         assert!(matches!(
-            handle_wrapper_message("wrapper-maicie", WrapperToDaemon::GuichetClaimNext { version: SERVICE_CONTRACT_VERSION }, &shared),
+            handle_wrapper_message(
+                "wrapper-maicie",
+                WrapperToDaemon::GuichetClaimNext {
+                    version: SERVICE_CONTRACT_VERSION
+                },
+                &shared
+            ),
             Some(DaemonToWrapper::ServiceRejected {
                 reason: ServiceRefusal::ServiceRoleRequired
             })
@@ -6430,7 +6474,9 @@ mod presence_tests {
         assert!(matches!(
             handle_wrapper_message(
                 "service-without-capability",
-                WrapperToDaemon::GuichetClaimNext { version: SERVICE_CONTRACT_VERSION },
+                WrapperToDaemon::GuichetClaimNext {
+                    version: SERVICE_CONTRACT_VERSION
+                },
                 &shared,
             ),
             Some(DaemonToWrapper::ServiceRejected {
@@ -6476,8 +6522,16 @@ mod presence_tests {
                 if capabilities == vec![ServiceCapability::MaicieGuichet]
         ));
         assert!(matches!(
-            handle_wrapper_message("service-capable", WrapperToDaemon::GuichetClaimNext { version: SERVICE_CONTRACT_VERSION }, &shared),
-            Some(DaemonToWrapper::GuichetEmpty { version: SERVICE_CONTRACT_VERSION })
+            handle_wrapper_message(
+                "service-capable",
+                WrapperToDaemon::GuichetClaimNext {
+                    version: SERVICE_CONTRACT_VERSION
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::GuichetEmpty {
+                version: SERVICE_CONTRACT_VERSION
+            })
         ));
 
         assert_eq!(shared.lock().unwrap().service_negotiations.len(), 2);
@@ -6522,7 +6576,9 @@ mod presence_tests {
         drop(first_reader);
         drop(first_writer);
         assert!(
-            first_closed_rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+            first_closed_rx
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap(),
             "la réponse ServiceWelcome doit échouer sur le socket fermé"
         );
         assert!(shared.lock().unwrap().service_negotiations.is_empty());
@@ -6556,7 +6612,10 @@ mod presence_tests {
         writeln!(
             second_writer,
             "{}",
-            encode(&WrapperToDaemon::GuichetClaimNext { version: SERVICE_CONTRACT_VERSION }).unwrap()
+            encode(&WrapperToDaemon::GuichetClaimNext {
+                version: SERVICE_CONTRACT_VERSION
+            })
+            .unwrap()
         )
         .unwrap();
         second_writer.flush().unwrap();

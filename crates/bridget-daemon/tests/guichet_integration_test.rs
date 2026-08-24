@@ -1,9 +1,9 @@
+use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
-    ConnectionRole, GuichetOutcome, GuichetReplyPayload, ServiceCapability,
-    ServiceRequestOperation, ServiceRequestPayload, SERVICE_CONTRACT_VERSION, decode, encode,
+    ConnectionRole, GuichetOutcome, GuichetReplyPayload, SERVICE_CONTRACT_VERSION,
+    ServiceCapability, ServiceRequestOperation, ServiceRequestPayload, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
-use bridget_core::BridgetMessage;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -44,8 +44,13 @@ fn start_daemon(home: &Path) -> Child {
 
 fn connect(home: &Path) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
     let stream = UnixStream::connect(socket(home)).unwrap();
-    stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-    (BufReader::new(stream.try_clone().unwrap()), BufWriter::new(stream))
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    (
+        BufReader::new(stream.try_clone().unwrap()),
+        BufWriter::new(stream),
+    )
 }
 
 fn request(
@@ -66,9 +71,13 @@ fn service(home: &Path, issuer_scope: &str) -> (BufReader<UnixStream>, BufWriter
         request(
             &mut reader,
             &mut writer,
-            WrapperToDaemon::RoleHandshake { role: ConnectionRole::Service },
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Service
+            },
         ),
-        DaemonToWrapper::RoleAccepted { role: ConnectionRole::Service }
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Service
+        }
     ));
     assert!(matches!(
         request(
@@ -90,7 +99,10 @@ fn service(home: &Path, issuer_scope: &str) -> (BufReader<UnixStream>, BufWriter
 fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
     let home = unique_home();
     let mut daemon = start_daemon(&home);
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
 
     // Un vrai producteur protocolaire dépose pendant l'absence de Maicie.
     let (mut wrapper_reader, mut wrapper_writer) = connect(&home);
@@ -139,7 +151,9 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
     let claim_a = request(
         &mut reader_a,
         &mut writer_a,
-        WrapperToDaemon::GuichetClaimNext { version: SERVICE_CONTRACT_VERSION },
+        WrapperToDaemon::GuichetClaimNext {
+            version: SERVICE_CONTRACT_VERSION,
+        },
     );
     let (generation_a, token_a) = match claim_a {
         DaemonToWrapper::GuichetClaimed {
@@ -168,7 +182,9 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
     let claim_b = request(
         &mut reader_b,
         &mut writer_b,
-        WrapperToDaemon::GuichetClaimNext { version: SERVICE_CONTRACT_VERSION },
+        WrapperToDaemon::GuichetClaimNext {
+            version: SERVICE_CONTRACT_VERSION,
+        },
     );
     let (generation_b, token_b) = match claim_b {
         DaemonToWrapper::GuichetClaimed {
@@ -234,7 +250,10 @@ fn reply(generation: u64, token: String, response_message_id: &str) -> WrapperTo
 fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois() {
     let home = unique_home();
     let mut daemon = start_daemon(&home);
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
 
     let (mut recipient_reader, mut recipient_writer) = connect(&home);
     assert!(matches!(
@@ -280,7 +299,11 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
     tracked.reply = true;
     tracked.reply_timeout = Some(60);
     assert!(matches!(
-        request(&mut maicie_reader, &mut maicie_writer, WrapperToDaemon::Send(tracked.clone())),
+        request(
+            &mut maicie_reader,
+            &mut maicie_writer,
+            WrapperToDaemon::Send(tracked.clone())
+        ),
         DaemonToWrapper::Ack { .. }
     ));
 
@@ -288,11 +311,23 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
     // vérifie encore que le nom déclaré désigne le wrapper producteur actif.
     let issued_at = now.to_string();
     let cli_args = vec![
-        "guichet", "deposer", "delivery-report", "--objective", "objective-1",
-        "--delegation", "delegation-1", "--hash",
+        "guichet",
+        "deposer",
+        "delivery-report",
+        "--objective",
+        "objective-1",
+        "--delegation",
+        "delegation-1",
+        "--hash",
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-        "--in-reply-to", &tracked.id, "--id", "gate-cli-deposit", "--issued-at",
-        &issued_at, "--issuer-scope", SCOPE,
+        "--in-reply-to",
+        &tracked.id,
+        "--id",
+        "gate-cli-deposit",
+        "--issued-at",
+        &issued_at,
+        "--issuer-scope",
+        SCOPE,
     ];
     let output = Command::new(env!("CARGO_BIN_EXE_bridget"))
         .args(&cli_args)
@@ -316,7 +351,10 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
     assert!(String::from_utf8_lossy(&retry.stdout).contains("DÉPÔT: outcome_unknown"));
 
     let (mut service_reader, mut service_writer) = service(&home, SERVICE_SCOPE);
-    assert_ne!(SCOPE, SERVICE_SCOPE, "le scope de dépôt n'est pas la session Maicie");
+    assert_ne!(
+        SCOPE, SERVICE_SCOPE,
+        "le scope de dépôt n'est pas la session Maicie"
+    );
     // Mutation discriminante : rétablir la comparaison avec le scope négocié
     // du service refuse ce lookup, puis le claim et la réponse du dépôt tiers.
     assert!(matches!(
@@ -334,7 +372,9 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
     let (generation, token) = match request(
         &mut service_reader,
         &mut service_writer,
-        WrapperToDaemon::GuichetClaimNext { version: SERVICE_CONTRACT_VERSION },
+        WrapperToDaemon::GuichetClaimNext {
+            version: SERVICE_CONTRACT_VERSION,
+        },
     ) {
         DaemonToWrapper::GuichetClaimed {
             request_id,
@@ -372,7 +412,8 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
         payload: GuichetReplyPayload::DeliveryReport {
             objective_id: "objective-1".to_string(),
             delegation_id: "delegation-1".to_string(),
-            delivery_hash: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".to_string(),
+            delivery_hash: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                .to_string(),
         },
     };
     assert!(matches!(
@@ -419,7 +460,10 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(event_count, 1, "un retry ne duplique jamais l'événement durable");
+    assert_eq!(
+        event_count, 1,
+        "un retry ne duplique jamais l'événement durable"
+    );
 
     // Mutation discriminante : retirer mark_answered_in_transaction du reply
     // laisse la demande ouverte malgré GuichetResult accepted.

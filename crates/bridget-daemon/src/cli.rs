@@ -950,7 +950,8 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
     }
     validate_agent_name(&from)?;
     let retry = idempotent_options(id, issued_at, issuer_scope)?;
-    let scope_identity = std::env::var("BRIDGET_AGENT_INSTANCE_ID").unwrap_or_else(|_| from.clone());
+    let scope_identity =
+        std::env::var("BRIDGET_AGENT_INSTANCE_ID").unwrap_or_else(|_| from.clone());
     let (request_id, issued_at, issuer_scope) = retry
         .map(|retry| (retry.id, retry.issued_at, retry.issuer_scope))
         .unwrap_or_else(|| {
@@ -2758,10 +2759,24 @@ mod idempotency_projection_tests {
     #[test]
     fn depot_guichet_rejoue_le_canon_ferme_avec_les_trois_cles() {
         let args = vec![
-            "deposer", "delivery-report", "--from", "codex-1", "--objective", "objective-1",
-            "--delegation", "delegation-1", "--hash", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
-            "--in-reply-to", "message-1", "--id", "deposit-1", "--issued-at", "1787500000",
-            "--issuer-scope", "015_scope_0123456789abcdef0123456789abcdef",
+            "deposer",
+            "delivery-report",
+            "--from",
+            "codex-1",
+            "--objective",
+            "objective-1",
+            "--delegation",
+            "delegation-1",
+            "--hash",
+            "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
+            "--in-reply-to",
+            "message-1",
+            "--id",
+            "deposit-1",
+            "--issued-at",
+            "1787500000",
+            "--issuer-scope",
+            "015_scope_0123456789abcdef0123456789abcdef",
         ]
         .into_iter()
         .map(str::to_string)
@@ -2786,8 +2801,16 @@ mod idempotency_projection_tests {
     fn depot_guichet_refuse_les_formes_ouvertes_ou_incompletes() {
         let hash = "0".repeat(64);
         let missing_link = vec![
-            "deposer", "delivery-report", "--from", "codex-1", "--objective", "objective-1",
-            "--delegation", "delegation-1", "--hash", hash.as_str(),
+            "deposer",
+            "delivery-report",
+            "--from",
+            "codex-1",
+            "--objective",
+            "objective-1",
+            "--delegation",
+            "delegation-1",
+            "--hash",
+            hash.as_str(),
         ]
         .into_iter()
         .map(str::to_string)

@@ -853,7 +853,10 @@ impl GuichetClient {
                 received: negotiated.version,
             });
         }
-        if !negotiated.capabilities.contains(REQUIRED_GUICHET_CAPABILITY) {
+        if !negotiated
+            .capabilities
+            .contains(REQUIRED_GUICHET_CAPABILITY)
+        {
             return Err(BridgetClientError::CapabilityMissing {
                 capability: REQUIRED_GUICHET_CAPABILITY.to_string(),
             });
@@ -907,7 +910,9 @@ impl GuichetClient {
             "claim_token": claim_token,
         }))?;
         parse_guichet_claim(response)?.ok_or_else(|| {
-            BridgetClientError::Protocol("guichet_claim ne peut pas retourner guichet_empty".to_string())
+            BridgetClientError::Protocol(
+                "guichet_claim ne peut pas retourner guichet_empty".to_string(),
+            )
         })
     }
 
@@ -1560,9 +1565,7 @@ fn write_error(source: std::io::Error) -> BridgetClientError {
     }
 }
 
-fn parse_service_welcome(
-    response: Value,
-) -> Result<NegotiatedGuichetContract, BridgetClientError> {
+fn parse_service_welcome(response: Value) -> Result<NegotiatedGuichetContract, BridgetClientError> {
     match response_type(&response)? {
         "ServiceWelcome" => {
             let version = u16::try_from(required_u64(&response, "version")?).map_err(|_| {
@@ -1584,9 +1587,7 @@ fn parse_service_welcome(
                 .iter()
                 .map(|value| {
                     value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
-                        BridgetClientError::Protocol(
-                            "capabilite guichet non textuelle".to_string(),
-                        )
+                        BridgetClientError::Protocol("capabilite guichet non textuelle".to_string())
                     })
                 })
                 .collect::<Result<BTreeSet<_>, _>>()?;
@@ -1645,7 +1646,10 @@ fn parse_guichet_lifecycle_event(
     response: Value,
 ) -> Result<GuichetLifecycleEvent, BridgetClientError> {
     if response_type(&response)? != "request_lifecycle_event" {
-        return Err(unexpected("request_lifecycle_event", response_type(&response)?));
+        return Err(unexpected(
+            "request_lifecycle_event",
+            response_type(&response)?,
+        ));
     }
     let state = required_string(&response, "state")?;
     if !matches!(state.as_str(), "answered" | "cancelled" | "timed_out") {
@@ -1671,10 +1675,11 @@ fn validate_guichet_reply_bytes(
     if bytes.len() + 1 > max_frame_bytes {
         return Err(BridgetClientError::FrameTooLarge { max_frame_bytes });
     }
-    let value: Value = serde_json::from_slice(bytes).map_err(|source| BridgetClientError::Decode {
-        line: String::from_utf8_lossy(bytes).into_owned(),
-        source,
-    })?;
+    let value: Value =
+        serde_json::from_slice(bytes).map_err(|source| BridgetClientError::Decode {
+            line: String::from_utf8_lossy(bytes).into_owned(),
+            source,
+        })?;
     if value.get("type").and_then(Value::as_str) != Some("guichet_reply")
         || value.get("v").and_then(Value::as_u64) != Some(1)
     {
@@ -1689,13 +1694,21 @@ fn validate_guichet_reply_bytes(
         "response_message_id",
         "outcome",
     ] {
-        if value.get(field).and_then(Value::as_str).is_none_or(str::is_empty) {
+        if value
+            .get(field)
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
             return Err(BridgetClientError::InvalidEnvelope(format!(
                 "reponse guichet sans {field}"
             )));
         }
     }
-    if value.get("claim_generation").and_then(Value::as_u64).is_none() {
+    if value
+        .get("claim_generation")
+        .and_then(Value::as_u64)
+        .is_none()
+    {
         return Err(BridgetClientError::InvalidEnvelope(
             "reponse guichet sans claim_generation".to_string(),
         ));

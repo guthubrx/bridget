@@ -308,13 +308,8 @@ fn open_store_with_reconciliation(
     reconcile_pending(&mut store, config, limits)?;
     reconcile_activation_startup_at(&mut store, &config.bridget_socket, unix_now()?)
         .map_err(CliError::Reconcile)?;
-    reconcile_guichet_startup_with_limits(
-        &mut store,
-        &config.bridget_socket,
-        unix_now()?,
-        limits,
-    )
-    .map_err(CliError::Reconcile)?;
+    reconcile_guichet_startup_with_limits(&mut store, &config.bridget_socket, unix_now()?, limits)
+        .map_err(CliError::Reconcile)?;
     Ok(store)
 }
 

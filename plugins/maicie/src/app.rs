@@ -7,17 +7,17 @@
 use crate::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use crate::config::DurationClasses;
 use crate::domain::guichet::{
-    parse_claim, parse_lifecycle_event, GuichetDomainError, ProjectionCoordinationState,
-    ProjectionDurationClass, ProjectionFreshness, ProjectionLocalDelivery,
-    ProjectionLocalDeliveryState, ProjectionReply, ProjectionTransportObservation,
-    ProjectionTransportState, RequeteCanonique, RequeteGuichet,
+    GuichetDomainError, ProjectionCoordinationState, ProjectionDurationClass, ProjectionFreshness,
+    ProjectionLocalDelivery, ProjectionLocalDeliveryState, ProjectionReply,
+    ProjectionTransportObservation, ProjectionTransportState, RequeteCanonique, RequeteGuichet,
+    parse_claim, parse_lifecycle_event,
 };
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, ClasseDuree, DecisionCoordination, Delegation,
     EtatDecision, EtatFlux, EtatObjectif, EtatOutboxDelegation, ModeObjectif, ObjectifCoordonne,
     OutboxDelegation, SnapshotTransport, SourceSnapshot, TypeDecision,
 };
-use crate::outbox::{stable_body_hash, PreparedDelegation};
+use crate::outbox::{PreparedDelegation, stable_body_hash};
 pub use crate::store::GuichetLifecycleResult;
 use crate::store::{
     ActivationApprovalRequest, DelegateReservation, GuichetProjectionFacts, MaicieStore,

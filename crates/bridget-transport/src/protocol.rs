@@ -109,7 +109,9 @@ pub enum ServiceRequestPayload {
         delivery_hash: String,
         in_reply_to: String,
     },
-    Delegation { delegation_id: String },
+    Delegation {
+        delegation_id: String,
+    },
 }
 
 /// Issue fermée qu'un service Maicie atteste au guichet.

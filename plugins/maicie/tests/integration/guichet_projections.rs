@@ -1,10 +1,10 @@
 use maicie::app::{
-    delegate, process_deadline_question_claim, process_guichet_claim, process_mission_status_claim,
-    DelegateRequest, DelegateResult, DelegationCandidate, GuichetError,
+    DelegateRequest, DelegateResult, DelegationCandidate, GuichetError, delegate,
+    process_deadline_question_claim, process_guichet_claim, process_mission_status_claim,
 };
 use maicie::bridget_client::{GuichetClaim, IdempotencyIssue};
 use maicie::config::DurationClasses;
-use maicie::domain::guichet::{parse_claim, ProjectionReply};
+use maicie::domain::guichet::{ProjectionReply, parse_claim};
 use maicie::domain::{ClasseDuree, EtatFlux, SnapshotTransport, SourceSnapshot};
 use maicie::store::{MaicieStore, StoreError};
 use rusqlite::{Connection, ErrorCode};

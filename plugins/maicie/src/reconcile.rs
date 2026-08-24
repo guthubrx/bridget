@@ -5,11 +5,11 @@
 //! puis ne rejoue que l'enveloppe filaire strictement identique enregistrée
 //! avant la première I/O.
 
+use crate::app::{GuichetError, process_guichet_claim, record_guichet_lifecycle_event};
 use crate::bridget_client::{
     BridgetClient, BridgetClientError, BridgetClientLimits, GuichetClient, IdempotencyIssue,
     SpawnOutcome,
 };
-use crate::app::{process_guichet_claim, record_guichet_lifecycle_event, GuichetError};
 use crate::outbox::{OutboxError, PendingDelegationOutbox};
 use crate::profiles::definition_digest_matches;
 use crate::store::{DelegationRecoveryEntry, LocalFailureReason, MaicieStore, StoreError};
@@ -392,10 +392,12 @@ pub fn reconcile_guichet_startup_observed_with_limits(
             });
             continue;
         }
-        report.actions.push(GuichetReconcileAction::ReponseAttestee {
-            request_id: processed.request_id,
-            issue: response.issue,
-        });
+        report
+            .actions
+            .push(GuichetReconcileAction::ReponseAttestee {
+                request_id: processed.request_id,
+                issue: response.issue,
+            });
 
         // Bridget pousse l'événement seulement après avoir rendu l'issue de
         // réponse durable. Son absence à l'échéance reste un fait transport :
@@ -404,8 +406,7 @@ pub fn reconcile_guichet_startup_observed_with_limits(
             Ok(event) => {
                 let request_id = event.request_id.clone();
                 let state = event.state.clone();
-                record_guichet_lifecycle_event(store, &event)
-                    .map_err(ReconcileError::Guichet)?;
+                record_guichet_lifecycle_event(store, &event).map_err(ReconcileError::Guichet)?;
                 report
                     .actions
                     .push(GuichetReconcileAction::EvenementAtteste { request_id, state });
