@@ -112,7 +112,11 @@ fn reference_absente_recoit_un_refus_atteste_sans_etat_d_orchestration() {
         assert_eq!(count, 0, "mutation inattendue dans {table}");
     }
     let refusals: i64 = connection
-        .query_row("SELECT COUNT(*) FROM guichet_refusal_receptions", [], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM guichet_refusal_receptions",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(refusals, 1);
     drop(connection);

@@ -136,10 +136,21 @@ pub enum NotificationReconcilePhase {
 /// devient jamais un runtime : chaque commande lui fournit une échéance unique.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuichetReconcileAction {
-    ReponseAttestee { request_id: String, issue: String },
-    RejetAtteste { request_id: String, reason: MotifRefusGreffe },
-    EvenementAtteste { request_id: String, state: String },
-    ClaimPerime { request_id: String },
+    ReponseAttestee {
+        request_id: String,
+        issue: String,
+    },
+    RejetAtteste {
+        request_id: String,
+        reason: MotifRefusGreffe,
+    },
+    EvenementAtteste {
+        request_id: String,
+        state: String,
+    },
+    ClaimPerime {
+        request_id: String,
+    },
     Vide,
     BudgetEpuise,
     TransportIndisponible,

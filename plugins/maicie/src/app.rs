@@ -215,8 +215,8 @@ fn process_mission_status_canonical(
     let RequeteGuichet::MissionStatus { delegation_id } = canonical.request else {
         return Err(StoreError::Invalid("projection mission_status incohérente"));
     };
-    let stored = store
-        .persist_guichet_projection(claim, canonical, response_message_id, now, |facts| {
+    let stored =
+        store.persist_guichet_projection(claim, canonical, response_message_id, now, |facts| {
             let (transport_observation, freshness) = transport_projection(facts, transport)?;
             Ok(ProjectionReply::MissionStatus {
                 delegation_id: delegation_id.to_string(),
@@ -226,8 +226,7 @@ fn process_mission_status_canonical(
                 transport_observation,
                 freshness,
             })
-        })
-        ?;
+        })?;
     Ok(stored)
 }
 
@@ -239,17 +238,18 @@ fn process_deadline_question_canonical(
     now: i64,
 ) -> Result<StoredGuichetReply, StoreError> {
     let RequeteGuichet::DeadlineQuestion { delegation_id } = canonical.request else {
-        return Err(StoreError::Invalid("projection deadline_question incohérente"));
+        return Err(StoreError::Invalid(
+            "projection deadline_question incohérente",
+        ));
     };
-    let stored = store
-        .persist_guichet_projection(claim, canonical, response_message_id, now, |facts| {
+    let stored =
+        store.persist_guichet_projection(claim, canonical, response_message_id, now, |facts| {
             Ok(ProjectionReply::DeadlineQuestion {
                 delegation_id: delegation_id.to_string(),
                 duration_class: duration_projection(facts.delegation.duree),
                 deadline_at: facts.deadline_at,
             })
-        })
-        ?;
+        })?;
     Ok(stored)
 }
 

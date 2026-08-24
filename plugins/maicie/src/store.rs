@@ -20,9 +20,8 @@ use crate::domain::{
     EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, FaitReassignation,
     FraicheurCoordination, GenerationDelegation, IssueGreffe, LienArbitrage, LigneeDelegation,
     LotReassignation, MotifRefusGreffe, NotificationOutbox, NotificationReassignation,
-    ObjectifCoordonne,
-    OperationGuichet, PolitiqueReassignation, QualificationDependance, ReceptionGreffe,
-    RecuCorrelation, ReductionCoordinationActive, ReductionOuvertureDelegation,
+    ObjectifCoordonne, OperationGuichet, PolitiqueReassignation, QualificationDependance,
+    ReceptionGreffe, RecuCorrelation, ReductionCoordinationActive, ReductionOuvertureDelegation,
     ReductionReassignation, TransitionCoordinationActive, TypeDecision, TypeEffetDemandeSuivie,
     TypeEvenementAttendu, TypeFaitReassignation, TypeNotificationReassignation,
     identifiant_deterministe, reduire_coordination, reduire_ouverture_dependance,
@@ -1605,7 +1604,8 @@ impl MaicieStore {
         if now <= 0 || response_message_id.trim().is_empty() {
             return Err(StoreError::Invalid("reçu de refus incomplet"));
         }
-        if canonical.issuer_scope != claim.issuer_scope || canonical.request_id != claim.request_id {
+        if canonical.issuer_scope != claim.issuer_scope || canonical.request_id != claim.request_id
+        {
             return Err(StoreError::Invalid("claim et refus divergents"));
         }
         let tx = self
@@ -1631,8 +1631,9 @@ impl MaicieStore {
             if claim.claim_generation <= reception.claim_generation {
                 return Err(StoreError::Conflict("claim de refus obsolète ou divergent"));
             }
-            let reply_bytes = refusal_reply_bytes(claim, &reception.response_message_id, canonical, reason)
-                .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
+            let reply_bytes =
+                refusal_reply_bytes(claim, &reception.response_message_id, canonical, reason)
+                    .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
             let changed = tx
                 .execute(
                     "UPDATE guichet_refusal_receptions\n\
@@ -1658,13 +1659,9 @@ impl MaicieStore {
             }
             reception.claim_generation = claim.claim_generation;
             reception.claim_token = claim.claim_token.clone();
-            reception.reply_bytes = refusal_reply_bytes(
-                claim,
-                &reception.response_message_id,
-                canonical,
-                reason,
-            )
-            .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
+            reception.reply_bytes =
+                refusal_reply_bytes(claim, &reception.response_message_id, canonical, reason)
+                    .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
             tx.commit().map_err(StoreError::Sql)?;
             return Ok(StoredGuichetReply {
                 reception,
@@ -2945,15 +2942,7 @@ type RawGuichetProjectionFacts = (
     i64,
 );
 
-type RawGuichetRefusalReception = (
-    String,
-    String,
-    String,
-    Vec<u8>,
-    i64,
-    String,
-    i64,
-);
+type RawGuichetRefusalReception = (String, String, String, Vec<u8>, i64, String, i64);
 
 fn load_guichet_refusal_reception(
     tx: &Transaction<'_>,
@@ -2971,26 +2960,36 @@ fn load_guichet_refusal_reception(
         )
         .optional()
         .map_err(StoreError::Sql)?;
-    raw.map(|(operation, response_message_id, reason, reply_bytes, claim_generation, claim_token, processed_at)| {
-        parse_refusal_reason_name(&reason)?;
-        Ok(ReceptionGreffe {
-            issuer_scope: issuer_scope.to_string(),
-            request_id: request_id.to_string(),
-            operation: parse_operation_name(&operation)?,
-            canonical_request_bytes: canonical_request_bytes.to_vec(),
-            objective_id: None,
-            delegation_id: None,
-            delivery_hash: None,
+    raw.map(
+        |(
+            operation,
             response_message_id,
-            claim_generation: u64::try_from(claim_generation)
-                .map_err(|_| StoreError::Corrupt("génération de refus invalide"))?,
-            claim_token,
+            reason,
             reply_bytes,
-            issue: IssueGreffe::Refusee,
-            decision_id: None,
+            claim_generation,
+            claim_token,
             processed_at,
-        })
-    })
+        )| {
+            parse_refusal_reason_name(&reason)?;
+            Ok(ReceptionGreffe {
+                issuer_scope: issuer_scope.to_string(),
+                request_id: request_id.to_string(),
+                operation: parse_operation_name(&operation)?,
+                canonical_request_bytes: canonical_request_bytes.to_vec(),
+                objective_id: None,
+                delegation_id: None,
+                delivery_hash: None,
+                response_message_id,
+                claim_generation: u64::try_from(claim_generation)
+                    .map_err(|_| StoreError::Corrupt("génération de refus invalide"))?,
+                claim_token,
+                reply_bytes,
+                issue: IssueGreffe::Refusee,
+                decision_id: None,
+                processed_at,
+            })
+        },
+    )
     .transpose()
 }
 

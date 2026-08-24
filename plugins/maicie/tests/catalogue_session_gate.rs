@@ -113,9 +113,10 @@ fn gate_session_017_cinq_promesses() {
     );
     fs::write(&journal_path, &without_final_lf.as_bytes()[..cut]).expect("P1 truncate");
 
-    let after_crash = parse_journal_bytes(&fs::read(&journal_path).expect("P1 reread"))
-        .expect("PROMESSE(1) SURVIE — MUTATION: parse qui refuse le journal entier \
-                 sur queue arrachée ; les entrées antérieures DOIVENT rester lisibles");
+    let after_crash = parse_journal_bytes(&fs::read(&journal_path).expect("P1 reread")).expect(
+        "PROMESSE(1) SURVIE — MUTATION: parse qui refuse le journal entier \
+                 sur queue arrachée ; les entrées antérieures DOIVENT rester lisibles",
+    );
     assert!(
         after_crash.torn_tail_warning.is_some(),
         "PROMESSE(1) SURVIE — MUTATION: ignorer la queue arrachée sans avertissement \
@@ -241,7 +242,8 @@ fn gate_session_017_cinq_promesses() {
         })
         .expect("PROMESSE(3) QUALIF — l'add de qualification doit exister");
     assert_eq!(
-        after_text, verbatim,
+        after_text,
+        verbatim,
         "PROMESSE(3) QUALIF — MUTATION: réécrire/normaliser le texte migré ; \
          octet pour octet exigé (len avant={}, après={})",
         verbatim.len(),
@@ -421,7 +423,11 @@ fn gate_session_017_cinq_promesses() {
 
     eprintln!(
         "gate_session_017 OK — N={} M={} K={} P={} delivered={}",
-        after.ouverts, after.recurrents, after.gates_rates, after.pending_qualification, after.delivered
+        after.ouverts,
+        after.recurrents,
+        after.gates_rates,
+        after.pending_qualification,
+        after.delivered
     );
 }
 
