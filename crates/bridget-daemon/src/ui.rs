@@ -79,9 +79,9 @@ impl From<std::io::Error> for UiError {
     }
 }
 
-#[derive(Default)]
 struct UiRelayRuntime {
     human_presence: Mutex<Option<UiHumanPresence>>,
+    human_presence_channel: Option<String>,
 }
 
 struct UiHumanPresence {
@@ -89,6 +89,13 @@ struct UiHumanPresence {
 }
 
 impl UiRelayRuntime {
+    fn new(human_presence_channel: Option<String>) -> Self {
+        Self {
+            human_presence: Mutex::new(None),
+            human_presence_channel,
+        }
+    }
+
     fn ensure_human_presence(&self, socket_path: &Path) -> Result<(), UiError> {
         let mut presence = self
             .human_presence
@@ -100,12 +107,18 @@ impl UiRelayRuntime {
         {
             return Ok(());
         }
-        *presence = Some(open_human_presence(socket_path)?);
+        *presence = Some(open_human_presence(
+            socket_path,
+            self.human_presence_channel.as_deref(),
+        )?);
         Ok(())
     }
 }
 
-fn open_human_presence(socket_path: &Path) -> Result<UiHumanPresence, UiError> {
+fn open_human_presence(
+    socket_path: &Path,
+    attested_channel: Option<&str>,
+) -> Result<UiHumanPresence, UiError> {
     let stream = UnixStream::connect(socket_path)?;
     let read_stream = stream.try_clone()?;
     let writer = Arc::new(Mutex::new(BufWriter::new(stream)));
@@ -120,8 +133,8 @@ fn open_human_presence(socket_path: &Path) -> Result<UiHumanPresence, UiError> {
                 agent_type: "ui".to_string(),
                 name: Some(UI_SENDER.to_string()),
                 host: Some("localhost".to_string()),
-                transport: Some("unix".to_string()),
-                channel: Some("unix".to_string()),
+                transport: None,
+                channel: attested_channel.map(str::to_owned),
                 mode: Some(PresenceMode::Cli),
                 location: None,
                 os: Some(std::env::consts::OS.to_string()),
@@ -190,6 +203,13 @@ pub struct UiRelay {
 
 impl UiRelay {
     pub fn bind(config: UiRelayConfig) -> Result<Self, UiError> {
+        Self::bind_with_attested_channel(config, None)
+    }
+
+    fn bind_with_attested_channel(
+        config: UiRelayConfig,
+        attested_channel: Option<String>,
+    ) -> Result<Self, UiError> {
         if !config.bind.ip().is_loopback() {
             return Err(UiError::Configuration(
                 "le relais UI doit écouter exclusivement sur la boucle locale".to_string(),
@@ -202,7 +222,7 @@ impl UiRelay {
         Ok(Self {
             listener,
             config,
-            runtime: Arc::new(UiRelayRuntime::default()),
+            runtime: Arc::new(UiRelayRuntime::new(attested_channel)),
         })
     }
 
@@ -248,7 +268,10 @@ impl UiRelay {
 /// Lance `bridget ui`. Le terminal garde le jeton ; aucun secret ne part
 /// dans le HTML ou dans une configuration persistée.
 pub fn run(daemon_socket: PathBuf, maicie_config: PathBuf) -> Result<(), UiError> {
-    let relay = UiRelay::bind(UiRelayConfig::loopback(daemon_socket, maicie_config))?;
+    let relay = UiRelay::bind_with_attested_channel(
+        UiRelayConfig::loopback(daemon_socket, maicie_config),
+        crate::connection_channel::attested_connection_channel(),
+    )?;
     println!("Bridget UI (lecture et envoi) : {}", relay.url()?);
     relay.serve()
 }
@@ -1214,14 +1237,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn spec_024_presence_ui_annonce_canal_unix_dans_la_trame_register() {
+    fn capture_ui_registration_channel(
+        attested_channel: Option<&str>,
+    ) -> (Option<String>, Option<String>) {
         let socket_path = std::env::temp_dir().join(format!(
             "bridget-ui-register-{}.sock",
             uuid::Uuid::new_v4().simple()
         ));
         let listener = UnixListener::bind(&socket_path).unwrap();
-        let (channel_sender, channel_receiver) = std::sync::mpsc::channel();
+        let (registration_sender, registration_receiver) = std::sync::mpsc::channel();
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
@@ -1229,11 +1253,13 @@ mod tests {
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
             let registration: WrapperToDaemon = decode(line.trim()).unwrap();
-            let channel = match registration {
-                WrapperToDaemon::Register { channel, .. } => channel,
+            let registration = match registration {
+                WrapperToDaemon::Register {
+                    transport, channel, ..
+                } => (transport, channel),
                 message => panic!("Register UI attendu, reçu {message:?}"),
             };
-            channel_sender.send(channel).unwrap();
+            registration_sender.send(registration).unwrap();
             writeln!(
                 writer,
                 "{}",
@@ -1252,11 +1278,33 @@ mod tests {
             ));
         });
 
-        let presence = open_human_presence(&socket_path).unwrap();
+        let presence = open_human_presence(&socket_path, attested_channel).unwrap();
         server.join().unwrap();
-        assert_eq!(channel_receiver.recv().unwrap().as_deref(), Some("unix"));
+        let registration = registration_receiver.recv().unwrap();
         drop(presence);
         std::fs::remove_file(socket_path).unwrap();
+        registration
+    }
+
+    #[test]
+    fn spec_024_presence_ui_locale_annonce_unix_dans_la_trame_reelle() {
+        assert_eq!(
+            capture_ui_registration_channel(Some("unix")),
+            (None, Some("unix".to_string()))
+        );
+    }
+
+    #[test]
+    fn spec_024_presence_ui_federee_conserve_ssh_unix_dans_la_trame_reelle() {
+        assert_eq!(
+            capture_ui_registration_channel(Some("ssh-unix")),
+            (None, Some("ssh-unix".to_string()))
+        );
+    }
+
+    #[test]
+    fn spec_024_presence_ui_sans_attestation_reste_inconnue_dans_la_trame_reelle() {
+        assert_eq!(capture_ui_registration_channel(None), (None, None));
     }
 
     #[test]

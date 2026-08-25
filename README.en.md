@@ -304,12 +304,18 @@ except for diagnosis.
 
 | Variable | Effect |
 |---|---|
-| `BRIDGET_CHANNEL` | connection channel advertised separately from the protocol (default: `unix`, or `channel=` in `~/.config/bridget/federation.env`) |
+| `BRIDGET_CHANNEL` | explicit connection-channel attestation, separate from the protocol; without attestation, the channel stays unknown |
 | `BRIDGET_TRANSPORT` | legacy alias for `BRIDGET_CHANNEL`, kept for rolling upgrades |
 | `BRIDGET_AGENT_NAME` | agent name, exported by the wrapper to the agent process |
 | `BRIDGET_AGENT_NAME_FILE` | file holding the current name; this is what prevails after a `rename` |
 | `HOSTNAME` | advertised host, otherwise the output of `hostname` |
 | `RUST_LOG=debug` | verbose logging, including the source of every model observation |
+
+The federation installer also writes `channel=` (and the legacy
+`transport=` alias) to `~/.config/bridget/federation.env`. If the process
+environment and this file advertise different channels, Bridget publishes an
+unknown channel: neither potentially stale fact wins merely because of read
+order.
 
 Files, all under `~/.cache/bridget/`:
 

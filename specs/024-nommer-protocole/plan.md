@@ -29,20 +29,26 @@ absente afin qu'un client récent lise un ancien daemon.
 
 ## D-2404 — Corriger l'écrivain, garder les alias
 
-Le nom interne devient `connection_channel`. Ordre de lecture :
-`BRIDGET_CHANNEL`, alias `BRIDGET_TRANSPORT`, `channel=` dans
-`federation.env`, alias `transport=`, puis `unix`. L'installateur écrit les
-deux clés pendant la période de compatibilité afin qu'un ancien wrapper
+Une attestation commune gouverne le wrapper et la présence UI. Dans chaque
+source, `BRIDGET_CHANNEL` prime sur son alias `BRIDGET_TRANSPORT`, et
+`channel=` prime sur `transport=` dans `federation.env`. Entre environnement
+et fichier, une valeur unique ou deux valeurs égales sont attestées ; deux
+valeurs divergentes ou l'absence des deux produisent l'inconnu. Aucun ordre de
+lecture et aucun `UnixStream` ne décident du fait réseau. L'installateur écrit
+les deux clés pendant la période de compatibilité afin qu'un ancien wrapper
 continue de voir `ssh-unix`.
 
 ## D-2405 — Matrice de preuve
 
-1. tmux local : `tmux` / `unix` ;
+1. tmux local explicitement attesté : `tmux` / `unix` ;
 2. tmux fédéré historique : `tmux` / `ssh-unix` ;
 3. ACP : `acp` / `unix` ;
 4. Codex natif : `codex_app_server` / `unix` ;
 5. Claude natif : `claude_stream_json` / `unix` ;
-6. trame sans canal attesté : protocole conservé, canal absent.
+6. trame sans canal attesté : protocole conservé, canal absent ;
+7. présence UI locale, fédérée, sans attestation et avec attestations
+   divergentes : `unix`, `ssh-unix`, absent, absent dans la trame puis dans
+   `AgentInfo`.
 
 Les tests couvrent aussi le rendu des deux colonnes et la préférence de la
 nouvelle clé de configuration sur l'alias historique.

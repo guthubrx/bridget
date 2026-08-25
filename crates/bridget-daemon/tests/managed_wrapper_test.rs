@@ -269,6 +269,7 @@ while IFS= read -r line; do :; done
             ("USER".to_string(), OsString::from("tester")),
             ("LANG".to_string(), OsString::from("C")),
             ("TMPDIR".to_string(), OsString::from("/tmp")),
+            ("BRIDGET_CHANNEL".to_string(), OsString::from("unix")),
         ]),
     };
     let marker_store = ManagedMarkerStore::at_directory(root.join("managed"));

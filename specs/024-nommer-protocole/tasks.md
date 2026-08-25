@@ -1,7 +1,6 @@
 # Tasks 024 — Nommer le protocole réel sans perdre le canal
 
-**Base** : `session-024-nommer-protocole` depuis `origin/main`
-(`29824c802bf673d8767154a00cd9d86f9c159e56`).
+**Base de composition** : `2330dfde7f9de8f663f84397b554f91d834096a2`.
 
 - [x] **T2401 [FR-2401/FR-2409] Inventorier les valeurs et leurs écrivains.**
   Mesurer la flotte, lire `transport_name`, le Register, la projection et
@@ -34,3 +33,12 @@
 - [x] **T2408 Portes et livraison.** Format, Clippy, compilation sans
   exécution avant comptage, suites ciblées et workspace, puis rapport des
   valeurs non mesurées.
+
+- [x] **T2409 [FR-2410/FR-2411] Attester le canal de la présence UI.**
+  Partager la résolution environnement/fédération, supprimer la déduction par
+  `UnixStream` et empêcher le repli historique `transport=unix` de recréer un
+  canal absent. **Tests** : trames UI et `AgentInfo` local, fédéré et inconnu.
+
+- [x] **T2410 [FR-2411] Fermer la divergence et les mutants.** Deux sources
+  discordantes donnent l'inconnu ; les mutants fédéré, défaut `unix`, repli
+  historique et priorité arbitraire font mourir leurs oracles nommés.

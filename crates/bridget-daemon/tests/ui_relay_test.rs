@@ -52,6 +52,70 @@ impl Drop for DaemonProcess {
     }
 }
 
+struct UiProcess {
+    child: Child,
+    address: SocketAddr,
+    token: String,
+}
+
+impl UiProcess {
+    fn start(home: &Path, environment_channel: Option<&str>) -> Self {
+        let maicie_config = write_maicie_config(home);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
+        command
+            .args(["ui", "--maicie-config"])
+            .arg(&maicie_config)
+            .env_clear()
+            .env("HOME", home)
+            .env("PATH", "/usr/bin:/bin")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        if let Some(channel) = environment_channel {
+            command.env("BRIDGET_CHANNEL", channel);
+        }
+        let mut child = command.spawn().expect("relais UI réel démarré");
+        let stdout = child.stdout.take().expect("stdout UI capturé");
+        let (line_sender, line_receiver) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let mut line = String::new();
+            let _ = BufReader::new(stdout).read_line(&mut line);
+            let _ = line_sender.send(line);
+        });
+        let line = line_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("URL du relais UI publiée");
+        let url = line
+            .split_once("http://")
+            .map(|(_, url)| url.trim())
+            .unwrap_or_else(|| panic!("URL UI absente de {line:?}"));
+        let (address, token) = url
+            .split_once("/?token=")
+            .unwrap_or_else(|| panic!("URL UI inattendue: {url}"));
+        Self {
+            child,
+            address: address.parse().expect("adresse loopback UI"),
+            token: token.to_string(),
+        }
+    }
+
+    fn terminate(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            assert_eq!(
+                unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM) },
+                0
+            );
+            let _ = self.child.wait();
+        }
+    }
+}
+
+impl Drop for UiProcess {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
 struct LiveAgent {
     writer: BufWriter<UnixStream>,
     reader: BufReader<UnixStream>,
@@ -148,6 +212,50 @@ fn write_maicie_config(root: &Path) -> PathBuf {
     path
 }
 
+fn observe_ui_presence_channel(
+    label: &str,
+    environment_channel: Option<&str>,
+    federation_config: Option<&str>,
+) -> Option<String> {
+    let root = root(label);
+    if let Some(config) = federation_config {
+        let config_directory = root.join(".config/bridget");
+        std::fs::create_dir_all(&config_directory).unwrap();
+        std::fs::write(config_directory.join("federation.env"), config).unwrap();
+    }
+    let daemon = DaemonProcess::start(&root);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let mut recipient = LiveAgent::connect(&socket, "destinataire-canal-ui");
+    let ui = UiProcess::start(&root, environment_channel);
+    let response = read_response(request_http(
+        ui.address,
+        "POST",
+        &format!("/v1/send?token={}", ui.token),
+        Some(r#"{"version":1,"to":"destinataire-canal-ui","body":"preuve canal","reply":true}"#),
+    ));
+    assert!(response.starts_with("HTTP/1.1 202"), "{response}");
+    assert!(matches!(
+        recipient.read(),
+        DaemonToWrapper::DeliverIdempotent { .. }
+    ));
+    recipient.send(&WrapperToDaemon::ListAgents);
+    let agents = match recipient.read() {
+        DaemonToWrapper::AgentList { agents } => agents,
+        response => panic!("AgentList attendu, reçu {response:?}"),
+    };
+    let human = agents
+        .iter()
+        .find(|agent| agent.name == "humain")
+        .expect("présence humaine UI enregistrée");
+    assert_eq!(human.transport, "cli");
+    let channel = human.channel.clone();
+    drop(ui);
+    drop(recipient);
+    drop(daemon);
+    std::fs::remove_dir_all(root).unwrap();
+    channel
+}
+
 fn request(address: SocketAddr, path: &str) -> TcpStream {
     request_http(address, "GET", path, None)
 }
@@ -209,6 +317,47 @@ fn read_until(stream: &mut TcpStream, expected: &str) -> String {
         }
     }
     String::from_utf8(bytes).unwrap()
+}
+
+#[test]
+fn spec_024_ui_locale_attestee_projette_unix_dans_agent_info() {
+    assert_eq!(
+        observe_ui_presence_channel("canal-local", Some("unix"), None).as_deref(),
+        Some("unix")
+    );
+}
+
+#[test]
+fn spec_024_ui_federee_projette_ssh_unix_dans_agent_info() {
+    assert_eq!(
+        observe_ui_presence_channel(
+            "canal-federe",
+            None,
+            Some("channel=ssh-unix\ntransport=ssh-unix\n")
+        )
+        .as_deref(),
+        Some("ssh-unix")
+    );
+}
+
+#[test]
+fn spec_024_ui_sans_attestation_reste_inconnue_dans_agent_info() {
+    assert_eq!(
+        observe_ui_presence_channel("canal-inconnu", None, None),
+        None
+    );
+}
+
+#[test]
+fn spec_024_ui_aux_attestations_divergentes_reste_inconnue_dans_agent_info() {
+    assert_eq!(
+        observe_ui_presence_channel(
+            "canal-divergent",
+            Some("unix"),
+            Some("channel=ssh-unix\ntransport=ssh-unix\n")
+        ),
+        None
+    );
 }
 
 #[test]
@@ -434,7 +583,10 @@ fn post_v1_send_reply_true_cree_une_demande_suivie() {
         .iter()
         .find(|agent| agent.name == "humain")
         .expect("présence humaine UI enregistrée");
-    assert_eq!(human.channel.as_deref(), Some("unix"));
+    assert_eq!(
+        human.channel, None,
+        "UiRelay::bind sans attestation ne doit pas réinventer unix via transport"
+    );
     let requests = recipient.open_requests();
     assert!(
         requests.iter().any(|request| request.id == message_id),

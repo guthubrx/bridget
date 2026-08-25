@@ -7,8 +7,8 @@ Spec: 024-nommer-protocole
 Titre: Nommer le protocole réel sans perdre le canal
 Statut: Complete
 Priorité: P1
-Tâches: 8/8 (100%)
-Tests: 7/7 (100%)
+Tâches: 10/10 (100%)
+Tests: 16/16 (100%)
 
 Résumé:
 - Contexte: La projection `TRANSPORT` mélange protocole d'agent et canal réseau.
@@ -82,6 +82,7 @@ conserve l'indication de fédération déjà annoncée.
 
 1. **Given** une ancienne trame tmux distante, **When** elle est enregistrée, **Then** le protocole devient `tmux` et le canal reste `ssh-unix`.
 2. **Given** un ancien client qui lit `AgentInfo`, **When** le daemon ajoute `channel`, **Then** les champs historiques restent inchangés.
+3. **Given** une présence UI locale, fédérée ou sans attestation, **When** elle s'enregistre, **Then** son canal vaut respectivement `unix`, `ssh-unix` ou reste absent dans la trame et dans `AgentInfo`.
 
 ## Requirements
 
@@ -94,8 +95,10 @@ conserve l'indication de fédération déjà annoncée.
 - **FR-2405**: `acp` DOIT rester le nom du protocole Cursor/Gemini réellement parlé.
 - **FR-2406**: `who` DOIT afficher deux colonnes distinctes `TRANSPORT` et `CANAL`.
 - **FR-2407**: Une trame historique sans `channel` DOIT rester décodable et conserver toute information déjà attestée.
-- **FR-2408**: `BRIDGET_CHANNEL` et `channel=` DOIVENT devenir les noms préférés ; `BRIDGET_TRANSPORT` et `transport=` restent des alias de compatibilité.
+- **FR-2408**: `BRIDGET_CHANNEL` et `channel=` DOIVENT devenir les noms préférés dans leur source ; `BRIDGET_TRANSPORT` et `transport=` restent des alias de compatibilité.
 - **FR-2409**: Le protocole NE DOIT PAS être déduit du seul `agent_type`.
+- **FR-2410**: Tout `Register` productif DOIT publier un canal attesté ou aucun canal ; le type local de la socket NE DOIT PAS devenir une preuve réseau.
+- **FR-2411**: Deux sources d'attestation divergentes DOIVENT produire un canal inconnu, jamais une priorité accidentelle.
 
 ### Non-Functional Requirements
 

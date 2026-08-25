@@ -468,12 +468,18 @@ manuel, sinon pour diagnostiquer.
 
 | Variable | Effet |
 |---|---|
-| `BRIDGET_CHANNEL` | canal de connexion annoncé séparément du protocole (défaut : `unix`, ou `channel=` dans `~/.config/bridget/federation.env`) |
+| `BRIDGET_CHANNEL` | attestation explicite du canal de connexion, séparée du protocole ; sans attestation, le canal reste inconnu |
 | `BRIDGET_TRANSPORT` | alias historique de `BRIDGET_CHANNEL`, conservé pour un déploiement progressif |
 | `BRIDGET_AGENT_NAME` | nom de l'agent, exporté par le wrapper vers le processus agent |
 | `BRIDGET_AGENT_NAME_FILE` | fichier portant le nom courant ; c'est lui qui fait foi après un `rename` |
 | `HOSTNAME` | hôte annoncé, à défaut la sortie de `hostname` |
 | `RUST_LOG=debug` | journalisation détaillée, notamment la source de chaque observation de modèle |
+
+L'installateur fédéré écrit aussi `channel=` (et l'alias historique
+`transport=`) dans `~/.config/bridget/federation.env`. Si l'environnement du
+processus et ce fichier annoncent deux canaux différents, Bridget publie un
+canal inconnu : aucun des deux faits potentiellement périmés ne gagne par
+simple ordre de lecture.
 
 Fichiers, tous sous `~/.cache/bridget/` :
 

@@ -375,6 +375,7 @@ elif command == "delete-buffer":
         .env("USER", "parity-test")
         .env("LANG", "C")
         .env("TMPDIR", "/tmp")
+        .env("BRIDGET_CHANNEL", "unix")
         .env("BRIDGET_PROMPT_CAPTURE", &capture)
         .env("BRIDGET_PROMPT_RELEASE", &release)
         .env("BRIDGET_PROMPT_DONE", &done)
@@ -1579,6 +1580,7 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
             .env("USER", "parity-test")
             .env("LANG", "C")
             .env("TMPDIR", "/tmp")
+            .env("BRIDGET_CHANNEL", "unix")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -1641,6 +1643,7 @@ fn matrice_fr008_compare_la_garde_de_facturation() {
         .env("USER", "parity-test")
         .env("LANG", "C")
         .env("TMPDIR", "/tmp")
+        .env("BRIDGET_CHANNEL", "unix")
         .env("OPENAI_API_KEY", "forbidden-test-key")
         .output()
         .unwrap();

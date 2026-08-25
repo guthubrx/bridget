@@ -799,35 +799,10 @@ fn host_name() -> String {
         .unwrap_or_else(|| "inconnu".to_string())
 }
 
-fn federation_channel(config: &str) -> Option<String> {
-    ["channel=", "transport="].into_iter().find_map(|prefix| {
-        config.lines().find_map(|line| {
-            line.strip_prefix(prefix)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned)
-        })
-    })
-}
-
 const INTERACTIVE_AGENT_PROTOCOL: &str = "tmux";
 
-fn connection_channel() -> String {
-    for variable in ["BRIDGET_CHANNEL", "BRIDGET_TRANSPORT"] {
-        if let Ok(channel) = std::env::var(variable)
-            && !channel.trim().is_empty()
-        {
-            return channel.trim().to_string();
-        }
-    }
-    let config_path = std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
-        .join(".config/bridget/federation.env");
-    std::fs::read_to_string(config_path)
-        .ok()
-        .and_then(|config| federation_channel(&config))
-        .unwrap_or_else(|| "unix".to_string())
+fn connection_channel() -> Option<String> {
+    crate::connection_channel::attested_connection_channel()
 }
 
 /// Domaine de travail dérivé du répertoire courant.
@@ -1265,7 +1240,7 @@ fn connect_and_register(
     name: Option<&str>,
     host: &str,
     protocol: &str,
-    channel: &str,
+    channel: Option<&str>,
     mode: PresenceMode,
     location: Option<&str>,
     os: &str,
@@ -1296,7 +1271,7 @@ fn connect_and_register_at(
     name: Option<&str>,
     host: &str,
     protocol: &str,
-    channel: &str,
+    channel: Option<&str>,
     mode: PresenceMode,
     location: Option<&str>,
     os: &str,
@@ -1321,7 +1296,7 @@ fn connect_and_register_at(
         name: name.map(str::to_owned),
         host: Some(host.to_string()),
         transport: Some(protocol.to_string()),
-        channel: Some(channel.to_string()),
+        channel: channel.map(str::to_owned),
         mode: Some(mode),
         location: location.map(str::to_owned),
         os: Some(os.to_string()),
@@ -1390,7 +1365,7 @@ pub fn launch(
         effective_name.as_deref(),
         &host,
         INTERACTIVE_AGENT_PROTOCOL,
-        &channel,
+        channel.as_deref(),
         PresenceMode::Tmux,
         tmux_location.as_deref(),
         &os,
@@ -1746,7 +1721,7 @@ pub fn launch(
                         Some(&wanted_name),
                         &host_for_thread,
                         INTERACTIVE_AGENT_PROTOCOL,
-                        &channel_for_thread,
+                        channel_for_thread.as_deref(),
                         PresenceMode::Tmux,
                         tmux_location_for_thread.as_deref(),
                         &os_for_thread,
@@ -1926,7 +1901,7 @@ pub fn launch(
                             Some(&wanted_name),
                             &host_for_thread,
                             INTERACTIVE_AGENT_PROTOCOL,
-                            &channel_for_thread,
+                            channel_for_thread.as_deref(),
                             PresenceMode::Tmux,
                             tmux_location_for_thread.as_deref(),
                             &os_for_thread,
@@ -3026,7 +3001,7 @@ fn launch_acp_with_status(
         effective_name.as_deref(),
         &host,
         &definition.protocol,
-        &channel,
+        channel.as_deref(),
         descriptor.mode,
         descriptor.location.as_deref(),
         &os,
@@ -3116,7 +3091,7 @@ fn launch_acp_with_status(
                     agent_type,
                     &name_state_path,
                     &host,
-                    &channel,
+                    channel.as_deref(),
                     &os,
                     &instance_id,
                     &my_name,
@@ -3235,7 +3210,7 @@ fn launch_acp_with_status(
                     agent_type,
                     &name_state_path,
                     &host,
-                    &channel,
+                    channel.as_deref(),
                     &os,
                     &instance_id,
                     &my_name,
@@ -3561,7 +3536,7 @@ fn reconnect_managed_session(
     agent_type: &str,
     name_state_path: &std::path::Path,
     host: &str,
-    channel: &str,
+    channel: Option<&str>,
     os: &str,
     instance_id: &str,
     fallback_name: &str,
@@ -4511,15 +4486,27 @@ mod reconnect_tests {
     #[test]
     fn spec_024_canal_federe_prefere_la_nouvelle_cle_et_lit_l_alias() {
         assert_eq!(
-            federation_channel("transport=ssh-unix\n"),
+            crate::connection_channel::attested_channel_from_sources(
+                None,
+                None,
+                Some("transport=ssh-unix\n")
+            ),
             Some("ssh-unix".to_string())
         );
         assert_eq!(
-            federation_channel("transport=ancien\nchannel=ssh-unix\n"),
+            crate::connection_channel::attested_channel_from_sources(
+                None,
+                None,
+                Some("transport=ancien\nchannel=ssh-unix\n")
+            ),
             Some("ssh-unix".to_string())
         );
         assert_eq!(
-            federation_channel("channel=   \ntransport=unix\n"),
+            crate::connection_channel::attested_channel_from_sources(
+                None,
+                None,
+                Some("channel=   \ntransport=unix\n")
+            ),
             Some("unix".to_string())
         );
     }
@@ -4564,7 +4551,7 @@ mod reconnect_tests {
             Some("cartae-agent"),
             "cartae",
             INTERACTIVE_AGENT_PROTOCOL,
-            "ssh-unix",
+            Some("ssh-unix"),
             PresenceMode::Tmux,
             Some("bridget:2.1"),
             "Linux",

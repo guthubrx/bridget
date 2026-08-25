@@ -94,20 +94,70 @@ constructeurs Rust exhaustifs. Après rebase, le premier `--no-run` a reproduit
 `E0063` dans l'initialiseur productif de la présence UI, puis dans trois
 initialiseurs de `guichet_integration_test` ajoutés sur la nouvelle base.
 
-Le canal UI n'a pas été deviné : `open_human_presence` appelle directement
-`UnixStream::connect`, donc sa trame `Register` annonce `channel=unix`. Un test
-lit cette trame réelle avant de terminer le handshake, puis le test
-d'intégration relit `AgentInfo.channel` depuis le daemon. Le mutant
-`channel=None` rend exactement 0 passé / 1 échoué avec `left=None` et
-`right=Some("unix")`; après restauration, le témoin rend 1/0/0.
+Le premier amendement avait attribué `channel=unix` à la présence UI parce que
+`open_human_presence` appelle `UnixStream::connect`. La relecture a invalidé
+ce raisonnement : sur une machine fédérée, le tunnel SSH publie lui aussi le
+daemon maître sous forme de socket Unix locale. L'API décrit le dernier saut,
+pas le fait réseau.
+
+L'amendement final partage donc une seule résolution d'attestation entre les
+wrappers et l'UI. `BRIDGET_CHANNEL` et `channel=` gouvernent leurs alias dans
+leur propre source. Entre environnement et `federation.env`, une valeur
+unique ou concordante est publiée ; une divergence ou l'absence des deux reste
+inconnue. La présence UI n'envoie plus `transport=unix`, car ce champ historique
+permettait au daemon de recréer artificiellement `channel=unix` quand le champ
+additif était absent.
+
+Trois tests lisent la trame `Register` réelle et quatre tests de couture
+lancent le vrai daemon puis le vrai sous-processus `bridget ui`. Ils attestent
+`unix` en configuration locale explicite, `ssh-unix` depuis
+`federation.env`, et l'absence en l'absence de source ou en cas de divergence,
+jusque dans `AgentInfo`.
+
+Quatre mutations discriminantes ont été exécutées puis restaurées :
+
+1. reclasser `ssh-unix` en `unix` tue les oracles fédérés de trame et de
+   projection ;
+2. remplacer un canal absent par le défaut `unix` tue les oracles d'inconnu ;
+3. remettre `transport=unix` dans la trame UI tue l'oracle `AgentInfo` en
+   réactivant le repli historique ;
+4. faire gagner arbitrairement l'environnement sur un fichier divergent tue
+   l'oracle de résolution et l'oracle de projection.
 
 Mesures de composition, dans l'ordre demandé :
 
 - base nue `2330dfde` : `--no-run` vert, 962 tests listés,
   **941 passés / 3 échoués / 18 ignorés** ;
-- composition : `--no-run` vert, 968 tests listés,
-  **947 passés / 3 échoués / 18 ignorés** ;
-- `ui_relay_test` exact : **11 passés / 0 échoué / 0 ignoré**.
+- composition avant l'amendement d'attestation : `--no-run` vert, 968 tests
+  listés, **947 passés / 3 échoués / 18 ignorés** ;
+- `ui_relay_test` avant l'amendement d'attestation : **11 passés / 0 échoué /
+  0 ignoré**.
+
+Comptes finaux post-amendement, après `--no-run` vert des deux côtés puis
+inventaire et exécution séquentielle de la même closure
+`bridget-transport + maicie + bridget-daemon` :
+
+- base nue `2330dfde` : 962 tests listés,
+  **941 passés / 3 échoués / 18 ignorés** ;
+- tête amendée : 978 tests listés,
+  **957 passés / 3 échoués / 18 ignorés** ;
+- `ui_relay_test` exact : **15 passés / 0 échoué / 0 ignoré** ;
+- famille `spec_024_*` : **15 passés / 0 échoué**, plus le test shell de
+  fédération vert, soit 16 oracles G11.
+
+Une première exécution simultanée base/tête a produit deux rouges
+supplémentaires uniquement sur la base et trois rouges sur la tête dans des
+harness qui lançaient un wrapper local avec un environnement volontairement
+vidé. Cette passe n'a pas été retenue comme soustraction. Les harness locaux
+déclarent désormais explicitement `BRIDGET_CHANNEL=unix`; leurs trois cibles
+ont passé isolément, puis la répétition séquentielle a retrouvé exactement les
+trois rouges de référence des deux côtés.
+
+L'inventaire des consommateurs a aussi fermé la compatibilité du retrait de
+`Register.transport=unix` pour l'UI : le daemon de `1fc67ef` filtrait déjà
+cette valeur réseau et publiait `AgentInfo.transport=cli`. CLI, MCP et Maicie
+continuent donc de lire et publier `cli`; le snapshot UI et Attach ne lisent
+pas ce champ, et aucun chemin ledger ne le persiste.
 
 Les trois rouges de composition sont les mêmes références hors lot que sur la
 base. Un passage intermédiaire a aussi produit trois timeouts simultanés dans
