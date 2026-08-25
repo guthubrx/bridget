@@ -32,6 +32,17 @@ la machine le 2026-08-24 ; un écart observé est noté comme découverte.
 compte les *objectifs* `a_evaluer` (`objectifs_a_evaluer=N` dans le résumé — pas les
 délégations). Traiter les délégations `a_evaluer` via `status --json` / greffe.
 
+**Migration v15 (orphelines + outbox) — avant `--migrate`.** Consentement
+explicite (`maicie migrate` / `--migrate`) ; `open()` refuse et n'écrit rien.
+Fail-closed : une seule ligne payload≠index → toute la migration échoue,
+`user_version` reste à 14. Sur copie de production mesurée : **265** délégations
+non terminales sur objectifs `clos` (à solder) vs **8** sur objectifs ouverts
+(intactes) ; ratio objectifs:délégations = 1:1. Les chiffres **27/264** du smoke
+auteur portent sur une **autre** copie privée — ne pas les fusionner avec 265/8.
+Le solde terminalise l'outbox dans la même transaction : migrer sans cela
+aurait laissé la reprise envoyer pendant la fenêtre de rejeu (~6,7 jours
+mesurés) ; avec la terminalisation, l'ordre d'exploitation devient indifférent.
+
 **Registre.** Entrées ouvertes (sévérité déclarée) + pied déterministe. Ce n’est pas une todo list inventée : c’est le journal du dû versionné.
 
 ## 3. Gestes sûrs du premier quart d’heure

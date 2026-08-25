@@ -117,16 +117,28 @@ SQLite fait échouer toute la migration (`Corrupt`) — `user_version` reste
 l'intégrité (copie privée d'abord) ; une base immigrable jusqu'à réparation
 manuelle est le comportement voulu (fail-closed), pas un bug.
 
-**Chiffres du smoke sur copie privée (pas la prod)** — vocabulaire exact :
+La terminalisation dans la transaction du solde rend l'ordre d'exploitation
+indifférent : migrer sans terminaliser aurait laissé la reprise envoyer
+pendant la fenêtre de rejeu encore ouverte (mesurée ~6,7 jours sur copie).
+
+**Ampleur mesurée sur copie de production (référent / relecteur)** — ratio
+objectifs:délégations = **1:1** (273/273), pas un ratio ~9,8 :
 
 | Chiffre | Ce qu'il compte |
 | --- | --- |
-| **27** | Délégations en `a_evaluer` dont l'objectif est déjà `clos` (JOIN orphelines), **avant** migrate. |
-| **264** | Délégations en `soldee_par_cloture` **après** migrate sur cette même copie (stock déjà soldé + les 27 orphelines converties). |
+| **265** | Délégations non terminales dont l'objectif est `clos` (à solder à la migration) — répartition observée : `creee` 244, `a_evaluer` 27, `en_attente_prerequis` 2. |
+| **8** | Délégations non terminales dont l'objectif est encore ouvert (intactes). |
+
+**Smoke auteur (copie privée distincte, pas la prod)** — autre instant, autre
+fichier ; ne pas confondre avec les 265/8 :
+
+| Chiffre | Ce qu'il compte |
+| --- | --- |
+| **27** | Délégations en `a_evaluer` dont l'objectif est déjà `clos`, **avant** migrate sur cette copie. |
+| **264** | Délégations en `soldee_par_cloture` **après** migrate sur cette même copie (stock déjà soldé + orphelines converties). |
 
 Ce ne sont **pas** des objectifs. `bridget-ronde` compte les **objectifs**
-`a_evaluer` (`objectifs_a_evaluer`) — d'où l'écart apparent avec le détail
-délégations.
+`a_evaluer` (`objectifs_a_evaluer`).
 
 ## Arrêt
 
