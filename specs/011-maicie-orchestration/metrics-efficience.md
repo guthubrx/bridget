@@ -87,3 +87,86 @@ Corrections à retenir sur la mesure de midi :
   rendement.
 - Tri de sessions fiable = par `cwd` et branche, JAMAIS par mots-clés
   (la liste d'outils injectée contient h3/horizon/ltx partout).
+
+---
+
+## Fenêtre C — 24/08 12:00 → 25/08 12:00 CEST
+
+Mesure exécutée par le référent (aucun agent Cursor libre : les onze étaient mandatés).
+
+### Production (git, toutes branches et worktrees, SHA uniques, date auteur)
+
+| | |
+|---|---|
+| Commits uniques | **275** |
+| Fusions | **41** |
+| Non-merge | **234** |
+| Lignes non-merge — **prod** | **22 701** |
+| Lignes non-merge — test | 6 631 |
+| Lignes non-merge — doc | 5 075 |
+| **Total lignes** | **34 407** |
+
+### Indisponibilité (mesurée, non déclarée)
+
+**Plus grand trou de commits : 299 minutes** — 24/08 21:53 → 25/08 02:53.
+Cause connue et documentée : le shell système a été écrasé par un agent qui « réparait » un `ENOENT` mal lu ; toute exécution était impossible. 255 commits horodatés dans la fenêtre.
+
+### Greffe
+
+Objectifs créés dans C : **111**. Objectifs clos dans C : **91** (via `mis_a_jour_at`, état `clos`).
+État global du greffe en fin de fenêtre : 271 clos, 29 en coordination, 1 à évaluer.
+*Aucun ratio vs B n'est cité : artefact de naissance d'outil, retiré du protocole.*
+
+### Ledger
+
+| | |
+|---|---|
+| Messages | **1 486** |
+| Demandes suivies | **77** |
+| `answered` | 67 |
+| `timed_out` | 6 |
+| `cancelled` | 4 |
+| **Taux de réponse** | **87 %** |
+
+Référence : A = 78 %, B = 36 %. **C est le meilleur des trois**, et dépasse A de 9 points.
+
+### Tokens du référent (tri par `cwd`, jamais par mots-clés)
+
+70 fichiers retenus (`cwd` sous `10.Scripts/bridget`), 27 sessions avec usage dans la fenêtre.
+
+| | |
+|---|---|
+| input | 22 200 |
+| output | 13 151 132 |
+| cache_creation | 35 300 353 |
+| **Facturable** | **48 473 685** |
+| cache_read (à part) | 4 236 696 806 |
+
+### Ratios
+
+| Métrique | C | B | A |
+|---|---|---|---|
+| **Facturable / fusion** | **1,18 M** | 1,45 M | 0,68 M |
+| Facturable / commit non-merge | 0,207 M | — | — |
+| Facturable / ligne de prod | 2 135 | — | — |
+
+**C vs B : −18 %. C vs A : +74 %.**
+
+### Hypothèse testée — la coordination autonome de Maicie réduit-elle les tokens du référent par unité livrée ?
+
+**Partiellement confirmé, et l'attribution reste incertaine.**
+
+Le coût par fusion baisse de 18 % entre B et C, et le taux de réponse aux demandes passe de 36 % à 87 %. Ce second chiffre est le plus solide : il mesure directement la coordination, et non le volume produit.
+
+**Mais l'attribution à Maicie seule n'est pas établie**, pour trois raisons mesurées :
+- une **indisponibilité de 299 minutes** ampute la fenêtre d'un cinquième, sans que la production s'effondre — ce qui déforme tous les ratios ;
+- **huit agents distants** ont été mis en service dans la seconde moitié de la fenêtre, déportant des compilations dont le coût en tokens n'est pas comptabilisé ici ;
+- le référent a passé une part importante de la fenêtre à **corriger ses propres constats** — quatre rectifications de faits qu'il avait portés à tort au registre. Ce coût est bien dans les tokens, mais il n'est pas un coût de coordination.
+
+**Non mesurable en l'état** : la part du gain due à Maicie contre celle due au déport et à la discipline de mesure adoptée dans la fenêtre.
+
+### Limites déclarées
+
+- **Tokens Codex et Cursor absents** : seuls ceux du référent sont mesurables. Avec vingt-six agents actifs dont huit distants, la consommation réelle du chantier est très supérieure et non quantifiée.
+- **Qualité non chiffrable.** Verdicts de revue de la fenêtre, depuis le greffe : **7 Blocker, 32 Major, 11 Minor, 2 Info**, et **47 constats portés le 25/08**. Quatre branches jugées caduques et archivées par tag après vérification indépendante. Trois trailers d'auteur interdits détectés, dont **26 occurrences sur `main`** — découverte d'un juré, non résolue.
+- **Non-portabilité découverte** : le gate de référence (`--features test-support`) ne compile pas sur Linux, ce qui limite ce que les jurés distants peuvent mesurer. Constat porté.
