@@ -1264,6 +1264,100 @@ fn hex_hash(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum RoutineOutput {
+    Proposed {
+        routine_id: Uuid,
+        template_hash_hex: String,
+        period_secs: i64,
+        participant: String,
+    },
+    Approved {
+        routine_id: Uuid,
+        state: &'static str,
+    },
+    State {
+        routine_id: Uuid,
+        state: &'static str,
+    },
+    List {
+        routines: Vec<RoutineStatusOutput>,
+    },
+    Show {
+        routine: RoutineStatusOutput,
+    },
+}
+
+#[derive(Serialize)]
+struct RoutineStatusOutput {
+    routine_id: Uuid,
+    state: EtatRoutine,
+    period_secs: i64,
+    participant: String,
+    last_bucket: Option<i64>,
+    open_occurrence: Option<maicie::routines::RoutineOccurrence>,
+    recent_sautee: Vec<maicie::routines::RoutineOccurrence>,
+    recent_differee: Vec<maicie::routines::RoutineOccurrence>,
+}
+
+impl From<RoutineStatusRow> for RoutineStatusOutput {
+    fn from(row: RoutineStatusRow) -> Self {
+        Self {
+            routine_id: row.routine_id,
+            state: row.state,
+            period_secs: row.period_secs,
+            participant: row.participant,
+            last_bucket: row.last_bucket,
+            open_occurrence: row.open_occurrence,
+            recent_sautee: row.recent_sautee,
+            recent_differee: row.recent_differee,
+        }
+    }
+}
+
+fn render_routine_output(output: RoutineOutput, json: bool) -> Result<String, CliError> {
+    if json {
+        return serde_json::to_string(&output)
+            .map_err(|_| CliError::Usage("sortie routine JSON indisponible"));
+    }
+    Ok(match output {
+        RoutineOutput::Proposed {
+            routine_id,
+            template_hash_hex,
+            period_secs,
+            participant,
+        } => format!(
+            "routine={} état=proposed participant={} period_secs={} hash={}",
+            routine_id, participant, period_secs, template_hash_hex
+        ),
+        RoutineOutput::Approved { routine_id, state }
+        | RoutineOutput::State { routine_id, state } => {
+            format!("routine={} état={}", routine_id, state)
+        }
+        RoutineOutput::List { routines } => format!(
+            "routines={} sautee={} differee={}",
+            routines.len(),
+            routines
+                .iter()
+                .map(|row| row.recent_sautee.len())
+                .sum::<usize>(),
+            routines
+                .iter()
+                .map(|row| row.recent_differee.len())
+                .sum::<usize>(),
+        ),
+        RoutineOutput::Show { routine } => format!(
+            "routine={} état={:?} sautee={} differee={} ouverte={}",
+            routine.routine_id,
+            routine.state,
+            routine.recent_sautee.len(),
+            routine.recent_differee.len(),
+            routine.open_occurrence.is_some(),
+        ),
+    })
+}
+
 fn parse_plage(arguments: &[String]) -> Result<PlageArgs, CliError> {
     let Some((verb, tail)) = arguments.split_first() else {
         return Err(CliError::Usage(
@@ -2691,6 +2785,7 @@ impl CliError {
             Self::Reconcile(ReconcileError::Store(_)) => EXIT_STORE,
             Self::Objective(ObjectiveError::Store(_)) => EXIT_STORE,
             Self::ProfileActivation(ProfileActivationError::Store(_)) => EXIT_STORE,
+            Self::Routine(RoutineError::Store(_)) => EXIT_STORE,
             Self::CatalogueReconcile(CatalogueReconcileError::Catalogue(_)) => EXIT_CONFIGURATION,
             Self::CatalogueReconcile(_) => EXIT_CONFIGURATION,
             Self::Reconcile(_) => EXIT_BRIDGET,
@@ -2699,7 +2794,7 @@ impl CliError {
                 EXIT_DELEGATE
             }
             Self::Objective(_) => EXIT_DELEGATE,
-            Self::Profile(_) | Self::ProfileActivation(_) => EXIT_DELEGATE,
+            Self::Profile(_) | Self::ProfileActivation(_) | Self::Routine(_) => EXIT_DELEGATE,
         }
     }
 
@@ -2726,6 +2821,9 @@ impl CliError {
             Self::Profile(_) => "profile_invalid",
             Self::ProfileActivation(ProfileActivationError::Store(_)) => "store",
             Self::ProfileActivation(_) => "profile_activation_invalid",
+            Self::Routine(RoutineError::Store(_)) => "store",
+            Self::Routine(RoutineError::NotFound(_)) => "routine_not_found",
+            Self::Routine(_) => "routine_invalid",
         }
     }
 
