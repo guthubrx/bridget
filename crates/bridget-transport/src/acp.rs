@@ -1,7 +1,7 @@
 //! Transport ACP synchrone : un lecteur stdout, un writer sérialisé et un
 //! worker FIFO. Le lecteur est l'unique propriétaire du flux de l'adaptateur.
 
-use crate::journal::{JournalLiveFeed, JournalWriter};
+use crate::journal::{JournalLiveFeed, JournalWriter, with_turn_failed_kind};
 use crate::managed_session::{
     ManagedEvent, ManagedEventKind, ManagedEventSource, ManagedSession, ManagedSessionDescriptor,
     ManagedTerminal,
@@ -908,7 +908,7 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                         &worker.events,
                         "error",
                         Some(message_id),
-                        json!({ "reason": reason }),
+                        with_turn_failed_kind(json!({ "reason": reason })),
                     );
                 }
                 _ => {}
@@ -2329,6 +2329,133 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             }
         }
         panic!("le faux adaptateur n'a pas terminé le tour");
+    }
+
+    #[test]
+    fn anomalie_acp_ne_ferme_le_tour_qu_apres_un_terminal_atteste() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-acp-terminalite-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let release = root.join("release-terminal");
+        std::fs::create_dir_all(&root).unwrap();
+        let script = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read request
+echo '{"jsonrpc":"2.0","method":"vendor/future","params":{"future":true}}'
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"le tour continue"}}}}'
+while [ ! -f "__RELEASE_TERMINAL__" ]; do sleep 0.01; done
+echo '{"jsonrpc":"2.0","id":3,"error":{"code":-32000,"message":"refus fournisseur"}}'
+while read request; do :; done
+"#
+        .replace(
+            "__RELEASE_TERMINAL__",
+            &release.display().to_string(),
+        );
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script],
+            queue_capacity: 1,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 5,
+        })
+        .unwrap();
+        transport.enable_journal(&root, "acp-live").unwrap();
+        transport.deliver(&message("message-live")).unwrap();
+
+        let mut saw_protocol_error = false;
+        let mut saw_continuation = false;
+        for _ in 0..100 {
+            thread::sleep(Duration::from_millis(10));
+            for event in transport.drain_events() {
+                saw_protocol_error |= matches!(
+                    event,
+                    AcpEvent::Error { ref detail }
+                        if detail == "notification ACP inconnue: vendor/future"
+                );
+                saw_continuation |= matches!(
+                    event,
+                    AcpEvent::Update { ref detail } if detail == "le tour continue"
+                );
+            }
+            if saw_protocol_error && saw_continuation {
+                break;
+            }
+        }
+        assert!(saw_protocol_error, "le faux ACP n'a pas émis son anomalie");
+        assert!(saw_continuation, "le faux ACP n'a pas poursuivi le prompt");
+        assert!(
+            matches!(transport.state(), TurnState::InProgress { ref message_id, .. } if message_id == "message-live"),
+            "l'anomalie protocole ne doit pas terminer le tour"
+        );
+
+        let read_events = || {
+            let mut events = std::fs::read_dir(root.join("acp-live"))
+                .unwrap()
+                .filter_map(Result::ok)
+                .flat_map(|entry| crate::journal::valid_events(&entry.path()))
+                .collect::<Vec<_>>();
+            events.sort_by_key(|event| event["seq"].as_u64());
+            events
+        };
+        let before_terminal = (0..100)
+            .find_map(|_| {
+                let events = read_events();
+                if events.iter().any(|event| event["event"] == "update") {
+                    Some(events)
+                } else {
+                    thread::sleep(Duration::from_millis(10));
+                    None
+                }
+            })
+            .expect("journal ACP non terminal non écrit");
+        let protocol_error = before_terminal
+            .iter()
+            .find(|event| event["event"] == "error")
+            .expect("anomalie ACP absente du journal");
+        assert!(protocol_error["payload"].get("terminal_kind").is_none());
+        assert!(
+            before_terminal
+                .iter()
+                .any(|event| event["event"] == "update")
+        );
+        assert!(!before_terminal.iter().any(|event| {
+            event["event"] == "turn_end"
+                || event["payload"].get("terminal_kind") == Some(&json!("turn_failed"))
+        }));
+
+        std::fs::write(&release, b"go").unwrap();
+        let mut rejected = false;
+        for _ in 0..100 {
+            thread::sleep(Duration::from_millis(10));
+            rejected |= transport.drain_events().iter().any(
+                |event| matches!(event, AcpEvent::DeliveryRejected { message_id, .. } if message_id == "message-live"),
+            );
+            if rejected {
+                break;
+            }
+        }
+        assert!(rejected, "le vrai terminal du faux ACP n'a pas été observé");
+        transport.shutdown();
+        let after_terminal = read_events();
+        let correlated_errors = after_terminal
+            .iter()
+            .filter(|event| event["event"] == "error" && event["message_id"] == "message-live")
+            .collect::<Vec<_>>();
+        let terminal_kind = correlated_errors
+            .last()
+            .and_then(|event| event["payload"].get("terminal_kind"))
+            .cloned();
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(correlated_errors.len(), 2, "anomalie et terminal attendus");
+        assert_eq!(terminal_kind, Some(json!("turn_failed")));
     }
 
     #[test]

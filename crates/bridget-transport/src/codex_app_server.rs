@@ -5,7 +5,7 @@
 //! crate publiée `codex-app-server-protocol` suit un autre produit et une
 //! autre numérotation ; la lier ici cacherait une incompatibilité possible.
 
-use crate::journal::{JournalFailureSink, JournalLiveFeed, JournalWriter};
+use crate::journal::{JournalFailureSink, JournalLiveFeed, JournalWriter, with_turn_failed_kind};
 use crate::managed_session::{
     ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource, ManagedSession,
     ManagedSessionDescriptor, ManagedTerminal,
@@ -790,6 +790,7 @@ fn record(
     message_id: Option<&str>,
     payload: Value,
 ) -> Result<(), String> {
+    let payload = codex_journal_payload(event, payload);
     journal
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
@@ -1032,6 +1033,17 @@ fn approval_text<'a>(value: &'a Value, method: &'a str) -> &'a str {
                 .filter(|text| !text.is_empty())
         })
         .unwrap_or(method)
+}
+
+fn codex_journal_payload(event: &str, payload: Value) -> Value {
+    // Dans ce pilote, `error` est exclusivement l'issue terminale du worker.
+    // La passerelle porte le code ici afin que les enrichissements de payload
+    // (par exemple une requête fournisseur pendante) ne puissent pas l'omettre.
+    if event == "error" {
+        with_turn_failed_kind(payload)
+    } else {
+        payload
+    }
 }
 
 fn served_model_from_codex(value: &Value) -> Option<String> {
@@ -2130,6 +2142,28 @@ mod tests {
             turn_end_index,
             "un silence intermédiaire ne doit jamais attester l'absence"
         );
+    }
+
+    #[test]
+    fn passerelle_codex_marque_seulement_les_erreurs_terminales() {
+        let terminal = codex_journal_payload(
+            "error",
+            json!({
+                "reason": "échéance Codex dépassée",
+                "pending_provider_request": {"state": "pending"}
+            }),
+        );
+        assert_eq!(terminal["terminal_kind"], crate::journal::TURN_FAILED_KIND);
+        assert_eq!(
+            terminal["pending_provider_request"],
+            json!({"state": "pending"})
+        );
+
+        let update = codex_journal_payload("update", json!({"kind": "text"}));
+        assert!(update.get("terminal_kind").is_none());
+
+        let malformed = codex_journal_payload("error", json!("payload invalide"));
+        assert_eq!(malformed, json!("payload invalide"));
     }
 
     #[test]

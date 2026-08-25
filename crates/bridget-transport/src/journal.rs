@@ -43,6 +43,23 @@ pub struct AppendLatencySample {
 const WRITER_QUEUE_CAPACITY: usize = 256;
 const MAX_INCREMENTAL_LINE_BYTES: usize = 4 * 1024 * 1024;
 const LIVE_FEED_CAPACITY_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const TURN_FAILED_KIND: &str = "turn_failed";
+
+/// Marque une erreur comme borne de fin sans déduire sa nature de `reason`.
+///
+/// Le détail reste libre ; seul ce code fermé est consommable par les outils
+/// de pilotage pour décider qu'un tour s'est terminé en échec. Un payload
+/// contraire au schéma objet reste volontairement non marqué : le lecteur le
+/// classera indéterminé au lieu de faire confiance à une borne mal formée.
+pub(crate) fn with_turn_failed_kind(mut payload: Value) -> Value {
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "terminal_kind".to_string(),
+            Value::String(TURN_FAILED_KIND.to_string()),
+        );
+    }
+    payload
+}
 
 #[derive(Debug, Serialize)]
 pub struct JournalEntry {

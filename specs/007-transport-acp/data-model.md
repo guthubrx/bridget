@@ -134,7 +134,7 @@ Payloads par type d'événement :
 | `update` | `kind` = `text` \| `tool_call` ; `text` : `content` (fragment de réponse) ; `tool_call` : `tool`, `summary` |
 | `permission` | payload typé (contre-revue T706) : `tool` (résumé de l'outil demandeur), `options` (les `optionId`+`kind` proposés), `decision` = **l'issue réellement émise** — `{ "outcome": "selected", "option_id": … }` ou `{ "outcome": "cancelled" }` — jamais la politique brute du registre (une politique `allow` peut aboutir à `cancelled` faute d'option compatible) |
 | `turn_end` | `stop_reason`, `routed_to` (destinataire de la réponse si `reply=yes`, absent sinon) |
-| `error` | `reason` (motif : mort du processus, `stopReason` d'erreur, rejet de livraison…) |
+| `error` | `reason` (détail libre) ; `terminal_kind=turn_failed` uniquement lorsque le worker a constaté l'échec terminal du prompt. Une anomalie de protocole non terminale n'a pas ce champ et ne constitue jamais une borne de fin. |
 
 Exigences associées (observables de T706) :
 
