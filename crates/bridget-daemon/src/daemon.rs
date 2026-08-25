@@ -1780,6 +1780,58 @@ impl DaemonState {
         }
     }
 
+    /// Fantôme reclaimable : le routeur pointe une instance absente (retain) ou
+    /// une présence `unreachable`/`stopped`. Un Register sans `instance_id`
+    /// (MCP éphémère, wrapper terminal) n'est PAS un fantôme — il n'a simplement
+    /// pas de présence riche.
+    fn connection_is_phantom_holder(&self, conn_id: &str) -> bool {
+        match self.conn_instances.get(conn_id) {
+            Some(instance_id) => match self.presences.get(instance_id) {
+                None => true,
+                Some(presence) => {
+                    matches!(presence.state.as_str(), "unreachable" | "stopped")
+                }
+            },
+            None => false,
+        }
+    }
+
+    /// Libère un nom tenu par un fantôme. Retourne `false` si le nom est libre,
+    /// live, ou tenu par une connexion sans instance (hors cas fantôme).
+    fn reclaim_phantom_name(&mut self, name: &str) -> bool {
+        let Some(existing) = self.router.get_agent(name) else {
+            return false;
+        };
+        let old_conn = existing.connection_id.clone();
+        if !self.connection_is_phantom_holder(&old_conn) {
+            return false;
+        }
+        self.router.unregister_by_conn(&old_conn);
+        self.conn_instances.remove(&old_conn);
+        self.conn_names.remove(&old_conn);
+        self.conn_hosts.remove(&old_conn);
+        self.conn_operating_systems.remove(&old_conn);
+        true
+    }
+
+    /// Quand le retain jette une présence, retire aussi le nom du routeur :
+    /// sinon `agent_infos` projetait `unix`/`connected` inventés (fantôme).
+    fn release_router_for_dangling_instances(&mut self) {
+        let dangling: Vec<String> = self
+            .conn_instances
+            .iter()
+            .filter(|(_, instance_id)| !self.presences.contains_key(instance_id.as_str()))
+            .map(|(conn_id, _)| conn_id.clone())
+            .collect();
+        for conn_id in dangling {
+            self.router.unregister_by_conn(&conn_id);
+            self.conn_instances.remove(&conn_id);
+            self.conn_names.remove(&conn_id);
+            self.conn_hosts.remove(&conn_id);
+            self.conn_operating_systems.remove(&conn_id);
+        }
+    }
+
     fn set_turn_state(&mut self, conn_id: &str, in_progress: bool) -> Result<(), String> {
         let instance_id = self
             .conn_instances
@@ -1798,62 +1850,48 @@ impl DaemonState {
         self.presences.retain(|_, presence| {
             presence.state == "connected" || presence.last_seen.elapsed() <= PRESENCE_RETENTION
         });
+        // Présence expirée + nom encore au routeur = fantôme. On coupe le lien.
+        self.release_router_for_dangling_instances();
         let mut agents: Vec<_> = self
             .router
             .list_agents()
             .iter()
-            .map(|agent| {
+            .filter_map(|agent| {
                 let presence = self
                     .conn_instances
                     .get(&agent.connection_id)
-                    .and_then(|id| self.presences.get(id));
-                bridget_transport::protocol::AgentInfo {
+                    .and_then(|id| self.presences.get(id))?;
+                // Jamais inventer connected/unix : sans présence attestée, hors
+                // annuaire public (connexions MCP éphémères sans instance_id).
+                Some(bridget_transport::protocol::AgentInfo {
                     name: agent.name.clone(),
                     agent_type: agent.agent_type.to_string(),
                     connection_id: agent.connection_id.clone(),
-                    host: presence
-                        .map(|p| p.host.clone())
-                        .or_else(|| self.conn_hosts.get(&agent.connection_id).cloned())
-                        .unwrap_or_else(|| "inconnu".to_string()),
-                    transport: presence
-                        .map(|p| p.transport.clone())
-                        .unwrap_or_else(|| "unix".to_string()),
-                    mode: presence.and_then(|p| p.mode),
-                    location: presence.and_then(|p| p.location.clone()),
-                    os: presence
-                        .map(|p| p.os.clone())
-                        .or_else(|| {
-                            self.conn_operating_systems
-                                .get(&agent.connection_id)
-                                .cloned()
-                        })
-                        .unwrap_or_else(|| "inconnu".to_string()),
+                    host: presence.host.clone(),
+                    transport: presence.transport.clone(),
+                    mode: presence.mode,
+                    location: presence.location.clone(),
+                    os: presence.os.clone(),
                     // Un agent qui refuse d'être dérangé est connecté mais non
                     // joignable : du point de vue de l'appelant, la question
                     // « puis-je lui écrire » a la même forme que pour un agent
                     // injoignable, d'où un état unique plutôt qu'une colonne.
-                    state: match presence {
-                        Some(presence) if presence.is_dnd() => "dnd".to_string(),
-                        Some(presence) => presence.state.clone(),
-                        None => "connected".to_string(),
+                    state: if presence.is_dnd() {
+                        "dnd".to_string()
+                    } else {
+                        presence.state.clone()
                     },
-                    last_seen_secs: presence
-                        .map(|p| p.last_seen.elapsed().as_secs())
-                        .unwrap_or(0),
-                    reconnect_count: presence.map(|p| p.reconnect_count).unwrap_or(0),
-                    domain: presence.and_then(|p| p.domain.clone()),
-                    model: presence.and_then(|p| p.model.clone()),
-                    effort: presence.and_then(|p| p.effort.clone()),
-                    rate_limits: presence
-                        .map(|p| p.rate_limits.values().cloned().collect())
-                        .unwrap_or_default(),
-                    model_mismatch: presence.and_then(|p| {
-                        bridget_transport::protocol::ModelMismatchFact::observe(
-                            p.model.as_deref(),
-                            p.served_model.as_deref(),
-                        )
-                    }),
-                }
+                    last_seen_secs: presence.last_seen.elapsed().as_secs(),
+                    reconnect_count: presence.reconnect_count,
+                    domain: presence.domain.clone(),
+                    model: presence.model.clone(),
+                    effort: presence.effort.clone(),
+                    rate_limits: presence.rate_limits.values().cloned().collect(),
+                    model_mismatch: bridget_transport::protocol::ModelMismatchFact::observe(
+                        presence.model.as_deref(),
+                        presence.served_model.as_deref(),
+                    ),
+                })
             })
             .collect();
         let live_names: std::collections::HashSet<String> =
@@ -3110,6 +3148,13 @@ fn handle_register(
     let parsed_type = agent_type
         .parse()
         .unwrap_or(bridget_core::AgentType::Custom(agent_type));
+
+    // Takeover sans stop : si le nom est tenu par un fantôme (routeur sans
+    // présence live), on libère avant d'enregistrer — c'est ce qui forçait
+    // trois interventions manuelles « stop puis spawn » la nuit du constat.
+    if let Some(requested) = name.as_deref() {
+        let _ = state.reclaim_phantom_name(requested);
+    }
 
     match state
         .router
@@ -9261,6 +9306,128 @@ mod presence_tests {
                 .unwrap_err()
                 .reason,
             AttachRefusal::WrapperUnavailable
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// ORACLE PRINCIPAL — `agent_infos` ne ment plus.
+    ///
+    /// Un `busy` dont `last_seen` a dépassé le retain (wrapper ACP sans
+    /// heartbeat d'autrefois) ne doit PAS réapparaître en `connected`/`unix`
+    /// inventés : zéro présence fantôme dans l'annuaire, nom libéré.
+    #[test]
+    fn presence_expiree_ne_projette_plus_connected_unix_invente() {
+        let (mut state, config) = state_with_registered_agent("fantome-expire");
+        state.set_turn_state("conn-1", true).unwrap();
+        let stale = Instant::now()
+            .checked_sub(PRESENCE_RETENTION + Duration::from_secs(1))
+            .expect("horloge");
+        state.presences.get_mut("instance-1").unwrap().last_seen = stale;
+
+        let infos = state.agent_infos();
+        assert!(
+            infos.iter().all(|agent| agent.name != "agent-2"),
+            "le fantôme ne doit plus figurer dans l'annuaire: {infos:?}"
+        );
+        assert!(
+            state.router.get_agent("agent-2").is_none(),
+            "le nom doit être libéré du routeur après expiration de la présence"
+        );
+        assert!(!infos.iter().any(|agent| {
+            agent.state == "connected" && agent.transport == "unix" && agent.mode.is_none()
+        }));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// ORACLE — mort du wrapper (unregister + unreachable) → zéro présence live.
+    #[test]
+    fn mort_du_wrapper_emporte_la_presence_du_routeur() {
+        let (mut state, config) = state_with_registered_agent("mort-wrapper");
+        assert!(state.router.get_agent("agent-2").is_some());
+        state.router.unregister_by_conn("conn-1");
+        state.mark_unreachable("conn-1");
+
+        let infos = state.agent_infos();
+        assert!(state.router.get_agent("agent-2").is_none());
+        assert!(
+            !infos
+                .iter()
+                .any(|agent| agent.name == "agent-2" && agent.state == "connected"),
+            "pas de connected résiduel: {infos:?}"
+        );
+        let unreachable = infos
+            .iter()
+            .find(|agent| agent.name == "agent-2")
+            .expect("l'état unreachable reste listé distinctement");
+        assert_eq!(unreachable.state, "unreachable");
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// ORACLE — takeover sur fantôme sans stop préalable.
+    #[test]
+    fn takeover_sur_fantome_reussit_sans_stop_prealable() {
+        let (mut state, config) = state_with_registered_agent("takeover-fantome");
+        // Simule le fantôme : présence expirée, nom encore au routeur avant
+        // le premier agent_infos (ou un résidu après crash de retain).
+        state.presences.clear();
+        // conn_instances pointe vers une instance absente → dangling.
+        assert!(state.router.get_agent("agent-2").is_some());
+
+        let registered = handle_register(
+            "conn-takeover",
+            "cursor".to_string(),
+            Some("agent-2".to_string()),
+            Some("local".to_string()),
+            Some("acp".to_string()),
+            Some(PresenceMode::Acp),
+            None,
+            Some("macOS".to_string()),
+            Some("instance-takeover".to_string()),
+            Some("bridget".to_string()),
+            false,
+            Some(true),
+            &mut state,
+        );
+        assert!(
+            matches!(
+                registered,
+                DaemonToWrapper::Registered { ref name } if name == "agent-2"
+            ),
+            "takeover refusé: {registered:?}"
+        );
+        let infos = state.agent_infos();
+        let info = infos
+            .iter()
+            .find(|agent| agent.name == "agent-2")
+            .expect("agent repris");
+        assert_eq!(info.state, "connected");
+        assert_eq!(info.transport, "acp");
+        assert_eq!(info.mode, Some(PresenceMode::Acp));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// Contre-épreuve : un agent vraiment live refuse le reclaim.
+    #[test]
+    fn takeover_refuse_un_nom_encore_live() {
+        let (mut state, config) = state_with_registered_agent("takeover-live");
+        let refused = handle_register(
+            "conn-intrus",
+            "cursor".to_string(),
+            Some("agent-2".to_string()),
+            Some("local".to_string()),
+            Some("acp".to_string()),
+            Some(PresenceMode::Acp),
+            None,
+            Some("macOS".to_string()),
+            Some("instance-intrus".to_string()),
+            None,
+            false,
+            Some(true),
+            &mut state,
+        );
+        assert!(
+            matches!(refused, DaemonToWrapper::Nack { .. }),
+            "un live ne doit pas être spolié: {refused:?}"
         );
         let _ = std::fs::remove_file(config.db_path);
     }
