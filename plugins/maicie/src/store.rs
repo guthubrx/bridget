@@ -47,7 +47,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 15;
+/// Version courante du schéma SQLite. Les oracles de migration doivent lire
+/// cette constante — un littéral en dur meurt à chaque migration.
+pub const SCHEMA_VERSION: i64 = 15;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (

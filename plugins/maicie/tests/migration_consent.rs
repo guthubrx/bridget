@@ -4,8 +4,11 @@
 //! `open_and_migrate` reste le seul consentement. Créer une base neuve
 //! (user_version 0 ET sqlite_master utilisateur vide) n'est pas une migration.
 //! Une base peuplée avec user_version remis à 0 est une porte déguisée : refus.
+//!
+//! Leçon : un oracle de version qui code la version en dur meurt à chaque
+//! migration ; il doit lire `store::SCHEMA_VERSION`.
 
-use maicie::store::{MaicieStore, StoreError};
+use maicie::store::{MaicieStore, StoreError, SCHEMA_VERSION};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -115,13 +118,13 @@ fn assert_migration_required(erreur: &StoreError, found: i64) {
             supported,
         } => {
             assert_eq!(*got, found);
-            assert_eq!(*supported, 14);
+            assert_eq!(*supported, SCHEMA_VERSION);
         }
         other => panic!("attendu MigrationRequired, reçu {other}"),
     }
     assert!(
         message.contains(&format!("schéma SQLite {found}"))
-            && message.contains("attend 14")
+            && message.contains(&format!("attend {SCHEMA_VERSION}"))
             && message.contains("maicie migrate --config <chemin>"),
         "message parlant attendu, reçu : {message}"
     );
@@ -133,19 +136,21 @@ fn base_anterieure_sans_flag_refuse_parlant_sans_ecriture() {
     let database = root.join("maicie.sqlite3");
     {
         let store = MaicieStore::open(&database).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 14);
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     }
     let connection = rusqlite::Connection::open(&database).unwrap();
-    connection.pragma_update(None, "user_version", 13).unwrap();
+    connection
+        .pragma_update(None, "user_version", SCHEMA_VERSION - 1)
+        .unwrap();
     drop(connection);
     let avant = schema_snapshot(&database);
-    assert_eq!(avant.user_version, 13);
+    assert_eq!(avant.user_version, SCHEMA_VERSION - 1);
 
     let erreur = match MaicieStore::open(&database) {
         Ok(_) => panic!("ouverture sans consentement aurait dû refuser"),
         Err(error) => error,
     };
-    assert_migration_required(&erreur, 13);
+    assert_migration_required(&erreur, SCHEMA_VERSION - 1);
     let apres = schema_snapshot(&database);
     assert_refusal_leaves_schema_untouched(&avant, &apres);
     fs::remove_dir_all(root).unwrap();
@@ -159,7 +164,7 @@ fn base_peuplee_user_version_zero_refuse_sans_mutation() {
     let database = root.join("maicie.sqlite3");
     {
         let store = MaicieStore::open(&database).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 14);
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     }
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection.pragma_update(None, "user_version", 0).unwrap();
@@ -181,9 +186,12 @@ fn base_peuplee_user_version_zero_refuse_sans_mutation() {
 
     // Avec consentement, la même base avance.
     let store = MaicieStore::open_and_migrate(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 14);
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     drop(store);
-    assert_eq!(schema_snapshot(&database).user_version, 14);
+    assert_eq!(
+        schema_snapshot(&database).user_version,
+        SCHEMA_VERSION
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -193,17 +201,25 @@ fn base_anterieure_avec_consentement_est_migree() {
     let database = root.join("maicie.sqlite3");
     {
         let store = MaicieStore::open(&database).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 14);
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     }
     let connection = rusqlite::Connection::open(&database).unwrap();
-    connection.pragma_update(None, "user_version", 13).unwrap();
+    connection
+        .pragma_update(None, "user_version", SCHEMA_VERSION - 1)
+        .unwrap();
     drop(connection);
-    assert_eq!(schema_snapshot(&database).user_version, 13);
+    assert_eq!(
+        schema_snapshot(&database).user_version,
+        SCHEMA_VERSION - 1
+    );
 
     let store = MaicieStore::open_and_migrate(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 14);
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     drop(store);
-    assert_eq!(schema_snapshot(&database).user_version, 14);
+    assert_eq!(
+        schema_snapshot(&database).user_version,
+        SCHEMA_VERSION
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -213,9 +229,12 @@ fn base_neuve_est_cree_sans_flag() {
     let database = root.join("maicie.sqlite3");
     assert!(!database.exists());
     let store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 14);
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     assert!(database.is_file());
     drop(store);
-    assert_eq!(schema_snapshot(&database).user_version, 14);
+    assert_eq!(
+        schema_snapshot(&database).user_version,
+        SCHEMA_VERSION
+    );
     fs::remove_dir_all(root).unwrap();
 }
