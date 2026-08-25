@@ -215,6 +215,58 @@ fn base_anterieure_avec_consentement_est_migree() {
 }
 
 #[test]
+fn migration_v18_pose_le_journal_ferme_des_refus_locaux() {
+    let root = unique_root("v18-refus-locaux");
+    let database = root.join("maicie.sqlite3");
+    {
+        let store = MaicieStore::open(&database).unwrap();
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+    }
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "DROP TRIGGER local_delegate_refusals_append_only_update;
+             DROP TRIGGER local_delegate_refusals_append_only_delete;
+             DROP INDEX local_delegate_refusals_reason_idx;
+             DROP TABLE local_delegate_refusals;
+             DELETE FROM schema_migrations WHERE version = 18;
+             PRAGMA user_version = 17;",
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = MaicieStore::open_and_migrate(&database).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 18);
+    assert_eq!(
+        store
+            .local_delegate_refusal_counts()
+            .unwrap()
+            .suite_aucune_avec_citation_non_classee,
+        0,
+        "la migration doit produire une projection immédiatement lisible"
+    );
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let objects: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE name IN (
+                 'local_delegate_refusals',
+                 'local_delegate_refusals_reason_idx',
+                 'local_delegate_refusals_append_only_update',
+                 'local_delegate_refusals_append_only_delete'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(objects, 4);
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn base_neuve_est_cree_sans_flag() {
     let root = unique_root("neuve");
     let database = root.join("maicie.sqlite3");

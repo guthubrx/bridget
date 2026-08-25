@@ -7,7 +7,7 @@ use maicie::domain::{
     ObjectifCoordonne, OutboxDelegation,
 };
 use maicie::outbox::{PreparedDelegation, stable_body_hash};
-use maicie::store::{MaicieStore, ObjectiveClosureCommitPhase, StoreError};
+use maicie::store::{MaicieStore, ObjectiveClosureCommitPhase, SCHEMA_VERSION, StoreError};
 use rusqlite::Connection;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -171,10 +171,7 @@ fn migration_v16_solde_les_orphelines_sur_objectifs_clos() {
 
     // Consentement explicite : open() refuse de migrer 15→16.
     let store = MaicieStore::open_and_migrate(&fixture.database).unwrap();
-    assert_eq!(
-        store.schema_version().unwrap(),
-        maicie::store::SCHEMA_VERSION
-    );
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     let snapshot = store
         .objective_snapshots(Some(objective_id))
         .unwrap()

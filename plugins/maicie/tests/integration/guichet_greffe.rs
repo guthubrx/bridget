@@ -7,7 +7,7 @@ use maicie::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use maicie::config::DurationClasses;
 use maicie::domain::guichet::{RequeteGuichet, parse_claim};
 use maicie::domain::{ClasseDuree, EtatDelegation, EtatObjectif, MotifRefusGreffe};
-use maicie::store::{GuichetCommitPhase, MaicieStore};
+use maicie::store::{GuichetCommitPhase, MaicieStore, SCHEMA_VERSION};
 use rusqlite::{Connection, ErrorCode};
 use std::fs;
 use std::io::Read;
@@ -460,7 +460,6 @@ fn migration_v17_conserve_les_refus_v16_et_ouvre_les_motifs_de_revue() {
     drop(connection);
 
     let store = MaicieStore::open_and_migrate(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 17);
     drop(store);
     let connection = Connection::open(&database).unwrap();
     let historical: (String, Vec<u8>, Vec<u8>) = connection
@@ -788,10 +787,7 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
     drop(connection);
 
     let mut store = MaicieStore::open_and_migrate(&database).unwrap();
-    assert_eq!(
-        store.schema_version().unwrap(),
-        maicie::store::SCHEMA_VERSION
-    );
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     assert_eq!(
         store
             .objective_snapshots(Some(created.objective_id))
@@ -806,10 +802,7 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
     // Une seconde ouverture d'une base déjà v7 est la vraie preuve
     // d'idempotence : la migration ne doit ni recréer, ni vider les tables.
     let mut reopened = MaicieStore::open(&database).unwrap();
-    assert_eq!(
-        reopened.schema_version().unwrap(),
-        maicie::store::SCHEMA_VERSION
-    );
+    assert_eq!(reopened.schema_version().unwrap(), SCHEMA_VERSION);
     let replay = process_guichet_claim(&mut reopened, &claim, "ignored", 1_020).unwrap();
     assert!(replay.replayed);
     assert_eq!(replay.reply_bytes, first.reply_bytes);

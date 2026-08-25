@@ -19,14 +19,14 @@ use crate::domain::{
     EtatDelegation, EtatEpisodeRelance, EtatGenerationDelegation, EtatNotificationOutbox,
     EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination,
     FaitReassignation, FraicheurCoordination, GenerationDelegation, IssueGreffe, LienArbitrage,
-    LigneeDelegation, LotReassignation, MotifRefusGreffe, NotificationOutbox,
-    NotificationReassignation, ObjectifCoordonne, OperationGuichet, OutboxDelegation,
-    PolitiqueReassignation, QualificationDependance, ReceptionGreffe, RecuCorrelation,
-    ReductionCoordinationActive, ReductionOuvertureDelegation, ReductionReassignation,
-    SuiteObjective, TransitionCoordinationActive, TypeDecision, TypeEffetDemandeSuivie,
-    TypeEvenementAttendu, TypeFaitReassignation, TypeNotificationReassignation,
-    identifiant_deterministe, reduire_coordination, reduire_ouverture_dependance,
-    reduire_reassignation,
+    LigneeDelegation, LotReassignation, MotifRefusDelegationLocale, MotifRefusGreffe,
+    NotificationOutbox, NotificationReassignation, ObjectifCoordonne, OperationGuichet,
+    OutboxDelegation, PolitiqueReassignation, QualificationDependance, ReceptionGreffe,
+    RecuCorrelation, ReductionCoordinationActive, ReductionOuvertureDelegation,
+    ReductionReassignation, SuiteObjective, TransitionCoordinationActive, TypeDecision,
+    TypeEffetDemandeSuivie, TypeEvenementAttendu, TypeFaitReassignation,
+    TypeNotificationReassignation, identifiant_deterministe, reduire_coordination,
+    reduire_ouverture_dependance, reduire_reassignation,
 };
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
@@ -49,7 +49,7 @@ use uuid::Uuid;
 
 /// Version courante du schéma SQLite. Les oracles de migration doivent lire
 /// cette constante — un littéral en dur meurt à chaque migration.
-pub const SCHEMA_VERSION: i64 = 17;
+pub const SCHEMA_VERSION: i64 = 18;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -93,6 +93,13 @@ pub struct DeferredDispatchParams {
     pub max_frame_bytes: usize,
     pub deadline_contractuelle: i64,
     pub issuer_scope: String,
+}
+
+/// Projection fermée des refus locaux de contrainte. Chaque champ correspond
+/// à un variant métier ; aucun motif libre ne peut apparaître dans la vue.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct CompteursRefusDelegationLocale {
+    pub suite_aucune_avec_citation_non_classee: u64,
 }
 
 /// Résultat durable d'une commande `delegate` idempotente. Les identifiants
@@ -1433,6 +1440,78 @@ impl MaicieStore {
         }
         tx.commit().map_err(StoreError::Sql)?;
         Ok(GuichetLifecycleResult::Recorded)
+    }
+
+    /// Greffe un refus local de contrainte avant de le rendre à l'appelant.
+    ///
+    /// La ligne ne contient que des valeurs typées : horodatage, motif fermé
+    /// et UUID effectivement reconnu dans ce store. Le compte retourné est lu
+    /// dans la même transaction que l'insertion ; un refus sans ligne durable
+    /// est donc impossible à présenter comme un refus métier.
+    pub fn record_local_delegate_refusal(
+        &mut self,
+        observed_at: i64,
+        reason: MotifRefusDelegationLocale,
+        cited_objective_id: Uuid,
+    ) -> Result<u64, StoreError> {
+        if observed_at <= 0 || cited_objective_id.is_nil() {
+            return Err(StoreError::Invalid("refus local incomplet"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let objective_exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM objectives WHERE id = ?1)",
+                [cited_objective_id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::Sql)?;
+        if !objective_exists {
+            return Err(StoreError::NotFound("objectif cité par le refus local"));
+        }
+        let inserted = tx
+            .execute(
+                "INSERT INTO local_delegate_refusals(
+                     observed_at, reason, cited_objective_id
+                 ) VALUES (?1, ?2, ?3)",
+                params![observed_at, reason.code(), cited_objective_id.to_string(),],
+            )
+            .map_err(StoreError::Sql)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("refus local non enregistré"));
+        }
+        let count: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM local_delegate_refusals WHERE reason = ?1",
+                [reason.code()],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::Sql)?;
+        let count = u64::try_from(count)
+            .map_err(|_| StoreError::Corrupt("compteur de refus local invalide"))?;
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(count)
+    }
+
+    /// Compteurs durables exposés par `maicie status`. La projection reste
+    /// locale et pure : aucune lecture du catalogue ni I/O Bridget.
+    pub fn local_delegate_refusal_counts(
+        &self,
+    ) -> Result<CompteursRefusDelegationLocale, StoreError> {
+        let count: i64 = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM local_delegate_refusals WHERE reason = ?1",
+                [MotifRefusDelegationLocale::SuiteAucuneAvecCitationNonClassee.code()],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(CompteursRefusDelegationLocale {
+            suite_aucune_avec_citation_non_classee: u64::try_from(count)
+                .map_err(|_| StoreError::Corrupt("compteur de refus local invalide"))?,
+        })
     }
 
     /// Ajoute un message libre destiné à Maicie au journal privé append-only.
@@ -7517,6 +7596,28 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
     // v17 : élargit le vocabulaire fermé des refus aux preuves de revue.
     if current_version < 17 {
         migrate_review_refusal_reasons_v17(&tx)?;
+    }
+    // v18 : refus locaux de contrainte, append-only et à motif fermé.
+    if current_version < 18 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS local_delegate_refusals (
+                 sequence INTEGER PRIMARY KEY,
+                 observed_at INTEGER NOT NULL CHECK(observed_at > 0),
+                 reason TEXT NOT NULL CHECK(reason IN (
+                     'suite_none_with_unclassified_citation'
+                 )),
+                 cited_objective_id TEXT NOT NULL REFERENCES objectives(id)
+             );
+             CREATE INDEX IF NOT EXISTS local_delegate_refusals_reason_idx
+                 ON local_delegate_refusals(reason, sequence);
+             CREATE TRIGGER IF NOT EXISTS local_delegate_refusals_append_only_update
+                 BEFORE UPDATE ON local_delegate_refusals
+                 BEGIN SELECT RAISE(ABORT, 'local delegate refusal append-only'); END;
+             CREATE TRIGGER IF NOT EXISTS local_delegate_refusals_append_only_delete
+                 BEFORE DELETE ON local_delegate_refusals
+                 BEGIN SELECT RAISE(ABORT, 'local delegate refusal append-only'); END;",
+        )
+        .map_err(StoreError::Sql)?;
     }
     for version in (current_version + 1)..=SCHEMA_VERSION {
         tx.execute(

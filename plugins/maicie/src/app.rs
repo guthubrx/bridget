@@ -21,8 +21,9 @@ use crate::domain::{
     DefinitionCoordination, Delegation, EntreeReductionCoordination, EtatDecision, EtatFlux,
     EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination,
     FaitAppartenanceRepli, FaitReassignation, FraicheurCoordination, ModeObjectif,
-    MotifRefusGreffe, ObjectifCoordonne, OutboxDelegation, PolitiqueReassignation,
-    SnapshotTransport, SourceSnapshot, SuiteObjective, TypeDecision, TypeFaitReassignation,
+    MotifRefusDelegationLocale, MotifRefusGreffe, ObjectifCoordonne, OutboxDelegation,
+    PolitiqueReassignation, SnapshotTransport, SourceSnapshot, SuiteObjective, TypeDecision,
+    TypeFaitReassignation,
 };
 use crate::outbox::{PreparedDelegation, stable_body_hash};
 pub use crate::store::GuichetLifecycleResult;
@@ -583,6 +584,11 @@ pub enum DelegateResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DelegateError {
     Invalid(&'static str),
+    ContrainteRefusee {
+        motif: MotifRefusDelegationLocale,
+        objectif_cite: Uuid,
+        refus_durables: u64,
+    },
     TargetUnavailable(String),
     EnvelopeMismatch,
     Store(String),
@@ -656,6 +662,15 @@ impl fmt::Display for DelegateError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Invalid(reason) => write!(formatter, "délégation invalide : {reason}"),
+            Self::ContrainteRefusee {
+                motif,
+                objectif_cite,
+                refus_durables,
+            } => write!(
+                formatter,
+                "contrainte de délégation refusée : {}; objectif_cité={objectif_cite}; refus_durables={refus_durables}",
+                motif.code()
+            ),
             Self::TargetUnavailable(target) => write!(formatter, "cible indisponible : {target}"),
             Self::EnvelopeMismatch => write!(formatter, "commande idempotente divergente"),
             Self::Store(reason) => write!(formatter, "stockage impossible : {reason}"),
@@ -1158,7 +1173,7 @@ pub fn delegate(
 }
 
 fn validate_suite_and_citations(
-    store: &MaicieStore,
+    store: &mut MaicieStore,
     request: &DelegateRequest<'_>,
 ) -> Result<(), DelegateError> {
     if let SuiteObjective::Objectif(suite_id) = request.suite {
@@ -1198,7 +1213,18 @@ fn validate_suite_and_citations(
     let known = store.existing_objective_ids(&cited).map_err(store_error)?;
     let missing =
         unclassified_known_citations(request.goal, &known, request.depends_on, request.references);
-    if !missing.is_empty() {
+    if let Some(objectif_cite) = missing.first().copied() {
+        if matches!(&request.suite, SuiteObjective::Aucune) {
+            let motif = MotifRefusDelegationLocale::SuiteAucuneAvecCitationNonClassee;
+            let refus_durables = store
+                .record_local_delegate_refusal(request.now, motif, objectif_cite)
+                .map_err(store_error)?;
+            return Err(DelegateError::ContrainteRefusee {
+                motif,
+                objectif_cite,
+                refus_durables,
+            });
+        }
         return Err(DelegateError::Invalid(
             "citation d'objectif non classée (--depends-on ou --reference)",
         ));

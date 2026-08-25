@@ -2,7 +2,7 @@ use base64::Engine;
 use maicie::app::{DelegateRequest, DelegateResult, DelegationCandidate, delegate};
 use maicie::bridget_client::IdempotencyIssue;
 use maicie::config::DurationClasses;
-use maicie::domain::ClasseDuree;
+use maicie::domain::{ClasseDuree, MotifRefusDelegationLocale};
 use maicie::store::MaicieStore;
 use serde_json::{Value, json};
 use std::fs;
@@ -103,6 +103,88 @@ fn status_sans_budget_ne_fabrique_ni_fraicheur_ni_capture() {
     let rendered = String::from_utf8(plain.stdout).unwrap();
     assert!(rendered.contains("snapshot_transport=unknown"));
     assert!(rendered.contains("fraîcheur=unavailable"));
+}
+
+#[test]
+fn status_expose_le_compteur_durable_des_contradictions_suite() {
+    let fixture = Fixture::new(None);
+    let known = fixture.seed_delegation_terminale();
+    {
+        let mut store = MaicieStore::open(&fixture.database).unwrap();
+        let goal = format!("enchaîne sur {known}");
+        let error = delegate(
+            &mut store,
+            DurationClasses {
+                short_secs: 30,
+                normal_secs: 60,
+                long_secs: 90,
+            },
+            "maicie",
+            &[DelegationCandidate {
+                name: "prospective".to_string(),
+                tags: Vec::new(),
+                available: true,
+                dnd: false,
+            }],
+            &DelegateRequest {
+                goal: &goal,
+                explicit_target: Some("prospective"),
+                required_tags: &[],
+                duration: ClasseDuree::Normale,
+                reply: false,
+                constat_id: None,
+                review_target: None,
+                suite: maicie::domain::SuiteObjective::Aucune,
+                depends_on: &[],
+                references: &[],
+                idempotency_key: "status-suite-contradiction",
+                now: 120,
+                retry_until: 150,
+                dedup_retained_until: 200,
+                max_frame_bytes: 256 * 1024,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            maicie::app::DelegateError::ContrainteRefusee {
+                motif: MotifRefusDelegationLocale::SuiteAucuneAvecCitationNonClassee,
+                objectif_cite,
+                refus_durables: 1,
+            } if objectif_cite == known
+        ));
+    }
+
+    let json_output = Command::new(env!("CARGO_BIN_EXE_maicie"))
+        .args([
+            "status",
+            "--config",
+            fixture.config.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        json_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&json_output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(
+        value["refus_contraintes"]["suite_aucune_avec_citation_non_classee"], 1,
+        "le chiffre durable doit être lisible sans observer le refus en direct"
+    );
+
+    let plain_output = Command::new(env!("CARGO_BIN_EXE_maicie"))
+        .args(["status", "--config", fixture.config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(plain_output.status.success());
+    assert!(
+        String::from_utf8(plain_output.stdout)
+            .unwrap()
+            .contains("refus_contradiction_suite=1")
+    );
 }
 
 #[test]
@@ -397,7 +479,7 @@ impl Fixture {
         }
     }
 
-    fn seed_delegation_terminale(&self) {
+    fn seed_delegation_terminale(&self) -> Uuid {
         let mut store = MaicieStore::open(&self.database).unwrap();
         let candidates = vec![DelegationCandidate {
             name: "prospective".to_string(),
@@ -443,6 +525,7 @@ impl Fixture {
                 110,
             )
             .unwrap();
+        created.objective_id
     }
 }
 

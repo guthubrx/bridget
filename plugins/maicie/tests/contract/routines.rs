@@ -14,7 +14,7 @@ use maicie::routines::{
     approve_routine, bucket_for, evaluate_routines, evaluate_routines_with, pause_routine,
     propose_routine, resume_routine, sealed_template_hash, template_hash,
 };
-use maicie::store::MaicieStore;
+use maicie::store::{MaicieStore, SCHEMA_VERSION};
 use rusqlite::params;
 use std::fs;
 use std::path::PathBuf;
@@ -85,10 +85,7 @@ fn schema_v15_pose_les_tables_routines() {
     let root = root("schema");
     let database = root.join("maicie.sqlite3");
     let store = MaicieStore::open(&database).unwrap();
-    assert_eq!(
-        store.schema_version().unwrap(),
-        maicie::store::SCHEMA_VERSION
-    );
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     drop(store);
     fs::remove_dir_all(root).unwrap();
 }
