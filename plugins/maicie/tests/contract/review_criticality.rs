@@ -1,6 +1,6 @@
 use maicie::catalogue::Severity;
 use maicie::review::{
-    CitationSource, ContractDocument, EvidenceKind, FileChange, RegistryFinding,
+    CitationSource, ContractDocument, EvidenceKind, F38_FIXED_REGIME, FileChange, RegistryFinding,
     RepositorySnapshot, ReviewRegime, SeedRule, TrackedPath, calculate_criticality,
 };
 
@@ -109,12 +109,16 @@ fn t2505_contrat_n_ancre_qu_un_chemin_complet_exact() {
             path("crates/bridget-transport/src/protocol.rs", 420),
             path("crates/bridget-daemon/src/store.rs", 80),
             path("plugins/maicie/src/store.rs", 7_600),
+            path(
+                "specs/015-guichet-maicie/contracts/protocole-guichet.md",
+                200,
+            ),
         ],
         Vec::new(),
     );
     input.contracts = vec![ContractDocument {
         source_path: "specs/011-maicie-orchestration/contracts/protocol.md".to_string(),
-        content: "Ancre `crates/bridget-transport/src/protocol.rs`; store.rs est incomplet."
+        content: "Ancre `crates/bridget-transport/src/protocol.rs`; référence croisée `specs/015-guichet-maicie/contracts/protocole-guichet.md`; store.rs est incomplet."
             .to_string(),
     }];
 
@@ -308,16 +312,24 @@ fn t2506_un_diff_ordinaire_reste_simple_et_le_noyau_reste_fixe_en_2x2() {
         ReviewRegime::Simple
     );
 
-    let self_change = snapshot(
-        vec![path("plugins/maicie/src/review.rs", 500)],
-        vec![change(
-            "plugins/maicie/src/review.rs",
-            "+const RULE: u8 = 4;",
-            "const RULE: u8 = 4;",
-        )],
-    );
-    assert_eq!(
-        calculate_criticality(&self_change).unwrap().proposed_regime,
-        ReviewRegime::JuryTwoByTwo
-    );
+    for fixed_path in [
+        "plugins/maicie/src/review.rs",
+        "plugins/maicie/src/review_git.rs",
+        "specs/025-carte-criticite-regime/contracts/revue-lot-v1.md",
+    ] {
+        let self_change = snapshot(
+            vec![path(fixed_path, 500)],
+            vec![change(
+                fixed_path,
+                "+const RULE: u8 = 4;",
+                "const RULE: u8 = 4;",
+            )],
+        );
+        assert_eq!(
+            calculate_criticality(&self_change).unwrap().proposed_regime,
+            F38_FIXED_REGIME,
+            "le périmètre fixé par le référent doit couvrir {fixed_path}"
+        );
+    }
+    assert_eq!(F38_FIXED_REGIME, ReviewRegime::JuryTwoByTwo);
 }

@@ -48,6 +48,10 @@ Réponse acceptée :
 `critical_paths` ne contient que les chemins modifiés ayant déclenché le
 régime, jamais toute la carte ni le contenu du diff.
 
+Une citation contractuelle n’ancre qu’un chemin complet existant hors de
+`specs/*/contracts/`. Les références croisées entre contrats ne s’élisent pas
+réciproquement.
+
 ## Opération `review_regime_select`
 
 ```json

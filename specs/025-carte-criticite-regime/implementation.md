@@ -30,6 +30,21 @@
 - **Garde** : les ambiguïtés ne portent que l’empreinte du jeton et les chemins
   candidats ; aucun contenu de diff ou de constat ne franchit la sortie pure
 
+### T2509–T2511 — Mesure Git exacte
+
+- **Statut** : complété
+- **Mesure** : 6 passés, 0 échoué, 0 ignoré après compilation `--no-run` ;
+  Clippy strict vert sur la bibliothèque et le test d’intégration
+- **Cas couverts** : worktree divergent, référence déplacée, base non ancêtre,
+  renommage, référence/SHA/racine invalides, limites et variables `GIT_*`
+  hostiles dans un sous-processus
+- **Voie contractuelle réelle** : l’intersection des citations complètes de
+  l’arbre `b6eea777` avec ses chemins suivis contient onze chemins, dont dix
+  artefacts sous `specs/*/contracts/`; leur exclusion récursive laisse l’unique
+  zone `crates/bridget-transport/src/protocol.rs`
+- **Régime propre** : `jury_2x2` est une constante issue de la décision
+  explicite du référent ; la carte ne la calcule, ne l’apprend ni ne la remplace
+
 ## REX
 
 À compléter après les gates et la revue hostile.

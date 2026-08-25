@@ -13,6 +13,7 @@ pub mod outbox;
 pub mod profiles;
 pub mod reconcile;
 pub mod review;
+pub mod review_git;
 pub mod routines;
 pub mod runtime;
 pub mod store;

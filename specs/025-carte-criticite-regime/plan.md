@@ -67,16 +67,18 @@ emploient la racine configurée et les SHA complets :
 git -C <racine> rev-parse --verify <ref>^{commit}
 git -C <racine> cat-file -e <sha>^{commit}
 git -C <racine> merge-base --is-ancestor <base> <tête>
-git -C <racine> ls-tree -r -z --name-only <tête>
+git -C <racine> ls-tree -r -z -l --full-tree <base|tête>
 git -C <racine> diff --name-status -z -M <base> <tête> --
-git -C <racine> diff --no-ext-diff --no-textconv --unified=0 <base> <tête> --
+git -C <racine> cat-file --batch
 ```
 
-L’adaptateur neutralise les aides de diff externes, n’effectue aucun checkout
-et borne le nombre de chemins, la taille cumulée des blobs textuels et la
-sortie du diff. Les renommages rendent le chemin avant et après. Toute borne
-dépassée devient un refus fermé et durable ; aucune troncature ne produit une
-proposition partielle.
+L’adaptateur neutralise les variables `GIT_*`, les aides de diff externes et
+n’effectue aucun checkout. Il lit les blobs par un lot unique, puis dérive les
+lignes changées depuis les deux objets ; aucun filtre `textconv` ne participe.
+Il borne le registre, le nombre et la taille des chemins, la taille cumulée des
+blobs, des contrats, des métadonnées et des lignes changées. Les renommages
+rendent le chemin avant et après. Toute borne dépassée devient un refus fermé
+et durable ; aucune troncature ne produit une proposition partielle.
 
 ### 3. Lecture du registre et des contrats
 
@@ -163,7 +165,7 @@ réduisent la surface de dépendance.
 ## Ordre d’intégration
 
 1. noyau pur + adaptateur Git + docs ;
-2. absorption 021/v17, v18 et 026/v19 ;
+2. absorption 021/v17, 026/v18 et 027/v19 ;
 3. rebase avant toute mesure de jury ;
 4. migration v20 et store ;
 5. opérations guichet et CLI ;

@@ -16,13 +16,13 @@
 
 ## Phase 3 — Mesure Git exacte
 
-- [ ] T2509 [US1] Écrire les tests avec vrais dépôts : paire exacte, worktree divergent, référence déplacée, base non ancêtre, renommage et limites dans `plugins/maicie/tests/review_git_integration.rs`.
-- [ ] T2510 [US1] Implémenter l’adaptateur borné dans `plugins/maicie/src/review_git.rs` sans checkout ni aide de diff externe.
-- [ ] T2511 [US1] Vérifier que les mêmes SHA rendent les mêmes preuves malgré worktree et environnement divergents.
+- [x] T2509 [US1] Écrire les tests avec vrais dépôts : paire exacte, worktree divergent, référence déplacée, base non ancêtre, renommage et limites dans `plugins/maicie/tests/review_git_integration.rs`.
+- [x] T2510 [US1] Implémenter l’adaptateur borné dans `plugins/maicie/src/review_git.rs` sans checkout ni aide de diff externe.
+- [x] T2511 [US1] Vérifier que les mêmes SHA rendent les mêmes preuves malgré worktree et environnement divergents.
 
 ## Phase 4 — Gate d’intégration des migrations
 
-- [ ] T2512 Attendre puis vérifier l’absorption de la session 021/v17, de v18 et de la session 026/v19 ; rebaser avant toute écriture store.
+- [ ] T2512 Attendre puis vérifier l’absorption de la session 021/v17, de la session 026/v18 et de la session 027/v19 ; rebaser avant toute écriture store.
 - [ ] T2513 Écrire l’oracle v19 réel → v20 et le faux v19 sans DDL inchangé dans `plugins/maicie/tests/schema_migration_guard.rs`.
 - [ ] T2514 Implémenter la migration v20 et les tables de revue dans `plugins/maicie/src/store.rs`.
 

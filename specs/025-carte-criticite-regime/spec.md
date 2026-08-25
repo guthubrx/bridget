@@ -6,7 +6,8 @@
 **Base de conception** : `b6eea777facf929d99a9c4f9ae75fb50e06dc2fd`
 **Migration réservée** : v20
 **Dépendances d’intégration** : session 021 (verdict lié au SHA, v17),
-migration v18, session 026 (vocabulaire fédéré du guichet, v19).
+session 026 (vocabulaire fédéré du guichet, v18), session 027 (horodatages de
+délégation, v19).
 **Dépendance de la suite** : session 023 doit être absorbée avant le lot
 distinct qui élira et déléguera les relecteurs.
 
@@ -103,7 +104,10 @@ Pour le registre historique :
 Pour un contrat, seule une citation complète relative au dépôt constitue un
 ancrage. Un `store.rs` ou `daemon.rs:1203` nu est une erreur de contrat
 visible, jamais une élection implicite. Cette règle doit reproduire l’ancrage
-actuel unique de `crates/bridget-transport/src/protocol.rs`.
+actuel unique de `crates/bridget-transport/src/protocol.rs`. Une référence
+croisée vers un autre artefact sous `specs/*/contracts/` n’élit pas ce second
+contrat : les contrats sont les sources de l’élection, jamais leurs propres
+zones, ce qui interdit une cascade récursive.
 
 Une ambiguïté n’élit jamais tous les homonymes et ne durcit pas le lot par
 défaut. Elle reste comptée comme dette de résolution afin que le faux positif

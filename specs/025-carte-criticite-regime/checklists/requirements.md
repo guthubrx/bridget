@@ -12,7 +12,7 @@
 
 ## Complétude des exigences
 
-- [x] Les dépendances 021, v18, 026/v19 et 023 sont explicites.
+- [x] Les dépendances 021/v17, 026/v18, 027/v19 et 023 sont explicites.
 - [x] Les trois voies F38 et le germe F38-b sont testables.
 - [x] L’angle de confidentialité est tranché et borné.
 - [x] Les homonymes et citations sans chemin ont un comportement exact.

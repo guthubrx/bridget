@@ -195,6 +195,10 @@ const SELF_CRITICAL_PATHS: [&str; 3] = [
     "specs/025-carte-criticite-regime/contracts/revue-lot-v1.md",
 ];
 
+/// Décision explicite du référent : le noyau F38 reste toujours en jury 2×2.
+/// Cette valeur n'est ni proposée, ni apprise, ni recalculée par la carte.
+pub const F38_FIXED_REGIME: ReviewRegime = ReviewRegime::JuryTwoByTwo;
+
 #[derive(Debug)]
 struct PathIndex {
     exact: BTreeSet<String>,
@@ -261,7 +265,7 @@ pub fn calculate_criticality(snapshot: &RepositorySnapshot) -> Result<Criticalit
             ReviewRegime::JuryOnePlusOne
         }
     } else {
-        ReviewRegime::JuryTwoByTwo
+        F38_FIXED_REGIME
     };
 
     Ok(CriticalityMap {
@@ -424,15 +428,18 @@ fn elect_contracts(
         }
         for token in citation_tokens(&contract.content, index) {
             match index.contract(&token.path) {
-                Some(Resolution::Resolved(path)) => add_evidence(
-                    zones,
-                    &path,
-                    CriticalEvidence {
-                        kind: EvidenceKind::Contract,
-                        source_id: source_path.clone(),
-                        rule: None,
-                    },
-                ),
+                Some(Resolution::Resolved(path)) if !is_contract_path(&path) => {
+                    add_evidence(
+                        zones,
+                        &path,
+                        CriticalEvidence {
+                            kind: EvidenceKind::Contract,
+                            source_id: source_path.clone(),
+                            rule: None,
+                        },
+                    );
+                }
+                Some(Resolution::Resolved(_)) => {}
                 Some(Resolution::Unresolved(candidates)) => {
                     unresolved.insert(unresolved_citation(
                         CitationSource::Contract,
@@ -464,19 +471,23 @@ fn elect_change(
     let Some(elected_path) = change.new_path.as_deref().or(change.old_path.as_deref()) else {
         return;
     };
-    let text = format!(
+    let lower_patch = change.patch.to_ascii_lowercase();
+    let lower_unit = format!(
         "{}\n{}",
-        change.patch,
-        change.head_content.as_deref().unwrap_or_default()
+        lower_patch,
+        change
+            .head_content
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
     );
-    let lower_text = text.to_ascii_lowercase();
     let lower_paths: Vec<String> = paths.iter().map(|path| path.to_ascii_lowercase()).collect();
 
     let persistence_path = lower_paths
         .iter()
         .any(|path| path.contains("migration") || path.ends_with("schema.sql"));
     let persistence_marker = first_marker(
-        &lower_text,
+        &lower_patch,
         &[
             "schema_version",
             "alter table",
@@ -519,7 +530,7 @@ fn elect_change(
         add_seed(zones, elected_path, SeedRule::AuthorizationPermissions);
     }
     if contains_any(
-        &lower_text,
+        &lower_unit,
         &[
             ".recv(",
             "recv(",
@@ -531,7 +542,7 @@ fn elect_change(
             "read_to_end",
         ],
     ) && contains_any(
-        &lower_text,
+        &lower_unit,
         &[
             "insert into",
             "fs::write",
