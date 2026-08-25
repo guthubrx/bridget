@@ -514,24 +514,59 @@ impl IdempotencyStore {
         // enfant. Une base touchée hors daemon (`.backup`, SQL CLI — FK OFF
         // par défaut) peut contenir des remises sans parent ; les laisser
         // ferait échouer la migration au démarrage et bloquerait la flotte.
-        // Décision : nettoyer ces orphelins de schéma AVANT le rebuild
-        // (données mortes — sans parent elles ne sont plus rejouables).
+        //
+        // Décision (écrite — charge 4) :
+        // - SUPPRIMER plutôt que conserver : sans parent `idempotency_records`,
+        //   la remise n'est plus adressable (lookup, rejeu, signal émetteur).
+        //   Ce n'est pas un orphelin métier (`orphaned`) : c'est un fantôme de
+        //   schéma que le daemon ne peut pas créer (FK ON à l'ouverture) ; seule
+        //   une intervention externe peut l'introduire. Origine inconnue ⇒
+        //   données hors contrat, pas un sort à préserver.
+        // - MAINTENANT (à la migration) plutôt qu'à l'usage : un seul fantôme
+        //   ferait échouer l'INSERT SELECT et bloquerait open() / la flotte.
+        // - Ne PAS désactiver `foreign_keys` : on reste sous la règle du daemon.
+        // - Ne PAS écarter en silence : `warn!` avec compte + delivery_id —
+        //   même règle que ce lot : un sort connu vaut mieux qu'un sort muet.
         let orphan_migration_applied = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 4)",
             [],
             |row| row.get::<_, bool>(0),
         )?;
         if !orphan_migration_applied {
-            tx.execute(
-                "DELETE FROM send_deliveries
-                 WHERE NOT EXISTS (
-                     SELECT 1 FROM idempotency_records r
-                     WHERE r.issuer_scope = send_deliveries.issuer_scope
-                       AND r.operation_kind = send_deliveries.operation_kind
-                       AND r.idempotency_key = send_deliveries.idempotency_key
-                 )",
-                [],
-            )?;
+            let schema_orphans: Vec<String> = {
+                let mut stmt = tx.prepare(
+                    "SELECT delivery_id FROM send_deliveries
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM idempotency_records r
+                         WHERE r.issuer_scope = send_deliveries.issuer_scope
+                           AND r.operation_kind = send_deliveries.operation_kind
+                           AND r.idempotency_key = send_deliveries.idempotency_key
+                     )",
+                )?;
+                stmt.query_map([], |row| row.get(0))?
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            if !schema_orphans.is_empty() {
+                log::warn!(
+                    "migration v4: écarté {} remise(s) send_deliveries sans parent \
+                     idempotency_records (origine hors daemon — CLI/backup, FK OFF ; \
+                     non rejouables ni signalables). Suppression plutôt que \
+                     conservation ou échec FK : démarrer en disant ce qui est perdu \
+                     plutôt que bloquer la flotte. delivery_id={:?}",
+                    schema_orphans.len(),
+                    schema_orphans
+                );
+                tx.execute(
+                    "DELETE FROM send_deliveries
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM idempotency_records r
+                         WHERE r.issuer_scope = send_deliveries.issuer_scope
+                           AND r.operation_kind = send_deliveries.operation_kind
+                           AND r.idempotency_key = send_deliveries.idempotency_key
+                     )",
+                    [],
+                )?;
+            }
             tx.execute_batch(
                 "CREATE TABLE send_deliveries_v4 (
                     delivery_id TEXT PRIMARY KEY,
@@ -2043,10 +2078,46 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    /// Capture des `warn!` pour les oracles qui exigent qu'un écart soit DIT.
+    /// Un seul logger global (contrainte `log`) ; les tests qui lisent la
+    /// trace prennent `TEST_LOG_LOCK` pour ne pas se marcher dessus.
+    static TEST_LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static TEST_WARN_LOGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+    fn ensure_warn_log_capture() {
+        use std::sync::Once;
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            struct CapturingLogger;
+            impl log::Log for CapturingLogger {
+                fn enabled(&self, metadata: &log::Metadata) -> bool {
+                    metadata.level() <= log::Level::Warn
+                }
+                fn log(&self, record: &log::Record) {
+                    if record.level() <= log::Level::Warn {
+                        TEST_WARN_LOGS
+                            .lock()
+                            .expect("TEST_WARN_LOGS")
+                            .push(record.args().to_string());
+                    }
+                }
+                fn flush(&self) {}
+            }
+            static LOGGER: CapturingLogger = CapturingLogger;
+            let _ = log::set_logger(&LOGGER);
+            log::set_max_level(log::LevelFilter::Warn);
+        });
+    }
+
     /// ORACLE — migration v4 face à des enfants sans parent (FK OFF hors daemon).
     /// Meurt si l'INSERT SELECT échoue au démarrage : flotte bloquée.
+    /// Meurt aussi si l'écart est silencieux (mutant : DELETE sans `warn!`).
     #[test]
     fn migration_v4_nettoie_les_enfants_sans_parent_sans_bloquer_le_daemon() {
+        ensure_warn_log_capture();
+        let _log_guard = TEST_LOG_LOCK.lock().expect("TEST_LOG_LOCK");
+        TEST_WARN_LOGS.lock().expect("TEST_WARN_LOGS").clear();
+
         let path = std::env::temp_dir().join(format!(
             "bridget-idempotency-v4-fk-orphan-{}.db",
             uuid::Uuid::new_v4()
@@ -2153,6 +2224,18 @@ mod tests {
             .unwrap();
         assert_eq!(kept, 1, "l'enfant valide survit");
         assert_eq!(ghost, 0, "l'enfant sans parent est nettoyé, pas bloquant");
+
+        let logs = TEST_WARN_LOGS.lock().expect("TEST_WARN_LOGS").clone();
+        let dit = logs.iter().any(|line| {
+            line.contains("migration v4")
+                && line.contains("écarté")
+                && line.contains("delivery-sans-parent")
+        });
+        assert!(
+            dit,
+            "l'écart doit être DIT (warn! compte + delivery_id) ; logs={logs:?}"
+        );
+
         drop(store);
         std::fs::remove_file(path).unwrap();
     }
