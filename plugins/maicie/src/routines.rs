@@ -329,10 +329,33 @@ pub fn evaluate_routines_with(
         let gap = current - after;
         if gap > MAX_CATCHUP_BUCKETS {
             // Sentinel unique pour le trou tronqué, puis au plus MAX buckets.
-            // skipped = buckets effacés sans ligne individuelle (mesure manche 4 :
-            // 30 j / 60 s → 43 135 disparus — la sentinelle DOIT porter ce compte).
+            // skipped = truncated_end − after − 1 (formule ; ex. after=B0 → 43135
+            // pour 30 j / 60 s). La sentinelle DOIT porter ce compte.
             let truncated_end = current - MAX_CATCHUP_BUCKETS;
             let skipped = (truncated_end - after - 1).max(0);
+            // AVANT sentinelle / saut : adopter tout mandat orphelin dans
+            // after+1 ..= truncated_end. Sinon (mesure jury 1/2/2) le mandat
+            // de la coupure reste hors fenêtre pour toujours et un neuf part.
+            let orphan_buckets = store
+                .list_routine_orphan_buckets(routine.id, after + 1, truncated_end)
+                .map_err(routine_store_error)?;
+            for bucket in orphan_buckets {
+                if store
+                    .load_occurrence(routine.id, bucket)
+                    .map_err(routine_store_error)?
+                    .is_some()
+                {
+                    continue;
+                }
+                let key = format!("routine:{}:{}", routine.id, bucket);
+                if let Some(adopted) =
+                    adopt_orphan_mandate(store, routine.id, bucket, &key, now)?
+                {
+                    produced.push(adopted);
+                }
+            }
+            // Sentinelle seulement si truncated_end n'a pas déjà d'occurrence
+            // (y compris via adoption ci-dessus).
             if store
                 .load_occurrence(routine.id, truncated_end)
                 .map_err(routine_store_error)?

@@ -24,6 +24,25 @@ fn root(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("maicie-routines-{label}-{}", Uuid::new_v4()))
 }
 
+/// Nettoie le répertoire de tir même quand le banc `panic!`, parce qu'un
+/// `remove_dir_all` en fin de fonction est sauté par le déroulement de pile :
+/// c'est ainsi que 43 répertoires orphelins ont rempli le volume le 2026-08-24.
+struct RootGuard {
+    path: PathBuf,
+}
+
+impl RootGuard {
+    fn new(label: &str) -> Self {
+        Self { path: root(label) }
+    }
+}
+
+impl Drop for RootGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 fn durations() -> DurationClasses {
     DurationClasses {
         short_secs: 30,
@@ -767,88 +786,171 @@ fn relec1_serie_mandat_orphelin_apres_adoption() {
     assert_eq!(controles_sains, N, "contrôles positifs sains");
 }
 
-/// Banc relec1 v3 — coupure injectée (opts), sans variable d'environnement.
+/// Mesures brutes d'un tir du banc v3 (régimes sous / juste / loin au-delà
+/// de [`MAX_CATCHUP_BUCKETS`]).
+struct Relec1TirV3 {
+    coupe_vide: bool,
+    deleg_apres_coupure: i64,
+    occ_apres_coupure: i64,
+    deleg_final: i64,
+    etat_n: Option<(EtatOccurrence, Option<String>)>,
+    /// Buckets réellement mandatés, en offset depuis le bucket de la coupure.
+    offsets_mandates: Vec<i64>,
+}
+
+/// Buckets portés par les mandats émis, relus dans le goal
+/// `[routine <id> bucket <n>] ...`. Le COMPTE seul ne dit pas QUEL bucket.
+fn offsets_mandates(connexion: &rusqlite::Connection, bucket_reference: i64) -> Vec<i64> {
+    let mut requete = connexion
+        .prepare(
+            "SELECT o.payload_json FROM objectives o \
+             JOIN delegations d ON d.objective_id = o.id",
+        )
+        .unwrap();
+    let payloads: Vec<Vec<u8>> = requete
+        .query_map([], |row| row.get::<_, Vec<u8>>(0))
+        .unwrap()
+        .map(|payload| payload.unwrap())
+        .collect();
+    let mut offsets: Vec<i64> = payloads
+        .iter()
+        .filter_map(|payload| {
+            let texte = String::from_utf8_lossy(payload);
+            let debut = texte.find("bucket ")? + "bucket ".len();
+            let reste = &texte[debut..];
+            let fin = reste.find(']')?;
+            let bucket = reste[..fin].trim().parse::<i64>().ok()?;
+            Some(bucket - bucket_reference)
+        })
+        .collect();
+    offsets.sort_unstable();
+    offsets
+}
+
+/// Un tir : coupure injectée à `t0`, reprise à `t0 + reprise_mult * period`.
+fn relec1_tir_crash_reel(reprise_mult: i64, label: &str) -> Relec1TirV3 {
+    let guard = RootGuard::new(label);
+    let database = guard.path.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let period = 60_i64;
+    let t0 = 1_787_580_000;
+    seed_active(&mut store, t0, period);
+    let bucket_n = bucket_for(t0, period);
+
+    let coupe = evaluate_routines_with(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0,
+        EvaluateRoutinesOpts {
+            abort_before_occurrence_insert: true,
+        },
+    )
+    .expect("releve coupee");
+    drop(store);
+
+    let connexion = rusqlite::Connection::open(&database).unwrap();
+    let deleg_apres_coupure: i64 = connexion
+        .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
+        .unwrap();
+    let occ_apres_coupure: i64 = connexion
+        .query_row("SELECT COUNT(*) FROM routine_occurrences", [], |r| r.get(0))
+        .unwrap();
+    drop(connexion);
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    let second = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0 + reprise_mult * period,
+    )
+    .expect("reprise");
+    drop(store);
+
+    let connexion = rusqlite::Connection::open(&database).unwrap();
+    let deleg_final: i64 = connexion
+        .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
+        .unwrap();
+    let offsets = offsets_mandates(&connexion, bucket_n);
+    drop(connexion);
+
+    Relec1TirV3 {
+        coupe_vide: coupe.is_empty(),
+        deleg_apres_coupure,
+        occ_apres_coupure,
+        deleg_final,
+        etat_n: second
+            .iter()
+            .find(|o| o.bucket == bucket_n)
+            .map(|o| (o.state, o.reason.clone())),
+        offsets_mandates: offsets,
+    }
+}
+
+/// Banc v3 — série appariée sur trois instants de reprise (sous / juste /
+/// loin au-delà de la borne). Régime couvert : gap ∈ {3, 66, 101}.
+/// Après remède borne×adoption : 1 délégation partout ; offsets [0] partout.
 #[test]
 fn relec1_serie_crash_reel_apres_adoption() {
     const N: usize = 5;
-    let mut doublons = 0usize;
-    let mut adoptions = 0usize;
-    for tir in 0..N {
-        let root = root(&format!("crash-reel-{tir}"));
-        let database = root.join("maicie.sqlite3");
-        let mut store = MaicieStore::open(&database).unwrap();
-        let period = 60_i64;
-        let t0 = 1_787_580_000;
-        seed_active(&mut store, t0, period);
-        let bucket_n = bucket_for(t0, period);
+    // 2 = sous la borne (contrôle positif historique) ;
+    // 65 / 100 = régime que la borne gouverne (motif mesuré 1/2/2 avant remède).
+    const POINTS: [i64; 3] = [2, 65, 100];
 
-        let coupe = evaluate_routines_with(
-            &mut store,
-            &durations(),
-            "maicie",
-            &[candidate("prospective")],
-            t0,
-            EvaluateRoutinesOpts {
-                abort_before_occurrence_insert: true,
-            },
-        )
-        .expect("releve coupee");
-        drop(store);
+    println!("=== BANC relec1 v3 — MAX_CATCHUP_BUCKETS = {MAX_CATCHUP_BUCKETS} ===");
+    for point in POINTS {
+        let mut tirs = Vec::with_capacity(N);
+        for tir in 0..N {
+            let mesure = relec1_tir_crash_reel(point, &format!("crash-reel-p{point}-{tir}"));
+            assert!(
+                mesure.coupe_vide,
+                "banc faux (point {point}, tir {tir}) : tick coupé rend produced != 0"
+            );
+            assert_eq!(
+                mesure.deleg_apres_coupure, 1,
+                "banc faux (point {point}, tir {tir}) : mandat non parti"
+            );
+            assert_eq!(
+                mesure.occ_apres_coupure, 0,
+                "banc faux (point {point}, tir {tir}) : occurrence écrite malgré coupure"
+            );
+            tirs.push(mesure);
+        }
+
+        let comptes: Vec<i64> = tirs.iter().map(|t| t.deleg_final).collect();
+        println!("--- POINT t0 + {point} * period ---");
+        println!("  delegations apres reprise : {comptes:?}");
+        println!(
+            "  bucket de la coupure      : {:?}",
+            tirs.iter()
+                .map(|t| match &t.etat_n {
+                    Some((etat, raison)) => {
+                        format!("{etat:?}/{}", raison.as_deref().unwrap_or("-"))
+                    }
+                    None => "absent".to_string(),
+                })
+                .collect::<Vec<_>>()
+        );
+        println!("  offsets mandates (tir 0)  : {:?}", tirs[0].offsets_mandates);
 
         assert!(
-            coupe.is_empty(),
-            "aggravation relec1 : tick coupe rend Ok(produced=0)"
+            comptes.iter().all(|c| *c == 1),
+            "adoption hors borne : point {point} doit rendre 1 délégation, obtenu {comptes:?}"
         );
-
-        let connexion = rusqlite::Connection::open(&database).unwrap();
-        let deleg_apres_coupure: i64 = connexion
-            .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
-            .unwrap();
-        let occ_apres_coupure: i64 = connexion
-            .query_row("SELECT COUNT(*) FROM routine_occurrences", [], |r| r.get(0))
-            .unwrap();
-        drop(connexion);
-        assert_eq!(deleg_apres_coupure, 1, "mandat parti");
-        assert_eq!(occ_apres_coupure, 0, "occurrence jamais écrite");
-
-        let mut store = MaicieStore::open(&database).unwrap();
-        let second = evaluate_routines(
-            &mut store,
-            &durations(),
-            "maicie",
-            &[candidate("prospective")],
-            t0 + 2 * period,
-        )
-        .expect("reprise");
-        drop(store);
-
-        let connexion = rusqlite::Connection::open(&database).unwrap();
-        let deleg_final: i64 = connexion
-            .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
-            .unwrap();
-        drop(connexion);
-
-        let etat_n = second
-            .iter()
-            .find(|o| o.bucket == bucket_n)
-            .map(|o| (o.state, o.reason.clone()));
-        let ouvertes = second
-            .iter()
-            .filter(|o| o.state == EtatOccurrence::Ouverte)
-            .count();
-        if deleg_final == 2 && ouvertes == 1 {
-            doublons += 1;
+        for (tir, mesure) in tirs.iter().enumerate() {
+            assert_eq!(
+                mesure.offsets_mandates,
+                vec![0],
+                "point {point} tir {tir} : seul le bucket de la coupure doit être mandaté"
+            );
+            assert_eq!(
+                mesure.etat_n.as_ref().map(|(s, r)| (*s, r.as_deref())),
+                Some((EtatOccurrence::Ouverte, Some("mandat_adopte"))),
+                "point {point} tir {tir} : bucket de la coupure adopté"
+            );
         }
-        if deleg_final == 1
-            && matches!(
-                etat_n.as_ref().map(|(s, r)| (*s, r.as_deref())),
-                Some((EtatOccurrence::Ouverte, Some("mandat_adopte")))
-            )
-        {
-            adoptions += 1;
-        }
-        let _ = fs::remove_dir_all(root);
     }
-    assert_eq!(doublons, 0, "crash réel : zéro doublon après adoption");
-    assert_eq!(adoptions, N, "crash réel : adoption à chaque reprise");
 }

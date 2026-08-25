@@ -1110,14 +1110,8 @@ fn run_routine(arguments: RoutineArgs, migrate: bool) -> Result<String, CliError
                 .load_routine(routine_id)
                 .map_err(CliError::Store)?
                 .ok_or(CliError::Routine(RoutineError::NotFound(routine_id)))?;
-            // Hash recalculé depuis les champs relus — jamais le blob stocké seul
-            // (sinon la garde est une tautologie : B3 manche 4).
-            let expected_hash = maicie::routines::sealed_template_hash(&routine);
-            // Refus AVANT l'écran : ne jamais afficher un goal altéré à côté
-            // d'une empreinte d'avant l'altération (vigilance visuelle piégée).
-            if expected_hash != routine.template_hash {
-                return Err(CliError::Routine(RoutineError::Invalid("gabarit altéré")));
-            }
+            // Hash recalculé + refus AVANT l'écran (vigilance piégée).
+            let expected_hash = routine_approval_preflight(&routine)?;
             confirm_local_routine_approval(routine_id, &routine, &expected_hash)?;
             let approved = approve_routine(&mut store, routine_id, &expected_hash, now)
                 .map_err(CliError::Routine)?;
@@ -1197,6 +1191,18 @@ fn confirm_local_routine_approval(
         return Err(CliError::Usage("approbation routine refusée"));
     }
     Ok(())
+}
+
+/// Recalcule le hash scellé et refuse AVANT tout écran si le gabarit a divergé.
+/// Extrait pour qu'un oracle puisse tuer le retrait de cette ligne (MUT-A).
+fn routine_approval_preflight(
+    routine: &maicie::routines::Routine,
+) -> Result<Vec<u8>, CliError> {
+    let expected_hash = maicie::routines::sealed_template_hash(routine);
+    if expected_hash != routine.template_hash {
+        return Err(CliError::Routine(RoutineError::Invalid("gabarit altéré")));
+    }
+    Ok(expected_hash)
 }
 
 /// Texte d'écran ADR 011 : les SIX champs scellés + les deux empreintes.
@@ -2765,14 +2771,47 @@ mod tests {
     use super::{
         Command, DelegateError, DelegateOutput, RegistreAction, RegistreArgs, candidates_from,
         delegate_error_for_cli, format_routine_approval_screen, parse_command, peel_migrate_flag,
-        sanitize_terminal,
+        routine_approval_preflight, sanitize_terminal,
     };
     use maicie::bridget_client::AgentInfo;
     use maicie::config::{DurationClasses, MaicieConfig, ProfileConfig};
     use maicie::domain::SuiteObjective;
-    use maicie::routines::{EtatRoutine, Routine};
+    use maicie::routines::{EtatRoutine, Routine, sealed_template_hash};
     use std::path::PathBuf;
     use uuid::Uuid;
+
+    #[test]
+    fn refus_avant_ecran_sur_gabarit_altere() {
+        let id = Uuid::new_v4();
+        let mut routine = Routine {
+            id,
+            goal: "ronde".into(),
+            participant: "prospective".into(),
+            period_secs: 60,
+            suite: SuiteObjective::Aucune,
+            depends_on: vec![],
+            references: vec![],
+            template_hash: vec![0x00],
+            state: EtatRoutine::Proposed,
+            proposed_at: 1,
+            approved_at: None,
+            paused_at: None,
+            last_bucket: None,
+        };
+        routine.template_hash = sealed_template_hash(&routine);
+        // Mutant du contenu sans retoucher le hash stocké → vigilance piégée
+        // si l'écran s'affichait. Le préflight DOIT refuser avant.
+        routine.goal = "autre goal".into();
+        let err = routine_approval_preflight(&routine).expect_err("gabarit altéré");
+        assert!(
+            err.to_string().contains("gabarit altéré"),
+            "refus pré-écran attendu, obtenu : {err}"
+        );
+        // Contrôle positif : gabarit intact → Ok (l'écran pourrait s'afficher).
+        routine.goal = "ronde".into();
+        routine.template_hash = sealed_template_hash(&routine);
+        assert!(routine_approval_preflight(&routine).is_ok());
+    }
 
     #[test]
     fn ecran_approbation_routine_affiche_les_six_champs_scelles() {

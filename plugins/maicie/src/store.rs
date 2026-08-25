@@ -2710,6 +2710,9 @@ impl MaicieStore {
 
     /// Retrouve objective_id + delegation_id pour une clé d'idempotence, sans
     /// exiger les octets canoniques (adoption d'un mandat orphelin routines).
+    /// Joint `delegations` comme les autres lookups : une ligne d'idempotence
+    /// orpheline de sa délégation ne doit pas produire une occurrence ouverte
+    /// fantôme.
     pub fn lookup_delegate_ids_by_key(
         &self,
         idempotency_key: &str,
@@ -2718,8 +2721,10 @@ impl MaicieStore {
         let row = self
             .connection
             .query_row(
-                "SELECT objective_id, delegation_id FROM delegate_idempotency\n\
-                 WHERE idempotency_key = ?1",
+                "SELECT i.objective_id, i.delegation_id\n\
+                 FROM delegate_idempotency i\n\
+                 JOIN delegations d ON d.id = i.delegation_id\n\
+                 WHERE i.idempotency_key = ?1",
                 [idempotency_key],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
@@ -2729,6 +2734,52 @@ impl MaicieStore {
             Ok((parse_uuid(&objective_raw)?, parse_uuid(&delegation_raw)?))
         })
         .transpose()
+    }
+
+    /// Buckets portant un mandat `routine:{id}:{bucket}` encore présent en
+    /// délégation, dans `[from_bucket, to_bucket]` inclus. Sert au rattrapage
+    /// borné : les orphelins hors `from..=current` doivent être adoptés avant
+    /// le saut de `last_bucket`, sinon ils restent invisibles pour toujours.
+    pub fn list_routine_orphan_buckets(
+        &self,
+        routine_id: Uuid,
+        from_bucket: i64,
+        to_bucket: i64,
+    ) -> Result<Vec<i64>, StoreError> {
+        if from_bucket > to_bucket {
+            return Ok(Vec::new());
+        }
+        let prefix = format!("routine:{routine_id}:");
+        let mut stmt = self
+            .connection
+            .prepare(
+                "SELECT i.idempotency_key\n\
+                 FROM delegate_idempotency i\n\
+                 JOIN delegations d ON d.id = i.delegation_id\n\
+                 WHERE i.idempotency_key LIKE ?1 ESCAPE '\\'",
+            )
+            .map_err(StoreError::Sql)?;
+        // LIKE : échapper % et _ dans l'UUID (prudence) — UUID hex n'en a pas.
+        let pattern = format!("{prefix}%");
+        let keys = stmt
+            .query_map([pattern], |row| row.get::<_, String>(0))
+            .map_err(StoreError::Sql)?;
+        let mut buckets = Vec::new();
+        for key in keys {
+            let key = key.map_err(StoreError::Sql)?;
+            let Some(suffix) = key.strip_prefix(&prefix) else {
+                continue;
+            };
+            let Ok(bucket) = suffix.parse::<i64>() else {
+                continue;
+            };
+            if bucket >= from_bucket && bucket <= to_bucket {
+                buckets.push(bucket);
+            }
+        }
+        buckets.sort_unstable();
+        buckets.dedup();
+        Ok(buckets)
     }
 
     /// Lit un résultat durable déjà réservé pour une clé de commande. Les
