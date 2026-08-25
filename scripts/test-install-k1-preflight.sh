@@ -166,4 +166,60 @@ grep -Fq "\"${force_home}/.local/bin/maicie\" preflight" \
 grep -Fxq "ExecStart=${force_home}/.local/bin/maicie-suivi" \
   "${force_home}/.config/systemd/user/bridget-maicie-releve.service"
 
+systemctl_state="${force_root}/systemctl.state"
+systemctl_log="${force_root}/systemctl.log"
+printf '%s\n' \
+  'active bridget-daemon.service' \
+  'active bridget-maicie-releve.timer' \
+  'active bridget-maicie-releve.service' >"$systemctl_state"
+cat >"${force_home}/.cargo/bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+state="${K1_TEST_SYSTEMCTL_STATE:?}"
+log="${K1_TEST_SYSTEMCTL_LOG:?}"
+args=("$@")
+[[ "${args[0]:-}" == "--user" ]] && args=("${args[@]:1}")
+printf '%s\n' "${args[*]}" >>"$log"
+command="${args[0]:-}"
+unit="${args[${#args[@]}-1]:-}"
+case "$command" in
+  is-active)
+    grep -Fqx "active $unit" "$state"
+    ;;
+  stop)
+    grep -Fv "active $unit" "$state" >"${state}.tmp"
+    mv "${state}.tmp" "$state"
+    ;;
+  daemon-reload)
+    ;;
+  restart|start|enable)
+    grep -Fv "active $unit" "$state" >"${state}.tmp" || true
+    printf 'active %s\n' "$unit" >>"${state}.tmp"
+    mv "${state}.tmp" "$state"
+    ;;
+  *)
+    echo "commande systemctl fixture inconnue: ${args[*]}" >&2
+    exit 99
+    ;;
+esac
+EOF
+chmod 0755 "${force_home}/.cargo/bin/systemctl"
+: >"$systemctl_log"
+live_output="$(
+  HOME="$force_home" \
+  K1_TEST_COMMAND_LOG="$force_log" \
+  K1_TEST_SYSTEMCTL_STATE="$systemctl_state" \
+  K1_TEST_SYSTEMCTL_LOG="$systemctl_log" \
+  "${force_repo}/scripts/install-k1.sh" --force --skip-verify 2>&1
+)"
+grep -q 'relève systemd arrêtée avant publication' <<<"$live_output"
+grep -q 'gate Maicie accepté sur la paire publiée' <<<"$live_output"
+quiesce_line="$(grep -n 'relève systemd arrêtée avant publication' <<<"$live_output" | cut -d: -f1)"
+published_gate_line="$(grep -n 'gate Maicie accepté sur la paire publiée' <<<"$live_output" | cut -d: -f1)"
+[[ "$quiesce_line" -lt "$published_gate_line" ]]
+grep -Fxq 'stop bridget-maicie-releve.timer' "$systemctl_log"
+grep -Fxq 'stop bridget-maicie-releve.service' "$systemctl_log"
+grep -Fxq 'enable --now bridget-maicie-releve.timer' "$systemctl_log"
+grep -Fxq 'start bridget-maicie-releve.service' "$systemctl_log"
+
 echo "gate installation Maicie: refus, paire finale --force et relève gardée vérifiés"

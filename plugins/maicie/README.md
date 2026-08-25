@@ -129,8 +129,19 @@ d'abord le binaire et la configuration finale dans un staging privé, contrôle
 cette paire, la publie, puis contrôle une seconde fois les deux chemins
 réellement inscrits dans les unités juste avant activation. `--force`
 remplace le binaire mais préserve toujours la configuration Maicie existante,
-notamment ses profils humains et son `database_path`. La relève installée
-repasse également le préflight avant chaque `status`.
+notamment ses profils humains et son `database_path`. Si la relève est active,
+`scripts/install-k1.sh` l'arrête de façon idempotente avant toute publication ;
+un arrêt brutal pendant la pose laisse donc la relève arrêtée, jamais active sur
+un candidat non contrôlé. Le second gate est exécuté juste après publication,
+avant l'écriture des unités. La relève installée repasse également le préflight
+avant chaque `status`, car l'ouverture métier actuelle peut encore modifier une
+base au DDL incomplet avant de la refuser ; la correction de cette mutation est
+un chantier séparé.
+
+Sur macOS, l'activation de la relève est vérifiée par `launchctl print` et tout
+échec de `bootstrap`/`load` est fatal. Un daemon Bridget déjà chargé est
+seulement détecté et laissé en mémoire : son redémarrage relève d'un chantier
+distinct.
 
 Ce contrôle prouve la compatibilité métier du schéma, pas la provenance du
 binaire. La règle d'activation gouvernée (projection d'un commit admis sur

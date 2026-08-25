@@ -111,6 +111,8 @@ MAICIE_CONFIG="${CONFIG_DIR_MAICIE}/config.json"
 
 DAEMON_PLIST="${LAUNCHD_DIR}/com.bridget.daemon.plist"
 MAICIE_RELEVE_PLIST="${LAUNCHD_DIR}/com.bridget.maicie.releve.plist"
+DAEMON_LABEL="com.bridget.daemon"
+MAICIE_RELEVE_LABEL="com.bridget.maicie.releve"
 DAEMON_SERVICE="${SYSTEMD_USER_DIR}/bridget-daemon.service"
 MAICIE_RELEVE_SERVICE="${SYSTEMD_USER_DIR}/bridget-maicie-releve.service"
 MAICIE_RELEVE_TIMER="${SYSTEMD_USER_DIR}/bridget-maicie-releve.timer"
@@ -368,6 +370,48 @@ preflight_published_maicie_activation() {
   log "gate Maicie accepté sur la paire publiée: binaire=$MAICIE_BIN config=$MAICIE_CONFIG $report"
 }
 
+# La relève doit être arrêtée avant toute publication. Sinon un arrêt brutal
+# entre la publication et le second gate laisse un service actif avec un
+# binaire qui n'a jamais été contrôlé sur la paire publiée.
+quiesce_maicie_releve() {
+  if [[ "$SKIP_SERVICES" == "1" ]]; then
+    log "NON FAIT: arrêt préalable de la relève (--skip-services)"
+    return 0
+  fi
+  case "$SERVICE_BACKEND" in
+    launchd)
+      local domain="gui/$(id -u)"
+      if launchctl print "$domain/$MAICIE_RELEVE_LABEL" >/dev/null 2>&1; then
+        launchctl bootout "$domain/$MAICIE_RELEVE_LABEL" \
+          || die "arrêt préalable launchd impossible ($MAICIE_RELEVE_LABEL)"
+        if launchctl print "$domain/$MAICIE_RELEVE_LABEL" >/dev/null 2>&1; then
+          die "relève launchd encore chargée après son arrêt ($MAICIE_RELEVE_LABEL)"
+        fi
+        log "relève launchd arrêtée avant publication ($MAICIE_RELEVE_LABEL)"
+      else
+        log "relève launchd déjà arrêtée ($MAICIE_RELEVE_LABEL)"
+      fi
+      ;;
+    systemd)
+      local timer_unit="bridget-maicie-releve.timer"
+      local service_unit="bridget-maicie-releve.service"
+      if systemctl --user is-active --quiet "$timer_unit"; then
+        systemctl --user stop "$timer_unit" \
+          || die "arrêt préalable systemd impossible ($timer_unit)"
+      fi
+      if systemctl --user is-active --quiet "$service_unit"; then
+        systemctl --user stop "$service_unit" \
+          || die "arrêt préalable systemd impossible ($service_unit)"
+      fi
+      if systemctl --user is-active --quiet "$timer_unit" \
+        || systemctl --user is-active --quiet "$service_unit"; then
+        die "relève systemd encore active après son arrêt"
+      fi
+      log "relève systemd arrêtée avant publication"
+      ;;
+  esac
+}
+
 write_test_adapter() {
   may_write "$ADAPTER_PATH" "adapter test" || return 0
   cat >"$ADAPTER_PATH" <<'EOF'
@@ -575,12 +619,22 @@ activate_services() {
   case "$SERVICE_BACKEND" in
     launchd)
       log "charger services launchd"
-      launchctl bootstrap "gui/$(id -u)" "$DAEMON_PLIST" 2>/dev/null \
-        || launchctl load "$DAEMON_PLIST" 2>/dev/null \
-        || true
-      launchctl bootstrap "gui/$(id -u)" "$MAICIE_RELEVE_PLIST" 2>/dev/null \
+      local domain="gui/$(id -u)"
+      if ! launchctl print "$domain/$DAEMON_LABEL" >/dev/null 2>&1; then
+        launchctl bootstrap "$domain" "$DAEMON_PLIST" 2>/dev/null \
+          || launchctl load "$DAEMON_PLIST" 2>/dev/null \
+          || die "activation launchd impossible ($DAEMON_LABEL)"
+      else
+        log "daemon launchd déjà chargé, redémarrage hors périmètre ($DAEMON_LABEL)"
+      fi
+      launchctl print "$domain/$DAEMON_LABEL" >/dev/null 2>&1 \
+        || die "daemon launchd non détectable après activation ($DAEMON_LABEL)"
+
+      launchctl bootstrap "$domain" "$MAICIE_RELEVE_PLIST" 2>/dev/null \
         || launchctl load "$MAICIE_RELEVE_PLIST" 2>/dev/null \
-        || true
+        || die "activation launchd impossible ($MAICIE_RELEVE_LABEL)"
+      launchctl print "$domain/$MAICIE_RELEVE_LABEL" >/dev/null 2>&1 \
+        || die "relève launchd non détectable après activation ($MAICIE_RELEVE_LABEL)"
       ;;
     systemd)
       log "activer services systemd --user"
@@ -593,7 +647,7 @@ activate_services() {
       fi
       systemctl --user enable --now bridget-maicie-releve.timer
       # Relève immédiate une fois (oneshot), sans attendre le timer.
-      systemctl --user start bridget-maicie-releve.service 2>/dev/null || true
+      systemctl --user start bridget-maicie-releve.service
       ;;
   esac
 }
@@ -773,13 +827,14 @@ main() {
   fi
   stage_maicie_activation
   preflight_staged_maicie_activation
+  quiesce_maicie_releve
   publish_staged_maicie_activation
+  preflight_published_maicie_activation
 
   write_test_adapter
   write_agents_json
   write_maicie_suivi
   write_services
-  preflight_published_maicie_activation
   activate_services
 
   print_report
