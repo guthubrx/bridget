@@ -1137,29 +1137,74 @@ impl IdempotencyStore {
 
     /// Reprise bornée : seules les remises encore en cours pour l'instance
     /// exacte sont relivrées. Une remise Acked ou Indeterminate ne l'est pas.
+    /// Toute ligne `dispatching` sans enveloppe est classée `indeterminate`
+    /// dans la même transaction avant que les autres remises soient rendues.
+    ///
+    /// Complexité : O(N), N étant le nombre total de remises faute d'index sur
+    /// l'instance ; le reclassement est groupé pour éviter N écritures.
     pub fn dispatching_deliveries_for_instance(
-        &self,
+        &mut self,
         recipient_instance_id: &str,
         now: i64,
     ) -> Result<Vec<SendDelivery>, IdempotencyError> {
-        let mut statement = self.conn.prepare(
-            "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at, message_bytes
-             FROM send_deliveries
-             WHERE recipient_instance_id = ?1 AND phase = 'dispatching' AND expires_at > ?2
-             ORDER BY delivery_id",
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let reclassified = tx.execute(
+            "UPDATE send_deliveries SET phase = 'indeterminate'
+             WHERE recipient_instance_id = ?1 AND phase = 'dispatching'
+               AND message_bytes IS NULL",
+            params![recipient_instance_id],
         )?;
-        statement
-            .query_map(params![recipient_instance_id, now], |row| {
-                Ok(SendDelivery {
-                    delivery_id: row.get(0)?,
-                    recipient_instance_id: row.get(1)?,
-                    delivery_generation: row.get(2)?,
-                    expires_at: row.get(3)?,
-                    message_bytes: row.get(4)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(Into::into)
+        let stored = {
+            let mut statement = tx.prepare(
+                "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at, message_bytes
+                 FROM send_deliveries
+                 WHERE recipient_instance_id = ?1 AND phase = 'dispatching' AND expires_at > ?2
+                 ORDER BY delivery_id",
+            )?;
+            statement
+                .query_map(params![recipient_instance_id, now], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, u64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, Option<Vec<u8>>>(4)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let deliveries = stored
+            .into_iter()
+            .map(
+                |(
+                    delivery_id,
+                    recipient_instance_id,
+                    delivery_generation,
+                    expires_at,
+                    message_bytes,
+                )| {
+                    let message_bytes = message_bytes.ok_or(IdempotencyError::CorruptRecord(
+                        "remise dispatching sans enveloppe après reclassement",
+                    ))?;
+                    Ok(SendDelivery {
+                        delivery_id,
+                        recipient_instance_id,
+                        delivery_generation,
+                        expires_at,
+                        message_bytes,
+                    })
+                },
+            )
+            .collect::<Result<Vec<_>, IdempotencyError>>()?;
+        tx.commit()?;
+        if reclassified > 0 {
+            log::warn!(
+                "{reclassified} remise(s) de {recipient_instance_id} classée(s) indeterminate: enveloppe locale absente"
+            );
+        }
+        Ok(deliveries)
     }
 
     /// Une marque `Seen` sans observable d'injection reste indéterminée : le
@@ -2340,7 +2385,7 @@ mod tests {
         }
         drop(conn);
 
-        let store = IdempotencyStore::open(&path).unwrap();
+        let mut store = IdempotencyStore::open(&path).unwrap();
         let deliveries = store
             .dispatching_deliveries_for_instance("instance-1", NOW)
             .unwrap();
