@@ -56,6 +56,21 @@ pub enum SuiteObjective {
     Objectif(Uuid),
 }
 
+/// Motifs fermés des refus de contrainte produits par le chemin local
+/// `delegate`. Aucun texte fourni par l'appelant ne devient un motif durable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotifRefusDelegationLocale {
+    SuiteAucuneAvecCitationNonClassee,
+}
+
+impl MotifRefusDelegationLocale {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::SuiteAucuneAvecCitationNonClassee => "suite_none_with_unclassified_citation",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectifCoordonne {
     pub id: Uuid,

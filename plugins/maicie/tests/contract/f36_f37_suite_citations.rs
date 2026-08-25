@@ -4,8 +4,9 @@ use maicie::app::{
     DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, close, delegate,
 };
 use maicie::config::DurationClasses;
-use maicie::domain::{ClasseDuree, EtatDelegation, SuiteObjective};
+use maicie::domain::{ClasseDuree, EtatDelegation, MotifRefusDelegationLocale, SuiteObjective};
 use maicie::store::MaicieStore;
+use rusqlite::{Connection, params};
 use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -89,9 +90,101 @@ fn f37_goal_citant_objectif_connu_sans_classement_refuse() {
     .unwrap_err();
     assert!(matches!(
         error,
-        DelegateError::Invalid("citation d'objectif non classée (--depends-on ou --reference)")
+        DelegateError::ContrainteRefusee {
+            motif: MotifRefusDelegationLocale::SuiteAucuneAvecCitationNonClassee,
+            objectif_cite,
+            refus_durables: 1,
+        } if objectif_cite == known
     ));
+
+    // Une seconde invocation est un second refus : chacune laisse sa propre
+    // ligne, même si aucun objectif ni outbox n'a été créé entre les deux.
+    let second = delegate(
+        &mut store,
+        durations(),
+        "maicie",
+        &[candidate("prospective")],
+        &base_request(&goal, SuiteObjective::Aucune, &[], &[], "cite-2"),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        second,
+        DelegateError::ContrainteRefusee {
+            motif: MotifRefusDelegationLocale::SuiteAucuneAvecCitationNonClassee,
+            objectif_cite,
+            refus_durables: 2,
+        } if objectif_cite == known
+    ));
+    assert_eq!(
+        store
+            .local_delegate_refusal_counts()
+            .unwrap()
+            .suite_aucune_avec_citation_non_classee,
+        2
+    );
     drop(store);
+
+    let reopened = MaicieStore::open(&database).unwrap();
+    assert_eq!(
+        reopened
+            .local_delegate_refusal_counts()
+            .unwrap()
+            .suite_aucune_avec_citation_non_classee,
+        2,
+        "le compteur survit à la fermeture du processus"
+    );
+    drop(reopened);
+
+    let connection = Connection::open(&database).unwrap();
+    let rows = connection
+        .prepare("SELECT reason, cited_objective_id FROM local_delegate_refusals ORDER BY sequence")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "suite_none_with_unclassified_citation".to_string(),
+                known.to_string(),
+            ),
+            (
+                "suite_none_with_unclassified_citation".to_string(),
+                known.to_string(),
+            ),
+        ],
+        "exactement une ligne typée par refus"
+    );
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO local_delegate_refusals(observed_at, reason, cited_objective_id)
+                 VALUES (?1, ?2, ?3)",
+                params![1_787_570_001_i64, "raison_libre", known.to_string()],
+            )
+            .is_err(),
+        "le schéma refuse tout motif hors de l'ensemble fermé"
+    );
+    assert!(
+        connection
+            .execute(
+                "UPDATE local_delegate_refusals SET observed_at = observed_at + 1",
+                [],
+            )
+            .is_err(),
+        "le journal des refus est append-only"
+    );
+    assert!(
+        connection
+            .execute("DELETE FROM local_delegate_refusals", [])
+            .is_err(),
+        "une ligne de refus durable ne peut pas être supprimée"
+    );
+    drop(connection);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -122,6 +215,14 @@ fn f37_reference_accepte_sans_creer_d_arete() {
         .remove(0);
     assert_eq!(snap.objective.references, vec![known]);
     assert!(snap.objective.depends_on.is_empty());
+    assert_eq!(
+        store
+            .local_delegate_refusal_counts()
+            .unwrap()
+            .suite_aucune_avec_citation_non_classee,
+        0,
+        "une citation classée reste cohérente sans ajouter de champ libre"
+    );
     drop(store);
     fs::remove_dir_all(root).unwrap();
 }

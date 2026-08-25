@@ -38,7 +38,10 @@ use maicie::routines::{
     evaluate_routines, pause_routine, propose_routine, resume_routine, routines_status_rows,
 };
 use maicie::runtime::{RuntimeNature, RuntimeObservation, RuntimeSignal, RuntimeSubscription};
-use maicie::store::{MaicieStore, ObjectiveSnapshot, ResourceRangeReservation, StoreError};
+use maicie::store::{
+    CompteursRefusDelegationLocale, MaicieStore, ObjectiveSnapshot, ResourceRangeReservation,
+    StoreError,
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::env;
@@ -118,10 +121,14 @@ fn run_status(arguments: StatusArgs, migrate: bool) -> Result<String, CliError> 
         coordination: coordination_report,
     } = open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)?;
     let snapshots = status(&store, arguments.objective_id).map_err(CliError::Objective)?;
+    let refus_contraintes = store
+        .local_delegate_refusal_counts()
+        .map_err(CliError::Store)?;
     let sources = capture_status_sources(&config, &delegated_participants(&snapshots));
     render_objective_output(
         ObjectiveOutput::Status {
             coordination: snapshots.into_iter().map(SnapshotOutput::from).collect(),
+            refus_contraintes,
             availability: sources.availability,
             availability_state: sources.availability_state,
             availability_reason: sources.availability_reason,
@@ -2246,6 +2253,7 @@ impl From<DelegateResult> for DelegateOutput {
 enum ObjectiveOutput {
     Status {
         coordination: Vec<SnapshotOutput>,
+        refus_contraintes: CompteursRefusDelegationLocale,
         availability: Vec<AvailabilityOutput>,
         availability_state: EtatFlux,
         availability_reason: Option<String>,
@@ -2636,6 +2644,7 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
     Ok(match output {
         ObjectiveOutput::Status {
             coordination,
+            refus_contraintes,
             availability,
             availability_state,
             availability_reason,
@@ -2651,8 +2660,9 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
                 .filter(|observation| observation.nature == "permission_auto_decidee")
                 .count();
             format!(
-                "objectifs={} disponibilité={} état_disponibilité={} motif_disponibilité={} snapshot_transport={} runtime={} permissions_auto_décidées={} fraîcheur={} flux={} coordination_fraîcheur={} coordination_motif={} coûts={}",
+                "objectifs={} refus_contradiction_suite={} disponibilité={} état_disponibilité={} motif_disponibilité={} snapshot_transport={} runtime={} permissions_auto_décidées={} fraîcheur={} flux={} coordination_fraîcheur={} coordination_motif={} coûts={}",
                 coordination.len(),
+                refus_contraintes.suite_aucune_avec_citation_non_classee,
                 availability.len(),
                 flux_name(availability_state),
                 availability_reason.as_deref().unwrap_or("aucun"),
@@ -2846,6 +2856,9 @@ impl CliError {
             Self::CatalogueReconcile(_) => "catalogue_reconcile",
             Self::Bridget(_) => "bridget",
             Self::Delegate(DelegateError::EnvelopeMismatch) => "envelope_mismatch",
+            Self::Delegate(DelegateError::ContrainteRefusee { .. }) => {
+                "delegate_constraint_refused"
+            }
             Self::Delegate(DelegateError::TargetUnavailable(_)) => "target_unavailable",
             Self::TargetUnknownBridget(_) => "target_unknown_bridget",
             Self::TargetMissingMaicieProfile { .. } => "target_missing_maicie_profile",

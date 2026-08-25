@@ -13,7 +13,7 @@ use maicie::domain::{
 use maicie::outbox::{PreparedDelegation, stable_body_hash};
 use maicie::store::{
     CoordinationCommitPhase, GuichetCommitPhase, MaicieStore, ObjectiveClosureCommitPhase,
-    ReassignmentCommitPhase, StoreError,
+    ReassignmentCommitPhase, SCHEMA_VERSION, StoreError,
 };
 use rusqlite::{Connection, ErrorCode, params};
 use std::fs;
@@ -79,10 +79,7 @@ fn migration_v8_main_vers_v11_puis_seconde_ouverture_conservent_l_historique() {
     drop(connection);
 
     let store = MaicieStore::open_and_migrate(&fixture.database).unwrap();
-    assert_eq!(
-        store.schema_version().unwrap(),
-        maicie::store::SCHEMA_VERSION
-    );
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     assert_eq!(
         store.objective_snapshots(Some(objectif.id)).unwrap()[0].delegations[0].id,
         delegation
@@ -120,10 +117,7 @@ fn migration_v8_main_vers_v11_puis_seconde_ouverture_conservent_l_historique() {
     );
     drop(connection);
     let reopened = MaicieStore::open(&fixture.database).unwrap();
-    assert_eq!(
-        reopened.schema_version().unwrap(),
-        maicie::store::SCHEMA_VERSION
-    );
+    assert_eq!(reopened.schema_version().unwrap(), SCHEMA_VERSION);
     assert_eq!(
         reopened
             .objective_snapshots(Some(objectif.id))
@@ -183,10 +177,7 @@ fn migration_v9_refuse_de_rejouer_une_notification_sans_horodatage_atteste() {
     drop(connection);
 
     let store = MaicieStore::open_and_migrate(&fixture.database).unwrap();
-    assert_eq!(
-        store.schema_version().unwrap(),
-        maicie::store::SCHEMA_VERSION
-    );
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     assert!(matches!(
         store.pending_notification_outboxes(),
         Err(StoreError::Corrupt(
