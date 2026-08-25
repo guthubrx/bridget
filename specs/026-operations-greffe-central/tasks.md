@@ -1,137 +1,42 @@
 # Tâches — Session 026
 
-## Phase 1 — Spécification et témoins sans collision
+## Première tranche urgente
 
-- [x] T2601 Formaliser les propriétés, la frontière ADR 011 et la définition de contradiction attestable dans `specs/026-operations-greffe-central/spec.md`.
-- [x] T2602 Documenter l'architecture à une porte, la décision SQL/Rust, v18 et la dépendance unique sur 021 dans `specs/026-operations-greffe-central/plan.md`.
-- [x] T2603 [P] Écrire deux contre-tests autonomes distincts pour `profile_approve` et `routine_approve` dans `plugins/maicie/tests/guichet_forbidden_operations_contract.rs`; observable : les deux fonctions de test sont exécutées et comparent exactement outcome, opération et motif.
-- [x] T2604 Exécuter `cargo test --workspace --no-run`, puis le binaire de test T2603 et consigner les deux rouges attendus sans les attribuer à 021 dans le jalon de branche.
+- [x] T2601 Décider une seule porte de vérité : le guichet.
+- [x] T2602 Rebaser sur 021@`2623772` et conserver son motif composé.
+- [x] T2603 Composer la vraie v18 de rc1 avant toute v19.
+- [x] T2604 Ajouter l'enveloppe canonique `delegate` et sa validation daemon.
+- [x] T2605 Parser la charge côté Maicie avec `deny_unknown_fields` et bornes.
+- [x] T2606 Appeler directement `citation::unclassified_known_citations`.
+- [x] T2607 Refuser exactement `suite=aucune` + UUID connu non classé.
+- [x] T2608 Persister puis rejouer le reçu dans `guichet_refusal_receptions`.
+- [x] T2609 Retourner `operation_not_available` pour une demande sans
+  contradiction, sans appliquer de délégation.
+- [x] T2610 Déclarer et tester la limite branche/SHA sans heuristique.
+- [x] T2611 Engendrer `ALL`, `as_sql()` et le parseur depuis les enums Maicie.
+- [x] T2612 Implémenter v19 sur la seule table des refus fédérés.
+- [x] T2613 Préflighter v18 sous savepoint avec rollback dans les deux branches.
+- [x] T2614 Tester vraie v18, fausse v18, fausse v19, v14 privé et bootstrap.
+- [x] T2615 Refuser fail-closed une valeur SQL inconnue à la lecture.
+- [ ] T2616 Exécuter le comptage final, clippy, geler et pousser la tête.
 
-## Phase 2 — Fondations après admission de 021
+## Seconde tranche reportée
 
-- [ ] T2605 Rebaser sur la tête admise contenant 021, relire le vocabulaire de refus unifié et adapter `specs/026-operations-greffe-central/plan.md` sans réintroduire de projection manuelle.
-- [ ] T2606 Mesurer et geler la forme v17 finale dans `plugins/maicie/tests/schema_migration_guard.rs` en partant de v16 par le vrai exécuteur 021 ; observable : neuf motifs dont `target_head_moved`, ancienne v17 à huit motifs refusée sans mutation, version future refusée, v18 no-op et bootstrap vide exhaustif.
-- [ ] T2607 Écrire les témoins v18 rouges dans `plugins/maicie/tests/schema_migration_guard.rs` : rollback de sonde sur succès et échec avec état avant/après identique, parcours actif v14→v18, injection SQL inconnue fail-closed, round-trip exact de `ALL`, bijection enum↔corpus et conservation des `CHECK` d'état.
-- [ ] T2608 Implémenter v18 dans `plugins/maicie/src/store.rs` en ouvrant seulement les vocabulaires SQL et en conservant contraintes d'état, unicité et corrélation ; observable : le DDL précède le marquage v18 et T2606–T2607 deviennent verts.
-- [ ] T2609 Créer une source Rust unique pour opérations et motifs dans `plugins/maicie/src/domain.rs` et supprimer les projections manuelles devenues redondantes dans `plugins/maicie/src/guichet.rs` et `plugins/maicie/src/store.rs`.
+- [ ] T2620 Appliquer réellement `delegate` avec configuration et candidats
+  centraux.
+- [ ] T2621 Ajouter `registre_add` sans chemin fourni par l'appelant.
+- [ ] T2622 Ajouter `objective_close` sur preuve centrale attestée.
+- [ ] T2623 Rendre durables les tentatives `profile_approve` et
+  `routine_approve`, sans les ajouter à l'enum autorisé.
+- [ ] T2624 Exposer l'issue terminale complète à la consultation et au client
+  mince.
 
-## Phase 3 — US2601 : validation partagée (P1)
+## Critères de livraison de la première tranche
 
-**But** : le défaut local cesse avant l'ouverture des capacités fédérées.
-
-**Test indépendant** : le même corpus rend exactement les mêmes décisions via
-la CLI locale et un appel de cas d'usage destiné au guichet.
-
-- [ ] T2610 [P] [US2601] Écrire le corpus exact des contradictions, références et ambiguïtés dans `plugins/maicie/tests/contract/f36_f37_suite_citations.rs`; observable : chaque fixture attend `coherent`, `refused` ou `signaled`, jamais une sous-chaîne.
-- [ ] T2611 [US2601] Implémenter le validateur unique au début de `delegate` dans `plugins/maicie/src/app.rs`, sans logique équivalente dans `plugins/maicie/src/main.rs`.
-- [ ] T2612 [US2601] Persister refus et signaux idempotents dans `plugins/maicie/src/store.rs`; observable : refus sans objectif créé, signal atomique avec la réservation et rejeu sans ligne double.
-- [ ] T2613 [US2601] Brancher la CLI locale uniquement par le cas d'usage existant dans `plugins/maicie/src/main.rs`; observable : le cas mesuré `suite=aucune + depends_on` est refusé et une référence de revue est seulement signalée.
-
-## Phase 4 — US2602 : délégation fédérée (P1)
-
-**Test indépendant** : un dépôt perdu puis rejoué crée un seul objectif et une
-seule délégation dans la base centrale, jamais dans une base leurre locale.
-
-- [ ] T2614 [P] [US2602] Ajouter les fixtures canoniques `delegate` valides, divergentes et contradictoires au corpus de contrat sous `specs/026-operations-greffe-central/contracts/`.
-- [ ] T2615 [US2602] Étendre les charges et réponses fermées dans `crates/bridget-transport/src/protocol.rs`; observable : toute variante de `ALL` a exactement une fixture et aucun champ inconnu n'est accepté.
-- [ ] T2616 [US2602] Persister dépôt, claim, refus et résultat terminal dans `crates/bridget-daemon/src/store.rs` et `crates/bridget-daemon/src/daemon.rs` sans interprétation métier.
-- [ ] T2617 [US2602] Convertir le claim vers `DelegateRequest` et appeler le cas d'usage partagé dans `plugins/maicie/src/guichet.rs` et `plugins/maicie/src/app.rs`; observable : IDs et état d'attente exacts dans le reçu.
-- [ ] T2618 [US2602] Fournir configuration, candidats, horloge et politiques centraux via `plugins/maicie/src/reconcile.rs` et `plugins/maicie/src/main.rs`; observable : aucune valeur sensible ne vient du payload distant.
-
-## Phase 5 — US2603 et US2604 : registre et clôture (P1)
-
-- [ ] T2619 [P] [US2603] Écrire les témoins `registre_add` append, rejeu et divergence dans `plugins/maicie/tests/catalogue_session_gate.rs`, avec un chemin local leurre explicitement inchangé.
-- [ ] T2620 [US2603] Implémenter la conversion fermée et l'append central dans `plugins/maicie/src/guichet.rs`, `plugins/maicie/src/reconcile.rs` et `plugins/maicie/src/catalogue.rs` seulement si la primitive existante ne suffit pas.
-- [ ] T2621 [P] [US2604] Écrire les témoins de clôture attestée, preuve absente, objectif déjà clos et rejeu exact dans `plugins/maicie/tests/integration/cli_objective.rs` ou un nouveau test autonome non concurrent.
-- [ ] T2622 [US2604] Implémenter `objective_close` sans motif libre dans `plugins/maicie/src/app.rs` et `plugins/maicie/src/guichet.rs`; observable : seule une livraison centrale corrélée autorise la clôture.
-
-## Phase 6 — US2605 et fermeture de sécurité (P1)
-
-- [ ] T2623 [US2605] Étendre `GuichetResult` et le lookup dans `crates/bridget-transport/src/protocol.rs`, `crates/bridget-daemon/src/store.rs` et `crates/bridget-daemon/src/daemon.rs` pour rendre issue et charge terminales durables.
-- [ ] T2624 [US2605] Étendre le CLI client dans `crates/bridget-daemon/src/cli.rs` avec erreur avant dépôt si tunnel absent et reprise stricte des mêmes id/date/octets.
-- [ ] T2625 [US2605] Rendre verts les deux contre-tests de `plugins/maicie/tests/guichet_forbidden_operations_contract.rs`; observable : deux refus durables exacts et zéro mutation métier.
-- [x] T2626 [P] [US2605] Ajouter dans `plugins/maicie/tests/guichet_forbidden_operations_contract.rs` le quatrième oracle enum↔corpus, engendré par une macro sans joker ; observable : une variante ajoutée sans fixture rend le `match` non exhaustif à la compilation.
-- [ ] T2627 [P] [US2605] Muter après composition l'enum et les comparaisons exactes dans les tests Bridget et Maicie ; observable : variante sans fixture et assertion par sous-chaîne font chacune rougir un oracle dédié.
-
-## Phase 7 — Validation et livraison
-
-- [ ] T2628 Exécuter `cargo test --workspace --no-run` avant comptage, puis les suites ciblées, le parcours central réel, formatage et clippy ; consigner SHA, passés, rouges, ignorés et imputation de chaque rouge.
-- [ ] T2629 Mesurer les compositions 021, la future v19/rc3, 025/v20 et les autres têtes gelées touchant protocole/guichet/store ; observable : aucune divergence sémantique silencieuse.
-- [ ] T2630 Relire le diff complet selon les articles XIX/XX, supprimer les duplications et documenter précisément le code évité et les surfaces non mesurées.
-- [ ] T2631 Geler, pousser et livrer la tête de `session-026-operations-greffe-central` avec message Git strict et sans trailer.
-
-## Dépendances et stratégie
-
-- T2601–T2604 sont indépendantes des fichiers de 021.
-- T2605 et T2606 bloquent tout code de production.
-- T2607–T2609 bloquent les trois opérations.
-- Le paquet A est T2610–T2613 et doit être livrable séparément.
-- Le paquet B est T2614–T2626 ; US2603 et US2604 peuvent préparer leurs tests
-  en parallèle après gel du contrat, mais leurs écritures centrales restent
-  séquentielles.
-- Le MVP sûr comprend T2601–T2625. Aucun MCP direct ni runtime Maicie résident
-  n'est requis.
-
-## Mesure du jalon documentaire/TDD
-
-**SHA de base réellement mesuré** :
-`b6eea777facf929d99a9c4f9ae75fb50e06dc2fd`, avec le diff des quatre fichiers
-neufs du jalon 026.
-
-- `cargo test --workspace --no-run` : compilation verte, aucun binaire de test
-  absent.
-- `cargo test -p maicie --test guichet_forbidden_operations_contract` au jalon
-  initial : **0 passé, 2 rouges, 0 ignoré**.
-- Rouge `profile_approve_est_refuse_et_persiste_exactement` : imputé au défaut
-  TDD attendu ; le code courant rend `UnsupportedOperation` sans refus terminal
-  durable.
-- Rouge `routine_approve_est_refuse_et_persiste_exactement` : même imputation,
-  exercée par une fonction distincte.
-- `--features test-support` : non joué ; cette mesure n'en a pas besoin et le
-  gate Linux `kqueue`/`kevent` reste hors périmètre connu.
-- `cargo fmt --all --check` : rouge sur la dette antérieure à 026 dans
-  `plugins/maicie/src/routines.rs`, `plugins/maicie/src/store.rs`,
-  `plugins/maicie/src/main.rs` et
-  `plugins/maicie/tests/contract/routines.rs`; aucun hunk ne vise le témoin 026.
-
-Un premier lancement a été arrêté par le harnais avant l'oracle métier, car le
-répertoire temporaire n'était pas en `0700`. Le fixture a été corrigé, recompilé
-avec `--no-run`, puis rejoué ; ce rouge de harnais n'est pas compté comme un
-défaut produit.
-
-### Addendum oracle exhaustif et renumérotation
-
-**SHA réellement mesuré** :
-`0bd24cba27cf7dea88ab5c763d5e18300922c82d`, avec le diff de l'oracle et de la
-renumérotation v19→v18.
-
-- `cargo test -p maicie --test guichet_forbidden_operations_contract --no-run` :
-  compilation verte.
-- Oracle `chaque_variante_operation_exige_une_fixture_exacte` isolé :
-  **1 passé, 0 rouge, 0 ignoré** (`2 filtered out`).
-- Binaire contractuel complet : **1 passé, 2 rouges, 0 ignoré** ; les deux
-  rouges et leur imputation `UnsupportedOperation` sans trace sont inchangés.
-- Aucun code de migration n'existait sous v19. La documentation réserve
-  désormais v18 et impose DDL réussi avant marquage de version.
-
-## Self-review Article XIX/XX du jalon
-
-- **Pourquoi cette solution est nécessaire** : douze agents fédérés ne peuvent
-  pas appliquer les trois mutations centrales et la valeur gratuite `aucune`
-  masque déjà des relations mesurées.
-- **Pourquoi elle est plus simple ou maintenable** : elle étend le guichet et
-  les cas d'usage existants, sans second accès MCP au store, daemon Maicie ni
-  validation dupliquée dans le CLI.
-- **Hypothèses prises** : 021 fournira le vocabulaire de refus unifié ; v18 est
-  réservée à 026 et succède directement à sa v17 finale à neuf motifs.
-- **Vérifications réalisées** : lecture des schémas et chemins d'appel,
-  compilation workspace, exécution séparée des deux témoins, formatage ciblé,
-  `git diff --check` et validation du format des tâches.
-- **Non vérifié** : implémentation, migration v17→v18, parcours central réel,
-  suites `test-support` Linux et composition finale.
-- **Code supprimé ou évité** : aucun code de production à ce jalon ; un client
-  MCP direct, un repli SQLite local, un interprète de prose et deux validateurs
-  parallèles sont explicitement évités.
-- **Complexité ajoutée et justification** : la prélecture d'un nom d'opération
-  interdit et l'audit `refused|signaled` sont nécessaires pour enregistrer ce
-  qui a été refusé sans autoriser cette opération.
+- `cargo test --workspace --no-run` précède le comptage ;
+- le contrat contradiction et la migration v19 sont verts ;
+- les rouges workspace sont listés et imputés ;
+- les deux approbations reportées sont annoncées comme ignorées, jamais comme
+  tenues ;
+- le SHA réellement mesuré et la chaîne v17→v18→v19 sont publiés ;
+- le commit suit strictement `type(scope): Description`, sans trailer.

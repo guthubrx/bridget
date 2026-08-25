@@ -1,234 +1,129 @@
 # Session 026 — Opérations fédérées du greffe central
 
 **Branche** : `session-026-operations-greffe-central`
-**Base de spécification** : `b6eea777facf929d99a9c4f9ae75fb50e06dc2fd`
-**Statut** : spécification et témoins TDD ; code partagé bloqué par la session 021
-**Priorité** : P1
-**Migration réservée** : v18, successeur direct de v17
 
-## Contexte mesuré
+**Base fonctionnelle** : session 021, tête `2623772`
 
-Le guichet Maicie fonctionne déjà pour `delivery_report` : il porte une
-enveloppe canonique, l'idempotence par `request_id`, un bail de relève et des
-issues terminales durables. Il n'accepte cependant aucune opération permettant
-à un agent fédéré de déléguer, de consigner un constat ou de clore un objectif.
-Ces agents transmettent donc leur intention à un humain, qui la ressaisit dans
-le greffe central.
+**Dépendance de schéma** : v17 (021) → v18 (refus local rc1) → v19 (026)
+**Statut** : première tranche urgente — refus fédéré d'une contradiction attestable
 
-Exposer directement la SQLite Maicie ou un second écrivain MCP créerait deux
-portes de vérité. La session étend la porte existante : le guichet. Un éventuel
-outil MCP futur ne pourra être qu'un client mince de ce même contrat.
+## Pourquoi cette tranche existe
 
-Une seconde mesure a montré que 121 des 123 objectifs portant `suite` déclarent
-`aucune`, y compris quand le mandat cite une relation avec un autre objectif.
-La seule obligation de remplir un champ mesure donc la valeur la moins chère,
-pas la réalité. La session corrige ce défaut dans le cas d'usage partagé par la
-CLI locale et le futur chemin fédéré avant d'ouvrir les trois opérations.
+Le guichet est l'unique porte de vérité entre les agents fédérés et le greffe
+Maicie central. Ajouter un accès direct MCP ou ouvrir une SQLite chez l'appelant
+créerait une seconde vérité.
 
-## Propriétés à tenir
+Le chemin local refusait déjà un but qui cite un objectif connu sans classer
+cette citation. Le chemin fédéré ne pouvait pas même déposer `delegate`. Cette
+tranche admet donc l'enveloppe, applique la même règle déterministe et produit
+un refus terminal durable avant toute mutation métier.
 
-### P2601 — Une seule porte d'écriture
+Elle ne prétend pas encore déléguer à distance. Une demande cohérente reçoit
+`operation_not_available`, elle aussi persistée : un dépôt n'est jamais vendu
+comme un effet applicatif.
 
-`delegate`, `registre_add` et `objective_close` sont déposées dans le guichet
-Bridget, relevées côté maître et appliquées par Maicie au store et au catalogue
-centraux. Aucun appelant distant n'ouvre une base Maicie, ne choisit un chemin
-de catalogue et ne bénéficie d'un repli local.
+## Propriétés livrées
 
-Le dépôt n'est pas l'application. `queued`, `in_flight` et `outcome_unknown`
-attestent au plus que le transport a peut-être accepté une enveloppe. Seul un
-reçu terminal durable, relu par `request_id`, atteste l'effet métier.
+### P2601 — Une seule règle, deux appelants
 
-### P2602 — Matrice fermée et approbations impossibles
+Le traitement guichet appelle
+`citation::unclassified_known_citations`. Il ne recopie ni la grammaire UUID,
+ni une heuristique de prose, ni le rapprochement avec une branche ou un SHA.
 
-La matrice publique ajoute exactement :
+La contradiction bloquante est exactement :
 
-- `delegate` ;
-- `registre_add` ;
-- `objective_close`.
+- `suite=aucune` ;
+- le `goal` cite l'UUID canonique d'un objectif présent dans le store central ;
+- cet UUID est absent de `depends_on` et `references`.
 
-Les opérations historiques de la session 015 restent compatibles.
-`profile_approve` et `routine_approve` ne sont jamais des variantes autorisées
-de `ServiceRequestOperation`. Une enveloppe attribuable qui les tente produit
-un refus terminal durable portant exactement le nom demandé, sans créer ni
-consommer d'approbation, routine, objectif, délégation ou ordre de lancement.
+Le motif exact est `suite_none_with_unclassified_citation`.
 
-La prélecture peut conserver un nom d'opération borné uniquement pour auditer
-le refus ; seule sa conversion réussie vers l'enum fermé autorise un cas
-d'usage. Un JSON sans identité exploitable reste une erreur de protocole et ne
-doit jamais être présenté comme un refus métier persisté.
+### P2602 — Limite déclarée, sans faux positif
 
-### P2603 — Ne pas demander une promesse, confronter des faits
+Une branche ou un SHA seuls ne sont pas des UUID d'objectif connus. Ils ne
+déclenchent donc pas le motif de contradiction. Cette limite couvre
+volontairement moins de cas que la prose observée, car un refus injuste serait
+plus dangereux qu'un signal manquant.
 
-La validation de la relation `suite` vit dans le cas d'usage `delegate`, avant
-toute création. La CLI locale et le traitement du guichet appellent exactement
-ce même point. Aucun parseur CLI ou adaptateur réseau ne porte une discipline
-parallèle.
+Le témoin de limite exige alors le motif exact `operation_not_available`. Il
+n'existe aucun LLM, score lexical ou liste parallèle de mots causaux.
 
-Le validateur rend une décision fermée : `coherent`, `refused` ou `signaled`.
-Un refus et un signal laissent chacun une ligne append-only et idempotente avec
-le canal, la version de règle, la clé de requête, les identifiants confrontés et
-la décision. Le but libre n'est pas recopié dans cet audit.
+### P2603 — Refus durable avant réponse
 
-### P2604 — Aucun champ de conformité libre obligatoire
+Le refus est écrit dans `guichet_refusal_receptions` avant que ses octets soient
+rendus. Un rejeu du même claim relit exactement les mêmes octets et ne crée pas
+une seconde ligne. Aucune table d'objectif, de délégation ou d'outbox n'est
+mutée par cette tranche.
 
-Aucune des trois opérations n'exige un motif, une raison ou une corrélation en
-texte libre. Les identifiants, relations, durées, sévérités et issues sont des
-types fermés ou des références vérifiables.
+`queued`, `in_flight` et `outcome_unknown` attestent seulement un dépôt. Seul
+le reçu terminal `refused` est conclusif.
 
-Le `goal` d'une délégation et le `text` d'un constat restent du contenu métier :
-ils ne prétendent pas prouver une conformité. Ils sont validés et bornés, mais
-ne remplacent jamais une relation structurée ni une raison typée.
+### P2604 — Vocabulaire fermé dans le code, refus conservable en SQL
 
-### P2605 — Tout refus est durable et exact
+`ServiceRequestOperation`, `OperationGuichet` et `MotifRefusGreffe` restent des
+enums fermés. Une source Rust unique engendre `ALL`, `as_sql()` et le parseur
+exact pour les deux vocabulaires Maicie.
 
-Tout refus produit après identification canonique de la requête est persisté
-avant sa réponse. Il est consultable après reconnexion et rejoué à l'identique.
-Les oracles comparent enums et chaînes exactes ; aucune assertion par
-sous-chaîne n'est admise.
+La migration v19 reconstruit seulement `guichet_refusal_receptions` et retire
+ses deux listes `CHECK(operation IN ...)` et `CHECK(reason IN ...)`. Elle garde
+les contraintes structurelles. Cela permet de conserver le nom d'une tentative
+refusée sans en faire une variante autorisée. Une chaîne inconnue injectée en
+SQL échoue `StoreError::Corrupt` à sa première lecture Rust.
 
-Les vocabulaires d'opérations et de motifs ont une source Rust unique qui
-engendre `ALL`, la projection SQL et le parseur. Les colonnes SQL qui stockent
-ces noms n'en recopient pas la liste dans un `CHECK`. Une valeur injectée hors
-code peut exister physiquement, mais sa lecture échoue explicitement comme
-corruption. Les `CHECK` de machine d'état restent en SQL.
+### P2605 — Aucun saut de migration
 
-## Contradiction attestable
+v19 ne s'applique qu'après la vraie v18 de rc1. Son préflight transactionnel :
 
-Une contradiction est une opposition vérifiable entre deux pièces de la même
-requête ; ce n'est pas une interprétation du but.
+- crée sous savepoint un objectif et un refus local sentinelles ;
+- prouve que l'insertion v18 fonctionne ;
+- prouve que les triggers refusent `UPDATE` et `DELETE` ;
+- exécute `ROLLBACK TO` puis `RELEASE` sur le chemin succès comme échec ;
+- compare les nombres de lignes avant et après.
 
-| Pièces observées | Décision | Exemple |
-|---|---|---|
-| `suite=aucune` et `depends_on` non vide | refus `no_suite_with_dependency` | le mandat déclare `--depends-on <UUID>` tout en déclarant aucune suite |
-| `suite=aucune` et le but associe le même UUID à un marqueur causal fermé, tandis que la relation le classe `reference` | refus `declared_relation_conflicts_with_body` | `depends_on=<UUID>` dans le corps mais `<UUID>` dans `references` |
-| UUID connu cité mais absent de `depends_on` et `references` | refus F37 existant | le corps cite `<UUID>` sans classement |
-| `suite=aucune` et UUID classé uniquement `reference`, sans marqueur causal fermé | signal `no_suite_with_reference` ; pas de blocage | « relire le verdict de `<UUID>` » |
-| formulation causale naturelle, négative, conditionnelle ou citée sans marqueur machine non ambigu | signal `ambiguous_relation` ; pas de blocage | « vérifier si ce lot dépend de `<UUID>` » |
-| aucun UUID connu, ou `suite=<UUID>` cohérente | passage | mandat autonome, ou suite explicitement nommée |
+Une base seulement estampillée v18, sans ce DDL, est refusée sans mutation. Une
+base estampillée v19 qui porte encore le CHECK v18 est également refusée.
 
-Les marqueurs lexicaux bloquants sont volontairement une grammaire machine
-minimale (`depends_on=<UUID>`, `depends-on:<UUID>` et
-`prerequisite_objective_id=<UUID>`), pas une liste de mots interprétés. Une
-phrase française ou anglaise est signalée quand elle ne peut pas être réduite
-sans ambiguïté. Aucun LLM, score ou heuristique probabiliste n'intervient.
+## Scénarios d'acceptation
 
-## Scénarios utilisateurs
+1. Un objectif central existe. Un claim `delegate`, `suite=aucune`, cite son
+   UUID dans `goal` sans relation structurée : reçu terminal exact, une ligne
+   durable, puis rejeu octet-identique.
+2. Le même texte ne contient qu'un nom de branche et un SHA : aucun motif de
+   contradiction n'est inventé ; le reçu exact dit que l'opération applicative
+   n'est pas encore disponible.
+3. Une valeur d'opération inconnue est injectée directement dans la table
+   privée : la première lecture échoue fermée.
+4. Une vraie v18 migre vers v19 en conservant les octets historiques ; une
+   fausse v18 et une fausse v19 ne modifient ni schéma ni numéro.
+5. Une copie privée v14 emprunte réellement v17, v18 puis v19 ; sa source reste
+   octet-identique. Le bootstrap vide est exercé séparément.
 
-### US2601 — Refuser une déclaration contradictoire sur les deux chemins (P1)
+## Frontière de sécurité inchangée
 
-Un appel local ou fédéré qui déclare `suite=aucune` avec une dépendance
-structurée reçoit le même motif exact. Aucune délégation n'est créée et une
-ligne durable permet de compter le refus. Une simple référence de revue ne
-bloque pas ; elle produit un signal durable.
+`profile_approve` et `routine_approve` restent absentes de
+`ServiceRequestOperation`. L'approbation est une frappe humaine protégée par
+l'ADR 011.
 
-**Test indépendant** : jouer le même corpus contre la CLI locale et un claim de
-guichet, comparer les décisions exactes et les lignes d'audit, puis muter le
-validateur dans un seul chemin ; le témoin de parité doit rougir.
+Leur transformation en refus fédérés durables portant le nom tenté appartient
+à la seconde tranche. Les deux témoins existent mais sont explicitement
+ignorés jusque-là ; cette première livraison ne présente pas cette propriété
+comme acquise.
 
-### US2602 — Déléguer depuis un agent fédéré (P1)
+## Travail explicitement reporté
 
-Un agent dépose un but borné, une cible ou des tags, une durée fermée et ses
-relations classées. Le maître résout la configuration et l'annuaire, crée une
-seule fois l'objectif, la délégation et l'outbox, puis rend leurs identifiants
-dans un reçu terminal. Le `request_id` est l'unique clé d'idempotence externe.
+- appliquer réellement `delegate` au greffe central ;
+- ajouter `registre_add` et `objective_close` ;
+- persister les tentatives `profile_approve` et `routine_approve` avant refus ;
+- exposer la consultation complète d'une issue terminale ;
+- fournir le client mince MCP éventuel du même guichet.
 
-**Test indépendant** : déposer, perdre l'accusé, rejouer les mêmes octets et
-relire l'issue ; un seul couple objectif/délégation existe. Un rejeu divergent
-est refusé et persisté.
-
-### US2603 — Consigner au registre central (P1)
-
-`registre_add` transporte une entrée `add` fermée du catalogue : version,
-identifiant, date, source de mission structurée, sévérité, récurrence éventuelle
-et texte du constat. Le chemin de journal vient de la configuration centrale.
-Un rejeu exact produit `idempotent_noop`; un même identifiant divergent produit
-un refus durable.
-
-**Test indépendant** : placer un faux catalogue dans la configuration locale de
-l'appelant, déposer deux fois la même entrée, puis vérifier une seule ligne dans
-le catalogue central et aucune écriture dans le faux chemin.
-
-### US2604 — Clore seulement sur une preuve centrale (P1)
-
-`objective_close` ne demande aucun motif libre. Il porte `objective_id` et
-`delegation_id`; Maicie vérifie la relation, l'identité du participant et une
-livraison terminale acceptée, puis dérive la base fermée
-`delivery_attested`. Sans cette preuve, la demande est refusée avec
-`closure_not_attested_intervention_required`.
-
-Une demande exacte rejouée après clôture retrouve son reçu original. Une autre
-demande visant un objectif déjà clos reçoit
-`objective_already_closed_intervention_required`; elle ne s'approprie pas la
-clôture existante.
-
-### US2605 — Connaître l'issue après une coupure (P1)
-
-Le client peut relire l'issue et la charge terminales par `request_id`. Si le
-tunnel est absent avant dépôt, il échoue explicitement sans base locale. Si la
-réponse est perdue après dépôt, il rejoue strictement le même `request_id`, le
-même `issued_at` et les mêmes octets, puis consulte l'issue. Il ne génère jamais
-une seconde intention.
-
-## Exigences fonctionnelles
-
-- **FR-2601** : les trois mutations passent exclusivement par le guichet et le
-  greffe centraux.
-- **FR-2602** : les opérations et charges utiles sont versionnées, fermées et
-  `deny_unknown_fields` à chaque niveau.
-- **FR-2603** : les approbations de profil et de routine sont absentes du
-  vocabulaire autorisé et refusées par des témoins distincts réellement joués.
-- **FR-2604** : chaque refus attribuable et chaque signal de contradiction est
-  persisté avant retour, avec comparaison exacte des valeurs.
-- **FR-2605** : le validateur partagé précède les mutations locales et
-  fédérées ; aucune validation équivalente ne subsiste dans `main.rs`.
-- **FR-2606** : aucun champ libre obligatoire ne sert de motif, de base ou de
-  corrélation ; le contenu métier libre reste distinct des gardes.
-- **FR-2607** : les horodatages, horizons, chemins, configuration, candidats et
-  identité de l'émetteur sont établis ou vérifiés côté maître.
-- **FR-2608** : la consultation rend l'issue et la charge terminales durables,
-  pas seulement l'état de dépôt.
-- **FR-2609** : `queued`, `in_flight` et `outcome_unknown` ne valent jamais
-  succès applicatif.
-- **FR-2610** : aucun repli n'ouvre la SQLite ou le catalogue local de
-  l'appelant.
-- **FR-2611** : v18 retire les listes d'opérations/motifs recopiées dans les
-  `CHECK`, conserve les gardes d'état et échoue à la lecture d'une valeur Rust
-  inconnue.
-- **FR-2612** : toute variante Rust autorisée possède un cas de corpus exact ;
-  ajouter une variante sans fixture fait rougir le gate.
+Ces éléments ne doivent jamais ouvrir une base locale ni créer une seconde
+porte d'écriture.
 
 ## Hors périmètre
 
-- Exposer directement Maicie ou sa SQLite par MCP.
-- Ajouter un daemon résident Maicie ou promettre une latence de traitement.
-- Approuver, proposer ou consommer un profil ou une routine à distance.
-- Interpréter un but par LLM ou classifier probabilistiquement une relation.
-- Modifier la politique de sélection d'agent ou les règles d'approbation ADR 011.
-
-## Dépendances de composition
-
-- La session 021 doit être admise avant tout code partagé ; elle refond les
-  motifs de refus dans les mêmes fichiers Maicie et Bridget.
-- La migration v18 vérifie que l'état durable immédiatement antérieur est v17,
-  applique son DDL, puis et seulement puis marque v18. L'étape d'installation
-  refuse une version antérieure ou une forme v17 incomplète sans modifier le
-  numéro ; une base déjà v18 s'ouvre sans rejouer le DDL et une version future
-  est refusée comme non prise en charge.
-- Le numéro v17 ne constitue pas cette preuve : six bases de test portent une
-  ancienne v17 à huit motifs, alors que la v17 finale de 021 en porte neuf. Le
-  témoin positif part d'une vraie v16 et applique le chemin de migration final
-  de 021. Le contrôle négatif part d'une ancienne forme à huit motifs marquée
-  v17 ; v18 doit la refuser sans ligne, DDL ni numéro modifié.
-- Le préflight v18 atteste la présence effective du neuvième motif
-  `target_head_moved` dans la contrainte v17 par une sonde sous savepoint,
-  intégralement rollbackée. Le rollback et la libération du savepoint ont lieu
-  que l'insertion réussisse ou échoue ; nombre de lignes, schéma et
-  `user_version` sont comparés avant/après. Il ne compare pas un hash fragile
-  de texte SQL et ne crée aucune pseudo-migration v17→v17.
-- Un bootstrap vide applique et vérifie chaque DDL jusqu'à v18 ; il ne saute
-  aucun palier sous prétexte que la version cible est connue.
-- Un parcours distinct part d'une base v14 conforme à la base active mesurée et
-  emprunte le même exécuteur séquentiel jusqu'à la v17 finale, puis v18. Un
-  témoin sur une base neuve ne remplace jamais ce parcours de migration réel.
-- La session ne requiert aucune autre migration que v18. La future v19 dépendra
-  de cette tête, pas l'inverse.
+- interpréter les branches, SHA ou la prose par heuristique ;
+- modifier la règle locale portée par rc1 ;
+- reprendre le variant composé de refus livré par 021 ;
+- exposer l'approbation de profils ou routines ;
+- toucher la base Maicie active pour un test de migration.
