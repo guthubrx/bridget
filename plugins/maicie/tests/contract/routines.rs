@@ -954,3 +954,110 @@ fn relec1_serie_crash_reel_apres_adoption() {
         }
     }
 }
+
+/// Garde : un mandat terminal (`annulee` / `terminee`) ne doit PAS être adopté
+/// — sinon l'occurrence ment et la routine gèle (mesure AWC sur 813e9ab).
+/// Mutant : retirer `AND d.state NOT IN (...)` fait mourir ce test.
+#[test]
+fn adoption_refuse_un_mandat_terminal() {
+    for etat_terminal in ["terminee", "annulee"] {
+        let guard = RootGuard::new(&format!("mandat-terminal-{etat_terminal}"));
+        let database = guard.path.join("maicie.sqlite3");
+        let mut store = MaicieStore::open(&database).unwrap();
+        let period = 60_i64;
+        let t0 = 1_787_580_000;
+        seed_active(&mut store, t0, period);
+        let bucket_n = bucket_for(t0, period);
+
+        let _coupe = evaluate_routines_with(
+            &mut store,
+            &durations(),
+            "maicie",
+            &[candidate("prospective")],
+            t0,
+            EvaluateRoutinesOpts {
+                abort_before_occurrence_insert: true,
+            },
+        )
+        .expect("releve coupee");
+        drop(store);
+
+        let connexion = rusqlite::Connection::open(&database).unwrap();
+        assert_eq!(
+            connexion
+                .execute(
+                    "UPDATE delegations SET state = ?1",
+                    rusqlite::params![etat_terminal],
+                )
+                .unwrap(),
+            1,
+            "une délégation à marquer {etat_terminal}"
+        );
+        let routine_id: String = connexion
+            .query_row("SELECT id FROM routines LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        let key = format!("routine:{routine_id}:{bucket_n}");
+        drop(connexion);
+
+        let store = MaicieStore::open(&database).unwrap();
+        assert!(
+            store
+                .lookup_delegate_ids_by_key(&key)
+                .unwrap()
+                .is_none(),
+            "lookup doit ignorer un mandat {etat_terminal}"
+        );
+        drop(store);
+
+        let mut store = MaicieStore::open(&database).unwrap();
+        let second = evaluate_routines(
+            &mut store,
+            &durations(),
+            "maicie",
+            &[candidate("prospective")],
+            t0 + 100 * period,
+        )
+        .expect("reprise au-delà de la borne");
+        drop(store);
+
+        let connexion = rusqlite::Connection::open(&database).unwrap();
+        let deleg_final: i64 = connexion
+            .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
+            .unwrap();
+        let etat_n: Option<(String, Option<String>)> = connexion
+            .query_row(
+                "SELECT state, reason FROM routine_occurrences WHERE bucket = ?1",
+                rusqlite::params![bucket_n],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok();
+        drop(connexion);
+
+        assert_eq!(
+            deleg_final, 2,
+            "{etat_terminal} : un neuf doit partir (orphelin mort non adopté)"
+        );
+        assert_ne!(
+            etat_n.as_ref().map(|(s, r)| (s.as_str(), r.as_deref())),
+            Some(("ouverte", Some("mandat_adopte"))),
+            "{etat_terminal} : bucket N ne doit pas être adopté comme vivant"
+        );
+        assert!(
+            second
+                .iter()
+                .any(|o| o.state == EtatOccurrence::Ouverte && o.reason.is_none()),
+            "{etat_terminal} : une ouverte neuve attendue au bucket courant"
+        );
+    }
+}
+
+/// Contrôle positif du filtre d'état : mandat vivant → toujours adopté.
+#[test]
+fn adoption_accepte_un_mandat_vivant_au_dela_de_la_borne() {
+    let mesure = relec1_tir_crash_reel(100, "mandat-vivant-controle");
+    assert_eq!(mesure.deleg_final, 1);
+    assert_eq!(
+        mesure.etat_n.as_ref().map(|(s, r)| (*s, r.as_deref())),
+        Some((EtatOccurrence::Ouverte, Some("mandat_adopte")))
+    );
+}

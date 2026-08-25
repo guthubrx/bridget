@@ -389,6 +389,9 @@ fn open_store_with_reconciliation(
     // Battement routines : même horloge que la relève (aucune timer Maicie).
     // Court-circuit si aucune active — zéro I/O Bridget, les fixtures CLI
     // mono-séquence et les commandes hors routines restent intactes.
+    // Précondition de composition pour pause/resume : ce tick ADOPTE les
+    // orphelins des actives AVANT toute action CLI (resume saute last_bucket
+    // sans balayer lui-même — voir `resume_routine`).
     let actives = store
         .list_routines(Some(EtatRoutine::Active))
         .map_err(CliError::Store)?;

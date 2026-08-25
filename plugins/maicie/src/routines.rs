@@ -261,6 +261,10 @@ pub fn resume_routine(
     routine.state = EtatRoutine::Active;
     routine.paused_at = None;
     // À la reprise : pas de rattrapage des buckets manqués pendant la pause.
+    // Précondition (composition CLI) : `open_store_with_reconciliation` a déjà
+    // appelé `evaluate_routines` sur les actives AVANT pause/resume — donc un
+    // orphelin dormant a été adopté (ou sauté) avant que last_bucket saute.
+    // Appelée seule (API lib), cette fonction ne balaye pas les orphelins.
     routine.last_bucket = Some(bucket_for(now, routine.period_secs).saturating_sub(1));
     store
         .update_routine(&routine)
@@ -329,16 +333,16 @@ pub fn evaluate_routines_with(
         let gap = current - after;
         if gap > MAX_CATCHUP_BUCKETS {
             // Sentinel unique pour le trou tronqué, puis au plus MAX buckets.
-            // skipped = truncated_end − after − 1 (formule ; ex. after=B0 → 43135
-            // pour 30 j / 60 s). La sentinelle DOIT porter ce compte.
+            // skipped = buckets de (after+1 .. truncated_end-1) SANS ligne
+            // individuelle après adoption (formule brute moins les adoptés).
             let truncated_end = current - MAX_CATCHUP_BUCKETS;
-            let skipped = (truncated_end - after - 1).max(0);
-            // AVANT sentinelle / saut : adopter tout mandat orphelin dans
+            // AVANT sentinelle / saut : adopter tout mandat orphelin VIVANT dans
             // after+1 ..= truncated_end. Sinon (mesure jury 1/2/2) le mandat
             // de la coupure reste hors fenêtre pour toujours et un neuf part.
             let orphan_buckets = store
                 .list_routine_orphan_buckets(routine.id, after + 1, truncated_end)
                 .map_err(routine_store_error)?;
+            let mut adopted_in_hole = 0_i64;
             for bucket in orphan_buckets {
                 if store
                     .load_occurrence(routine.id, bucket)
@@ -351,9 +355,13 @@ pub fn evaluate_routines_with(
                 if let Some(adopted) =
                     adopt_orphan_mandate(store, routine.id, bucket, &key, now)?
                 {
+                    if bucket < truncated_end {
+                        adopted_in_hole += 1;
+                    }
                     produced.push(adopted);
                 }
             }
+            let skipped = (truncated_end - after - 1 - adopted_in_hole).max(0);
             // Sentinelle seulement si truncated_end n'a pas déjà d'occurrence
             // (y compris via adoption ci-dessus).
             if store

@@ -2712,7 +2712,8 @@ impl MaicieStore {
     /// exiger les octets canoniques (adoption d'un mandat orphelin routines).
     /// Joint `delegations` comme les autres lookups : une ligne d'idempotence
     /// orpheline de sa délégation ne doit pas produire une occurrence ouverte
-    /// fantôme.
+    /// fantôme. Refuse aussi les mandats terminaux (`annulee` / `terminee`) —
+    /// sinon l'adoption ment (« mandat en cours ») et gèle la routine.
     pub fn lookup_delegate_ids_by_key(
         &self,
         idempotency_key: &str,
@@ -2724,7 +2725,8 @@ impl MaicieStore {
                 "SELECT i.objective_id, i.delegation_id\n\
                  FROM delegate_idempotency i\n\
                  JOIN delegations d ON d.id = i.delegation_id\n\
-                 WHERE i.idempotency_key = ?1",
+                 WHERE i.idempotency_key = ?1\n\
+                   AND d.state NOT IN ('annulee', 'terminee')",
                 [idempotency_key],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
@@ -2736,10 +2738,10 @@ impl MaicieStore {
         .transpose()
     }
 
-    /// Buckets portant un mandat `routine:{id}:{bucket}` encore présent en
-    /// délégation, dans `[from_bucket, to_bucket]` inclus. Sert au rattrapage
-    /// borné : les orphelins hors `from..=current` doivent être adoptés avant
-    /// le saut de `last_bucket`, sinon ils restent invisibles pour toujours.
+    /// Buckets portant un mandat `routine:{id}:{bucket}` encore **vivant**
+    /// (délégation non terminale), dans `[from_bucket, to_bucket]` inclus.
+    /// Sert au rattrapage borné : les orphelins hors `from..=current` doivent
+    /// être adoptés avant le saut de `last_bucket`.
     pub fn list_routine_orphan_buckets(
         &self,
         routine_id: Uuid,
@@ -2750,17 +2752,18 @@ impl MaicieStore {
             return Ok(Vec::new());
         }
         let prefix = format!("routine:{routine_id}:");
+        // UUID hex : pas de `%` / `_` à échapper — pas d'ESCAPE cosmétique.
+        let pattern = format!("{prefix}%");
         let mut stmt = self
             .connection
             .prepare(
                 "SELECT i.idempotency_key\n\
                  FROM delegate_idempotency i\n\
                  JOIN delegations d ON d.id = i.delegation_id\n\
-                 WHERE i.idempotency_key LIKE ?1 ESCAPE '\\'",
+                 WHERE i.idempotency_key LIKE ?1\n\
+                   AND d.state NOT IN ('annulee', 'terminee')",
             )
             .map_err(StoreError::Sql)?;
-        // LIKE : échapper % et _ dans l'UUID (prudence) — UUID hex n'en a pas.
-        let pattern = format!("{prefix}%");
         let keys = stmt
             .query_map([pattern], |row| row.get::<_, String>(0))
             .map_err(StoreError::Sql)?;

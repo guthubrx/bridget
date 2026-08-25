@@ -133,6 +133,9 @@ relève (~60 s). Elle **délègue**, n'approuve jamais. Surface CLI :
 
 Schéma SQLite `user_version = 15` : tables `routines` / `routine_occurrences`.
 La migration v15 n'est pas dans ce lot (`--migrate` ailleurs).
+L'adoption d'un mandat orphelin exige une délégation **vivante**
+(`state NOT IN (annulee, terminee)`) : un mandat terminal n'est jamais
+ressuscité en `ouverte/mandat_adopte`.
 
 ### Dette assumée (hors lot) — formulation mesurée
 
