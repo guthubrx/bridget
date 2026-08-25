@@ -629,6 +629,7 @@ pub fn run(agent: &str, initial_window: AttachWindow, socket_path: &Path) -> Res
             agent,
             initial_window,
             socket_path,
+            libc::STDIN_FILENO,
             raw_terminal,
             is_terminal(libc::STDOUT_FILENO),
         )
@@ -643,6 +644,7 @@ fn run_with_input(
     agent: &str,
     initial_window: AttachWindow,
     socket_path: &Path,
+    input_fd: RawFd,
     raw_terminal: bool,
     tty_output: bool,
 ) -> Result<(), String> {
@@ -670,7 +672,7 @@ fn run_with_input(
             &mut state,
             agent,
             socket_path,
-            libc::STDIN_FILENO,
+            input_fd,
             raw_terminal,
             tty_output,
         )? {
@@ -1393,6 +1395,7 @@ fn drive_interactive(
     );
 
     let mut reconnect = true;
+    let mut input_open = true;
     let mut reader_failure = None;
     loop {
         match status_rx.try_recv() {
@@ -1406,8 +1409,10 @@ fn drive_interactive(
             Err(mpsc::TryRecvError::Empty) => {}
         }
 
+        // POSIX ignore un descripteur négatif : après EOF non-TTY, la boucle
+        // attend encore le lecteur socket sans relire stdin ni tourner à vide.
         let mut pollfd = libc::pollfd {
-            fd: input_fd,
+            fd: if input_open { input_fd } else { -1 },
             events: libc::POLLIN,
             revents: 0,
         };
@@ -1434,7 +1439,11 @@ fn drive_interactive(
                     libc::read(input_fd, (&mut byte as *mut u8).cast::<libc::c_void>(), 1)
                 };
                 if read == 0 {
-                    reconnect = false;
+                    if raw_terminal {
+                        reconnect = false;
+                    } else {
+                        input_open = false;
+                    }
                     break;
                 }
                 if read < 0 {
@@ -1476,6 +1485,7 @@ fn drive_interactive(
                 reconnect = false;
                 break;
             }
+            input_open = false;
             render_expired_sends(&shared_state, &renderer_sender);
             continue;
         }
@@ -3921,7 +3931,16 @@ mod tests {
             }
         });
 
-        let error = run("codex-1", AttachWindow::Today, &socket_path).unwrap_err();
+        let input = File::open("/dev/null").unwrap();
+        let error = run_with_input(
+            "codex-1",
+            AttachWindow::Today,
+            &socket_path,
+            input.as_raw_fd(),
+            false,
+            false,
+        )
+        .unwrap_err();
         assert!(error.contains("wrapper ACP de « codex-1 » est indisponible"));
         server.join().unwrap();
         std::fs::remove_file(socket_path).unwrap();
