@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Harnais bridget-idle : partition agents + backlog Git local en lecture seule.
+# Harnais bridget-idle : partition + bornes de tour + backlog Git local + contrôles positifs.
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,18 +23,181 @@ spec.loader.exec_module(mod)
 
 agents = [
     {"name": "alice", "state": "connected", "domain": "bridget", "last_seen_secs": 10},
-    {"name": "bob", "state": "connected", "domain": "bridget", "last_seen_secs": 5},
+    {"name": "bob", "state": "connected", "domain": "bridget", "transport": "codex_app_server", "last_seen_secs": 5},
     {"name": "cursor10-like", "state": "connected", "domain": "cursor10-lot", "last_seen_secs": 3},
     {"name": "cursorbridget-like", "state": "busy", "domain": "bridget", "last_seen_secs": 1},
     {"name": "relec6-like", "state": "busy", "domain": "relec6-lot", "last_seen_secs": 2},
     {"name": "bridget", "state": "connected", "domain": "bridget", "last_seen_secs": 0},
-    # Consommateur sain vs figé (propriété mécanique, pas des noms d'instance).
-    {"name": "healthy-consumer", "state": "busy", "domain": "bridget", "last_seen_secs": 2},
-    {"name": "frozen-consumer", "state": "busy", "domain": "bridget", "last_seen_secs": 2},
+    # La mission ne suffit pas : la borne du dernier tour tranche l'activité.
+    {"name": "healthy-consumer", "state": "connected", "domain": "bridget", "transport": "codex_app_server", "last_seen_secs": 2},
+    {"name": "frozen-consumer", "state": "connected", "domain": "bridget", "transport": "codex_app_server", "last_seen_secs": 2},
+    {"name": "freshly-finished", "state": "connected", "domain": "bridget", "transport": "acp", "last_seen_secs": 2},
+    {"name": "resumed-consumer", "state": "connected", "domain": "bridget", "transport": "codex_app_server", "last_seen_secs": 2},
+    {"name": "corrupt-journal", "state": "connected", "domain": "bridget", "transport": "codex_app_server", "last_seen_secs": 2},
+    {"name": "missing-journal", "state": "connected", "domain": "bridget", "transport": "codex_app_server", "last_seen_secs": 2},
+    {"name": "busy-without-journal", "state": "busy", "domain": "bridget", "transport": "ssh-unix", "last_seen_secs": 2},
+    {"name": "contradictory-consumer", "state": "busy", "domain": "bridget", "transport": "codex_app_server", "last_seen_secs": 2},
+    {"name": "ssh-open-only", "state": "connected", "domain": "bridget", "transport": "ssh-unix", "last_seen_secs": 2},
+    {"name": "acp-anomaly-live", "state": "connected", "domain": "bridget", "transport": "acp", "last_seen_secs": 2},
+    {"name": "ambiguous-error", "state": "connected", "domain": "bridget", "transport": "acp", "last_seen_secs": 2},
+    {"name": "unsafe-stop", "state": "connected", "domain": "bridget", "transport": "acp", "last_seen_secs": 2},
+    {"name": "unsafe-error", "state": "connected", "domain": "bridget", "transport": "acp", "last_seen_secs": 2},
 ]
-occupied = {"bob", "healthy-consumer", "frozen-consumer"}
+occupied = {
+    "bob",
+    "healthy-consumer",
+    "frozen-consumer",
+    "freshly-finished",
+    "resumed-consumer",
+    "corrupt-journal",
+    "missing-journal",
+    "busy-without-journal",
+    "contradictory-consumer",
+    "ssh-open-only",
+    "acp-anomaly-live",
+    "ambiguous-error",
+    "unsafe-stop",
+    "unsafe-error",
+}
 exclude = {"bridget", "fable", "poucave", "sol", "maicie"}
 daemon = {a["name"] for a in agents}
+
+journal_root = fixture / "journals"
+
+def write_journal(agent, events, *, invalid_line=False):
+    directory = journal_root / agent
+    directory.mkdir(parents=True)
+    path = directory / "2026-08-25.jsonl"
+    with path.open("w", encoding="utf-8") as stream:
+        for event in events:
+            stream.write(json.dumps(event, ensure_ascii=False) + "\n")
+        if invalid_line:
+            stream.write('{"v":1,"seq":999,"event":"turn_start"\n')
+
+def boundary(seq, event, message_id, payload=None):
+    return {
+        "v": 1,
+        "seq": seq,
+        "ts": f"2026-08-25T10:00:{seq:02d}Z",
+        "session_id": "session-fixture",
+        "event": event,
+        "message_id": message_id,
+        "payload": payload or {},
+    }
+
+write_journal("bob", [boundary(1, "turn_start", "bob-tour")])
+write_journal(
+    "healthy-consumer",
+    [
+        boundary(1, "turn_start", "healthy-tour"),
+        boundary(2, "provider_request", "healthy-tour", {"state": "pending"}),
+    ],
+)
+write_journal(
+    "frozen-consumer",
+    [
+        boundary(1, "turn_start", "frozen-tour"),
+        boundary(
+            2,
+            "error",
+            "frozen-tour",
+            {"reason": "échéance fournisseur dépassée", "terminal_kind": "turn_failed"},
+        ),
+    ],
+)
+write_journal(
+    "freshly-finished",
+    [
+        boundary(1, "turn_start", "fresh-tour"),
+        boundary(2, "turn_end", "fresh-tour", {"stop_reason": "inconnu"}),
+    ],
+)
+write_journal(
+    "resumed-consumer",
+    [
+        boundary(1, "turn_start", "old-tour"),
+        boundary(2, "turn_end", "old-tour", {"stop_reason": "end_turn"}),
+        boundary(3, "turn_start", "new-tour"),
+        # Un terminal tardif de l'ancien message ne ferme pas le nouveau tour.
+        boundary(4, "error", "old-tour", {"reason": "retard ancien"}),
+    ],
+)
+write_journal(
+    "corrupt-journal",
+    [boundary(1, "turn_start", "corrupt-tour")],
+    invalid_line=True,
+)
+write_journal(
+    "contradictory-consumer",
+    [
+        boundary(1, "turn_start", "contradictory-tour"),
+        boundary(2, "turn_end", "contradictory-tour", {"stop_reason": "end_turn"}),
+    ],
+)
+write_journal("ssh-open-only", [boundary(1, "turn_start", "ssh-tour")])
+write_journal(
+    "acp-anomaly-live",
+    [
+        boundary(1, "turn_start", "message-live"),
+        boundary(2, "error", "message-live", {"reason": "notification ACP inconnue: vendor/future"}),
+        boundary(3, "update", "message-live", {"kind": "text", "content": "le tour continue"}),
+    ],
+)
+write_journal(
+    "ambiguous-error",
+    [
+        boundary(1, "turn_start", "message-ambiguous"),
+        boundary(2, "error", "message-ambiguous", {"reason": "ancien terminal ou anomalie"}),
+    ],
+)
+unsafe_detail = "provider\x1b[2J\refface\u202ele diagnostic"
+if not all(control in unsafe_detail for control in ("\x1b", "\r", "\u202e")):
+    raise SystemExit("CONTROLE POSITIF RATE: les contrôles dangereux manquent à la fixture")
+write_journal(
+    "unsafe-stop",
+    [
+        boundary(1, "turn_start", "unsafe-stop-tour"),
+        boundary(2, "turn_end", "unsafe-stop-tour", {"stop_reason": unsafe_detail}),
+    ],
+)
+write_journal(
+    "unsafe-error",
+    [
+        boundary(1, "turn_start", "unsafe-error-tour"),
+        boundary(
+            2,
+            "error",
+            "unsafe-error-tour",
+            {"reason": unsafe_detail, "terminal_kind": "turn_failed"},
+        ),
+    ],
+)
+for unsafe_agent, detail_key in (("unsafe-stop", "stop_reason"), ("unsafe-error", "reason")):
+    path = journal_root / unsafe_agent / "2026-08-25.jsonl"
+    terminal = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+    if terminal["payload"][detail_key] != unsafe_detail:
+        raise SystemExit(f"CONTROLE POSITIF RATE: détail dangereux absent de {unsafe_agent}")
+print("controle_positif_details_dangereux_presents: OK")
+
+turns = mod.read_turn_observations(journal_root, occupied)
+if turns["healthy-consumer"]["state"] != "open":
+    raise SystemExit(f"tour sain non ouvert: {turns['healthy-consumer']}")
+if turns["frozen-consumer"]["state"] != "ended":
+    raise SystemExit(f"fin sans reprise non détectée: {turns['frozen-consumer']}")
+if turns["resumed-consumer"]["state"] != "open":
+    raise SystemExit(f"reprise non prioritaire: {turns['resumed-consumer']}")
+if turns["acp-anomaly-live"]["state"] != "open":
+    raise SystemExit(f"une error ACP non terminale a fermé le tour: {turns['acp-anomaly-live']}")
+if turns["ambiguous-error"]["state"] != "unknown" or turns["ambiguous-error"].get("reason") != "error-terminalite-non-attestee":
+    raise SystemExit(f"une ancienne error ambiguë a produit une certitude: {turns['ambiguous-error']}")
+for unsafe_agent, terminal_kind in (("unsafe-stop", "turn_completed"), ("unsafe-error", "turn_failed")):
+    if turns[unsafe_agent].get("state") != "ended" or turns[unsafe_agent].get("terminal_kind") != terminal_kind:
+        raise SystemExit(f"code terminal fermé absent pour {unsafe_agent}: {turns[unsafe_agent]}")
+if turns["corrupt-journal"]["state"] != "unknown" or not turns["corrupt-journal"]["reason"].startswith("journal-json-invalide:"):
+    raise SystemExit(f"journal corrompu conclu à tort: {turns['corrupt-journal']}")
+if turns["missing-journal"]["state"] != "unknown" or "absent" not in turns["missing-journal"]["reason"]:
+    raise SystemExit(f"journal absent conclu à tort: {turns['missing-journal']}")
+print("lecture_bornes_tour_et_incertitudes: OK")
 
 # --- Contrôle positif omission (ancienne logique) ---
 legacy = mod.classify_legacy(agents, occupied, exclude=exclude, silent_after_secs=1800)
@@ -55,39 +218,79 @@ for ghost in ("cursor10-like", "cursorbridget-like", "relec6-like"):
         raise SystemExit(f"CONTROLE POSITIF RATE: {ghost} visible dans l'ancienne logique")
 print("controle_positif_trois_fantomes_omis: OK")
 
-# Backlog : sain sous seuil (5 min), figé au-dessus (44 min) — bornes mesurées.
-backlog = {"healthy-consumer": 5 * 60, "frozen-consumer": 44 * 60}
+# Le backlog ne décide plus : ouvert >1 h reste sain, terminal frais reste fini.
+backlog = {
+    "healthy-consumer": 65 * 60,
+    "frozen-consumer": 44 * 60,
+    "freshly-finished": 1,
+    "resumed-consumer": 65 * 60,
+    "corrupt-journal": 44 * 60,
+    "missing-journal": 44 * 60,
+    "busy-without-journal": 44 * 60,
+    "contradictory-consumer": 44 * 60,
+    "ssh-open-only": 65 * 60,
+    "acp-anomaly-live": 65 * 60,
+    "ambiguous-error": 44 * 60,
+    "unsafe-stop": 44 * 60,
+    "unsafe-error": 44 * 60,
+}
 fixed = mod.classify(
     agents,
     occupied,
     exclude=exclude,
     silent_after_secs=1800,
     backlog_ages=backlog,
-    blocked_after_secs=mod.BLOCKED_AFTER_SECS,
+    turn_observations=turns,
 )
 ok_fixed, detail_fixed = mod.partition_oracle(fixed, daemon)
 if not ok_fixed:
     raise SystemExit(f"correctif ROUGE sur oracle: {detail_fixed}")
 print(f"partition_correctif: OK ({detail_fixed})")
 
-bloques = {n: s for n, s in fixed["bloques"]}
+bloques = {item["name"]: item for item in fixed["bloques"]}
 if "frozen-consumer" not in bloques:
     raise SystemExit(f"figé absente de BLOQUES: {bloques}")
 if "healthy-consumer" in bloques:
     raise SystemExit(f"consommateur sain à tort BLOQUE: {bloques}")
+if "freshly-finished" not in bloques:
+    raise SystemExit(f"terminal frais masqué par l'âge de remise: {bloques}")
 if "healthy-consumer" not in fixed["occupes"]:
     raise SystemExit(f"sain devrait rester OCCUPE: {fixed['occupes']}")
 if "frozen-consumer" in fixed["occupes"]:
     raise SystemExit("figé ne doit pas rester OCCUPE une fois BLOQUE")
+if "resumed-consumer" not in fixed["occupes"]:
+    raise SystemExit(f"tour repris devrait rester OCCUPE: {fixed['occupes']}")
+if "busy-without-journal" not in fixed["occupes"]:
+    raise SystemExit(f"état busy positif perdu: {fixed['occupes']}")
+if "acp-anomaly-live" not in fixed["occupes"]:
+    raise SystemExit(f"anomalie ACP non terminale sortie des OCCUPES: {fixed['occupes']}")
+ind_fixed = {name: reason for name, reason in fixed["indetermines"]}
+for uncertain in ("corrupt-journal", "missing-journal", "ambiguous-error"):
+    if uncertain not in ind_fixed or "activite-tour=" not in ind_fixed[uncertain]:
+        raise SystemExit(f"incertitude de journal non nommée pour {uncertain}: {ind_fixed}")
+if "contradictory-consumer" not in ind_fixed or "contradiction-state-busy" not in ind_fixed["contradictory-consumer"]:
+    raise SystemExit(f"contradiction de sources conclue à tort: {ind_fixed}")
+if "ssh-open-only" not in ind_fixed or "source-sans-borne-terminale:ssh-unix" not in ind_fixed["ssh-open-only"]:
+    raise SystemExit(f"source interactive incomplète conclue à tort: {ind_fixed}")
+if bloques["frozen-consumer"]["condition"] != "dernier-tour-termine-sans-reprise":
+    raise SystemExit(f"condition terminale absente: {bloques['frozen-consumer']}")
+for unsafe_agent in ("unsafe-stop", "unsafe-error"):
+    if unsafe_agent not in bloques:
+        raise SystemExit(f"univers terminal incomplet, {unsafe_agent} absent: {bloques}")
 print("controle_positif_bloques_deux_sens: OK")
 
-# Sans backlog signal, le figé retombe OCCUPE (régression anti-silence sur la catégorie).
+# Sans backlog, la borne terminale reste concluante : l'âge n'est qu'un contexte.
 no_backlog = mod.classify(
-    agents, occupied, exclude=exclude, silent_after_secs=1800, backlog_ages={}
+    agents,
+    occupied,
+    exclude=exclude,
+    silent_after_secs=1800,
+    backlog_ages={},
+    turn_observations=turns,
 )
-if "frozen-consumer" not in no_backlog["occupes"]:
-    raise SystemExit("sans backlog, frozen-consumer doit être OCCUPE")
-print("bloques_sans_signal_reste_occupe: OK")
+if "frozen-consumer" not in {item["name"] for item in no_backlog["bloques"]}:
+    raise SystemExit("sans backlog, la fin sans reprise doit rester visible")
+print("borne_terminale_independante_du_backlog: OK")
 
 ind = {name: reason for name, reason in fixed["indetermines"]}
 if "cursorbridget-like" not in ind or "busy-sans-mission-greffe" not in ind["cursorbridget-like"]:
@@ -101,19 +304,10 @@ if "bridget" not in ind:
     raise SystemExit("bridget (hors-perimetre) doit apparaître en INDETERMINES")
 print("semantique_correctif: OK")
 
-# Seuil = milieu du trou mesuré [7, 44] min → 25 min ; compile 10 min sous le seuil.
-if mod.BLOCKED_AFTER_SECS != 25 * 60:
-    raise SystemExit(f"seuil inattendu: {mod.BLOCKED_AFTER_SECS}")
-ten_min = mod.classify(
-    [{"name": "compiler", "state": "busy", "domain": "bridget", "last_seen_secs": 1}],
-    {"compiler"},
-    exclude=set(),
-    silent_after_secs=1800,
-    backlog_ages={"compiler": 10 * 60},
-)
-if ten_min["bloques"] or ten_min["occupes"] != ["compiler"]:
-    raise SystemExit(f"compile 10 min ne doit pas être BLOQUE: {ten_min}")
-print("seuil_compile_10min_sous_coupure: OK")
+# Le contrôle positif porte sur la présence d'un tour ouvert, pas un seuil.
+if fixed["occupes"].count("healthy-consumer") != 1:
+    raise SystemExit(f"tour ouvert long non conservé exactement une fois: {fixed['occupes']}")
+print("tour_ouvert_65min_reste_occupe: OK")
 
 # Lecture Maicie sur copie : sidecars source intacts
 db = fixture / "maicie.sqlite3"
@@ -368,16 +562,18 @@ backlog_path = fixture / "backlog.json"
 agents_path.write_text(json.dumps(agents), encoding="utf-8")
 occupied_path.write_text(json.dumps(sorted(occupied)), encoding="utf-8")
 backlog_path.write_text(json.dumps(backlog), encoding="utf-8")
-print(f"FIXTURES {agents_path} {occupied_path} {backlog_path}")
+print(f"FIXTURES {agents_path} {occupied_path} {backlog_path} {journal_root}")
 PY
 
 agents_json="${fixture_root}/agents.json"
 occupied_json="${fixture_root}/occupied.json"
 backlog_json="${fixture_root}/backlog.json"
+journal_root="${fixture_root}/journals"
 git_repo="${fixture_root}/repository"
-out="$("$system_python" "$idle" --agents-json "$agents_json" --occupied-json "$occupied_json" --backlog-json "$backlog_json" --git-repo "$git_repo" --now 2000000000)"
+out="$("$system_python" "$idle" --agents-json "$agents_json" --occupied-json "$occupied_json" --backlog-json "$backlog_json" --journal-root "$journal_root" --git-repo "$git_repo" --now 2000000000)"
 grep -q 'BLOQUES' <<<"$out"
 grep -q 'frozen-consumer' <<<"$out"
+grep -q 'dernier-tour-termine-sans-reprise' <<<"$out"
 grep -q 'cursor10-like' <<<"$out"
 grep -q 'BACKLOG BRANCHES INDISPONIBLE (greffe sans etat exploitable)' <<<"$out"
 grep -q 'origin/pending-lot' <<<"$out"
@@ -388,15 +584,54 @@ fi
 grep -q 'refs locales sans fetch' <<<"$out"
 grep -q 'age du commit de tete uniquement' <<<"$out"
 echo 'cli_texte_branches_et_limites: OK'
-slow_out="$("$system_python" "$idle" --agents-json "$agents_json" --occupied-json "$occupied_json" --backlog-json "$backlog_json" --git-repo "$git_repo" --git-bin "${fixture_root}/git-slow" --git-timeout-secs 0.05 --now 2000000000)"
+"$system_python" - "$out" <<'PY'
+import sys
+
+rendered = sys.argv[1]
+for control in ("\x1b", "\r", "\u202e"):
+    if control in rendered:
+        raise SystemExit(f"contrôle terminal brut dans stdout: U+{ord(control):04X}")
+for escaped in (r"\u001b", r"\u000d", r"\u202e"):
+    if escaped not in rendered:
+        raise SystemExit(f"détail neutralisé absent du rendu texte: {escaped}")
+print("rendu_texte_details_inertes: OK")
+PY
+slow_out="$("$system_python" "$idle" --agents-json "$agents_json" --occupied-json "$occupied_json" --backlog-json "$backlog_json" --journal-root "$journal_root" --git-repo "$git_repo" --git-bin "${fixture_root}/git-slow" --git-timeout-secs 0.05 --now 2000000000)"
 grep -q 'BACKLOG BRANCHES INDISPONIBLE (delai Git depasse)' <<<"$slow_out"
 if grep -q 'origin/pending-lot' <<<"$slow_out"; then
   echo 'backlog_branches_timeout_cli: liste partielle visible' >&2
   exit 1
 fi
 echo 'cli_timeout_sans_liste_partielle: OK'
-json_out="$("$system_python" "$idle" --agents-json "$agents_json" --occupied-json "$occupied_json" --backlog-json "$backlog_json" --git-repo "$git_repo" --now 2000000000 --json)"
-"$system_python" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["daemon_count"]==8; assert any(x["name"]=="frozen-consumer" for x in d["bloques"]); assert not any(x["name"]=="healthy-consumer" for x in d["bloques"]); b=d["branch_backlog"]; assert b["state"]=="partial"; assert b["reason"]=="greffe sans etat exploitable"; assert any(x["ref"]=="origin/pending-lot" and x["age_secs"]==7200 for x in b["lots"]); assert not any(x["ref"]=="origin/merged-lot" for x in b["lots"])' "$json_out"
-echo 'cli_json_backlog_partiel: OK'
+json_out="$("$system_python" "$idle" --agents-json "$agents_json" --occupied-json "$occupied_json" --backlog-json "$backlog_json" --journal-root "$journal_root" --git-repo "$git_repo" --now 2000000000 --json)"
+"$system_python" - "$json_out" <<'PY'
+import json, sys
 
-echo "test-bridget-idle: 20 passes / 0 echec / 0 ignore"
+raw = sys.argv[1]
+data = json.loads(raw)
+assert data["daemon_count"] == 19
+assert any(item["name"] == "frozen-consumer" and item["condition"] == "dernier-tour-termine-sans-reprise" for item in data["bloques"])
+assert not any(item["name"] == "healthy-consumer" for item in data["bloques"])
+assert "healthy-consumer" in data["occupes"]
+assert "acp-anomaly-live" in data["occupes"]
+assert any(item["name"] == "missing-journal" and "journal-absent" in item["reason"] for item in data["indetermines"])
+assert any(item["name"] == "ssh-open-only" and "source-sans-borne-terminale:ssh-unix" in item["reason"] for item in data["indetermines"])
+assert any(item["name"] == "ambiguous-error" and "error-terminalite-non-attestee" in item["reason"] for item in data["indetermines"])
+unsafe_detail = "provider\x1b[2J\refface\u202ele diagnostic"
+unsafe = {item["name"]: item for item in data["bloques"] if item["name"].startswith("unsafe-")}
+assert unsafe["unsafe-stop"]["terminal_kind"] == "turn_completed"
+assert unsafe["unsafe-error"]["terminal_kind"] == "turn_failed"
+assert unsafe["unsafe-stop"]["terminal_reason"] == unsafe_detail
+assert unsafe["unsafe-error"]["terminal_reason"] == unsafe_detail
+for control in ("\x1b", "\r", "\u202e"):
+    if control in raw:
+        raise SystemExit(f"contrôle brut dans le JSON sérialisé: U+{ord(control):04X}")
+b = data["branch_backlog"]
+assert b["state"] == "partial"
+assert b["reason"] == "greffe sans etat exploitable"
+assert any(x["ref"] == "origin/pending-lot" and x["age_secs"] == 7200 for x in b["lots"])
+assert not any(x["ref"] == "origin/merged-lot" for x in b["lots"])
+print("json_diagnostic_valide_et_inerte_et_backlog_branches: OK")
+PY
+
+echo "test-bridget-idle: checks OK (partition + bornes de tour + backlog Git + incertitudes + copies + cli)"

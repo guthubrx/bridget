@@ -7,10 +7,11 @@ domaine hors allowlist) disparaissait — « LIBRES : aucun » mentait. Tout age
 du daemon appartient désormais à exactement une catégorie ; l'inclassable va
 dans INDETERMINES avec la raison, jamais dans le silence.
 
-Propriété mécanique (BLOQUÉS) : un agent connecté peut cesser de consommer ses
-remises sans que la présence (heartbeat) ni la mission greffe ne le signalent.
-Signal : âge de la plus vieille remise `send_deliveries.phase=dispatching`
-jointe au ledger (copie seule).
+Propriété mécanique (BLOQUÉS) : une mission et une présence ne prouvent pas un
+tour actif. Le journal append-only distingue un dernier `turn_start` ouvert
+d'un `turn_end` ou d'une `error` portant `terminal_kind=turn_failed` sans
+reprise. L'âge d'une remise reste une pièce contextuelle ; il ne décide jamais
+de l'activité.
 
 La ronde expose aussi les références distantes locales non fusionnées. Cette
 vue Git est bornée, sans fetch et sans écriture dans le dépôt observé. La
@@ -29,6 +30,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -38,15 +40,6 @@ DEFAULT_EXCLUDE = "bridget,fable,poucave,sol,maicie"
 # perdu (None) ou un domaine de lot (`*-lot`) reste dans le périmètre LIBRES.
 EXTERNAL_DOMAINS = frozenset({"46.Thunderbridge", "30.infra", "moi"})
 
-# Coupure BLOQUÉS — mesurée, pas choisie.
-# Snapshot live 2026-08-25 ~09:05 (copie ~/.cache/bridget/bridget.db) :
-#   max âges ledger-join = 6.2 / 13.3 / 14.6 min → PAS d'écart franc
-#   (les deux figés du matin étaient déjà débloqués).
-# Séparation mesurée le matin même (même requête SQL sur copie) :
-#   sains 2–7 min · figés 44 min et >60 min. Trou franc = [7, 44].
-# Coupure = milieu du trou observé : (7+44)/2 ≈ 25.5 → 25 min = 1500 s.
-# Une compile de ~10 min reste sous le seuil (exigence anti fausse alerte).
-BLOCKED_AFTER_SECS = 1500
 DEFAULT_BRIDGET_DB = str(Path.home() / ".cache/bridget/bridget.db")
 DEFAULT_GIT_REPO = str(Path(__file__).resolve().parent.parent)
 DEFAULT_GIT_TIMEOUT_SECS = 5.0
@@ -54,6 +47,43 @@ BRANCH_BACKLOG_UNAVAILABLE = "greffe sans etat exploitable"
 BRANCH_REFS_SCOPE = "refs locales sans fetch"
 BRANCH_AGE_BASIS = "age du commit de tete uniquement"
 BRANCH_DELIVERY_LIMIT = "une ref distante ne prouve pas une livraison"
+
+
+DEFAULT_JOURNAL_ROOT = str(Path.home() / ".cache/bridget/sessions")
+# Ces producteurs ferment aussi bien les succès que les rejets. Les wrappers
+# interactifs (`unix` / `ssh-unix`) ne consignent aujourd'hui que l'ouverture ;
+# une ouverture chez eux n'est donc pas une preuve suffisante d'activité.
+COMPLETE_TURN_BOUNDARY_TRANSPORTS = frozenset({"codex_app_server", "acp"})
+TURN_CONTINUATION_EVENTS = frozenset(
+    {"prompt_dispatched", "provider_request", "update", "permission"}
+)
+TURN_COMPLETED_KIND = "turn_completed"
+TURN_FAILED_KIND = "turn_failed"
+
+
+def bounded_detail(value: Any) -> str:
+    """Conserve le diagnostic brut, borné pour le JSON structuré."""
+    if not isinstance(value, str):
+        return "inconnu"
+    return value[:160] or "inconnu"
+
+
+def inert_text(value: Any) -> str:
+    """Rend une donnée externe visible sans laisser agir ses contrôles."""
+    rendered: list[str] = []
+    for character in bounded_detail(value):
+        codepoint = ord(character)
+        if unicodedata.category(character).startswith("C"):
+            rendered.append(
+                f"\\u{codepoint:04x}"
+                if codepoint <= 0xFFFF
+                else f"\\U{codepoint:08x}"
+            )
+        elif character.isspace():
+            rendered.append(" ")
+        else:
+            rendered.append(character)
+    return " ".join("".join(rendered).split()) or "inconnu"
 
 
 def args() -> argparse.Namespace:
@@ -66,6 +96,11 @@ def args() -> argparse.Namespace:
     parser.add_argument("--config", default=str(Path.home() / ".config/maicie/config.json"))
     parser.add_argument("--bridget-bin", default=os.environ.get("BRIDGET_BIN", "bridget"))
     parser.add_argument("--bridget-db", default=os.environ.get("BRIDGET_DB", DEFAULT_BRIDGET_DB))
+    parser.add_argument(
+        "--journal-root",
+        type=Path,
+        default=Path(os.environ.get("BRIDGET_JOURNAL_ROOT", DEFAULT_JOURNAL_ROOT)),
+    )
     parser.add_argument("--git-bin", default=os.environ.get("GIT_BIN", "git"))
     parser.add_argument(
         "--git-repo", default=os.environ.get("BRIDGET_REPO", DEFAULT_GIT_REPO)
@@ -78,7 +113,6 @@ def args() -> argparse.Namespace:
     )
     parser.add_argument("--now", type=int, help="horodatage injecté pour le harnais")
     parser.add_argument("--silent-after-secs", type=int, default=1800)
-    parser.add_argument("--blocked-after-secs", type=int, default=BLOCKED_AFTER_SECS)
     parser.add_argument("--exclude", default=DEFAULT_EXCLUDE)
     parser.add_argument("--json", action="store_true")
     parser.add_argument(
@@ -96,8 +130,6 @@ def args() -> argparse.Namespace:
     value = parser.parse_args()
     if value.silent_after_secs < 0:
         parser.error("--silent-after-secs doit être positif ou nul")
-    if value.blocked_after_secs < 0:
-        parser.error("--blocked-after-secs doit être positif ou nul")
     if not math.isfinite(value.git_timeout_secs) or value.git_timeout_secs <= 0:
         parser.error("--git-timeout-secs doit être strictement positif")
     if value.now is not None and value.now < 0:
@@ -192,6 +224,194 @@ def read_backlog_ages_from_bridget_copy(
         if isinstance(target, str) and isinstance(age, int):
             ages[target] = age
     return ages, None
+
+
+def read_turn_observations(
+    journal_root: Path, agents: set[str]
+) -> dict[str, dict[str, Any]]:
+    """Projette la dernière borne de tour, sans inventer de reprise.
+
+    Toute ambiguïté rend `unknown`. Une ligne invalide pourrait précisément
+    contenir la borne qui changerait la conclusion ; l'ignorer transformerait
+    une absence de preuve en preuve d'activité ou de fin.
+    """
+
+    def unknown(reason: str) -> dict[str, Any]:
+        return {"state": "unknown", "reason": reason}
+
+    observations: dict[str, dict[str, Any]] = {}
+    for agent in sorted(agents):
+        if not agent or Path(agent).name != agent or agent in {".", ".."}:
+            observations[agent] = unknown("nom-agent-invalide")
+            continue
+        directory = journal_root / agent
+        try:
+            if directory.is_symlink():
+                observations[agent] = unknown("journal-chemin-symbolique")
+                continue
+            if not directory.is_dir():
+                observations[agent] = unknown("journal-absent")
+                continue
+            paths = sorted(
+                path for path in directory.iterdir() if path.suffix == ".jsonl"
+            )
+        except OSError as error:
+            observations[agent] = unknown(
+                f"journal-illisible:{inert_text(str(error))}"
+            )
+            continue
+        if not paths:
+            observations[agent] = unknown("journal-vide")
+            continue
+
+        current: dict[str, Any] | None = None
+        previous_seq = 0
+        failure: str | None = None
+        for path in paths:
+            try:
+                if path.is_symlink() or not path.is_file():
+                    failure = f"journal-fichier-invalide:{path.name}"
+                    break
+                with path.open(encoding="utf-8") as stream:
+                    for line_number, line in enumerate(stream, start=1):
+                        if not line.endswith("\n"):
+                            failure = (
+                                f"journal-ligne-partielle:{path.name}:{line_number}"
+                            )
+                            break
+                        try:
+                            event = json.loads(line)
+                        except json.JSONDecodeError:
+                            failure = f"journal-json-invalide:{path.name}:{line_number}"
+                            break
+                        if not isinstance(event, dict) or event.get("v") != 1:
+                            failure = (
+                                f"journal-version-inconnue:{path.name}:{line_number}"
+                            )
+                            break
+                        seq = event.get("seq")
+                        if type(seq) is not int or seq <= previous_seq:
+                            failure = f"journal-sequence-incoherente:{path.name}:{line_number}"
+                            break
+                        previous_seq = seq
+                        kind = event.get("event")
+                        message_id = event.get("message_id")
+                        timestamp = event.get("ts")
+                        if kind == "turn_start":
+                            if not isinstance(message_id, str) or not message_id:
+                                failure = (
+                                    f"turn-start-sans-message:{path.name}:{line_number}"
+                                )
+                                break
+                            current = {
+                                "state": "open",
+                                "message_id": message_id,
+                                "seq": seq,
+                                "ts": timestamp if isinstance(timestamp, str) else None,
+                            }
+                        elif kind == "turn_end":
+                            if (
+                                current is not None
+                                and isinstance(message_id, str)
+                                and message_id == current.get("message_id")
+                            ):
+                                payload = event.get("payload")
+                                payload = payload if isinstance(payload, dict) else {}
+                                current = {
+                                    "state": "ended",
+                                    "message_id": message_id,
+                                    "seq": seq,
+                                    "ts": timestamp
+                                    if isinstance(timestamp, str)
+                                    else None,
+                                    "terminal_event": kind,
+                                    "terminal_kind": TURN_COMPLETED_KIND,
+                                    "terminal_reason": bounded_detail(
+                                        payload.get("stop_reason")
+                                    ),
+                                    "condition": "dernier-tour-termine-sans-reprise",
+                                }
+                        elif kind == "error":
+                            if (
+                                current is not None
+                                and current.get("state") != "ended"
+                                and isinstance(message_id, str)
+                                and message_id == current.get("message_id")
+                            ):
+                                payload = event.get("payload")
+                                payload = payload if isinstance(payload, dict) else {}
+                                terminal_kind = payload.get("terminal_kind")
+                                if terminal_kind == TURN_FAILED_KIND:
+                                    current = {
+                                        "state": "ended",
+                                        "message_id": message_id,
+                                        "seq": seq,
+                                        "ts": timestamp
+                                        if isinstance(timestamp, str)
+                                        else None,
+                                        "terminal_event": kind,
+                                        "terminal_kind": TURN_FAILED_KIND,
+                                        "terminal_reason": bounded_detail(
+                                            payload.get("reason")
+                                        ),
+                                        "condition": "dernier-tour-termine-sans-reprise",
+                                    }
+                                elif terminal_kind is None:
+                                    current = {
+                                        "state": "unknown",
+                                        "reason": "error-terminalite-non-attestee",
+                                        "message_id": message_id,
+                                        "seq": seq,
+                                        "ts": timestamp
+                                        if isinstance(timestamp, str)
+                                        else None,
+                                    }
+                                else:
+                                    current = {
+                                        "state": "unknown",
+                                        "reason": "terminalite-error-inconnue",
+                                        "message_id": message_id,
+                                        "seq": seq,
+                                        "ts": timestamp
+                                        if isinstance(timestamp, str)
+                                        else None,
+                                    }
+                        elif kind in TURN_CONTINUATION_EVENTS:
+                            if (
+                                current is not None
+                                and isinstance(message_id, str)
+                                and message_id == current.get("message_id")
+                            ):
+                                if (
+                                    current.get("state") == "unknown"
+                                    and current.get("reason")
+                                    == "error-terminalite-non-attestee"
+                                ):
+                                    current = {
+                                        "state": "open",
+                                        "message_id": message_id,
+                                        "seq": seq,
+                                        "ts": timestamp
+                                        if isinstance(timestamp, str)
+                                        else None,
+                                    }
+                                elif current.get("state") == "open":
+                                    current["seq"] = seq
+                                    current["ts"] = (
+                                        timestamp if isinstance(timestamp, str) else None
+                                    )
+                    if failure:
+                        break
+            except (OSError, UnicodeError) as error:
+                failure = f"journal-illisible:{path.name}:{inert_text(str(error))}"
+                break
+
+        observations[agent] = (
+            unknown(failure)
+            if failure
+            else (current if current is not None else unknown("borne-tour-absente"))
+        )
+    return observations
 
 
 def _git_detail(result: subprocess.CompletedProcess[str]) -> str:
@@ -500,15 +720,15 @@ def classify(
     exclude: set[str],
     silent_after_secs: int,
     backlog_ages: dict[str, int] | None = None,
-    blocked_after_secs: int = BLOCKED_AFTER_SECS,
+    turn_observations: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Partition complète des agents vus par le daemon + morts hors daemon.
 
     Propriété : libres ∪ muets ∪ occupes ∪ bloques ∪ indetermines = noms daemon,
     sans recouvrement. Les morts = occupied − daemon (hors partition daemon).
 
-    BLOQUÉS prime sur les autres catégories daemon : présence + mission ne
-    suffisent pas si les remises ne sont plus consommées.
+    Pour une mission ouverte, une borne terminale sans reprise donne BLOQUÉS ;
+    une borne ouverte donne OCCUPÉS. L'âge d'une remise n'est jamais un verdict.
     """
     by_name: dict[str, dict[str, Any]] = {}
     for agent in agents:
@@ -521,20 +741,59 @@ def classify(
 
     daemon_names = set(by_name)
     backlog_ages = backlog_ages or {}
+    turn_observations = turn_observations or {}
     libres: list[tuple[str, int]] = []
     muets: list[tuple[str, int]] = []
     occupes: list[str] = []
-    bloques: list[tuple[str, int]] = []
+    bloques: list[dict[str, Any]] = []
     indetermines: list[tuple[str, str]] = []
 
     for name, agent in sorted(by_name.items()):
         age = backlog_ages.get(name)
-        if isinstance(age, int) and age > blocked_after_secs:
-            bloques.append((name, age))
-            continue
-
         if name in occupied:
-            occupes.append(name)
+            observation = turn_observations.get(name)
+            turn_state = (
+                observation.get("state") if isinstance(observation, dict) else None
+            )
+            if turn_state == "ended":
+                if agent.get("state") == "busy":
+                    indetermines.append(
+                        (name, "activite-tour=contradiction-state-busy-journal-termine")
+                    )
+                else:
+                    bloques.append(
+                        {
+                            "name": name,
+                            "condition": "dernier-tour-termine-sans-reprise",
+                            "terminal_event": observation.get("terminal_event"),
+                            "terminal_kind": observation.get("terminal_kind"),
+                            "terminal_reason": observation.get("terminal_reason"),
+                            "terminal_ts": observation.get("ts"),
+                            "oldest_unacked_secs": age
+                            if isinstance(age, int)
+                            else None,
+                        }
+                    )
+                continue
+            if agent.get("state") == "busy":
+                occupes.append(name)
+                continue
+            if turn_state == "open":
+                transport = agent.get("transport")
+                if transport in COMPLETE_TURN_BOUNDARY_TRANSPORTS:
+                    occupes.append(name)
+                else:
+                    label = transport if isinstance(transport, str) else "inconnu"
+                    indetermines.append(
+                        (name, f"activite-tour=source-sans-borne-terminale:{label}")
+                    )
+                continue
+            reason = (
+                observation.get("reason", "observation-invalide")
+                if isinstance(observation, dict)
+                else "observation-absente"
+            )
+            indetermines.append((name, f"activite-tour={reason}"))
             continue
 
         reasons: list[str] = []
@@ -582,7 +841,6 @@ def classify(
         "indetermines": indetermines,
         "morts": morts,
         "maicie_occupied_count": len(occupied),
-        "blocked_after_secs": blocked_after_secs,
     }
 
 
@@ -592,7 +850,7 @@ def partition_oracle(result: dict[str, Any], daemon_names: set[str]) -> tuple[bo
         "libres": {name for name, _ in result["libres"]},
         "muets": {name for name, _ in result["muets"]},
         "occupes": set(result["occupes"]),
-        "bloques": {name for name, _ in result.get("bloques", [])},
+        "bloques": {item["name"] for item in result.get("bloques", [])},
         "indetermines": {name for name, _ in result["indetermines"]},
     }
     covered: set[str] = set()
@@ -658,17 +916,27 @@ def classify_legacy(
 def format_text(result: dict[str, Any], *, maicie_error: str | None) -> str:
     lines: list[str] = []
     if maicie_error:
-        lines.append(f"MAICIE INDISPONIBLE ({maicie_error[:60]}) — vue agents seule, missions inconnues")
+        lines.append(
+            f"MAICIE INDISPONIBLE ({inert_text(maicie_error)[:60]}) — "
+            "vue agents seule, missions inconnues"
+        )
     lines.append(
         "LIBRES (vivants, sans mission) : "
-        + (", ".join(name for name, _ in result["libres"]) or "aucun")
+        + (", ".join(inert_text(name) for name, _ in result["libres"]) or "aucun")
     )
     lines.append(
         "MUETS (>30 min sans signal)    : "
-        + (", ".join(f"{name} {secs // 60}min" for name, secs in result["muets"]) or "aucun")
+        + (
+            ", ".join(
+                f"{inert_text(name)} {secs // 60}min"
+                for name, secs in result["muets"]
+            )
+            or "aucun"
+        )
     )
     lines.append(
-        "OCCUPES                        : " + (", ".join(result["occupes"]) or "aucun")
+        "OCCUPES                        : "
+        + (", ".join(inert_text(name) for name in result["occupes"]) or "aucun")
     )
     # Énoncé volontairement littéral : l'âge est celui de la plus vieille
     # remise encore en file, PAS « bloqué depuis ». Un agent qui repart après
@@ -676,22 +944,40 @@ def format_text(result: dict[str, Any], *, maicie_error: str | None) -> str:
     # (mesuré 2026-08-25, jc2 : travaille, compteur 50 min — le signal était
     # vrai, la lecture « est bloqué depuis » mentait).
     lines.append(
-        "BLOQUES (plus vieille remise non consommee) : "
+        "BLOQUES (dernier tour termine sans reprise) : "
         + (
-            ", ".join(f"{name} {secs // 60}min" for name, secs in result["bloques"])
+            ", ".join(
+                (
+                    f"{inert_text(item['name'])} "
+                    f"(condition={inert_text(item['condition'])}; "
+                    f"terminal={inert_text(item.get('terminal_event'))}/"
+                    f"{inert_text(item.get('terminal_kind'))}; "
+                    f"detail={inert_text(item.get('terminal_reason'))}; "
+                    + (
+                        f"remise={item['oldest_unacked_secs'] // 60}min)"
+                        if isinstance(item.get("oldest_unacked_secs"), int)
+                        else "remise=inconnue)"
+                    )
+                )
+                for item in result["bloques"]
+            )
             or "aucun"
         )
     )
     if result["indetermines"]:
         lines.append(
             "INDETERMINES                  : "
-            + ", ".join(f"{name} ({reason})" for name, reason in result["indetermines"])
+            + ", ".join(
+                f"{inert_text(name)} ({inert_text(reason)})"
+                for name, reason in result["indetermines"]
+            )
         )
     else:
         lines.append("INDETERMINES                  : aucun")
     if result["morts"]:
         lines.append(
-            "MORTS (mission active, ABSENTS du daemon) : " + ", ".join(result["morts"])
+            "MORTS (mission active, ABSENTS du daemon) : "
+            + ", ".join(inert_text(name) for name in result["morts"])
         )
     return "\n".join(lines)
 
@@ -707,7 +993,11 @@ def main() -> int:
     else:
         agents, agents_error = run_json([options.bridget_bin, "agents", "--json"])
         if agents_error or not isinstance(agents, list):
-            print(f"annuaire Bridget indisponible: {agents_error or 'payload invalide'}", flush=True)
+            print(
+                f"annuaire Bridget indisponible: "
+                f"{inert_text(agents_error or 'payload invalide')}",
+                flush=True,
+            )
             return 1
 
     if options.occupied_json:
@@ -742,18 +1032,21 @@ def main() -> int:
 
     assert isinstance(agents, list)
     typed_agents = [a for a in agents if isinstance(a, dict)]
+    daemon_names = {a["name"] for a in typed_agents if isinstance(a.get("name"), str)}
+    turn_observations = read_turn_observations(
+        options.journal_root, occupied & daemon_names
+    )
     result = classify(
         typed_agents,
         occupied,
         exclude=exclude,
         silent_after_secs=options.silent_after_secs,
         backlog_ages=backlog_ages,
-        blocked_after_secs=options.blocked_after_secs,
+        turn_observations=turn_observations,
     )
-    daemon_names = {a["name"] for a in typed_agents if isinstance(a.get("name"), str)}
     ok, detail = partition_oracle(result, daemon_names)
     if not ok:
-        print(f"ORACLE PARTITION ROUGE: {detail}", flush=True)
+        print(f"ORACLE PARTITION ROUGE: {inert_text(detail)}", flush=True)
         return 2
 
     if options.json:
@@ -762,11 +1055,11 @@ def main() -> int:
             "libres": [{"name": n, "last_seen_secs": s} for n, s in result["libres"]],
             "muets": [{"name": n, "last_seen_secs": s} for n, s in result["muets"]],
             "occupes": result["occupes"],
-            "bloques": [{"name": n, "oldest_unacked_secs": s} for n, s in result["bloques"]],
+            "bloques": result["bloques"],
             "indetermines": [{"name": n, "reason": r} for n, r in result["indetermines"]],
             "morts": result["morts"],
             "daemon_count": result["daemon_count"],
-            "blocked_after_secs": result["blocked_after_secs"],
+            "blocked_signal": "dernier-tour-termine-sans-reprise",
             "partition": detail,
             "maicie": (
                 {"state": "unavailable", "reason": maicie_error}
@@ -790,12 +1083,13 @@ def main() -> int:
                 }
             ),
         }
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        print(json.dumps(payload, ensure_ascii=True, sort_keys=True))
     else:
         text = format_text(result, maicie_error=maicie_error)
         if backlog_error:
             text = (
-                f"BACKLOG INDISPONIBLE ({backlog_error[:60]}) — BLOQUES non calculables\n"
+                f"BACKLOG INDISPONIBLE ({inert_text(backlog_error)[:60]}) — "
+                "âge des remises inconnu\n"
                 + text
             )
         text += "\n" + format_branch_backlog(branch_backlog, branch_error=branch_error)
