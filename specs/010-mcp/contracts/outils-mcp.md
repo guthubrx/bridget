@@ -59,7 +59,9 @@ Le daemon répond avant que le destinataire ait accusé : il n'attend jamais
 l'aval, par construction. Le `delivery_id` atteste alors que la remise est
 prise. Le rejeu à l'identique (**même `id`, même `issued_at`, même corps**) est
 une **consultation** sûre, jamais une seconde émission : il rend `accepted` une
-fois l'accusé aval consolidé.
+fois l'accusé aval consolidé. Même phase que `delivery_status: en_vol` au
+ledger (`bridget_ledger`) et que `dispatching` en base — trois noms, un seul
+état.
 
 Les deux cas portent des **statuts différents**, et pas seulement des motifs
 différents : un consommateur branche sur le CHAMP `status`, pas sur la prose du
@@ -133,9 +135,9 @@ quand une saga `send_deliveries` existe pour le même `id` (plage P31 :
 | *(absent)* | pas de saga / Store-only | statut inconnu — **ne pas inventer** `recu` |
 
 Vocabulaires équivalents, une seule réalité : `en_vol` (projection ledger /
-MCP) = phase SQL `dispatching` = dépôt « en vol » / `in_flight` côté issue
-CLI (`outcome_unknown` avec `delivery_id`). Ce ne sont pas trois états
-concurrentiels.
+`bridget_ledger`) = phase SQL `dispatching` = statut d'envoi `in_flight`
+(`bridget_send`). Ce ne sont pas trois états concurrentiels — voir aussi la
+section `bridget_send` ci-dessus.
 
 Le rendu CLI miroir suffixe `[en vol]` / `[reçu]` / `[indéterminé]`. Visibilité
 ledger ≠ accusé : un message peut être listé `en_vol` sans que le destinataire
