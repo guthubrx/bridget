@@ -184,75 +184,116 @@ pub enum ClasseDuree {
     Longue,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EtatDelegation {
-    /// Visible au greffe, aucune outbox tant que les prérequis objectifs
-    /// déclarés par `--depends-on` ne sont pas clos (F37 voie A).
-    EnAttentePrerequis,
-    Creee,
-    AEvaluer,
-    Terminee,
-    Annulee,
+/// États d'une délégation. Variantes, `ALL`, sérialisation SQL et prédicats
+/// (`est_terminal`, `est_mandat_mort`) sont générés **ensemble** : une
+/// variante neuve ne peut pas être classée sans entrer dans `ALL`, sinon
+/// `sql_in_clause` l'ignorerait en silence (trou mesuré sur 6c1c6c1).
+macro_rules! define_etat_delegation {
+    ($(
+        $(#[$meta:meta])*
+        $variant:ident {
+            sql: $sql:literal,
+            terminal: $terminal:expr,
+            mort: $mort:expr $(,)?
+        }
+    ),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum EtatDelegation {
+            $(
+                $(#[$meta])*
+                $variant,
+            )+
+        }
+
+        impl EtatDelegation {
+            /// Toutes les variantes — même expansion que l'enum et les matchs.
+            /// L'exhaustivité est garantie par le compilateur : ajouter une
+            /// variante impose une entrée ici (macro), pas un oubli dans un
+            /// tableau littéral séparé.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// Forme persistée (`snake_case`).
+            pub fn as_sql(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $sql,)+
+                }
+            }
+
+            /// Plus de suite possible (refus d'adoption, etc.).
+            pub fn est_terminal(self) -> bool {
+                match self {
+                    $(Self::$variant => $terminal,)+
+                }
+            }
+
+            /// Cadavre pour la rétractation d'une occurrence `ouverte`.
+            /// `Terminee` = mission accomplie → faux (attend la clôture).
+            pub fn est_mandat_mort(self) -> bool {
+                match self {
+                    $(Self::$variant => $mort,)+
+                }
+            }
+
+            /// Garde redondante : match exhaustif dont chaque bras exige
+            /// l'appartenance à `ALL`. Une variante neuve casse la compilation ;
+            /// une omission dans `ALL` (impossible via la macro, prouvée par
+            /// l'oracle si `ALL` était un littéral) fait échouer l'assertion.
+            pub fn assert_listed_in_all(self) {
+                match self {
+                    $(Self::$variant => {
+                        assert!(
+                            Self::ALL.contains(&self),
+                            "{self:?} absent de EtatDelegation::ALL — \
+                             sql_in_clause l'ignorerait"
+                        );
+                    },)+
+                }
+            }
+
+            /// Clause `IN (...)` dérivée du prédicat — jamais une liste SQL
+            /// recopiée à la main. Itère `ALL`.
+            pub fn sql_in_clause(pred: impl Fn(Self) -> bool) -> String {
+                Self::ALL
+                    .iter()
+                    .copied()
+                    .filter(|etat| pred(*etat))
+                    .map(|etat| format!("'{}'", etat.as_sql()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        }
+    };
 }
 
-impl EtatDelegation {
-    /// Liste unique pour itérer le domaine (oracles, clauses SQL dérivées).
-    /// L'ajout d'une variante force aussi les `match` exhaustifs ci-dessous.
-    pub const ALL: [Self; 5] = [
-        Self::EnAttentePrerequis,
-        Self::Creee,
-        Self::AEvaluer,
-        Self::Terminee,
-        Self::Annulee,
-    ];
-
-    /// Forme persistée (`snake_case`). Match exhaustif — une variante neuve
-    /// casse la compilation ici avant d'atteindre SQLite.
-    pub fn as_sql(self) -> &'static str {
-        match self {
-            Self::EnAttentePrerequis => "en_attente_prerequis",
-            Self::Creee => "creee",
-            Self::AEvaluer => "a_evaluer",
-            Self::Terminee => "terminee",
-            Self::Annulee => "annulee",
-        }
-    }
-
-    /// Plus de suite possible (refus d'adoption, etc.). Match exhaustif.
-    pub fn est_terminal(self) -> bool {
-        match self {
-            Self::Terminee | Self::Annulee => true,
-            Self::EnAttentePrerequis | Self::Creee | Self::AEvaluer => false,
-        }
-    }
-
-    /// Cadavre pour la rétractation d'une occurrence `ouverte` : l'occurrence
-    /// ment et doit passer `sautee/mandat_plus_vivant`.
-    ///
-    /// `Terminee` = mission **accomplie** : l'occurrence attend la clôture
-    /// d'objectif — ce n'est **pas** un cadavre. Match exhaustif : un état
-    /// terminal ajouté au domaine doit choisir ici, pas dans une requête SQL.
-    pub fn est_mandat_mort(self) -> bool {
-        match self {
-            Self::Annulee => true,
-            Self::Terminee
-            | Self::EnAttentePrerequis
-            | Self::Creee
-            | Self::AEvaluer => false,
-        }
-    }
-
-    /// Clause `IN (...)` dérivée du prédicat domaine — jamais une liste SQL
-    /// recopiée à la main.
-    pub fn sql_in_clause(pred: impl Fn(Self) -> bool) -> String {
-        Self::ALL
-            .into_iter()
-            .filter(|etat| pred(*etat))
-            .map(|etat| format!("'{}'", etat.as_sql()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
+define_etat_delegation! {
+    /// Visible au greffe, aucune outbox tant que les prérequis objectifs
+    /// déclarés par `--depends-on` ne sont pas clos (F37 voie A).
+    EnAttentePrerequis {
+        sql: "en_attente_prerequis",
+        terminal: false,
+        mort: false,
+    },
+    Creee {
+        sql: "creee",
+        terminal: false,
+        mort: false,
+    },
+    AEvaluer {
+        sql: "a_evaluer",
+        terminal: false,
+        mort: false,
+    },
+    Terminee {
+        sql: "terminee",
+        terminal: true,
+        mort: false,
+    },
+    Annulee {
+        sql: "annulee",
+        terminal: true,
+        mort: true,
+    },
 }
 
 /// Types d'événements produits par le registre Maicie lui-même. Les faits

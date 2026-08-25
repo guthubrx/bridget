@@ -1230,7 +1230,7 @@ fn retract_tir(etat_delegation: &str, label: &str) -> (String, Option<String>, i
 #[test]
 fn retractation_derivee_du_domaine_sur_chaque_etat() {
     for tir in 0..3 {
-        for etat in EtatDelegation::ALL {
+        for &etat in EtatDelegation::ALL {
             let sql = etat.as_sql();
             let (e_occ, motif, deleg) =
                 retract_tir(sql, &format!("ret-{}-{tir}", sql));

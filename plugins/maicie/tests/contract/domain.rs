@@ -46,6 +46,61 @@ fn delegation_ne_termine_jamais_directement_apres_la_creation() {
     assert_eq!(delegation.annuler(), Err(DomainError::TransitionInterdite));
 }
 
+/// Garde `ALL` : match exhaustif + appartenance. Des témoins sont construits
+/// **hors** de `ALL` ; chaque bras du garde assert la présence. Une variante
+/// neuve casse la compilation du match ; l'omettre de `ALL` fait échouer
+/// l'assertion dès que le témoin est ajouté.
+///
+/// Mutant mesuré (relec) : classer `SoldeeParCloture` partout, laisser `ALL`
+/// à 5 → `sql_in_clause(est_terminal)` omettait l'état. Avec la macro source
+/// unique, ce mutant est impossible ; ce test prouve aussi la bijection
+/// témoins ↔ `ALL` et que la clause SQL suit chaque terminal de `ALL`.
+#[test]
+fn all_est_garanti_par_match_exhaustif() {
+    // Témoins hors de `ALL` — liste que le compilateur force à croître avec
+    // le match de `assert_listed_in_all` (même ensemble de variantes).
+    let temoins = [
+        EtatDelegation::EnAttentePrerequis,
+        EtatDelegation::Creee,
+        EtatDelegation::AEvaluer,
+        EtatDelegation::Terminee,
+        EtatDelegation::Annulee,
+    ];
+    for etat in temoins {
+        etat.assert_listed_in_all();
+    }
+    assert_eq!(
+        temoins.len(),
+        EtatDelegation::ALL.len(),
+        "témoins et ALL doivent avoir la même cardinalité"
+    );
+    for etat in EtatDelegation::ALL {
+        assert!(
+            temoins.contains(etat),
+            "{etat:?} dans ALL mais absent des témoins du garde"
+        );
+    }
+    // La jonction classification ↔ énumération : tout terminal de ALL
+    // apparaît dans la clause SQL (le trou exact du mutant relec).
+    let clause = EtatDelegation::sql_in_clause(EtatDelegation::est_terminal);
+    for etat in EtatDelegation::ALL {
+        if etat.est_terminal() {
+            assert!(
+                clause.contains(etat.as_sql()),
+                "sql_in_clause(est_terminal) omet '{}' pourtant est_terminal — \
+                 ALL et la classification ont divergé",
+                etat.as_sql()
+            );
+        } else {
+            assert!(
+                !clause.contains(&format!("'{}'", etat.as_sql())),
+                "sql_in_clause(est_terminal) contient '{}' non terminal",
+                etat.as_sql()
+            );
+        }
+    }
+}
+
 #[test]
 fn outbox_delegation_garde_l_enveloppe_et_son_horizon_bridget() {
     let mut outbox = OutboxDelegation {

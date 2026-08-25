@@ -8037,14 +8037,11 @@ fn delegation_state_name(state: EtatDelegation) -> &'static str {
 }
 
 fn parse_delegation_state(value: &str) -> Result<EtatDelegation, StoreError> {
-    match value {
-        "en_attente_prerequis" => Ok(EtatDelegation::EnAttentePrerequis),
-        "creee" => Ok(EtatDelegation::Creee),
-        "a_evaluer" => Ok(EtatDelegation::AEvaluer),
-        "terminee" => Ok(EtatDelegation::Terminee),
-        "annulee" => Ok(EtatDelegation::Annulee),
-        _ => Err(StoreError::Corrupt("état délégation inconnu")),
-    }
+    EtatDelegation::ALL
+        .iter()
+        .copied()
+        .find(|etat| etat.as_sql() == value)
+        .ok_or(StoreError::Corrupt("état délégation inconnu"))
 }
 
 fn parse_outbox_state(value: &str) -> Result<EtatOutboxDelegation, StoreError> {

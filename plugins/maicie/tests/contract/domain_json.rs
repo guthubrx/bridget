@@ -119,24 +119,10 @@ fn exhaustive_classe_duree(value: ClasseDuree) {
 }
 
 fn all_etat_delegation() -> Vec<EtatDelegation> {
-    exhaustive_etat_delegation(EtatDelegation::Creee);
-    vec![
-        EtatDelegation::EnAttentePrerequis,
-        EtatDelegation::Creee,
-        EtatDelegation::AEvaluer,
-        EtatDelegation::Terminee,
-        EtatDelegation::Annulee,
-    ]
-}
-
-fn exhaustive_etat_delegation(value: EtatDelegation) {
-    match value {
-        EtatDelegation::EnAttentePrerequis
-        | EtatDelegation::Creee
-        | EtatDelegation::AEvaluer
-        | EtatDelegation::Terminee
-        | EtatDelegation::Annulee => {}
+    for etat in EtatDelegation::ALL {
+        etat.assert_listed_in_all();
     }
+    EtatDelegation::ALL.to_vec()
 }
 
 fn all_etat_outbox_delegation() -> Vec<EtatOutboxDelegation> {
