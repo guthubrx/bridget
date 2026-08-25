@@ -103,6 +103,10 @@ created }` (source `ListRequests`) ; `messages` = messages récents `{ id,
 from, to, body, ts, delivery_status? }` (couche de lecture partagée avec
 `bridget ledger`) — schémas séparés, jamais mélangés dans une même liste.
 
+`ts` est l'horodatage d'**émission** (gravure au ledger au début de la remise),
+pas celui de l'accusé. Il fait foi pour la chronologie des émissions ; ce n'est
+pas un horodatage de réception — ne pas en déduire un délai de livraison.
+
 `delivery_status` (snake_case, optionnel) expose la phase de remise idempotente
 quand une saga `send_deliveries` existe pour le même `id` (plage P31 :
 `protocol.rs:LedgerMessage`). Valeurs fermées :
@@ -113,6 +117,11 @@ quand une saga `send_deliveries` existe pour le même `id` (plage P31 :
 | `recu` | `acked` | destinataire a accusé |
 | `indetermine` | `indeterminate` | quarantaine absorbante — ne sera plus accusé |
 | *(absent)* | pas de saga / Store-only | statut inconnu — **ne pas inventer** `recu` |
+
+Vocabulaires équivalents, une seule réalité : `en_vol` (projection ledger /
+MCP) = phase SQL `dispatching` = dépôt « en vol » / `in_flight` côté issue
+CLI (`outcome_unknown` avec `delivery_id`). Ce ne sont pas trois états
+concurrentiels.
 
 Le rendu CLI miroir suffixe `[en vol]` / `[reçu]` / `[indéterminé]`. Visibilité
 ledger ≠ accusé : un message peut être listé `en_vol` sans que le destinataire

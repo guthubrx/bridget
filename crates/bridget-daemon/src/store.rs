@@ -1053,15 +1053,10 @@ impl Store {
             > 0;
 
         if has_deliveries {
-            // Bases ouvertes avant la migration v4 / index dédié : sans cet
-            // index la sous-requête corrélée SCAN toute send_deliveries.
-            self.conn
-                .execute(
-                    "CREATE INDEX IF NOT EXISTS idx_send_deliveries_kind_key
-                     ON send_deliveries(operation_kind, idempotency_key)",
-                    [],
-                )
-                .map_err(StoreError::Sqlite)?;
+            // L'index idx_send_deliveries_kind_key est posé par le batch DDL
+            // d'IdempotencyStore (même db_path au démarrage daemon). Pas de
+            // CREATE INDEX ici : une lecture ne doit pas exiger l'écriture
+            // (mode=ro → « attempt to write a readonly database »).
             let mut stmt = self
                 .conn
                 .prepare(
@@ -2283,8 +2278,36 @@ mod tests {
         tx.commit().unwrap();
     }
 
-    /// Oracle jury : la sous-requête phase doit SEARCH via
-    /// `idx_send_deliveries_kind_key`, jamais SCAN `send_deliveries`.
+    fn explain_recent_messages_plan(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {RECENT_MESSAGES_PLAN_SQL}"))
+            .unwrap();
+        stmt.query_map(rusqlite::params![50_i64], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    fn plan_searches_kind_key(plan: &[String]) -> bool {
+        plan.iter().any(|line| {
+            line.contains("send_deliveries")
+                && line.contains("SEARCH")
+                && line.contains("idx_send_deliveries_kind_key")
+        })
+    }
+
+    fn plan_scans_send_deliveries(plan: &[String]) -> bool {
+        // SQLite nomme parfois l'alias seul (« SCAN d ») dans la sous-requête.
+        plan.iter().any(|line| {
+            let trimmed = line.trim();
+            (trimmed == "SCAN d" || trimmed.starts_with("SCAN d "))
+                || (line.contains("SCAN") && line.contains("send_deliveries"))
+        })
+    }
+
+    /// Oracle + mutant : avec l'index → SEARCH ; sans l'index → SCAN (le test
+    /// ROUGIT si l'on retire seulement l'assertion positive — propriété gardée
+    /// = dépendance réelle à idx_send_deliveries_kind_key).
     #[test]
     fn recent_messages_explique_search_pas_scan_sur_send_deliveries() {
         let path = std::env::temp_dir().join(format!(
@@ -2294,39 +2317,35 @@ mod tests {
         ));
         seed_ledger_with_deliveries(&path, 200);
         let store = Store::open(&path).unwrap();
+
+        let with_index = explain_recent_messages_plan(&store.conn);
+        let joined_with = with_index.join("\n");
+        assert!(
+            plan_searches_kind_key(&with_index),
+            "contrôle positif : SEARCH sur idx_send_deliveries_kind_key, plan:\n{joined_with}"
+        );
+        assert!(
+            !plan_scans_send_deliveries(&with_index),
+            "contrôle positif : pas de SCAN send_deliveries, plan:\n{joined_with}"
+        );
+        eprintln!("EXPLAIN avec index:\n{joined_with}");
+
         store
             .conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_send_deliveries_kind_key
-                 ON send_deliveries(operation_kind, idempotency_key)",
-                [],
-            )
+            .execute("DROP INDEX idx_send_deliveries_kind_key", [])
             .unwrap();
-        let plan: Vec<String> = {
-            let mut stmt = store
-                .conn
-                .prepare(&format!("EXPLAIN QUERY PLAN {RECENT_MESSAGES_PLAN_SQL}"))
-                .unwrap();
-            stmt.query_map(rusqlite::params![50_i64], |row| row.get::<_, String>(3))
-                .unwrap()
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap()
-        };
-        let joined = plan.join("\n");
+        let without_index = explain_recent_messages_plan(&store.conn);
+        let joined_without = without_index.join("\n");
         assert!(
-            plan.iter().any(|line| {
-                line.contains("send_deliveries")
-                    && line.contains("SEARCH")
-                    && line.contains("idx_send_deliveries_kind_key")
-            }),
-            "attendu SEARCH sur idx_send_deliveries_kind_key, plan:\n{joined}"
+            !plan_searches_kind_key(&without_index),
+            "mutant : sans l'index le plan ne doit plus SEARCH kind_key, plan:\n{joined_without}"
         );
         assert!(
-            plan.iter()
-                .all(|line| { !(line.contains("send_deliveries") && line.contains("SCAN")) }),
-            "interdit SCAN send_deliveries, plan:\n{joined}"
+            plan_scans_send_deliveries(&without_index),
+            "mutant : sans l'index attendu SCAN send_deliveries, plan:\n{joined_without}"
         );
-        eprintln!("EXPLAIN QUERY PLAN:\n{joined}");
+        eprintln!("EXPLAIN sans index (mutant):\n{joined_without}");
+
         drop(store);
         let _ = std::fs::remove_file(path);
     }
@@ -2341,7 +2360,7 @@ mod tests {
         ));
         seed_ledger_with_deliveries(&path, 10_000);
         let store = Store::open(&path).unwrap();
-        // Amorçage : crée l'index si besoin et chauffe le plan.
+        // Amorçage : chauffe le plan (index déjà posé par IdempotencyStore).
         let _ = store.recent_messages(50).unwrap();
         let mut samples = Vec::with_capacity(5);
         for _ in 0..5 {

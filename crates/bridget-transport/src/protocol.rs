@@ -1258,11 +1258,14 @@ impl LedgerDeliveryStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LedgerMessage {
     pub id: String,
+    /// Horodatage d'émission (gravure au ledger), pas d'accusé — ne pas en
+    /// déduire un délai de livraison.
     pub ts: i64,
     pub sender: String,
     pub target: String,
     pub body: String,
     /// Absent pour les entrées hors saga idempotente (Send legacy / antérieur).
+    /// `en_vol` ⇔ phase SQL `dispatching` ⇔ dépôt CLI « en vol » / in_flight.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery_status: Option<LedgerDeliveryStatus>,
 }

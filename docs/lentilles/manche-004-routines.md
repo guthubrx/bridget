@@ -171,6 +171,11 @@ annonce « 21h47 » sur une pièce inscrite à 21:07:18 ; relec2 annonce
 « 21h02 » à 21:03:17. Le décalage va de +1 à +40 minutes et il est
 collectif — les agents alignent leur heure sur celle de leurs pairs au lieu
 de lire l'horloge. **Seul l'horodatage d'inscription au ledger fait foi.**
+Depuis le lot `fix/ledger-emission-avant-ack`, cette inscription est le fait
+d'**émission** (début de remise), pas l'accusé du destinataire : le `ts` date
+quand le message est devenu visible, pas quand il a été vu. « Le ts fait foi »
+reste vrai pour la chronologie des émissions ; en déduire un délai de
+livraison ou un instant de réception serait une erreur.
 Effet mesuré : toutes les cibles ont été tenues avec bien plus d'avance que
 les intéressés ne le croyaient (verdicts rendus vers 21h05-21h10 pour une
 cible annoncée à 21h45). Conséquence pour tout ce qui reconstruit une

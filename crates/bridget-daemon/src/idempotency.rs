@@ -459,25 +459,10 @@ impl IdempotencyStore {
                 [],
             )?;
         }
-        let kind_key_index_migration = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 4)",
-            [],
-            |row| row.get::<_, bool>(0),
-        )?;
-        if !kind_key_index_migration {
-            // Bases déjà migrées v3 : CREATE INDEX IF NOT EXISTS dans le batch
-            // ci-dessus ne suffit pas si la table existait avant l'ajout de
-            // l'index dans le DDL — on le force ici pour les bases vivantes.
-            tx.execute(
-                "CREATE INDEX IF NOT EXISTS idx_send_deliveries_kind_key
-                 ON send_deliveries(operation_kind, idempotency_key)",
-                [],
-            )?;
-            tx.execute(
-                "INSERT INTO idempotency_schema_migrations(version) VALUES (4)",
-                [],
-            )?;
-        }
+        // Pas de migration v4 : le CREATE INDEX IF NOT EXISTS du batch DDL
+        // (idx_send_deliveries_kind_key) suffit aussi sur une base où la table
+        // existait déjà sans l'index — éprouvé en revue. Un numéro de migration
+        // est une ressource ordonnée ; on ne le consomme pas pour un no-op.
         tx.commit()?;
         Ok(())
     }

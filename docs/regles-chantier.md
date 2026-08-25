@@ -221,7 +221,11 @@ deux échecs successifs pour un même agent.)*
   heure sur celle de leurs pairs plutôt que de lire l'horloge. Pour tout
   rapport, ETA ou reconstruction de chronologie : prendre les `ts`. Corollaire
   de la règle du référent (« les heures viennent de `date` ou de git, jamais
-  du ressenti »), qui vaut donc pour toute la flotte.
+  du ressenti »), qui vaut donc pour toute la flotte. **Sens du `ts` depuis
+  `fix/ledger-emission-avant-ack` :** inscription = émission (début de
+  remise), plus l'accusé — le `ts` fait foi pour *quand le message est devenu
+  visible*, pas pour *quand il a été reçu* ; ne pas en déduire un délai de
+  livraison.
 - **Une ABSENCE se vérifie dans la durée, jamais à l'instant.** Le ledger a
   une latence d'inscription qui a atteint 8 minutes sous la charge du
   2026-08-24 ; `outcome_unknown` est rendu immédiatement et n'en dit rien.
