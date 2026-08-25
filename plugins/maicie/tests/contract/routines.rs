@@ -1061,3 +1061,86 @@ fn adoption_accepte_un_mandat_vivant_au_dela_de_la_borne() {
         Some((EtatOccurrence::Ouverte, Some("mandat_adopte")))
     );
 }
+
+/// Banc relec1 m6 — le saut de `resume_routine` doit adopter les orphelins
+/// avant de poser `last_bucket`. Sans garde : pause+resume → deleg=2.
+/// Avec garde : les deux bras rendent deleg=1 et orphelin adopté en base.
+fn relec1_m6_tir(avec_pause: bool, label: &str) -> (i64, bool) {
+    let guard = RootGuard::new(label);
+    let database = guard.path.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let period = 60_i64;
+    let t0 = 1_787_580_000;
+    let routine_id = seed_active(&mut store, t0, period);
+    let bucket_n = bucket_for(t0, period);
+
+    let coupe = evaluate_routines_with(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0,
+        EvaluateRoutinesOpts {
+            abort_before_occurrence_insert: true,
+        },
+    )
+    .expect("releve coupee");
+    assert!(coupe.is_empty(), "la coupure ne produit aucune occurrence");
+
+    if avec_pause {
+        pause_routine(&mut store, routine_id, t0 + period).expect("pause");
+        resume_routine(&mut store, routine_id, t0 + 10 * period).expect("resume");
+    }
+
+    let _reprise = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0 + 10 * period,
+    )
+    .expect("reprise");
+    drop(store);
+
+    let connexion = rusqlite::Connection::open(&database).unwrap();
+    let delegations: i64 = connexion
+        .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
+        .unwrap();
+    // L'adoption peut avoir lieu DANS resume (hors produced du tick suivant).
+    let orphelin_adopte: bool = connexion
+        .query_row(
+            "SELECT COUNT(*) FROM routine_occurrences\n\
+             WHERE bucket = ?1 AND state = 'ouverte' AND reason = 'mandat_adopte'",
+            rusqlite::params![bucket_n],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .unwrap_or(false);
+    drop(connexion);
+    (delegations, orphelin_adopte)
+}
+
+#[test]
+fn relec1_m6_saut_de_resume_adopte_les_orphelins() {
+    const N: usize = 5;
+    for tir in 0..N {
+        let (d_ctrl, adopte_ctrl) = relec1_m6_tir(false, &format!("m6-ctrl-{tir}"));
+        let (d_pause, adopte_pause) = relec1_m6_tir(true, &format!("m6-pause-{tir}"));
+        assert_eq!(
+            d_ctrl, 1,
+            "tir {tir} contrôle sans pause : 1 délégation attendue"
+        );
+        assert!(
+            adopte_ctrl,
+            "tir {tir} contrôle sans pause : orphelin adopté"
+        );
+        assert_eq!(
+            d_pause, 1,
+            "tir {tir} pause+resume : 1 délégation (garde resume) — obtenu {d_pause}"
+        );
+        assert!(
+            adopte_pause,
+            "tir {tir} pause+resume : orphelin adopté avant le saut de last_bucket"
+        );
+    }
+}

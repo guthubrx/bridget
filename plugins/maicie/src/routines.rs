@@ -260,12 +260,28 @@ pub fn resume_routine(
     }
     routine.state = EtatRoutine::Active;
     routine.paused_at = None;
-    // À la reprise : pas de rattrapage des buckets manqués pendant la pause.
-    // Précondition (composition CLI) : `open_store_with_reconciliation` a déjà
-    // appelé `evaluate_routines` sur les actives AVANT pause/resume — donc un
-    // orphelin dormant a été adopté (ou sauté) avant que last_bucket saute.
-    // Appelée seule (API lib), cette fonction ne balaye pas les orphelins.
-    routine.last_bucket = Some(bucket_for(now, routine.period_secs).saturating_sub(1));
+    // Pas de rattrapage des buckets de pause — mais AVANT le saut de
+    // last_bucket, adopter tout mandat orphelin vivant dans l'intervalle
+    // sauté (sinon pause+resume laisse l'orphelin hors fenêtre : mesure m6).
+    let new_last = bucket_for(now, routine.period_secs).saturating_sub(1);
+    let after = routine.last_bucket.unwrap_or(new_last);
+    if after < new_last {
+        let orphan_buckets = store
+            .list_routine_orphan_buckets(routine.id, after + 1, new_last)
+            .map_err(routine_store_error)?;
+        for bucket in orphan_buckets {
+            if store
+                .load_occurrence(routine.id, bucket)
+                .map_err(routine_store_error)?
+                .is_some()
+            {
+                continue;
+            }
+            let key = format!("routine:{}:{}", routine.id, bucket);
+            let _ = adopt_orphan_mandate(store, routine.id, bucket, &key, now)?;
+        }
+    }
+    routine.last_bucket = Some(new_last);
     store
         .update_routine(&routine)
         .map_err(routine_store_error)?;
