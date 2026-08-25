@@ -109,6 +109,13 @@ wrapper sans comportement. Les fonctions métier existantes (`delegate`,
    L'installation refuse toute source différente de v17 ; une base déjà v18
    reste un no-op et une version future échoue. Le bootstrap vide prouve
    séparément qu'il exécute tous les DDL intermédiaires.
+   La forme v17 positive n'est jamais un fichier local déjà estampillé : le
+   test part de v16 et appelle l'étape v17 finale de 021. Une ancienne v17 à
+   huit motifs, volontairement marquée 17, est le contrôle négatif obligatoire.
+   Une insertion sentinelle `target_head_moved` sous savepoint prouve la
+   contrainte à neuf motifs puis est rollbackée avant tout DDL v18. Le chemin
+   succès comme le chemin d'échec exécutent `ROLLBACK TO` puis `RELEASE`, et
+   comparent l'état durable avant/après la sonde.
 4. Livrer le paquet A avec ses témoins CLI/guichet et son audit durable.
 5. Livrer le paquet B par couches : protocole, store Bridget, greffe Maicie,
    contexte central, CLI/lookup.
@@ -143,8 +150,9 @@ Puis, dans cet ordre :
 
 1. témoins exacts des approbations interdites ;
 2. corpus de contradiction sur CLI locale et claim guichet ;
-3. tests v18 depuis v17, refus des versions non adjacentes, bootstrap vide et
-   injection inconnue ;
+3. tests v18 depuis v16→v17 finale, refus de l'ancienne v17 à huit motifs et des
+   versions non adjacentes, parcours actif v14→v18, bootstrap vide et injection
+   inconnue ;
 4. tests ciblés Maicie et guichet daemon ;
 5. parcours réel dépôt → relève → effet central → lookup terminal ;
 6. `cargo fmt --all --check`, clippy ciblé, puis workspace complet.
@@ -166,6 +174,6 @@ chaque rouge. Le gate `--features test-support` n'est pas forcé sur Linux s'il
 
 ## Non vérifié à ce jalon
 
-Le code partagé, la forme finale des motifs issue de 021, l'implémentation v18
-et les comptes workspace finaux ne sont pas mesurés tant que 021 n'est pas
+Le code partagé, la forme finale à neuf motifs issue de 021, l'implémentation
+v18 et les comptes workspace finaux ne sont pas mesurés tant que 021 n'est pas
 admise. Les contre-tests initiaux sont volontairement rouges jusqu'au paquet B.

@@ -214,7 +214,21 @@ une seconde intention.
   refuse une version antérieure ou une forme v17 incomplète sans modifier le
   numéro ; une base déjà v18 s'ouvre sans rejouer le DDL et une version future
   est refusée comme non prise en charge.
+- Le numéro v17 ne constitue pas cette preuve : six bases de test portent une
+  ancienne v17 à huit motifs, alors que la v17 finale de 021 en porte neuf. Le
+  témoin positif part d'une vraie v16 et applique le chemin de migration final
+  de 021. Le contrôle négatif part d'une ancienne forme à huit motifs marquée
+  v17 ; v18 doit la refuser sans ligne, DDL ni numéro modifié.
+- Le préflight v18 atteste la présence effective du neuvième motif
+  `target_head_moved` dans la contrainte v17 par une sonde sous savepoint,
+  intégralement rollbackée. Le rollback et la libération du savepoint ont lieu
+  que l'insertion réussisse ou échoue ; nombre de lignes, schéma et
+  `user_version` sont comparés avant/après. Il ne compare pas un hash fragile
+  de texte SQL et ne crée aucune pseudo-migration v17→v17.
 - Un bootstrap vide applique et vérifie chaque DDL jusqu'à v18 ; il ne saute
   aucun palier sous prétexte que la version cible est connue.
+- Un parcours distinct part d'une base v14 conforme à la base active mesurée et
+  emprunte le même exécuteur séquentiel jusqu'à la v17 finale, puis v18. Un
+  témoin sur une base neuve ne remplace jamais ce parcours de migration réel.
 - La session ne requiert aucune autre migration que v18. La future v19 dépendra
   de cette tête, pas l'inverse.

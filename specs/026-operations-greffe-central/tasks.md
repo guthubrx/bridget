@@ -10,8 +10,8 @@
 ## Phase 2 — Fondations après admission de 021
 
 - [ ] T2605 Rebaser sur la tête admise contenant 021, relire le vocabulaire de refus unifié et adapter `specs/026-operations-greffe-central/plan.md` sans réintroduire de projection manuelle.
-- [ ] T2606 Mesurer et geler la forme v17 attendue dans `plugins/maicie/tests/schema_migration_guard.rs`; observable : v16, une fausse v17 incomplète et une version future sont refusées sans changement, v18 est un no-op et un bootstrap vide exécute tous les DDL.
-- [ ] T2607 Écrire les témoins v18 rouges dans `plugins/maicie/tests/schema_migration_guard.rs` : injection SQL inconnue fail-closed, round-trip exact de `ALL`, bijection enum↔corpus et conservation des `CHECK` d'état.
+- [ ] T2606 Mesurer et geler la forme v17 finale dans `plugins/maicie/tests/schema_migration_guard.rs` en partant de v16 par le vrai exécuteur 021 ; observable : neuf motifs dont `target_head_moved`, ancienne v17 à huit motifs refusée sans mutation, version future refusée, v18 no-op et bootstrap vide exhaustif.
+- [ ] T2607 Écrire les témoins v18 rouges dans `plugins/maicie/tests/schema_migration_guard.rs` : rollback de sonde sur succès et échec avec état avant/après identique, parcours actif v14→v18, injection SQL inconnue fail-closed, round-trip exact de `ALL`, bijection enum↔corpus et conservation des `CHECK` d'état.
 - [ ] T2608 Implémenter v18 dans `plugins/maicie/src/store.rs` en ouvrant seulement les vocabulaires SQL et en conservant contraintes d'état, unicité et corrélation ; observable : le DDL précède le marquage v18 et T2606–T2607 deviennent verts.
 - [ ] T2609 Créer une source Rust unique pour opérations et motifs dans `plugins/maicie/src/domain.rs` et supprimer les projections manuelles devenues redondantes dans `plugins/maicie/src/guichet.rs` et `plugins/maicie/src/store.rs`.
 
@@ -123,7 +123,7 @@ renumérotation v19→v18.
   les cas d'usage existants, sans second accès MCP au store, daemon Maicie ni
   validation dupliquée dans le CLI.
 - **Hypothèses prises** : 021 fournira le vocabulaire de refus unifié ; v18 est
-  réservée à 026 et succède directement à sa v17.
+  réservée à 026 et succède directement à sa v17 finale à neuf motifs.
 - **Vérifications réalisées** : lecture des schémas et chemins d'appel,
   compilation workspace, exécution séparée des deux témoins, formatage ciblé,
   `git diff --check` et validation du format des tâches.
