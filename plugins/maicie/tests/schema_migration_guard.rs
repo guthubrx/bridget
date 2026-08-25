@@ -18,7 +18,8 @@ fn schema_version_constante(source: &str) -> i64 {
         .lines()
         .find(|ligne| {
             let taille = ligne.trim_start();
-            taille.starts_with("const SCHEMA_VERSION:")
+            let sans_pub = taille.strip_prefix("pub ").unwrap_or(taille);
+            sans_pub.starts_with("const SCHEMA_VERSION:")
         })
         .expect("const SCHEMA_VERSION introuvable");
     extraire_entier_final(ligne).expect("SCHEMA_VERSION sans entier")
