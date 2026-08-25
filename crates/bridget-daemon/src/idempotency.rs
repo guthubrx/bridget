@@ -123,6 +123,29 @@ pub struct SendDelivery {
     pub message_bytes: Vec<u8>,
 }
 
+/// Projection de stockage : la colonne `message_bytes` reste nullable pour
+/// les lignes héritées de v1, classées `indeterminate` par la migration v2.
+struct StoredSendDelivery {
+    delivery_id: String,
+    recipient_instance_id: String,
+    delivery_generation: u64,
+    expires_at: i64,
+    phase: String,
+    message_bytes: Option<Vec<u8>>,
+}
+
+impl StoredSendDelivery {
+    fn into_delivery(self) -> Option<SendDelivery> {
+        self.message_bytes.map(|message_bytes| SendDelivery {
+            delivery_id: self.delivery_id,
+            recipient_instance_id: self.recipient_instance_id,
+            delivery_generation: self.delivery_generation,
+            expires_at: self.expires_at,
+            message_bytes,
+        })
+    }
+}
+
 /// Demande suivie créée avec la remise d'un `reply=yes` dans l'unique
 /// transaction SQLite : aucune remise idempotente ne peut survivre sans son
 /// cycle de réponse durable.
@@ -1059,29 +1082,57 @@ impl IdempotencyStore {
     /// réussi, rejouez pour lire le sort », rc=0, sur un message qui ne
     /// partirait plus jamais. Le mensonge optimiste est pire que celui qu'on
     /// corrige — d'où `dispatching` seul.
+    ///
+    /// Complexité : O(log n) via l'index unique de la clé idempotente.
     pub fn send_delivery(
         &self,
         key: &IdempotencyKey,
     ) -> Result<Option<SendDelivery>, IdempotencyError> {
+        let Some(delivery) = self.stored_send_delivery(key)? else {
+            return Ok(None);
+        };
+        if delivery.phase != "dispatching" {
+            return Ok(None);
+        }
+        Ok(delivery.into_delivery())
+    }
+
+    fn stored_send_delivery(
+        &self,
+        key: &IdempotencyKey,
+    ) -> Result<Option<StoredSendDelivery>, IdempotencyError> {
         self.conn
             .query_row(
-                "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at, message_bytes
+                "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at,
+                        phase, message_bytes
                  FROM send_deliveries
-                 WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2
-                   AND phase = 'dispatching'",
+                 WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2",
                 params![key.issuer_scope, key.idempotency_key],
                 |row| {
-                    Ok(SendDelivery {
+                    Ok(StoredSendDelivery {
                         delivery_id: row.get(0)?,
                         recipient_instance_id: row.get(1)?,
                         delivery_generation: row.get(2)?,
                         expires_at: row.get(3)?,
-                        message_bytes: row.get(4)?,
+                        phase: row.get(4)?,
+                        message_bytes: row.get(5)?,
                     })
                 },
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    /// Mutant livré : retire uniquement la garde de phase, sans modifier la
+    /// projection nullable. Hors chemin de production par construction.
+    #[cfg(test)]
+    fn send_delivery_mutant_sans_filtre_de_phase(
+        &self,
+        key: &IdempotencyKey,
+    ) -> Result<Option<SendDelivery>, IdempotencyError> {
+        Ok(self
+            .stored_send_delivery(key)?
+            .and_then(StoredSendDelivery::into_delivery))
     }
 
     /// Reprise bornée : seules les remises encore en cours pour l'instance
@@ -2331,7 +2382,9 @@ mod tests {
     /// un état ABSORBANT : plus aucune transition n'en sort, ce message ne sera
     /// jamais accusé.
     ///
-    /// Cet oracle meurt si le filtre de phase disparaît.
+    /// Cet oracle tue le mutant exact qui retire la garde de phase : avec une
+    /// enveloppe présente, l'écart porte sur le sens métier et non sur le
+    /// décodage SQLite.
     #[test]
     fn une_remise_en_quarantaine_ne_remonte_plus_comme_une_remise_en_vol() {
         let mut store = IdempotencyStore::open_in_memory().unwrap();
@@ -2350,12 +2403,20 @@ mod tests {
         store.begin_send_delivery(&key, &delivery).unwrap();
         // Avant la quarantaine, la remise est bien en vol : sans ce constat,
         // l'oracle passerait aussi pour une clé qui n'a jamais rien déposé.
-        assert_eq!(store.send_delivery(&key).unwrap(), Some(delivery));
+        assert_eq!(store.send_delivery(&key).unwrap(), Some(delivery.clone()));
 
         store
             .mark_delivery_indeterminate("delivery-quarantaine", "instance-1", 4)
             .unwrap();
 
+        assert_eq!(
+            store
+                .send_delivery_mutant_sans_filtre_de_phase(&key)
+                .unwrap(),
+            Some(delivery),
+            "contrôle positif du mutant : sans garde de phase, une enveloppe \
+             présente ferait passer la quarantaine pour une remise en vol"
+        );
         assert_eq!(
             store.send_delivery(&key).unwrap(),
             None,
@@ -2386,7 +2447,10 @@ mod tests {
     /// définitivement inaccusables qui continuaient à s'annoncer comme des
     /// dépôts réussis.
     ///
-    /// Cet oracle meurt si le filtre de phase disparaît.
+    /// Cet oracle garde la projection nullable : même sous le mutant exact qui
+    /// retire la garde de phase, l'absence d'enveloppe reste non relivrable et
+    /// ne fuit jamais en `InvalidColumnType`. L'oracle runtime voisin, dont
+    /// l'enveloppe est présente, est celui qui tue ce mutant sur le sens métier.
     #[test]
     fn une_remise_mise_en_quarantaine_par_la_migration_n_atteste_plus_un_depot() {
         let path = std::env::temp_dir().join(format!(
@@ -2449,6 +2513,14 @@ mod tests {
             "prémisse de l'oracle : la migration doit bien avoir mis en quarantaine"
         );
 
+        assert_eq!(
+            store
+                .send_delivery_mutant_sans_filtre_de_phase(&key())
+                .unwrap(),
+            None,
+            "le mutant de phase ne doit pas réintroduire l'échec de décodage : \
+             sans enveloppe, la remise reste non relivrable"
+        );
         assert_eq!(
             store.send_delivery(&key()).unwrap(),
             None,
