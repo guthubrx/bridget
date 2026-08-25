@@ -8,7 +8,7 @@
 //! Leçon : un oracle de version qui code la version en dur meurt à chaque
 //! migration ; il doit lire `store::SCHEMA_VERSION`.
 
-use maicie::store::{MaicieStore, StoreError, SCHEMA_VERSION};
+use maicie::store::{MaicieStore, SCHEMA_VERSION, StoreError};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -188,10 +188,7 @@ fn base_peuplee_user_version_zero_refuse_sans_mutation() {
     let store = MaicieStore::open_and_migrate(&database).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     drop(store);
-    assert_eq!(
-        schema_snapshot(&database).user_version,
-        SCHEMA_VERSION
-    );
+    assert_eq!(schema_snapshot(&database).user_version, SCHEMA_VERSION);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -208,18 +205,12 @@ fn base_anterieure_avec_consentement_est_migree() {
         .pragma_update(None, "user_version", SCHEMA_VERSION - 1)
         .unwrap();
     drop(connection);
-    assert_eq!(
-        schema_snapshot(&database).user_version,
-        SCHEMA_VERSION - 1
-    );
+    assert_eq!(schema_snapshot(&database).user_version, SCHEMA_VERSION - 1);
 
     let store = MaicieStore::open_and_migrate(&database).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     drop(store);
-    assert_eq!(
-        schema_snapshot(&database).user_version,
-        SCHEMA_VERSION
-    );
+    assert_eq!(schema_snapshot(&database).user_version, SCHEMA_VERSION);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -232,9 +223,6 @@ fn base_neuve_est_cree_sans_flag() {
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     assert!(database.is_file());
     drop(store);
-    assert_eq!(
-        schema_snapshot(&database).user_version,
-        SCHEMA_VERSION
-    );
+    assert_eq!(schema_snapshot(&database).user_version, SCHEMA_VERSION);
     fs::remove_dir_all(root).unwrap();
 }
