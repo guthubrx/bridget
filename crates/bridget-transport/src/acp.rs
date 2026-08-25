@@ -1109,6 +1109,28 @@ fn spawn_reader(
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
                             .push_source(event, raw_line.clone());
+                    } else if let Some(thought) =
+                        update_thought_text(&value, session_id.as_deref())
+                    {
+                        // Variante standard SessionUpdate (effect-acp) : ne
+                        // plus la jeter — elle arrive AVANT les messages.
+                        let message_id = active_message_id(&queue);
+                        record_or_terminal(
+                            &journal,
+                            &events,
+                            "update",
+                            message_id.as_deref(),
+                            reasoning_journal_payload(thought),
+                        );
+                        events
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .push_source(
+                                AcpEvent::Update {
+                                    detail: format!("reasoning:{thought}"),
+                                },
+                                raw_line.clone(),
+                            );
                     } else if matches!(
                         value
                             .pointer("/params/update/sessionUpdate")
@@ -1490,14 +1512,21 @@ fn update_has_foreign_session(value: &Value, session_id: Option<&str>) -> bool {
         .is_some_and(|(received, expected)| received != expected)
 }
 
-fn update_text<'a>(value: &'a Value, session_id: Option<&str>) -> Option<&'a str> {
+/// Texte d'un `session/update` ACP dont `sessionUpdate` vaut `expected`
+/// et dont le contenu est un bloc texte — forme documentée par le schéma
+/// Agent Client Protocol (réf. MIT `effect-acp` / `SessionUpdate`).
+fn update_chunk_text<'a>(
+    value: &'a Value,
+    session_id: Option<&str>,
+    expected: &str,
+) -> Option<&'a str> {
     if update_has_foreign_session(value, session_id) {
         return None;
     }
     if value
         .pointer("/params/update/sessionUpdate")
         .and_then(Value::as_str)
-        != Some("agent_message_chunk")
+        != Some(expected)
         || value
             .pointer("/params/update/content/type")
             .and_then(Value::as_str)
@@ -1508,6 +1537,135 @@ fn update_text<'a>(value: &'a Value, session_id: Option<&str>) -> Option<&'a str
     value
         .pointer("/params/update/content/text")
         .and_then(Value::as_str)
+}
+
+fn update_text<'a>(value: &'a Value, session_id: Option<&str>) -> Option<&'a str> {
+    update_chunk_text(value, session_id, "agent_message_chunk")
+}
+
+/// Variante standard `SessionUpdate` : pensée / raisonnement en flux.
+/// Avant L4, `update_text` la rejetait avec tout ce qui n'était pas
+/// `agent_message_chunk` — d'où zéro occurrence dans le code.
+fn update_thought_text<'a>(value: &'a Value, session_id: Option<&str>) -> Option<&'a str> {
+    update_chunk_text(value, session_id, "agent_thought_chunk")
+}
+
+/// Niveau de détail C3 (contrat relais-v1) produit depuis les updates ACP.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AcpMessageDetailV1 {
+    version: u32,
+    acts: Vec<AcpActV1>,
+    reasoning: AcpReasoningV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AcpActV1 {
+    kind: String,
+    text: String,
+    detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AcpReasoningV1 {
+    available: bool,
+    summary: Option<String>,
+    raw: Option<String>,
+}
+
+impl AcpMessageDetailV1 {
+    fn new() -> Self {
+        Self {
+            version: 1,
+            acts: Vec::new(),
+            reasoning: AcpReasoningV1 {
+                // Absent de pensée ≠ vide : la page doit lire « non fourni ».
+                available: false,
+                summary: None,
+                raw: None,
+            },
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        let acts: Vec<Value> = self
+            .acts
+            .iter()
+            .map(|act| {
+                let mut map = serde_json::Map::from_iter([
+                    ("kind".to_string(), Value::String(act.kind.clone())),
+                    ("text".to_string(), Value::String(act.text.clone())),
+                ]);
+                if let Some(detail) = &act.detail {
+                    map.insert("detail".to_string(), Value::String(detail.clone()));
+                }
+                Value::Object(map)
+            })
+            .collect();
+        let mut reasoning = serde_json::Map::from_iter([(
+            "available".to_string(),
+            Value::Bool(self.reasoning.available),
+        )]);
+        if let Some(summary) = &self.reasoning.summary {
+            reasoning.insert("summary".to_string(), Value::String(summary.clone()));
+        }
+        if let Some(raw) = &self.reasoning.raw {
+            reasoning.insert("raw".to_string(), Value::String(raw.clone()));
+        }
+        json!({
+            "version": self.version,
+            "acts": acts,
+            "reasoning": reasoning,
+        })
+    }
+}
+
+fn reasoning_journal_payload(text: &str) -> Value {
+    json!({
+        "kind": "reasoning",
+        "content": text,
+        "available": true,
+    })
+}
+
+/// Absorbe une notification `session/update` dans le détail C3.
+/// `agent_thought_chunk` → `reasoning` ; `tool_call` / `tool_call_update` →
+/// acte `tool` (ensemble fermé C3). Les autres variantes sont ignorées ici.
+fn absorb_acp_session_update(
+    detail: &mut AcpMessageDetailV1,
+    value: &Value,
+    session_id: Option<&str>,
+    tool_titles: &mut HashMap<String, String>,
+) {
+    if let Some(thought) = update_thought_text(value, session_id) {
+        detail.reasoning.available = true;
+        let raw = detail.reasoning.raw.get_or_insert_with(String::new);
+        raw.push_str(thought);
+        detail.reasoning.summary = Some(raw.clone());
+        return;
+    }
+    let session_update = value
+        .pointer("/params/update/sessionUpdate")
+        .and_then(Value::as_str);
+    if matches!(session_update, Some("tool_call") | Some("tool_call_update"))
+        && !update_has_foreign_session(value, session_id)
+    {
+        let payload = tool_call_journal_payload(value, tool_titles);
+        let text = payload
+            .get("tool")
+            .and_then(Value::as_str)
+            .unwrap_or("inconnu")
+            .to_string();
+        let detail_text = payload
+            .get("summary")
+            .and_then(Value::as_str)
+            .filter(|summary| !summary.is_empty())
+            .map(str::to_string);
+        detail.acts.push(AcpActV1 {
+            kind: "tool".to_string(),
+            text,
+            detail: detail_text,
+        });
+    }
 }
 
 fn tool_call_journal_payload(value: &Value, tool_titles: &mut HashMap<String, String>) -> Value {
@@ -1846,6 +2004,131 @@ mod tests {
             tool_call_journal_payload(&update(json!({"kind":"quantum_wrench"})), &mut tool_titles);
         assert_eq!(unknown_kind["tool"], "quantum_wrench");
         assert_eq!(unknown_kind["tool_kind"], "quantum_wrench");
+    }
+
+    fn session_update(session_update: &str, text: &str) -> Value {
+        json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "fixture-session",
+                "update": {
+                    "sessionUpdate": session_update,
+                    "content": { "type": "text", "text": text }
+                }
+            }
+        })
+    }
+
+    fn session_tool_call(title: &str, summary: &str) -> Value {
+        json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "fixture-session",
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "tool-1",
+                    "title": title,
+                    "kind": "read",
+                    "content": { "type": "text", "text": summary }
+                }
+            }
+        })
+    }
+
+    /// T4.4 — présence de pensée → available true (contrôle positif du filet).
+    #[test]
+    fn agent_thought_chunk_rend_reasoning_available_true() {
+        let mut detail = AcpMessageDetailV1::new();
+        let mut tool_titles = HashMap::new();
+        // Ordre documenté d'un tour : PENSÉE puis MESSAGES puis OUTILS.
+        absorb_acp_session_update(
+            &mut detail,
+            &session_update("agent_thought_chunk", "je vais lire le fichier"),
+            Some("fixture-session"),
+            &mut tool_titles,
+        );
+        absorb_acp_session_update(
+            &mut detail,
+            &session_update("agent_message_chunk", "voici la réponse"),
+            Some("fixture-session"),
+            &mut tool_titles,
+        );
+        absorb_acp_session_update(
+            &mut detail,
+            &session_tool_call("Read src/main.rs", "lecture"),
+            Some("fixture-session"),
+            &mut tool_titles,
+        );
+
+        let json = detail.to_json();
+        assert_eq!(json["reasoning"]["available"], true);
+        assert_eq!(json["reasoning"]["raw"], "je vais lire le fichier");
+        assert_eq!(json["reasoning"]["summary"], "je vais lire le fichier");
+        assert_eq!(json["acts"].as_array().unwrap().len(), 1);
+        assert_eq!(json["acts"][0]["kind"], "tool");
+        assert_eq!(json["acts"][0]["text"], "Read src/main.rs");
+        assert_eq!(json["acts"][0]["detail"], "lecture");
+        // Le message n'est pas un acte tool / reasoning — absorb ne le mélange pas.
+        assert!(update_text(
+            &session_update("agent_message_chunk", "voici la réponse"),
+            Some("fixture-session")
+        )
+        .is_some());
+        assert!(
+            update_thought_text(
+                &session_update("agent_thought_chunk", "je vais lire le fichier"),
+                Some("fixture-session")
+            )
+            .is_some()
+        );
+    }
+
+    /// T4.5 — aucun chunk de pensée → available false, jamais un objet vide
+    /// qui se lirait « il n'a pas réfléchi » (cas Gemini : chunk jamais émis).
+    #[test]
+    fn flux_sans_thought_chunk_rend_reasoning_available_false() {
+        let mut detail = AcpMessageDetailV1::new();
+        let mut tool_titles = HashMap::new();
+        absorb_acp_session_update(
+            &mut detail,
+            &session_update("agent_message_chunk", "réponse seule"),
+            Some("fixture-session"),
+            &mut tool_titles,
+        );
+        absorb_acp_session_update(
+            &mut detail,
+            &session_tool_call("Bash cargo test", "ok"),
+            Some("fixture-session"),
+            &mut tool_titles,
+        );
+
+        let json = detail.to_json();
+        assert_eq!(json["reasoning"]["available"], false);
+        assert!(json["reasoning"].get("summary").is_none());
+        assert!(json["reasoning"].get("raw").is_none());
+        assert_eq!(json["acts"][0]["kind"], "tool");
+    }
+
+    /// T4.6 — mutant : si l'on rétablissait le filtre qui n'accepte que
+    /// `agent_message_chunk`, ce test meurt. Nom du test mort sous mutant :
+    /// `agent_thought_chunk_rend_reasoning_available_true`.
+    #[test]
+    fn thought_chunk_n_est_plus_rejete_par_le_filtre_de_session_update() {
+        let thought = session_update("agent_thought_chunk", "pensée");
+        assert!(
+            update_text(&thought, Some("fixture-session")).is_none(),
+            "la pensée ne doit pas alimenter le message"
+        );
+        assert_eq!(
+            update_thought_text(&thought, Some("fixture-session")),
+            Some("pensée")
+        );
+        assert_eq!(
+            update_chunk_text(&thought, Some("fixture-session"), "agent_thought_chunk"),
+            Some("pensée")
+        );
     }
 
     #[test]
