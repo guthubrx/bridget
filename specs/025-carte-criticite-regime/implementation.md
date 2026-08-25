@@ -76,6 +76,37 @@
 - **Gate** : aucune ouverture du store, aucune opération guichet et aucun DDL
   v20 ; ces écritures restent interdites avant l’absorption réelle de v17–v19
 
+### T2511D–T2511E — Configuration fermée du projet
+
+- **Statut** : complété
+- **Rouge causal** :
+  `CARGO_TARGET_DIR=/home/moi/revue/rc2/.git/target-rc2-025 cargo test -p maicie --test config_contract --no-run`
+  échouait sur les trois accès au champ `review_project` absent
+- **Univers vérifiés avant comptage** : `config_contract` 18 tests,
+  `contract` 94 tests et le binaire `maicie` 11 tests, mesurés avec
+  `cargo test ... -- --list` après leur compilation `--no-run`
+- **Mesure** : 18 passés, 0 échoué, 0 ignoré ; 94 passés, 0 échoué,
+  0 ignoré ; 11 passés, 0 échoué, 0 ignoré
+- **Contrat** : un seul projet optionnel porte `project_id`, racine absolue
+  lexicalement normalisée et `referent_id`; toute liste critique est un champ
+  inconnu, et Maicie ne peut pas être son propre référent
+- **Frontière d’effet** : une racine inexistante reste valide au chargement ;
+  son existence sera mesurée à la soumission afin que le refus appartienne au
+  greffe et soit comptable
+- **Mutants tués dans les assertions, cardinal 1 vérifié** : carte manuelle
+  acceptée (`config.rs:368`), existence exigée au chargement (`:391`),
+  normalisation supprimée (`:462`), Maicie admise comme référent (`:462`) et
+  retrait de `config.rs` du noyau fixe (`review_criticality.rs:329`)
+- **Faux zéro rejeté** : les trois nouveaux oracles vivent dans
+  `config_contract`; une commande filtrée sur `contract` avait exécuté zéro
+  test et n’a pas été comptée
+- **Lint** :
+  `CARGO_TARGET_DIR=/home/moi/revue/rc2/.git/target-rc2-025 cargo clippy -p maicie --lib --test config_contract --bin maicie -- -D warnings`
+  est strictement vert
+- **Compatibilité daemon** : le refus d’enveloppe antérieure à Maicie aura un
+  propriétaire unique, le greffe daemon ; son libellé attend la source fédérée
+  de la session 026
+
 ## REX
 
 À compléter après les gates et la revue hostile.

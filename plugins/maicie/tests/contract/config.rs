@@ -332,6 +332,139 @@ fn refuse_catalogue_path_vers_tasks_md_ou_symlink() {
     let _ = fs::remove_dir_all(&root);
 }
 
+fn with_review_project(project_id: &str, repository_root: &str, referent_id: &str) -> String {
+    VALID_CONFIG.replace(
+        "\"profiles\": [{",
+        &format!(
+            "\"review_project\": {{\"project_id\":\"{project_id}\",\"repository_root\":\"{repository_root}\",\"referent_id\":\"{referent_id}\"}},\n  \"profiles\": [{{"
+        ),
+    )
+}
+
+#[test]
+fn t2511d_projet_revue_est_explicite_sans_liste_critique_ni_valeur_inventee() {
+    let configured = Fixture::new(
+        "review-project",
+        &with_review_project("bridget", "/srv/bridget", "referent-1"),
+    );
+    let config = MaicieConfig::load(&configured.path).unwrap();
+    let project = config.review_project.unwrap();
+
+    assert_eq!(project.project_id, "bridget");
+    assert_eq!(project.repository_root, PathBuf::from("/srv/bridget"));
+    assert_eq!(project.referent_id, "referent-1");
+
+    let absent = Fixture::new("review-project-absent", VALID_CONFIG);
+    assert_eq!(
+        MaicieConfig::load(&absent.path).unwrap().review_project,
+        None
+    );
+
+    let with_manual_map = with_review_project("bridget", "/srv/bridget", "referent-1").replace(
+        "\"referent_id\":\"referent-1\"",
+        "\"referent_id\":\"referent-1\",\"critical_paths\":[\"plugins/maicie/src/store.rs\"]",
+    );
+    let forbidden = Fixture::new("review-critical-paths", &with_manual_map);
+    assert!(matches!(
+        MaicieConfig::load(&forbidden.path),
+        Err(ConfigError::Parse { .. })
+    ));
+}
+
+#[test]
+fn t2511d_racine_inexistante_reste_un_fait_de_soumission_comptable() {
+    let missing = std::env::temp_dir().join(format!(
+        "maicie-review-repository-absent-{}-{}",
+        std::process::id(),
+        NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+    ));
+    assert!(
+        !missing.exists(),
+        "le contrôle positif exige une racine absente"
+    );
+    let configured = Fixture::new(
+        "review-project-missing",
+        &with_review_project("bridget", missing.to_str().unwrap(), "referent-1"),
+    );
+
+    let loaded = MaicieConfig::load(&configured.path);
+    assert!(
+        loaded.is_ok(),
+        "l'existence du dépôt ne se déclare pas au chargement : {loaded:?}"
+    );
+    let project = loaded.unwrap().review_project.unwrap();
+    assert_eq!(project.repository_root, missing);
+}
+
+#[test]
+fn t2511d_refuse_identites_ou_racine_non_canoniques_avant_usage() {
+    let long_root = format!("/{}", "x".repeat(1_024));
+    for (label, project_id, root, referent_id, expected) in [
+        (
+            "review-project-id",
+            "Bridget",
+            "/srv/bridget",
+            "referent-1",
+            "project_id",
+        ),
+        (
+            "review-project-relative",
+            "bridget",
+            "srv/bridget",
+            "referent-1",
+            "chemin absolu",
+        ),
+        (
+            "review-project-parent",
+            "bridget",
+            "/srv/../bridget",
+            "referent-1",
+            "normalisee",
+        ),
+        (
+            "review-project-current",
+            "bridget",
+            "/srv/./bridget",
+            "referent-1",
+            "normalisee",
+        ),
+        (
+            "review-project-double-separator",
+            "bridget",
+            "/srv//bridget",
+            "referent-1",
+            "normalisee",
+        ),
+        (
+            "review-project-long",
+            "bridget",
+            &long_root,
+            "referent-1",
+            "1024",
+        ),
+        (
+            "review-project-empty-referent",
+            "bridget",
+            "/srv/bridget",
+            "",
+            "referent_id",
+        ),
+        (
+            "review-project-self-referent",
+            "bridget",
+            "/srv/bridget",
+            "maicie",
+            "ne peut pas etre son propre referent",
+        ),
+    ] {
+        let fixture = Fixture::new(label, &with_review_project(project_id, root, referent_id));
+        let loaded = MaicieConfig::load(&fixture.path);
+        assert!(loaded.is_err(), "{label} doit être refusé");
+        let error = loaded.unwrap_err();
+        assert!(error.to_string().contains(expected), "{label}: {error}");
+    }
+}
+
 struct Fixture {
     path: PathBuf,
 }

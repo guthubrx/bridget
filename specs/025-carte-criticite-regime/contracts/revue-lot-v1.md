@@ -121,6 +121,12 @@ fixé `jury_2x2`; `review_regime_select` est alors refusée avec
 Une erreur qui empêche l’ouverture de la SQLite ne fabrique pas une ligne
 métier. Elle termine la commande par une erreur technique explicite.
 
+Si le daemon actif refuse l’enveloppe avant livraison à Maicie — opération
+inconnue ou `CanonicalBytesMismatch` — ce refus fermé est persisté et compté
+par le greffe daemon qui l’observe. Maicie ne fabrique pas une seconde ligne
+locale. La variante exacte doit étendre la source fédérée de la session 026,
+et n’est pas redéfinie par ce contrat avant son absorption.
+
 ## Idempotence
 
 - même `issuer_scope`, `request_id` et mêmes octets : même réponse persistée ;

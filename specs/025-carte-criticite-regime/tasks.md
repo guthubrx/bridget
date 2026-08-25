@@ -25,6 +25,8 @@
 - [x] T2511A [US1] Écrire les oracles de l’identifiant de soumission, de l’attente sans défaut et des charges JSON fermées.
 - [x] T2511B [US4] Implémenter la transition pure confirmer, durcir ou alléger et le régime propre déjà fixé par le référent.
 - [x] T2511C [US4] Vérifier les mutants du régime par défaut, du sens d’écart et de la protection propre.
+- [x] T2511D [US1] Écrire les oracles de la configuration projet sans carte manuelle et sans vérification prématurée du dépôt.
+- [x] T2511E [US1] Implémenter la configuration fermée et inclure sa source dans le régime propre fixé.
 
 ## Phase 4 — Gate d’intégration des migrations
 
@@ -34,7 +36,7 @@
 
 ## Phase 5 — Soumission, décision et comptage
 
-- [ ] T2515 [US1] Étendre le vocabulaire fédéré v19 avec `review_lot_submit` et `review_regime_select` dans le contrat producteur↔consommateur.
+- [ ] T2515 [US1] Étendre le vocabulaire fédéré v19 avec `review_lot_submit`, `review_regime_select` et le refus d’enveloppe incompatible dans le contrat producteur↔consommateur.
 - [ ] T2516 [US1] Implémenter la soumission transactionnelle carte + proposition + reçu dans `plugins/maicie/src/app.rs` et `plugins/maicie/src/store.rs`.
 - [ ] T2517 [US4] Implémenter la sélection du référent, le régime propre fixe et les écarts sans champ libre dans `plugins/maicie/src/app.rs` et `plugins/maicie/src/store.rs`.
 - [ ] T2518 [US4] Prouver que chaque refus métier laisse une ligne durable et qu’aucune décision par défaut n’avance la soumission.
@@ -57,7 +59,7 @@
 
 ```text
 T2501–T2504
-    ├── T2505–T2508 ── T2509–T2511 ── T2511A–T2511C
+    ├── T2505–T2508 ── T2509–T2511 ── T2511A–T2511E
     └── attente externe T2512
                          ↓
                     T2513–T2514

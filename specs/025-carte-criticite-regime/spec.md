@@ -137,9 +137,10 @@ pas. Elle ne peut pas atteindre l’étape d’élection des relecteurs par sile
 Le régime de toute modification du noyau de criticité est fixé à
 `jury_2x2`, conformément à la doctrine utilisateur déjà inscrite pour les
 mécanismes fondateurs. Cette valeur n’est ni calculée par la carte ni
-remplaçable par une sélection du référent. Les chemins du noyau et le contrat
-025 sont bornés dans le code ; leur suppression ou renommage apparaît elle-même
-dans le diff et conserve donc la garde.
+remplaçable par une sélection du référent. La configuration du projet, le
+calcul, la mesure Git et le contrat 025 sont bornés dans le code ; leur
+suppression ou renommage apparaît elle-même dans le diff et conserve donc la
+garde.
 
 ### D-2506 — Chaque refus et chaque décision laissent une ligne durable
 
@@ -154,6 +155,13 @@ fichiers, le texte complet des constats et les trames externes ne sont jamais
 copiés dans ce journal. Les métriques exposent au minimum : soumissions,
 décisions, écarts par sens, écarts ouverts/clos, refus par condition et
 citations ambiguës.
+
+Une incompatibilité d’enveloppe observée avant que Maicie reçoive la demande
+appartient au greffe du daemon : opération inconnue et `CanonicalBytesMismatch`
+doivent devenir une condition fermée et comptable dans le vocabulaire fédéré,
+jamais une erreur générique. Maicie ne duplique pas localement ce même fait.
+Le libellé Rust exact est consommé depuis la source unique de la session 026 ;
+la session 025 n’en crée pas un second avant son absorption.
 
 ### D-2507 — Un écart se ferme seulement sur un fait lié au même lot
 

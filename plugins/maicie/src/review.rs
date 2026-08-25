@@ -334,7 +334,8 @@ impl fmt::Display for ReviewError {
 
 impl Error for ReviewError {}
 
-const SELF_CRITICAL_PATHS: [&str; 3] = [
+const SELF_CRITICAL_PATHS: [&str; 4] = [
+    "plugins/maicie/src/config.rs",
     "plugins/maicie/src/review.rs",
     "plugins/maicie/src/review_git.rs",
     "specs/025-carte-criticite-regime/contracts/revue-lot-v1.md",

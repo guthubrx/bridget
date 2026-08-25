@@ -313,6 +313,7 @@ fn t2506_un_diff_ordinaire_reste_simple_et_le_noyau_reste_fixe_en_2x2() {
     );
 
     for fixed_path in [
+        "plugins/maicie/src/config.rs",
         "plugins/maicie/src/review.rs",
         "plugins/maicie/src/review_git.rs",
         "specs/025-carte-criticite-regime/contracts/revue-lot-v1.md",
