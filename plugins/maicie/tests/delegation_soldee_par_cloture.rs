@@ -102,6 +102,46 @@ fn cloture_terminalise_outbox_sinon_oracle_rouge() {
 }
 
 #[test]
+fn invariant_aucune_a_evaluer_sous_un_objectif_clos() {
+    let fixture = Fixture::new("invariant-global-cloture");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let closed_id = seed_with_a_evaluer(&mut store, &fixture.database, "a-clore-global");
+    let _open_id = seed_with_a_evaluer(&mut store, &fixture.database, "controle-positif-ouvert");
+
+    store
+        .close_objective(closed_id, "oracle invariant global", 2_300)
+        .unwrap();
+
+    let connection = Connection::open(&fixture.database).unwrap();
+    let open_a_evaluer: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM delegations d
+             JOIN objectives o ON o.id = d.objective_id
+             WHERE o.state <> 'clos' AND d.state = 'a_evaluer'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let a_evaluer_under_closed: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM delegations d
+             JOIN objectives o ON o.id = d.objective_id
+             WHERE o.state = 'clos' AND d.state = 'a_evaluer'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        open_a_evaluer, 1,
+        "contrôle positif : l'instrument doit voir la délégation encore ouverte"
+    );
+    assert_eq!(
+        a_evaluer_under_closed, 0,
+        "un objectif clos ne doit conserver aucune délégation a_evaluer"
+    );
+}
+
+#[test]
 fn cloture_preserve_terminee_et_annulee() {
     let fixture = Fixture::new("cloture-preserve-terminaux");
     let mut store = MaicieStore::open(&fixture.database).unwrap();
