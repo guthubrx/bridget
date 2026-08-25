@@ -105,15 +105,16 @@ jamais la config/base de production ») reste la seule barrière ; une garde
 technique (allowlist de chemins, variable d'environnement) est un chantier
 séparé, hors de ce lot.
 
-### Migration v15 — orphelines `soldee_par_cloture` (fail-closed)
+### Migration v16 — orphelines `soldee_par_cloture` (fail-closed)
 
-La migration 14→15 solde, dans **une seule transaction**, les délégations
+La migration 15→16 solde, dans **une seule transaction**, les délégations
 encore ouvertes (`creee` / `a_evaluer` / `en_attente_prerequis`) sur des
 objectifs déjà `clos`, et terminalise leurs outboxes encore expédiables
-(`prepared` / `outcome_unknown` → `rejected` + `terminal=1`). Politique
+(`prepared` / `outcome_unknown` → `rejected` + `terminal=1`). (La v15 sur
+`main` est réservée aux tables routines.) Politique
 **tout-ou-rien** : une seule ligne dont le payload JSON diverge de l'index
 SQLite fait échouer toute la migration (`Corrupt`) — `user_version` reste
-à 14, rien de partiel. Avant `--migrate` sur une base peuplée, vérifier
+inchangé, rien de partiel. Avant `--migrate` sur une base peuplée, vérifier
 l'intégrité (copie privée d'abord) ; une base immigrable jusqu'à réparation
 manuelle est le comportement voulu (fail-closed), pas un bug.
 
