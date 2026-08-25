@@ -27,21 +27,25 @@ v1 (spec 011) — intrants pour les itérations suivantes.
 
 ### Avancement mesuré des blocs
 
+> Régénéré par `scripts/tableau-avancement.py` — ne pas éditer à la main.
+
+<!-- TABLEAU-AVANCEMENT:DEBUT -->
 | Bloc | Fait | % |
 |---|---|---|
-| A — Observabilité (session 014) | 5/5 | **100** |
-| C — Micro-tâches | 6/6 | **100** |
-| E — À la main de l'utilisateur | 3/3 | **100** |
-| G — Ponts natifs | 10/11 | 91 |
-| L — Gains du natif, sort des tmux | 5/6 | 83 |
-| K — Déployer ailleurs | 3/4 | 75 |
-| F — Maicie v2 comportementale | 22/33 | 67 |
-| D — Chantiers v2 | 4/7 | 57 |
-| J — Outillage d'agents | 2/4 | 50 |
-| B — Piste GUI | 2/6 | 33 |
-| M — Le référent géré | 1/5 | 20 |
-| N — Produit & ouverture | 0/6 | 0 |
-| **Total** | **63/96** | **66** |
+| A. Session 014 — Observabilité | 5/5 | **100** |
+| C. Micro-tâches | 6/6 | **100** |
+| E. À la main de l'utilisateur | 3/3 | **100** |
+| Bloc G — ponts natifs | 10/11 | 91 |
+| Bloc L — gains du natif et sort des tmux | 5/6 | 83 |
+| Bloc J — outillage d'agents (rattrapage T3 Code) | 3/4 | 75 |
+| Bloc K — déployer ailleurs | 3/4 | 75 |
+| F. Maicie v2 comportementale — automatiser le référen | 22/33 | 67 |
+| D. Chantiers v2 substantiels | 4/7 | 57 |
+| B. Piste GUI | 2/6 | 33 |
+| Bloc M — le référent géré | 1/5 | 20 |
+| Bloc N — produit & ouverture | 0/6 | **0** |
+| **Total** | **64/96** | **67** |
+<!-- TABLEAU-AVANCEMENT:FIN -->
 
 ### Onze lots en vol, `main` = `b6eea77`
 
