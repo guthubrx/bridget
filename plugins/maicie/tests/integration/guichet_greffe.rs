@@ -345,7 +345,11 @@ fn depot_sur_objectif_clos_est_refuse_sans_tuer_maicie_ni_reouvrir() {
         .unwrap();
     assert_eq!(snapshots.len(), 1);
     assert_eq!(snapshots[0].objective.etat, EtatObjectif::Clos);
-    assert_eq!(snapshots[0].delegations[0].etat, EtatDelegation::Creee);
+    // Clôture solde les délégations ouvertes (soldee_par_cloture, jamais un verdict).
+    assert_eq!(
+        snapshots[0].delegations[0].etat,
+        EtatDelegation::SoldeeParCloture
+    );
     assert!(
         snapshots[0]
             .decisions
@@ -394,8 +398,8 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
         .unwrap();
     drop(connection);
 
-let mut store = MaicieStore::open_and_migrate(&database).unwrap();
-assert_eq!(store.schema_version().unwrap(), 15);
+    let mut store = MaicieStore::open_and_migrate(&database).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 16);
     assert_eq!(
         store
             .objective_snapshots(Some(created.objective_id))
@@ -410,7 +414,7 @@ assert_eq!(store.schema_version().unwrap(), 15);
     // Une seconde ouverture d'une base déjà v7 est la vraie preuve
     // d'idempotence : la migration ne doit ni recréer, ni vider les tables.
     let mut reopened = MaicieStore::open(&database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 15);
+    assert_eq!(reopened.schema_version().unwrap(), 16);
     let replay = process_guichet_claim(&mut reopened, &claim, "ignored", 1_020).unwrap();
     assert!(replay.replayed);
     assert_eq!(replay.reply_bytes, first.reply_bytes);

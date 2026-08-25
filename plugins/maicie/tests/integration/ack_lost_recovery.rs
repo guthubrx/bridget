@@ -711,6 +711,98 @@ fn crash_apres_ack_avant_commit_rejoue_l_issue_terminale_sans_envoi() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Oracle jury (relec1) : après solde par clôture, la reprise n'envoie plus.
+/// Serveur qui RAPPORTE (timeout 3s) au lieu de bloquer sur SendIdempotent —
+/// sinon « pas d'envoi » = silence indiscernable. Contrôle négatif hors fenêtre
+/// obligatoire : sans lui un instrument toujours-vrai ne prouverait rien.
+fn serve_and_report_send(listener: UnixListener) -> mpsc::Receiver<bool> {
+    let (tx, rx) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let (mut reader, mut writer) = split(stream);
+        negotiate_client(&mut reader, &mut writer);
+        assert_eq!(read_json(&mut reader)["type"], "Lookup");
+        write_issue(&mut writer, json!({"kind":"idempotency_expired"}));
+        let mut ligne = String::new();
+        let envoye = matches!(reader.read_line(&mut ligne), Ok(n) if n > 0)
+            && ligne.contains("SendIdempotent");
+        if envoye {
+            write_issue(
+                &mut writer,
+                json!({"kind":"accepted","expires_at":1_100_i64}),
+            );
+        }
+        let _ = tx.send(envoye);
+    });
+    rx
+}
+
+fn tir_enveloppe_apres_solde(
+    clore_objectif: bool,
+    observed_at: i64,
+    label: &str,
+) -> (String, bool, bool) {
+    let root = unique_root(label);
+    let database = root.join("maicie.sqlite3");
+    let socket = root.join("bridget.sock");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let prepared = fixture(store.issuer_scope());
+    store.create_prepared_delegation(&prepared).unwrap();
+
+    if clore_objectif {
+        store
+            .close_objective(uuid(OBJECTIVE_ID), "objectif soldé par le jury", 1_005)
+            .unwrap();
+    }
+
+    let etat = {
+        let cx = rusqlite::Connection::open(&database).unwrap();
+        let e: String = cx
+            .query_row("SELECT state FROM delegations LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        e
+    };
+    let expediable = !store.pending_delegation_outboxes().unwrap().is_empty();
+
+    let listener = UnixListener::bind(&socket).unwrap();
+    let rx = serve_and_report_send(listener);
+    let _report = reconcile_startup_at(&mut store, &socket, observed_at);
+    let envoye = rx.recv_timeout(Duration::from_secs(10)).unwrap_or(false);
+
+    drop(store);
+    let _ = fs::remove_dir_all(&root);
+    (etat, expediable, envoye)
+}
+
+#[test]
+fn enveloppe_soldee_par_cloture_n_est_pas_expediee() {
+    let (etat_c, exp_c, envoye_c) = tir_enveloppe_apres_solde(false, 1_010, "j7-ctrl");
+    let (etat_s, exp_s, envoye_s) = tir_enveloppe_apres_solde(true, 1_010, "j7-solde");
+    let (_, _, envoye_hors) = tir_enveloppe_apres_solde(true, 9_999_999, "j7-hors");
+
+    assert_eq!(etat_c, "creee");
+    assert!(exp_c, "sans clôture l'enveloppe reste sélectionnable");
+    assert!(
+        envoye_c,
+        "sans clôture la reprise envoie (instrument vivant)"
+    );
+
+    assert_eq!(etat_s, "soldee_par_cloture");
+    assert!(!exp_s, "après solde : plus aucune enveloppe expédiable");
+    assert!(
+        !envoye_s,
+        "après solde : aucun SendIdempotent (propriété jury)"
+    );
+
+    assert!(
+        !envoye_hors,
+        "contrôle négatif : hors fenêtre → pas d'envoi (sinon l'instrument ment)"
+    );
+}
+
 fn serve_lookup_then_replay(listener: UnixListener, expected_message: &[u8]) {
     let (stream, _) = listener.accept().unwrap();
     let (mut reader, mut writer) = split(stream);

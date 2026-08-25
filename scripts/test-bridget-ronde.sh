@@ -81,6 +81,9 @@ import json, sys
 report = json.loads(sys.argv[1])
 assert report["decision"] == "none" and report["delivery"] == "none"
 assert report["maicie"]["objectives_to_evaluate"] == [{"objective_id": "evaluate", "state": "a_evaluer"}]
+assert report["maicie"]["objectives_to_evaluate_means"] == (
+    "count of objectives.state=a_evaluer ; not delegation a_evaluer rows"
+)
 assert [a["name"] for a in report["agents"]["unassigned_connected"]] == ["bob"]
 assert [r["id"] for r in report["requests"]["expired"]] == ["expired"]
 assert report["registry"]["view"] == "REGISTRE\nopen=1\n"

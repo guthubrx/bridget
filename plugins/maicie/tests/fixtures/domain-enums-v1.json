@@ -20,7 +20,8 @@
     "creee",
     "a_evaluer",
     "terminee",
-    "annulee"
+    "annulee",
+    "soldee_par_cloture"
   ],
   "etat_outbox_delegation": [
     "prepared",

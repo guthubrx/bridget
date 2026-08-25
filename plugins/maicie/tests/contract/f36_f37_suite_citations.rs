@@ -244,16 +244,21 @@ fn f37_cloture_sans_dependant_zero_bruit() {
     assert!(store.dependents_of_objective(alone).unwrap().is_empty());
     let before_notifications = store.pending_notification_outboxes().unwrap().len();
     let before_outboxes = store.pending_delegation_outboxes().unwrap().len();
+    assert!(
+        before_outboxes >= 1,
+        "la graine crée au moins une enveloppe préparée"
+    );
     close(&mut store, alone, "clôture isolée", 1_787_570_060).unwrap();
     assert_eq!(
         store.pending_notification_outboxes().unwrap().len(),
         before_notifications,
         "aucune notification F37 inventée"
     );
-    assert_eq!(
-        store.pending_delegation_outboxes().unwrap().len(),
-        before_outboxes,
-        "aucune outbox de déblocage inventée"
+    // Pas de bruit de déblocage : aucune nouvelle enveloppe. La mission initiale
+    // n'est plus expédiable (soldée + outbox terminale, même transaction).
+    assert!(
+        store.pending_delegation_outboxes().unwrap().is_empty(),
+        "aucune outbox de déblocage inventée ; reprise vide après solde"
     );
     drop(store);
     fs::remove_dir_all(root).unwrap();

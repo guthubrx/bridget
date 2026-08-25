@@ -28,7 +28,22 @@ la machine le 2026-08-24 ; un écart observé est noté comme découverte.
 **Deux vérités (ne se remplacent pas).** Maicie SQLite = objectifs, délégations, décisions. Bridget (`who`, socket) = présence et transport. Un agent absent de `who` n’annule pas une mission au greffe ; un `busy` n’ouvre pas un objectif.
 
 **États observés (status --json, même instant).** Objectifs : `clos` 181, `en_coordination` 10. Délégations : `creee` 176, `a_evaluer` 15 — et ces 15 `a_evaluer` sont sur des objectifs **déjà `clos`**.  
-**Découverte :** `bridget-ronde` ne compte que les *objectifs* `a_evaluer` (donc `à_évaluer=0` alors que 15 délégations attendent encore une lecture humaine). Traiter les `a_evaluer` via `status --json` / greffe, pas seulement le résumé de ronde.
+**Découverte (corrigée côté solde ; le compteur reste documenté) :** `bridget-ronde`
+compte les *objectifs* `a_evaluer` (`objectifs_a_evaluer=N` dans le résumé — pas les
+délégations). Traiter les délégations `a_evaluer` via `status --json` / greffe.
+
+**Migration v16 (orphelines + outbox ; v15 = routines sur `main`) — avant
+`--migrate`.** Consentement explicite (`maicie migrate` / `--migrate`) ;
+`open()` refuse et n'écrit rien. Fail-closed : une seule ligne payload≠index
+→ toute la migration échoue, `user_version` inchangé. Chiffres **délégations**
+(relecteur, copie prod 2026-08-25 ~03h40, avant migrate, uv=14) : **265** non
+terminales sur objectifs `clos` (à solder) vs **8** sur objectifs ouverts
+(intactes) ; ratio objectifs:délégations = 1:1. Smoke auteur (copie privée
+2026-08-24 soir) : **27** `a_evaluer`/clos avant migrate, **264**
+`soldee_par_cloture` après — ne pas fusionner avec 265/8. Le solde terminalise
+l'outbox dans la même transaction : migrer sans cela aurait laissé la reprise
+envoyer pendant la fenêtre de rejeu (~6,7 jours mesurés) ; avec la
+terminalisation, l'ordre d'exploitation devient indifférent.
 
 **Registre.** Entrées ouvertes (sévérité déclarée) + pied déterministe. Ce n’est pas une todo list inventée : c’est le journal du dû versionné.
 

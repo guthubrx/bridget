@@ -294,6 +294,15 @@ define_etat_delegation! {
         terminal: true,
         mort: true,
     },
+    /// Soldée par clôture d'objectif — terminal explicite, jamais un verdict
+    /// d'évaluation : personne n'a rendu `terminee` / `evaluee`.
+    /// `mort: false` : l'occurrence est déjà fermée dans la même transaction
+    /// que le solde — elle n'atteste pas un cadavre.
+    SoldeeParCloture {
+        sql: "soldee_par_cloture",
+        terminal: true,
+        mort: false,
+    },
 }
 
 /// Types d'événements produits par le registre Maicie lui-même. Les faits
@@ -1968,10 +1977,24 @@ impl Delegation {
         Ok(())
     }
 
+    /// Solde une délégation encore ouverte parce que l'objectif porteuse
+    /// vient d'être clos. Distinct de `transition(..., Terminee)` : on
+    /// n'invente pas un verdict d'évaluation.
+    pub fn solder_par_cloture(&mut self) -> Result<(), DomainError> {
+        if matches!(
+            self.etat,
+            EtatDelegation::Terminee | EtatDelegation::Annulee | EtatDelegation::SoldeeParCloture
+        ) {
+            return Err(DomainError::TransitionInterdite);
+        }
+        self.etat = EtatDelegation::SoldeeParCloture;
+        Ok(())
+    }
+
     pub fn annuler(&mut self) -> Result<(), DomainError> {
         if matches!(
             self.etat,
-            EtatDelegation::Terminee | EtatDelegation::Annulee
+            EtatDelegation::Terminee | EtatDelegation::Annulee | EtatDelegation::SoldeeParCloture
         ) {
             return Err(DomainError::TransitionInterdite);
         }

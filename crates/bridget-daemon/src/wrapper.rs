@@ -340,6 +340,7 @@ fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, Stri
                             | EtatDelegation::AEvaluer
                             | EtatDelegation::Terminee
                             | EtatDelegation::Annulee
+                            | EtatDelegation::SoldeeParCloture
                     )
             })
             .max_by_key(|(item, delegation)| ranking(item, delegation))

@@ -105,6 +105,44 @@ jamais la config/base de production ») reste la seule barrière ; une garde
 technique (allowlist de chemins, variable d'environnement) est un chantier
 séparé, hors de ce lot.
 
+### Migration v16 — orphelines `soldee_par_cloture` (fail-closed)
+
+La migration 15→16 solde, dans **une seule transaction**, les délégations
+encore ouvertes (`creee` / `a_evaluer` / `en_attente_prerequis`) sur des
+objectifs déjà `clos`, et terminalise leurs outboxes encore expédiables
+(`prepared` / `outcome_unknown` → `rejected` + `terminal=1`). (La v15 sur
+`main` est réservée aux tables routines.) Politique
+**tout-ou-rien** : une seule ligne dont le payload JSON diverge de l'index
+SQLite fait échouer toute la migration (`Corrupt`) — `user_version` reste
+inchangé, rien de partiel. Avant `--migrate` sur une base peuplée, vérifier
+l'intégrité (copie privée d'abord) ; une base immigrable jusqu'à réparation
+manuelle est le comportement voulu (fail-closed), pas un bug.
+
+La terminalisation dans la transaction du solde rend l'ordre d'exploitation
+indifférent : migrer sans terminaliser aurait laissé la reprise envoyer
+pendant la fenêtre de rejeu encore ouverte (mesurée ~6,7 jours sur copie).
+
+**Ampleur mesurée sur copie de production (relecteur, 2026-08-25 ~03h40)** —
+objet : **délégations** (273 objectifs, ratio 1:1) ; instant : **avant**
+`--migrate`, `user_version = 14` :
+
+| Chiffre | Ce qu'il compte |
+| --- | --- |
+| **265** | Délégations non terminales dont l'objectif est `clos` (à solder à la migration v16) — répartition : `creee` 244, `a_evaluer` 27, `en_attente_prerequis` 2. |
+| **8** | Délégations non terminales dont l'objectif est encore ouvert (intactes). |
+
+**Smoke auteur (copie privée `/tmp/cursor4-orphelines-private`, 2026-08-24
+soir)** — objet : **délégations** ; autre fichier, autre instant ; ne pas
+confondre avec les 265/8 ci-dessus :
+
+| Chiffre | Ce qu'il compte |
+| --- | --- |
+| **27** | Délégations en `a_evaluer` dont l'objectif est déjà `clos`, **avant** migrate sur cette copie. |
+| **264** | Délégations en `soldee_par_cloture` **après** migrate sur cette même copie (stock déjà soldé + orphelines converties). |
+
+Ce ne sont **pas** des objectifs. `bridget-ronde` compte les **objectifs**
+`a_evaluer` (`objectifs_a_evaluer`).
+
 ## Arrêt
 
 Maicie ne maintient aucun service résident, timer ou processus enfant. Une
