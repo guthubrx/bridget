@@ -17,7 +17,11 @@ use std::time::{Duration, Instant};
 
 const WARMUP_TURNS: usize = 100;
 const MEASURED_TURNS: usize = 1_000;
-const EVENTS_PER_TURN: usize = 3;
+/// Bornes échantillonnées par `AppendLatencyProbe` (`turn_start` | `turn_end`
+/// uniquement — `is_turn_boundary`). Distinct du cardinal journal/attach.
+const SAMPLED_BOUNDARIES_PER_TURN: usize = 2;
+/// Événements journal/attach par tour ACP après L4 : start + reasoning + end.
+const JOURNAL_EVENTS_PER_TURN: usize = 3;
 const GLOBAL_TIMEOUT: Duration = Duration::from_secs(60);
 const SC001_TURNS: usize = 600;
 const SC001_CADENCE: Duration = Duration::from_millis(100);
@@ -391,7 +395,7 @@ impl BenchHarness {
     }
 
     fn finish(mut self, deadline: Instant) {
-        let expected_view = self.historical_events + self.planned_turns * EVENTS_PER_TURN;
+        let expected_view = self.historical_events + self.planned_turns * JOURNAL_EVENTS_PER_TURN;
         for view in &self.views {
             wait_until(deadline, "vue attach en retard en fin de campagne", || {
                 view.final_fragments.load(Ordering::SeqCst) >= expected_view
@@ -449,19 +453,19 @@ fn run_interleaved_campaign() -> (Duration, usize, Duration, usize) {
             baseline.send_turn(turn);
         }
         let expected = if turn < WARMUP_TURNS {
-            (turn + 1) * EVENTS_PER_TURN
+            (turn + 1) * SAMPLED_BOUNDARIES_PER_TURN
         } else {
-            (turn + 1 - WARMUP_TURNS) * EVENTS_PER_TURN
+            (turn + 1 - WARMUP_TURNS) * SAMPLED_BOUNDARIES_PER_TURN
         };
         baseline.wait_for_appends(expected, deadline);
         observed.wait_for_appends(expected, deadline);
         if turn + 1 == WARMUP_TURNS {
-            baseline.take_samples(WARMUP_TURNS * EVENTS_PER_TURN);
-            observed.take_samples(WARMUP_TURNS * EVENTS_PER_TURN);
+            baseline.take_samples(WARMUP_TURNS * SAMPLED_BOUNDARIES_PER_TURN);
+            observed.take_samples(WARMUP_TURNS * SAMPLED_BOUNDARIES_PER_TURN);
         }
     }
-    let baseline_samples = baseline.take_samples(MEASURED_TURNS * EVENTS_PER_TURN);
-    let observed_samples = observed.take_samples(MEASURED_TURNS * EVENTS_PER_TURN);
+    let baseline_samples = baseline.take_samples(MEASURED_TURNS * SAMPLED_BOUNDARIES_PER_TURN);
+    let observed_samples = observed.take_samples(MEASURED_TURNS * SAMPLED_BOUNDARIES_PER_TURN);
     let result = (
         percentile_95(&baseline_samples),
         baseline_samples.len(),
@@ -481,8 +485,8 @@ fn sc005_deux_vues_reelles_ne_degradent_pas_le_p95_d_append_de_plus_de_cinq_pour
     let mut deltas = Vec::with_capacity(SC005_INTERNAL_PAIRS);
     for _ in 0..SC005_INTERNAL_PAIRS {
         let (baseline, baseline_count, with_views, observed_count) = run_interleaved_campaign();
-        assert_eq!(baseline_count, MEASURED_TURNS * EVENTS_PER_TURN);
-        assert_eq!(observed_count, MEASURED_TURNS * EVENTS_PER_TURN);
+        assert_eq!(baseline_count, MEASURED_TURNS * SAMPLED_BOUNDARIES_PER_TURN);
+        assert_eq!(observed_count, MEASURED_TURNS * SAMPLED_BOUNDARIES_PER_TURN);
         baselines.push(baseline);
         observed.push(with_views);
         deltas.push(with_views.as_nanos() as i128 - baseline.as_nanos() as i128);
@@ -580,16 +584,17 @@ fn run_sc001_campaign(index: usize) -> Sc001Campaign {
         harness.send_turn(turn);
     }
 
-    let expected_events = SC001_TURNS * EVENTS_PER_TURN;
-    harness.wait_for_appends(expected_events, deadline);
+    let expected_samples = SC001_TURNS * SAMPLED_BOUNDARIES_PER_TURN;
+    let expected_journal = SC001_TURNS * JOURNAL_EVENTS_PER_TURN;
+    harness.wait_for_appends(expected_samples, deadline);
     for view in &harness.views {
         wait_until(deadline, "rendu attach absent après append", || {
-            view.final_fragments.load(Ordering::SeqCst) >= expected_events
+            view.final_fragments.load(Ordering::SeqCst) >= expected_journal
         });
     }
 
     let samples = harness.probe.take_samples();
-    assert_eq!(samples.len(), expected_events, "append incomplet");
+    assert_eq!(samples.len(), expected_samples, "append incomplet");
     let first_view = &harness.views[0];
     let rendered = first_view
         .rendered_at
@@ -608,7 +613,7 @@ fn run_sc001_campaign(index: usize) -> Sc001Campaign {
         })
         .collect::<Vec<_>>();
     drop(rendered);
-    assert_eq!(latencies.len(), expected_events);
+    assert_eq!(latencies.len(), expected_samples);
     let p95 = percentile_95(&latencies);
     let max = latencies.iter().copied().max().unwrap_or_default();
     harness.finish(deadline);
@@ -736,7 +741,7 @@ fn sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon() {
 
     harness.send_turn(0);
     wait_until(deadline, "suivi live absent après rotation", || {
-        final_fragments.load(Ordering::SeqCst) >= 1 + EVENTS_PER_TURN
+        final_fragments.load(Ordering::SeqCst) >= 1 + JOURNAL_EVENTS_PER_TURN
     });
     let seqs = final_sequences
         .lock()
