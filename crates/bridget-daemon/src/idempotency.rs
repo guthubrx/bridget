@@ -2044,6 +2044,10 @@ mod tests {
                      );",
                 )
                 .unwrap();
+            // `X'7b7d'` (= `{}`) suffit ici : cet oracle ne teste que le CHECK
+            // via UPDATE brut. Un chemin réel (`orphan_dispatching_for_instance`)
+            // exige un vrai `BridgetMessage` sérialisé — voir
+            // `chemin_reel_sur_base_migree_depuis_v3`.
             // Sur le CHECK pré-v4, orphaned est refusé.
             let refused = legacy.execute(
                 "UPDATE send_deliveries SET phase = 'orphaned' WHERE delivery_id = 'delivery-legacy'",
@@ -2081,6 +2085,136 @@ mod tests {
             )
             .unwrap();
         assert_eq!(phase, "orphaned");
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// ORACLE — chemin de production sur base réellement migrée v3→v4.
+    /// Complète `migration_v4_elargit…` (CHECK par UPDATE brut) : ici
+    /// `orphan_dispatching_for_instance` désérialise `message_bytes`, écrit
+    /// `orphan_emitter_notices`, et le lookup rend `Orphaned`.
+    #[test]
+    fn chemin_reel_sur_base_migree_depuis_v3() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-chemin-reel-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let message = bridget_core::BridgetMessage::new("emetteur-x", "cible-y", "mandat perdu");
+        let message_id = message.id.clone();
+        let bytes = serde_json::to_vec(&message).unwrap();
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            "cle-reelle",
+        )
+        .unwrap();
+
+        {
+            let legacy = Connection::open(&path).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE idempotency_schema_migrations (version INTEGER PRIMARY KEY);
+                     INSERT INTO idempotency_schema_migrations(version) VALUES (2);
+                     INSERT INTO idempotency_schema_migrations(version) VALUES (3);
+                     CREATE TABLE idempotency_records (
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL,
+                        idempotency_key TEXT NOT NULL,
+                        canonical_bytes BLOB NOT NULL,
+                        state TEXT NOT NULL,
+                        public_result_kind TEXT,
+                        public_result_category TEXT,
+                        public_result_reason TEXT,
+                        issued_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        PRIMARY KEY (issuer_scope, operation_kind, idempotency_key)
+                     );
+                     CREATE TABLE send_deliveries (
+                        delivery_id TEXT PRIMARY KEY,
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL CHECK (operation_kind = 'send'),
+                        idempotency_key TEXT NOT NULL,
+                        recipient_instance_id TEXT NOT NULL,
+                        delivery_generation INTEGER NOT NULL CHECK (delivery_generation > 0),
+                        phase TEXT NOT NULL CHECK (phase IN ('dispatching', 'acked', 'indeterminate')),
+                        expires_at INTEGER NOT NULL,
+                        message_bytes BLOB,
+                        FOREIGN KEY (issuer_scope, operation_kind, idempotency_key)
+                            REFERENCES idempotency_records(issuer_scope, operation_kind, idempotency_key)
+                            ON DELETE CASCADE
+                     );
+                     CREATE TABLE spawn_commands (
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL,
+                        command_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        generation INTEGER NOT NULL,
+                        persistent INTEGER NOT NULL,
+                        state TEXT NOT NULL,
+                        instance_id TEXT,
+                        deadline_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        issue_kind TEXT,
+                        issue_category TEXT,
+                        issue_reason TEXT,
+                        resolved_definition_json TEXT,
+                        PRIMARY KEY (issuer_scope, operation_kind, command_id)
+                     );
+                     INSERT INTO idempotency_records VALUES (
+                        '012_scope_aaaaaaaaaaaa', 'send', 'cle-reelle', X'00',
+                        'dispatching', NULL, NULL, NULL, 1000000, 1003600
+                     );",
+                )
+                .unwrap();
+            legacy
+                .execute(
+                    "INSERT INTO send_deliveries VALUES (
+                        'delivery-reel', '012_scope_aaaaaaaaaaaa', 'send', 'cle-reelle',
+                        'instance-1', 1, 'dispatching', 1003600, ?1)",
+                    params![bytes],
+                )
+                .unwrap();
+        }
+
+        let mut store = IdempotencyStore::open(&path).expect("migration v4");
+        let notices = store
+            .orphan_dispatching_for_instance("instance-1", "destinataire purge")
+            .expect("chemin réel sur base migrée");
+
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].delivery_id, "delivery-reel");
+        assert_eq!(notices[0].message_id, message_id);
+        assert_eq!(notices[0].sender, "emetteur-x");
+        assert_eq!(notices[0].target, "cible-y");
+
+        let phase: String = store
+            .conn
+            .query_row(
+                "SELECT phase FROM send_deliveries WHERE delivery_id = 'delivery-reel'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(phase, "orphaned");
+
+        let notices_en_base: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM orphan_emitter_notices",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(notices_en_base, 1);
+
+        assert_eq!(
+            store.lookup(&key, 1_000_000).unwrap(),
+            LookupResult::Orphaned {
+                expires_at: 1_003_600,
+                reason: "destinataire purge".to_string(),
+            }
+        );
+
         drop(store);
         std::fs::remove_file(path).unwrap();
     }
