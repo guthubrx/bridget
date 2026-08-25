@@ -193,6 +193,7 @@ fn assert_review_refusal(
     created: &maicie::app::DelegationCreated,
     claim: &GuichetClaim,
     expected: MotifRefusGreffe,
+    expected_reason: &str,
 ) {
     let mut store = MaicieStore::open(database).unwrap();
     let result = process_guichet_claim(&mut store, claim, "response-review-refused", 1_010)
@@ -208,17 +209,38 @@ fn assert_review_refusal(
         "un refus ne greffe aucune décision"
     );
     drop(store);
+    assert_refusal_reason_persisted_and_emitted(
+        database,
+        &claim.request_id,
+        &result.reply_bytes,
+        expected_reason,
+    );
+}
+
+fn assert_refusal_reason_persisted_and_emitted(
+    database: &Path,
+    request_id: &str,
+    reply_bytes: &[u8],
+    expected_reason: &str,
+) {
     let reason: String = Connection::open(database)
         .unwrap()
         .query_row(
             "SELECT reason FROM guichet_refusal_receptions WHERE request_id = ?1",
-            [&claim.request_id],
+            [request_id],
             |row| row.get(0),
         )
         .unwrap();
-    assert!(
-        String::from_utf8_lossy(&result.reply_bytes).contains(&reason),
-        "le reçu filaire et le motif durable doivent concorder"
+    assert_eq!(
+        reason, expected_reason,
+        "motif durable divergent du contrat"
+    );
+    let reply: serde_json::Value = serde_json::from_slice(reply_bytes).unwrap();
+    assert_eq!(reply["outcome"], "refused");
+    assert_eq!(reply["payload"]["kind"], "refused");
+    assert_eq!(
+        reply["payload"]["reason"], expected_reason,
+        "motif filaire divergent du motif durable et du contrat"
     );
 }
 
@@ -233,6 +255,7 @@ fn mandat_revue_exige_un_verdict_et_delegation_ordinaire_le_refuse() {
         &review_created,
         &missing,
         MotifRefusGreffe::VerdictRevueRequis,
+        "review_verdict_required",
     );
 
     let ordinary_root = root("review-unexpected");
@@ -251,6 +274,7 @@ fn mandat_revue_exige_un_verdict_et_delegation_ordinaire_le_refuse() {
         &ordinary_created,
         &unexpected,
         MotifRefusGreffe::VerdictRevueInattendu,
+        "review_verdict_unexpected",
     );
     fs::remove_dir_all(review_root).unwrap();
     fs::remove_dir_all(ordinary_root).unwrap();
@@ -274,6 +298,7 @@ fn mandat_divergent_est_refuse_avant_les_observations_git() {
         &created,
         &claim,
         MotifRefusGreffe::MandatRevueDivergent,
+        "review_mandate_mismatch",
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -296,6 +321,7 @@ fn cible_deplacee_prime_sur_un_head_local_egalement_divergent() {
         &created,
         &claim,
         MotifRefusGreffe::TeteCibleDeplacee,
+        "target_head_moved",
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -318,6 +344,7 @@ fn mauvaise_tete_mesuree_est_distinguee_d_une_cible_deplacee() {
         &created,
         &claim,
         MotifRefusGreffe::TeteMesureeDivergente,
+        "measured_head_mismatch",
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -471,7 +498,12 @@ fn rapport_puis_answered_rejoue_les_memes_octets_sans_seconde_decision() {
         refused.refusal_reason,
         Some(maicie::domain::MotifRefusGreffe::EnveloppeDivergente)
     );
-    assert!(String::from_utf8_lossy(&refused.reply_bytes).contains("envelope_mismatch"));
+    assert_refusal_reason_persisted_and_emitted(
+        &database,
+        &divergent.request_id,
+        &refused.reply_bytes,
+        "envelope_mismatch",
+    );
     let replay_refused = process_guichet_claim(&mut store, &divergent, "ignored", 1_031).unwrap();
     assert!(replay_refused.replayed);
     assert_eq!(replay_refused.reply_bytes, refused.reply_bytes);
@@ -512,7 +544,12 @@ fn rapport_aux_relations_incoherentes_devient_un_rejet_atteste() {
         refused.refusal_reason,
         Some(maicie::domain::MotifRefusGreffe::RelationsInvalides)
     );
-    assert!(String::from_utf8_lossy(&refused.reply_bytes).contains("relation_invalid"));
+    assert_refusal_reason_persisted_and_emitted(
+        &database,
+        &claim.request_id,
+        &refused.reply_bytes,
+        "relation_invalid",
+    );
     let replay = process_guichet_claim(&mut store, &claim, "ignored", 1_020).unwrap();
     assert!(replay.replayed);
     assert_eq!(replay.reply_bytes, refused.reply_bytes);

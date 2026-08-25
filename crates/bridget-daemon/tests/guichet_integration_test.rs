@@ -5,6 +5,7 @@ use bridget_transport::protocol::{
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -566,6 +567,239 @@ fn depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat() {
 
     daemon.kill();
     let _ = std::fs::remove_dir_all(home);
+}
+
+/// Les attendus restent littéraux : le banc ne dérive jamais le message du
+/// prédicat qu'il exerce. Chaque cas lance le vrai binaire et doit mourir sur
+/// les assertions de code retour et de première ligne stderr.
+///
+/// Le dixième message nommé, « aucun SHA », n'est volontairement pas simulé :
+/// `git_stdout` applique `trim()` avant le parsing de `ls-remote`, donc une
+/// ligne vide ou composée d'espaces prend toujours le chemin « aucune tête ».
+/// C'est une branche de production inatteignable, pas un cas de test manquant.
+#[test]
+fn depot_cli_refuse_exactement_les_neuf_erreurs_git_atteignables() {
+    struct FailureCase {
+        name: &'static str,
+        git_case: &'static str,
+        review_args: &'static [&'static str],
+        expected_error: &'static str,
+    }
+
+    const HEAD: &str = "1111111111111111111111111111111111111111";
+    const UPPER_HEAD: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    let cases = [
+        FailureCase {
+            name: "attestation_incomplete",
+            git_case: "must_not_run",
+            review_args: &["--verdict", "approve"],
+            expected_error: "erreur: --verdict, --review-ref et --expected-head doivent être fournis ensemble",
+        },
+        FailureCase {
+            name: "verdict_inconnu",
+            git_case: "must_not_run",
+            review_args: &[
+                "--verdict",
+                "inconnu",
+                "--review-ref",
+                "origin/fix/review",
+                "--expected-head",
+                HEAD,
+            ],
+            expected_error: "erreur: --verdict attend approve|approve_with_changes|amender|stop",
+        },
+        FailureCase {
+            name: "reference_invalide",
+            git_case: "must_not_run",
+            review_args: &[
+                "--verdict",
+                "approve",
+                "--review-ref",
+                "./main",
+                "--expected-head",
+                HEAD,
+            ],
+            expected_error: "erreur: --review-ref attend <remote>/<branche> valide",
+        },
+        FailureCase {
+            name: "sha_attendu_non_canonique",
+            git_case: "must_not_run",
+            review_args: &[
+                "--verdict",
+                "approve",
+                "--review-ref",
+                "origin/fix/review",
+                "--expected-head",
+                UPPER_HEAD,
+            ],
+            expected_error: "erreur: --expected-head attend exactement 40 hexadécimaux minuscules",
+        },
+        FailureCase {
+            name: "head_mesure_non_canonique",
+            git_case: "head_noncanonical",
+            review_args: &[
+                "--verdict",
+                "approve",
+                "--review-ref",
+                "origin/fix/review",
+                "--expected-head",
+                HEAD,
+            ],
+            expected_error: "erreur: git rev-parse n'a pas rendu un SHA-1 canonique",
+        },
+        FailureCase {
+            name: "aucune_tete_distante",
+            git_case: "remote_empty",
+            review_args: &[
+                "--verdict",
+                "approve",
+                "--review-ref",
+                "origin/fix/review",
+                "--expected-head",
+                HEAD,
+            ],
+            expected_error: "erreur: git ls-remote n'a rendu aucune tête",
+        },
+        FailureCase {
+            name: "tete_distante_ambigue",
+            git_case: "remote_ambiguous",
+            review_args: &[
+                "--verdict",
+                "approve",
+                "--review-ref",
+                "origin/fix/review",
+                "--expected-head",
+                HEAD,
+            ],
+            expected_error: "erreur: git ls-remote a rendu une tête ambiguë",
+        },
+        FailureCase {
+            name: "reference_distante_absente",
+            git_case: "remote_without_ref",
+            review_args: &[
+                "--verdict",
+                "approve",
+                "--review-ref",
+                "origin/fix/review",
+                "--expected-head",
+                HEAD,
+            ],
+            expected_error: "erreur: git ls-remote n'a rendu aucune référence",
+        },
+        FailureCase {
+            name: "observation_distante_non_canonique",
+            git_case: "remote_noncanonical",
+            review_args: &[
+                "--verdict",
+                "approve",
+                "--review-ref",
+                "origin/fix/review",
+                "--expected-head",
+                HEAD,
+            ],
+            expected_error: "erreur: git ls-remote a rendu une observation non canonique",
+        },
+    ];
+
+    let root = unique_home();
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake_git = bin.join("git");
+    std::fs::write(
+        &fake_git,
+        r#"#!/bin/sh
+if [ "$BRIDGET_TEST_GIT_CASE" = "must_not_run" ]; then
+    exit 99
+fi
+sha="1111111111111111111111111111111111111111"
+case "$1" in
+    remote)
+        printf '%s\n' '/tmp/fake-review-remote'
+        ;;
+    rev-parse)
+        if [ "$BRIDGET_TEST_GIT_CASE" = "head_noncanonical" ]; then
+            printf '%s\n' 'pas-un-sha'
+        else
+            printf '%s\n' "$sha"
+        fi
+        ;;
+    ls-remote)
+        case "$BRIDGET_TEST_GIT_CASE" in
+            remote_empty)
+                ;;
+            remote_ambiguous)
+                printf '%s\t%s\n%s\t%s\n' "$sha" 'refs/heads/fix/review' "$sha" 'refs/heads/fix/review'
+                ;;
+            remote_without_ref)
+                printf '%s\n' "$sha"
+                ;;
+            remote_noncanonical)
+                printf '%s\t%s\n' "$sha" 'refs/heads/fix/autre'
+                ;;
+            *)
+                printf '%s\t%s\n' "$sha" 'refs/heads/fix/review'
+                ;;
+        esac
+        ;;
+    *)
+        exit 98
+        ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_git, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    for case in cases {
+        let mut args = vec![
+            "guichet",
+            "deposer",
+            "delivery-report",
+            "--from",
+            "codex-review",
+            "--objective",
+            "objective-review",
+            "--delegation",
+            "delegation-review",
+            "--hash",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--in-reply-to",
+            "message-review",
+        ];
+        args.extend_from_slice(case.review_args);
+        let output = isolated_bridget_command()
+            .args(args)
+            .current_dir(&root)
+            .env("HOME", &root)
+            .env("PATH", &bin)
+            .env("BRIDGET_AGENT_NAME", "codex-review")
+            .env("BRIDGET_TEST_GIT_CASE", case.git_case)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{} doit être un refus de parsing, stderr={stderr}",
+            case.name
+        );
+        assert_eq!(
+            stderr.lines().next(),
+            Some(case.expected_error),
+            "{} doit mourir dans l'assertion du message exact",
+            case.name
+        );
+        assert_eq!(
+            stderr.lines().nth(1),
+            Some(
+                "usage: bridget guichet deposer <delivery-report|mission-status|deadline-question> [options]"
+            ),
+            "{} doit atteindre le refus CLI attendu",
+            case.name
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
