@@ -19,6 +19,141 @@ v1 (spec 011) — intrants pour les itérations suivantes.
 > commande git ; **[lu]** = trouvé dans un document, un commit message ou un
 > mandat ; **[prédit]** = déduit — n'emprunte aucune solidité au mesuré.
 
+## Point d'étape — 2026-08-25 après-midi (horodatage : voir git)
+
+> **Ce bloc remplace le tableau de bord de 07:24 ci-dessous pour tout ce qui
+> concerne l'après-midi.** Le tableau qui suit reste valable sur les cases
+> historiques ; il ignore tout ce qui a été fait après 07:24.
+
+### Avancement mesuré des blocs
+
+| Bloc | Fait | % |
+|---|---|---|
+| A — Observabilité (session 014) | 5/5 | **100** |
+| C — Micro-tâches | 6/6 | **100** |
+| E — À la main de l'utilisateur | 3/3 | **100** |
+| G — Ponts natifs | 10/11 | 91 |
+| L — Gains du natif, sort des tmux | 5/6 | 83 |
+| K — Déployer ailleurs | 3/4 | 75 |
+| F — Maicie v2 comportementale | 22/33 | 67 |
+| D — Chantiers v2 | 4/7 | 57 |
+| J — Outillage d'agents | 2/4 | 50 |
+| B — Piste GUI | 2/6 | 33 |
+| M — Le référent géré | 1/5 | 20 |
+| N — Produit & ouverture | 0/6 | 0 |
+| **Total** | **63/96** | **66** |
+
+### Onze lots en vol, `main` = `b6eea77`
+
+| Branche | Commits | Auteur | Jury |
+|---|---|---|---|
+| `fix/purge-ne-doit-pas-orpheliner-en-silence` | 9 | cursor8 | gelé, attend rebase |
+| `session-022-tests-workspace-permanents` | 4 | ac4 | relec9 |
+| `session-18-activation-outils-pilotage` | 3 | ac3 | jury3 |
+| `session-20-verification-pre-push` | 3 | jc1 | relec8 |
+| `session-021-verdict-sha-mesure` | 1 | jc3 | relec6 — **STOP** ×2 |
+| `session-19-trace-interactions-codex` | 1 | ac2 | rc3 |
+| `fix/lecture-remise-sans-enveloppe` | 1 | ac4 | fable2 |
+| `fix/maicie-installed-preflight` | 1 | ac1 | rc2 |
+| `fix/bancs-instables-filet` | 1 | jc2 | rc1 |
+| `test/closure-delegation-invariant` | 1 | ac1 | relec6 — **STOP** |
+| `fix/annulee-hors-clos-sans-suite` | 1 | — | rc4 |
+
+Flotte : **42 agents**, dont 16 sur `cartae`. Greffe : **322 objectifs**,
+**181 entrées** au catalogue du dû.
+
+### Sessions SpecKit ouvertes cet après-midi
+
+`/speckit.progress` a rendu `017` à **quatre agents** dans la même heure — il
+lit les dossiers publiés et **ne voit pas les réservations en vol**. Trois ont
+proposé `018` de bonne foi. Attribution arbitrée :
+
+| N° | Objet | Agent |
+|---|---|---|
+| 018 | Activation gouvernée des outils de pilotage | ac3 |
+| 019 | Trace durable des interactions bloquantes Codex | ac2 |
+| 020 | Vérification transactionnelle avant envoi | jc1 |
+| 021 | Verdict et SHA mesuré (migration v17) | jc3 |
+| 022 | Tests workspace permanents | ac4 |
+| 023 | Tour expiré observable + refus qui nomme sa condition | jc1 |
+| 024 | G11 — nommer le protocole | jc2 |
+
+Migrations réservées : **v17** jc3 (livrée), **v18** ac1 (horodatages de
+délégation), **v19** libre.
+
+### Trois découvertes qui changent la méthode
+
+**1. Les « rouges permanents » n'existent pas — ils dépendent de la
+plateforme.** `[mesuré]` Trois tests sont rouges sous Linux et verts sur
+macOS ; `acp::ignored_cancel` fait l'inverse (4/20 sur macOS, 0/100 sous Linux
+à charge 45,88 sur 16 CPU — **la charge est réfutée comme cause**). Les douze
+agents distants sont sous Linux, la machine principale sous macOS : **deux
+populations mesuraient deux dépôts différents en croyant mesurer le même.**
+→ **Règle : un rapport de gates NOMME SA PLATEFORME à côté de ses comptes**, et
+un juré **mesure** la liste des rouges au lieu de la **reporter**.
+
+**2. Un zéro doit prouver que son univers n'est pas vide.** `[mesuré]` Un
+oracle d'invariant comptait `0` délégation ouverte sous objectif clos ; le
+mutant qui renomme `clos` le laisse **vert**, parce que la jointure ne rend
+plus rien. Son contrôle positif existait mais **du mauvais côté de la
+jointure**. Même défaut vingt minutes plus tard dans l'outillage de
+supervision : l'absence de fichier PID prise pour la mort de trois jurés, alors
+que les agents **vivants** n'en ont pas non plus.
+→ **Devant une absence, vérifier ce que rend la présence avant d'agir.**
+Écrit comme **geste**, jamais comme vertu : une vertu ne se transmet pas.
+
+**3. La projection prise pour la chose — huit occurrences le même jour.** Le
+lien pour la capacité ; l'émission pour la réception ; l'index SQL pour le
+payload métier ; le poussé-chez-moi pour le livré ; la remise consommée pour le
+travail fait ; l'absence de PID pour la mort ; le refus muet pour une cause ;
+**l'accepté pour le vu**. Ce chantier n'a pas huit défauts : il en a **un seul,
+à huit endroits** — et le motif n'est pas dans le code, il est dans la manière
+d'interroger l'état.
+
+### Le filet anti-trace était percé depuis toujours
+
+`[mesuré]` Le hook `commit-msg` énumérait les outils, et le littéral bash
+`"Co-[Aa]uthored-[Bb]y:.*[Cc]ursor",` portait **une virgule à l'intérieur de la
+chaîne** : le motif exigeait une virgule après le mot, il ne correspondait
+**jamais**, tout en s'exécutant avec `rc=0`. Cause réelle des 26 commits tracés
+de `main` — pas un hook absent, un hook aveugle.
+
+Corrigé : **plus aucune énumération d'outils**, un motif unique sur toute ligne
+de co-autorat et toute mention de génération, insensible à la casse. 8
+formulations testées dont des noms inventés, 2 contrôles positifs intacts, posé
+et vérifié sur les **14 dépôts** (principal + 13 clones distants), empreintes
+identiques. Identité git des clones distants alignée sur l'utilisateur.
+
+**Décision utilisateur** : aucun co-autorat, jamais, pour aucun outil — c'est la
+constitution. Le dépôt public naîtra **sans historique**, d'un commit propre :
+aucun des 92 messages parlant du chantier, aucun nom d'agent, aucun trailer n'y
+figurera. Le dépôt actuel reste l'atelier.
+
+### K3 précisé — préparer la publication, pas déménager
+
+`[mesuré]` Le dépôt est à moitié-moitié : **181 fichiers de code**
+(`crates/` + `plugins/`) contre **177 fichiers de chantier** (`specs/` +
+`docs/`). Contamination du code : **3 fichiers** citant `/Users/moi`, **0**
+citant `cartae`, plus 4 `ETAT-NUIT-*.md` à la racine. Le pruning est une
+session, pas un chantier.
+
+### Ce qui bloque le débit, et c'est le bloc M
+
+Quatre agents de la machine principale ont leur **tour qui expire de façon
+répétée** — `jury1` et `jury2` encore à 13:20, juste après réception d'un
+message ; `relec7` à 11:49 ; `coder4` à 07:26. Ils sont **vivants** (`who` les
+donne `connected`, 4 processus chacun) et comptés **occupés** parce qu'une
+délégation ouverte porte leur nom. L'instrument mesure **l'existence d'une
+délégation, pas l'activité**. `jury2` était la dernière voix sur un lot bloqué
+en l'attendant : deux heures perdues.
+
+Répartition : **26 agents sur la machine principale (charge 14,10/16 CPU,
+6,7 Go libres)** contre **16 sur cartae (charge 0,07/16 CPU, 43 Go libres)**.
+Quatre relecteurs `rc1`–`rc4` créés sur cartae à 13:49 pour absorber la file de
+jurys. **Le rééquilibrage de fond reste à arbitrer.**
+
+---
+
 ## Tableau de bord — réconcilié le 2026-08-25 (horodatage d'édition : voir git)
 
 ### Cœur — lots en cours (JAMAIS acquis)
@@ -224,7 +359,9 @@ Rayé d'un commun accord : J4, B7. À trier le moment venu : D22.
 - [ ] N2 silos comme transports (SendMessage/codex queue) — ⬜
 - [ ] N3 isolation/merge en produit — 🔄 entamé de fait (M1 garde, P31
       plages) ; reste worktree+ports au spawn, file de merge Maicie
-- [ ] N4 = K3 séparation projet/outil, PRÉREQUIS d'ouverture — ⬜
+- [ ] N4 = K3 séparation projet/outil, PRÉREQUIS d'ouverture — ⬜ ;
+      **frontière tranchée le 2026-08-25** (voir K3) : outil vs chantier,
+      publication sans historique.
 - [ ] N5 adaptateur A2A éventuel — ⬜ inscrit, pas un chantier
 - [ ] N6 confinement d'exécution — ⬜ phase sécurité
 
@@ -365,24 +502,42 @@ ont été créés directement dans ce fichier le 24/08.
       `objective_costs` `store.rs:7376` **[mesuré]**
 - [x] G10 pont Zed REFUSÉ sous toutes ses formes (4 formes + @version +
       chemin --equipier), DEPRECATIONS daté, ACP générique préservé
-- [ ] G11 nommer le protocole — 🔄 ENCORE DÛ (TRANSPORT affiche
-      codex_app_server / claude_stream_json depuis `0a3872b` **[lu]** ;
-      vérification complète ouverte)
+- [ ] G11 nommer le protocole — 🔄 EN COURS, session **024** chez `jc2`
+      (ouverte 2026-08-25 13:45). **[mesuré]** la colonne TRANSPORT mélange
+      deux natures sur 36 agents : 12 `ssh-unix` + 3 `unix` (transports
+      réseau), 9 `acp` (nom de famille), 8 `codex_app_server` et 3
+      `claude_stream_json` (vrais protocoles). Les **12 en `ssh-unix` sont
+      exactement les 12 agents de cartae** : la fédération écrase le nom du
+      protocole par celui du tunnel. Propriété visée : la colonne nomme le
+      protocole réellement parlé, indépendamment du chemin de connexion —
+      **sans perdre** l'information « agent distant ».
 
 **Bloc J — outillage d'agents (rattrapage T3 Code)**
 - [x] J1 capacités déclarées par pilote et modèle (L1 : refus typé avant
       processus, matrice + digest)
 - [x] J2 ramasseur de sessions abandonnées (reaper Phase 0 + garde G9)
 - [ ] J3 répertoire des sessions — ⬜ ENCORE DÛ
-- [ ] J4 journaux par pilote — ⬛ PÉRIMÉ / RAYÉ (commun accord avec B7 ;
-      ne plus traiter comme dû actif)
+- [x] J4 journaux par pilote — ⬛ **PÉRIMÉ / RAYÉ** d'un commun accord avec
+      B7. Coché pour **sortir du décompte du dû** : ce n'est pas un travail
+      fait, c'est un travail annulé. Une case rayée qui reste décochée gonfle
+      le reste à faire d'un item qui n'existe plus.
 
 **Bloc K — déployer ailleurs**
 - [x] K1 installateur bi-plateforme (macOS launchd + Linux systemd, rustup
       sur place, idempotent, --verify-guichet ; prouvé Mac + cartae.app) —
       🔄 rejeu au niveau du jour en cours sur cartae.app (coder2)
 - [x] K2 ronde portable (mergée, unité active, sidecars prouvés intacts)
-- [ ] K3 séparer projet/outil — ⬜ non commencé
+- [ ] K3 séparer projet/outil — ⬜ non commencé, **mais tranché le
+      2026-08-25 après-midi** (décision utilisateur). Ce n'est PAS séparer
+      Bridget de Maicie : c'est séparer **l'outil** du **chantier**.
+      **[mesuré]** le dépôt est à moitié-moitié — 181 fichiers de code
+      (`crates/` + `plugins/`) contre 177 de chantier (`specs/` + `docs/`).
+      Contamination du code : 3 fichiers citant `/Users/moi`, **0** citant
+      `cartae`, plus 4 `ETAT-NUIT-*.md` à la racine.
+      **Décision** : le dépôt public naîtra **sans historique**, d'un commit
+      propre — aucun des 92 messages parlant du chantier, aucun nom d'agent,
+      aucun trailer de co-autorat. Le dépôt actuel reste l'atelier.
+      **Pruning du code d'abord**, publication ensuite.
 - [x] K4 démarrage à froid documenté — docs/demarrage-a-froid.md, une page,
       chaque commande exécutée sur machine réelle, 5 découvertes
 
@@ -394,9 +549,17 @@ ont été créés directement dans ce fichier le 24/08.
 - [x] L3 quota anticipé Claude (fenêtre/statut/resetsAt dans LIMITE, aucune
       décision auto) — format compact 5h/7d en cours (coder4)
 - [x] L4 coût par mission — ✅ FAIT (= G9) — `5059d3c` **[mesuré]**
-- [ ] L5 voir qui travaille — 🔄 ENCORE DÛ (volet redémarrage busy
-      ré-annoncé mergé **[lu]** ; entre-tours aveugle ; heartbeat
-      lien≠capacité EN JURY — pas acquis)
+- [ ] L5 voir qui travaille — 🔄 ENCORE DÛ, **deux volets sur trois acquis**
+      (mise à jour 2026-08-25 après-midi) : volet redémarrage busy ré-annoncé
+      mergé **[lu]** ; heartbeat lien≠capacité **MERGÉ [mesuré]** — `bee684d`
+      et `0715d5f` sont ancêtres de `origin/main`,
+      `presence_within_retention` ne lit plus que `link_seen`, et l'ancienne
+      exemption `connected` ne subsiste que comme **mutant sous `cfg(test)`**
+      (`daemon.rs:107-112`). La mention « EN JURY — pas acquis » était périmée.
+      **Reste dû** : l'entre-tours aveugle — un agent dont le tour a expiré est
+      compté `occupé` parce qu'une délégation porte son nom ; mesuré sur quatre
+      agents (`jury1`/`jury2` 13:20, `relec7` 11:49, `coder4` 07:26).
+      → session **023** ouverte chez `jc1`.
 - [x] BASCULE tmux→gérés FAITE le 24/08 12h25 (voir point d'étape bloc L) ;
       extinction ACHEVÉE à 15h25 : cxbridget, prospective puis coderBridget
       (pane fermé par l'utilisateur après sa dernière livraison — état
