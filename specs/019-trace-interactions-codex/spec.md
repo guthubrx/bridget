@@ -2,7 +2,7 @@
 
 **Branche** : `session-19-trace-interactions-codex` | **Créée** : 2026-08-25
 **Status** : Complète
-**Tests** : 5/5 (100 %)
+**Tests ciblés** : 10/10 (100 %)
 **Dependencies** : SPEC-007, SPEC-008
 
 ## Contexte
@@ -27,6 +27,11 @@ fournisseur, contenant au minimum sa méthode et son identifiant, sans donnée
 sensible. Toute fin par échéance ou fermeture du transport doit permettre de
 déterminer si une telle interaction restait pendante.
 
+Aucune chaîne libre issue du fournisseur ne doit être persistée verbatim par
+un champ pourtant autorisé. Une valeur connue peut être projetée depuis une
+liste fermée locale ; toute autre corrélation est opaque, de longueur fixe et
+séparée par domaine.
+
 ## Scénarios utilisateur et tests
 
 ### US-1901 — Expliquer un prochain tour silencieux (P1)
@@ -48,17 +53,23 @@ l'erreur finale et la vue la rend lisiblement.
 3. **Étant donné** que la requête contient un corps de commande ou du texte
    utilisateur, **quand** elle est journalisée, **alors** aucun de ces contenus
    n'apparaît dans le journal.
+4. **Étant donné** qu'une chaîne sensible ou des contrôles sont placés dans la
+   méthode, l'identifiant JSON-RPC, le tour ou une raison d'erreur fournisseur,
+   **quand** les faits durables sont relus, **alors** aucun octet libre ne
+   réapparaît et les corrélations restent non vides et stables.
 
 ## Exigences
 
 - **FR-1901 — Trace avant attente** : toute requête fournisseur reçue pendant
   un tour actif produit un événement durable avant que le système poursuive
   son attente.
-- **FR-1902 — Corrélation minimale** : l'événement conserve le fournisseur, la
-  méthode, l'identifiant de requête, l'identifiant de tour et l'identifiant du
-  message Bridget quand ils sont attestés ; une absence reste absente.
+- **FR-1902 — Corrélation minimale** : l'événement conserve le fournisseur, une
+  méthode connue ou sa projection opaque, les projections opaques de la
+  requête et du tour, ainsi que l'identifiant du message Bridget quand ils sont
+  attestés ; une absence reste absente.
 - **FR-1903 — Expurgation par liste blanche** : aucun paramètre, prompt,
-  commande, chemin ou résultat fournisseur n'est persisté dans cet événement.
+  commande, chemin, résultat ni chaîne fournisseur libre n'est persisté dans
+  cet événement ou dans sa raison terminale.
 - **FR-1904 — Sort terminal explicable** : une échéance ou fermeture survenue
   avec une requête pendante porte la même corrélation dans son fait d'erreur.
 - **FR-1905 — Lecture humaine** : la vue d'historique distingue une interaction
@@ -66,6 +77,10 @@ l'erreur finale et la vue la rend lisiblement.
 - **FR-1906 — Compatibilité additive** : les journaux antérieurs et les autres
   transports gardent leur sens ; un lecteur ancien peut ignorer le nouvel
   événement.
+- **FR-1907 — Projection sûre** : une méthode reconnue est émise depuis une
+  constante locale fermée ; toute valeur inconnue et toute corrélation libre
+  est une empreinte SHA-256 séparée par domaine, préfixée `sha256:` et suivie
+  de 64 hexadécimaux. Aucune valeur n'est tronquée.
 
 ## Hors périmètre
 
@@ -81,8 +96,13 @@ l'erreur finale et la vue la rend lisiblement.
 
 - **SC-1901** : le banc déterministe écrit, dans cet ordre, le fait de requête
   pendante puis le fait d'erreur, avec le même message et le même tour.
-- **SC-1902** : une sentinelle sensible injectée dans les paramètres du faux
-  pilote a zéro occurrence dans le journal durable.
+- **SC-1902** : des sentinelles injectées séparément dans les paramètres, la
+  méthode, l'identifiant JSON-RPC chaîne et le tour ont zéro occurrence dans le
+  journal durable ; ESC, retour chariot et contrôle bidirectionnel injectés
+  dans la méthode et une raison fournisseur ont également zéro occurrence.
+- **SC-1902b** : les projections de requête et de tour sont non vides, de
+  longueur fixe, stables entre `provider_request` et `error`, et distinctes
+  pour une même entrée placée dans deux domaines.
 - **SC-1903** : la vue rend la requête pendante et l'erreur sans JSON brut.
 - **SC-1904** : les suites de compilation et de tests existantes conservent
   leurs résultats, hors rouges préexistants explicitement imputés.
@@ -98,8 +118,11 @@ l'erreur finale et la vue la rend lisiblement.
 ## Résultat
 
 Le journal porte désormais un fait `provider_request` construit par liste
-blanche. Lorsqu'un tour finit par échéance ou fermeture de stdout, son fait
-`error` reprend la dernière requête encore pendante. `attach` rend les deux
-faits sans JSON brut. Aucun choix d'approbation ni réglage du pilote n'a été
-ajouté : la session rend une cause future observable, elle ne conclut rien sur
-les pannes historiques.
+blanche et projections bornées. La méthode d'approbation connue reste lisible
+car elle est réémise depuis une constante locale ; toute méthode inconnue,
+requête, tour ou raison fournisseur libre est remplacé par une empreinte à
+longueur fixe. Lorsqu'un tour finit par échéance ou fermeture de stdout, son
+fait `error` reprend la dernière requête encore pendante. `attach` rend les
+deux faits sans JSON brut. Aucun choix d'approbation ni réglage du pilote n'a
+été ajouté : la session rend une cause future observable, elle ne conclut rien
+sur les pannes historiques.

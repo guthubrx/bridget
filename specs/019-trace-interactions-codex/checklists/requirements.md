@@ -16,6 +16,10 @@ corriger ni la prétendre prouvée.
 - [x] Aucun marqueur de clarification ne subsiste.
 - [x] Les exigences et critères sont mesurables.
 - [x] Les scénarios d'échéance, d'EOF et de fuite de contenu sont couverts.
+- [x] Les champs autorisés sont eux-mêmes testés contre les chaînes libres et
+  les contrôles ESC, retour chariot et bidirectionnels.
+- [x] L'absence de fuite est non vacuante : entrée attestée, événements
+  présents, corrélations non vides et stables.
 - [x] Le périmètre et les exclusions causales sont explicites.
 - [x] Les dépendances SPEC-007 et SPEC-008 sont déclarées.
 

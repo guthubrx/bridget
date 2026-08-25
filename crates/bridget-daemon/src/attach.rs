@@ -4098,11 +4098,13 @@ mod tests {
 
     #[test]
     fn test_019_rend_requete_fournisseur_et_correlation_de_lecheance() {
+        let request_ref = format!("sha256:{}", "a".repeat(64));
+        let turn_ref = format!("sha256:{}", "b".repeat(64));
         let pending = json!({
             "provider": "codex",
             "method": "item/commandExecution/requestApproval",
-            "request_id": "approval-native",
-            "turn_id": "turn-native",
+            "request_id": request_ref,
+            "turn_id": turn_ref,
             "state": "pending"
         });
         let request = journal_record(1, "provider_request", pending.clone());
@@ -4119,13 +4121,13 @@ mod tests {
         assert_eq!(
             render_journal_event(&request, "coder2"),
             format!(
-                "{stamp} [interaction] codex item/commandExecution/requestApproval — en attente — requête approval-native — tour turn-native"
+                "{stamp} [interaction] codex item/commandExecution/requestApproval — en attente — requête {request_ref} — tour {turn_ref}"
             )
         );
         assert_eq!(
             render_journal_event(&error, "coder2"),
             format!(
-                "{stamp} [erreur] échéance Codex dépassée — interaction pendante : item/commandExecution/requestApproval — en attente — requête approval-native — tour turn-native"
+                "{stamp} [erreur] échéance Codex dépassée — interaction pendante : item/commandExecution/requestApproval — en attente — requête {request_ref} — tour {turn_ref}"
             )
         );
     }

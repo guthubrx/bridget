@@ -11,3 +11,7 @@
 - [x] T1907 Exécuter les tests ciblés, `cargo test --no-run`, puis la suite
   mesurable et imputer chaque rouge.
 - [x] T1908 Geler la tête, vérifier le message de commit et livrer le SHA.
+- [x] T1909 Reproduire la fuite par champs autorisés avec quatre sondes
+  causales, puis projeter les chaînes fournisseur sans perdre la corrélation.
+- [x] T1910 Rejouer les gates Linux, vérifier la composition avec SPEC-023,
+  geler et relivrer la tête corrigée.

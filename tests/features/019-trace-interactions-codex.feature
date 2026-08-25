@@ -11,3 +11,18 @@ Fonctionnalité: Expliquer un tour Codex suspendu
     Alors la requête pendante est journalisée avant l'erreur
     Et la requête et l'erreur désignent le même message et le même tour
     Et la sentinelle sensible est absente du journal
+
+  Plan du scénario: Une chaîne libre ne traverse pas un champ autorisé
+    Étant donné un pilote qui accepte un tour
+    Et qui injecte une sentinelle dans <champ>
+    Quand Bridget journalise la requête puis sa borne terminale
+    Alors la sentinelle est attestée à l'entrée
+    Et les deux événements et leurs corrélations restent présents
+    Et la sentinelle est absente du journal
+
+    Exemples:
+      | champ                         |
+      | méthode avec ESC, CR et bidi |
+      | identifiant JSON-RPC chaîne  |
+      | identifiant de tour          |
+      | raison avec ESC, CR et bidi  |
