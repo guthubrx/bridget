@@ -2,7 +2,7 @@
 
 use bridget_core::BridgetMessage;
 use bridget_daemon::ui::{UiRelay, UiRelayConfig};
-use bridget_transport::protocol::{PresenceMode, decode, encode};
+use bridget_transport::protocol::{LedgerScope, PresenceMode, decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
@@ -37,14 +37,18 @@ impl DaemonProcess {
         }
         panic!("daemon non prêt");
     }
-}
 
-impl Drop for DaemonProcess {
-    fn drop(&mut self) {
+    fn terminate(&mut self) {
         if self.0.try_wait().ok().flatten().is_none() {
             assert_eq!(unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) }, 0);
             let _ = self.0.wait();
         }
+    }
+}
+
+impl Drop for DaemonProcess {
+    fn drop(&mut self) {
+        self.terminate();
     }
 }
 
@@ -89,6 +93,17 @@ impl LiveAgent {
         self.reader.read_line(&mut line).unwrap();
         decode(line.trim()).unwrap()
     }
+
+    fn ledger_messages(&mut self) -> Vec<bridget_transport::protocol::LedgerMessage> {
+        self.send(&WrapperToDaemon::LedgerProjection {
+            scope: LedgerScope::Messages,
+            limit: 200,
+        });
+        match self.read() {
+            DaemonToWrapper::LedgerProjection { messages, .. } => messages,
+            response => panic!("LedgerProjection attendu, reçu {response:?}"),
+        }
+    }
 }
 
 fn root(label: &str) -> PathBuf {
@@ -122,11 +137,35 @@ fn write_maicie_config(root: &Path) -> PathBuf {
 }
 
 fn request(address: SocketAddr, path: &str) -> TcpStream {
+    request_http(address, "GET", path, None)
+}
+
+fn request_http(address: SocketAddr, method: &str, path: &str, body: Option<&str>) -> TcpStream {
     let mut stream = TcpStream::connect(address).unwrap();
+    let body = body.unwrap_or("");
     stream
-        .write_all(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes())
+        .write_all(
+            format!(
+                "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )
         .unwrap();
     stream
+}
+
+fn read_response(mut stream: TcpStream) -> String {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
+}
+
+fn response_json(response: &str) -> serde_json::Value {
+    serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
 }
 
 fn read_until(stream: &mut TcpStream, expected: &str) -> String {
@@ -257,4 +296,240 @@ fn requete_loopback_sans_jeton_est_refusee() {
     let mut response = request(address, "/v1/snapshot");
     let response = read_until(&mut response, "403");
     assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+}
+
+#[test]
+fn get_sur_v1_send_reste_interdit_apres_ouverture_du_post() {
+    let config = UiRelayConfig {
+        daemon_socket: PathBuf::from("/tmp/ui-get-send-ne-doit-pas-ouvrir.sock"),
+        maicie_config: PathBuf::from("/tmp/ui-get-send-ne-doit-pas-ouvrir.json"),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-get-send".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let response = read_response(request(address, "/v1/send?token=jeton-get-send"));
+    assert!(response.starts_with("HTTP/1.1 405"), "{response}");
+}
+
+#[test]
+fn post_v1_send_corps_vide_rend_le_code_ferme_invalid_body() {
+    let config = UiRelayConfig {
+        daemon_socket: PathBuf::from("/tmp/ui-invalid-body-ne-doit-pas-ouvrir.sock"),
+        maicie_config: PathBuf::from("/tmp/ui-invalid-body-ne-doit-pas-ouvrir.json"),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-invalid-body".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let response = read_response(request_http(
+        address,
+        "POST",
+        "/v1/send?token=jeton-invalid-body",
+        Some(r#"{"version":1,"to":"agent","body":"  ","reply":false}"#),
+    ));
+    assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    assert_eq!(response_json(&response)["code"], "invalid_body");
+}
+
+#[test]
+fn post_v1_send_valide_repond_202_et_livre_un_identifiant_non_vide() {
+    let root = root("send-ok");
+    let daemon = DaemonProcess::start(&root);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let mut recipient = LiveAgent::connect(&socket, "destinataire");
+    let config = UiRelayConfig {
+        daemon_socket: socket,
+        maicie_config: write_maicie_config(&root),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-send-ok".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let response = read_response(request_http(
+        address,
+        "POST",
+        "/v1/send?token=jeton-send-ok",
+        Some(r#"{"version":1,"to":"destinataire","body":"message UI","reply":false}"#),
+    ));
+    assert!(response.starts_with("HTTP/1.1 202"), "{response}");
+    let payload = response_json(&response);
+    assert_eq!(payload["version"], 1);
+    assert_eq!(payload["status"], "in_flight");
+    assert!(
+        payload["delivery_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()),
+        "{payload}"
+    );
+    assert!(payload["issued_at"].as_i64().is_some_and(|value| value > 0));
+    match recipient.read() {
+        DaemonToWrapper::DeliverIdempotent { message, .. } => {
+            assert_eq!(message.from, "humain");
+            assert_eq!(message.to, "destinataire");
+            assert_eq!(message.body, "message UI");
+            assert!(!message.reply);
+        }
+        response => panic!("DeliverIdempotent attendu, reçu {response:?}"),
+    }
+
+    drop(daemon);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn post_v1_send_destinataire_inconnu_refuse_sans_archiver() {
+    let root = root("send-unknown");
+    let daemon = DaemonProcess::start(&root);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let mut observer = LiveAgent::connect(&socket, "observateur");
+    assert!(observer.ledger_messages().is_empty());
+    let config = UiRelayConfig {
+        daemon_socket: socket,
+        maicie_config: write_maicie_config(&root),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-send-unknown".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let response = read_response(request_http(
+        address,
+        "POST",
+        "/v1/send?token=jeton-send-unknown",
+        Some(r#"{"version":1,"to":"absent","body":"ne pas archiver","reply":false}"#),
+    ));
+    assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+    assert_eq!(response_json(&response)["code"], "unknown_recipient");
+    assert!(
+        observer.ledger_messages().is_empty(),
+        "un refus de destinataire ne doit créer aucune ligne durable"
+    );
+
+    drop(daemon);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn snapshot_compose_la_ligne_agent_avec_les_faits_du_ledger() {
+    let root = root("agent-row");
+    let daemon = DaemonProcess::start(&root);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let mut agent = LiveAgent::connect(&socket, "agent-ligne");
+    let mut human = LiveAgent::connect(&socket, "humain");
+    agent.send(&WrapperToDaemon::Send(BridgetMessage::new(
+        "agent-ligne",
+        "humain",
+        "extrait attesté",
+    )));
+    assert!(matches!(agent.read(), DaemonToWrapper::Ack { .. }));
+    assert!(matches!(human.read(), DaemonToWrapper::Deliver(_)));
+    let config = UiRelayConfig {
+        daemon_socket: socket,
+        maicie_config: write_maicie_config(&root),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-agent-row".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let response = read_response(request(address, "/v1/snapshot?token=jeton-agent-row"));
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let payload = response_json(&response);
+    let row = payload["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "agent-ligne")
+        .expect("ligne de l'agent présent");
+    assert_eq!(row["type"], "ui-test");
+    assert_eq!(row["host"], "test");
+    assert!(matches!(
+        row["state"].as_str(),
+        Some("alive" | "busy" | "stopped")
+    ));
+    assert!(row["last_message_at"].as_i64().is_some());
+    assert_eq!(row["last_excerpt"], "extrait attesté");
+    assert_eq!(row["unread"], 1);
+
+    drop(daemon);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn relais_sert_les_trois_assets_hors_du_source_rust() {
+    let config = UiRelayConfig {
+        daemon_socket: PathBuf::from("/tmp/ui-assets-ne-doit-pas-ouvrir.sock"),
+        maicie_config: PathBuf::from("/tmp/ui-assets-ne-doit-pas-ouvrir.json"),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-assets".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let index = read_response(request(address, "/?token=jeton-assets"));
+    let script = read_response(request(address, "/app.js?token=jeton-assets"));
+    let theme = read_response(request(address, "/theme.css?token=jeton-assets"));
+    assert!(index.starts_with("HTTP/1.1 200"), "{index}");
+    assert!(index.contains("<script type=\"module\" src=\"/app.js\">"));
+    assert!(script.starts_with("HTTP/1.1 200"), "{script}");
+    assert!(script.contains("application/javascript"), "{script}");
+    assert!(theme.starts_with("HTTP/1.1 200"), "{theme}");
+    assert!(theme.contains("text/css"), "{theme}");
+}
+
+#[test]
+fn watch_annonce_reconnecting_puis_connected_apres_coupure_daemon() {
+    let root = root("relay-state");
+    let mut daemon = DaemonProcess::start(&root);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let mut agent = LiveAgent::connect(&socket, "agent-reprise");
+    let config = UiRelayConfig {
+        daemon_socket: socket.clone(),
+        maicie_config: write_maicie_config(&root),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-reprise".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let mut events = request(address, "/v1/watch?token=jeton-reprise&agent=agent-reprise");
+    let subscription_id = match agent.read() {
+        DaemonToWrapper::Subscribe {
+            subscription_id, ..
+        } => subscription_id,
+        response => panic!("Subscribe attendu, reçu {response:?}"),
+    };
+    agent.send(&WrapperToDaemon::Subscribed { subscription_id });
+    let initial = read_until(&mut events, "\"state\":\"connected\"");
+    assert!(initial.contains("event: relay_state"), "{initial}");
+
+    daemon.terminate();
+    let cut = read_until(&mut events, "\"state\":\"reconnecting\"");
+    assert!(cut.contains("event: relay_state"), "{cut}");
+
+    let daemon_restarted = DaemonProcess::start(&root);
+    let mut reconnected = LiveAgent::connect(&socket, "agent-reprise");
+    let subscription_id = match reconnected.read() {
+        DaemonToWrapper::Subscribe {
+            subscription_id, ..
+        } => subscription_id,
+        response => panic!("Subscribe de reprise attendu, reçu {response:?}"),
+    };
+    reconnected.send(&WrapperToDaemon::Subscribed { subscription_id });
+    let restored = read_until(&mut events, "\"state\":\"connected\"");
+    assert!(restored.contains("event: relay_state"), "{restored}");
+
+    drop(daemon_restarted);
+    std::fs::remove_dir_all(root).unwrap();
 }
