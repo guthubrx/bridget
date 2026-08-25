@@ -1,13 +1,17 @@
-//! Relais local lecture-seule pour les futures fenêtres Bridget.
+//! Relais local du poste de travail Bridget.
 //!
 //! Le navigateur ne parle jamais à la socket Unix du daemon. Ce module ouvre
 //! des connexions ordinaires vers les projections publiques (`ListAgents`,
 //! `LedgerProjection`, Attach) puis les traduit en HTTP/SSE loopback.
 
-use bridget_transport::protocol::{AttachWindow, ConnectionRole, LedgerScope, decode, encode};
+use bridget_core::BridgetMessage;
+use bridget_transport::protocol::{
+    AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
+    LedgerMessage, LedgerScope, decode, encode,
+};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use maicie::ui_projection::{UiMissionProjectionV1, read_ui_mission_projection_v1};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
@@ -15,170 +19,19 @@ use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const UI_VERSION: u8 = 1;
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
+const MAX_HTTP_BODY_BYTES: usize = 64 * 1024;
 const MAX_UI_AGENT_NAME_BYTES: usize = 100;
 const MAX_UI_SSE_EVENTS: usize = 20_000;
-
-// Cette page ne détient aucun état métier et ne connaît aucune socket Unix.
-// Elle ne consomme que les deux projections HTTP de ce relais : instantané et
-// flux Attach. L'interface graphique est donc une fenêtre, pas un quatrième
-// produit avec son propre protocole.
-const UI_PAGE: &str = r#"<!doctype html>
-<html lang="fr">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bridget — lecture seule</title>
-<style>
-  body { font: 14px ui-monospace, Menlo, monospace; margin: 1rem; color: #1f2933; background: #fff; }
-  h1 { font-size: 1.25rem; } h2 { font-size: 1rem; margin-top: 1.5rem; }
-  table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #bcccdc; padding: .35rem; text-align: left; vertical-align: top; }
-  button, select { font: inherit; padding: .3rem; } pre { white-space: pre-wrap; border: 1px solid #bcccdc; min-height: 12rem; padding: .6rem; overflow-wrap: anywhere; }
-  .unknown { color: #7b341e; } .status { padding: .5rem; border-left: 4px solid #486581; background: #f0f4f8; }
-</style>
-<body>
-<h1>Bridget — lecture seule</h1>
-<p id="source-status" class="status">Chargement de l'instantané attesté…</p>
-
-<h2>Agents</h2>
-<table><thead><tr><th>nom</th><th>état</th><th>modèle</th><th>mode</th><th>localisation</th></tr></thead><tbody id="agents"></tbody></table>
-
-<h2>Pertes à la reprise</h2>
-<table><thead><tr><th>nom</th><th>raison</th><th>détail</th></tr></thead><tbody id="losses"></tbody></table>
-
-<h2>Missions en cours</h2>
-<table><thead><tr><th>objectif</th><th>agent</th><th>état</th><th>âge</th></tr></thead><tbody id="missions"></tbody></table>
-
-<h2>Journal</h2>
-<label>Agent <select id="agent"></select></label>
-<button id="follow" type="button">Suivre</button>
-<p id="journal-status" class="status">Aucun agent sélectionné.</p>
-<pre id="journal" aria-live="polite"></pre>
-
-<script>
-(() => {
-  const token = new URLSearchParams(location.search).get("token");
-  const status = document.getElementById("source-status");
-  const agentsNode = document.getElementById("agents");
-  const lossesNode = document.getElementById("losses");
-  const missionsNode = document.getElementById("missions");
-  const selector = document.getElementById("agent");
-  const journal = document.getElementById("journal");
-  const journalStatus = document.getElementById("journal-status");
-  let stream = null;
-
-  const unknown = (value, label) => value == null || value === "" ? `${label} inconnu` : String(value);
-  const row = (parent, values) => {
-    const tr = document.createElement("tr");
-    values.forEach(([value, missing]) => {
-      const td = document.createElement("td");
-      td.textContent = value;
-      if (missing) td.className = "unknown";
-      tr.appendChild(td);
-    });
-    parent.appendChild(tr);
-  };
-  const age = (seconds) => {
-    if (!Number.isFinite(seconds) || seconds <= 0) return ["âge indisponible", true];
-    const elapsed = Math.max(0, Math.floor(Date.now() / 1000) - seconds);
-    if (elapsed < 60) return [`${elapsed}s`, false];
-    if (elapsed < 3600) return [`${Math.floor(elapsed / 60)}min`, false];
-    return [`${Math.floor(elapsed / 3600)}h`, false];
-  };
-  const renderSnapshot = (snapshot) => {
-    agentsNode.replaceChildren();
-    selector.replaceChildren();
-    const agents = snapshot.agents || [];
-    if (agents.length === 0) row(agentsNode, [["annuaire indisponible ou vide", true], ["—", true], ["—", true], ["—", true], ["—", true]]);
-    agents.forEach((agent) => {
-      row(agentsNode, [
-        [unknown(agent.name, "nom"), !agent.name], [unknown(agent.state, "état"), !agent.state],
-        [agent.model_mismatch ? `${agent.model_mismatch.served} ≠ ${agent.model_mismatch.pinned}` : unknown(agent.model, "modèle non observé"), !agent.model_mismatch && !agent.model], [unknown(agent.mode, "mode"), !agent.mode],
-        [unknown(agent.location, "localisation non attestée"), !agent.location]
-      ]);
-      const option = document.createElement("option"); option.value = agent.name; option.textContent = agent.name; selector.appendChild(option);
-    });
-
-    lossesNode.replaceChildren();
-    const losses = snapshot.recovery_losses || [];
-    losses.forEach((loss) => row(lossesNode, [
-      [unknown(loss.name, "nom"), !loss.name],
-      [unknown(loss.reason, "raison"), !loss.reason],
-      [loss.detail || "—", !loss.detail]
-    ]));
-
-    missionsNode.replaceChildren();
-    const objectives = snapshot.missions && snapshot.missions.objectives;
-    if (!Array.isArray(objectives)) {
-      row(missionsNode, [["source Maicie indisponible", true], ["—", true], ["—", true], ["—", true]]);
-      return;
-    }
-    const active = objectives.filter((item) => item.objective && item.objective.etat !== "Clos" && item.objective.etat !== "clos");
-    if (active.length === 0) row(missionsNode, [["aucune mission en cours", false], ["—", false], ["—", false], ["—", false]]);
-    active.forEach((item) => {
-      const objective = item.objective;
-      const delegations = Array.isArray(item.delegations) && item.delegations.length ? item.delegations : [null];
-      delegations.forEach((delegation) => row(missionsNode, [
-        [unknown(objective.but, "objectif"), !objective.but],
-        [delegation ? unknown(delegation.participant, "agent") : "agent non déclaré", !delegation || !delegation.participant],
-        [unknown(objective.etat, "état"), !objective.etat], age(objective.cree_at)
-      ]));
-    });
-  };
-  const append = (text) => { journal.textContent += `${text}\n`; journal.scrollTop = journal.scrollHeight; };
-  const fragmentText = (encoded) => {
-    try { return new TextDecoder().decode(Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0))); }
-    catch (_) { return "[fragment binaire non UTF-8]"; }
-  };
-  const renderEvent = (payload) => {
-    const event = payload.event || {};
-    switch (event.type) {
-      case "JournalFragment": append(fragmentText(event.bytes)); break;
-      case "Gap": append(`[lacune attestée seq ${event.from_seq}..${event.to_seq}${event.reason ? ` : ${event.reason}` : ""}]`); break;
-      case "JournalReadError": append(`[journal illisible : ${event.reason}]`); break;
-      case "SnapshotCaughtUp": append("[rattrapage terminé]"); break;
-      case "Subscribed": append("[abonnement actif]"); break;
-      case "End": journalStatus.textContent = `Flux terminé : ${event.reason || "motif indisponible"}`; append("[fin du flux]"); break;
-      default: append(`[événement Bridget ${event.type || "inconnu"}]`);
-    }
-  };
-  const follow = () => {
-    if (stream) stream.close();
-    const agent = selector.value;
-    if (!agent) { journalStatus.textContent = "Journal indisponible : aucun agent attesté."; return; }
-    journal.textContent = "";
-    journalStatus.textContent = `Abonnement en cours pour ${agent}…`;
-    stream = new EventSource(`/v1/watch?token=${encodeURIComponent(token || "")}&agent=${encodeURIComponent(agent)}`);
-    stream.addEventListener("snapshot", (message) => {
-      renderSnapshot(JSON.parse(message.data));
-      journalStatus.textContent = `Journal en flux continu : ${agent}`;
-    });
-    stream.addEventListener("journal", (message) => renderEvent(JSON.parse(message.data)));
-    stream.onerror = () => {
-      journalStatus.textContent = "Journal indisponible ou interrompu ; les lignes déjà affichées ne sont pas une observation fraîche.";
-      if (stream) stream.close();
-    };
-  };
-  document.getElementById("follow").addEventListener("click", follow);
-  if (!token) { status.textContent = "Jeton UI absent : le relais refuse toute projection."; return; }
-  fetch(`/v1/snapshot?token=${encodeURIComponent(token)}`).then((response) => {
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return response.json();
-  }).then((snapshot) => {
-    renderSnapshot(snapshot);
-    status.textContent = "Instantané lu depuis les projections Bridget et Maicie.";
-    if (selector.value) follow(); else journalStatus.textContent = "Journal indisponible : l'annuaire ne contient aucun agent.";
-  }).catch((error) => {
-    status.textContent = `Instantané indisponible : ${error.message}`;
-    agentsNode.replaceChildren(); missionsNode.replaceChildren(); lossesNode.replaceChildren();
-    row(agentsNode, [["source Bridget indisponible", true], ["—", true], ["—", true], ["—", true], ["—", true]]);
-    row(lossesNode, [["source indisponible", true], ["—", true], ["—", true]]);
-    row(missionsNode, [["source Maicie indisponible", true], ["—", true], ["—", true], ["—", true]]);
-  });
-})();
-</script>
-</body></html>"#;
+const MAX_UI_RECONNECT_ATTEMPTS: usize = 50;
+const UI_RECONNECT_DELAY: Duration = Duration::from_millis(100);
+const UI_SENDER: &str = "humain";
+const UI_INDEX: &[u8] = include_bytes!("../assets/ui/index.html");
+const UI_SCRIPT: &[u8] = include_bytes!("../assets/ui/app.js");
+const UI_THEME: &[u8] = include_bytes!("../assets/ui/theme.css");
 
 #[derive(Debug, Clone)]
 pub struct UiRelayConfig {
@@ -293,11 +146,54 @@ pub fn run(daemon_socket: PathBuf, maicie_config: PathBuf) -> Result<(), UiError
 #[derive(Serialize)]
 struct UiSnapshotV1 {
     version: u8,
-    agents: Vec<bridget_transport::protocol::AgentInfo>,
+    agents: Vec<UiAgentRowV1>,
     open_requests: Vec<bridget_transport::protocol::RequestInfo>,
     missions: UiMissionProjectionV1,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     recovery_losses: Vec<UiRecoveryLossV1>,
+}
+
+#[derive(Debug, Serialize)]
+struct UiAgentRowV1 {
+    name: String,
+    #[serde(rename = "type")]
+    agent_type: String,
+    host: String,
+    state: &'static str,
+    last_message_at: Option<i64>,
+    last_excerpt: Option<String>,
+    unread: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiSendRequestV1 {
+    version: u8,
+    to: String,
+    body: String,
+    reply: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct UiSendAcceptedV1 {
+    version: u8,
+    delivery_id: String,
+    issued_at: i64,
+    status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct UiSendErrorV1 {
+    version: u8,
+    code: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct UiRelayStateV1 {
+    version: u8,
+    kind: &'static str,
+    state: &'static str,
+    since: i64,
 }
 
 #[derive(Serialize)]
@@ -316,19 +212,40 @@ struct UiJournalEventV1<'a> {
 
 fn serve_connection(stream: &mut TcpStream, config: &UiRelayConfig) -> Result<(), UiError> {
     let request = read_request(stream)?;
-    if request.method != "GET" {
+    if request.path == "/v1/send" && request.method != "POST" {
+        return write_text(stream, 405, "méthode non autorisée");
+    }
+    if request.method != "GET" && request.method != "POST" {
         return write_text(stream, 405, "méthode non autorisée");
     }
     if request.query.get("token") != Some(&config.token) {
         return write_text(stream, 403, "jeton UI invalide");
     }
-    match request.path.as_str() {
-        "/" => write_html(stream, 200, UI_PAGE),
-        "/v1/snapshot" => {
+    match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/") => write_asset(stream, 200, "text/html; charset=utf-8", UI_INDEX),
+        ("GET", "/app.js") => write_asset(
+            stream,
+            200,
+            "application/javascript; charset=utf-8",
+            UI_SCRIPT,
+        ),
+        ("GET", "/theme.css") => write_asset(stream, 200, "text/css; charset=utf-8", UI_THEME),
+        ("POST", "/v1/send") => match post_ui_message(config, &request.body) {
+            Ok(response) => write_json(stream, 202, &response),
+            Err((status, code)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                },
+            ),
+        },
+        ("GET", "/v1/snapshot") => {
             let snapshot = read_snapshot(config)?;
             write_json(stream, 200, &snapshot)
         }
-        "/v1/journal" => {
+        ("GET", "/v1/journal") => {
             let agent = request
                 .query
                 .get("agent")
@@ -342,7 +259,7 @@ fn serve_connection(stream: &mut TcpStream, config: &UiRelayConfig) -> Result<()
             };
             stream_sse_journal(stream, &config.daemon_socket, agent, window, None)
         }
-        "/v1/watch" => {
+        ("GET", "/v1/watch") => {
             let agent = request
                 .query
                 .get("agent")
@@ -363,8 +280,145 @@ fn serve_connection(stream: &mut TcpStream, config: &UiRelayConfig) -> Result<()
     }
 }
 
+fn post_ui_message(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiSendAcceptedV1, (u16, &'static str)> {
+    let request: UiSendRequestV1 =
+        serde_json::from_slice(body).map_err(|_| (400, "invalid_body"))?;
+    if request.version != UI_VERSION || request.body.trim().is_empty() {
+        return Err((400, "invalid_body"));
+    }
+    validate_agent(&request.to).map_err(|_| (404, "unknown_recipient"))?;
+
+    let agents = read_agent_list(&config.daemon_socket).map_err(|_| (503, "daemon_unavailable"))?;
+    validate_ui_recipient(&agents, &request.to)?;
+    send_ui_message(&config.daemon_socket, request).map_err(|_| (503, "daemon_unavailable"))
+}
+
+fn validate_ui_recipient(
+    agents: &[bridget_transport::protocol::AgentInfo],
+    recipient: &str,
+) -> Result<(), (u16, &'static str)> {
+    let Some(agent) = agents.iter().find(|agent| agent.name == recipient) else {
+        return Err((404, "unknown_recipient"));
+    };
+    if matches!(agent.state.as_str(), "stopped" | "unreachable") {
+        return Err((409, "agent_stopped"));
+    }
+    Ok(())
+}
+
+fn read_agent_list(
+    socket_path: &Path,
+) -> Result<Vec<bridget_transport::protocol::AgentInfo>, UiError> {
+    let stream = UnixStream::connect(socket_path)?;
+    let read_stream = stream.try_clone()?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    send_daemon(&mut writer, &WrapperToDaemon::ListAgents)?;
+    match read_daemon(&mut reader)? {
+        DaemonToWrapper::AgentList { agents } => Ok(agents),
+        response => Err(UiError::Protocol(format!(
+            "AgentList attendu, reçu {response:?}"
+        ))),
+    }
+}
+
+fn send_ui_message(
+    socket_path: &Path,
+    request: UiSendRequestV1,
+) -> Result<UiSendAcceptedV1, UiError> {
+    let stream = UnixStream::connect(socket_path)?;
+    let read_stream = stream.try_clone()?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Client,
+        },
+    )?;
+    match read_daemon(&mut reader)? {
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client,
+        } => {}
+        response => {
+            return Err(UiError::Protocol(format!(
+                "acceptation client attendue, reçu {response:?}"
+            )));
+        }
+    }
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: crate::mcp::issuer_scope("bridget-ui"),
+            capabilities: vec![ClientCapability::SendIdempotent],
+        },
+    )?;
+    match read_daemon(&mut reader)? {
+        DaemonToWrapper::ClientWelcome { capabilities, .. }
+            if capabilities.contains(&ClientCapability::SendIdempotent) => {}
+        response => {
+            return Err(UiError::Protocol(format!(
+                "contrat client attendu, reçu {response:?}"
+            )));
+        }
+    }
+
+    let issued_at = now_secs();
+    let mut message = BridgetMessage::new(UI_SENDER, request.to, request.body);
+    message.reply = request.reply;
+    let message_id = message.id.clone();
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::SendIdempotent {
+            message,
+            message_id: message_id.clone(),
+            issued_at,
+        },
+    )?;
+    match read_daemon(&mut reader)? {
+        DaemonToWrapper::IdempotencyResult {
+            issue:
+                IdempotencyIssue::OutcomeUnknown {
+                    delivery_id: Some(delivery_id),
+                    ..
+                },
+            ..
+        } => Ok(UiSendAcceptedV1 {
+            version: UI_VERSION,
+            delivery_id,
+            issued_at,
+            status: "in_flight",
+        }),
+        DaemonToWrapper::IdempotencyResult {
+            issue: IdempotencyIssue::Accepted { .. },
+            ..
+        } => Ok(UiSendAcceptedV1 {
+            version: UI_VERSION,
+            delivery_id: message_id,
+            issued_at,
+            status: "in_flight",
+        }),
+        response => Err(UiError::Protocol(format!(
+            "issue idempotente en vol attendue, reçu {response:?}"
+        ))),
+    }
+}
+
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .min(i64::MAX as u64) as i64
+}
+
 fn read_snapshot(config: &UiRelayConfig) -> Result<UiSnapshotV1, UiError> {
-    let (agents, open_requests) = read_bridget_snapshot(&config.daemon_socket)?;
+    let (agent_infos, messages, open_requests) = read_bridget_snapshot(&config.daemon_socket)?;
+    let agents = compose_agent_rows(agent_infos, &messages);
     let missions = read_ui_mission_projection_v1(&config.maicie_config)
         .map_err(|error| UiError::Configuration(error.to_string()))?;
     let recovery_losses = read_recovery_losses(&config.daemon_socket);
@@ -375,6 +429,50 @@ fn read_snapshot(config: &UiRelayConfig) -> Result<UiSnapshotV1, UiError> {
         missions,
         recovery_losses,
     })
+}
+
+fn compose_agent_rows(
+    agents: Vec<bridget_transport::protocol::AgentInfo>,
+    messages: &[LedgerMessage],
+) -> Vec<UiAgentRowV1> {
+    agents
+        .into_iter()
+        .map(|agent| {
+            let last = messages
+                .iter()
+                .filter(|message| message.sender == agent.name || message.target == agent.name)
+                .max_by(|left, right| (left.ts, &left.id).cmp(&(right.ts, &right.id)));
+            UiAgentRowV1 {
+                name: agent.name.clone(),
+                agent_type: agent.agent_type,
+                host: agent.host,
+                state: public_agent_state(&agent.state),
+                last_message_at: last.map(|message| message.ts),
+                last_excerpt: last.map(|message| excerpt(&message.body)),
+                unread: messages
+                    .iter()
+                    .filter(|message| message.sender == agent.name && message.target == UI_SENDER)
+                    .count(),
+            }
+        })
+        .collect()
+}
+
+fn public_agent_state(state: &str) -> &'static str {
+    match state {
+        "busy" => "busy",
+        "stopped" | "unreachable" => "stopped",
+        _ => "alive",
+    }
+}
+
+fn excerpt(body: &str) -> String {
+    const MAX_EXCERPT_CHARS: usize = 160;
+    let mut excerpt = body.chars().take(MAX_EXCERPT_CHARS).collect::<String>();
+    if body.chars().count() > MAX_EXCERPT_CHARS {
+        excerpt.push('…');
+    }
+    excerpt
 }
 
 fn recovery_losses_path_for_socket(socket_path: &Path) -> PathBuf {
@@ -406,6 +504,7 @@ fn read_bridget_snapshot(
 ) -> Result<
     (
         Vec<bridget_transport::protocol::AgentInfo>,
+        Vec<LedgerMessage>,
         Vec<bridget_transport::protocol::RequestInfo>,
     ),
     UiError,
@@ -426,19 +525,19 @@ fn read_bridget_snapshot(
     send_daemon(
         &mut writer,
         &WrapperToDaemon::LedgerProjection {
-            scope: LedgerScope::Requests,
+            scope: LedgerScope::Both,
             limit: 200,
         },
     )?;
-    let open_requests = match read_daemon(&mut reader)? {
-        DaemonToWrapper::LedgerProjection { requests, .. } => requests,
+    let (messages, open_requests) = match read_daemon(&mut reader)? {
+        DaemonToWrapper::LedgerProjection { messages, requests } => (messages, requests),
         response => {
             return Err(UiError::Protocol(format!(
                 "LedgerProjection attendu, reçu {response:?}"
             )));
         }
     };
-    Ok((agents, open_requests))
+    Ok((agents, messages, open_requests))
 }
 
 /// Traduit un unique abonnement Attach existant vers SSE. L'abonnement est
@@ -452,6 +551,112 @@ fn stream_sse_journal(
     window: AttachWindow,
     snapshot_config: Option<&UiRelayConfig>,
 ) -> Result<(), UiError> {
+    write!(
+        http,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
+    )?;
+    http.flush()?;
+    let mut session = match open_attach_session(socket_path, agent, window.clone()) {
+        Ok(session) => session,
+        Err(error) if snapshot_config.is_some() => {
+            write_relay_state(http, "lost", now_secs())?;
+            let _ = http.shutdown(Shutdown::Both);
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    let initial_snapshot = snapshot_config.map(read_snapshot).transpose()?;
+    if snapshot_config.is_some() {
+        write_relay_state(http, "connected", now_secs())?;
+    }
+    if let Some(snapshot) = initial_snapshot {
+        write_sse(http, "snapshot", &snapshot)?;
+    }
+    write_sse(
+        http,
+        "journal",
+        &UiJournalEventV1 {
+            version: UI_VERSION,
+            event: &session.subscribed,
+        },
+    )?;
+
+    let mut last_seq = None;
+    let mut events = 0_usize;
+    while events < MAX_UI_SSE_EVENTS {
+        let event = match read_daemon(&mut session.reader) {
+            Ok(event) => event,
+            Err(error) if snapshot_config.is_some() => {
+                let reconnecting_since = now_secs();
+                write_relay_state(http, "reconnecting", reconnecting_since)?;
+                let resume_window = last_seq
+                    .and_then(|seq: u64| seq.checked_add(1))
+                    .map(AttachWindow::Seq)
+                    .unwrap_or_else(|| window.clone());
+                let mut recovered = None;
+                for _ in 0..MAX_UI_RECONNECT_ATTEMPTS {
+                    match open_attach_session(socket_path, agent, resume_window.clone()) {
+                        Ok(next) => {
+                            recovered = Some(next);
+                            break;
+                        }
+                        Err(_) => thread::sleep(UI_RECONNECT_DELAY),
+                    }
+                }
+                let Some(next) = recovered else {
+                    write_relay_state(http, "lost", reconnecting_since)?;
+                    break;
+                };
+                session = next;
+                let restored_snapshot = snapshot_config.map(read_snapshot).transpose()?;
+                write_relay_state(http, "connected", now_secs())?;
+                if let Some(snapshot) = restored_snapshot {
+                    write_sse(http, "snapshot", &snapshot)?;
+                }
+                write_sse(
+                    http,
+                    "journal",
+                    &UiJournalEventV1 {
+                        version: UI_VERSION,
+                        event: &session.subscribed,
+                    },
+                )?;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        last_seq = event_resume_seq(&event).or(last_seq);
+        write_sse(
+            http,
+            "journal",
+            &UiJournalEventV1 {
+                version: UI_VERSION,
+                event: &event,
+            },
+        )?;
+        events += 1;
+        if matches!(event, DaemonToWrapper::End { .. }) {
+            if snapshot_config.is_some() {
+                write_relay_state(http, "lost", now_secs())?;
+            }
+            break;
+        }
+    }
+    let _ = http.shutdown(Shutdown::Both);
+    Ok(())
+}
+
+struct UiAttachSession {
+    _writer: BufWriter<UnixStream>,
+    reader: BufReader<UnixStream>,
+    subscribed: DaemonToWrapper,
+}
+
+fn open_attach_session(
+    socket_path: &Path,
+    agent: &str,
+    window: AttachWindow,
+) -> Result<UiAttachSession, UiError> {
     let stream = UnixStream::connect(socket_path)?;
     let read_stream = stream.try_clone()?;
     let mut writer = BufWriter::new(stream);
@@ -495,39 +700,33 @@ fn stream_sse_journal(
             )));
         }
     };
-    write!(
-        http,
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
-    )?;
-    http.flush()?;
-    if let Some(config) = snapshot_config {
-        let snapshot = read_snapshot(config)?;
-        write_sse(http, "snapshot", &snapshot)?;
+    Ok(UiAttachSession {
+        _writer: writer,
+        reader,
+        subscribed,
+    })
+}
+
+fn event_resume_seq(event: &DaemonToWrapper) -> Option<u64> {
+    match event {
+        DaemonToWrapper::JournalFragment { seq, .. } => Some(*seq),
+        DaemonToWrapper::SnapshotCaughtUp { through_seq, .. } => *through_seq,
+        DaemonToWrapper::Gap { to_seq, .. } => Some(*to_seq),
+        _ => None,
     }
+}
+
+fn write_relay_state(http: &mut TcpStream, state: &'static str, since: i64) -> Result<(), UiError> {
     write_sse(
         http,
-        "journal",
-        &UiJournalEventV1 {
+        "relay_state",
+        &UiRelayStateV1 {
             version: UI_VERSION,
-            event: &subscribed,
+            kind: "relay_state",
+            state,
+            since,
         },
-    )?;
-    for _ in 0..MAX_UI_SSE_EVENTS {
-        let event = read_daemon(&mut reader)?;
-        write_sse(
-            http,
-            "journal",
-            &UiJournalEventV1 {
-                version: UI_VERSION,
-                event: &event,
-            },
-        )?;
-        if matches!(event, DaemonToWrapper::End { .. }) {
-            break;
-        }
-    }
-    let _ = http.shutdown(Shutdown::Both);
-    Ok(())
+    )
 }
 
 fn write_sse<T: Serialize>(
@@ -567,6 +766,7 @@ struct HttpRequest {
     method: String,
     path: String,
     query: HashMap<String, String>,
+    body: Vec<u8>,
 }
 
 fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, UiError> {
@@ -607,10 +807,43 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, UiError> {
     if !path.starts_with('/') || path.contains("..") {
         return Err(UiError::Protocol("chemin HTTP invalide".to_string()));
     }
+    let mut headers = HashMap::new();
+    for line in text
+        .split("\r\n")
+        .skip(1)
+        .take_while(|line| !line.is_empty())
+    {
+        let (name, value) = line
+            .split_once(':')
+            .ok_or_else(|| UiError::Protocol("en-tête HTTP invalide".to_string()))?;
+        let name = name.trim().to_ascii_lowercase();
+        if name.is_empty() || headers.insert(name, value.trim().to_string()).is_some() {
+            return Err(UiError::Protocol(
+                "en-tête HTTP absent ou dupliqué".to_string(),
+            ));
+        }
+    }
+    if headers.contains_key("transfer-encoding") {
+        return Err(UiError::Protocol(
+            "Transfer-Encoding interdit sur le relais UI".to_string(),
+        ));
+    }
+    let content_length = match headers.get("content-length") {
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| UiError::Protocol("Content-Length invalide".to_string()))?,
+        None => 0,
+    };
+    if content_length > MAX_HTTP_BODY_BYTES {
+        return Err(UiError::Protocol("corps HTTP trop volumineux".to_string()));
+    }
+    let mut body = vec![0_u8; content_length];
+    stream.read_exact(&mut body)?;
     Ok(HttpRequest {
         method,
         path: path.to_string(),
         query: parse_query(query)?,
+        body,
     })
 }
 
@@ -664,13 +897,19 @@ fn write_text(stream: &mut TcpStream, status: u16, body: &str) -> Result<(), UiE
     Ok(())
 }
 
-fn write_html(stream: &mut TcpStream, status: u16, body: &str) -> Result<(), UiError> {
+fn write_asset(
+    stream: &mut TcpStream,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+) -> Result<(), UiError> {
     write!(
         stream,
-        "HTTP/1.1 {status} {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         status_text(status),
         body.len()
     )?;
+    stream.write_all(body)?;
     stream.flush()?;
     Ok(())
 }
@@ -692,9 +931,14 @@ fn write_json<T: Serialize>(stream: &mut TcpStream, status: u16, value: &T) -> R
 fn status_text(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        202 => "Accepted",
+        400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        409 => "Conflict",
+        500 => "Internal Server Error",
+        503 => "Service Unavailable",
         _ => "Error",
     }
 }
@@ -704,6 +948,21 @@ mod tests {
     use super::*;
     use std::net::TcpStream;
     use std::time::Duration;
+
+    fn agent_info(name: &str, state: &str) -> bridget_transport::protocol::AgentInfo {
+        serde_json::from_value(serde_json::json!({
+            "name": name,
+            "agent_type": "codex",
+            "connection_id": "conn-test",
+            "host": "test",
+            "transport": "unix",
+            "os": "linux",
+            "state": state,
+            "last_seen_secs": 0,
+            "reconnect_count": 0
+        }))
+        .unwrap()
+    }
 
     #[test]
     fn requete_sans_jeton_est_refusee_avant_toute_socket_daemon() {
@@ -730,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn page_locale_ne_connait_que_les_projections_du_relais() {
+    fn page_locale_charge_les_assets_sans_exposer_la_socket_daemon() {
         let config = UiRelayConfig {
             daemon_socket: PathBuf::from("/tmp/ui-page-ne-doit-pas-etre-ouvert.sock"),
             maicie_config: PathBuf::from("/tmp/ui-page-ne-doit-pas-etre-ouvert.json"),
@@ -751,10 +1010,8 @@ mod tests {
         client.read_to_string(&mut response).unwrap();
         worker.join().unwrap();
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-        assert!(response.contains("/v1/snapshot"), "{response}");
-        assert!(response.contains("/v1/watch"), "{response}");
-        assert!(response.contains("EventSource"), "{response}");
-        assert!(response.contains("Pertes à la reprise"), "{response}");
+        assert!(response.contains("/app.js"), "{response}");
+        assert!(response.contains("/theme.css"), "{response}");
         assert!(
             !response.contains("bridget.sock"),
             "Mutation : une page qui recevrait la socket Unix contournerait le relais; {response}"
@@ -776,5 +1033,21 @@ mod tests {
         assert!(parse_query("token=a%2Fb").is_err());
         assert!(parse_query("token=a&token=b").is_err());
         assert_eq!(parse_query("token=abc_123").unwrap()["token"], "abc_123");
+    }
+
+    #[test]
+    fn garde_destinataire_refuse_absent_et_arrete_sans_refuser_un_agent_vivant() {
+        let vivant = agent_info("vivant", "connected");
+        let arrete = agent_info("arrete", "stopped");
+        let agents = vec![vivant, arrete];
+        assert_eq!(
+            validate_ui_recipient(&agents, "absent"),
+            Err((404, "unknown_recipient"))
+        );
+        assert_eq!(
+            validate_ui_recipient(&agents, "arrete"),
+            Err((409, "agent_stopped"))
+        );
+        assert_eq!(validate_ui_recipient(&agents, "vivant"), Ok(()));
     }
 }
