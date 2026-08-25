@@ -105,6 +105,29 @@ jamais la config/base de production ») reste la seule barrière ; une garde
 technique (allowlist de chemins, variable d'environnement) est un chantier
 séparé, hors de ce lot.
 
+### Migration v15 — orphelines `soldee_par_cloture` (fail-closed)
+
+La migration 14→15 solde, dans **une seule transaction**, les délégations
+encore ouvertes (`creee` / `a_evaluer` / `en_attente_prerequis`) sur des
+objectifs déjà `clos`, et terminalise leurs outboxes encore expédiables
+(`prepared` / `outcome_unknown` → `rejected` + `terminal=1`). Politique
+**tout-ou-rien** : une seule ligne dont le payload JSON diverge de l'index
+SQLite fait échouer toute la migration (`Corrupt`) — `user_version` reste
+à 14, rien de partiel. Avant `--migrate` sur une base peuplée, vérifier
+l'intégrité (copie privée d'abord) ; une base immigrable jusqu'à réparation
+manuelle est le comportement voulu (fail-closed), pas un bug.
+
+**Chiffres du smoke sur copie privée (pas la prod)** — vocabulaire exact :
+
+| Chiffre | Ce qu'il compte |
+| --- | --- |
+| **27** | Délégations en `a_evaluer` dont l'objectif est déjà `clos` (JOIN orphelines), **avant** migrate. |
+| **264** | Délégations en `soldee_par_cloture` **après** migrate sur cette même copie (stock déjà soldé + les 27 orphelines converties). |
+
+Ce ne sont **pas** des objectifs. `bridget-ronde` compte les **objectifs**
+`a_evaluer` (`objectifs_a_evaluer`) — d'où l'écart apparent avec le détail
+délégations.
+
 ## Arrêt
 
 Maicie ne maintient aucun service résident, timer ou processus enfant. Une

@@ -1,5 +1,6 @@
 //! Oracles : clôture d'objectif solde les délégations ouvertes
-//! (`soldee_par_cloture`, jamais `terminee`).
+//! (`soldee_par_cloture`, jamais `terminee`) et terminalise leurs outboxes
+//! expédiables dans la même transaction.
 
 use maicie::domain::{
     ClasseDuree, Delegation, EtatDelegation, EtatObjectif, EtatOutboxDelegation, ModeObjectif,
@@ -21,6 +22,7 @@ fn cloture_solde_les_delegations_ouvertes_dans_la_meme_transaction() {
     let fixture = Fixture::new("cloture-solde");
     let mut store = MaicieStore::open(&fixture.database).unwrap();
     let objective_id = seed_with_a_evaluer(&mut store, &fixture.database, "a-clore");
+    assert_eq!(store.pending_delegation_outboxes().unwrap().len(), 1);
 
     let failed =
         store.close_objective_observed(objective_id, "clôture atomique solde", 2_100, |phase| {
@@ -39,6 +41,8 @@ fn cloture_solde_les_delegations_ouvertes_dans_la_meme_transaction() {
         .remove(0);
     assert_ne!(snapshot.objective.etat, EtatObjectif::Clos);
     assert_eq!(snapshot.delegations[0].etat, EtatDelegation::AEvaluer);
+    // Rollback complet : outbox encore expédiable tant que la clôture n'a pas commit.
+    assert_eq!(store.pending_delegation_outboxes().unwrap().len(), 1);
 
     store
         .close_objective(objective_id, "clôture atomique solde", 2_100)
@@ -53,6 +57,48 @@ fn cloture_solde_les_delegations_ouvertes_dans_la_meme_transaction() {
         EtatDelegation::SoldeeParCloture
     );
     assert_ne!(snapshot.delegations[0].etat, EtatDelegation::Terminee);
+    // Oracle greffe/action : soldée ⇒ plus aucune enveloppe expédiable.
+    assert!(store.pending_delegation_outboxes().unwrap().is_empty());
+}
+
+#[test]
+fn cloture_terminalise_outbox_sinon_oracle_rouge() {
+    // Si `terminalize_dispatchable_outboxes_for_settled_delegation` est retiré
+    // du solde, ce test meurt : délégation soldée + 1 pending = contradiction.
+    let fixture = Fixture::new("cloture-outbox-terminale");
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let objective_id = seed_objective(&mut store, "outbox-doit-mourir");
+    let pending = store.pending_delegation_outboxes().unwrap();
+    assert_eq!(pending.len(), 1);
+    let message_id = pending[0].message_id;
+    let delegation_id = pending[0].delegation_id;
+
+    store
+        .close_objective(objective_id, "clôture terminalise outbox", 2_200)
+        .unwrap();
+
+    assert!(
+        store.pending_delegation_outboxes().unwrap().is_empty(),
+        "reprise ne doit plus sélectionner l'enveloppe d'une délégation soldée"
+    );
+    let connection = Connection::open(&fixture.database).unwrap();
+    let (state, terminal): (String, i64) = connection
+        .query_row(
+            "SELECT state, terminal FROM delegation_outbox WHERE message_id = ?1",
+            [message_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(state, "rejected");
+    assert_eq!(terminal, 1);
+    let delegation_state: String = connection
+        .query_row(
+            "SELECT state FROM delegations WHERE id = ?1",
+            [delegation_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(delegation_state, "soldee_par_cloture");
 }
 
 #[test]
@@ -113,6 +159,8 @@ fn migration_v16_solde_les_orphelines_sur_objectifs_clos() {
             .remove(0);
         // Simule une orpheline antérieure au correctif (objectif déjà clos).
         force_delegation_state(&connection, &delegation, EtatDelegation::AEvaluer);
+        // Et une outbox encore expédiable (régression pré-correctif greffe/action).
+        force_outbox_dispatchable(&connection, delegation.id);
         // Après routines (v15) : orphelines = v16. Downgrade juste avant.
         connection.pragma_update(None, "user_version", 15).unwrap();
         connection
@@ -134,6 +182,10 @@ fn migration_v16_solde_les_orphelines_sur_objectifs_clos() {
         EtatDelegation::SoldeeParCloture
     );
     assert_ne!(snapshot.delegations[0].etat, EtatDelegation::Terminee);
+    assert!(
+        store.pending_delegation_outboxes().unwrap().is_empty(),
+        "migration v15 doit terminaliser l'outbox des orphelines soldées"
+    );
 }
 
 fn seed_objective(store: &mut MaicieStore, label: &str) -> Uuid {
@@ -236,6 +288,18 @@ fn force_delegation_state(connection: &Connection, delegation: &Delegation, etat
         .execute(
             "UPDATE delegations SET state = ?1, payload_json = ?2 WHERE id = ?3",
             rusqlite::params![state, payload, delegation.id.to_string()],
+        )
+        .unwrap();
+}
+
+fn force_outbox_dispatchable(connection: &Connection, delegation_id: Uuid) {
+    connection
+        .execute(
+            "UPDATE delegation_outbox
+             SET state = 'prepared', terminal = 0, last_issue_json = NULL,
+                 issue_observed_at = NULL
+             WHERE delegation_id = ?1",
+            [delegation_id.to_string()],
         )
         .unwrap();
 }

@@ -6099,6 +6099,9 @@ fn release_resource_ranges_for_objective(
 
 /// Solde toute délégation encore ouverte sur un objectif en cours de clôture.
 /// État cible : `soldee_par_cloture` — jamais `terminee` (pas de verdict inventé).
+/// Dans la même transaction, les enveloppes encore expédiables de ces
+/// délégations passent terminales : la reprise ne doit jamais envoyer une
+/// mission que le greffe tient pour close.
 fn settle_open_delegations_on_objective_closure(
     tx: &Transaction<'_>,
     objective_id: Uuid,
@@ -6160,7 +6163,28 @@ fn settle_open_delegations_on_objective_closure(
                 "délégation modifiée pendant la clôture",
             ));
         }
+        terminalize_dispatchable_outboxes_for_settled_delegation(tx, &id)?;
     }
+    Ok(())
+}
+
+/// Retire de la reprise (`pending_delegation_outboxes`) toute enveloppe encore
+/// expédiable d'une délégation soldée par clôture. Ne touche pas la machine à
+/// états de la délégation (déjà soldée) — uniquement l'outbox.
+fn terminalize_dispatchable_outboxes_for_settled_delegation(
+    tx: &Transaction<'_>,
+    delegation_id: &str,
+) -> Result<(), StoreError> {
+    let issue_bytes =
+        serde_json::to_vec(&json!({"local": "soldee_par_cloture"})).map_err(StoreError::Json)?;
+    tx.execute(
+        "UPDATE delegation_outbox\n\
+         SET state = 'rejected', terminal = 1, last_issue_json = ?1\n\
+         WHERE delegation_id = ?2 AND terminal = 0\n\
+           AND state IN ('prepared', 'outcome_unknown')",
+        params![issue_bytes, delegation_id],
+    )
+    .map_err(StoreError::Sql)?;
     Ok(())
 }
 
@@ -7451,7 +7475,10 @@ fn database_has_user_schema(tx: &Transaction<'_>) -> Result<bool, StoreError> {
 
 /// Migration v16 : solde les délégations ouvertes sur objectifs déjà clos.
 /// Même règle que `settle_open_delegations_on_objective_closure` — jamais
-/// `terminee` : l'état est `soldee_par_cloture`.
+/// `terminee` : l'état est `soldee_par_cloture`. Tout-ou-rien : une seule
+/// ligne divergente (payload ≠ index) échoue toute la migration.
+/// Les outboxes encore expédiables de chaque orpheline sont terminalisées
+/// dans la même transaction.
 fn migrate_orphan_delegations_on_closed_objectives(tx: &Transaction<'_>) -> Result<(), StoreError> {
     let mut statement = tx
         .prepare(
@@ -7511,6 +7538,7 @@ fn migrate_orphan_delegations_on_closed_objectives(tx: &Transaction<'_>) -> Resu
                 "délégation orpheline non soldée à la migration",
             ));
         }
+        terminalize_dispatchable_outboxes_for_settled_delegation(tx, &id)?;
     }
     Ok(())
 }
