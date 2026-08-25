@@ -509,12 +509,29 @@ impl IdempotencyStore {
         }
         // v4 : phase `orphaned` — destinataire purgé, sort CONNU (≠ indeterminate,
         // ≠ outcome_unknown). SQLite ne sait pas élargir un CHECK : reconstruction.
+        //
+        // `foreign_keys=ON` à l'ouverture : l'INSERT SELECT revalide chaque
+        // enfant. Une base touchée hors daemon (`.backup`, SQL CLI — FK OFF
+        // par défaut) peut contenir des remises sans parent ; les laisser
+        // ferait échouer la migration au démarrage et bloquerait la flotte.
+        // Décision : nettoyer ces orphelins de schéma AVANT le rebuild
+        // (données mortes — sans parent elles ne sont plus rejouables).
         let orphan_migration_applied = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 4)",
             [],
             |row| row.get::<_, bool>(0),
         )?;
         if !orphan_migration_applied {
+            tx.execute(
+                "DELETE FROM send_deliveries
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM idempotency_records r
+                     WHERE r.issuer_scope = send_deliveries.issuer_scope
+                       AND r.operation_kind = send_deliveries.operation_kind
+                       AND r.idempotency_key = send_deliveries.idempotency_key
+                 )",
+                [],
+            )?;
             tx.execute_batch(
                 "CREATE TABLE send_deliveries_v4 (
                     delivery_id TEXT PRIMARY KEY,
@@ -2022,6 +2039,120 @@ mod tests {
             )
             .unwrap();
         assert_eq!(phase, "orphaned");
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// ORACLE — migration v4 face à des enfants sans parent (FK OFF hors daemon).
+    /// Meurt si l'INSERT SELECT échoue au démarrage : flotte bloquée.
+    #[test]
+    fn migration_v4_nettoie_les_enfants_sans_parent_sans_bloquer_le_daemon() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-idempotency-v4-fk-orphan-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        {
+            let legacy = Connection::open(&path).unwrap();
+            // Comme le CLI SQLite : FK OFF par défaut → orphelin de schéma possible.
+            legacy.pragma_update(None, "foreign_keys", false).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE idempotency_schema_migrations (version INTEGER PRIMARY KEY);
+                     INSERT INTO idempotency_schema_migrations(version) VALUES (2);
+                     INSERT INTO idempotency_schema_migrations(version) VALUES (3);
+                     CREATE TABLE idempotency_records (
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL,
+                        idempotency_key TEXT NOT NULL,
+                        canonical_bytes BLOB NOT NULL,
+                        state TEXT NOT NULL,
+                        public_result_kind TEXT,
+                        public_result_category TEXT,
+                        public_result_reason TEXT,
+                        issued_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        PRIMARY KEY (issuer_scope, operation_kind, idempotency_key)
+                     );
+                     CREATE TABLE send_deliveries (
+                        delivery_id TEXT PRIMARY KEY,
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL CHECK (operation_kind = 'send'),
+                        idempotency_key TEXT NOT NULL,
+                        recipient_instance_id TEXT NOT NULL,
+                        delivery_generation INTEGER NOT NULL CHECK (delivery_generation > 0),
+                        phase TEXT NOT NULL CHECK (phase IN ('dispatching', 'acked', 'indeterminate')),
+                        expires_at INTEGER NOT NULL,
+                        message_bytes BLOB,
+                        FOREIGN KEY (issuer_scope, operation_kind, idempotency_key)
+                            REFERENCES idempotency_records(issuer_scope, operation_kind, idempotency_key)
+                            ON DELETE CASCADE
+                     );
+                     CREATE TABLE spawn_commands (
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL,
+                        command_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        generation INTEGER NOT NULL,
+                        persistent INTEGER NOT NULL,
+                        state TEXT NOT NULL,
+                        instance_id TEXT,
+                        deadline_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        issue_kind TEXT,
+                        issue_category TEXT,
+                        issue_reason TEXT,
+                        resolved_definition_json TEXT,
+                        PRIMARY KEY (issuer_scope, operation_kind, command_id)
+                     );
+                     -- Parent valide + enfant valide.
+                     INSERT INTO idempotency_records VALUES (
+                        '012_scope_aaaaaaaaaaaa', 'send', 'kept-key', X'00',
+                        'dispatching', NULL, NULL, NULL, 1000000, 1003600
+                     );
+                     INSERT INTO send_deliveries VALUES (
+                        'delivery-kept', '012_scope_aaaaaaaaaaaa', 'send', 'kept-key',
+                        'instance-1', 1, 'dispatching', 1003600, X'7b7d'
+                     );
+                     -- Enfant SANS parent (impossible sous le daemon, possible hors daemon).
+                     INSERT INTO send_deliveries VALUES (
+                        'delivery-sans-parent', '012_scope_bbbbbbbbbbbb', 'send', 'ghost-key',
+                        'instance-ghost', 1, 'dispatching', 1003600, X'7b7d'
+                     );",
+                )
+                .unwrap();
+        }
+
+        // Ne doit PAS paniquer / échouer : c'est le démarrage du daemon.
+        let store = IdempotencyStore::open(&path).expect(
+            "v4 ne doit pas bloquer le démarrage sur un enfant sans parent",
+        );
+        let has_v4: bool = store
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 4)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_v4);
+        let kept: usize = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM send_deliveries WHERE delivery_id = 'delivery-kept'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let ghost: usize = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM send_deliveries WHERE delivery_id = 'delivery-sans-parent'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, 1, "l'enfant valide survit");
+        assert_eq!(ghost, 0, "l'enfant sans parent est nettoyé, pas bloquant");
         drop(store);
         std::fs::remove_file(path).unwrap();
     }
