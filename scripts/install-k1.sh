@@ -225,6 +225,43 @@ install_binary() {
   created "$label ($dst)"
 }
 
+# Gate de SCHÉMA Maicie uniquement : Bridget conserve exactement son chemin
+# de pose. La provenance origin/main appartient au gate d'activation gouvernée
+# (session 018), à étendre aux binaires compilés ; cette extension doit appeler
+# celui-ci en complément et non le remplacer.
+# On contrôle le binaire qui sera ACTIF après cette invocation, pas forcément
+# target/release : sans --force, une copie ou un symlink déjà installé gagne.
+preflight_maicie_activation() {
+  if [[ ! -e "$MAICIE_CONFIG" ]]; then
+    if [[ -e "$MAICIE_DB_PATH" ]]; then
+      die "gate Maicie impossible: config absente mais greffe par défaut présent ($MAICIE_DB_PATH)"
+    fi
+    log "gate Maicie différé: config absente (bootstrap neuf)"
+    return 0
+  fi
+
+  local candidate candidate_real report remedy
+  if [[ -e "$MAICIE_BIN" && "$FORCE" != "1" ]]; then
+    candidate="$MAICIE_BIN"
+  else
+    candidate="${ROOT_DIR}/target/release/maicie"
+  fi
+  [[ -x "$candidate" ]] || die "gate Maicie: binaire candidat absent ou non exécutable ($candidate)"
+  candidate_real="$(python3 - "$candidate" <<'PY'
+import os, sys
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+  remedy=""
+  if [[ "$FORCE" != "1" ]]; then
+    remedy=" ; relancer avec --force pour construire puis contrôler le nouveau candidat"
+  fi
+  if ! report="$("$candidate" preflight --config "$MAICIE_CONFIG" --json 2>&1)"; then
+    die "gate Maicie refusé avant installation: binaire=$candidate cible=$candidate_real config=$MAICIE_CONFIG : $report$remedy"
+  fi
+  log "gate Maicie accepté avant installation: binaire=$candidate cible=$candidate_real $report"
+}
+
 write_test_adapter() {
   may_write "$ADAPTER_PATH" "adapter test" || return 0
   cat >"$ADAPTER_PATH" <<'EOF'
@@ -668,6 +705,7 @@ main() {
   if [[ -e "${ROOT_DIR}/target/release/bridget" ]]; then
     install_binary "${ROOT_DIR}/target/release/bridget" "$BRIDGET_BIN" "binaire bridget"
   fi
+  preflight_maicie_activation
   if [[ -e "${ROOT_DIR}/target/release/maicie" ]]; then
     install_binary "${ROOT_DIR}/target/release/maicie" "$MAICIE_BIN" "binaire maicie"
   fi

@@ -105,6 +105,31 @@ jamais la config/base de production ») reste la seule barrière ; une garde
 technique (allowlist de chemins, variable d'environnement) est un chantier
 séparé, hors de ce lot.
 
+### Préflight d'installation sans écriture
+
+Avant de poser ou de réactiver Maicie, le chemin d'installation appelle :
+
+```bash
+maicie preflight --config /chemin/absolu/vers/maicie.json --json
+```
+
+Le préflight copie SQLite et son éventuel WAL dans un répertoire privé
+jetable, puis inspecte cette copie. Il ne crée donc ni base, ni table, ni
+sidecar dans le greffe d'autorité. Une base absente ou vide et une version
+exacte rendent exit 0 avec `write_schema_compatible=true`. Ce champ ne
+prétend pas tester les ACL ou l'état du montage. Un schéma antérieur **ou**
+postérieur au binaire rend l'erreur `store` (exit 6). Les lectures métier ne
+sont pas exemptées : un binaire incompatible ne sait aujourd'hui exécuter
+aucune des lectures CLI sans ouvrir le store.
+
+`scripts/install-k1.sh` exécute ce gate même avec `--skip-verify`, sur le
+binaire qui resterait réellement actif : copie installée ou cible du symlink
+sans `--force`, candidat compilé avec `--force`. Ce contrôle prouve la
+compatibilité de schéma, pas la provenance du binaire. La règle d'activation
+gouvernée (projection d'un commit admis sur `origin/main`) doit être étendue
+aux binaires compilés puis l'englober ; elle ne doit pas créer un second
+contrôle de compatibilité concurrent.
+
 ### Migration v16 — orphelines `soldee_par_cloture` (fail-closed)
 
 La migration 15→16 solde, dans **une seule transaction**, les délégations

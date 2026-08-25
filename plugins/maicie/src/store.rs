@@ -35,14 +35,14 @@ use crate::outbox::{
 use crate::routines::{EtatOccurrence, EtatRoutine, Routine, RoutineOccurrence};
 use bridget_transport::protocol::{CoordinationEventKind, WrapperToDaemon};
 use rusqlite::{
-    Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
+    Connection, ErrorCode, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, DirBuilder, OpenOptions};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -80,6 +80,16 @@ pub struct MaicieStore {
     path: PathBuf,
     connection: Connection,
     issuer_scope: String,
+}
+
+/// Résultat du contrôle de compatibilité qui précède l'activation d'un
+/// binaire. Cette lecture ne crée ni base, ni table, ni sidecar volontaire :
+/// elle dit seulement si le schéma autorise l'ouverture métier du greffe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SchemaPreflight {
+    pub database_version: Option<i64>,
+    pub supported_version: i64,
+    pub bootstrap_required: bool,
 }
 
 /// Paramètres figés pour créer l'outbox au déblocage F37 (aucune intention
@@ -376,6 +386,68 @@ struct ApprovedSpawnOrder {
 }
 
 impl MaicieStore {
+    /// Vérifie sans écriture qu'un binaire peut ouvrir le greffe configuré.
+    ///
+    /// Une base absente ou SQLite vide est un bootstrap compatible. Une base
+    /// antérieure ou postérieure au binaire rend la même erreur que l'ouverture
+    /// métier, mais avant toute réconciliation ou attribution de commande.
+    pub fn schema_preflight(path: impl AsRef<Path>) -> Result<SchemaPreflight, StoreError> {
+        let path = path.as_ref();
+        validate_database_path(path)?;
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                validate_private_parent_if_present(path)?;
+                return Ok(SchemaPreflight {
+                    database_version: None,
+                    supported_version: SCHEMA_VERSION,
+                    bootstrap_required: true,
+                });
+            }
+            Err(error) => return Err(StoreError::Io(error)),
+        };
+        validate_private_parent(path)?;
+        validate_private_database_metadata(&metadata)?;
+        if metadata.len() == 0 {
+            return Ok(SchemaPreflight {
+                database_version: Some(0),
+                supported_version: SCHEMA_VERSION,
+                bootstrap_required: true,
+            });
+        }
+
+        let snapshot = snapshot_database_for_preflight(path)?;
+        let connection =
+            Connection::open_with_flags(&snapshot.database, OpenFlags::SQLITE_OPEN_READ_WRITE)
+                .map_err(StoreError::Sql)?;
+        connection
+            .busy_timeout(Duration::from_secs(5))
+            .map_err(StoreError::Sql)?;
+        let current_version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(StoreError::Sql)?;
+        if current_version > SCHEMA_VERSION {
+            return Err(StoreError::UnsupportedSchema {
+                found: current_version,
+                supported: SCHEMA_VERSION,
+            });
+        }
+        let schema_populated = database_has_user_schema(&connection)?;
+        if (current_version > 0 && current_version < SCHEMA_VERSION)
+            || (current_version == 0 && schema_populated)
+        {
+            return Err(StoreError::MigrationRequired {
+                found: current_version,
+                supported: SCHEMA_VERSION,
+            });
+        }
+        Ok(SchemaPreflight {
+            database_version: Some(current_version),
+            supported_version: SCHEMA_VERSION,
+            bootstrap_required: current_version == 0,
+        })
+    }
+
     /// Ouvre la base privée sans migrer un schéma déjà versionné.
     ///
     /// Une base neuve (`user_version = 0` et aucun objet utilisateur dans
@@ -4006,6 +4078,124 @@ fn validate_database_path(path: &Path) -> Result<(), StoreError> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    device: u64,
+    inode: u64,
+    size: u64,
+    modified_secs: i64,
+    modified_nanos: i64,
+    changed_secs: i64,
+    changed_nanos: i64,
+}
+
+struct TemporaryDatabaseSnapshot {
+    root: PathBuf,
+    database: PathBuf,
+}
+
+impl Drop for TemporaryDatabaseSnapshot {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn sidecar_path(database: &Path, suffix: &str) -> PathBuf {
+    let mut path = database.as_os_str().to_os_string();
+    path.push(suffix);
+    PathBuf::from(path)
+}
+
+fn file_stamp(path: &Path) -> Result<Option<FileStamp>, StoreError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(FileStamp {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            size: metadata.size(),
+            modified_secs: metadata.mtime(),
+            modified_nanos: metadata.mtime_nsec(),
+            changed_secs: metadata.ctime(),
+            changed_nanos: metadata.ctime_nsec(),
+        })),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(StoreError::Io(error)),
+    }
+}
+
+fn database_file_stamps(database: &Path) -> Result<[Option<FileStamp>; 3], StoreError> {
+    Ok([
+        file_stamp(database)?,
+        file_stamp(&sidecar_path(database, "-wal"))?,
+        file_stamp(&sidecar_path(database, "-journal"))?,
+    ])
+}
+
+/// Copie le fichier et ses journaux dans un répertoire privé avant ouverture.
+/// Ouvrir directement une base WAL, même `READ_ONLY`, crée un `-wal` vide ou
+/// modifie les octets de verrou du `-shm`. Le double relevé de métadonnées
+/// refuse conservativement une copie traversée par une écriture concurrente.
+fn snapshot_database_for_preflight(source: &Path) -> Result<TemporaryDatabaseSnapshot, StoreError> {
+    for _ in 0..3 {
+        let before = database_file_stamps(source)?;
+        let root = std::env::temp_dir().join(format!(
+            "maicie-schema-preflight-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        DirBuilder::new()
+            .mode(DIRECTORY_MODE)
+            .create(&root)
+            .map_err(StoreError::Io)?;
+        let snapshot = TemporaryDatabaseSnapshot {
+            database: root.join("maicie.sqlite3"),
+            root,
+        };
+        fs::copy(source, &snapshot.database).map_err(StoreError::Io)?;
+        for suffix in ["-wal", "-journal"] {
+            let source_sidecar = sidecar_path(source, suffix);
+            if file_stamp(&source_sidecar)?.is_some() {
+                fs::copy(&source_sidecar, sidecar_path(&snapshot.database, suffix))
+                    .map_err(StoreError::Io)?;
+            }
+        }
+        if before == database_file_stamps(source)? {
+            return Ok(snapshot);
+        }
+    }
+    Err(StoreError::Conflict(
+        "greffe modifié pendant le préflight de schéma",
+    ))
+}
+
+fn validate_private_parent_if_present(path: &Path) -> Result<(), StoreError> {
+    let parent = path.parent().expect("validé");
+    match fs::symlink_metadata(parent) {
+        Ok(_) => validate_private_parent(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(StoreError::Io(error)),
+    }
+}
+
+fn validate_private_parent(path: &Path) -> Result<(), StoreError> {
+    let parent = path.parent().expect("validé");
+    let metadata = fs::symlink_metadata(parent).map_err(StoreError::Io)?;
+    if !metadata.file_type().is_dir() || metadata.permissions().mode() & 0o777 != DIRECTORY_MODE {
+        return Err(StoreError::Invalid(
+            "répertoire SQLite non privé (0700 requis)",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_database_metadata(metadata: &fs::Metadata) -> Result<(), StoreError> {
+    if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o777 != DATABASE_MODE {
+        return Err(StoreError::Invalid(
+            "fichier SQLite non privé (0600 requis)",
+        ));
+    }
+    Ok(())
+}
+
 fn prepare_private_database(path: &Path) -> Result<(), StoreError> {
     let parent = path.parent().expect("validé");
     if !parent.exists() {
@@ -4017,14 +4207,7 @@ fn prepare_private_database(path: &Path) -> Result<(), StoreError> {
             Err(error) => return Err(StoreError::Io(error)),
         }
     }
-    let parent_metadata = fs::symlink_metadata(parent).map_err(StoreError::Io)?;
-    if !parent_metadata.file_type().is_dir()
-        || parent_metadata.permissions().mode() & 0o777 != DIRECTORY_MODE
-    {
-        return Err(StoreError::Invalid(
-            "répertoire SQLite non privé (0700 requis)",
-        ));
-    }
+    validate_private_parent(path)?;
 
     if !path.exists() {
         match OpenOptions::new()
@@ -4039,12 +4222,7 @@ fn prepare_private_database(path: &Path) -> Result<(), StoreError> {
         }
     }
     let metadata = fs::symlink_metadata(path).map_err(StoreError::Io)?;
-    if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o777 != DATABASE_MODE {
-        return Err(StoreError::Invalid(
-            "fichier SQLite non privé (0600 requis)",
-        ));
-    }
-    Ok(())
+    validate_private_database_metadata(&metadata)
 }
 
 type StoredGuichetAggregates = (String, Vec<u8>, String, Vec<u8>, String);
@@ -7777,8 +7955,8 @@ fn verify_guichet_refusal_shape_v19(tx: &Transaction<'_>) -> Result<(), StoreErr
 /// Vrai si la base contient déjà un objet de schéma utilisateur.
 /// Les tables/index internes `sqlite_*` ne comptent pas : un fichier SQLite
 /// fraîchement créé reste « vide » au sens bootstrap.
-fn database_has_user_schema(tx: &Transaction<'_>) -> Result<bool, StoreError> {
-    let count: i64 = tx
+fn database_has_user_schema(connection: &Connection) -> Result<bool, StoreError> {
+    let count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master\n\
              WHERE name NOT LIKE 'sqlite_%'",
