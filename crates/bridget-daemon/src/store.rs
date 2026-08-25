@@ -1156,8 +1156,9 @@ impl Store {
                              WHERE d.operation_kind = 'send' AND d.idempotency_key = l.id
                              ORDER BY CASE d.phase
                                  WHEN 'acked' THEN 0
-                                 WHEN 'dispatching' THEN 1
-                                 ELSE 2
+                                 WHEN 'orphaned' THEN 1
+                                 WHEN 'dispatching' THEN 2
+                                 ELSE 3
                              END
                              LIMIT 1) AS delivery_phase
                      FROM ledger l
@@ -2416,8 +2417,9 @@ mod tests {
              WHERE d.operation_kind = 'send' AND d.idempotency_key = l.id
              ORDER BY CASE d.phase
                  WHEN 'acked' THEN 0
-                 WHEN 'dispatching' THEN 1
-                 ELSE 2
+                 WHEN 'orphaned' THEN 1
+                 WHEN 'dispatching' THEN 2
+                 ELSE 3
              END
              LIMIT 1) AS delivery_phase
      FROM ledger l

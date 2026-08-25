@@ -48,6 +48,8 @@ pub(crate) const REJEU_A_L_IDENTIQUE: &str = "rejouer à l'identique — même i
 const DIAGNOSTIC_REMISE_EN_VOL: &str = "remise en vol — le destinataire n'a pas encore accusé";
 const DIAGNOSTIC_SORT_INDETERMINE: &str = "sort indéterminé";
 const DIAGNOSTIC_ACCUSE_PERDU: &str = "accusé perdu après transmission";
+const DIAGNOSTIC_ORPHELIN: &str =
+    "remise orpheline — le destinataire a été purgé ; le sort n'est pas inconnu";
 
 /// Statuts clients du couple dépôt-réussi / sort-inconnu.
 ///
@@ -59,6 +61,7 @@ const DIAGNOSTIC_ACCUSE_PERDU: &str = "accusé perdu après transmission";
 /// constat BLOQUANT FAUX a été gravé au registre avant rétractation.
 pub(crate) const STATUT_IN_FLIGHT: &str = "in_flight";
 pub(crate) const STATUT_OUTCOME_UNKNOWN: &str = "outcome_unknown";
+pub(crate) const STATUT_ORPHELIN: &str = "orphaned";
 
 /// Preuve de dépôt portée par une issue `OutcomeUnknown`, s'il y en a une.
 ///
@@ -928,6 +931,17 @@ fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value
                 }),
             }
         }
+        IdempotencyIssue::Orphaned {
+            delivery_id,
+            reason,
+            ..
+        } => json!({
+            "status": STATUT_ORPHELIN,
+            "id": id,
+            "issued_at": issued_at,
+            "delivery_id": delivery_id,
+            "reason": format!("{DIAGNOSTIC_ORPHELIN} ({reason})")
+        }),
         IdempotencyIssue::EnvelopeMismatch => json!({
             "status": "envelope_mismatch",
             "id": id,
@@ -1791,6 +1805,25 @@ mod tests {
                 "un delivery_id sans valeur probante ne doit pas être publié"
             );
         }
+    }
+
+    /// Oracle : `orphaned` n'est ni `in_flight` ni `outcome_unknown`.
+    #[test]
+    fn statut_orphelin_distinct_de_in_flight_et_outcome_unknown() {
+        let issue = IdempotencyIssue::Orphaned {
+            expires_at: 1_700_000_060,
+            delivery_id: "delivery-orphelin".to_string(),
+            reason: "destinataire purgé".to_string(),
+        };
+        let rendu = send_issue_result("msg-orphelin", 1_700_000_000, issue.clone());
+        assert_eq!(rendu["status"], STATUT_ORPHELIN);
+        assert_ne!(rendu["status"], STATUT_IN_FLIGHT);
+        assert_ne!(rendu["status"], STATUT_OUTCOME_UNKNOWN);
+        assert_eq!(rendu["delivery_id"], "delivery-orphelin");
+        assert!(
+            !crate::cli::send_deposited(&issue),
+            "un orphelin n'est pas un dépôt réussi à conclure en rc=0"
+        );
     }
 
     #[test]

@@ -1870,6 +1870,51 @@ impl DaemonState {
         }
     }
 
+    /// Après purge de présence(s) : orpheliner les remises `dispatching` et
+    /// prévenir l'émetteur. Ne décide PAS de purger — seulement les suites.
+    fn orphan_deliveries_after_presence_purge(&mut self, purged_instance_ids: &[String]) {
+        const REASON: &str = "destinataire purgé — présence absente ; remise orpheline";
+        for instance_id in purged_instance_ids {
+            let notices = match self
+                .idempotency
+                .orphan_dispatching_for_instance(instance_id, REASON)
+            {
+                Ok(notices) => notices,
+                Err(error) => {
+                    error!("orphelinage des remises de {instance_id}: {error}");
+                    continue;
+                }
+            };
+            for notice in notices {
+                info!(
+                    "remise orpheline delivery={} msg={} {}→{} ({})",
+                    notice.delivery_id, notice.message_id, notice.sender, notice.target, notice.reason
+                );
+                let body = format!(
+                    "ORPHELIN: le message {} destiné à {} n'a pas été livré — présence purgée (delivery {}). {}",
+                    notice.message_id, notice.target, notice.delivery_id, notice.reason
+                );
+                if let Some(agent) = self.router.get_agent(&notice.sender)
+                    && let Some(writer) = self.connections.get(&agent.connection_id)
+                {
+                    if let Err(error) = deliver_to_agent(writer, &notice.sender, &body) {
+                        warn!(
+                            "signal orphelin non délivré à {}: {error}",
+                            notice.sender
+                        );
+                    }
+                } else {
+                    // Émetteur hors ligne : le ledger + rejeu `orphaned` restent
+                    // la trace ; on ne peut pas pousser un Deliver vivant.
+                    warn!(
+                        "émetteur {} hors ligne pour signal orphelin {}",
+                        notice.sender, notice.delivery_id
+                    );
+                }
+            }
+        }
+    }
+
     fn set_turn_state(&mut self, conn_id: &str, in_progress: bool) -> Result<(), String> {
         let instance_id = self
             .conn_instances
@@ -1885,13 +1930,22 @@ impl DaemonState {
     }
 
     fn agent_infos(&mut self) -> Vec<bridget_transport::protocol::AgentInfo> {
-        // Lot B : exemption `connected` levée — retain = horloge lien seule.
-        // Un connected mort (plus de heartbeat) disparaît sans redémarrage ;
-        // un busy jury sous heartbeat survit même si la capacité est gelée.
+        // Lot B (déjà sur main) : exemption `connected` levée — retain =
+        // horloge lien seule via `presence_within_retention`.
+        // Ce lot (purge/orphan) : capturer les IDs purgés pour orpheliner les
+        // remises `dispatching` — sans réintroduire l'exemption connected.
+        let before: HashSet<String> = self.presences.keys().cloned().collect();
         self.presences
             .retain(|_, presence| presence_within_retention(presence));
+        let purged: Vec<String> = before
+            .into_iter()
+            .filter(|id| !self.presences.contains_key(id))
+            .collect();
         // Présence expirée + nom encore au routeur = fantôme. On coupe le lien.
         self.release_router_for_dangling_instances();
+        // APRÈS la décision de purger (pas la politique de purge) : rendre
+        // visibles les remises qui ne partiront plus.
+        self.orphan_deliveries_after_presence_purge(&purged);
         let mut agents: Vec<_> = self
             .router
             .list_agents()
@@ -4126,6 +4180,15 @@ fn replay_issue(
                 .send_delivery(key)
                 .map_err(|error| error.to_string())?
                 .map(|delivery| delivery.delivery_id),
+        }),
+        LookupResult::Orphaned { expires_at, reason } => Ok(IdempotencyIssue::Orphaned {
+            expires_at,
+            delivery_id: st
+                .idempotency
+                .orphaned_delivery_id(key)
+                .map_err(|error| error.to_string())?
+                .unwrap_or_default(),
+            reason,
         }),
         LookupResult::IdempotencyExpired => Ok(IdempotencyIssue::IdempotencyExpired),
     }
@@ -9621,6 +9684,86 @@ mod presence_tests {
         assert!(!infos.iter().any(|agent| {
             agent.state == "connected" && agent.transport == "unix" && agent.mode.is_none()
         }));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// ORACLE — à la purge de présence, une remise `dispatching` devient
+    /// `orphaned` (visible), pas un `outcome_unknown` muet.
+    #[test]
+    fn purge_presence_orpheline_les_remises_dispatching() {
+        use crate::idempotency::{IdempotencyKey, OperationKind, Reservation, SendDelivery};
+
+        let (mut state, config) = state_with_registered_agent("purge-orphelin");
+        // busy + last_seen périmé : le retain jette (connected serait exempt).
+        state.set_turn_state("conn-1", true).unwrap();
+        let stale = Instant::now()
+            .checked_sub(PRESENCE_RETENTION + Duration::from_secs(1))
+            .expect("horloge");
+        state.presences.get_mut("instance-1").unwrap().last_seen = stale;
+
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            "msg-jury-perdu",
+        )
+        .unwrap();
+        assert!(matches!(
+            state.idempotency.reserve(
+                &key,
+                b"canon-jury",
+                1_000_000,
+                3600,
+                1_000_000,
+                30
+            ),
+            Ok(Reservation::Prepared { .. })
+        ));
+        let mut message = BridgetMessage::new("bridget", "agent-2", "mandat de jury");
+        message.id = "msg-jury-perdu".to_string();
+        let message_bytes = serde_json::to_vec(&message).unwrap();
+        state
+            .idempotency
+            .begin_send_delivery(
+                &key,
+                &SendDelivery {
+                    delivery_id: "delivery-jury".to_string(),
+                    recipient_instance_id: "instance-1".to_string(),
+                    delivery_generation: 1,
+                    expires_at: 1_000_000 + 3600,
+                    message_bytes,
+                },
+            )
+            .unwrap();
+
+        let _ = state.agent_infos();
+        assert!(
+            !state.presences.contains_key("instance-1"),
+            "présence doit être purgée"
+        );
+        assert_eq!(
+            state
+                .idempotency
+                .dispatching_deliveries_for_instance("instance-1", 1_000_000)
+                .unwrap()
+                .len(),
+            0,
+            "plus de dispatching après purge"
+        );
+        assert_eq!(
+            state
+                .idempotency
+                .orphaned_delivery_id(&key)
+                .unwrap()
+                .as_deref(),
+            Some("delivery-jury")
+        );
+        assert_eq!(
+            state.idempotency.lookup(&key, 1_000_000).unwrap(),
+            crate::idempotency::LookupResult::Orphaned {
+                expires_at: 1_000_000 + 3600,
+                reason: "destinataire purgé — présence absente ; remise orpheline".to_string(),
+            }
+        );
         let _ = std::fs::remove_file(config.db_path);
     }
 

@@ -83,6 +83,8 @@ impl RecordState {
 pub enum PublicResult {
     Accepted { expires_at: i64 },
     Rejected { category: String, reason: String },
+    /// Destinataire purgé : terminale, distincte d'un rejet métier.
+    Orphaned { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +99,10 @@ pub enum LookupResult {
     },
     OutcomeUnknown {
         expires_at: i64,
+    },
+    Orphaned {
+        expires_at: i64,
+        reason: String,
     },
     IdempotencyExpired,
 }
@@ -292,6 +298,16 @@ pub struct IdempotencyStore {
     conn: Connection,
 }
 
+/// Remise devenue orpheline après purge de la présence destinataire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanedDeliveryNotice {
+    pub delivery_id: String,
+    pub message_id: String,
+    pub sender: String,
+    pub target: String,
+    pub reason: String,
+}
+
 impl IdempotencyStore {
     pub fn open(path: &Path) -> Result<Self, IdempotencyError> {
         let mut conn = Connection::open(path)?;
@@ -355,7 +371,7 @@ impl IdempotencyStore {
                 idempotency_key TEXT NOT NULL,
                 recipient_instance_id TEXT NOT NULL,
                 delivery_generation INTEGER NOT NULL CHECK (delivery_generation > 0),
-                phase TEXT NOT NULL CHECK (phase IN ('dispatching', 'acked', 'indeterminate')),
+                phase TEXT NOT NULL CHECK (phase IN ('dispatching', 'acked', 'indeterminate', 'orphaned')),
                 expires_at INTEGER NOT NULL,
                 message_bytes BLOB,
                 FOREIGN KEY (issuer_scope, operation_kind, idempotency_key)
@@ -482,10 +498,45 @@ impl IdempotencyStore {
                 [],
             )?;
         }
-        // Pas de migration v4 : le CREATE INDEX IF NOT EXISTS du batch DDL
-        // (idx_send_deliveries_kind_key) suffit aussi sur une base où la table
-        // existait déjà sans l'index — éprouvé en revue. Un numéro de migration
-        // est une ressource ordonnée ; on ne le consomme pas pour un no-op.
+        // v4 : phase `orphaned` — destinataire purgé, sort CONNU (≠ indeterminate,
+        // ≠ outcome_unknown). SQLite ne sait pas élargir un CHECK : reconstruction.
+        let orphan_migration_applied = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 4)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !orphan_migration_applied {
+            tx.execute_batch(
+                "CREATE TABLE send_deliveries_v4 (
+                    delivery_id TEXT PRIMARY KEY,
+                    issuer_scope TEXT NOT NULL,
+                    operation_kind TEXT NOT NULL CHECK (operation_kind = 'send'),
+                    idempotency_key TEXT NOT NULL,
+                    recipient_instance_id TEXT NOT NULL,
+                    delivery_generation INTEGER NOT NULL CHECK (delivery_generation > 0),
+                    phase TEXT NOT NULL CHECK (phase IN ('dispatching', 'acked', 'indeterminate', 'orphaned')),
+                    expires_at INTEGER NOT NULL,
+                    message_bytes BLOB,
+                    FOREIGN KEY (issuer_scope, operation_kind, idempotency_key)
+                        REFERENCES idempotency_records(issuer_scope, operation_kind, idempotency_key)
+                        ON DELETE CASCADE
+                );
+                INSERT INTO send_deliveries_v4 (
+                    delivery_id, issuer_scope, operation_kind, idempotency_key,
+                    recipient_instance_id, delivery_generation, phase, expires_at, message_bytes
+                ) SELECT
+                    delivery_id, issuer_scope, operation_kind, idempotency_key,
+                    recipient_instance_id, delivery_generation, phase, expires_at, message_bytes
+                FROM send_deliveries;
+                DROP TABLE send_deliveries;
+                ALTER TABLE send_deliveries_v4 RENAME TO send_deliveries;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_send_deliveries_operation
+                    ON send_deliveries(issuer_scope, operation_kind, idempotency_key);
+                CREATE INDEX IF NOT EXISTS idx_send_deliveries_kind_key
+                    ON send_deliveries(operation_kind, idempotency_key);
+                INSERT INTO idempotency_schema_migrations(version) VALUES (4);",
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -1084,6 +1135,8 @@ impl IdempotencyStore {
     /// corrige — d'où `dispatching` seul.
     ///
     /// Complexité : O(log n) via l'index unique de la clé idempotente.
+    /// `orphaned` est aussi absorbant : le destinataire a été purgé, le sort
+    /// est connu. Ne pas le confondre avec une remise en vol.
     pub fn send_delivery(
         &self,
         key: &IdempotencyKey,
@@ -1133,6 +1186,23 @@ impl IdempotencyStore {
         Ok(self
             .stored_send_delivery(key)?
             .and_then(StoredSendDelivery::into_delivery))
+    }
+
+    /// Identifiant de remise orpheline (phase `orphaned`), pour le rejeu honnête.
+    pub fn orphaned_delivery_id(
+        &self,
+        key: &IdempotencyKey,
+    ) -> Result<Option<String>, IdempotencyError> {
+        self.conn
+            .query_row(
+                "SELECT delivery_id FROM send_deliveries
+                 WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2
+                   AND phase = 'orphaned'",
+                params![key.issuer_scope, key.idempotency_key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     /// Reprise bornée : seules les remises encore en cours pour l'instance
@@ -1226,6 +1296,75 @@ impl IdempotencyStore {
         } else {
             Err(IdempotencyError::InvalidDelivery)
         }
+    }
+
+    /// Après purge d'une présence : les remises encore `dispatching` pour cette
+    /// instance deviennent `orphaned` (sort CONNU) et le socle passe en
+    /// terminal `orphaned`. Distinct de `indeterminate` (quarantaine d'injection)
+    /// et de `outcome_unknown` (sort réellement inconnu).
+    pub fn orphan_dispatching_for_instance(
+        &mut self,
+        recipient_instance_id: &str,
+        reason: &str,
+    ) -> Result<Vec<OrphanedDeliveryNotice>, IdempotencyError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut statement = tx.prepare(
+            "SELECT delivery_id, issuer_scope, idempotency_key, message_bytes
+             FROM send_deliveries
+             WHERE recipient_instance_id = ?1 AND phase = 'dispatching'",
+        )?;
+        let rows: Vec<(String, String, String, Vec<u8>)> = statement
+            .query_map(params![recipient_instance_id], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?.unwrap_or_default(),
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+
+        let mut notices = Vec::with_capacity(rows.len());
+        for (delivery_id, issuer_scope, idempotency_key, message_bytes) in rows {
+            let message =
+                serde_json::from_slice::<bridget_core::BridgetMessage>(&message_bytes).ok();
+            let (message_id, sender, target) = match &message {
+                Some(msg) => (msg.id.clone(), msg.from.clone(), msg.to.clone()),
+                None => (
+                    delivery_id.clone(),
+                    "inconnu".to_string(),
+                    "inconnu".to_string(),
+                ),
+            };
+            let delivery = tx.execute(
+                "UPDATE send_deliveries SET phase = 'orphaned'
+                 WHERE delivery_id = ?1 AND phase = 'dispatching'",
+                params![delivery_id],
+            )?;
+            let record = tx.execute(
+                "UPDATE idempotency_records
+                 SET state = 'terminal', public_result_kind = 'orphaned',
+                     public_result_category = NULL, public_result_reason = ?1
+                 WHERE issuer_scope = ?2 AND operation_kind = 'send'
+                   AND idempotency_key = ?3 AND state = 'dispatching'",
+                params![reason, issuer_scope, idempotency_key],
+            )?;
+            if delivery != 1 || record != 1 {
+                return Err(IdempotencyError::DispatchUnavailable);
+            }
+            notices.push(OrphanedDeliveryNotice {
+                delivery_id,
+                message_id,
+                sender,
+                target,
+                reason: reason.to_string(),
+            });
+        }
+        tx.commit()?;
+        Ok(notices)
     }
 
     /// Accusé aval : la remise et le résultat public deviennent terminaux dans
@@ -1322,6 +1461,7 @@ impl IdempotencyStore {
             PublicResult::Rejected { category, reason } => {
                 ("rejected", Some(category.as_str()), Some(reason.as_str()))
             }
+            PublicResult::Orphaned { reason } => ("orphaned", None, Some(reason.as_str())),
         };
         let updated = self.conn.execute(
             "UPDATE idempotency_records
@@ -1556,6 +1696,12 @@ impl Record {
                     .clone()
                     .ok_or(IdempotencyError::CorruptRecord("motif absent"))?,
                 expires_at: self.expires_at,
+            }),
+            Some("orphaned") => Ok(LookupResult::Orphaned {
+                expires_at: self.expires_at,
+                reason: self.public_result_reason.clone().unwrap_or_else(|| {
+                    "destinataire purgé — remise orpheline".to_string()
+                }),
             }),
             _ => Err(IdempotencyError::CorruptRecord("issue terminale absente")),
         }
@@ -2176,6 +2322,61 @@ mod tests {
                 .unwrap(),
             0,
             "une remise déjà acked ne migre pas"
+        );
+    }
+
+    /// ORACLE — purge de présence ⇒ phase `orphaned`, lookup ≠ outcome_unknown.
+    #[test]
+    fn purge_orpheline_les_remises_dispatching_sans_outcome_unknown() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let key = key();
+        assert!(matches!(
+            reserve(&store, b"canon"),
+            Reservation::Prepared { .. }
+        ));
+        let delivery = SendDelivery {
+            delivery_id: "delivery-purge".to_string(),
+            recipient_instance_id: "instance-purgée".to_string(),
+            delivery_generation: 2,
+            expires_at: NOW + HORIZON,
+            message_bytes: sample_message_bytes("msg-purge", "relec-zombie"),
+        };
+        store.begin_send_delivery(&key, &delivery).unwrap();
+        let notices = store
+            .orphan_dispatching_for_instance(
+                "instance-purgée",
+                "destinataire purgé — présence absente ; remise orpheline",
+            )
+            .unwrap();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].delivery_id, "delivery-purge");
+        assert_eq!(notices[0].target, "relec-zombie");
+        assert_eq!(delivery_phase(&store, "delivery-purge"), "orphaned");
+        assert!(
+            store
+                .dispatching_deliveries_for_instance("instance-purgée", NOW)
+                .unwrap()
+                .is_empty(),
+            "plus aucune remise en vol après orphelinage"
+        );
+        assert_eq!(
+            store.lookup(&key, NOW).unwrap(),
+            LookupResult::Orphaned {
+                expires_at: NOW + HORIZON,
+                reason: "destinataire purgé — présence absente ; remise orpheline".to_string(),
+            },
+            "le rejeu doit dire orphelin, jamais outcome_unknown"
+        );
+        assert_eq!(
+            store.orphaned_delivery_id(&key).unwrap().as_deref(),
+            Some("delivery-purge")
+        );
+        assert!(
+            store
+                .orphan_dispatching_for_instance("instance-purgée", "rejeu")
+                .unwrap()
+                .is_empty(),
+            "orphelinage absorbant"
         );
     }
 

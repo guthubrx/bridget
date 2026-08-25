@@ -563,6 +563,12 @@ pub enum IdempotencyIssue {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         delivery_id: Option<String>,
     },
+    /// Destinataire purgé : le sort n'est PAS inconnu — la remise est orpheline.
+    Orphaned {
+        expires_at: i64,
+        delivery_id: String,
+        reason: String,
+    },
     EnvelopeMismatch,
     IdempotencyExpired,
     InvalidIssuedAt,
@@ -1443,6 +1449,8 @@ pub enum LedgerDeliveryStatus {
     Recu,
     /// Remise passée en quarantaine absorbante.
     Indetermine,
+    /// Destinataire purgé : sort connu (orphelin), distinct de l'inconnu.
+    Orphelin,
 }
 
 impl LedgerDeliveryStatus {
@@ -1451,6 +1459,7 @@ impl LedgerDeliveryStatus {
             "dispatching" => Some(Self::EnVol),
             "acked" => Some(Self::Recu),
             "indeterminate" => Some(Self::Indetermine),
+            "orphaned" => Some(Self::Orphelin),
             _ => None,
         }
     }
@@ -1460,6 +1469,7 @@ impl LedgerDeliveryStatus {
             Self::EnVol => "en vol",
             Self::Recu => "reçu",
             Self::Indetermine => "indéterminé",
+            Self::Orphelin => "orphelin",
         }
     }
 }
@@ -3058,9 +3068,8 @@ mod tests {
         ));
     }
 
-    /// Oracle : les trois phases nommées ont une correspondance. Meurt si l'on
-    /// retire l'arm `indeterminate` (fausse assurance : un état SQL existe
-    /// sans rendu lisible au ledger).
+    /// Oracle : les phases nommées ont une correspondance. Meurt si l'on
+    /// retire un arm (état SQL sans rendu lisible au ledger).
     #[test]
     fn from_phase_garde_indetermine_parmi_les_trois_etats() {
         assert_eq!(
@@ -3076,7 +3085,13 @@ mod tests {
             Some(LedgerDeliveryStatus::Indetermine),
             "retirer cette correspondance laisse la quarantaine muette au ledger"
         );
+        assert_eq!(
+            LedgerDeliveryStatus::from_phase("orphaned"),
+            Some(LedgerDeliveryStatus::Orphelin),
+            "orphelin doit se rendre au ledger, distinct de indéterminé"
+        );
         assert_eq!(LedgerDeliveryStatus::Indetermine.label_fr(), "indéterminé");
+        assert_eq!(LedgerDeliveryStatus::Orphelin.label_fr(), "orphelin");
         assert_eq!(LedgerDeliveryStatus::from_phase("autre"), None);
     }
 }
