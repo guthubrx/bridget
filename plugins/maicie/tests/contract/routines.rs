@@ -1257,16 +1257,16 @@ fn retractation_derivee_du_domaine_sur_chaque_etat() {
             // Propriétés indépendantes du prédicat — sans elles, muter
             // `est_mandat_mort` garde production et oracle alignés (faux vert).
             match etat {
-                EtatDelegation::Terminee => {
+                EtatDelegation::Terminee | EtatDelegation::SoldeeParCloture => {
                     assert_ne!(
                         (e_occ.as_str(), motif.as_deref()),
                         ("sautee", Some("mandat_plus_vivant")),
-                        "tir {tir} TERMINEE : mission accomplie rétractée à tort"
+                        "tir {tir} {sql} : terminal non-mort rétracté à tort"
                     );
-                    assert_eq!(e_occ, "ouverte", "tir {tir} TERMINEE : reste ouverte");
+                    assert_eq!(e_occ, "ouverte", "tir {tir} {sql} : reste ouverte");
                     assert_eq!(
                         deleg, 1,
-                        "tir {tir} TERMINEE : relance interdite (deleg=1), obtenu {deleg}"
+                        "tir {tir} {sql} : relance interdite (deleg=1), obtenu {deleg}"
                     );
                 }
                 EtatDelegation::Annulee => {
