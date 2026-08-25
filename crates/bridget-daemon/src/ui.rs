@@ -147,10 +147,30 @@ pub fn run(daemon_socket: PathBuf, maicie_config: PathBuf) -> Result<(), UiError
 struct UiSnapshotV1 {
     version: u8,
     agents: Vec<UiAgentRowV1>,
+    peer_exchanges: Vec<UiPeerExchangeV1>,
     open_requests: Vec<bridget_transport::protocol::RequestInfo>,
     missions: UiMissionProjectionV1,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     recovery_losses: Vec<UiRecoveryLossV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum UiPeerDirectionV1 {
+    In,
+    Out,
+    Both,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UiPeerExchangeV1 {
+    version: u8,
+    kind: &'static str,
+    at: i64,
+    peer: String,
+    direction: UiPeerDirectionV1,
+    count: usize,
+    delivery_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -218,18 +238,27 @@ fn serve_connection(stream: &mut TcpStream, config: &UiRelayConfig) -> Result<()
     if request.method != "GET" && request.method != "POST" {
         return write_text(stream, 405, "méthode non autorisée");
     }
+    if request.method == "GET" {
+        match request.path.as_str() {
+            "/app.js" => {
+                return write_asset(
+                    stream,
+                    200,
+                    "application/javascript; charset=utf-8",
+                    UI_SCRIPT,
+                );
+            }
+            "/theme.css" => {
+                return write_asset(stream, 200, "text/css; charset=utf-8", UI_THEME);
+            }
+            _ => {}
+        }
+    }
     if request.query.get("token") != Some(&config.token) {
         return write_text(stream, 403, "jeton UI invalide");
     }
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/") => write_asset(stream, 200, "text/html; charset=utf-8", UI_INDEX),
-        ("GET", "/app.js") => write_asset(
-            stream,
-            200,
-            "application/javascript; charset=utf-8",
-            UI_SCRIPT,
-        ),
-        ("GET", "/theme.css") => write_asset(stream, 200, "text/css; charset=utf-8", UI_THEME),
         ("POST", "/v1/send") => match post_ui_message(config, &request.body) {
             Ok(response) => write_json(stream, 202, &response),
             Err((status, code)) => write_json(
@@ -242,7 +271,11 @@ fn serve_connection(stream: &mut TcpStream, config: &UiRelayConfig) -> Result<()
             ),
         },
         ("GET", "/v1/snapshot") => {
-            let snapshot = read_snapshot(config)?;
+            let focus_agent = request.query.get("agent").map(String::as_str);
+            if let Some(agent) = focus_agent {
+                validate_agent(agent)?;
+            }
+            let snapshot = read_snapshot(config, focus_agent)?;
             write_json(stream, 200, &snapshot)
         }
         ("GET", "/v1/journal") => {
@@ -416,15 +449,22 @@ fn now_secs() -> i64 {
         .min(i64::MAX as u64) as i64
 }
 
-fn read_snapshot(config: &UiRelayConfig) -> Result<UiSnapshotV1, UiError> {
+fn read_snapshot(
+    config: &UiRelayConfig,
+    focus_agent: Option<&str>,
+) -> Result<UiSnapshotV1, UiError> {
     let (agent_infos, messages, open_requests) = read_bridget_snapshot(&config.daemon_socket)?;
     let agents = compose_agent_rows(agent_infos, &messages);
+    let peer_exchanges = focus_agent
+        .map(|agent| aggregate_peer_exchanges(agent, &messages))
+        .unwrap_or_default();
     let missions = read_ui_mission_projection_v1(&config.maicie_config)
         .map_err(|error| UiError::Configuration(error.to_string()))?;
     let recovery_losses = read_recovery_losses(&config.daemon_socket);
     Ok(UiSnapshotV1 {
         version: UI_VERSION,
         agents,
+        peer_exchanges,
         open_requests,
         missions,
         recovery_losses,
@@ -473,6 +513,70 @@ fn excerpt(body: &str) -> String {
         excerpt.push('…');
     }
     excerpt
+}
+
+fn aggregate_peer_exchanges(
+    focus_agent: &str,
+    messages: &[LedgerMessage],
+) -> Vec<UiPeerExchangeV1> {
+    let mut ordered = messages
+        .iter()
+        .filter(|message| message.sender == focus_agent || message.target == focus_agent)
+        .collect::<Vec<_>>();
+    ordered.sort_by(|left, right| (left.ts, &left.id).cmp(&(right.ts, &right.id)));
+
+    let mut exchanges = Vec::new();
+    let mut current: Option<UiPeerExchangeV1> = None;
+    for message in ordered {
+        let Some((peer, direction)) = peer_direction(focus_agent, message) else {
+            if let Some(exchange) = current.take() {
+                exchanges.push(exchange);
+            }
+            continue;
+        };
+        if current
+            .as_ref()
+            .is_some_and(|exchange| exchange.peer == peer)
+        {
+            let exchange = current.as_mut().expect("échange courant vérifié");
+            if exchange.direction != direction {
+                exchange.direction = UiPeerDirectionV1::Both;
+            }
+            exchange.count += 1;
+            exchange.delivery_ids.push(message.id.clone());
+            continue;
+        }
+        if let Some(exchange) = current.replace(UiPeerExchangeV1 {
+            version: UI_VERSION,
+            kind: "peer_exchange",
+            at: message.ts,
+            peer: peer.to_string(),
+            direction,
+            count: 1,
+            delivery_ids: vec![message.id.clone()],
+        }) {
+            exchanges.push(exchange);
+        }
+    }
+    if let Some(exchange) = current {
+        exchanges.push(exchange);
+    }
+    exchanges
+}
+
+fn peer_direction<'a>(
+    focus_agent: &str,
+    message: &'a LedgerMessage,
+) -> Option<(&'a str, UiPeerDirectionV1)> {
+    if message.sender == focus_agent && message.target != focus_agent && message.target != UI_SENDER
+    {
+        return Some((&message.target, UiPeerDirectionV1::Out));
+    }
+    if message.target == focus_agent && message.sender != focus_agent && message.sender != UI_SENDER
+    {
+        return Some((&message.sender, UiPeerDirectionV1::In));
+    }
+    None
 }
 
 fn recovery_losses_path_for_socket(socket_path: &Path) -> PathBuf {
@@ -565,12 +669,14 @@ fn stream_sse_journal(
         }
         Err(error) => return Err(error),
     };
-    let initial_snapshot = snapshot_config.map(read_snapshot).transpose()?;
+    let initial_snapshot = snapshot_config
+        .map(|config| read_snapshot(config, Some(agent)))
+        .transpose()?;
     if snapshot_config.is_some() {
         write_relay_state(http, "connected", now_secs())?;
     }
     if let Some(snapshot) = initial_snapshot {
-        write_sse(http, "snapshot", &snapshot)?;
+        write_snapshot_sse(http, &snapshot)?;
     }
     write_sse(
         http,
@@ -608,10 +714,12 @@ fn stream_sse_journal(
                     break;
                 };
                 session = next;
-                let restored_snapshot = snapshot_config.map(read_snapshot).transpose()?;
+                let restored_snapshot = snapshot_config
+                    .map(|config| read_snapshot(config, Some(agent)))
+                    .transpose()?;
                 write_relay_state(http, "connected", now_secs())?;
                 if let Some(snapshot) = restored_snapshot {
-                    write_sse(http, "snapshot", &snapshot)?;
+                    write_snapshot_sse(http, &snapshot)?;
                 }
                 write_sse(
                     http,
@@ -727,6 +835,14 @@ fn write_relay_state(http: &mut TcpStream, state: &'static str, since: i64) -> R
             since,
         },
     )
+}
+
+fn write_snapshot_sse(http: &mut TcpStream, snapshot: &UiSnapshotV1) -> Result<(), UiError> {
+    write_sse(http, "snapshot", snapshot)?;
+    for exchange in &snapshot.peer_exchanges {
+        write_sse(http, "peer_exchange", exchange)?;
+    }
+    Ok(())
 }
 
 fn write_sse<T: Serialize>(
@@ -964,6 +1080,17 @@ mod tests {
         .unwrap()
     }
 
+    fn ledger_message(id: &str, ts: i64, sender: &str, target: &str) -> LedgerMessage {
+        LedgerMessage {
+            id: id.to_string(),
+            ts,
+            sender: sender.to_string(),
+            target: target.to_string(),
+            body: format!("{sender} vers {target}"),
+            delivery_status: None,
+        }
+    }
+
     #[test]
     fn requete_sans_jeton_est_refusee_avant_toute_socket_daemon() {
         let config = UiRelayConfig {
@@ -1049,5 +1176,45 @@ mod tests {
             Err((409, "agent_stopped"))
         );
         assert_eq!(validate_ui_recipient(&agents, "vivant"), Ok(()));
+    }
+
+    #[test]
+    fn peer_exchange_distingue_in_out_et_both() {
+        let both = aggregate_peer_exchanges(
+            "rc1",
+            &[
+                ledger_message("bulle-avant", 10, "humain", "rc1"),
+                ledger_message("sortant", 20, "rc1", "jc6"),
+                ledger_message("entrant", 21, "jc6", "rc1"),
+                ledger_message("bulle-apres", 30, "rc1", "humain"),
+            ],
+        );
+        assert_eq!(both.len(), 1);
+        assert_eq!(both[0].peer, "jc6");
+        assert_eq!(both[0].direction, UiPeerDirectionV1::Both);
+        assert_eq!(both[0].count, 2);
+        assert_eq!(both[0].delivery_ids, ["sortant", "entrant"]);
+
+        let incoming = aggregate_peer_exchanges("rc1", &[ledger_message("in", 40, "jc2", "rc1")]);
+        assert_eq!(incoming[0].direction, UiPeerDirectionV1::In);
+        let outgoing = aggregate_peer_exchanges("rc1", &[ledger_message("out", 41, "rc1", "jc2")]);
+        assert_eq!(outgoing[0].direction, UiPeerDirectionV1::Out);
+    }
+
+    #[test]
+    fn peer_exchange_garde_count_un_et_la_position_chronologique_reelle() {
+        let exchanges = aggregate_peer_exchanges(
+            "rc1",
+            &[
+                ledger_message("second", 200, "rc1", "jc2"),
+                ledger_message("premier", 100, "jc6", "rc1"),
+            ],
+        );
+        assert_eq!(exchanges.len(), 2);
+        assert_eq!(exchanges[0].at, 100);
+        assert_eq!(exchanges[1].at, 200);
+        let encoded = serde_json::to_value(&exchanges[0]).unwrap();
+        assert_eq!(encoded["count"], 1);
+        assert_eq!(encoded["delivery_ids"], serde_json::json!(["premier"]));
     }
 }

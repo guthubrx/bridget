@@ -477,8 +477,8 @@ fn relais_sert_les_trois_assets_hors_du_source_rust() {
     thread::spawn(move || relay.serve().unwrap());
 
     let index = read_response(request(address, "/?token=jeton-assets"));
-    let script = read_response(request(address, "/app.js?token=jeton-assets"));
-    let theme = read_response(request(address, "/theme.css?token=jeton-assets"));
+    let script = read_response(request(address, "/app.js"));
+    let theme = read_response(request(address, "/theme.css"));
     assert!(index.starts_with("HTTP/1.1 200"), "{index}");
     assert!(index.contains("<script type=\"module\" src=\"/app.js\">"));
     assert!(script.starts_with("HTTP/1.1 200"), "{script}");
@@ -531,5 +531,54 @@ fn watch_annonce_reconnecting_puis_connected_apres_coupure_daemon() {
     assert!(restored.contains("event: relay_state"), "{restored}");
 
     drop(daemon_restarted);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn watch_projette_un_echange_pair_both_et_le_pousse_comme_evenement_sse() {
+    let root = root("peer-exchange");
+    let daemon = DaemonProcess::start(&root);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let mut focus = LiveAgent::connect(&socket, "agent-focus");
+    let mut peer = LiveAgent::connect(&socket, "agent-pair");
+
+    let mut outgoing = BridgetMessage::new("agent-focus", "agent-pair", "question");
+    outgoing.id = "sortant-pair".to_string();
+    focus.send(&WrapperToDaemon::Send(outgoing));
+    assert!(matches!(focus.read(), DaemonToWrapper::Ack { .. }));
+    assert!(matches!(peer.read(), DaemonToWrapper::Deliver(_)));
+    let mut incoming = BridgetMessage::new("agent-pair", "agent-focus", "réponse");
+    incoming.id = "entrant-pair".to_string();
+    peer.send(&WrapperToDaemon::Send(incoming));
+    assert!(matches!(peer.read(), DaemonToWrapper::Ack { .. }));
+    assert!(matches!(focus.read(), DaemonToWrapper::Deliver(_)));
+
+    let config = UiRelayConfig {
+        daemon_socket: socket,
+        maicie_config: write_maicie_config(&root),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-peer".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+    let mut events = request(address, "/v1/watch?token=jeton-peer&agent=agent-focus");
+    let subscription_id = match focus.read() {
+        DaemonToWrapper::Subscribe {
+            subscription_id, ..
+        } => subscription_id,
+        response => panic!("Subscribe attendu, reçu {response:?}"),
+    };
+    focus.send(&WrapperToDaemon::Subscribed { subscription_id });
+
+    let snapshot = read_until(&mut events, "event: peer_exchange");
+    assert!(snapshot.contains("event: snapshot"), "{snapshot}");
+    assert!(snapshot.contains("\"peer\":\"agent-pair\""), "{snapshot}");
+    assert!(snapshot.contains("\"direction\":\"both\""), "{snapshot}");
+    assert!(snapshot.contains("\"count\":2"), "{snapshot}");
+    let pushed = read_until(&mut events, "\"delivery_ids\"");
+    assert!(pushed.contains("data: {\"version\":1,\"kind\":\"peer_exchange\""));
+
+    drop(daemon);
     std::fs::remove_dir_all(root).unwrap();
 }
