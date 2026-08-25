@@ -262,9 +262,10 @@ pub fn resume_routine(
     }
     routine.state = EtatRoutine::Active;
     routine.paused_at = None;
-    // Pas de rattrapage des buckets de pause — mais AVANT le saut de
-    // last_bucket, adopter tout mandat orphelin vivant dans l'intervalle
-    // sauté (sinon pause+resume laisse l'orphelin hors fenêtre : mesure m6).
+    // Pas de rattrapage des buckets de pause. AVANT le saut de last_bucket,
+    // adopter les orphelins vivants de l'intervalle sauté — garde de contrat
+    // (API resume seule), pas un incident CLI (le tick du pause les couvre
+    // souvent par composition, ce qui n'est pas une fermeture).
     let new_last = bucket_for(now, routine.period_secs).saturating_sub(1);
     let after = routine.last_bucket.unwrap_or(new_last);
     if after < new_last {

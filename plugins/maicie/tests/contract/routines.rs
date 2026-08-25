@@ -1147,9 +1147,11 @@ fn adoption_accepte_un_mandat_vivant_au_dela_de_la_borne() {
     );
 }
 
-/// Banc relec1 m6 — le saut de `resume_routine` doit adopter les orphelins
-/// avant de poser `last_bucket`. Sans garde : pause+resume → deleg=2.
-/// Avec garde : les deux bras rendent deleg=1 et orphelin adopté en base.
+/// Banc relec1 m6 — garde de contrat sur le saut de `resume_routine` :
+/// adopter les orphelins de l'intervalle sauté avant `last_bucket`.
+/// Sans garde (API seule) : pause+resume → deleg=2. Avec garde : deleg=1
+/// des deux bras. Ce n'est pas un incident CLI (« mandat perdu au resume ») :
+/// c'est une fragilité de composition couverte par construction.
 fn relec1_m6_tir(avec_pause: bool, label: &str) -> (i64, bool) {
     let guard = RootGuard::new(label);
     let database = guard.path.join("maicie.sqlite3");
