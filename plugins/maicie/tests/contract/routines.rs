@@ -955,100 +955,185 @@ fn relec1_serie_crash_reel_apres_adoption() {
     }
 }
 
-/// Garde : un mandat terminal (`annulee` / `terminee`) ne doit PAS être adopté
-/// — sinon l'occurrence ment et la routine gèle (mesure AWC sur 813e9ab).
-/// Mutant : retirer `AND d.state NOT IN (...)` fait mourir ce test.
+/// Propriété : une occurrence ne doit jamais attester un mandat mort.
+/// Matrice relec1 m6b (N=5 logique) : terminal + objectif ouvert → REPART
+/// (deleg≥2) ; terminal + objectif clos → REPART via rattrapage de clôture.
+/// Mutant : retirer le filtre d.state OU retract_occurrences_with_dead_mandates
+/// fait geler le bras « objectif ouvert ».
 #[test]
-fn adoption_refuse_un_mandat_terminal() {
-    for etat_terminal in ["terminee", "annulee"] {
-        let guard = RootGuard::new(&format!("mandat-terminal-{etat_terminal}"));
-        let database = guard.path.join("maicie.sqlite3");
-        let mut store = MaicieStore::open(&database).unwrap();
-        let period = 60_i64;
-        let t0 = 1_787_580_000;
-        seed_active(&mut store, t0, period);
-        let bucket_n = bucket_for(t0, period);
+fn occurrence_n_atteste_jamais_un_mandat_mort() {
+    const N: usize = 5;
+    let cas = [
+        ("terminee", true),
+        ("terminee", false),
+        ("annulee", true),
+        ("annulee", false),
+    ];
+    for (etat, clore) in cas {
+        for tir in 0..N {
+            let guard = RootGuard::new(&format!("prop-mort-{etat}-{clore}-{tir}"));
+            let database = guard.path.join("maicie.sqlite3");
+            let mut store = MaicieStore::open(&database).unwrap();
+            let period = 60_i64;
+            let t0 = 1_787_580_000;
+            seed_active(&mut store, t0, period);
 
-        let _coupe = evaluate_routines_with(
-            &mut store,
-            &durations(),
-            "maicie",
-            &[candidate("prospective")],
-            t0,
-            EvaluateRoutinesOpts {
-                abort_before_occurrence_insert: true,
-            },
-        )
-        .expect("releve coupee");
-        drop(store);
-
-        let connexion = rusqlite::Connection::open(&database).unwrap();
-        assert_eq!(
-            connexion
-                .execute(
-                    "UPDATE delegations SET state = ?1",
-                    rusqlite::params![etat_terminal],
-                )
-                .unwrap(),
-            1,
-            "une délégation à marquer {etat_terminal}"
-        );
-        let routine_id: String = connexion
-            .query_row("SELECT id FROM routines LIMIT 1", [], |r| r.get(0))
-            .unwrap();
-        let key = format!("routine:{routine_id}:{bucket_n}");
-        drop(connexion);
-
-        let store = MaicieStore::open(&database).unwrap();
-        assert!(
-            store
-                .lookup_delegate_ids_by_key(&key)
-                .unwrap()
-                .is_none(),
-            "lookup doit ignorer un mandat {etat_terminal}"
-        );
-        drop(store);
-
-        let mut store = MaicieStore::open(&database).unwrap();
-        let second = evaluate_routines(
-            &mut store,
-            &durations(),
-            "maicie",
-            &[candidate("prospective")],
-            t0 + 100 * period,
-        )
-        .expect("reprise au-delà de la borne");
-        drop(store);
-
-        let connexion = rusqlite::Connection::open(&database).unwrap();
-        let deleg_final: i64 = connexion
-            .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
-            .unwrap();
-        let etat_n: Option<(String, Option<String>)> = connexion
-            .query_row(
-                "SELECT state, reason FROM routine_occurrences WHERE bucket = ?1",
-                rusqlite::params![bucket_n],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+            let coupe = evaluate_routines_with(
+                &mut store,
+                &durations(),
+                "maicie",
+                &[candidate("prospective")],
+                t0,
+                EvaluateRoutinesOpts {
+                    abort_before_occurrence_insert: true,
+                },
             )
-            .ok();
-        drop(connexion);
+            .expect("coupure");
+            assert!(coupe.is_empty());
+            drop(store);
 
-        assert_eq!(
-            deleg_final, 2,
-            "{etat_terminal} : un neuf doit partir (orphelin mort non adopté)"
-        );
-        assert_ne!(
-            etat_n.as_ref().map(|(s, r)| (s.as_str(), r.as_deref())),
-            Some(("ouverte", Some("mandat_adopte"))),
-            "{etat_terminal} : bucket N ne doit pas être adopté comme vivant"
-        );
-        assert!(
-            second
-                .iter()
-                .any(|o| o.state == EtatOccurrence::Ouverte && o.reason.is_none()),
-            "{etat_terminal} : une ouverte neuve attendue au bucket courant"
-        );
+            let cx = rusqlite::Connection::open(&database).unwrap();
+            let deleg_id: String = cx
+                .query_row("SELECT id FROM delegations LIMIT 1", [], |r| r.get(0))
+                .unwrap();
+            cx.execute(
+                "UPDATE delegations SET state = ?1 WHERE id = ?2",
+                rusqlite::params![etat, deleg_id],
+            )
+            .unwrap();
+            if clore {
+                cx.execute("UPDATE objectives SET state = 'clos'", [])
+                    .unwrap();
+            }
+            drop(cx);
+
+            let mut store = MaicieStore::open(&database).unwrap();
+            for k in 0..3 {
+                let _ = evaluate_routines(
+                    &mut store,
+                    &durations(),
+                    "maicie",
+                    &[candidate("prospective")],
+                    t0 + (100 + k) * period,
+                )
+                .expect("reprise");
+            }
+            drop(store);
+
+            let cx = rusqlite::Connection::open(&database).unwrap();
+            let delegations: i64 = cx
+                .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
+                .unwrap();
+            let menteuses: i64 = cx
+                .query_row(
+                    "SELECT COUNT(*) FROM routine_occurrences o\n\
+                     LEFT JOIN delegations d ON d.id = o.delegation_id\n\
+                     WHERE o.state = 'ouverte'\n\
+                       AND (o.delegation_id IS NULL\n\
+                            OR d.state IN ('annulee', 'terminee')\n\
+                            OR d.id IS NULL)",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            drop(cx);
+
+            assert!(
+                delegations >= 2,
+                "{etat} clos={clore} tir {tir} : routine doit repartir (deleg≥2), obtenu {delegations}"
+            );
+            assert_eq!(
+                menteuses, 0,
+                "{etat} clos={clore} tir {tir} : aucune ouverte ne doit attester un cadavre"
+            );
+        }
     }
+}
+
+/// Rétractation : une ouverte devenue cadavre après adoption ne gèle plus.
+#[test]
+fn ouverte_retractee_quand_le_mandat_meurt_apres_coup() {
+    let guard = RootGuard::new("retract-apres-coup");
+    let database = guard.path.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let period = 60_i64;
+    let t0 = 1_787_580_000;
+    seed_active(&mut store, t0, period);
+
+    // Coupure puis reprise sous la borne → adoption vivante.
+    let _ = evaluate_routines_with(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0,
+        EvaluateRoutinesOpts {
+            abort_before_occurrence_insert: true,
+        },
+    )
+    .unwrap();
+    drop(store);
+    let mut store = MaicieStore::open(&database).unwrap();
+    let _ = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0 + 2 * period,
+    )
+    .unwrap();
+    drop(store);
+
+    let cx = rusqlite::Connection::open(&database).unwrap();
+    assert_eq!(
+        cx.query_row(
+            "SELECT COUNT(*) FROM routine_occurrences WHERE state = 'ouverte'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap(),
+        1
+    );
+    cx.execute("UPDATE delegations SET state = 'annulee'", [])
+        .unwrap();
+    // Objectif reste OUVERT — seul le rattrapage mandat_plus_vivant doit agir.
+    drop(cx);
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    let _ = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0 + 5 * period,
+    )
+    .unwrap();
+    drop(store);
+
+    let cx = rusqlite::Connection::open(&database).unwrap();
+    let retractees: i64 = cx
+        .query_row(
+            "SELECT COUNT(*) FROM routine_occurrences\n\
+             WHERE state = 'sautee' AND reason = 'mandat_plus_vivant'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let ouvertes: i64 = cx
+        .query_row(
+            "SELECT COUNT(*) FROM routine_occurrences WHERE state = 'ouverte'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let delegations: i64 = cx
+        .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
+        .unwrap();
+    drop(cx);
+
+    assert_eq!(retractees, 1, "ouverte rétractée en mandat_plus_vivant");
+    assert_eq!(ouvertes, 1, "un neuf doit pouvoir ouvrir");
+    assert!(delegations >= 2, "redélégation après cadavre, objectif encore ouvert");
 }
 
 /// Contrôle positif du filtre d'état : mandat vivant → toujours adopté.

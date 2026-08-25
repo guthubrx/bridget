@@ -6,6 +6,8 @@
 //! Motifs d'occurrence `sautee` (fermés) :
 //! - `horloge_arretee` — buckets échus pendant une indisponibilité du tick
 //! - `rattrapage_borne:<N>` — trou tronqué ; N = buckets effacés sans ligne
+//! - `mandat_plus_vivant` — occurrence ouverte rétractée : le mandat attesté
+//!   n'existe plus ou est terminal (`annulee`/`terminee`)
 
 use crate::app::{DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, delegate};
 use crate::config::DurationClasses;
@@ -333,6 +335,11 @@ pub fn evaluate_routines_with(
     store
         .terminate_occurrences_with_closed_objectives()
         .map_err(routine_store_error)?;
+    // Propriété : ne jamais laisser une `ouverte` attester un mandat mort
+    // (filtre d'adoption seul ne suffit pas si l'état a changé après coup).
+    store
+        .retract_occurrences_with_dead_mandates()
+        .map_err(routine_store_error)?;
 
     let actives = store
         .list_routines(Some(EtatRoutine::Active))
@@ -560,7 +567,11 @@ fn validate_propose(request: &ProposeRoutineRequest<'_>) -> Result<(), RoutineEr
 }
 
 /// Si un mandat `routine:{id}:{bucket}` existe déjà sans occurrence : l'adopter
-/// en `ouverte` (jamais `sautee`). Remède manche 4 motif 3.
+/// en `ouverte` (jamais `sautee`), uniquement si le mandat est encore vivant.
+/// Propriété : une occurrence ne doit jamais attester un mandat inexistant
+/// ou terminal. Choix : sans adoption, un mandat neuf peut partir même si
+/// l'objectif précédent reste ouvert — le calendrier ne gèle pas sur un
+/// cadavre ; la dette Annulee/jamais-retour reste hors lot.
 fn adopt_orphan_mandate(
     store: &mut MaicieStore,
     routine_id: Uuid,

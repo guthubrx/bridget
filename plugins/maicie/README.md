@@ -135,7 +135,12 @@ Schéma SQLite `user_version = 15` : tables `routines` / `routine_occurrences`.
 La migration v15 n'est pas dans ce lot (`--migrate` ailleurs).
 L'adoption d'un mandat orphelin exige une délégation **vivante**
 (`state NOT IN (annulee, terminee)`) : un mandat terminal n'est jamais
-ressuscité en `ouverte/mandat_adopte`.
+ressuscité en `ouverte/mandat_adopte`. Une `ouverte` qui pointerait déjà
+vers un cadavre est rétractée en `sautee/mandat_plus_vivant` en tête de
+tick. **Choix** : sans attestation vivante, la routine redélègue même si
+l'objectif précédent reste ouvert — le calendrier ne doit pas geler en
+silence sur un mandat mort ; le traitement propre d'`Annulee` / jamais-
+retour reste la dette hors lot.
 
 ### Dette assumée (hors lot) — formulation mesurée
 

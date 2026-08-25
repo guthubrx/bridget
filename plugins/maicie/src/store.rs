@@ -2338,6 +2338,32 @@ impl MaicieStore {
         Ok(changed)
     }
 
+    /// Propriété : une occurrence `ouverte` ne doit jamais attester un mandat
+    /// inexistant ou terminal. Rétracte en `sautee/mandat_plus_vivant` pour
+    /// que `has_open` retombe et que la routine puisse redéléguer — même si
+    /// l'objectif reste ouvert (choix : le calendrier ne doit pas geler sur
+    /// un cadavre ; la dette Annulee/jamais-retour reste hors lot).
+    pub fn retract_occurrences_with_dead_mandates(&mut self) -> Result<usize, StoreError> {
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE routine_occurrences\n\
+                 SET state = 'sautee', reason = 'mandat_plus_vivant'\n\
+                 WHERE state = 'ouverte'\n\
+                   AND (\n\
+                       delegation_id IS NULL\n\
+                       OR NOT EXISTS (\n\
+                           SELECT 1 FROM delegations d\n\
+                           WHERE d.id = routine_occurrences.delegation_id\n\
+                             AND d.state NOT IN ('annulee', 'terminee')\n\
+                       )\n\
+                   )",
+                [],
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(changed)
+    }
+
     pub fn load_routine(&self, routine_id: Uuid) -> Result<Option<Routine>, StoreError> {
         self.connection
             .query_row(
