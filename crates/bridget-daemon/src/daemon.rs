@@ -1910,6 +1910,12 @@ impl DaemonState {
     /// dans le cas le moins probable. Symétrique de
     /// `schedule_idempotent_delivery_recovery` (côté destinataire, remises
     /// `dispatching`) : ici le destinataire du *signal* est l'émetteur.
+    ///
+    /// Limite déclarée : `notified_at` atteste l'**émission** (`writeln!`+`flush`
+    /// Ok sur la socket), pas la **réception** par le wrapper. Si le wrapper
+    /// meurt juste après, le signal est perdu et la base dit qu'il a été
+    /// délivré — passage direct de rien à « notifié », sans état « en vol ».
+    /// Dimensionnement accepté ; pas corrigé dans ce lot.
     fn flush_pending_orphan_emitter_notices(&mut self) {
         let pending = match self.idempotency.pending_orphan_emitter_notices() {
             Ok(pending) => pending,
@@ -9922,9 +9928,14 @@ mod presence_tests {
         let _ = std::fs::remove_file(config.db_path);
     }
 
-    /// ORACLE — arbitration Register émetteur : notice non vue à la purge
-    /// (émetteur hors ligne) est rejouée au Register, pas laissée muette.
-    /// Meurt si on retire le flush post-Registered tout en gardant la notice.
+    /// ORACLE — prouve que `flush_pending_orphan_emitter_notices` pousse une
+    /// notice en attente dès que l'émetteur a une connexion lisible.
+    ///
+    /// **Ce qu'il ne prouve PAS** : que `handle_connection` appelle ce flush
+    /// après `Registered`. Ce branchement vit dans la boucle socket ; aucun
+    /// test unitaire ne l'atteint. Retirer `if registered_just_now { … }`
+    /// laisse cet oracle vert — trou déclaré, pas maquillé. Un témoin d'intégration
+    /// (vrai Register sur socket) fermerait le trou ; hors périmètre immédiat.
     #[test]
     fn register_emetteur_rejoue_les_notices_orphelines_en_attente() {
         use crate::idempotency::{IdempotencyKey, OperationKind, Reservation, SendDelivery};
@@ -9980,7 +9991,9 @@ mod presence_tests {
             "émetteur absent ⇒ notice reste en attente"
         );
 
-        // L'émetteur revient : Register + flush (comme la boucle connexion).
+        // L'émetteur revient en ligne (présence + socket). On appelle le flush
+        // directement — prouve la fonction, pas le branchement Register
+        // (voir doc de l'oracle : trou déclaré).
         state
             .router
             .register(Some("bridget"), &bridget_core::AgentType::Claude, "conn-emitter")

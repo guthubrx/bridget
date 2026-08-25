@@ -441,16 +441,7 @@ impl IdempotencyStore {
                 PRIMARY KEY (id, target)
             );
             CREATE INDEX IF NOT EXISTS idx_ledger_ts ON ledger(ts);
-            CREATE INDEX IF NOT EXISTS idx_ledger_conv ON ledger(conversation_key, ts);
-            -- Signal émetteur durable : gravé dans la même TX que l'orphelinage,
-            -- notifié ensuite ; rejouable si le Deliver a crashé entre les deux.
-            CREATE TABLE IF NOT EXISTS orphan_emitter_notices (
-                delivery_id TEXT PRIMARY KEY,
-                sender TEXT NOT NULL,
-                body TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                notified_at INTEGER
-            );",
+            CREATE INDEX IF NOT EXISTS idx_ledger_conv ON ledger(conversation_key, ts);",
         )?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let migration_applied = tx.query_row(
@@ -601,18 +592,16 @@ impl IdempotencyStore {
                     ON send_deliveries(issuer_scope, operation_kind, idempotency_key);
                 CREATE INDEX IF NOT EXISTS idx_send_deliveries_kind_key
                     ON send_deliveries(operation_kind, idempotency_key);
-                CREATE TABLE IF NOT EXISTS orphan_emitter_notices (
-                    delivery_id TEXT PRIMARY KEY,
-                    sender TEXT NOT NULL,
-                    body TEXT NOT NULL,
-                    created_at INTEGER NOT NULL,
-                    notified_at INTEGER
-                );
                 INSERT INTO idempotency_schema_migrations(version) VALUES (4);",
             )?;
         }
-        // Bases déjà en v4 sans la table de signal : CREATE IF NOT EXISTS suffit
-        // (idempotent, hors numérotation — pas un no-op déguisé en migration).
+        // Une seule copie du DDL : bases neuves, montée v4, et têtes antérieures
+        // déjà en v4 sans la table. CREATE IF NOT EXISTS couvre les trois ;
+        // le dupliquer ailleurs (CHECK / schéma) rendait la migration invisible
+        // aux témoins — même motif que la charge 1 sur send_deliveries.
+        //
+        // `notified_at` : émission socket Ok, pas réception wrapper (limite
+        // déclarée — voir flush_pending_orphan_emitter_notices).
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS orphan_emitter_notices (
                 delivery_id TEXT PRIMARY KEY,
@@ -1482,6 +1471,8 @@ impl IdempotencyStore {
             .map_err(Into::into)
     }
 
+    /// Marque la notice comme émise sur la socket (`writeln!`+`flush` Ok).
+    /// Limite : ce n'est pas une attestation de réception par le wrapper.
     pub fn mark_orphan_emitter_notified(
         &self,
         delivery_id: &str,
