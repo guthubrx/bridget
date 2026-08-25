@@ -122,16 +122,18 @@ La terminalisation dans la transaction du solde rend l'ordre d'exploitation
 indifférent : migrer sans terminaliser aurait laissé la reprise envoyer
 pendant la fenêtre de rejeu encore ouverte (mesurée ~6,7 jours sur copie).
 
-**Ampleur mesurée sur copie de production (référent / relecteur)** — ratio
-objectifs:délégations = **1:1** (273/273), pas un ratio ~9,8 :
+**Ampleur mesurée sur copie de production (relecteur, 2026-08-25 ~03h40)** —
+objet : **délégations** (273 objectifs, ratio 1:1) ; instant : **avant**
+`--migrate`, `user_version = 14` :
 
 | Chiffre | Ce qu'il compte |
 | --- | --- |
-| **265** | Délégations non terminales dont l'objectif est `clos` (à solder à la migration) — répartition observée : `creee` 244, `a_evaluer` 27, `en_attente_prerequis` 2. |
+| **265** | Délégations non terminales dont l'objectif est `clos` (à solder à la migration v16) — répartition : `creee` 244, `a_evaluer` 27, `en_attente_prerequis` 2. |
 | **8** | Délégations non terminales dont l'objectif est encore ouvert (intactes). |
 
-**Smoke auteur (copie privée distincte, pas la prod)** — autre instant, autre
-fichier ; ne pas confondre avec les 265/8 :
+**Smoke auteur (copie privée `/tmp/cursor4-orphelines-private`, 2026-08-24
+soir)** — objet : **délégations** ; autre fichier, autre instant ; ne pas
+confondre avec les 265/8 ci-dessus :
 
 | Chiffre | Ce qu'il compte |
 | --- | --- |

@@ -35,14 +35,15 @@ délégations). Traiter les délégations `a_evaluer` via `status --json` / gref
 **Migration v16 (orphelines + outbox ; v15 = routines sur `main`) — avant
 `--migrate`.** Consentement explicite (`maicie migrate` / `--migrate`) ;
 `open()` refuse et n'écrit rien. Fail-closed : une seule ligne payload≠index
-→ toute la migration échoue, `user_version` inchangé. Sur copie de production
-mesurée : **265** délégations non terminales sur objectifs `clos` (à solder) vs
-**8** sur objectifs ouverts (intactes) ; ratio objectifs:délégations = 1:1. Les
-chiffres **27/264** du smoke auteur portent sur une **autre** copie privée —
-ne pas les fusionner avec 265/8. Le solde terminalise l'outbox dans la même
-transaction : migrer sans cela aurait laissé la reprise envoyer pendant la
-fenêtre de rejeu (~6,7 jours mesurés) ; avec la terminalisation, l'ordre
-d'exploitation devient indifférent.
+→ toute la migration échoue, `user_version` inchangé. Chiffres **délégations**
+(relecteur, copie prod 2026-08-25 ~03h40, avant migrate, uv=14) : **265** non
+terminales sur objectifs `clos` (à solder) vs **8** sur objectifs ouverts
+(intactes) ; ratio objectifs:délégations = 1:1. Smoke auteur (copie privée
+2026-08-24 soir) : **27** `a_evaluer`/clos avant migrate, **264**
+`soldee_par_cloture` après — ne pas fusionner avec 265/8. Le solde terminalise
+l'outbox dans la même transaction : migrer sans cela aurait laissé la reprise
+envoyer pendant la fenêtre de rejeu (~6,7 jours mesurés) ; avec la
+terminalisation, l'ordre d'exploitation devient indifférent.
 
 **Registre.** Entrées ouvertes (sévérité déclarée) + pied déterministe. Ce n’est pas une todo list inventée : c’est le journal du dû versionné.
 
