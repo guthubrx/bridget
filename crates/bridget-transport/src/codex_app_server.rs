@@ -68,6 +68,40 @@ struct Observations {
     terminal_by_turn: HashMap<String, ManagedTerminal>,
 }
 
+// Les deltas restent provisoires : seul le worker atteste leur présence au terminal.
+#[derive(Debug, Default)]
+struct CodexTurnDetail {
+    message_id: String,
+    thread_id: String,
+    turn_id: Option<String>,
+    reasoning_seen: bool,
+    summary: String,
+    raw_reasoning: String,
+    summary_index: Option<u64>,
+    content_index: Option<u64>,
+}
+
+type ActiveTurnDetail = Arc<Mutex<Option<CodexTurnDetail>>>;
+
+#[derive(Debug, Clone, Copy)]
+enum CodexActKind {
+    Command,
+    File,
+    Plan,
+    Approval,
+}
+
+impl CodexActKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Command => "command",
+            Self::File => "file",
+            Self::Plan => "plan",
+            Self::Approval => "approval",
+        }
+    }
+}
+
 pub struct CodexAppServerTransport {
     connection_id: String,
     alive: Arc<AtomicBool>,
@@ -136,6 +170,7 @@ impl CodexAppServerTransport {
         let writer = Arc::new(Mutex::new(Some(stdin)));
         let waiters = Arc::new(Mutex::new(HashMap::new()));
         let observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
+        let active_detail = Arc::new(Mutex::new(None));
         let alive = Arc::new(AtomicBool::new(true));
         let next_id = Arc::new(AtomicU64::new(1));
         let journal = Arc::new(Mutex::new(None));
@@ -145,6 +180,7 @@ impl CodexAppServerTransport {
             observations.clone(),
             alive.clone(),
             journal.clone(),
+            active_detail.clone(),
             options.model.clone(),
         );
 
@@ -251,6 +287,7 @@ impl CodexAppServerTransport {
             busy: busy.clone(),
             thread_id: thread_id.clone(),
             journal: journal.clone(),
+            active_detail,
             notify_timeout: Duration::from_secs(options.notify_timeout_secs),
         });
 
@@ -496,6 +533,7 @@ struct Worker {
     busy: Arc<AtomicBool>,
     thread_id: String,
     journal: Journal,
+    active_detail: ActiveTurnDetail,
     notify_timeout: Duration,
 }
 
@@ -545,10 +583,20 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                 Some(&message.id),
                 json!({ "body": message.body }),
             );
+            *worker
+                .active_detail
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = Some(CodexTurnDetail {
+                message_id: message.id.clone(),
+                thread_id: worker.thread_id.clone(),
+                ..CodexTurnDetail::default()
+            });
             let started = SystemTime::now();
             let result = start_turn_with_retry(&worker, &message);
+            let turn_started = result.is_ok();
             let event = match result {
                 Ok(turn_id) => {
+                    set_active_turn_id(&worker.active_detail, &message.id, &turn_id);
                     push_internal(
                         &worker.observations,
                         ManagedEventKind::PromptDispatched {
@@ -571,6 +619,16 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                     reason,
                 },
             };
+            if turn_started {
+                let reasoning = finish_reasoning(&worker.active_detail, &message.id);
+                let _ = record(&worker.journal, "reasoning", Some(&message.id), reasoning);
+            } else {
+                worker
+                    .active_detail
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .take();
+            }
             let is_finished = matches!(event, ManagedEventKind::TurnFinished { .. });
             if is_finished {
                 let _ = record(&worker.journal, "turn_end", Some(&message.id), json!({}));
@@ -700,6 +758,150 @@ fn record(
         .map_or(Ok(()), |journal| {
             journal.enqueue(event, message_id, payload)
         })
+}
+
+fn source_matches_active_turn(detail: &CodexTurnDetail, value: &Value) -> bool {
+    value.pointer("/params/threadId").and_then(Value::as_str) == Some(detail.thread_id.as_str())
+        && detail.turn_id.as_deref().is_none_or(|turn_id| {
+            value.pointer("/params/turnId").and_then(Value::as_str) == Some(turn_id)
+        })
+}
+
+fn set_active_turn_id(active_detail: &ActiveTurnDetail, message_id: &str, turn_id: &str) {
+    let mut active = active_detail
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if let Some(detail) = active
+        .as_mut()
+        .filter(|detail| detail.message_id == message_id)
+    {
+        detail.turn_id = Some(turn_id.to_string());
+    }
+}
+
+fn record_active_act(
+    journal: &Journal,
+    active_detail: &ActiveTurnDetail,
+    value: &Value,
+    kind: CodexActKind,
+    text: &str,
+    detail: Option<&str>,
+) {
+    let message_id = active_detail
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .filter(|active| source_matches_active_turn(active, value))
+        .map(|active| active.message_id.clone());
+    if let Some(message_id) = message_id {
+        let mut payload = serde_json::Map::from_iter([
+            ("kind".to_string(), Value::String(kind.as_str().to_string())),
+            ("text".to_string(), Value::String(text.to_string())),
+        ]);
+        if let Some(detail) = detail {
+            payload.insert("detail".to_string(), Value::String(detail.to_string()));
+        }
+        let _ = record(journal, "update", Some(&message_id), Value::Object(payload));
+    }
+}
+
+fn append_indexed(
+    text: &mut String,
+    current_index: &mut Option<u64>,
+    next_index: Option<u64>,
+    delta: Option<&str>,
+) {
+    if let Some(next_index) = next_index
+        && current_index.is_some_and(|current| current != next_index)
+        && !text.is_empty()
+    {
+        text.push('\n');
+    }
+    if next_index.is_some() {
+        *current_index = next_index;
+    }
+    if let Some(delta) = delta {
+        text.push_str(delta);
+    }
+}
+
+fn observe_reasoning(active_detail: &ActiveTurnDetail, method: &str, value: &Value) {
+    let mut active = active_detail
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let Some(detail) = active.as_mut() else {
+        return;
+    };
+    if !source_matches_active_turn(detail, value) {
+        return;
+    }
+    detail.reasoning_seen = true;
+    match method {
+        "item/reasoning/summaryPartAdded" => append_indexed(
+            &mut detail.summary,
+            &mut detail.summary_index,
+            value
+                .pointer("/params/summaryIndex")
+                .and_then(Value::as_u64),
+            None,
+        ),
+        "item/reasoning/summaryTextDelta" => append_indexed(
+            &mut detail.summary,
+            &mut detail.summary_index,
+            value
+                .pointer("/params/summaryIndex")
+                .and_then(Value::as_u64),
+            value.pointer("/params/delta").and_then(Value::as_str),
+        ),
+        "item/reasoning/textDelta" => append_indexed(
+            &mut detail.raw_reasoning,
+            &mut detail.content_index,
+            value
+                .pointer("/params/contentIndex")
+                .and_then(Value::as_u64),
+            value.pointer("/params/delta").and_then(Value::as_str),
+        ),
+        _ => {}
+    }
+}
+
+fn finish_reasoning(active_detail: &ActiveTurnDetail, message_id: &str) -> Value {
+    let detail = active_detail
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take();
+    let Some(detail) = detail.filter(|detail| detail.message_id == message_id) else {
+        return json!({ "available": false });
+    };
+    let mut payload =
+        serde_json::Map::from_iter([("available".to_string(), Value::Bool(detail.reasoning_seen))]);
+    if detail.reasoning_seen && !detail.summary.is_empty() {
+        payload.insert("summary".to_string(), Value::String(detail.summary));
+    }
+    if detail.reasoning_seen && !detail.raw_reasoning.is_empty() {
+        payload.insert("raw".to_string(), Value::String(detail.raw_reasoning));
+    }
+    Value::Object(payload)
+}
+
+fn is_approval_request(method: &str) -> bool {
+    let mut parts = method.split('/');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some("item"), Some(kind), Some("requestApproval"), None) if !kind.is_empty()
+    )
+}
+
+fn approval_text<'a>(value: &'a Value, method: &'a str) -> &'a str {
+    ["command", "reason", "grantRoot", "cwd"]
+        .into_iter()
+        .find_map(|key| {
+            value
+                .pointer(&format!("/params/{key}"))
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+        })
+        .unwrap_or(method)
 }
 
 fn served_model_from_codex(value: &Value) -> Option<String> {
@@ -876,6 +1078,7 @@ fn spawn_reader(
     observations: Arc<(Mutex<Observations>, Condvar)>,
     alive: Arc<AtomicBool>,
     journal: Journal,
+    active_detail: ActiveTurnDetail,
     pinned_model: Option<String>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
@@ -936,6 +1139,117 @@ fn spawn_reader(
                         raw,
                         ManagedEventKind::Update {
                             detail: "agentMessage/delta Codex".to_string(),
+                        },
+                    );
+                }
+                Some(
+                    method @ ("item/reasoning/summaryTextDelta"
+                    | "item/reasoning/summaryPartAdded"
+                    | "item/reasoning/textDelta"),
+                ) => {
+                    observe_reasoning(&active_detail, method, &value);
+                    push_source(
+                        &observations,
+                        raw,
+                        ManagedEventKind::Update {
+                            detail: format!("{method} Codex"),
+                        },
+                    );
+                }
+                Some("item/commandExecution/outputDelta") => {
+                    if let Some(delta) = value
+                        .pointer("/params/delta")
+                        .and_then(Value::as_str)
+                        .filter(|delta| !delta.is_empty())
+                    {
+                        record_active_act(
+                            &journal,
+                            &active_detail,
+                            &value,
+                            CodexActKind::Command,
+                            delta,
+                            None,
+                        );
+                    }
+                    push_source(
+                        &observations,
+                        raw,
+                        ManagedEventKind::Update {
+                            detail: "item/commandExecution/outputDelta Codex".to_string(),
+                        },
+                    );
+                }
+                Some("item/fileChange/patchUpdated") => {
+                    if let Some(changes) =
+                        value.pointer("/params/changes").and_then(Value::as_array)
+                    {
+                        for change in changes {
+                            let Some(path) = change
+                                .get("path")
+                                .and_then(Value::as_str)
+                                .filter(|path| !path.is_empty())
+                            else {
+                                continue;
+                            };
+                            let kind = change
+                                .pointer("/kind/type")
+                                .and_then(Value::as_str)
+                                .filter(|kind| !kind.is_empty());
+                            record_active_act(
+                                &journal,
+                                &active_detail,
+                                &value,
+                                CodexActKind::File,
+                                path,
+                                kind,
+                            );
+                        }
+                    }
+                    push_source(
+                        &observations,
+                        raw,
+                        ManagedEventKind::Update {
+                            detail: "item/fileChange/patchUpdated Codex".to_string(),
+                        },
+                    );
+                }
+                Some("item/plan/delta") => {
+                    if let Some(delta) = value
+                        .pointer("/params/delta")
+                        .and_then(Value::as_str)
+                        .filter(|delta| !delta.is_empty())
+                    {
+                        record_active_act(
+                            &journal,
+                            &active_detail,
+                            &value,
+                            CodexActKind::Plan,
+                            delta,
+                            None,
+                        );
+                    }
+                    push_source(
+                        &observations,
+                        raw,
+                        ManagedEventKind::Update {
+                            detail: "item/plan/delta Codex".to_string(),
+                        },
+                    );
+                }
+                Some(method) if is_approval_request(method) => {
+                    record_active_act(
+                        &journal,
+                        &active_detail,
+                        &value,
+                        CodexActKind::Approval,
+                        approval_text(&value, method),
+                        Some(method),
+                    );
+                    push_source(
+                        &observations,
+                        raw,
+                        ManagedEventKind::Update {
+                            detail: format!("{method} Codex"),
                         },
                     );
                 }
@@ -1063,7 +1377,26 @@ mod tests {
                         *'"method":"turn/start"'*)
                             if [ "$started" != 1 ]; then printf '%s\n' '{"id":4,"error":{"code":-32099,"message":"initialized absent"}}'
                             elif [ "$saturated" = 0 ]; then saturated=1; printf '%s\n' '{"id":4,"error":{"code":-32001,"message":"saturated"}}'
-                            else printf '%s\n' '{"id":5,"result":{"turn":{"id":"turn-native"}}}'; if [ "${BRIDGET_CODEX_HOLD_TURN:-0}" != 1 ]; then printf '%s\n' '{  "method" : "item/agentMessage/delta" , "params" : { "threadId" : "thread-native" , "turnId" : "turn-native" , "itemId":"i", "delta" : "réponse native" } }'; printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"completed","items":[]}}}'; fi
+                            else
+                                printf '%s\n' '{"id":5,"result":{"turn":{"id":"turn-native"}}}'
+                                if [ "${BRIDGET_CODEX_HOLD_TURN:-0}" != 1 ]; then
+                                    if [ "${BRIDGET_CODEX_ACTIVITY:-0}" = 1 ]; then
+                                        printf '%s\n' '{"method":"item/reasoning/summaryPartAdded","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"reasoning-1","summaryIndex":0}}'
+                                        printf '%s\n' '{"method":"item/reasoning/summaryTextDelta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"reasoning-1","summaryIndex":0,"delta":"Je compare"}}'
+                                        printf '%s\n' '{"method":"item/reasoning/summaryTextDelta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"reasoning-1","summaryIndex":0,"delta":" les options."}}'
+                                        printf '%s\n' '{"method":"item/reasoning/textDelta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"reasoning-1","contentIndex":0,"delta":"raison brute"}}'
+                                        printf '%s\n' '{"method":"item/commandExecution/outputDelta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"command-1","delta":"313 passés"}}'
+                                        printf '%s\n' '{"method":"item/commandExecution/outputDelta","params":{"threadId":"foreign-thread","turnId":"foreign-turn","itemId":"foreign-command","delta":"ne pas attribuer"}}'
+                                        printf '%s\n' '{"method":"item/fileChange/patchUpdated","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"file-1","changes":[{"path":"src/main.rs","kind":{"type":"update"},"diff":"@@ -1 +1 @@"}]}}'
+                                        printf '%s\n' '{"method":"item/plan/delta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"plan-1","delta":"Tester le flux"}}'
+                                        printf '%s\n' '{"id":"approval-7","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"approval-1","startedAtMs":1787686800000,"command":"cargo test -p bridget-transport","reason":"sortie réseau"}}'
+                                        printf '%s\n' '{"id":"approval-8","method":"item/fileChange/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"approval-2","startedAtMs":1787686800000,"reason":"écrire le fichier"}}'
+                                        printf '%s\n' '{"id":"approval-9","method":"item/permissions/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"approval-3","startedAtMs":1787686800000,"cwd":"/tmp","permissions":{},"reason":"accès réseau"}}'
+                                        printf '%s\n' '{"method":"item/futureWidget/delta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"future-1","delta":"ne pas inventer"}}'
+                                    fi
+                                    printf '%s\n' '{  "method" : "item/agentMessage/delta" , "params" : { "threadId" : "thread-native" , "turnId" : "turn-native" , "itemId":"i", "delta" : "réponse native" } }'
+                                    printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"completed","items":[]}}}'
+                                fi
                             fi ;;
                         *'"method":"turn/interrupt"'*) printf '%s\n' '{"id":6,"result":{}}'; printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"interrupted","items":[]}}}' ;;
                     esac
@@ -1079,6 +1412,163 @@ mod tests {
         let mut message = BridgetMessage::new("bridget", "codex-native", format!("mission {id}"));
         message.id = id.to_string();
         message
+    }
+
+    fn journal_detail_fixture(label: &str, with_activity: bool) -> (Vec<Value>, Vec<Value>) {
+        let root = root(label);
+        let trace = root.join("trace.jsonl");
+        let mut environment = vec![(
+            "BRIDGET_CODEX_TRACE".to_string(),
+            trace.to_string_lossy().into_owned(),
+        )];
+        if with_activity {
+            environment.push(("BRIDGET_CODEX_ACTIVITY".to_string(), "1".to_string()));
+        }
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            fake_options(&trace),
+            &environment,
+            false,
+        )
+        .expect("session native de détail");
+        transport
+            .activate_journal(&root, "codex-native", None)
+            .expect("journal de détail activé");
+        transport
+            .deliver(&message(label))
+            .expect("livraison de détail");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut finished = false;
+        while Instant::now() < deadline {
+            finished |= transport.drain_events().iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::TurnFinished {
+                        terminal: ManagedTerminal::Completed,
+                        ..
+                    }
+                )
+            });
+            if finished {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(finished, "le tour de détail n'a pas terminé");
+        transport.stop();
+
+        let journal_path = fs::read_dir(root.join("codex-native"))
+            .expect("répertoire du journal")
+            .next()
+            .expect("fichier du journal")
+            .expect("entrée du journal")
+            .path();
+        let events = crate::journal::valid_events(&journal_path);
+        let frames = fs::read_to_string(&trace)
+            .expect("trace fournisseur")
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .collect();
+        fs::remove_dir_all(root).expect("nettoyage de la fixture");
+        (events, frames)
+    }
+
+    #[test]
+    fn journal_codex_atteste_presence_puis_absence_et_ne_valide_pas_approbation() {
+        let (present, outbound) = journal_detail_fixture("detail-present", true);
+        let reasoning = present
+            .iter()
+            .filter(|event| event["event"] == "reasoning")
+            .collect::<Vec<_>>();
+        assert_eq!(reasoning.len(), 1, "une seule attestation terminale");
+        assert_eq!(
+            reasoning[0]["payload"],
+            json!({
+                "available": true,
+                "summary": "Je compare les options.",
+                "raw": "raison brute"
+            })
+        );
+        let reasoning_index = present
+            .iter()
+            .position(|event| event["event"] == "reasoning")
+            .expect("attestation de présence");
+        let turn_end_index = present
+            .iter()
+            .position(|event| event["event"] == "turn_end")
+            .expect("fin de tour présente");
+        assert_eq!(
+            reasoning_index + 1,
+            turn_end_index,
+            "le raisonnement n'est attesté qu'au terminal"
+        );
+        for expected in [
+            json!({"kind":"command", "text":"313 passés"}),
+            json!({"kind":"file", "text":"src/main.rs", "detail":"update"}),
+            json!({"kind":"plan", "text":"Tester le flux"}),
+            json!({
+                "kind":"approval",
+                "text":"cargo test -p bridget-transport",
+                "detail":"item/commandExecution/requestApproval"
+            }),
+            json!({
+                "kind":"approval",
+                "text":"écrire le fichier",
+                "detail":"item/fileChange/requestApproval"
+            }),
+            json!({
+                "kind":"approval",
+                "text":"accès réseau",
+                "detail":"item/permissions/requestApproval"
+            }),
+        ] {
+            assert!(
+                present
+                    .iter()
+                    .any(|event| event["event"] == "update" && event["payload"] == expected),
+                "acte Codex absent du journal: {expected}"
+            );
+        }
+        assert_eq!(
+            present
+                .iter()
+                .filter(|event| event["event"] == "update")
+                .count(),
+            6,
+            "une notification inconnue doit rester un événement système inerte"
+        );
+        assert!(
+            outbound.iter().all(|frame| !matches!(
+                frame["id"].as_str(),
+                Some("approval-7" | "approval-8" | "approval-9")
+            )),
+            "une attente affichable ne doit produire aucune décision JSON-RPC"
+        );
+
+        let (absent, _) = journal_detail_fixture("detail-absent", false);
+        let reasoning = absent
+            .iter()
+            .filter(|event| event["event"] == "reasoning")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reasoning.len(),
+            1,
+            "l'absence n'est attestée qu'au terminal"
+        );
+        assert_eq!(reasoning[0]["payload"], json!({"available": false}));
+        let reasoning_index = absent
+            .iter()
+            .position(|event| event["event"] == "reasoning")
+            .expect("attestation d'absence");
+        let turn_end_index = absent
+            .iter()
+            .position(|event| event["event"] == "turn_end")
+            .expect("fin du tour sans raisonnement");
+        assert_eq!(
+            reasoning_index + 1,
+            turn_end_index,
+            "un silence intermédiaire ne doit jamais attester l'absence"
+        );
     }
 
     #[test]
