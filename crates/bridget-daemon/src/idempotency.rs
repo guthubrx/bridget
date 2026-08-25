@@ -341,6 +341,11 @@ impl IdempotencyStore {
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_send_deliveries_operation
                 ON send_deliveries(issuer_scope, operation_kind, idempotency_key);
+            -- Lookup ledger : jointure sur (operation_kind, idempotency_key)
+            -- sans issuer_scope — n'emprunte PAS l'UNIQUE ci-dessus (préfixe
+            -- issuer_scope). Index dédié pour SEARCH, pas SCAN.
+            CREATE INDEX IF NOT EXISTS idx_send_deliveries_kind_key
+                ON send_deliveries(operation_kind, idempotency_key);
             CREATE TABLE IF NOT EXISTS supervisor_identity (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                 issuer_scope TEXT NOT NULL UNIQUE
@@ -451,6 +456,25 @@ impl IdempotencyStore {
             }
             tx.execute(
                 "INSERT INTO idempotency_schema_migrations(version) VALUES (3)",
+                [],
+            )?;
+        }
+        let kind_key_index_migration = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 4)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !kind_key_index_migration {
+            // Bases déjà migrées v3 : CREATE INDEX IF NOT EXISTS dans le batch
+            // ci-dessus ne suffit pas si la table existait avant l'ajout de
+            // l'index dans le DDL — on le force ici pour les bases vivantes.
+            tx.execute(
+                "CREATE INDEX IF NOT EXISTS idx_send_deliveries_kind_key
+                 ON send_deliveries(operation_kind, idempotency_key)",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO idempotency_schema_migrations(version) VALUES (4)",
                 [],
             )?;
         }
