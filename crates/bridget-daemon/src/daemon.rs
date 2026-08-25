@@ -9649,7 +9649,9 @@ mod presence_tests {
         );
         let infos = st.agent_infos();
         assert!(
-            infos.iter().any(|a| a.name == "agent-2" && a.state == "busy"),
+            infos
+                .iter()
+                .any(|a| a.name == "agent-2" && a.state == "busy"),
             "busy jury ne doit pas être purgé: {infos:?}"
         );
         let _ = std::fs::remove_file(&config.db_path);
