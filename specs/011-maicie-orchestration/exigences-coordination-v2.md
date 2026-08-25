@@ -43,8 +43,9 @@ v1 (spec 011) — intrants pour les itérations suivantes.
 | D. Chantiers v2 substantiels | 4/7 | 57 |
 | B. Piste GUI | 2/6 | 33 |
 | Bloc M — le référent géré | 1/5 | 20 |
+| Bloc P — Tests ciblés par calcul d'impact (F39, gravé le 2026-08-2 | 1/5 | 20 |
 | Bloc N — produit & ouverture | 0/6 | **0** |
-| **Total** | **64/96** | **67** |
+| **Total** | **65/101** | **64** |
 <!-- TABLEAU-AVANCEMENT:FIN -->
 
 ### Onze lots en vol, `main` = `b6eea77`
@@ -542,6 +543,15 @@ ont été créés directement dans ce fichier le 24/08.
       propre — aucun des 92 messages parlant du chantier, aucun nom d'agent,
       aucun trailer de co-autorat. Le dépôt actuel reste l'atelier.
       **Pruning du code d'abord**, publication ensuite.
+      **Volet 1 — pruning du code : APPROUVÉ** (2026-08-25 16:20). Tête
+      `0afd1026`, auteur `rc1`, jury `rc5` : zéro `cartae` dans l'intégralité
+      de `crates/`, `plugins/` **et** `scripts/` ; `HOME` absent échoue au
+      point de dérivation (vérifié sur le binaire réel, `env -u HOME` sort 1
+      avec le message attendu). **[mesuré]** Attend le guichet pour merger.
+      **Volet 2 — instantané public : DÛ.** Gate mesuré séparément :
+      **183 occurrences** de `/Users/moi` sur **167 lignes** dans
+      **26 fichiers** documentaires/specs/fixtures — pas du code exécutable,
+      mais bloquant avant publication.
 - [x] K4 démarrage à froid documenté — docs/demarrage-a-froid.md, une page,
       chaque commande exécutée sur machine réelle, 5 découvertes
 
@@ -563,7 +573,11 @@ ont été créés directement dans ce fichier le 24/08.
       **Reste dû** : l'entre-tours aveugle — un agent dont le tour a expiré est
       compté `occupé` parce qu'une délégation porte son nom ; mesuré sur quatre
       agents (`jury1`/`jury2` 13:20, `relec7` 11:49, `coder4` 07:26).
-      → session **023** ouverte chez `jc1`.
+      → session **023** ouverte chez `jc1`. **STOP posé le 2026-08-25 16:13** :
+      le second bras macOS (`fable2`) mesure que `sanitize_terminal` repose sur
+      `char::is_control()`, qui ne couvre que la catégorie Unicode **Cc** — les
+      caractères **bidi sont Cf et passent**. Contrôle positif ESC vert, bidi
+      override et isolats rouges. **[mesuré]** L5 recule d'autant.
 - [x] BASCULE tmux→gérés FAITE le 24/08 12h25 (voir point d'étape bloc L) ;
       extinction ACHEVÉE à 15h25 : cxbridget, prospective puis coderBridget
       (pane fermé par l'utilisateur après sa dernière livraison — état
@@ -2031,3 +2045,113 @@ deux sont de toute façon détectables dans le contenu du diff (voie 1). Tout
 le reste naît non-critique ; le registre densifie ensuite. La courbe voulue
 (jury rare au début, densifiant avec la ramification) est préservée, l'angle
 mort réactif est fermé.
+
+---
+
+## Bloc P — Tests ciblés par calcul d'impact (F39, gravé le 2026-08-25 18h05, demande utilisateur)
+
+### Le constat, mesuré le jour même
+
+| Fait | Mesure |
+|---|---|
+| `jc3` livre **36 lignes**, un fichier | validation complète = **943 tests** ; il déclare la limite au lieu de jouer |
+| `fable-reviewer` impute deux rouges préexistants | il joue la suite **deux fois** — 959 sur le lot, 946 sur la base |
+| Coût matériel d'un seul relecteur | **~5 Go** de `target` — cause mesurée du disque à 92 % le matin |
+| Découpage réel du dépôt | **4 paquets**, 48 binaires de test (33 `maicie`, 15 `bridget-daemon`) |
+
+**Le coût d'une relecture ne dépend pas de la taille du changement mais de la
+taille du projet.** Il croît donc seul, et finira par produire soit une
+relecture dégradée assumée, soit — bien pire — une relecture dégradée
+**invisible**.
+
+**Et personne ne décide de jouer 943 tests** : c'est ce qui arrive quand on tape
+la commande la plus simple.
+
+### Le principe directeur
+
+> **La réponse gratuite gagne toujours**, quelle que soit la règle affichée.
+
+Transposition littérale de la leçon `--suite aucune` (F36/F37) : aujourd'hui
+« tout jouer » est la réponse gratuite. **La commande nue doit jouer le ciblé ;
+tout jouer doit exiger un drapeau explicite.**
+
+### L'outillage — rien à réinventer
+
+- **[`cargo-difftests`](https://github.com/dnbln/cargo-difftests)** — libre.
+  Croise la **couverture LLVM** et ce qui a changé depuis la dernière exécution.
+  Postulat : *si un test passait et que rien de ce qu'il traverse n'a changé,
+  son résultat ne changera pas.*
+  Trois algorithmes : `fs-mtime`, `git-diff-files`, **`git-diff-hunks`** — ce
+  dernier travaille **au niveau des lignes modifiées**, pas des fichiers
+  touchés : c'est celui qu'il nous faut (le cas mesuré est 36 lignes contre
+  943 tests). Option `--commit` pour comparer à un commit précis.
+  Déconseillé sur arbre sale → **outil de vérification avant livraison**, pas de
+  développement. Modèle : `cargo generate dnbln/cargo-difftests`.
+- **[`cargo-nextest`](https://nexte.st/)** — vitesse seulement, pas d'analyse
+  d'impact. Un processus par test, meilleure isolation, jusqu'à 3× plus rapide.
+- **Niveau gratuit déjà disponible** : `cargo test -p <paquet>` cible par
+  paquet sans rien installer — **mais `-p X` ne joue QUE X, jamais les paquets
+  qui dépendent de X.** Graphe mesuré (`cargo metadata`) :
+
+  | modifier… | rejouer |
+  |---|---|
+  | `bridget-core` | **tout le workspace** |
+  | `bridget-transport` | transport + maicie + daemon |
+  | `maicie` | maicie + **daemon** |
+  | `bridget-daemon` | daemon seul (personne n'en dépend) |
+
+  `bridget-daemon` dépend de `maicie` **en dur**, pas « par le protocole ».
+  La règle se lit donc **`-p <paquet>` ET SES DÉPENDANTS**.
+  Et le paquet se détermine **par le diff** (`git diff --name-only`), jamais par
+  le nom du lot.
+
+### La règle d'architecture — décision structurante
+
+> **Si la connaissance vient du registre, elle est chez Maicie.
+> Si elle vient du code ou de son exécution, elle est produite dehors et
+> déposée chez elle comme un fait.**
+
+- La carte de **criticité** (F38) reste chez Maicie : sa source est le registre.
+- La carte d'**impact des tests** exige d'instrumenter l'exécution → **outil
+  séparé**. Maicie la **lit**, ne la **fabrique jamais**.
+
+**Motif** : y mettre la mesure ferait de la coordinatrice un outil de
+compilation ; elle grossirait, et le jour d'une panne on ne saurait plus si
+c'est la coordination ou la mesure qui a lâché.
+
+**Bénéfice opérationnel** : si la mesure tombe, Maicie continue de coordonner et
+**dit** « je n'ai pas de carte fraîche, je ne peux pas confronter » — information
+honnête — au lieu de s'écrouler ou de faire semblant.
+**Corollaire** : la carte porte une **date**, et Maicie refuse de confronter sur
+une carte périmée plutôt que de valider à tort.
+
+### Qui fait quoi
+
+| Acteur | Fait | Ne fait jamais |
+|---|---|---|
+| **Maicie** | détient la carte déposée · calcule l'intersection avec les fichiers modifiés · **confronte et refuse** | décider qu'un test manquant est *acceptable* (arbitrage déguisé en règle) · **lancer** les tests |
+| **Référent** | arbitre les exceptions (agent bloqué par un rouge hors périmètre — 3 cas le 25/08) · déclenche la passe complète · **constate si la carte dérive** | — |
+| **Agent auteur** | lance · déclare ce qu'il n'a pas joué **en liste vérifiable** | déclarer en prose |
+
+### La passe complète périodique
+
+Elle mesure **ce que le calcul a raté** — dépendance à un fichier de données, à
+une variable d'environnement, à un ordre d'exécution. Le jour où elle ne trouve
+plus rien pendant des semaines, **le calcul est fiable**. C'est le seul critère.
+
+### Mise en place, dans l'ordre
+
+- [x] **F39.1** niveau paquet — **EN VIGUEUR le 2026-08-25 18h23** (décision
+      utilisateur), diffusé aux 5 agents actifs. Gate courant = `cargo test -p
+      <paquet>` avec univers listé ; suite complète workspace **une seule fois**
+      avant livraison finale. **[mesuré]** `fable2` : 302 tests au lieu de 959,
+      même verdict, un tiers du coût — il l'avait fait de lui-même.
+- [ ] **F39.2** installer `cargo-difftests` via son modèle, produire la première
+      carte, la déposer **datée**
+- [ ] **F39.3** rendre la commande nue **ciblée** ; drapeau explicite pour tout jouer
+- [ ] **F39.4** brancher la confrontation chez Maicie — comparaison de deux
+      listes, zéro jugement, refus si la liste jouée ne couvre pas l'attendue
+- [ ] **F39.5** planifier la passe complète périodique et **mesurer ce qu'elle
+      attrape encore**
+
+**À ouvrir après le redémarrage général.**
