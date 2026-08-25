@@ -5,10 +5,10 @@
 
 Spec: 018-activation-outils-pilotage
 Titre: Activation gouvernée des outils de pilotage
-Statut: Ready
+Statut: Completed
 Priorité: P1
-Tâches: 1/8 (13%)
-Tests: 0/10 (0%)
+Tâches: 8/8 (100%)
+Tests: 10/10 (100%)
 
 Résumé:
 - Contexte: `bridget-idle` a été activé par un lien vers un worktree avant son jury et son merge ; sa suppression aurait cassé l'outil actif.
@@ -28,7 +28,7 @@ Fichiers:
 
 **Feature Branch**: `session-18-activation-outils-pilotage`
 **Created**: 2026-08-25
-**Status**: Ready
+**Status**: Completed
 **Priority**: P1
 **Dependencies**: SPEC-011
 

@@ -6,22 +6,22 @@
 
 ## Phase 2 — Oracles de la frontière
 
-- [ ] T002 [US2] Créer les contrôles positifs des cinq refus et de l'absence d'effet dans `scripts/test-018-pilotage-install.sh`
+- [x] T002 [US2] Créer les contrôles positifs des cinq refus et de l'absence d'effet dans `scripts/test-018-pilotage-install.sh`
 
 ## Phase 3 — Release admise et durable
 
-- [ ] T003 [US1] Implémenter la politique commune d'admission et de matérialisation dans `scripts/lib/pilotage-release.sh`
-- [ ] T004 [US1] Migrer l'installation de `bridget-idle` vers la release gouvernée dans `scripts/install-bridget-idle.sh`
+- [x] T003 [US1] Implémenter la politique commune d'admission et de matérialisation dans `scripts/lib/pilotage-release.sh`
+- [x] T004 [US1] Migrer l'installation de `bridget-idle` vers la release gouvernée dans `scripts/install-bridget-idle.sh`
 
 ## Phase 4 — Ronde honnête
 
-- [ ] T005 [US3] Migrer `bridget-ronde` et arrêter avant toute unité en cas de refus dans `scripts/install-bridget-ronde.sh` et `scripts/test-bridget-ronde.sh`
+- [x] T005 [US3] Migrer `bridget-ronde` et arrêter avant toute unité en cas de refus dans `scripts/install-bridget-ronde.sh` et `scripts/test-bridget-ronde.sh`
 
 ## Phase 5 — Validation et livraison
 
-- [ ] T006 [US1] Valider idempotence, corruption, origine lisible et survie sans dépôt via `scripts/test-018-pilotage-install.sh`
-- [ ] T007 Exécuter harnais métier, mutants, formatage, compilation, suite et Clippy puis consigner les comptes dans `specs/018-activation-outils-pilotage/implementation.md`
-- [ ] T008 Finaliser le REX, geler le SHA et livrer la branche `session-18-activation-outils-pilotage` via Bridget
+- [x] T006 [US1] Valider idempotence, corruption, origine lisible et survie sans dépôt via `scripts/test-018-pilotage-install.sh`
+- [x] T007 Exécuter harnais métier, mutants, formatage, compilation, suite et Clippy puis consigner les comptes dans `specs/018-activation-outils-pilotage/implementation.md`
+- [x] T008 Finaliser le REX, geler le SHA et livrer la branche `session-18-activation-outils-pilotage` via Bridget
 
 ## Dépendances
 
