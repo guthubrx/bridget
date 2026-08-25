@@ -104,6 +104,17 @@ impl LiveAgent {
             response => panic!("LedgerProjection attendu, reçu {response:?}"),
         }
     }
+
+    fn open_requests(&mut self) -> Vec<bridget_transport::protocol::RequestInfo> {
+        self.send(&WrapperToDaemon::LedgerProjection {
+            scope: LedgerScope::Requests,
+            limit: 200,
+        });
+        match self.read() {
+            DaemonToWrapper::LedgerProjection { requests, .. } => requests,
+            response => panic!("LedgerProjection attendu, reçu {response:?}"),
+        }
+    }
 }
 
 fn root(label: &str) -> PathBuf {
@@ -384,6 +395,57 @@ fn post_v1_send_valide_repond_202_et_livre_un_identifiant_non_vide() {
 }
 
 #[test]
+fn post_v1_send_reply_true_cree_une_demande_suivie() {
+    let root = root("send-reply");
+    let daemon = DaemonProcess::start(&root);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let mut recipient = LiveAgent::connect(&socket, "destinataire-reply");
+    let config = UiRelayConfig {
+        daemon_socket: socket,
+        maicie_config: write_maicie_config(&root),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-send-reply".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let response = read_response(request_http(
+        address,
+        "POST",
+        "/v1/send?token=jeton-send-reply",
+        Some(r#"{"version":1,"to":"destinataire-reply","body":"question suivie","reply":true}"#),
+    ));
+    assert!(response.starts_with("HTTP/1.1 202"), "{response}");
+    let message_id = match recipient.read() {
+        DaemonToWrapper::DeliverIdempotent { message, .. } => {
+            assert!(message.reply);
+            message.id
+        }
+        response => panic!("DeliverIdempotent attendu, reçu {response:?}"),
+    };
+    let requests = recipient.open_requests();
+    assert!(
+        requests.iter().any(|request| request.id == message_id),
+        "reply=true doit créer la demande suivie {message_id}: {requests:?}"
+    );
+    let mut reply = BridgetMessage::new("destinataire-reply", "humain", "réponse UI");
+    reply.in_reply_to = Some(message_id.clone());
+    recipient.send(&WrapperToDaemon::Send(reply));
+    assert!(matches!(recipient.read(), DaemonToWrapper::Ack { .. }));
+    assert!(
+        recipient
+            .open_requests()
+            .iter()
+            .all(|request| request.id != message_id),
+        "la réponse corrélée doit solder la demande suivie"
+    );
+
+    drop(daemon);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn post_v1_send_destinataire_inconnu_refuse_sans_archiver() {
     let root = root("send-unknown");
     let daemon = DaemonProcess::start(&root);
@@ -477,8 +539,8 @@ fn relais_sert_les_trois_assets_hors_du_source_rust() {
     thread::spawn(move || relay.serve().unwrap());
 
     let index = read_response(request(address, "/?token=jeton-assets"));
-    let script = read_response(request(address, "/app.js?token=jeton-assets"));
-    let theme = read_response(request(address, "/theme.css?token=jeton-assets"));
+    let script = read_response(request(address, "/app.js"));
+    let theme = read_response(request(address, "/theme.css"));
     assert!(index.starts_with("HTTP/1.1 200"), "{index}");
     assert!(index.contains("<script type=\"module\" src=\"/app.js\">"));
     assert!(script.starts_with("HTTP/1.1 200"), "{script}");
@@ -531,5 +593,76 @@ fn watch_annonce_reconnecting_puis_connected_apres_coupure_daemon() {
     assert!(restored.contains("event: relay_state"), "{restored}");
 
     drop(daemon_restarted);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn snapshot_sans_agent_omet_les_pairs_et_watch_agent_les_projette() {
+    let root = root("peer-exchange");
+    let daemon = DaemonProcess::start(&root);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let mut focus = LiveAgent::connect(&socket, "agent-focus");
+    let mut peer = LiveAgent::connect(&socket, "agent-pair");
+
+    let mut outgoing = BridgetMessage::new("agent-focus", "agent-pair", "question");
+    outgoing.id = "sortant-pair".to_string();
+    focus.send(&WrapperToDaemon::Send(outgoing));
+    assert!(matches!(focus.read(), DaemonToWrapper::Ack { .. }));
+    assert!(matches!(peer.read(), DaemonToWrapper::Deliver(_)));
+    let mut incoming = BridgetMessage::new("agent-pair", "agent-focus", "réponse");
+    incoming.id = "entrant-pair".to_string();
+    peer.send(&WrapperToDaemon::Send(incoming));
+    assert!(matches!(peer.read(), DaemonToWrapper::Ack { .. }));
+    assert!(matches!(focus.read(), DaemonToWrapper::Deliver(_)));
+
+    let config = UiRelayConfig {
+        daemon_socket: socket,
+        maicie_config: write_maicie_config(&root),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-peer".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let global = response_json(&read_response(request(
+        address,
+        "/v1/snapshot?token=jeton-peer",
+    )));
+    assert!(
+        global.get("peer_exchanges").is_none(),
+        "sans agent, une absence de calcul ne doit pas mentir sous la forme d'une liste vide: {global}"
+    );
+
+    let focused = response_json(&read_response(request(
+        address,
+        "/v1/snapshot?token=jeton-peer&agent=agent-focus",
+    )));
+    let focused_exchanges = focused["peer_exchanges"]
+        .as_array()
+        .expect("avec agent, la projection calculée reste toujours présente");
+    assert_eq!(focused_exchanges.len(), 1, "{focused}");
+    assert_eq!(focused_exchanges[0]["peer"], "agent-pair", "{focused}");
+    assert_eq!(focused_exchanges[0]["direction"], "both", "{focused}");
+    assert_eq!(focused_exchanges[0]["count"], 2, "{focused}");
+
+    let mut events = request(address, "/v1/watch?token=jeton-peer&agent=agent-focus");
+    let subscription_id = match focus.read() {
+        DaemonToWrapper::Subscribe {
+            subscription_id, ..
+        } => subscription_id,
+        response => panic!("Subscribe attendu, reçu {response:?}"),
+    };
+    focus.send(&WrapperToDaemon::Subscribed { subscription_id });
+
+    let snapshot = read_until(&mut events, "event: peer_exchange");
+    assert!(snapshot.contains("event: snapshot"), "{snapshot}");
+    assert!(snapshot.contains("\"peer\":\"agent-pair\""), "{snapshot}");
+    assert!(snapshot.contains("\"direction\":\"both\""), "{snapshot}");
+    assert!(snapshot.contains("\"count\":2"), "{snapshot}");
+    let pushed = read_until(&mut events, "\"delivery_ids\"");
+    assert!(pushed.contains("data: {\"version\":1,\"kind\":\"peer_exchange\""));
+
+    drop(daemon);
     std::fs::remove_dir_all(root).unwrap();
 }

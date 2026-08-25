@@ -64,6 +64,12 @@ POST /v1/send
 
 Ajout à `UiSnapshotV1` et poussé par `/v1/watch`. **Pas de route nouvelle.**
 
+La projection est relative à l'agent dont le fil est affiché : le paramètre
+`agent` est donc **requis pour calculer `peer_exchanges`**. Sur
+`GET /v1/snapshot` sans `agent`, la clé est omise (`non calculé`) ; avec
+`agent`, elle est toujours présente, y compris sous la forme `[]` (`calculé,
+aucun échange`). `/v1/watch` exige déjà `agent` et pousse la même projection.
+
 ```json
 {
   "version": 1,
