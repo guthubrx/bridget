@@ -16,8 +16,6 @@ const DEFAULT_NOTIFY_TIMEOUT_SECS: u64 = 600;
 // launchd démarre le daemon avec un PATH minimal : les pilotes embarqués ne
 // doivent pas dépendre de la configuration interactive de l'utilisateur.
 const NATIVE_CODEX_COMMAND: &str = "/opt/homebrew/bin/codex";
-/// Chemin absolu figé du CLI Claude (launchd / PATH minimal).
-pub const NATIVE_CLAUDE_COMMAND: &str = "/Users/moi/.local/bin/claude";
 const MAX_PASS_ENV_ENTRIES: usize = 64;
 const MAX_ENV_NAME_BYTES: usize = 128;
 const MAX_CAPABILITY_VALUE_CHARS: usize = 100;
@@ -837,7 +835,7 @@ fn definition(
 
 fn native_claude_definition() -> AgentDefinition {
     AgentDefinition {
-        command: NATIVE_CLAUDE_COMMAND.to_string(),
+        command: native_claude_command(),
         // Même contrat que le wrapper interactif (wrapper.rs) : sans ces
         // flags le flux stream-json émet des demandes d'outil auxquelles le
         // pilote géré ne répond pas — tours clos, zéro outil.
@@ -876,6 +874,17 @@ fn native_claude_definition() -> AgentDefinition {
             models: BTreeMap::from([("claude-opus-5".to_string(), ModelCapabilities::default())]),
         },
     }
+}
+
+/// Résout le CLI Claude depuis le HOME du daemon afin de conserver un chemin
+/// absolu sans publier le répertoire personnel d'une machine particulière.
+fn native_claude_command() -> String {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".local/bin/claude")
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn native_codex_definition() -> AgentDefinition {
@@ -1013,7 +1022,13 @@ mod tests {
             Some(&ModelCapabilities::default())
         );
         let claude = registry.get("claude").unwrap();
-        assert_eq!(claude.command, NATIVE_CLAUDE_COMMAND);
+        let expected_claude_command = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".local/bin/claude")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(claude.command, expected_claude_command);
         assert!(Path::new(&claude.command).is_absolute());
         assert_eq!(claude.protocol, "claude_stream_json");
         assert_eq!(
@@ -1424,7 +1439,7 @@ mod tests {
                 "@zed-industries/codex-acp",
             ),
             (
-                "/Users/moi/.local/bin/claude-code-acp",
+                "/opt/bridget-fixtures/bin/claude-code-acp",
                 vec![],
                 "@zed-industries/claude-code-acp",
             ),
