@@ -57,11 +57,16 @@ write_unit() {
 
 mkdir -p "${HOME}/.local/bin" "$report_dir"
 chmod 0700 "$report_dir"
-if [[ ! -e "$installed_command" || "$force" == 1 ]]; then
-  install -m 0755 "$source_command" "$installed_command"
-  echo "posé: commande ($installed_command)" >&2
+# Lien, pas copie : une copie ~/.local/bin échappe à la revue et au jury
+# (constat 2026-08-25 — mêmes outils de pilotage que bridget-idle).
+if [[ -L "$installed_command" && "$(readlink "$installed_command")" == "$source_command" ]]; then
+  echo "déjà en place: commande ($installed_command -> $source_command)" >&2
+elif [[ ! -e "$installed_command" || "$force" == 1 ]]; then
+  rm -f "$installed_command"
+  ln -sfn "$source_command" "$installed_command"
+  echo "posé: commande ($installed_command -> $source_command)" >&2
 else
-  echo "déjà en place: commande ($installed_command)" >&2
+  echo "déjà en place: commande ($installed_command) (passer --force pour symlink versionné)" >&2
 fi
 
 case "$(uname -s)" in
