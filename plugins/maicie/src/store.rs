@@ -23,14 +23,16 @@ use crate::domain::{
     NotificationReassignation, ObjectifCoordonne, OperationGuichet, OutboxDelegation,
     PolitiqueReassignation, QualificationDependance, ReceptionGreffe, RecuCorrelation,
     ReductionCoordinationActive, ReductionOuvertureDelegation, ReductionReassignation,
-    TransitionCoordinationActive, TypeDecision, TypeEffetDemandeSuivie, TypeEvenementAttendu,
-    TypeFaitReassignation, TypeNotificationReassignation, identifiant_deterministe,
-    reduire_coordination, reduire_ouverture_dependance, reduire_reassignation,
+    SuiteObjective, TransitionCoordinationActive, TypeDecision, TypeEffetDemandeSuivie,
+    TypeEvenementAttendu, TypeFaitReassignation, TypeNotificationReassignation,
+    identifiant_deterministe, reduire_coordination, reduire_ouverture_dependance,
+    reduire_reassignation,
 };
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
     StoreCommitPhase, stable_body_hash,
 };
+use crate::routines::{EtatOccurrence, EtatRoutine, Routine, RoutineOccurrence};
 use bridget_transport::protocol::{CoordinationEventKind, WrapperToDaemon};
 use rusqlite::{
     Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
@@ -45,7 +47,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 15;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -2193,6 +2195,325 @@ impl MaicieStore {
         Ok(reservations)
     }
 
+    pub fn insert_routine(&mut self, routine: &Routine) -> Result<(), StoreError> {
+        let (suite_kind, suite_objective_id) = suite_columns(&routine.suite);
+        let inserted = self
+            .connection
+            .execute(
+                "INSERT INTO routines(\n\
+                     id, goal, participant, period_secs, suite_kind, suite_objective_id,\n\
+                     depends_on_json, references_json, template_hash, state,\n\
+                     proposed_at, approved_at, paused_at, last_bucket\n\
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params![
+                    routine.id.to_string(),
+                    routine.goal,
+                    routine.participant,
+                    routine.period_secs,
+                    suite_kind,
+                    suite_objective_id,
+                    serde_json::to_string(&routine.depends_on)
+                        .map_err(|_| StoreError::Corrupt("depends_on JSON"))?,
+                    serde_json::to_string(&routine.references)
+                        .map_err(|_| StoreError::Corrupt("references JSON"))?,
+                    routine.template_hash,
+                    routine_state_name(routine.state),
+                    routine.proposed_at,
+                    routine.approved_at,
+                    routine.paused_at,
+                    routine.last_bucket,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("routine non enregistrée"));
+        }
+        Ok(())
+    }
+
+    pub fn update_routine(&mut self, routine: &Routine) -> Result<(), StoreError> {
+        let (suite_kind, suite_objective_id) = suite_columns(&routine.suite);
+        let updated = self
+            .connection
+            .execute(
+                "UPDATE routines SET\n\
+                     goal = ?1, participant = ?2, period_secs = ?3,\n\
+                     suite_kind = ?4, suite_objective_id = ?5,\n\
+                     depends_on_json = ?6, references_json = ?7, template_hash = ?8,\n\
+                     state = ?9, proposed_at = ?10, approved_at = ?11, paused_at = ?12,\n\
+                     last_bucket = ?13\n\
+                 WHERE id = ?14",
+                params![
+                    routine.goal,
+                    routine.participant,
+                    routine.period_secs,
+                    suite_kind,
+                    suite_objective_id,
+                    serde_json::to_string(&routine.depends_on)
+                        .map_err(|_| StoreError::Corrupt("depends_on JSON"))?,
+                    serde_json::to_string(&routine.references)
+                        .map_err(|_| StoreError::Corrupt("references JSON"))?,
+                    routine.template_hash,
+                    routine_state_name(routine.state),
+                    routine.proposed_at,
+                    routine.approved_at,
+                    routine.paused_at,
+                    routine.last_bucket,
+                    routine.id.to_string(),
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if updated != 1 {
+            return Err(StoreError::NotFound("routine absente"));
+        }
+        Ok(())
+    }
+
+    /// Activation atomique : `proposed` → `active` sous garde du hash scellé.
+    /// `updated != 1` = course ou hash divergent (ADR 011 compare-and-swap).
+    pub fn activate_routine_cas(
+        &mut self,
+        routine_id: Uuid,
+        template_hash: &[u8],
+        approved_at: i64,
+        last_bucket: i64,
+    ) -> Result<Routine, StoreError> {
+        let updated = self
+            .connection
+            .execute(
+                "UPDATE routines SET state = 'active', approved_at = ?1, last_bucket = ?2,\n\
+                     paused_at = NULL\n\
+                 WHERE id = ?3 AND state = 'proposed' AND template_hash = ?4",
+                params![
+                    approved_at,
+                    last_bucket,
+                    routine_id.to_string(),
+                    template_hash,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if updated != 1 {
+            return Err(StoreError::Conflict(
+                "activation routine refusée (état ou hash)",
+            ));
+        }
+        self.load_routine(routine_id)?
+            .ok_or(StoreError::NotFound("routine absente après activation"))
+    }
+
+    /// Clôture les occurrences ouvertes liées à un objectif (même transaction
+    /// que la clôture d'objectif). Idempotent : 0 ligne = pas d'occurrence.
+    pub fn terminate_occurrences_for_objective_tx(
+        tx: &Transaction<'_>,
+        objective_id: Uuid,
+    ) -> Result<usize, StoreError> {
+        let changed = tx
+            .execute(
+                "UPDATE routine_occurrences SET state = 'terminee'\n\
+                 WHERE objective_id = ?1 AND state = 'ouverte'",
+                [objective_id.to_string()],
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(changed)
+    }
+
+    /// Rattrapage : toute occurrence encore `ouverte` dont l'objectif est clos
+    /// passe à `terminee`. Appelé en tête de chaque tick routines.
+    pub fn terminate_occurrences_with_closed_objectives(&mut self) -> Result<usize, StoreError> {
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE routine_occurrences\n\
+                 SET state = 'terminee'\n\
+                 WHERE state = 'ouverte'\n\
+                   AND objective_id IS NOT NULL\n\
+                   AND EXISTS (\n\
+                       SELECT 1 FROM objectives\n\
+                       WHERE objectives.id = routine_occurrences.objective_id\n\
+                         AND objectives.state = 'clos'\n\
+                   )",
+                [],
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(changed)
+    }
+
+    /// Propriété : une occurrence `ouverte` ne doit jamais attester un mandat
+    /// inexistant ou terminal. Rétracte en `sautee/mandat_plus_vivant` pour
+    /// que `has_open` retombe et que la routine puisse redéléguer — même si
+    /// l'objectif reste ouvert (choix : le calendrier ne doit pas geler sur
+    /// un cadavre ; la dette Annulee/jamais-retour reste hors lot).
+    pub fn retract_occurrences_with_dead_mandates(&mut self) -> Result<usize, StoreError> {
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE routine_occurrences\n\
+                 SET state = 'sautee', reason = 'mandat_plus_vivant'\n\
+                 WHERE state = 'ouverte'\n\
+                   AND (\n\
+                       delegation_id IS NULL\n\
+                       OR NOT EXISTS (\n\
+                           SELECT 1 FROM delegations d\n\
+                           WHERE d.id = routine_occurrences.delegation_id\n\
+                             AND d.state NOT IN ('annulee', 'terminee')\n\
+                       )\n\
+                   )",
+                [],
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(changed)
+    }
+
+    pub fn load_routine(&self, routine_id: Uuid) -> Result<Option<Routine>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT id, goal, participant, period_secs, suite_kind, suite_objective_id,\n\
+                        depends_on_json, references_json, template_hash, state,\n\
+                        proposed_at, approved_at, paused_at, last_bucket\n\
+                 FROM routines WHERE id = ?1",
+                [routine_id.to_string()],
+                map_routine_row,
+            )
+            .optional()
+            .map_err(StoreError::Sql)?
+            .map(row_to_routine)
+            .transpose()
+    }
+
+    pub fn list_routines(&self, state: Option<EtatRoutine>) -> Result<Vec<Routine>, StoreError> {
+        let mut statement = if state.is_some() {
+            self.connection
+                .prepare(
+                    "SELECT id, goal, participant, period_secs, suite_kind, suite_objective_id,\n\
+                            depends_on_json, references_json, template_hash, state,\n\
+                            proposed_at, approved_at, paused_at, last_bucket\n\
+                     FROM routines WHERE state = ?1 ORDER BY proposed_at, id",
+                )
+                .map_err(StoreError::Sql)?
+        } else {
+            self.connection
+                .prepare(
+                    "SELECT id, goal, participant, period_secs, suite_kind, suite_objective_id,\n\
+                            depends_on_json, references_json, template_hash, state,\n\
+                            proposed_at, approved_at, paused_at, last_bucket\n\
+                     FROM routines ORDER BY proposed_at, id",
+                )
+                .map_err(StoreError::Sql)?
+        };
+        let mapped = if let Some(filter) = state {
+            statement
+                .query_map([routine_state_name(filter)], map_routine_row)
+                .map_err(StoreError::Sql)?
+        } else {
+            statement
+                .query_map([], map_routine_row)
+                .map_err(StoreError::Sql)?
+        };
+        let mut routines = Vec::new();
+        for row in mapped {
+            routines.push(row_to_routine(row.map_err(StoreError::Sql)?)?);
+        }
+        Ok(routines)
+    }
+
+    pub fn insert_occurrence(&mut self, occurrence: &RoutineOccurrence) -> Result<(), StoreError> {
+        let inserted = self
+            .connection
+            .execute(
+                "INSERT INTO routine_occurrences(\n\
+                     routine_id, bucket, state, reason, objective_id, delegation_id, created_at\n\
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    occurrence.routine_id.to_string(),
+                    occurrence.bucket,
+                    occurrence_state_name(occurrence.state),
+                    occurrence.reason,
+                    occurrence.objective_id.map(|id| id.to_string()),
+                    occurrence.delegation_id.map(|id| id.to_string()),
+                    occurrence.created_at,
+                ],
+            )
+            .map_err(|error| {
+                if matches!(
+                    error.sqlite_error_code(),
+                    Some(ErrorCode::ConstraintViolation)
+                ) {
+                    StoreError::Conflict("occurrence déjà présente")
+                } else {
+                    StoreError::Sql(error)
+                }
+            })?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("occurrence non enregistrée"));
+        }
+        Ok(())
+    }
+
+    pub fn load_occurrence(
+        &self,
+        routine_id: Uuid,
+        bucket: i64,
+    ) -> Result<Option<RoutineOccurrence>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT routine_id, bucket, state, reason, objective_id, delegation_id, created_at\n\
+                 FROM routine_occurrences WHERE routine_id = ?1 AND bucket = ?2",
+                params![routine_id.to_string(), bucket],
+                map_occurrence_row,
+            )
+            .optional()
+            .map_err(StoreError::Sql)?
+            .map(row_to_occurrence)
+            .transpose()
+    }
+
+    pub fn open_occurrence_for_routine(
+        &self,
+        routine_id: Uuid,
+    ) -> Result<Option<RoutineOccurrence>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT routine_id, bucket, state, reason, objective_id, delegation_id, created_at\n\
+                 FROM routine_occurrences\n\
+                 WHERE routine_id = ?1 AND state = 'ouverte'\n\
+                 ORDER BY bucket DESC LIMIT 1",
+                [routine_id.to_string()],
+                map_occurrence_row,
+            )
+            .optional()
+            .map_err(StoreError::Sql)?
+            .map(row_to_occurrence)
+            .transpose()
+    }
+
+    pub fn recent_occurrences(
+        &self,
+        routine_id: Uuid,
+        state: EtatOccurrence,
+        limit: i64,
+    ) -> Result<Vec<RoutineOccurrence>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT routine_id, bucket, state, reason, objective_id, delegation_id, created_at\n\
+                 FROM routine_occurrences\n\
+                 WHERE routine_id = ?1 AND state = ?2\n\
+                 ORDER BY bucket DESC LIMIT ?3",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map(
+                params![routine_id.to_string(), occurrence_state_name(state), limit],
+                map_occurrence_row,
+            )
+            .map_err(StoreError::Sql)?;
+        let mut occurrences = Vec::new();
+        for row in rows {
+            occurrences.push(row_to_occurrence(row.map_err(StoreError::Sql)?)?);
+        }
+        Ok(occurrences)
+    }
+
     /// Variante à observateur utilisée par les tests de crash transactionnel.
     /// L'observateur ne fait jamais partie du chemin de production normal.
     #[doc(hidden)]
@@ -2411,6 +2732,83 @@ impl MaicieStore {
         tx.commit().map_err(StoreError::Sql)?;
         observer(StoreCommitPhase::AfterCommit)?;
         Ok(())
+    }
+
+    /// Retrouve objective_id + delegation_id pour une clé d'idempotence, sans
+    /// exiger les octets canoniques (adoption d'un mandat orphelin routines).
+    /// Joint `delegations` comme les autres lookups : une ligne d'idempotence
+    /// orpheline de sa délégation ne doit pas produire une occurrence ouverte
+    /// fantôme. Refuse aussi les mandats terminaux (`annulee` / `terminee`) —
+    /// sinon l'adoption ment (« mandat en cours ») et gèle la routine.
+    pub fn lookup_delegate_ids_by_key(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<(Uuid, Uuid)>, StoreError> {
+        validate_delegate_idempotency_key(idempotency_key)?;
+        let row = self
+            .connection
+            .query_row(
+                "SELECT i.objective_id, i.delegation_id\n\
+                 FROM delegate_idempotency i\n\
+                 JOIN delegations d ON d.id = i.delegation_id\n\
+                 WHERE i.idempotency_key = ?1\n\
+                   AND d.state NOT IN ('annulee', 'terminee')",
+                [idempotency_key],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        row.map(|(objective_raw, delegation_raw)| {
+            Ok((parse_uuid(&objective_raw)?, parse_uuid(&delegation_raw)?))
+        })
+        .transpose()
+    }
+
+    /// Buckets portant un mandat `routine:{id}:{bucket}` encore **vivant**
+    /// (délégation non terminale), dans `[from_bucket, to_bucket]` inclus.
+    /// Sert au rattrapage borné : les orphelins hors `from..=current` doivent
+    /// être adoptés avant le saut de `last_bucket`.
+    pub fn list_routine_orphan_buckets(
+        &self,
+        routine_id: Uuid,
+        from_bucket: i64,
+        to_bucket: i64,
+    ) -> Result<Vec<i64>, StoreError> {
+        if from_bucket > to_bucket {
+            return Ok(Vec::new());
+        }
+        let prefix = format!("routine:{routine_id}:");
+        // UUID hex : pas de `%` / `_` à échapper — pas d'ESCAPE cosmétique.
+        let pattern = format!("{prefix}%");
+        let mut stmt = self
+            .connection
+            .prepare(
+                "SELECT i.idempotency_key\n\
+                 FROM delegate_idempotency i\n\
+                 JOIN delegations d ON d.id = i.delegation_id\n\
+                 WHERE i.idempotency_key LIKE ?1\n\
+                   AND d.state NOT IN ('annulee', 'terminee')",
+            )
+            .map_err(StoreError::Sql)?;
+        let keys = stmt
+            .query_map([pattern], |row| row.get::<_, String>(0))
+            .map_err(StoreError::Sql)?;
+        let mut buckets = Vec::new();
+        for key in keys {
+            let key = key.map_err(StoreError::Sql)?;
+            let Some(suffix) = key.strip_prefix(&prefix) else {
+                continue;
+            };
+            let Ok(bucket) = suffix.parse::<i64>() else {
+                continue;
+            };
+            if bucket >= from_bucket && bucket <= to_bucket {
+                buckets.push(bucket);
+            }
+        }
+        buckets.sort_unstable();
+        buckets.dedup();
+        Ok(buckets)
     }
 
     /// Lit un résultat durable déjà réservé pour une clé de commande. Les
@@ -5639,6 +6037,8 @@ where
     // Politique 31 : libération des plages dans la même transaction que les notifications.
     release_resource_ranges_for_objective(tx, objective.id)?;
     persist_objective_costs(tx, objective, issued_at, costs)?;
+    // Routines : clôture d'occurrence liée dans la même transaction (manche 4).
+    MaicieStore::terminate_occurrences_for_objective_tx(tx, objective.id)?;
     // F37 : déblocage OBJECTIF→OBJECTIF dans la même transaction que 016.
     // Aucun dépendant → zéro écriture supplémentaire (oracle silencieux).
     release_waiting_dependents_on_prerequisite_closure(tx, objective.id, decision, issued_at)?;
@@ -6875,6 +7275,41 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
         )
         .map_err(StoreError::Sql)?;
     }
+    // Routines : gabarit de delegate + calendrier (M5 / note cursor7).
+    if current_version < 15 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS routines (
+                 id TEXT PRIMARY KEY,
+                 goal TEXT NOT NULL,
+                 participant TEXT NOT NULL,
+                 period_secs INTEGER NOT NULL CHECK(period_secs >= 60),
+                 suite_kind TEXT NOT NULL CHECK(suite_kind IN ('aucune', 'objectif')),
+                 suite_objective_id TEXT,
+                 depends_on_json TEXT NOT NULL,
+                 references_json TEXT NOT NULL,
+                 template_hash BLOB NOT NULL,
+                 state TEXT NOT NULL CHECK(state IN ('proposed', 'active', 'paused')),
+                 proposed_at INTEGER NOT NULL CHECK(proposed_at > 0),
+                 approved_at INTEGER,
+                 paused_at INTEGER,
+                 last_bucket INTEGER
+             );
+             CREATE INDEX IF NOT EXISTS routines_state_idx ON routines(state);
+             CREATE TABLE IF NOT EXISTS routine_occurrences (
+                 routine_id TEXT NOT NULL REFERENCES routines(id),
+                 bucket INTEGER NOT NULL,
+                 state TEXT NOT NULL CHECK(state IN ('ouverte', 'sautee', 'differee', 'terminee')),
+                 reason TEXT,
+                 objective_id TEXT REFERENCES objectives(id),
+                 delegation_id TEXT REFERENCES delegations(id),
+                 created_at INTEGER NOT NULL CHECK(created_at > 0),
+                 PRIMARY KEY (routine_id, bucket)
+             );
+             CREATE INDEX IF NOT EXISTS routine_occurrences_state_idx
+                 ON routine_occurrences(routine_id, state, bucket);",
+        )
+        .map_err(StoreError::Sql)?;
+    }
     for version in (current_version + 1)..=SCHEMA_VERSION {
         tx.execute(
             "INSERT OR IGNORE INTO schema_migrations(version, applied_at)\n\
@@ -7404,6 +7839,148 @@ fn objective_state_name(state: EtatObjectif) -> &'static str {
         EtatObjectif::Synthetise => "synthetise",
         EtatObjectif::Clos => "clos",
     }
+}
+
+fn routine_state_name(state: EtatRoutine) -> &'static str {
+    match state {
+        EtatRoutine::Proposed => "proposed",
+        EtatRoutine::Active => "active",
+        EtatRoutine::Paused => "paused",
+    }
+}
+
+fn parse_routine_state(value: &str) -> Result<EtatRoutine, StoreError> {
+    match value {
+        "proposed" => Ok(EtatRoutine::Proposed),
+        "active" => Ok(EtatRoutine::Active),
+        "paused" => Ok(EtatRoutine::Paused),
+        _ => Err(StoreError::Corrupt("état routine inconnu")),
+    }
+}
+
+fn occurrence_state_name(state: EtatOccurrence) -> &'static str {
+    match state {
+        EtatOccurrence::Ouverte => "ouverte",
+        EtatOccurrence::Sautee => "sautee",
+        EtatOccurrence::Differee => "differee",
+        EtatOccurrence::Terminee => "terminee",
+    }
+}
+
+fn parse_occurrence_state(value: &str) -> Result<EtatOccurrence, StoreError> {
+    match value {
+        "ouverte" => Ok(EtatOccurrence::Ouverte),
+        "sautee" => Ok(EtatOccurrence::Sautee),
+        "differee" => Ok(EtatOccurrence::Differee),
+        "terminee" => Ok(EtatOccurrence::Terminee),
+        _ => Err(StoreError::Corrupt("état occurrence inconnu")),
+    }
+}
+
+fn suite_columns(suite: &SuiteObjective) -> (&'static str, Option<String>) {
+    match suite {
+        SuiteObjective::Aucune => ("aucune", None),
+        SuiteObjective::Objectif(id) => ("objectif", Some(id.to_string())),
+    }
+}
+
+fn parse_suite_columns(
+    kind: &str,
+    objective_id: Option<String>,
+) -> Result<SuiteObjective, StoreError> {
+    match (kind, objective_id) {
+        ("aucune", None) => Ok(SuiteObjective::Aucune),
+        ("objectif", Some(raw)) => Ok(SuiteObjective::Objectif(parse_uuid(&raw)?)),
+        _ => Err(StoreError::Corrupt("suite routine incohérente")),
+    }
+}
+
+type RoutineRow = (
+    String,
+    String,
+    String,
+    i64,
+    String,
+    Option<String>,
+    String,
+    String,
+    Vec<u8>,
+    String,
+    i64,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+);
+
+fn map_routine_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RoutineRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+        row.get(10)?,
+        row.get(11)?,
+        row.get(12)?,
+        row.get(13)?,
+    ))
+}
+
+fn row_to_routine(row: RoutineRow) -> Result<Routine, StoreError> {
+    Ok(Routine {
+        id: parse_uuid(&row.0)?,
+        goal: row.1,
+        participant: row.2,
+        period_secs: row.3,
+        suite: parse_suite_columns(&row.4, row.5)?,
+        depends_on: serde_json::from_str(&row.6).map_err(StoreError::Json)?,
+        references: serde_json::from_str(&row.7).map_err(StoreError::Json)?,
+        template_hash: row.8,
+        state: parse_routine_state(&row.9)?,
+        proposed_at: row.10,
+        approved_at: row.11,
+        paused_at: row.12,
+        last_bucket: row.13,
+    })
+}
+
+type OccurrenceRow = (
+    String,
+    i64,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    i64,
+);
+
+fn map_occurrence_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OccurrenceRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+    ))
+}
+
+fn row_to_occurrence(row: OccurrenceRow) -> Result<RoutineOccurrence, StoreError> {
+    Ok(RoutineOccurrence {
+        routine_id: parse_uuid(&row.0)?,
+        bucket: row.1,
+        state: parse_occurrence_state(&row.2)?,
+        reason: row.3,
+        objective_id: row.4.as_deref().map(parse_uuid).transpose()?,
+        delegation_id: row.5.as_deref().map(parse_uuid).transpose()?,
+        created_at: row.6,
+    })
 }
 
 fn parse_objective_state(value: &str) -> Result<EtatObjectif, StoreError> {

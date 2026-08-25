@@ -32,6 +32,10 @@ use maicie::reconcile::{
     reconcile_guichet_startup_with_limits, reconcile_notification_startup_with_limits,
     reconcile_startup_with_limits,
 };
+use maicie::routines::{
+    EtatRoutine, ProposeRoutineRequest, RoutineError, RoutineStatusRow, approve_routine,
+    evaluate_routines, pause_routine, propose_routine, resume_routine, routines_status_rows,
+};
 use maicie::runtime::{RuntimeNature, RuntimeObservation, RuntimeSignal, RuntimeSubscription};
 use maicie::store::{MaicieStore, ObjectiveSnapshot, ResourceRangeReservation, StoreError};
 use serde::Serialize;
@@ -75,6 +79,7 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
         Command::Profile(profile_args) => run_profile(profile_args, migrate),
         Command::Registre(registre_args) => run_registre(registre_args, migrate),
         Command::Plage(plage_args) => run_plage(plage_args, migrate),
+        Command::Routine(routine_args) => run_routine(routine_args, migrate),
         Command::Migrate(migrate_args) => {
             if migrate {
                 return Err(CliError::Usage(
@@ -381,10 +386,47 @@ fn open_store_with_reconciliation(
     // le même chemin borné de reprise, jamais une seconde logique d'envoi CLI.
     reconcile_notification_startup_with_limits(&mut store, &config.bridget_socket, limits)
         .map_err(CliError::Reconcile)?;
+    // Battement routines : même horloge que la relève (aucune timer Maicie).
+    // Court-circuit si aucune active — zéro I/O Bridget, les fixtures CLI
+    // mono-séquence et les commandes hors routines restent intactes.
+    // Note : une routine `paused` n'est pas dans actives — le saut d'orphelins
+    // au resume est couvert DANS resume_routine (pas par ce tick).
+    let actives = store
+        .list_routines(Some(EtatRoutine::Active))
+        .map_err(CliError::Store)?;
+    if !actives.is_empty() {
+        let now = unix_now()?;
+        let issuer_scope = store.issuer_scope().to_string();
+        // Annuaire Bridget manquant : tick sans candidats (retente ensuite).
+        // Motif explicite — pas unwrap_or_default anonyme (manche 4).
+        let candidates =
+            list_routine_candidates(config, limits).unwrap_or_else(|_error| Vec::new());
+        // Erreurs de stockage remontent ; les blips delegate sont absorbés
+        // DANS evaluate_routines (break sans avancer last_bucket).
+        evaluate_routines(
+            &mut store,
+            &config.durations,
+            &issuer_scope,
+            &candidates,
+            now,
+        )
+        .map_err(CliError::Routine)?;
+    }
     Ok(ReconciledStore {
         store,
         coordination,
     })
+}
+
+fn list_routine_candidates(
+    config: &MaicieConfig,
+    limits: BridgetClientLimits,
+) -> Result<Vec<DelegationCandidate>, CliError> {
+    let client =
+        BridgetClient::connect_with_limits(&config.bridget_socket, "maicie-routines", limits)
+            .map_err(CliError::Bridget)?;
+    let agents = client.list_agents().map_err(CliError::Bridget)?;
+    Ok(candidates_from(config, &agents))
 }
 
 fn reconcile_pending(
@@ -713,6 +755,7 @@ enum Command {
     Profile(ProfileArgs),
     Registre(RegistreArgs),
     Plage(PlageArgs),
+    Routine(RoutineArgs),
     /// Consentement explicite : applique les migrations de schéma.
     Migrate(MigrateArgs),
 }
@@ -845,9 +888,10 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
         "profile" => parse_profile(tail).map(Command::Profile),
         "registre" => parse_registre(tail).map(Command::Registre),
         "plage" => parse_plage(tail).map(Command::Plage),
+        "routine" => parse_routine(tail).map(Command::Routine),
         "migrate" => parse_migrate(tail).map(Command::Migrate),
         _ => Err(CliError::Usage(
-            "commande inconnue : delegate, status, objective, profile, registre, plage ou migrate",
+            "commande inconnue : delegate, status, objective, profile, registre, plage, routine ou migrate",
         )),
     }
 }
@@ -874,6 +918,444 @@ fn run_migrate(arguments: MigrateArgs) -> Result<String, CliError> {
     let store = MaicieStore::open_and_migrate(&config.database_path).map_err(CliError::Store)?;
     let version = store.schema_version().map_err(CliError::Store)?;
     Ok(format!("schéma migré vers {version}"))
+}
+
+#[derive(Debug)]
+struct RoutineArgs {
+    config: PathBuf,
+    json: bool,
+    action: RoutineAction,
+}
+
+#[derive(Debug)]
+enum RoutineAction {
+    Propose {
+        goal: String,
+        participant: String,
+        period_secs: i64,
+        suite: SuiteObjective,
+        depends_on: Vec<Uuid>,
+        references: Vec<Uuid>,
+    },
+    Approve {
+        routine_id: Uuid,
+    },
+    List,
+    Pause {
+        routine_id: Uuid,
+    },
+    Resume {
+        routine_id: Uuid,
+    },
+    Show {
+        routine_id: Uuid,
+    },
+}
+
+fn parse_routine(arguments: &[String]) -> Result<RoutineArgs, CliError> {
+    let Some((verb, tail)) = arguments.split_first() else {
+        return Err(CliError::Usage(
+            "action routine obligatoire : propose|approve|list|pause|resume|show",
+        ));
+    };
+    let mut config = None;
+    let mut json = false;
+    let mut goal = None;
+    let mut participant = None;
+    let mut period_secs = None;
+    let mut suite = None;
+    let mut depends_on = Vec::new();
+    let mut references = Vec::new();
+    let mut routine_id = None;
+    let mut index = 0;
+    while index < tail.len() {
+        match tail[index].as_str() {
+            "--config" => set_once_path(&mut config, next_value(tail, &mut index, "--config")?)?,
+            "--json" => {
+                if json {
+                    return Err(CliError::Usage("option --json dupliquée"));
+                }
+                json = true;
+            }
+            "--goal" => {
+                set_once_string(&mut goal, next_value(tail, &mut index, "--goal")?, "goal")?
+            }
+            "--to" => set_once_string(
+                &mut participant,
+                next_value(tail, &mut index, "--to")?,
+                "to",
+            )?,
+            "--period-secs" => {
+                if period_secs.is_some() {
+                    return Err(CliError::Usage("option --period-secs dupliquée"));
+                }
+                let raw = next_value(tail, &mut index, "--period-secs")?;
+                period_secs = Some(
+                    raw.parse::<i64>()
+                        .map_err(|_| CliError::Usage("--period-secs entier attendu"))?,
+                );
+            }
+            "--suite" => {
+                if suite.is_some() {
+                    return Err(CliError::Usage("option --suite dupliquée"));
+                }
+                suite = Some(parse_suite(next_value(tail, &mut index, "--suite")?)?);
+            }
+            "--depends-on" => {
+                depends_on.push(parse_objective_id(next_value(
+                    tail,
+                    &mut index,
+                    "--depends-on",
+                )?)?);
+            }
+            "--reference" => {
+                references.push(parse_objective_id(next_value(
+                    tail,
+                    &mut index,
+                    "--reference",
+                )?)?);
+            }
+            "--id" => {
+                if routine_id.is_some() {
+                    return Err(CliError::Usage("option --id dupliquée"));
+                }
+                routine_id = Some(parse_objective_id(next_value(tail, &mut index, "--id")?)?);
+            }
+            other if other.starts_with("--") => {
+                return Err(CliError::Usage("option routine inconnue"));
+            }
+            _ => {
+                return Err(CliError::Usage("option routine inconnue"));
+            }
+        }
+        index += 1;
+    }
+    let config = config.ok_or(CliError::Usage("--config est obligatoire"))?;
+    let action = match verb.as_str() {
+        "propose" => {
+            let suite = suite.ok_or(CliError::Usage(
+                "--suite est obligatoire (--suite aucune|<objectif-id>)",
+            ))?;
+            RoutineAction::Propose {
+                goal: goal.ok_or(CliError::Usage("--goal obligatoire"))?,
+                participant: participant.ok_or(CliError::Usage("--to obligatoire"))?,
+                period_secs: period_secs.ok_or(CliError::Usage("--period-secs obligatoire"))?,
+                suite,
+                depends_on,
+                references,
+            }
+        }
+        "approve" => RoutineAction::Approve {
+            routine_id: routine_id.ok_or(CliError::Usage("--id obligatoire"))?,
+        },
+        "list" => RoutineAction::List,
+        "pause" => RoutineAction::Pause {
+            routine_id: routine_id.ok_or(CliError::Usage("--id obligatoire"))?,
+        },
+        "resume" => RoutineAction::Resume {
+            routine_id: routine_id.ok_or(CliError::Usage("--id obligatoire"))?,
+        },
+        "show" => RoutineAction::Show {
+            routine_id: routine_id.ok_or(CliError::Usage("--id obligatoire"))?,
+        },
+        _ => {
+            return Err(CliError::Usage(
+                "action routine inconnue : propose|approve|list|pause|resume|show",
+            ));
+        }
+    };
+    Ok(RoutineArgs {
+        config,
+        json,
+        action,
+    })
+}
+
+fn run_routine(arguments: RoutineArgs, migrate: bool) -> Result<String, CliError> {
+    let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let mut store = open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)?.store;
+    let now = unix_now()?;
+    match arguments.action {
+        RoutineAction::Propose {
+            goal,
+            participant,
+            period_secs,
+            suite,
+            depends_on,
+            references,
+        } => {
+            let routine = propose_routine(
+                &mut store,
+                &ProposeRoutineRequest {
+                    goal: &goal,
+                    participant: &participant,
+                    period_secs,
+                    suite,
+                    depends_on: &depends_on,
+                    references: &references,
+                    now,
+                },
+            )
+            .map_err(CliError::Routine)?;
+            render_routine_output(
+                RoutineOutput::Proposed {
+                    routine_id: routine.id,
+                    template_hash_hex: hex_hash(&routine.template_hash),
+                    period_secs: routine.period_secs,
+                    participant: routine.participant,
+                },
+                arguments.json,
+            )
+        }
+        RoutineAction::Approve { routine_id } => {
+            let routine = store
+                .load_routine(routine_id)
+                .map_err(CliError::Store)?
+                .ok_or(CliError::Routine(RoutineError::NotFound(routine_id)))?;
+            // Hash recalculé + refus AVANT l'écran (vigilance piégée).
+            let expected_hash = routine_approval_preflight(&routine)?;
+            confirm_local_routine_approval(routine_id, &routine, &expected_hash)?;
+            let approved = approve_routine(&mut store, routine_id, &expected_hash, now)
+                .map_err(CliError::Routine)?;
+            render_routine_output(
+                RoutineOutput::Approved {
+                    routine_id: approved.id,
+                    state: "active",
+                },
+                arguments.json,
+            )
+        }
+        RoutineAction::List => {
+            let rows = routines_status_rows(&store).map_err(CliError::Routine)?;
+            render_routine_output(
+                RoutineOutput::List {
+                    routines: rows.into_iter().map(RoutineStatusOutput::from).collect(),
+                },
+                arguments.json,
+            )
+        }
+        RoutineAction::Pause { routine_id } => {
+            let paused = pause_routine(&mut store, routine_id, now).map_err(CliError::Routine)?;
+            render_routine_output(
+                RoutineOutput::State {
+                    routine_id: paused.id,
+                    state: "paused",
+                },
+                arguments.json,
+            )
+        }
+        RoutineAction::Resume { routine_id } => {
+            let resumed = resume_routine(&mut store, routine_id, now).map_err(CliError::Routine)?;
+            render_routine_output(
+                RoutineOutput::State {
+                    routine_id: resumed.id,
+                    state: "active",
+                },
+                arguments.json,
+            )
+        }
+        RoutineAction::Show { routine_id } => {
+            let rows = routines_status_rows(&store).map_err(CliError::Routine)?;
+            let row = rows
+                .into_iter()
+                .find(|row| row.routine_id == routine_id)
+                .ok_or(CliError::Routine(RoutineError::NotFound(routine_id)))?;
+            render_routine_output(
+                RoutineOutput::Show {
+                    routine: RoutineStatusOutput::from(row),
+                },
+                arguments.json,
+            )
+        }
+    }
+}
+
+fn confirm_local_routine_approval(
+    routine_id: Uuid,
+    routine: &maicie::routines::Routine,
+    expected_hash: &[u8],
+) -> Result<(), CliError> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err(CliError::Usage(
+            "approbation routine = terminal interactif uniquement",
+        ));
+    }
+    print!("{}", format_routine_approval_screen(routine_id, routine, expected_hash));
+    print!("Confirmer l'activation (oui) : ");
+    io::stdout()
+        .flush()
+        .map_err(|_| CliError::Usage("stdout indisponible"))?;
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .map_err(|_| CliError::Usage("stdin indisponible"))?;
+    if line.trim() != "oui" {
+        return Err(CliError::Usage("approbation routine refusée"));
+    }
+    Ok(())
+}
+
+/// Recalcule le hash scellé et refuse AVANT tout écran si le gabarit a divergé.
+/// Extrait pour qu'un oracle puisse tuer le retrait de cette ligne (MUT-A).
+fn routine_approval_preflight(
+    routine: &maicie::routines::Routine,
+) -> Result<Vec<u8>, CliError> {
+    let expected_hash = maicie::routines::sealed_template_hash(routine);
+    if expected_hash != routine.template_hash {
+        return Err(CliError::Routine(RoutineError::Invalid("gabarit altéré")));
+    }
+    Ok(expected_hash)
+}
+
+/// Texte d'écran ADR 011 : les SIX champs scellés + les deux empreintes.
+/// Testable sans TTY (véracité de l'interface, pas seulement la garde).
+fn format_routine_approval_screen(
+    routine_id: Uuid,
+    routine: &maicie::routines::Routine,
+    expected_hash: &[u8],
+) -> String {
+    let suite_label = match &routine.suite {
+        maicie::domain::SuiteObjective::Aucune => "aucune".to_string(),
+        maicie::domain::SuiteObjective::Objectif(id) => id.to_string(),
+    };
+    let depends = if routine.depends_on.is_empty() {
+        "—".to_string()
+    } else {
+        routine
+            .depends_on
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let references = if routine.references.is_empty() {
+        "—".to_string()
+    } else {
+        routine
+            .references
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    format!(
+        "Approbation locale de la routine\n\
+           id={routine_id}\n\
+           goal={goal}\n\
+           participant={participant}\n\
+           period_secs={period}\n\
+           suite={suite}\n\
+           depends_on={depends}\n\
+           references={references}\n\
+           hash_stocke={stocke}\n\
+           hash_recalcule={recalc} (scellé sur goal,participant,period_secs,suite,depends_on,references — tous affichés ci-dessus)\n",
+        goal = sanitize_terminal(&routine.goal),
+        participant = routine.participant,
+        period = routine.period_secs,
+        suite = suite_label,
+        depends = depends,
+        references = references,
+        stocke = hex_hash(&routine.template_hash),
+        recalc = hex_hash(expected_hash),
+    )
+}
+
+fn hex_hash(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum RoutineOutput {
+    Proposed {
+        routine_id: Uuid,
+        template_hash_hex: String,
+        period_secs: i64,
+        participant: String,
+    },
+    Approved {
+        routine_id: Uuid,
+        state: &'static str,
+    },
+    State {
+        routine_id: Uuid,
+        state: &'static str,
+    },
+    List {
+        routines: Vec<RoutineStatusOutput>,
+    },
+    Show {
+        routine: RoutineStatusOutput,
+    },
+}
+
+#[derive(Serialize)]
+struct RoutineStatusOutput {
+    routine_id: Uuid,
+    state: EtatRoutine,
+    period_secs: i64,
+    participant: String,
+    last_bucket: Option<i64>,
+    open_occurrence: Option<maicie::routines::RoutineOccurrence>,
+    recent_sautee: Vec<maicie::routines::RoutineOccurrence>,
+    recent_differee: Vec<maicie::routines::RoutineOccurrence>,
+}
+
+impl From<RoutineStatusRow> for RoutineStatusOutput {
+    fn from(row: RoutineStatusRow) -> Self {
+        Self {
+            routine_id: row.routine_id,
+            state: row.state,
+            period_secs: row.period_secs,
+            participant: row.participant,
+            last_bucket: row.last_bucket,
+            open_occurrence: row.open_occurrence,
+            recent_sautee: row.recent_sautee,
+            recent_differee: row.recent_differee,
+        }
+    }
+}
+
+fn render_routine_output(output: RoutineOutput, json: bool) -> Result<String, CliError> {
+    if json {
+        return serde_json::to_string(&output)
+            .map_err(|_| CliError::Usage("sortie routine JSON indisponible"));
+    }
+    Ok(match output {
+        RoutineOutput::Proposed {
+            routine_id,
+            template_hash_hex,
+            period_secs,
+            participant,
+        } => format!(
+            "routine={} état=proposed participant={} period_secs={} hash={}",
+            routine_id, participant, period_secs, template_hash_hex
+        ),
+        RoutineOutput::Approved { routine_id, state }
+        | RoutineOutput::State { routine_id, state } => {
+            format!("routine={} état={}", routine_id, state)
+        }
+        RoutineOutput::List { routines } => format!(
+            "routines={} sautee={} differee={}",
+            routines.len(),
+            routines
+                .iter()
+                .map(|row| row.recent_sautee.len())
+                .sum::<usize>(),
+            routines
+                .iter()
+                .map(|row| row.recent_differee.len())
+                .sum::<usize>(),
+        ),
+        RoutineOutput::Show { routine } => format!(
+            "routine={} état={:?} sautee={} differee={} ouverte={}",
+            routine.routine_id,
+            routine.state,
+            routine.recent_sautee.len(),
+            routine.recent_differee.len(),
+            routine.open_occurrence.is_some(),
+        ),
+    })
 }
 
 fn parse_plage(arguments: &[String]) -> Result<PlageArgs, CliError> {
@@ -2287,7 +2769,8 @@ enum CliError {
     Store(StoreError),
     Reconcile(ReconcileError),
     Profile(ProfileError),
-    ProfileActivation(ProfileActivationError),
+        ProfileActivation(ProfileActivationError),
+    Routine(RoutineError),
 }
 
 impl CliError {
@@ -2302,6 +2785,7 @@ impl CliError {
             Self::Reconcile(ReconcileError::Store(_)) => EXIT_STORE,
             Self::Objective(ObjectiveError::Store(_)) => EXIT_STORE,
             Self::ProfileActivation(ProfileActivationError::Store(_)) => EXIT_STORE,
+            Self::Routine(RoutineError::Store(_)) => EXIT_STORE,
             Self::CatalogueReconcile(CatalogueReconcileError::Catalogue(_)) => EXIT_CONFIGURATION,
             Self::CatalogueReconcile(_) => EXIT_CONFIGURATION,
             Self::Reconcile(_) => EXIT_BRIDGET,
@@ -2310,7 +2794,7 @@ impl CliError {
                 EXIT_DELEGATE
             }
             Self::Objective(_) => EXIT_DELEGATE,
-            Self::Profile(_) | Self::ProfileActivation(_) => EXIT_DELEGATE,
+            Self::Profile(_) | Self::ProfileActivation(_) | Self::Routine(_) => EXIT_DELEGATE,
         }
     }
 
@@ -2337,6 +2821,9 @@ impl CliError {
             Self::Profile(_) => "profile_invalid",
             Self::ProfileActivation(ProfileActivationError::Store(_)) => "store",
             Self::ProfileActivation(_) => "profile_activation_invalid",
+            Self::Routine(RoutineError::Store(_)) => "store",
+            Self::Routine(RoutineError::NotFound(_)) => "routine_not_found",
+            Self::Routine(_) => "routine_invalid",
         }
     }
 
@@ -2374,6 +2861,7 @@ impl fmt::Display for CliError {
             Self::Reconcile(error) => error.fmt(formatter),
             Self::Profile(error) => error.fmt(formatter),
             Self::ProfileActivation(error) => error.fmt(formatter),
+            Self::Routine(error) => error.fmt(formatter),
         }
     }
 }
@@ -2382,11 +2870,96 @@ impl fmt::Display for CliError {
 mod tests {
     use super::{
         Command, DelegateError, DelegateOutput, RegistreAction, RegistreArgs, candidates_from,
-        delegate_error_for_cli, parse_command, peel_migrate_flag, sanitize_terminal,
+        delegate_error_for_cli, format_routine_approval_screen, parse_command, peel_migrate_flag,
+        routine_approval_preflight, sanitize_terminal,
     };
     use maicie::bridget_client::AgentInfo;
     use maicie::config::{DurationClasses, MaicieConfig, ProfileConfig};
+    use maicie::domain::SuiteObjective;
+    use maicie::routines::{EtatRoutine, Routine, sealed_template_hash};
     use std::path::PathBuf;
+    use uuid::Uuid;
+
+    #[test]
+    fn refus_avant_ecran_sur_gabarit_altere() {
+        let id = Uuid::new_v4();
+        let mut routine = Routine {
+            id,
+            goal: "ronde".into(),
+            participant: "prospective".into(),
+            period_secs: 60,
+            suite: SuiteObjective::Aucune,
+            depends_on: vec![],
+            references: vec![],
+            template_hash: vec![0x00],
+            state: EtatRoutine::Proposed,
+            proposed_at: 1,
+            approved_at: None,
+            paused_at: None,
+            last_bucket: None,
+        };
+        routine.template_hash = sealed_template_hash(&routine);
+        // Mutant du contenu sans retoucher le hash stocké → vigilance piégée
+        // si l'écran s'affichait. Le préflight DOIT refuser avant.
+        routine.goal = "autre goal".into();
+        let err = routine_approval_preflight(&routine).expect_err("gabarit altéré");
+        assert!(
+            err.to_string().contains("gabarit altéré"),
+            "refus pré-écran attendu, obtenu : {err}"
+        );
+        // Contrôle positif : gabarit intact → Ok (l'écran pourrait s'afficher).
+        routine.goal = "ronde".into();
+        routine.template_hash = sealed_template_hash(&routine);
+        assert!(routine_approval_preflight(&routine).is_ok());
+    }
+
+    #[test]
+    fn ecran_approbation_routine_affiche_les_six_champs_scelles() {
+        let id = Uuid::new_v4();
+        let dep = Uuid::new_v4();
+        let reference = Uuid::new_v4();
+        let suite_obj = Uuid::new_v4();
+        let hash = vec![0xab_u8, 0xcd];
+        let routine = Routine {
+            id,
+            goal: "ronde".into(),
+            participant: "prospective".into(),
+            period_secs: 60,
+            suite: SuiteObjective::Objectif(suite_obj),
+            depends_on: vec![dep],
+            references: vec![reference],
+            template_hash: hash.clone(),
+            state: EtatRoutine::Proposed,
+            proposed_at: 1,
+            approved_at: None,
+            paused_at: None,
+            last_bucket: None,
+        };
+        let screen = format_routine_approval_screen(id, &routine, &hash);
+        for key in [
+            "goal=",
+            "participant=",
+            "period_secs=",
+            "suite=",
+            "depends_on=",
+            "references=",
+        ] {
+            assert!(screen.contains(key), "écran doit montrer {key}");
+        }
+        assert!(screen.contains(&dep.to_string()));
+        assert!(screen.contains(&reference.to_string()));
+        assert!(screen.contains(&suite_obj.to_string()));
+        assert!(
+            screen.contains(
+                "scellé sur goal,participant,period_secs,suite,depends_on,references — tous affichés ci-dessus"
+            ),
+            "libellé hash ne doit pas mentir sur les champs sources"
+        );
+        assert!(
+            !screen.contains("depuis les champs affichés"),
+            "ancien libellé ambigu interdit"
+        );
+    }
 
     #[test]
     fn delegate_exige_les_options_structurantes() {

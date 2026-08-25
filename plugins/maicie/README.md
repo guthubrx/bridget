@@ -117,6 +117,41 @@ Si Bridget utilise un registre utilisateur `agents.json`, ce fichier doit être
 régulier, non symbolique et avoir le mode `0600` ou plus restrictif ; le daemon
 refuse de démarrer avec un registre plus permissif.
 
+## Routines (schéma v15)
+
+Une routine est un gabarit de `delegate` + un calendrier évalué à chaque
+relève (~60 s). Elle **délègue**, n'approuve jamais. Surface CLI :
+
+| Action | Rôle |
+|---|---|
+| `routine propose` | Propose un gabarit (`--goal`, `--participant`, `--period-secs`, `--suite`, `--depends-on`, `--references`) ; état `proposed` |
+| `routine approve` | Approbation locale ADR 011 : refus pré-écran si gabarit altéré, puis écran des six champs scellés + confirmation `oui` |
+| `routine list` | Liste les routines et occurrences ouvertes / récentes |
+| `routine show --id` | Détail d'une routine (`open_occurrence`, `recent_differee`, …) |
+| `routine pause --id` | Suspend sans rattraper les buckets de pause à la reprise |
+| `routine resume --id` | Reprend au bucket courant (pas de rattrapage de la pause) |
+
+Schéma SQLite `user_version = 15` : tables `routines` / `routine_occurrences`.
+La migration v15 n'est pas dans ce lot (`--migrate` ailleurs).
+L'adoption d'un mandat orphelin exige une délégation **vivante**
+(`state NOT IN (annulee, terminee)`) : un mandat terminal n'est jamais
+ressuscité en `ouverte/mandat_adopte`. Une `ouverte` qui pointerait déjà
+vers un cadavre est rétractée en `sautee/mandat_plus_vivant` en tête de
+tick. **Choix** : sans attestation vivante, la routine redélègue même si
+l'objectif précédent reste ouvert — le calendrier ne doit pas geler en
+silence sur un mandat mort ; le traitement propre d'`Annulee` / jamais-
+retour reste la dette hors lot.
+
+### Dette assumée (hors lot) — formulation mesurée
+
+Si une délégation est **annulée** sans clôture d'objectif, l'occurrence reste
+`ouverte`, les relèves suivantes produisent des `differee`, **aucun nouveau
+mandat ne part**, et `routine list` continue d'afficher `active`. En termes
+mesurés : **la routine cesse définitivement de tourner, en silence, pendant
+que la surface affirme qu'elle est vivante.** Remède futur (~1 j) : états
+`Annulee` / jamais-retour. Banc de référence : mesure relec5 (dix relèves,
+contrôle positif objectif clos).
+
 ## Guichet Maicie
 
 La session 015 ajoute le contrat du guichet Maicie : Bridget peut tenir une
