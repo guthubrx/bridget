@@ -355,8 +355,13 @@ def format_text(result: dict[str, Any], *, maicie_error: str | None) -> str:
     lines.append(
         "OCCUPES                        : " + (", ".join(result["occupes"]) or "aucun")
     )
+    # Énoncé volontairement littéral : l'âge est celui de la plus vieille
+    # remise encore en file, PAS « bloqué depuis ». Un agent qui repart après
+    # déblocage garde son ancienneté tant que cette remise n'est pas consommée
+    # (mesuré 2026-08-25, jc2 : travaille, compteur 50 min — le signal était
+    # vrai, la lecture « est bloqué depuis » mentait).
     lines.append(
-        "BLOQUES (remises non consommees): "
+        "BLOQUES (plus vieille remise non consommee) : "
         + (
             ", ".join(f"{name} {secs // 60}min" for name, secs in result["bloques"])
             or "aucun"
