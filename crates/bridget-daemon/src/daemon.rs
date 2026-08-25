@@ -9432,6 +9432,33 @@ mod presence_tests {
         let _ = std::fs::remove_file(config.db_path);
     }
 
+    /// ORACLE — Heartbeat rafraîchit last_seen, jamais l'état métier.
+    ///
+    /// Sans lui, un Heartbeat qui écrirait `state="connected"` laisserait
+    /// les quatre oracles fantômes verts : la garde existerait dans le code
+    /// et nulle part dans le filet. busy doit rester busy.
+    #[test]
+    fn heartbeat_preserve_etat_metier() {
+        let (mut state, config) = state_with_registered_agent("heartbeat-busy");
+        state.set_turn_state("conn-1", true).unwrap();
+        assert_eq!(state.presences.get("instance-1").unwrap().state, "busy");
+        let before = state.presences.get("instance-1").unwrap().last_seen;
+        std::thread::sleep(Duration::from_millis(5));
+        let shared = Arc::new(Mutex::new(state));
+        assert!(handle_wrapper_message("conn-1", WrapperToDaemon::Heartbeat, &shared).is_none());
+        let st = shared.lock().unwrap();
+        let presence = st.presences.get("instance-1").unwrap();
+        assert_eq!(
+            presence.state, "busy",
+            "Heartbeat ne doit jamais écraser l'état métier (busy→connected serait un mensonge)"
+        );
+        assert!(
+            presence.last_seen > before,
+            "Heartbeat doit rafraîchir last_seen, sinon le retain jette encore le busy live"
+        );
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
     #[test]
     fn journal_ready_atteste_le_gate_attach_apres_register() {
         let (mut state, config) = state_with_registered_agent("attach-journal-ready");
