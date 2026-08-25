@@ -1,8 +1,8 @@
 # Session 023 — Observabilité des tours et des refus
 
-**Branche** : `session-023-observabilite-tour-refus`  
-**Base** : `b6eea777facf929d99a9c4f9ae75fb50e06dc2fd`  
-**Statut** : Implémentée, validation finale avant livraison  
+**Branche** : `session-023-observabilite-tour-refus`
+**Base** : `b6eea777facf929d99a9c4f9ae75fb50e06dc2fd`
+**Statut** : Implémentée, validation finale avant livraison
 **Priorité** : P1
 
 ## Contexte
