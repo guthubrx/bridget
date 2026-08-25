@@ -14,4 +14,13 @@
 - [x] T2307 Rendre le diagnostic CLI exhaustif sans modifier l'éligibilité.
 - [x] T2308 Compiler, mesurer les mutants, les suites ciblées et le workspace.
 - [x] T2309 Mesurer les compositions 018/019/021/022 et documenter les limites.
-- [ ] T2310 Pousser la tête gelée et livrer les comptes et imputations.
+- [x] T2310 Pousser la première tête gelée et la soumettre au jury.
+- [x] T2311 Reproduire sans mutation les deux bloquants rc3 et le hunk rustfmt.
+- [x] T2312 Marquer les échecs terminaux au producteur sans parser `reason`.
+- [x] T2313 Rendre une ancienne `error` ambiguë et une continuation probante.
+- [x] T2314 Neutraliser les contrôles du détail dans les sorties texte et JSON.
+- [x] T2315 Ajouter le faux ACP en attente puis rejet terminal et les contrôles
+  positifs non vacuants.
+- [x] T2316 Corriger le hunk rustfmt 023 sans modifier P2.
+- [x] T2317 Remesurer mutations, suites complètes et compositions concurrentes.
+- [ ] T2318 Pousser la nouvelle tête gelée et la remettre au jury de sécurité.

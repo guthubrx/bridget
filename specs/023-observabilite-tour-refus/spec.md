@@ -2,7 +2,7 @@
 
 **Branche** : `session-023-observabilite-tour-refus`
 **Base** : `b6eea777facf929d99a9c4f9ae75fb50e06dc2fd`
-**Statut** : Implémentée, validation finale avant livraison
+**Statut** : Reprise après STOP validée, nouvelle tête à remettre au jury
 **Priorité** : P1
 
 ## Contexte
@@ -24,12 +24,14 @@ d'éligibilité.
 ### P1 — Dernière borne de tour observable
 
 Pour tout participant d'une délégation ouverte, la ronde croise l'annuaire avec
-les événements durables `turn_start`, `turn_end` et `error`. Un dernier
-`turn_start` sans terminal corrélé reste un tour ouvert. Un terminal corrélé
-sans `turn_start` ultérieur est distingué d'un agent au travail. Hors
-attestation instantanée `state=busy`, une source absente, illisible ou
-incohérente rend la conclusion indéterminée ; elle ne devient jamais une preuve
-d'inactivité.
+les événements durables de son tour. Un `turn_end` corrélé atteste la borne
+fermée `turn_completed`. Un `error` ne ferme le tour que si son producteur porte
+le code fermé `terminal_kind=turn_failed` ; son texte `reason` reste un détail
+libre et ne décide jamais. Une ancienne `error` sans code est indéterminée. Une
+`update` corrélée ultérieure atteste que le tour a continué, tandis qu'un
+nouveau `turn_start` atteste sa reprise. Hors attestation instantanée
+`state=busy`, une source absente, illisible ou incohérente rend la conclusion
+indéterminée ; elle ne devient jamais une preuve d'inactivité.
 
 Une ouverture n'est une preuve positive que si son transport écrit aussi les
 terminaux de succès et d'échec. Les wrappers interactifs `unix` et `ssh-unix`
@@ -38,6 +40,11 @@ projection reste donc indéterminée au lieu de prétendre que le tour est ouver
 
 Cette projection ne crée aucun nouvel état durable et n'attribue aucune cause
 à une fin de tour. Elle lit le journal append-only déjà détenu par Bridget.
+
+Les détails libres du fournisseur restent présents dans le JSON structuré,
+mais ne peuvent piloter la sortie opérateur : le rendu texte échappe les
+caractères de contrôle et le JSON sérialisé ne porte aucun contrôle Unicode
+brut. Le code terminal et le détail sont deux champs distincts.
 
 ### P2 — Condition de refus nommée
 
@@ -54,8 +61,9 @@ La session ne modifie pas la décision qui rend `busy` temporairement non
 
 ### US-2301 — Distinguer fin sans reprise et tour ouvert
 
-1. Un participant dont le journal finit par `turn_end` ou `error`, sans
-   `turn_start` ultérieur, n'apparaît plus dans `OCCUPES`.
+1. Un participant dont le journal finit par `turn_end` ou par une `error`
+   portant `terminal_kind=turn_failed`, sans `turn_start` ultérieur, n'apparaît
+   plus dans `OCCUPES`.
 2. Un participant dont le dernier tour reste ouvert demeure `OCCUPE`, même si
    sa remise a plus d'une heure.
 3. Un participant qui a terminé puis ouvert un nouveau tour demeure `OCCUPE`.
@@ -66,6 +74,10 @@ La session ne modifie pas la décision qui rend `busy` temporairement non
    `INDETERMINE`, sauf si l'annuaire atteste simultanément `state=busy`.
 6. Le rendu texte et le JSON nomment la borne terminale et gardent l'âge de la
    remise comme contexte seulement, jamais comme condition de classement.
+7. Une `error` non marquée suivie d'une `update` conserve le tour ouvert ; sans
+   continuation elle reste `INDETERMINE`. Les séquences ESC, retour chariot et
+   contrôles bidirectionnels présentes dans `stop_reason` ou `error.reason`
+   restent diagnostiquables sans aucun contrôle brut dans la sortie.
 
 ### US-2302 — Comprendre un refus sans enquête
 
@@ -81,14 +93,16 @@ La session ne modifie pas la décision qui rend `busy` temporairement non
 
 - Changer la politique qui refuse une cible pendant un tour `busy`.
 - Mettre en file, réessayer automatiquement ou choisir une autre cible.
-- Créer un événement de journal, un état daemon ou une migration de schéma.
-- Modifier les fichiers des sessions 019 ou 022.
+- Créer un nouveau type d'événement, un état daemon ou une migration de schéma.
+  `terminal_kind` est un enrichissement additif du payload v1 existant.
+- Modifier le schéma `provider_request` de 019 ou la boucle `attach.rs` de 022.
 - Activer un outil depuis une branche non admise sur `origin/main`.
 
 ## Dépendances et composition
 
-- La session 019 ajoute `provider_request`, mais P1 ne dépend que des bornes de
-  tour déjà présentes avant 019.
+- La session 019 ajoute `provider_request` et enrichit les erreurs Codex. La
+  passerelle Codex de 023 ajoute le code terminal après cet enrichissement ;
+  aucune décision de 023 ne lit le texte ou les empreintes de 019.
 - La session 022 modifie la boucle d'entrée de la vue ; 023 ne touche pas
   `attach.rs`.
 - La session 021 touche aussi Maicie. La composition doit être mesurée sur sa
