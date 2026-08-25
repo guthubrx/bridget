@@ -1981,6 +1981,11 @@ mod tests {
     /// ORACLE — migration v4 : une base pré-orphaned DOIT élargir le CHECK.
     /// Meurt si l'on retire le bloc v4 alors que le CREATE fresh porte déjà
     /// `orphaned` (les oracles de phase restent verts, la montée reste muette).
+    ///
+    /// Nature de la charge : trois migrations sur quatre avaient déjà leur
+    /// témoin dans ce fichier — la v4 était la seule orpheline. Ce n'est pas
+    /// une pratique à instaurer, c'est une pratique à ne pas rompre. Montage :
+    /// DDL **v3** à la main (CHECK à trois phases), pas une base neuve.
     #[test]
     fn migration_v4_elargit_le_check_pour_accepter_orphaned() {
         let path = std::env::temp_dir().join(format!(
