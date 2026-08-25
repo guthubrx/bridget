@@ -248,7 +248,7 @@ impl UiRelay {
 /// dans le HTML ou dans une configuration persistée.
 pub fn run(daemon_socket: PathBuf, maicie_config: PathBuf) -> Result<(), UiError> {
     let relay = UiRelay::bind(UiRelayConfig::loopback(daemon_socket, maicie_config))?;
-    println!("Bridget UI (lecture seule) : {}", relay.url()?);
+    println!("Bridget UI (lecture et envoi) : {}", relay.url()?);
     relay.serve()
 }
 
