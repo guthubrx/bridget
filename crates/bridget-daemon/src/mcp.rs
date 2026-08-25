@@ -48,8 +48,12 @@ pub(crate) const REJEU_A_L_IDENTIQUE: &str = "rejouer à l'identique — même i
 const DIAGNOSTIC_REMISE_EN_VOL: &str = "remise en vol — le destinataire n'a pas encore accusé";
 const DIAGNOSTIC_SORT_INDETERMINE: &str = "sort indéterminé";
 const DIAGNOSTIC_ACCUSE_PERDU: &str = "accusé perdu après transmission";
-const DIAGNOSTIC_ORPHELIN: &str =
+pub(crate) const DIAGNOSTIC_ORPHELIN: &str =
     "remise orpheline — le destinataire a été purgé ; le sort n'est pas inconnu";
+/// Conduite pour `orphaned` — distincte de `REJEU_A_L_IDENTIQUE`.
+/// L'état est absorbant : rejouer la même clé rend `orphaned` à nouveau.
+/// Un agent qui applique le réflexe enseigné pour `in_flight` tourne en rond.
+pub(crate) const CONDUITE_ORPHELIN: &str = "le rejeu à l'identique ne sert à rien — cette clé est close ; change de destinataire, ou attends son retour avec une clé neuve";
 
 /// Statuts clients du couple dépôt-réussi / sort-inconnu.
 ///
@@ -940,7 +944,7 @@ fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value
             "id": id,
             "issued_at": issued_at,
             "delivery_id": delivery_id,
-            "reason": format!("{DIAGNOSTIC_ORPHELIN} ({reason})")
+            "reason": format!("{DIAGNOSTIC_ORPHELIN} ; {CONDUITE_ORPHELIN} ({reason})")
         }),
         IdempotencyIssue::EnvelopeMismatch => json!({
             "status": "envelope_mismatch",
@@ -1823,6 +1827,15 @@ mod tests {
         assert!(
             !crate::cli::send_deposited(&issue),
             "un orphelin n'est pas un dépôt réussi à conclure en rc=0"
+        );
+        let reason = rendu["reason"].as_str().unwrap_or("");
+        assert!(
+            reason.contains(CONDUITE_ORPHELIN),
+            "orphaned doit porter la conduite, pas seulement le constat: {reason}"
+        );
+        assert!(
+            !reason.contains(REJEU_A_L_IDENTIQUE),
+            "orphaned ne doit PAS enseigner le rejeu à l'identique (absorbant): {reason}"
         );
     }
 

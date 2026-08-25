@@ -1440,8 +1440,13 @@ impl IdempotencyStore {
             if delivery != 1 || record != 1 {
                 return Err(IdempotencyError::DispatchUnavailable);
             }
+            // Conduite (pas seulement le constat) : `orphaned` est absorbant —
+            // le réflexe REJEU_A_L_IDENTIQUE enseigné pour in_flight/outcome_unknown
+            // ferait tourner l'émetteur en rond. Aligné sur mcp::CONDUITE_ORPHELIN.
             let body = format!(
-                "ORPHELIN: le message {} destiné à {} n'a pas été livré — présence purgée (delivery {}). {}",
+                "ORPHELIN: le message {} destiné à {} n'a pas été livré — présence purgée (delivery {}). {}\n\
+                 Le rejeu à l'identique ne sert à rien — cette clé est close. \
+                 Change de destinataire, ou attends son retour avec une clé neuve.",
                 message_id, target, delivery_id, reason
             );
             // Même transaction : le signal survit à un crash avant le Deliver.
