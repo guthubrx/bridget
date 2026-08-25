@@ -12,6 +12,7 @@ pub mod domain;
 pub mod outbox;
 pub mod profiles;
 pub mod reconcile;
+pub mod review;
 pub mod routines;
 pub mod runtime;
 pub mod store;

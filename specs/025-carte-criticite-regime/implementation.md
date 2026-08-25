@@ -12,11 +12,23 @@
 
 ### T2501–T2504 — Contrat et preuves métier
 
-- **Statut** : complété, validation en cours
+- **Statut** : complété
 - **Fichiers** : spec, plan, modèle, contrat, tâches, Gherkin et ADR 012
-- **Tests** : validation documentaire et format à exécuter avant commit
+- **Tests** : `git diff --check` et contrôle des termes interdits
 - **Note** : le lot est coupé avant l’élection des relecteurs sur la dépendance
   réelle au capteur de la session 023. La migration v20 attend v17–v19.
+
+### T2505–T2508 — Noyau pur F38
+
+- **Statut** : complété
+- **Fichiers** : `plugins/maicie/src/review.rs`, surface publique et sept
+  tests contractuels
+- **Mesure** : 7 passés, 0 échoué, 0 ignoré ; compilation préalable avec
+  `cargo test -p maicie --test contract --no-run`
+- **Mutants tués dans les assertions** : retrait séparé des quatre germes,
+  élection arbitraire du premier homonyme et seuil Major abaissé de deux à un
+- **Garde** : les ambiguïtés ne portent que l’empreinte du jeton et les chemins
+  candidats ; aucun contenu de diff ou de constat ne franchit la sortie pure
 
 ## REX
 

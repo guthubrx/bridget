@@ -24,3 +24,5 @@ mod runtime_subscription;
 mod guichet_domain;
 #[path = "contract/profiles.rs"]
 mod profiles;
+#[path = "contract/review_criticality.rs"]
+mod review_criticality;

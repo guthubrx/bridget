@@ -9,10 +9,10 @@
 
 ## Phase 2 — Noyau pur F38
 
-- [ ] T2505 [US2] Écrire les tests du résolveur : exact, unique, homonymes, suffixe de ligne et contrat strict dans `plugins/maicie/tests/contract/review_criticality.rs`.
-- [ ] T2506 [US3] Écrire les tests des quatre germes et trois voies, avec contrôles positifs non vides, dans `plugins/maicie/tests/contract/review_criticality.rs`.
-- [ ] T2507 [US2] Implémenter l’index, les preuves et le calcul pur dans `plugins/maicie/src/review.rs`.
-- [ ] T2508 [US3] Poser et vérifier les mutants du résolveur, des quatre germes et du seuil de deux Majors.
+- [x] T2505 [US2] Écrire les tests du résolveur : exact, unique, homonymes, suffixe de ligne et contrat strict dans `plugins/maicie/tests/contract/review_criticality.rs`.
+- [x] T2506 [US3] Écrire les tests des quatre germes et trois voies, avec contrôles positifs non vides, dans `plugins/maicie/tests/contract/review_criticality.rs`.
+- [x] T2507 [US2] Implémenter l’index, les preuves et le calcul pur dans `plugins/maicie/src/review.rs`.
+- [x] T2508 [US3] Poser et vérifier les mutants du résolveur, des quatre germes et du seuil de deux Majors.
 
 ## Phase 3 — Mesure Git exacte
 
