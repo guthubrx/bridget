@@ -183,6 +183,9 @@ impl Presence {
     }
 
     /// Capacité d'exécution observée : met à jour les deux horloges.
+    /// Aussi appelée à l'observation d'une *incapacité* (stopped /
+    /// unreachable) : ce n'est pas une attestation de vie, c'est dater
+    /// l'entrée pour le retain.
     fn touch_capacity(&mut self) {
         let now = Instant::now();
         self.last_seen = now;
@@ -1864,6 +1867,10 @@ impl DaemonState {
     }
 
     fn agent_infos(&mut self) -> Vec<bridget_transport::protocol::AgentInfo> {
+        // Retain : exemption `connected` (lot B) || horloge lien. Ce lot a
+        // passé last_seen → link_seen ; l'exemption court-circuite toujours
+        // pour tout connected — le correctif de retain n'agit donc que hors
+        // connected (busy long) tant que B n'a pas levé l'exemption.
         self.presences.retain(|_, presence| {
             presence.state == "connected" || presence.link_seen.elapsed() <= PRESENCE_RETENTION
         });
@@ -1898,6 +1905,10 @@ impl DaemonState {
                     } else {
                         presence.state.clone()
                     },
+                    // Âge de CAPACITÉ (last_seen), pas du lien. Honnête à lire ;
+                    // aucune décision maicie/reaper ne s'en sert — elles
+                    // regardent `state`. ACP sans événement de contenu → âge
+                    // figé (voir regles-chantier, limites de ce lot).
                     last_seen_secs: presence.last_seen.elapsed().as_secs(),
                     reconnect_count: presence.reconnect_count,
                     domain: presence.domain.clone(),
