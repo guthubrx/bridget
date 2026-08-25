@@ -171,6 +171,64 @@
         assert.equal(next.agents[0].name, "rc1");
       });
 
+      test("snapshot_cible_chaque_agent_et_refuse_les_traces_non_calculees", async () => {
+        const counts = new Map([["rc1", 19], ["jc1", 30], ["rc5", 3]]);
+        const calls = [];
+        const fakeFetch = async (url) => {
+          calls.push(url);
+          const agent = new URL(url, "http://ui.local").searchParams.get("agent");
+          const snapshot = { agents: [] };
+          if (agent) {
+            snapshot.peer_exchanges = Array.from(
+              { length: counts.get(agent) || 0 },
+              (_, index) => ({ peer: `${agent}-${index}`, count: 1 }),
+            );
+          }
+          return { ok: true, status: 200, json: async () => snapshot };
+        };
+
+        const discovery = await api.fetchScopedSnapshot(fakeFetch, "jeton +", null);
+        assert.equal(Object.hasOwn(discovery.snapshot, "peer_exchanges"), false);
+        assert.deepEqual(api.peerExchangeProjection(discovery, null), {
+          state: "unscoped",
+          exchanges: [],
+        });
+        assert.deepEqual(
+          api.peerExchangeProjection({ agent: "rc1", snapshot: { agents: [] } }, "rc1"),
+          { state: "not_computed", exchanges: [] },
+        );
+
+        const scoped = new Map();
+        for (const [agent, count] of counts) {
+          const result = await api.fetchScopedSnapshot(fakeFetch, "jeton +", agent);
+          scoped.set(agent, result);
+          assert.equal(result.snapshot.peer_exchanges.length, count);
+          assert.deepEqual(api.peerExchangeProjection(result, agent), {
+            state: "computed",
+            exchanges: result.snapshot.peer_exchanges,
+          });
+        }
+        assert.deepEqual(calls, [
+          "/v1/snapshot?token=jeton+%2B",
+          "/v1/snapshot?token=jeton+%2B&agent=rc1",
+          "/v1/snapshot?token=jeton+%2B&agent=jc1",
+          "/v1/snapshot?token=jeton+%2B&agent=rc5",
+        ]);
+        assert.equal(
+          api.agentResourceUrl("/v1/watch", "jeton +", "jc1"),
+          "/v1/watch?token=jeton+%2B&agent=jc1",
+        );
+        assert.deepEqual(api.peerExchangeProjection(scoped.get("rc1"), "jc1"), {
+          state: "unscoped",
+          exchanges: [],
+        });
+        const shared = { at: 10, peer: "bridget", direction: "both", delivery_ids: ["same"] };
+        assert.notEqual(
+          api.peerExchangeKey("rc1", shared),
+          api.peerExchangeKey("jc1", shared),
+        );
+      });
+
       test("compositeur_hors_du_sous_arbre_du_fil", () => {
         const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
         const stack = [];
@@ -379,6 +437,46 @@
       if (Number.isFinite(parsed)) return parsed / 1000;
     }
     return 0;
+  }
+
+  function agentResourceUrl(path, token, agent = null) {
+    const query = new URLSearchParams({ token });
+    if (agent) query.set("agent", agent);
+    return `${path}?${query.toString()}`;
+  }
+
+  async function fetchScopedSnapshot(fetchFn, token, agent = null) {
+    const response = await fetchFn(agentResourceUrl("/v1/snapshot", token, agent));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return {
+      agent: agent || null,
+      snapshot: await response.json(),
+    };
+  }
+
+  function peerExchangeProjection(scopedSnapshot, selectedAgent) {
+    if (
+      !scopedSnapshot ||
+      !scopedSnapshot.agent ||
+      scopedSnapshot.agent !== selectedAgent
+    ) {
+      return { state: "unscoped", exchanges: [] };
+    }
+    const snapshot = scopedSnapshot.snapshot;
+    if (
+      !snapshot ||
+      !Object.hasOwn(snapshot, "peer_exchanges") ||
+      !Array.isArray(snapshot.peer_exchanges)
+    ) {
+      return { state: "not_computed", exchanges: [] };
+    }
+    return { state: "computed", exchanges: snapshot.peer_exchanges };
+  }
+
+  function peerExchangeKey(agent, exchange) {
+    const identity = (exchange.delivery_ids || []).join(":") ||
+      `${exchange.at}:${exchange.peer}:${exchange.direction}`;
+    return `${agent || "unscoped"}:${identity}`;
   }
 
   function normalizeAgentRow(agent) {
@@ -1083,22 +1181,31 @@
       if (previousSelected && state.agents.some((agent) => agent.name === previousSelected)) {
         state = { ...state, selectedAgent: previousSelected };
       }
-      (Array.isArray(snapshot.peer_exchanges) ? snapshot.peer_exchanges : []).forEach((exchange) => {
-        const key = (exchange.delivery_ids || []).join(":") || `${exchange.at}:${exchange.peer}:${exchange.direction}`;
+      const peerProjection = peerExchangeProjection(
+        { agent: watchedAgent || null, snapshot },
+        state.selectedAgent,
+      );
+      peerProjection.exchanges.forEach((exchange) => {
+        const key = peerExchangeKey(watchedAgent, exchange);
         if (seenPeers.has(key)) return;
         seenPeers.add(key);
         state = applyWatchEvent(state, {
           ...exchange,
           kind: "peer_exchange",
-          agent: watchedAgent || state.selectedAgent,
+          agent: watchedAgent,
         });
       });
+      if (peerProjection.state === "not_computed") {
+        nodes.sourceState.textContent = `Traces inter-agents non calculées pour ${watchedAgent}.`;
+        nodes.sourceState.dataset.state = "error";
+      }
       if (snapshot.repository || snapshot.branch) {
         nodes.contextLine.textContent = `${text(snapshot.repository, "dépôt inconnu")} · ${text(snapshot.branch, "branche inconnue")}`;
       }
       renderAgents();
       renderHeader();
       renderThread(0);
+      return peerProjection.state;
     };
 
     const applyIncoming = (event) => {
@@ -1112,14 +1219,32 @@
       source = null;
     };
 
+    const requestScopedSnapshot = (agent, generation) => {
+      void fetchScopedSnapshot((url) => windowRef.fetch(url), token, agent)
+        .then((scoped) => {
+          if (generation !== sourceGeneration || state.selectedAgent !== scoped.agent) return;
+          const peerState = applySnapshotPayload(scoped.snapshot, scoped.agent);
+          if (peerState === "computed") {
+            nodes.sourceState.textContent = "Flotte et traces synchronisées.";
+            nodes.sourceState.dataset.state = "ready";
+          }
+        })
+        .catch(() => {
+          if (generation !== sourceGeneration || state.selectedAgent !== agent) return;
+          nodes.sourceState.textContent = `Instantané ciblé indisponible pour ${agent} ; flux maintenu.`;
+          nodes.sourceState.dataset.state = "error";
+        });
+    };
+
     const connectWatch = (agent) => {
       closeWatch();
       if (!agent || !token || typeof windowRef.EventSource !== "function") return;
       const generation = sourceGeneration;
       updateRelay("reconnecting");
       source = new windowRef.EventSource(
-        `/v1/watch?token=${encodeURIComponent(token)}&agent=${encodeURIComponent(agent)}`,
+        agentResourceUrl("/v1/watch", token, agent),
       );
+      requestScopedSnapshot(agent, generation);
       source.onopen = () => {
         if (generation !== sourceGeneration) return;
         updateRelay("connected");
@@ -1127,7 +1252,11 @@
       source.addEventListener("snapshot", (message) => {
         if (generation !== sourceGeneration) return;
         try {
-          applySnapshotPayload(JSON.parse(message.data), agent);
+          const peerState = applySnapshotPayload(JSON.parse(message.data), agent);
+          if (peerState === "computed") {
+            nodes.sourceState.textContent = "Flotte et traces synchronisées.";
+            nodes.sourceState.dataset.state = "ready";
+          }
         } catch (_error) {
           nodes.sourceState.textContent = "Instantané du relais illisible.";
           nodes.sourceState.dataset.state = "error";
@@ -1158,7 +1287,7 @@
         if (generation !== sourceGeneration) return;
         try {
           const exchange = JSON.parse(message.data);
-          const key = (exchange.delivery_ids || []).join(":") || `${exchange.at}:${exchange.peer}:${exchange.direction}`;
+          const key = peerExchangeKey(agent, exchange);
           if (seenPeers.has(key)) return;
           seenPeers.add(key);
           applyIncoming({ ...exchange, kind: "peer_exchange", agent });
@@ -1315,27 +1444,22 @@
       return { close: closeWatch };
     }
 
-    if (requestedAgent) connectWatch(requestedAgent);
-    windowRef.fetch(`/v1/snapshot?token=${encodeURIComponent(token)}`)
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json();
-      })
-      .then((snapshot) => {
-        const selectedBefore = state.selectedAgent;
-        applySnapshotPayload(snapshot, selectedBefore);
-        nodes.sourceState.textContent = "Flotte synchronisée.";
-        nodes.sourceState.dataset.state = "ready";
-        const target = selectedBefore && state.agents.some((agent) => agent.name === selectedBefore)
-          ? selectedBefore
-          : state.selectedAgent;
-        if (target && (!requestedAgent || target !== requestedAgent)) selectAgent(target);
-      })
-      .catch(() => {
-        nodes.sourceState.textContent = "Flotte indisponible ; nouvelle tentative par le flux.";
-        nodes.sourceState.dataset.state = "error";
-        updateRelay("reconnecting");
-      });
+    if (requestedAgent) {
+      connectWatch(requestedAgent);
+    } else {
+      fetchScopedSnapshot((url) => windowRef.fetch(url), token, null)
+        .then((scoped) => {
+          applySnapshotPayload(scoped.snapshot, scoped.agent);
+          nodes.sourceState.textContent = "Flotte synchronisée ; sélection d’un agent…";
+          nodes.sourceState.dataset.state = "ready";
+          if (state.selectedAgent) selectAgent(state.selectedAgent);
+        })
+        .catch(() => {
+          nodes.sourceState.textContent = "Flotte indisponible ; aucun agent sélectionnable.";
+          nodes.sourceState.dataset.state = "error";
+          updateRelay("reconnecting");
+        });
+    }
 
     return { close: closeWatch };
   }
@@ -1358,6 +1482,10 @@
     scrollToLatest,
     relayBannerState,
     applyReconnectSnapshot,
+    agentResourceUrl,
+    fetchScopedSnapshot,
+    peerExchangeProjection,
+    peerExchangeKey,
     normalizeAgentRow,
     normalizeAgents,
     journalEnvelopeToEvents,
