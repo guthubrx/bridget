@@ -4,11 +4,17 @@
 //! refuse néanmoins toute opération ou charge hors matrice avant que le store
 //! Maicie ne soit consulté.
 
-use super::{EtatRequeteGuichet, IssueGreffe, MotifRefusGreffe, OperationGuichet};
+use super::{
+    ClasseDuree, EtatRequeteGuichet, IssueGreffe, MotifRefusGreffe, OperationGuichet,
+    SuiteObjective,
+};
 use crate::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
-use bridget_transport::protocol::ReviewVerdictEvidence;
+use bridget_transport::protocol::{
+    GuichetDurationClass, ReviewVerdictEvidence, ServiceSuiteDeclaration,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::fmt;
 use uuid::Uuid;
 
@@ -19,6 +25,7 @@ pub enum RequeteGuichet {
     DeliveryReport(RapportLivraison),
     MissionStatus { delegation_id: Uuid },
     DeadlineQuestion { delegation_id: Uuid },
+    Delegate(DemandeDelegation),
 }
 
 impl RequeteGuichet {
@@ -27,13 +34,16 @@ impl RequeteGuichet {
             Self::DeliveryReport(_) => OperationGuichet::DeliveryReport,
             Self::MissionStatus { .. } => OperationGuichet::MissionStatus,
             Self::DeadlineQuestion { .. } => OperationGuichet::DeadlineQuestion,
+            Self::Delegate(_) => OperationGuichet::Delegate,
         }
     }
 
     pub fn in_reply_to(&self, request_id: &str) -> String {
         match self {
             Self::DeliveryReport(report) => report.in_reply_to.clone(),
-            Self::MissionStatus { .. } | Self::DeadlineQuestion { .. } => request_id.to_string(),
+            Self::MissionStatus { .. } | Self::DeadlineQuestion { .. } | Self::Delegate(_) => {
+                request_id.to_string()
+            }
         }
     }
 }
@@ -54,6 +64,17 @@ pub struct RapportLivraison {
     pub delivery_hash: String,
     pub in_reply_to: String,
     pub review_verdict: Option<ReviewVerdictEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DemandeDelegation {
+    pub goal: String,
+    pub explicit_target: Option<String>,
+    pub required_tags: Vec<String>,
+    pub duration: ClasseDuree,
+    pub suite: SuiteObjective,
+    pub depends_on: Vec<Uuid>,
+    pub references: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +157,22 @@ struct DelegationPayload {
     delegation_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DelegatePayload {
+    goal: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    explicit_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    required_tags: Vec<String>,
+    duration: GuichetDurationClass,
+    suite: ServiceSuiteDeclaration,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    references: Vec<String>,
+}
+
 pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDomainError> {
     let wire: ServiceRequestWire = serde_json::from_slice(&claim.canonical_request)
         .map_err(|_| GuichetDomainError::InvalidEnvelope("JSON ou champs invalides"))?;
@@ -211,6 +248,74 @@ pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDoma
                 &payload,
             )?;
             RequeteGuichet::DeadlineQuestion { delegation_id }
+        }
+        "delegate" => {
+            let payload: DelegatePayload = serde_json::from_value(wire.payload.clone())
+                .map_err(|_| GuichetDomainError::InvalidEnvelope("délégation invalide"))?;
+            if payload.goal.trim().is_empty() || payload.goal.len() > 16 * 1024 {
+                return Err(GuichetDomainError::InvalidEnvelope(
+                    "but de délégation invalide",
+                ));
+            }
+            if let Some(target) = &payload.explicit_target {
+                validate_identifier(target)?;
+            }
+            if payload.required_tags.len() > 32
+                || payload
+                    .required_tags
+                    .iter()
+                    .any(|tag| validate_identifier(tag).is_err())
+                || payload.required_tags.iter().collect::<BTreeSet<_>>().len()
+                    != payload.required_tags.len()
+            {
+                return Err(GuichetDomainError::InvalidEnvelope(
+                    "tags de délégation invalides",
+                ));
+            }
+            if payload.depends_on.len() > 100 || payload.references.len() > 100 {
+                return Err(GuichetDomainError::InvalidEnvelope("relations hors borne"));
+            }
+            let depends_on = payload
+                .depends_on
+                .iter()
+                .map(|value| parse_uuid(value))
+                .collect::<Result<Vec<_>, _>>()?;
+            let references = payload
+                .references
+                .iter()
+                .map(|value| parse_uuid(value))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut relations = BTreeSet::new();
+            if depends_on
+                .iter()
+                .chain(&references)
+                .any(|id| !relations.insert(*id))
+            {
+                return Err(GuichetDomainError::InvalidEnvelope(
+                    "relation de délégation dupliquée",
+                ));
+            }
+            let suite = match &payload.suite {
+                ServiceSuiteDeclaration::Aucune => SuiteObjective::Aucune,
+                ServiceSuiteDeclaration::Objectif { objective_id } => {
+                    SuiteObjective::Objectif(parse_uuid(objective_id)?)
+                }
+            };
+            let duration = match payload.duration {
+                GuichetDurationClass::Courte => ClasseDuree::Courte,
+                GuichetDurationClass::Normale => ClasseDuree::Normale,
+                GuichetDurationClass::Longue => ClasseDuree::Longue,
+            };
+            ensure_canonical(&claim.canonical_request, &wire, "delegate", &payload)?;
+            RequeteGuichet::Delegate(DemandeDelegation {
+                goal: payload.goal,
+                explicit_target: payload.explicit_target,
+                required_tags: payload.required_tags,
+                duration,
+                suite,
+                depends_on,
+                references,
+            })
         }
         _ => return Err(GuichetDomainError::UnsupportedOperation),
     };
@@ -450,24 +555,8 @@ pub fn refusal_reply_bytes(
 ) -> Result<Vec<u8>, GuichetDomainError> {
     validate_identifier(response_message_id)?;
     validate_identifier(&claim.claim_token)?;
-    let operation = match request.request.operation() {
-        OperationGuichet::DeliveryReport => "delivery_report",
-        OperationGuichet::MissionStatus => "mission_status",
-        OperationGuichet::DeadlineQuestion => "deadline_question",
-    };
-    let reason = match reason {
-        MotifRefusGreffe::DelegationAbsente => "delegation_missing",
-        MotifRefusGreffe::RelationsInvalides => "relation_invalid",
-        MotifRefusGreffe::EnveloppeDivergente => "envelope_mismatch",
-        MotifRefusGreffe::VerdictRevueRequis => "review_verdict_required",
-        MotifRefusGreffe::VerdictRevueInattendu => "review_verdict_unexpected",
-        MotifRefusGreffe::MandatRevueDivergent => "review_mandate_mismatch",
-        MotifRefusGreffe::TeteCibleDeplacee => "target_head_moved",
-        MotifRefusGreffe::TeteCibleDeplaceeEtTeteMesureeDivergente => {
-            "target_head_moved_and_measured_head_mismatch"
-        }
-        MotifRefusGreffe::TeteMesureeDivergente => "measured_head_mismatch",
-    };
+    let operation = request.request.operation().as_sql();
+    let reason = reason.as_sql();
     let in_reply_to = request.request.in_reply_to(&request.request_id);
     serde_json::to_vec(&GuichetReplyWire {
         kind: "guichet_reply",

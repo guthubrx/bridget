@@ -140,6 +140,30 @@ pub fn process_guichet_claim(
     now: i64,
 ) -> Result<GuichetProcessResult, GuichetError> {
     let canonical = parse_claim(claim).map_err(guichet_domain_error)?;
+    if let RequeteGuichet::Delegate(request) = &canonical.request {
+        let cited = crate::citation::extract_uuids(&request.goal);
+        let known = store
+            .existing_objective_ids(&cited)
+            .map_err(guichet_store_error)?;
+        let unclassified = unclassified_known_citations(
+            &request.goal,
+            &known,
+            &request.depends_on,
+            &request.references,
+        );
+        let reason = if matches!(request.suite, SuiteObjective::Aucune) && !unclassified.is_empty()
+        {
+            MotifRefusGreffe::SuiteAucuneAvecCitationNonClassee
+        } else {
+            // Cette première tranche ferme le défaut mesuré sans prétendre que
+            // l'opération de délégation fédérée est déjà applicative.
+            MotifRefusGreffe::OperationNonDisponible
+        };
+        let stored = store
+            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+            .map_err(guichet_store_error)?;
+        return Ok(guichet_process_result(stored, Some(reason)));
+    }
     let stored = match &canonical.request {
         RequeteGuichet::DeliveryReport(report) => {
             store.graft_delivery_report(claim, &canonical, report, response_message_id, now)
@@ -155,6 +179,7 @@ pub fn process_guichet_claim(
         RequeteGuichet::DeadlineQuestion { .. } => {
             process_deadline_question_canonical(store, claim, &canonical, response_message_id, now)
         }
+        RequeteGuichet::Delegate(_) => unreachable!("delegate traité avant les greffes métier"),
     };
     match stored {
         Ok(stored) => Ok(guichet_process_result(stored, None)),

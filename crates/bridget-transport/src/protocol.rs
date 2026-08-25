@@ -110,6 +110,7 @@ pub enum ServiceRequestOperation {
     DeliveryReport,
     MissionStatus,
     DeadlineQuestion,
+    Delegate,
 }
 
 /// Verdict fermé d'une revue. Le transport conserve le fait déclaré ; seule
@@ -231,6 +232,28 @@ pub enum ServiceRequestPayload {
     Delegation {
         delegation_id: String,
     },
+    Delegate {
+        goal: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        explicit_target: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        required_tags: Vec<String>,
+        duration: GuichetDurationClass,
+        suite: ServiceSuiteDeclaration,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        depends_on: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        references: Vec<String>,
+    },
+}
+
+/// Déclaration de suite structurée : aucune valeur libre ne peut jouer le rôle
+/// de preuve. Un objectif nommé reste un identifiant vérifiable côté maître.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ServiceSuiteDeclaration {
+    Aucune,
+    Objectif { objective_id: String },
 }
 
 /// Issue fermée qu'un service Maicie atteste au guichet.
@@ -260,6 +283,8 @@ pub enum GuichetRefusalReason {
     TargetHeadMoved,
     TargetHeadMovedAndMeasuredHeadMismatch,
     MeasuredHeadMismatch,
+    SuiteNoneWithUnclassifiedCitation,
+    OperationNotAvailable,
 }
 
 /// Fait terminal attesté uniquement par Bridget pour une demande du guichet.

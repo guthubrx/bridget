@@ -49,7 +49,7 @@ use uuid::Uuid;
 
 /// Version courante du schéma SQLite. Les oracles de migration doivent lire
 /// cette constante — un littéral en dur meurt à chaque migration.
-pub const SCHEMA_VERSION: i64 = 18;
+pub const SCHEMA_VERSION: i64 = 19;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -1872,8 +1872,9 @@ impl MaicieStore {
             | crate::domain::guichet::RequeteGuichet::DeadlineQuestion { delegation_id } => {
                 *delegation_id
             }
-            crate::domain::guichet::RequeteGuichet::DeliveryReport(_) => {
-                return Err(StoreError::Invalid("projection de livraison interdite"));
+            crate::domain::guichet::RequeteGuichet::DeliveryReport(_)
+            | crate::domain::guichet::RequeteGuichet::Delegate(_) => {
+                return Err(StoreError::Invalid("opération de projection interdite"));
             }
         };
         let facts = load_guichet_projection_facts(&tx, delegation_id)?;
@@ -4503,20 +4504,11 @@ fn review_verdict_refusal(
 }
 
 fn operation_name(operation: OperationGuichet) -> &'static str {
-    match operation {
-        OperationGuichet::DeliveryReport => "delivery_report",
-        OperationGuichet::MissionStatus => "mission_status",
-        OperationGuichet::DeadlineQuestion => "deadline_question",
-    }
+    operation.as_sql()
 }
 
 fn parse_operation_name(value: &str) -> Result<OperationGuichet, StoreError> {
-    match value {
-        "delivery_report" => Ok(OperationGuichet::DeliveryReport),
-        "mission_status" => Ok(OperationGuichet::MissionStatus),
-        "deadline_question" => Ok(OperationGuichet::DeadlineQuestion),
-        _ => Err(StoreError::Corrupt("opération guichet inconnue")),
-    }
+    OperationGuichet::parse_sql(value).ok_or(StoreError::Corrupt("opération guichet inconnue"))
 }
 
 fn issue_name(issue: IssueGreffe) -> &'static str {
@@ -4537,36 +4529,11 @@ fn parse_issue_name(value: &str) -> Result<IssueGreffe, StoreError> {
 }
 
 fn refusal_reason_name(reason: MotifRefusGreffe) -> &'static str {
-    match reason {
-        MotifRefusGreffe::DelegationAbsente => "delegation_missing",
-        MotifRefusGreffe::RelationsInvalides => "relation_invalid",
-        MotifRefusGreffe::EnveloppeDivergente => "envelope_mismatch",
-        MotifRefusGreffe::VerdictRevueRequis => "review_verdict_required",
-        MotifRefusGreffe::VerdictRevueInattendu => "review_verdict_unexpected",
-        MotifRefusGreffe::MandatRevueDivergent => "review_mandate_mismatch",
-        MotifRefusGreffe::TeteCibleDeplacee => "target_head_moved",
-        MotifRefusGreffe::TeteCibleDeplaceeEtTeteMesureeDivergente => {
-            "target_head_moved_and_measured_head_mismatch"
-        }
-        MotifRefusGreffe::TeteMesureeDivergente => "measured_head_mismatch",
-    }
+    reason.as_sql()
 }
 
 fn parse_refusal_reason_name(value: &str) -> Result<MotifRefusGreffe, StoreError> {
-    match value {
-        "delegation_missing" => Ok(MotifRefusGreffe::DelegationAbsente),
-        "relation_invalid" => Ok(MotifRefusGreffe::RelationsInvalides),
-        "envelope_mismatch" => Ok(MotifRefusGreffe::EnveloppeDivergente),
-        "review_verdict_required" => Ok(MotifRefusGreffe::VerdictRevueRequis),
-        "review_verdict_unexpected" => Ok(MotifRefusGreffe::VerdictRevueInattendu),
-        "review_mandate_mismatch" => Ok(MotifRefusGreffe::MandatRevueDivergent),
-        "target_head_moved" => Ok(MotifRefusGreffe::TeteCibleDeplacee),
-        "target_head_moved_and_measured_head_mismatch" => {
-            Ok(MotifRefusGreffe::TeteCibleDeplaceeEtTeteMesureeDivergente)
-        }
-        "measured_head_mismatch" => Ok(MotifRefusGreffe::TeteMesureeDivergente),
-        _ => Err(StoreError::Corrupt("motif de refus inconnu")),
-    }
+    MotifRefusGreffe::parse_sql(value).ok_or(StoreError::Corrupt("motif de refus inconnu"))
 }
 
 fn lifecycle_state_name(state: EtatRequeteGuichet) -> &'static str {
@@ -7619,6 +7586,13 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
         )
         .map_err(StoreError::Sql)?;
     }
+    // v19 : le vocabulaire autorisé reste fermé par les enums Rust ; la table
+    // durable des refus conserve aussi le nom d'une tentative rejetée.
+    if current_version < 19 {
+        verify_local_delegate_refusals_shape_v18(&tx)?;
+        migrate_guichet_refusal_vocabulary_v19(&tx)?;
+    }
+    verify_guichet_refusal_shape_v19(&tx)?;
     for version in (current_version + 1)..=SCHEMA_VERSION {
         tx.execute(
             "INSERT OR IGNORE INTO schema_migrations(version, applied_at)\n\
@@ -7665,6 +7639,139 @@ fn migrate_review_refusal_reasons_v17(tx: &Transaction<'_>) -> Result<(), StoreE
          DROP TABLE guichet_refusal_receptions_v16;",
     )
     .map_err(StoreError::Sql)
+}
+
+/// Vérifie le vrai comportement v18 avant de marquer v19. La sonde crée ses
+/// deux lignes sous savepoint, exige les deux gardes append-only, puis annule
+/// toujours l'ensemble — succès comme échec.
+fn verify_local_delegate_refusals_shape_v18(tx: &Transaction<'_>) -> Result<(), StoreError> {
+    let objectives_before: i64 = tx
+        .query_row("SELECT COUNT(*) FROM objectives", [], |row| row.get(0))
+        .map_err(|_| StoreError::Corrupt("forme v18 du greffe local incompatible avec v19"))?;
+    let refusals_before: i64 = tx
+        .query_row("SELECT COUNT(*) FROM local_delegate_refusals", [], |row| {
+            row.get(0)
+        })
+        .map_err(|_| StoreError::Corrupt("forme v18 du greffe local incompatible avec v19"))?;
+    tx.execute_batch("SAVEPOINT maicie_v19_preflight_v18")
+        .map_err(StoreError::Sql)?;
+    let inserted = tx.execute_batch(
+        "INSERT INTO objectives(id,state,payload_json)
+         VALUES('maicie-v19-preflight-' || lower(hex(randomblob(16))),'ouvert',X'7B7D');
+         INSERT INTO local_delegate_refusals(observed_at,reason,cited_objective_id)
+         SELECT 1,'suite_none_with_unclassified_citation',id
+         FROM objectives WHERE id LIKE 'maicie-v19-preflight-%';",
+    );
+    let update_rejected = tx
+        .execute(
+            "UPDATE local_delegate_refusals SET observed_at=2
+             WHERE cited_objective_id LIKE 'maicie-v19-preflight-%'",
+            [],
+        )
+        .is_err();
+    let delete_rejected = tx
+        .execute(
+            "DELETE FROM local_delegate_refusals
+             WHERE cited_objective_id LIKE 'maicie-v19-preflight-%'",
+            [],
+        )
+        .is_err();
+    let cleanup = tx.execute_batch(
+        "ROLLBACK TO maicie_v19_preflight_v18;
+         RELEASE maicie_v19_preflight_v18;",
+    );
+    cleanup.map_err(StoreError::Sql)?;
+    let objectives_after: i64 = tx
+        .query_row("SELECT COUNT(*) FROM objectives", [], |row| row.get(0))
+        .map_err(StoreError::Sql)?;
+    let refusals_after: i64 = tx
+        .query_row("SELECT COUNT(*) FROM local_delegate_refusals", [], |row| {
+            row.get(0)
+        })
+        .map_err(StoreError::Sql)?;
+    if inserted.is_err()
+        || !update_rejected
+        || !delete_rejected
+        || objectives_before != objectives_after
+        || refusals_before != refusals_after
+    {
+        return Err(StoreError::Corrupt(
+            "forme v18 du greffe local incompatible avec v19",
+        ));
+    }
+    Ok(())
+}
+
+/// Migration v19 : seule la table des refus fédérés est reconstruite. Les
+/// contraintes structurelles restent en SQL ; les vocabulaires opération et
+/// motif sont validés fail-closed lors de chaque lecture par les enums Rust.
+fn migrate_guichet_refusal_vocabulary_v19(tx: &Transaction<'_>) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "ALTER TABLE guichet_refusal_receptions RENAME TO guichet_refusal_receptions_v18;
+         CREATE TABLE guichet_refusal_receptions (
+             issuer_scope TEXT NOT NULL,
+             request_id TEXT NOT NULL,
+             canonical_request_bytes BLOB NOT NULL,
+             operation TEXT NOT NULL,
+             reason TEXT NOT NULL,
+             response_message_id TEXT NOT NULL,
+             reply_bytes BLOB NOT NULL,
+             claim_generation INTEGER NOT NULL CHECK(claim_generation >= 0),
+             claim_token TEXT NOT NULL,
+             processed_at INTEGER NOT NULL,
+             PRIMARY KEY(issuer_scope, request_id, canonical_request_bytes)
+         );
+         INSERT INTO guichet_refusal_receptions(
+             issuer_scope,request_id,canonical_request_bytes,operation,reason,
+             response_message_id,reply_bytes,claim_generation,claim_token,processed_at
+         )
+         SELECT issuer_scope,request_id,canonical_request_bytes,operation,reason,
+                response_message_id,reply_bytes,claim_generation,claim_token,processed_at
+         FROM guichet_refusal_receptions_v18;
+         DROP TABLE guichet_refusal_receptions_v18;",
+    )
+    .map_err(StoreError::Sql)
+}
+
+/// Une base déjà estampillée v19 doit accepter le vocabulaire durable ouvert
+/// sans conserver la ligne de sonde. La lecture reste fermée côté Rust.
+fn verify_guichet_refusal_shape_v19(tx: &Transaction<'_>) -> Result<(), StoreError> {
+    let before: i64 = tx
+        .query_row(
+            "SELECT COUNT(*) FROM guichet_refusal_receptions",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| StoreError::Corrupt("forme v19 des refus fédérés incomplète"))?;
+    tx.execute_batch("SAVEPOINT maicie_v19_refusal_shape")
+        .map_err(StoreError::Sql)?;
+    let probe = tx.execute(
+        "INSERT INTO guichet_refusal_receptions(
+             issuer_scope,request_id,canonical_request_bytes,operation,reason,
+             response_message_id,reply_bytes,claim_generation,claim_token,processed_at
+         ) VALUES('maicie-v19-shape',lower(hex(randomblob(16))),randomblob(16),
+                  'future_operation','future_reason',lower(hex(randomblob(16))),X'7B7D',
+                  1,'maicie-v19-shape',1)",
+        [],
+    );
+    let cleanup = tx.execute_batch(
+        "ROLLBACK TO maicie_v19_refusal_shape;
+         RELEASE maicie_v19_refusal_shape;",
+    );
+    cleanup.map_err(StoreError::Sql)?;
+    let after: i64 = tx
+        .query_row(
+            "SELECT COUNT(*) FROM guichet_refusal_receptions",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::Sql)?;
+    if probe.is_err() || before != after {
+        return Err(StoreError::Corrupt(
+            "forme v19 des refus fédérés incomplète",
+        ));
+    }
+    Ok(())
 }
 
 /// Vrai si la base contient déjà un objet de schéma utilisateur.

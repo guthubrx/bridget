@@ -428,7 +428,7 @@ fn verdict_concordant_termine_la_revue_sans_clore_l_objectif() {
 }
 
 #[test]
-fn migration_v17_conserve_les_refus_v16_et_ouvre_les_motifs_de_revue() {
+fn parcours_v16_v17_v18_v19_conserve_les_refus_et_motifs_de_revue() {
     let root = root("migration-v17-review-refusals");
     let database = root.join("maicie.sqlite3");
     drop(MaicieStore::open(&database).unwrap());
@@ -483,7 +483,7 @@ fn migration_v17_conserve_les_refus_v16_et_ouvre_les_motifs_de_revue() {
              )",
             [],
         )
-        .expect("le CHECK v17 doit accepter le motif composé de revue");
+        .expect("le parcours par v17 doit conserver le motif composé de revue");
     let legacy_table: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master
