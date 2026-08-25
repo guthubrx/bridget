@@ -1252,7 +1252,7 @@ impl IdempotencyStore {
                 row.get::<_, String>(2)?,
                 row.get::<_, u64>(3)?,
                 row.get::<_, String>(4)?,
-                row.get::<_, Vec<u8>>(5)?,
+                row.get::<_, Option<Vec<u8>>>(5)?,
             )),
         ).optional()?.ok_or(IdempotencyError::InvalidDelivery)?;
         if row.2 != recipient_instance_id || row.3 != delivery_generation {
@@ -1265,7 +1265,11 @@ impl IdempotencyStore {
         if row.4 != "dispatching" {
             return Err(IdempotencyError::InvalidDelivery);
         }
-        let message = serde_json::from_slice::<bridget_core::BridgetMessage>(&row.5).ok();
+        let envelope_missing = row.5.is_none();
+        let message = row
+            .5
+            .as_deref()
+            .and_then(|bytes| serde_json::from_slice::<bridget_core::BridgetMessage>(bytes).ok());
         let delivery = tx.execute("UPDATE send_deliveries SET phase = 'acked' WHERE delivery_id = ?1 AND phase = 'dispatching'", params![delivery_id])?;
         let record = tx.execute(
             "UPDATE idempotency_records SET state = 'terminal', public_result_kind = 'accepted', public_result_category = NULL, public_result_reason = NULL
@@ -1291,6 +1295,11 @@ impl IdempotencyStore {
             None
         };
         tx.commit()?;
+        if envelope_missing {
+            log::warn!(
+                "accusé idempotent {delivery_id} enregistré sans enveloppe locale: corrélation in_reply_to impossible"
+            );
+        }
         Ok(answered_request)
     }
 
