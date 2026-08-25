@@ -305,3 +305,112 @@ fn t2511a_contrats_json_refusent_champs_libres_chemins_et_decision_omise() {
         );
     }
 }
+
+// Oracles de jury — bornes 1 et 3.
+const CANARI: &str = "CANARI-JURY-025-a7f3e9d1c5b2-SECRET";
+
+/// Snapshot dont toutes les entrées textuelles portent le canari : diff,
+/// contenu de tête, contrat et constat ouvert.
+fn snapshot_empoisonne(secret: &str) -> RepositorySnapshot {
+    RepositorySnapshot {
+        paths: vec![TrackedPath {
+            path: "src/model.rs".to_string(),
+            line_count: 20,
+        }],
+        changes: vec![FileChange {
+            old_path: Some("src/model.rs".to_string()),
+            new_path: Some("src/model.rs".to_string()),
+            patch: format!("+const SCHEMA_VERSION: i64 = 20; // {secret}"),
+            head_content: Some(format!("const SCHEMA_VERSION: i64 = 20; // {secret}")),
+        }],
+        contracts: vec![maicie::review::ContractDocument {
+            source_path: "docs/contrat.md".to_string(),
+            content: format!("clause contractuelle {secret}"),
+        }],
+        open_findings: vec![maicie::review::RegistryFinding {
+            id: "c-jury-canari".to_string(),
+            severity: maicie::catalogue::Severity::Blocker,
+            text: format!("constat ouvert contenant {secret}"),
+        }],
+    }
+}
+
+#[test]
+fn jury_controle_positif_carte_serialisee() {
+    let mut carte = ordinary_map();
+    carte.critical_changed_paths = vec![CANARI.to_string()];
+    let serialisee = serde_json::to_string(&carte).unwrap();
+    assert!(
+        serialisee.contains(CANARI),
+        "l'instrument ne voit pas le canari présent dans la carte sérialisée"
+    );
+}
+
+#[test]
+fn jury_controle_positif_resultat_affichable() {
+    let mut carte = ordinary_map();
+    carte.critical_changed_paths = vec![CANARI.to_string()];
+    let affichable = format!("{carte:?}");
+    assert!(
+        affichable.contains(CANARI),
+        "l'instrument ne voit pas le canari présent dans le résultat affichable"
+    );
+}
+
+#[test]
+fn jury_canari_absent_des_deux_sorties() {
+    let carte = calculate_criticality(&snapshot_empoisonne(CANARI)).unwrap();
+    let serialisee = serde_json::to_string(&carte).unwrap();
+    let affichable = format!("{carte:?}");
+    assert!(
+        !serialisee.contains(CANARI),
+        "fuite dans la carte sérialisée : {serialisee}"
+    );
+    assert!(
+        !affichable.contains(CANARI),
+        "fuite dans le résultat affichable : {affichable}"
+    );
+}
+
+#[test]
+fn jury_pas_de_fuite_par_empreinte_partielle() {
+    let carte = calculate_criticality(&snapshot_empoisonne(CANARI)).unwrap();
+    let deux_sorties = format!("{}{:?}", serde_json::to_string(&carte).unwrap(), carte);
+    for taille in [8usize, 12, 16, 20] {
+        let fragment = &CANARI[..taille];
+        assert!(
+            !deux_sorties.contains(fragment),
+            "fragment de {taille} caractères survit : {fragment}"
+        );
+    }
+}
+
+#[test]
+fn jury_pas_de_fuite_par_longueur() {
+    let court = "S1";
+    let long = "S".repeat(4096);
+    let a = calculate_criticality(&snapshot_empoisonne(court)).unwrap();
+    let b = calculate_criticality(&snapshot_empoisonne(&long)).unwrap();
+    let ta = serde_json::to_string(&a).unwrap().len();
+    let tb = serde_json::to_string(&b).unwrap().len();
+    assert_eq!(
+        ta, tb,
+        "la taille de la carte varie avec la longueur du secret : {ta} contre {tb}"
+    );
+}
+
+#[test]
+fn jury_composition_est_en_lecture_seule() {
+    let temoin =
+        std::env::temp_dir().join(format!("maicie-jury-lecture-seule-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temoin);
+    std::fs::create_dir_all(&temoin).unwrap();
+    let avant = std::fs::read_dir(&temoin).unwrap().count();
+    let _ = calculate_criticality(&snapshot_empoisonne(CANARI)).unwrap();
+    let apres = std::fs::read_dir(&temoin).unwrap().count();
+    let _ = std::fs::remove_dir_all(&temoin);
+    assert_eq!(
+        avant, apres,
+        "la composition a écrit dans le système de fichiers"
+    );
+}
