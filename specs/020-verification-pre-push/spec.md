@@ -5,9 +5,9 @@
 
 Spec: 020-verification-pre-push
 Titre: Vérification transactionnelle avant envoi
-Statut: In Progress
+Statut: Implemented
 Priorité: P1
-Tâches: 7/8 (88%)
+Tâches: 8/8 (100%)
 Tests: 7/7 (100%)
 
 Résumé:
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch**: `session-20-verification-pre-push`
 **Created**: 2026-08-25
-**Status**: In Progress
+**Status**: Implemented
 **Priority**: P1
 **Dependencies**: SPEC-018 uniquement pour l'activation du hook après jury
 

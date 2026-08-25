@@ -61,3 +61,51 @@ Deux problèmes trouvés et corrigés :
 
 Portabilité vérifiée avec un `TMPDIR` absolu contenant des espaces :
 7 passés / 0 rouge / 0 ignoré.
+
+### T008 — Validation finale sans activation
+
+- **Statut** : complété
+- **Commit d'implémentation** :
+  `ef845ab2ffe159d5ce2a8c6df917834a2df9769a`
+- **Banc ciblé** : 7 passés / 0 rouge / 0 ignoré.
+- **Syntaxe Bash** : valide sur les deux scripts.
+- **Diff** : aucun espace ou marqueur invalide.
+- **Simulation réelle** : création de référence simulée contre `origin`,
+  deux commits introduits, acceptée sans envoi.
+- **Activation** : `/home/moi/.git-hooks/pre-push` reste absent.
+- **Non mesuré** : exécution macOS et analyse ShellCheck, indisponible sur la
+  machine ; aucune suite Cargo, car aucun fichier Rust n'est modifié.
+
+## REX
+
+**Date** : 2026-08-25
+**Tâches complétées** : 8/8
+**Tests** : 7/7
+
+### Ce qui a bien fonctionné
+
+- La soustraction de l'état distant conserve l'héritage accepté tout en
+  inspectant chaque commit réellement nouveau.
+- Le test direct du motif et sa mutation empêchent qu'un hook seulement
+  exécutable soit pris pour un hook efficace.
+
+### Difficultés rencontrées
+
+- Deux premières exécutions rouges avaient des fixtures invalides ; leurs
+  comptes ont été écartés avant toute conclusion.
+- La revue hostile a trouvé un nettoyage temporaire trop dépendant du quoting
+  et une destination distante sans séparateur d'options ; les deux ont été
+  corrigés avant livraison.
+
+### Charge future
+
+- Aucune dépendance ajoutée.
+- Les deux scripts portent chacun une responsabilité : barrière et banc.
+- Potentiel de suppression à comportement constant après revue : environ
+  zéro ligne.
+
+### Recommandation
+
+Après jury et merge uniquement, faire passer l'activation par la règle de
+projection durable de SPEC-018. Une barrière côté réception restera nécessaire
+si la politique doit résister au contournement volontaire d'un hook local.

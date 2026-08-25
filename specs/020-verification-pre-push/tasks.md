@@ -22,7 +22,7 @@
 
 ## Phase 3 — Livraison sans activation
 
-- [ ] T008 [US3] Exécuter la suite finale, relire le diff et compléter `specs/020-verification-pre-push/implementation.md`
+- [x] T008 [US3] Exécuter la suite finale, relire le diff et compléter `specs/020-verification-pre-push/implementation.md`
 
 ## Dépendances et stratégie
 
