@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 const WARMUP_TURNS: usize = 100;
 const MEASURED_TURNS: usize = 1_000;
-const EVENTS_PER_TURN: usize = 2;
+const EVENTS_PER_TURN: usize = 3;
 const GLOBAL_TIMEOUT: Duration = Duration::from_secs(60);
 const SC001_TURNS: usize = 600;
 const SC001_CADENCE: Duration = Duration::from_millis(100);
@@ -736,13 +736,17 @@ fn sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon() {
 
     harness.send_turn(0);
     wait_until(deadline, "suivi live absent après rotation", || {
-        final_fragments.load(Ordering::SeqCst) >= 3
+        final_fragments.load(Ordering::SeqCst) >= 1 + EVENTS_PER_TURN
     });
     let seqs = final_sequences
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .clone();
-    assert_eq!(seqs, vec![5, 6, 7], "continuité rejeu→suivi");
+    assert_eq!(
+        seqs,
+        vec![5, 6, 7, 8],
+        "continuité rejeu→suivi (hist + start+reasoning+end)"
+    );
     let current_file = harness
         .root
         .join("home/.cache/bridget/sessions/codex-bench")

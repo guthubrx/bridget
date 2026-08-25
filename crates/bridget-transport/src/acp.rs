@@ -1579,75 +1579,7 @@ fn update_thought_text<'a>(value: &'a Value, session_id: Option<&str>) -> Option
     update_chunk_text(value, session_id, "agent_thought_chunk")
 }
 
-/// Niveau de détail C3 (contrat relais-v1) produit depuis les updates ACP.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AcpMessageDetailV1 {
-    version: u32,
-    acts: Vec<AcpActV1>,
-    reasoning: AcpReasoningV1,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AcpActV1 {
-    kind: String,
-    text: String,
-    detail: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AcpReasoningV1 {
-    available: bool,
-    summary: Option<String>,
-    raw: Option<String>,
-}
-
-impl AcpMessageDetailV1 {
-    fn new() -> Self {
-        Self {
-            version: 1,
-            acts: Vec::new(),
-            reasoning: AcpReasoningV1 {
-                // Absent de pensée ≠ vide : la page doit lire « non fourni ».
-                available: false,
-                summary: None,
-                raw: None,
-            },
-        }
-    }
-
-    fn to_json(&self) -> Value {
-        let acts: Vec<Value> = self
-            .acts
-            .iter()
-            .map(|act| {
-                let mut map = serde_json::Map::from_iter([
-                    ("kind".to_string(), Value::String(act.kind.clone())),
-                    ("text".to_string(), Value::String(act.text.clone())),
-                ]);
-                if let Some(detail) = &act.detail {
-                    map.insert("detail".to_string(), Value::String(detail.clone()));
-                }
-                Value::Object(map)
-            })
-            .collect();
-        let mut reasoning = serde_json::Map::from_iter([(
-            "available".to_string(),
-            Value::Bool(self.reasoning.available),
-        )]);
-        if let Some(summary) = &self.reasoning.summary {
-            reasoning.insert("summary".to_string(), Value::String(summary.clone()));
-        }
-        if let Some(raw) = &self.reasoning.raw {
-            reasoning.insert("raw".to_string(), Value::String(raw.clone()));
-        }
-        json!({
-            "version": self.version,
-            "acts": acts,
-            "reasoning": reasoning,
-        })
-    }
-}
-
+/// Payload de la ligne journal terminale `event=reasoning` (contrat C3).
 fn reasoning_journal_payload_from_raw(raw: &str) -> Value {
     if raw.is_empty() {
         // Absent ≠ vide : pas de summary/raw qui se liraient « pas réfléchi ».
@@ -1668,48 +1600,6 @@ fn take_reasoning_journal_payload(reasoning_raw: &Arc<Mutex<String>>) -> Value {
     let payload = reasoning_journal_payload_from_raw(&raw);
     raw.clear();
     payload
-}
-
-/// Absorbe une notification `session/update` dans le détail C3 (aide tests /
-/// assemblage page). `agent_thought_chunk` → raw ; `tool_call*` → acte `tool`.
-fn absorb_acp_session_update(
-    detail: &mut AcpMessageDetailV1,
-    value: &Value,
-    session_id: Option<&str>,
-    tool_titles: &mut HashMap<String, String>,
-) {
-    if let Some(thought) = update_thought_text(value, session_id) {
-        detail.reasoning.available = true;
-        let raw = detail.reasoning.raw.get_or_insert_with(String::new);
-        raw.push_str(thought);
-        detail.reasoning.summary = Some(raw.clone());
-        return;
-    }
-    let session_update = value
-        .pointer("/params/update/sessionUpdate")
-        .and_then(Value::as_str);
-    if matches!(session_update, Some("tool_call") | Some("tool_call_update"))
-        && !update_has_foreign_session(value, session_id)
-    {
-        let payload = tool_call_journal_payload(value, tool_titles);
-        let text = payload
-            .get("text")
-            .or_else(|| payload.get("tool"))
-            .and_then(Value::as_str)
-            .unwrap_or("inconnu")
-            .to_string();
-        let detail_text = payload
-            .get("detail")
-            .or_else(|| payload.get("summary"))
-            .and_then(Value::as_str)
-            .filter(|summary| !summary.is_empty())
-            .map(str::to_string);
-        detail.acts.push(AcpActV1 {
-            kind: "tool".to_string(),
-            text,
-            detail: detail_text,
-        });
-    }
 }
 
 fn tool_call_journal_payload(value: &Value, tool_titles: &mut HashMap<String, String>) -> Value {
@@ -2087,77 +1977,76 @@ mod tests {
         })
     }
 
-    /// T4.4 — présence de pensée → ligne terminale available true.
+    /// Simule le chemin productif : chunks → reasoning_raw → take terminal.
+    fn accumulate_thought_then_take(chunks: &[&str]) -> Value {
+        let reasoning_raw = Arc::new(Mutex::new(String::new()));
+        for chunk in chunks {
+            let update = session_update("agent_thought_chunk", chunk);
+            let thought = update_thought_text(&update, Some("fixture-session"))
+                .expect("thought_chunk productif");
+            reasoning_raw
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push_str(thought);
+        }
+        take_reasoning_journal_payload(&reasoning_raw)
+    }
+
+    /// T4.4 — présence de pensée → ligne terminale available true (pipeline réel).
     #[test]
     fn agent_thought_chunk_rend_reasoning_available_true() {
-        let mut detail = AcpMessageDetailV1::new();
-        let mut tool_titles = HashMap::new();
-        // Ordre documenté d'un tour : PENSÉE puis MESSAGES puis OUTILS.
-        absorb_acp_session_update(
-            &mut detail,
-            &session_update("agent_thought_chunk", "je vais lire le fichier"),
-            Some("fixture-session"),
-            &mut tool_titles,
-        );
-        absorb_acp_session_update(
-            &mut detail,
-            &session_update("agent_message_chunk", "voici la réponse"),
-            Some("fixture-session"),
-            &mut tool_titles,
-        );
-        absorb_acp_session_update(
-            &mut detail,
-            &session_tool_call("Read src/main.rs", "lecture"),
-            Some("fixture-session"),
-            &mut tool_titles,
-        );
-
-        let terminal = reasoning_journal_payload_from_raw(
-            detail.reasoning.raw.as_deref().unwrap_or(""),
-        );
+        // Ordre documenté : PENSÉE puis MESSAGES puis OUTILS — seul le raw compte.
+        let terminal = accumulate_thought_then_take(&["je vais lire ", "le fichier"]);
         assert_eq!(terminal["available"], true);
         assert_eq!(terminal["raw"], "je vais lire le fichier");
         assert_eq!(terminal["summary"], "je vais lire le fichier");
 
-        let json = detail.to_json();
-        assert_eq!(json["acts"].as_array().unwrap().len(), 1);
-        assert_eq!(json["acts"][0]["kind"], "tool");
-        assert_eq!(json["acts"][0]["text"], "Read src/main.rs");
-        assert_eq!(json["acts"][0]["detail"], "lecture");
-        assert_eq!(
-            tool_call_journal_payload(
-                &session_tool_call("Read src/main.rs", "lecture"),
-                &mut HashMap::new()
-            )["kind"],
-            "tool"
+        let mut tool_titles = HashMap::new();
+        let act = tool_call_journal_payload(
+            &session_tool_call("Read src/main.rs", "lecture"),
+            &mut tool_titles,
         );
+        assert_eq!(act["kind"], "tool");
+        assert_eq!(act["text"], "Read src/main.rs");
+        assert_eq!(act["detail"], "lecture");
+        // Un second take sur le même accumulateur vide → available:false (unicité).
+        let second = accumulate_thought_then_take(&[]);
+        assert_eq!(second, json!({ "available": false }));
     }
 
     /// T4.5 — aucun chunk de pensée → ligne terminale available false
     /// (cas Gemini : chunk jamais émis). Pas de summary/raw vides.
     #[test]
     fn flux_sans_thought_chunk_rend_reasoning_available_false() {
-        let mut detail = AcpMessageDetailV1::new();
-        let mut tool_titles = HashMap::new();
-        absorb_acp_session_update(
-            &mut detail,
-            &session_update("agent_message_chunk", "réponse seule"),
-            Some("fixture-session"),
-            &mut tool_titles,
-        );
-        absorb_acp_session_update(
-            &mut detail,
-            &session_tool_call("Bash cargo test", "ok"),
-            Some("fixture-session"),
-            &mut tool_titles,
-        );
-
-        let terminal = reasoning_journal_payload_from_raw("");
+        let terminal = accumulate_thought_then_take(&[]);
         assert_eq!(terminal, json!({ "available": false }));
         assert!(terminal.get("summary").is_none());
         assert!(terminal.get("raw").is_none());
-        assert_eq!(detail.reasoning.available, false);
-        assert_eq!(detail.to_json()["acts"][0]["kind"], "tool");
+
+        let mut tool_titles = HashMap::new();
+        let act = tool_call_journal_payload(
+            &session_tool_call("Bash cargo test", "ok"),
+            &mut tool_titles,
+        );
+        assert_eq!(act["kind"], "tool");
+        assert_eq!(act["text"], "Bash cargo test");
+    }
+
+    /// Unicité du terminal : take vide le buffer — un second take ne rejoue pas.
+    #[test]
+    fn reasoning_terminal_est_unique_par_prise() {
+        let reasoning_raw = Arc::new(Mutex::new(String::from("une seule fois")));
+        let first = take_reasoning_journal_payload(&reasoning_raw);
+        let second = take_reasoning_journal_payload(&reasoning_raw);
+        assert_eq!(first["available"], true);
+        assert_eq!(first["raw"], "une seule fois");
+        assert_eq!(second, json!({ "available": false }));
+        assert!(
+            reasoning_raw
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .is_empty()
+        );
     }
 
     /// T4.6 — mutant : si l'on rétablissait le filtre qui n'accepte que
@@ -2776,6 +2665,15 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
                     "message_id": "journal-message",
                     "payload": {"available": false}
                 })), "sans thought_chunk : ligne terminale available:false");
+                let reasoning_lines: Vec<_> = events
+                    .iter()
+                    .filter(|event| event["event"] == "reasoning")
+                    .collect();
+                assert_eq!(
+                    reasoning_lines.len(),
+                    1,
+                    "exactement un event=reasoning terminal par tour, got {reasoning_lines:?}"
+                );
                 assert!(events.contains(&json!({
                     "v": 1, "session_id": "fixture-session", "event": "turn_end",
                     "message_id": "journal-message",
