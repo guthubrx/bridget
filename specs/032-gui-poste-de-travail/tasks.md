@@ -12,9 +12,15 @@
 
 Tiré des défauts mesurés le 25/08. **Une livraison qui l'ignore est refusée.**
 
-1. **Périmètre de test** : le paquet **et ses dépendants**.
-   `bridget-daemon` dépend de `maicie` **en dur** — `-p maicie` seul ne verrait
-   pas une rupture chez lui.
+1. **Périmètre de test** : le paquet **et ses dépendants** — ce qui casserait
+   *si on modifiait ce paquet*, jamais ce qu'il consomme.
+   **Sens de la flèche, corrigé le 25/08 23h31** : `bridget-daemon` **consomme**
+   `maicie` en dur ; `maicie` est donc sa **dépendance**, pas son dépendant.
+   Un diff limité à `bridget-daemon` a pour closure `bridget-daemon` seul —
+   personne ne l'importe. Inversement, un diff dans `maicie` **doit** faire
+   jouer `bridget-daemon`.
+   *La formulation antérieure désignait le mauvais côté et faisait jouer une
+   closure plus large que nécessaire : coûteux, et faux comme règle.*
 2. **Univers listé avant comptage** : `-- --list` puis le compte.
 3. **Le compte** `passed` / `failed` — **jamais le code retour**.
 4. Sous mutant : **le NOM du test mort**, jamais son cardinal.

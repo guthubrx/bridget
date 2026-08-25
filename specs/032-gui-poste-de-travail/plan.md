@@ -177,9 +177,16 @@ un d'un autre fournisseur pour la contre-revue.
 
 Chaque lot **déclare** :
 
-1. **son périmètre de test** — le paquet **et ses dépendants**, jamais le paquet
-   seul. `bridget-daemon` dépend de `maicie` **en dur** ; `-p maicie` seul ne
-   verrait pas une rupture chez lui ;
+1. **son périmètre de test** — le paquet **et ses dépendants** : ce qui casserait
+   *si on modifiait ce paquet*, jamais ce qu'il consomme. Le paquet se détermine
+   **par le diff** (`git diff --name-only`), jamais par le nom du lot.
+   Closures mesurées, reprises telles quelles du registre 011 :
+   `bridget-core` → tout le workspace · `bridget-transport` → transport + maicie
+   + daemon · `maicie` → maicie **+ daemon** · `bridget-daemon` → **daemon seul,
+   personne n'en dépend**.
+   *Corrigé le 25/08 23h31 : ces lignes avaient été recopiées à l'envers ici et
+   dans `tasks.md`, faisant de `maicie` un dépendant de `bridget-daemon` alors
+   qu'il en est la dépendance. Le registre, lui, était juste.*
 2. **l'univers listé avant comptage** — `-- --list` puis le compte ;
 3. **le compte** `passed` / `failed`, **jamais le code retour** ;
 4. **le nom du test mort** sous mutant, **jamais son cardinal** — un cardinal
