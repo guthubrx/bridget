@@ -256,7 +256,8 @@ pub fn run(daemon_socket: PathBuf, maicie_config: PathBuf) -> Result<(), UiError
 struct UiSnapshotV1 {
     version: u8,
     agents: Vec<UiAgentRowV1>,
-    peer_exchanges: Vec<UiPeerExchangeV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peer_exchanges: Option<Vec<UiPeerExchangeV1>>,
     open_requests: Vec<bridget_transport::protocol::RequestInfo>,
     missions: UiMissionProjectionV1,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -574,9 +575,7 @@ fn read_snapshot(
 ) -> Result<UiSnapshotV1, UiError> {
     let facts = read_bridget_snapshot(&config.daemon_socket)?;
     let agents = compose_agent_rows(facts.agents, &facts.messages);
-    let peer_exchanges = focus_agent
-        .map(|agent| aggregate_peer_exchanges(agent, &facts.messages))
-        .unwrap_or_default();
+    let peer_exchanges = focus_agent.map(|agent| aggregate_peer_exchanges(agent, &facts.messages));
     let missions = read_ui_mission_projection_v1(&config.maicie_config)
         .map_err(|error| UiError::Configuration(error.to_string()))?;
     let recovery_losses = read_recovery_losses(&config.daemon_socket);
@@ -959,8 +958,10 @@ fn write_relay_state(http: &mut TcpStream, state: &'static str, since: i64) -> R
 
 fn write_snapshot_sse(http: &mut TcpStream, snapshot: &UiSnapshotV1) -> Result<(), UiError> {
     write_sse(http, "snapshot", snapshot)?;
-    for exchange in &snapshot.peer_exchanges {
-        write_sse(http, "peer_exchange", exchange)?;
+    if let Some(exchanges) = &snapshot.peer_exchanges {
+        for exchange in exchanges {
+            write_sse(http, "peer_exchange", exchange)?;
+        }
     }
     Ok(())
 }

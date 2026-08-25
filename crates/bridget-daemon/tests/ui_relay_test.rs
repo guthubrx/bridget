@@ -597,7 +597,7 @@ fn watch_annonce_reconnecting_puis_connected_apres_coupure_daemon() {
 }
 
 #[test]
-fn watch_projette_un_echange_pair_both_et_le_pousse_comme_evenement_sse() {
+fn snapshot_sans_agent_omet_les_pairs_et_watch_agent_les_projette() {
     let root = root("peer-exchange");
     let daemon = DaemonProcess::start(&root);
     let socket = root.join(".cache/bridget/bridget.sock");
@@ -624,6 +624,28 @@ fn watch_projette_un_echange_pair_both_et_le_pousse_comme_evenement_sse() {
     let relay = UiRelay::bind(config).unwrap();
     let address = relay.local_addr().unwrap();
     thread::spawn(move || relay.serve().unwrap());
+
+    let global = response_json(&read_response(request(
+        address,
+        "/v1/snapshot?token=jeton-peer",
+    )));
+    assert!(
+        global.get("peer_exchanges").is_none(),
+        "sans agent, une absence de calcul ne doit pas mentir sous la forme d'une liste vide: {global}"
+    );
+
+    let focused = response_json(&read_response(request(
+        address,
+        "/v1/snapshot?token=jeton-peer&agent=agent-focus",
+    )));
+    let focused_exchanges = focused["peer_exchanges"]
+        .as_array()
+        .expect("avec agent, la projection calculée reste toujours présente");
+    assert_eq!(focused_exchanges.len(), 1, "{focused}");
+    assert_eq!(focused_exchanges[0]["peer"], "agent-pair", "{focused}");
+    assert_eq!(focused_exchanges[0]["direction"], "both", "{focused}");
+    assert_eq!(focused_exchanges[0]["count"], 2, "{focused}");
+
     let mut events = request(address, "/v1/watch?token=jeton-peer&agent=agent-focus");
     let subscription_id = match focus.read() {
         DaemonToWrapper::Subscribe {
