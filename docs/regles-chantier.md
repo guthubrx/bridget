@@ -27,6 +27,14 @@ l'incident.
    — le commit de docs du référent a atterri dessus — pendant qu'un second
    agent y modifiait wrapper.rs : course à deux mains dans le même arbre,
    travail extrait en patchs de sauvetage, checkout rendu à main.)*
+   **Garde automatisée (carte de reprise) :** l'alerte règle 6 ne se déclenche
+   que si le chemin est l'entrée primaire d'un dépôt à **≥ 2 worktrees**.
+   Conséquence mesurée (jury 2026-08-25) : **nettoyer les worktrees désarme
+   cette alerte** — le même principal cesse d'être signalé dès que le dernier
+   worktree lié est purgé. La protection est donc maximale quand le dépôt
+   viole le rangement (purge sous 24 h, plafond de worktrees) et nulle quand
+   il est propre. Sens choisi : se taire plutôt que crier faux sur un clone
+   de revue. Ne pas croire que la carte remplace cette règle sociale.
 7. **Le worktree de l'auteur n'est JAMAIS ouvert au relecteur.** Toute revue
    (lecture appuyée exceptée) se fait sur une COPIE DÉTACHÉE du SHA gelé :
    mutants plantés et restaurés chez soi, jamais chez l'auteur. *(Incident
