@@ -220,19 +220,29 @@ le binaire affiche son `id` et son `issued_at`, à réutiliser ensemble pour lir
 le sort d'un envoi non encore consolidé. Sa portée stable vient de l'instance
 Bridget courante, comme pour l'outil MCP.
 
-Le premier résultat d'un envoi nominal n'est pas un incident : le daemon répond
-avant que le destinataire ait accusé, donc il annonce
-`DÉPÔT: in_flight (remise en vol)` — l'outil MCP rend le même statut,
-`"in_flight"` — avec l'identifiant de remise qui l'atteste. Le sort n'est
-déclaré `outcome_unknown` que lorsqu'il est réellement indéterminé. Les deux
-surfaces nomment le même statut, il n'y a donc rien à traduire de l'une à
-l'autre.
+Le premier résultat d'un envoi nominal n'est pas un incident. L'issue durable
+`OutcomeUnknown` ci-dessus est celle du protocole ; côté client — binaire comme
+outil MCP — elle se lit sous deux statuts distincts, selon qu'un dépôt est
+attesté ou non. Un seul des deux décrit un problème :
 
-`in_flight` n'appelle **aucune action** : c'est un succès de dépôt. Pour lire le
-sort d'un envoi non encore consolidé, rejouez à l'identique — **même `id`, même
-`issued_at`, même corps** : c'est une consultation, jamais une seconde émission,
-et elle rend `accepted` une fois l'accusé du destinataire consolidé. Ce rejeu ne
-duplique jamais.
+- **`in_flight` — dépôt attesté**, le destinataire n'a pas encore accusé.
+  **Aucune action n'est requise** : c'est un succès. Le daemon répond sans
+  jamais attendre l'aval, donc c'est le retour normal d'un premier envoi. Le
+  binaire l'annonce `DÉPÔT: in_flight (remise en vol)` et l'outil MCP rend le
+  même statut, `"in_flight"`, avec l'identifiant de remise qui l'atteste.
+- **`outcome_unknown` — le sort est inconnu**, pour l'une de deux raisons :
+  la connexion est tombée avant la réponse, ou le daemon a répondu sans
+  attester de dépôt (pas d'identifiant de remise). Dans les deux cas, le
+  message a pu partir ou non.
+
+Les deux surfaces nomment le même statut, il n'y a donc rien à traduire de
+l'une à l'autre.
+
+Pour lire le sort d'un envoi non encore consolidé — `in_flight` par curiosité,
+`outcome_unknown` par nécessité —, rejouez à l'identique : **même `id`, même
+`issued_at`, même corps**. C'est une consultation, jamais une seconde émission ;
+elle rend `accepted` une fois l'accusé du destinataire consolidé, et ne duplique
+jamais.
 
 Cette garantie est disponible sur le protocole local et la CLI.
 
