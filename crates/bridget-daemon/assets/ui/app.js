@@ -202,6 +202,11 @@
         for (const [agent, count] of counts) {
           const result = await api.fetchScopedSnapshot(fakeFetch, "jeton +", agent);
           scoped.set(agent, result);
+          assert.equal(
+            Object.hasOwn(result.snapshot, "peer_exchanges"),
+            true,
+            `traces non calculées pour agent=${agent}`,
+          );
           assert.equal(result.snapshot.peer_exchanges.length, count);
           assert.deepEqual(api.peerExchangeProjection(result, agent), {
             state: "computed",
