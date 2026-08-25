@@ -1,9 +1,14 @@
+use bridget_transport::protocol::{
+    GuichetOutcome, GuichetRefusalReason, GuichetReplyPayload, ServiceRequestOperation,
+    WrapperToDaemon, decode,
+};
 use maicie::app::{
-    DelegateRequest, DelegateResult, DelegationCandidate, delegate, process_guichet_claim,
+    DelegateRequest, DelegateResult, DelegationCandidate, GuichetError, delegate,
+    process_guichet_claim,
 };
 use maicie::bridget_client::GuichetClaim;
 use maicie::config::DurationClasses;
-use maicie::domain::{ClasseDuree, SuiteObjective};
+use maicie::domain::{ClasseDuree, MotifRefusGreffe, OperationGuichet, SuiteObjective};
 use maicie::store::MaicieStore;
 use rusqlite::Connection;
 use serde_json::Value;
@@ -120,6 +125,18 @@ fn suite_aucune_et_uuid_connu_non_classe_sont_refuses_et_persistes_exactement() 
         reply["payload"]["reason"],
         "suite_none_with_unclassified_citation"
     );
+    let reply_text = std::str::from_utf8(&first.reply_bytes).unwrap();
+    assert!(matches!(
+        decode::<WrapperToDaemon>(reply_text).unwrap(),
+        WrapperToDaemon::GuichetReply {
+            outcome: GuichetOutcome::Refused,
+            payload: GuichetReplyPayload::Refused {
+                operation: ServiceRequestOperation::Delegate,
+                reason: GuichetRefusalReason::SuiteNoneWithUnclassifiedCitation,
+            },
+            ..
+        }
+    ));
     assert_eq!(
         refusal_row(&database, "request-contradiction-uuid"),
         (
@@ -155,6 +172,52 @@ fn branche_ou_sha_seuls_ne_sont_pas_declares_comme_contradiction() {
             "operation_not_available".to_string(),
             1,
         )
+    );
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn vocabulaires_rust_font_un_round_trip_exact_et_exhaustif() {
+    for &operation in OperationGuichet::ALL {
+        assert_eq!(
+            OperationGuichet::parse_sql(operation.as_sql()),
+            Some(operation)
+        );
+    }
+    for &reason in MotifRefusGreffe::ALL {
+        assert_eq!(MotifRefusGreffe::parse_sql(reason.as_sql()), Some(reason));
+    }
+}
+
+#[test]
+fn valeur_sql_inconnue_est_refusee_a_la_premiere_lecture() {
+    let root = root("unknown-sql");
+    let database = root.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let objective_id = seed_objective(&mut store);
+    let claim = claim(
+        "request-corrupt-operation",
+        &format!("ce lot est la suite de {objective_id}"),
+    );
+    process_guichet_claim(&mut store, &claim, "response-corrupt", 1_787_671_010).unwrap();
+    drop(store);
+
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute(
+            "UPDATE guichet_refusal_receptions SET operation='future_operation'
+             WHERE request_id='request-corrupt-operation'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    let error = process_guichet_claim(&mut store, &claim, "ignored", 1_787_671_011).unwrap_err();
+    assert_eq!(
+        error,
+        GuichetError::Store("store corrompu : opération guichet inconnue".to_string())
     );
     drop(store);
     fs::remove_dir_all(root).unwrap();

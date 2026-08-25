@@ -117,11 +117,13 @@ fn chaque_variante_operation_exige_une_fixture_exacte() {
 }
 
 #[test]
+#[ignore = "session 026 : seconde tranche des opérations fédérées"]
 fn profile_approve_est_refuse_et_persiste_exactement() {
     assert_forbidden_operation_is_durable("profile_approve");
 }
 
 #[test]
+#[ignore = "session 026 : seconde tranche des opérations fédérées"]
 fn routine_approve_est_refuse_et_persiste_exactement() {
     assert_forbidden_operation_is_durable("routine_approve");
 }

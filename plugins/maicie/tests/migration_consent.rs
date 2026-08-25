@@ -236,7 +236,7 @@ fn migration_v18_pose_le_journal_ferme_des_refus_locaux() {
     drop(connection);
 
     let store = MaicieStore::open_and_migrate(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 18);
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     assert_eq!(
         store
             .local_delegate_refusal_counts()
