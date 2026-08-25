@@ -890,6 +890,7 @@ impl Peer {
             name: Some(name.to_string()),
             host: Some("fixture-host".to_string()),
             transport: Some("unix".to_string()),
+            channel: None,
             mode: Some(bridget_transport::protocol::PresenceMode::Acp),
             location: None,
             os: Some("fixture-os".to_string()),
@@ -1079,7 +1080,13 @@ fn run_interactive_prompt_corpus(
     // réduit qui est visible et interrogée par l'outil MCP bridget_who.
     let initial = wait_agent(&mut peer, agent);
     assert_eq!(initial.agent_type, "codex");
-    assert_eq!(initial.transport, "unix");
+    assert_eq!(initial.transport, "tmux");
+    assert!(
+        initial
+            .channel
+            .as_deref()
+            .is_some_and(|value| value != "tmux")
+    );
     assert_eq!(initial.state, "connected");
 
     // Quickstart 007 §2 et §3 : la même session répond à une demande
@@ -1107,7 +1114,13 @@ fn run_interactive_prompt_corpus(
     let next = send_tracked_with_timeout(&mut peer, agent, "QUEUE-NEXT", 9);
     proxy.cut_wrapper_and_wait_for_reconnect();
     let reconnected = wait_reconnected(&mut peer, agent);
-    assert_eq!(reconnected.transport, "unix");
+    assert_eq!(reconnected.transport, "tmux");
+    assert!(
+        reconnected
+            .channel
+            .as_deref()
+            .is_some_and(|value| value != "tmux")
+    );
     assert_eq!(reconnected.state, "connected");
     assert_eq!(
         receive_replies(&mut peer, &[slow.clone(), next]),

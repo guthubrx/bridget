@@ -70,6 +70,7 @@ impl LiveAgent {
             name: Some(name.to_string()),
             host: Some("test".to_string()),
             transport: Some("unix".to_string()),
+            channel: None,
             mode: Some(PresenceMode::Cli),
             location: None,
             os: Some("test".to_string()),

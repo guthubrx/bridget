@@ -54,7 +54,7 @@ case "$action" in
 mkdir -p "$1"
 rm -f "$2"
 mkdir -p "$HOME/.config/bridget"
-printf 'transport=ssh-unix\n' > "$HOME/.config/bridget/federation.env"
+printf 'channel=ssh-unix\ntransport=ssh-unix\n' > "$HOME/.config/bridget/federation.env"
 REMOTE_SCRIPT
     mkdir -p "$config_dir"
     umask 077

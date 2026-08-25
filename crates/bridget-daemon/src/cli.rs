@@ -1501,6 +1501,7 @@ fn send_control_to_daemon_at(
         name: Some(format!("cli-send-{}", std::process::id())),
         host: None,
         transport: None,
+        channel: None,
         mode: Some(PresenceMode::Cli),
         location: None,
         os: None,
@@ -1738,6 +1739,7 @@ fn send_rename_to_daemon(current_name: &str, name: &str) -> Result<DaemonToWrapp
         name: Some(format!("cli-rename-{}", std::process::id())),
         host: None,
         transport: None,
+        channel: None,
         mode: Some(PresenceMode::Cli),
         location: None,
         os: None,
@@ -1791,6 +1793,7 @@ fn send_runtime_to_daemon(
         name: Some(format!("cli-runtime-{}", std::process::id())),
         host: None,
         transport: None,
+        channel: None,
         mode: Some(PresenceMode::Cli),
         location: None,
         os: None,
@@ -2675,13 +2678,14 @@ fn cmd_agents(args: &[String]) {
         println!("Agents connectes :");
         for agent in &status.agents {
             println!(
-                "  {} ({}) [{}] — {} / {} via {} — {} / {} [{}]",
+                "  {} ({}) [{}] — {} / {} via {} (canal {}) — {} / {} [{}]",
                 agent.name,
                 agent.agent_type,
                 cell(agent.domain.as_deref()),
                 agent.host,
                 agent.os,
                 agent.transport,
+                cell(agent.channel.as_deref()),
                 format_model(agent),
                 cell(agent.effort.as_deref()),
                 agent.state
@@ -2746,6 +2750,9 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
     let host_w = column("HÔTE", &|a: &AgentInfo| a.host.clone());
     let os_w = column("OS", &|a: &AgentInfo| a.os.clone());
     let transport_w = column("TRANSPORT", &|a: &AgentInfo| a.transport.clone());
+    let channel_w = column("CANAL", &|a: &AgentInfo| {
+        cell(a.channel.as_deref()).to_string()
+    });
     let mode_w = column("MODE", &|a: &AgentInfo| {
         cell(a.mode.map(PresenceMode::as_str)).to_string()
     });
@@ -2768,19 +2775,20 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
     }
     writeln!(
         output,
-        "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  ÉTAT",
-        "NOM", "TYPE", "HÔTE", "OS", "TRANSPORT", "MODE", "LOCALISATION", "DOMAINE", "MODÈLE", "EFFORT", "LIMITE"
+        "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  ÉTAT",
+        "NOM", "TYPE", "HÔTE", "OS", "TRANSPORT", "CANAL", "MODE", "LOCALISATION", "DOMAINE", "MODÈLE", "EFFORT", "LIMITE"
     )
     .unwrap();
     for agent in agents {
         writeln!(
             output,
-            "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {}",
+            "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {}",
             agent.name,
             agent.agent_type,
             agent.host,
             agent.os,
             agent.transport,
+            cell(agent.channel.as_deref()),
             cell(agent.mode.map(PresenceMode::as_str)),
             cell(agent.location.as_deref()),
             cell(agent.domain.as_deref()),
@@ -3876,6 +3884,7 @@ mod hook_tests {
             connection_id: "conn-referent".to_string(),
             host: "local".to_string(),
             transport: "unix".to_string(),
+            channel: None,
             mode: Some(PresenceMode::Tmux),
             location: None,
             os: "macOS".to_string(),
@@ -4031,6 +4040,7 @@ mod hook_tests {
             name: Some("referent-oracle".to_string()),
             host: None,
             transport: None,
+            channel: None,
             mode: Some(PresenceMode::Tmux),
             location: None,
             os: None,
@@ -4517,7 +4527,8 @@ mod idempotency_projection_tests {
             agent_type: "fixture".to_string(),
             connection_id: format!("conn-{name}"),
             host: "local".to_string(),
-            transport: "unix".to_string(),
+            transport: "tmux".to_string(),
+            channel: Some("ssh-unix".to_string()),
             mode,
             location: location.map(str::to_string),
             os: "macOS".to_string(),
@@ -4545,6 +4556,7 @@ mod idempotency_projection_tests {
 
         assert!(rendered.starts_with("Agents connectés :\n"));
         assert!(rendered.contains("MODE"));
+        assert!(rendered.contains("CANAL"));
         assert!(rendered.contains("LOCALISATION"));
         assert!(rendered.contains("LIMITE"));
         assert!(rendered.contains("acp-gere"));
@@ -4553,6 +4565,7 @@ mod idempotency_projection_tests {
         assert!(rendered.contains("bridget:4.2"));
         assert!(rendered.contains("acp"));
         assert!(rendered.contains("tmux"));
+        assert!(rendered.contains("ssh-unix"));
         assert!(rendered.contains("cli"));
         assert!(!rendered.contains('\u{1b}'));
     }
@@ -4565,6 +4578,7 @@ mod idempotency_projection_tests {
             connection_id: "conn-claude".to_string(),
             host: "local".to_string(),
             transport: "stdio".to_string(),
+            channel: None,
             mode: Some(PresenceMode::Cli),
             location: None,
             os: "macOS".to_string(),
@@ -4631,6 +4645,7 @@ mod idempotency_projection_tests {
             connection_id: "conn-claude".to_string(),
             host: "local".to_string(),
             transport: "stdio".to_string(),
+            channel: None,
             mode: Some(PresenceMode::Cli),
             location: None,
             os: "macOS".to_string(),

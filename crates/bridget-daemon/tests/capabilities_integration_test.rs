@@ -79,6 +79,7 @@ impl Peer {
             name: None,
             host: None,
             transport: None,
+            channel: None,
             mode: None,
             location: None,
             os: None,

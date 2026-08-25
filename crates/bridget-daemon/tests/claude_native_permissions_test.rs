@@ -128,11 +128,17 @@ fn run_mission_with(
             WrapperToDaemon::Register {
                 agent_type,
                 transport,
+                channel,
                 mode,
                 ..
             } => {
                 assert_eq!(agent_type, "claude");
-                assert_eq!(transport.as_deref(), Some("stdio"));
+                assert_eq!(transport.as_deref(), Some("claude_stream_json"));
+                assert!(
+                    channel
+                        .as_deref()
+                        .is_some_and(|value| value != "claude_stream_json")
+                );
                 assert_eq!(mode, Some(PresenceMode::Cli));
             }
             other => panic!("Register Claude attendu, reçu : {other:?}"),

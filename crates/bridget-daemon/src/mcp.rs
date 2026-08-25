@@ -876,6 +876,7 @@ fn registered_connection(socket: &Path) -> Result<DaemonConnection, ToolError> {
         name: Some(ephemeral_connection_name()),
         host: None,
         transport: None,
+        channel: None,
         mode: Some(PresenceMode::Cli),
         location: None,
         os: None,

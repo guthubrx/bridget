@@ -75,12 +75,18 @@ done
             WrapperToDaemon::Register {
                 agent_type,
                 transport,
+                channel,
                 mode,
                 location,
                 ..
             } => {
                 assert_eq!(agent_type, "claude-native");
-                assert_eq!(transport.as_deref(), Some("stdio"));
+                assert_eq!(transport.as_deref(), Some("claude_stream_json"));
+                assert!(
+                    channel
+                        .as_deref()
+                        .is_some_and(|value| value != "claude_stream_json")
+                );
                 assert_eq!(mode, Some(PresenceMode::Cli));
                 assert_eq!(location, None);
             }
@@ -281,6 +287,7 @@ while IFS= read -r line; do :; done
             agent_type,
             name,
             transport,
+            channel,
             mode,
             instance_id,
             domain,
@@ -288,7 +295,12 @@ while IFS= read -r line; do :; done
         } => {
             assert_eq!(agent_type, "claude");
             assert_eq!(name.as_deref(), Some("claude-manage-1"));
-            assert_eq!(transport.as_deref(), Some("stdio"));
+            assert_eq!(transport.as_deref(), Some("claude_stream_json"));
+            assert!(
+                channel
+                    .as_deref()
+                    .is_some_and(|value| value != "claude_stream_json")
+            );
             assert_eq!(mode, Some(PresenceMode::Cli));
             assert_eq!(instance_id.as_deref(), Some(identity.instance_id.as_str()));
             assert_eq!(domain.as_deref(), Some(expected_domain.as_str()));

@@ -787,6 +787,10 @@ pub enum WrapperToDaemon {
         host: Option<String>,
         #[serde(default)]
         transport: Option<String>,
+        /// Canal de connexion au daemon (`unix`, `ssh-unix`, ...), distinct
+        /// du protocole d'agent porté par la présence.
+        #[serde(default)]
+        channel: Option<String>,
         /// Mode d'attelage réellement emprunté. Son absence représente un
         /// enregistrement historique, jamais un mode à deviner.
         #[serde(default)]
@@ -1464,7 +1468,13 @@ pub struct AgentInfo {
     pub agent_type: String,
     pub connection_id: String,
     pub host: String,
+    /// Protocole d'agent réellement utilisé (`tmux`, `acp`,
+    /// `codex_app_server`, `claude_stream_json`, ...).
     pub transport: String,
+    /// Canal de connexion au daemon. Absent lorsqu'aucun wrapper ne l'a
+    /// attesté ; il n'est jamais déduit du type d'agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
     /// Mode d'attelage attesté. `None` représente une présence historique
     /// dont le mode n'a jamais été annoncé.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1511,6 +1521,8 @@ struct AgentInfoWire {
     host: String,
     transport: String,
     #[serde(default)]
+    channel: Option<String>,
+    #[serde(default)]
     mode: Option<PresenceMode>,
     #[serde(default)]
     location: Option<String>,
@@ -1547,6 +1559,7 @@ impl From<AgentInfoWire> for AgentInfo {
             connection_id: wire.connection_id,
             host: wire.host,
             transport: wire.transport,
+            channel: wire.channel,
             mode: wire.mode,
             location: wire.location,
             os: wire.os,
@@ -1785,6 +1798,7 @@ mod tests {
             name: None,
             host: Some("test-host".to_string()),
             transport: Some("unix".to_string()),
+            channel: Some("unix".to_string()),
             mode: Some(PresenceMode::Acp),
             location: None,
             os: Some("Linux".to_string()),
@@ -1802,6 +1816,7 @@ mod tests {
                 name,
                 host,
                 transport,
+                channel,
                 mode,
                 location,
                 os,
@@ -1814,6 +1829,7 @@ mod tests {
                 assert!(name.is_none());
                 assert_eq!(host.as_deref(), Some("test-host"));
                 assert_eq!(transport.as_deref(), Some("unix"));
+                assert_eq!(channel.as_deref(), Some("unix"));
                 assert_eq!(mode, Some(PresenceMode::Acp));
                 assert_eq!(location, None);
                 assert_eq!(os.as_deref(), Some("Linux"));
@@ -1834,6 +1850,7 @@ mod tests {
         assert!(matches!(
             decoded,
             WrapperToDaemon::Register {
+                channel: None,
                 mode: None,
                 location: None,
                 ..
@@ -2094,8 +2111,23 @@ mod tests {
         let info: AgentInfo = decode(json).unwrap();
         assert!(info.model.is_none());
         assert!(info.effort.is_none());
+        assert!(info.channel.is_none());
         assert!(info.rate_limits.is_empty());
         assert!(info.model_mismatch.is_none());
+    }
+
+    #[test]
+    fn spec_024_agent_info_expose_protocole_et_canal_independants() {
+        let json = r#"{"name":"cartae-agent","agent_type":"codex","connection_id":"conn-1",
+            "host":"cartae","transport":"tmux","channel":"ssh-unix","mode":"tmux",
+            "os":"Linux","state":"connected","last_seen_secs":0,"reconnect_count":0}"#;
+        let info: AgentInfo = decode(json).unwrap();
+        assert_eq!(info.transport, "tmux");
+        assert_eq!(info.channel.as_deref(), Some("ssh-unix"));
+
+        let encoded = encode(&info).unwrap();
+        assert!(encoded.contains(r#""transport":"tmux""#));
+        assert!(encoded.contains(r#""channel":"ssh-unix""#));
     }
 
     #[test]

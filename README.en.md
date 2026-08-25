@@ -24,10 +24,10 @@ dropped connection, keeping two agents from looping forever.
 ```console
 $ bridget who
 Agents connectés :
-  NAME     TYPE    HOST         OS     TRANSPORT  DOMAIN     MODEL          EFFORT  STATE
-  agent-1  claude  local-host   macOS  unix       bridget    claude-opus-5  high    connected
-  agent-2  codex   local-host   macOS  unix       project-b  gpt-5.6-terra  xhigh   dnd
-  remote   claude  server       Linux  ssh        project-b  claude-opus-5  high    connected
+  NAME     TYPE    HOST         OS     TRANSPORT  CHANNEL   DOMAIN     MODEL          EFFORT  STATE
+  agent-1  claude  local-host   macOS  tmux       unix      bridget    claude-opus-5  high    connected
+  agent-2  codex   local-host   macOS  tmux       unix      project-b  gpt-5.6-terra  xhigh   dnd
+  remote   claude  server       Linux  tmux       ssh-unix  project-b  claude-opus-5  high    connected
 
 $ bridget send --to remote --reply "Can you review crates/bridget-core?"
 OK: sent to "remote" (id=fa09fa7800694, hops=4) [answer expected]
@@ -304,7 +304,8 @@ except for diagnosis.
 
 | Variable | Effect |
 |---|---|
-| `BRIDGET_TRANSPORT` | transport name advertised in the directory (default: `unix`, or the value read from `~/.config/bridget/federation.env`) |
+| `BRIDGET_CHANNEL` | connection channel advertised separately from the protocol (default: `unix`, or `channel=` in `~/.config/bridget/federation.env`) |
+| `BRIDGET_TRANSPORT` | legacy alias for `BRIDGET_CHANNEL`, kept for rolling upgrades |
 | `BRIDGET_AGENT_NAME` | agent name, exported by the wrapper to the agent process |
 | `BRIDGET_AGENT_NAME_FILE` | file holding the current name; this is what prevails after a `rename` |
 | `HOSTNAME` | advertised host, otherwise the output of `hostname` |
@@ -418,10 +419,10 @@ says nothing about actual capability: the model is what decides who gets which
 task.
 
 ```text
-  NAME     TYPE    HOST         OS     TRANSPORT  MODEL          EFFORT  STATE
-  agent-1  claude  local-host   macOS  unix       claude-opus-5  high    connected
-  agent-2  codex   local-host   macOS  unix       gpt-5.6-terra  xhigh   connected
-  remote   claude  server       Linux  ssh        —              —       unreachable
+  NAME     TYPE    HOST         OS     TRANSPORT  CHANNEL   MODEL          EFFORT  STATE
+  agent-1  claude  local-host   macOS  tmux       unix      claude-opus-5  high    connected
+  agent-2  codex   local-host   macOS  tmux       unix      gpt-5.6-terra  xhigh   connected
+  remote   claude  server       Linux  tmux       ssh-unix  —              —       unreachable
 ```
 
 An em dash marks a value that has never been observed — Bridget never invents a
@@ -552,9 +553,11 @@ agent is re-registered automatically under the same name as soon as the SSH
 socket reappears — including if it was renamed in the meantime with
 `bridget rename`.
 
-`bridget who` also shows the execution host, the OS, the transport and the
-presence state in aligned columns. The OS is detected by the wrapper (`macOS`,
-`Linux`, and so on) so a request can be routed to tools that actually exist
+`bridget who` also shows the execution host, the OS, the agent protocol in
+`TRANSPORT`, the network path in `CHANNEL`, and the presence state in aligned
+columns. A federated tmux agent therefore remains `TRANSPORT=tmux` while carrying
+`CHANNEL=ssh-unix`. The OS is detected by the wrapper (`macOS`, `Linux`, and so
+on) so a request can be routed to tools that actually exist
 there. After a disconnection, a remote instance stays visible as `unreachable`
 for five minutes, which tells a network loss apart from an agent deliberately
 shut down.
