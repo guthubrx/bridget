@@ -168,6 +168,10 @@ struct TurnWorker {
     state: Arc<Mutex<TurnState>>,
     events: Arc<Mutex<AcpEventQueue>>,
     response: Arc<Mutex<String>>,
+    /// Accumulé depuis `agent_thought_chunk` ; vidé en début de tour.
+    /// Une seule ligne journal `event=reasoning` est émise en fin de tour
+    /// (alignement C3 avec L3 Codex — pas de DTO ManagedEvent).
+    reasoning_raw: Arc<Mutex<String>>,
     session_id: String,
     notify_timeout: Duration,
     cancel_grace: Duration,
@@ -335,6 +339,7 @@ impl AcpTransport {
         let shutdown_started = Arc::new(AtomicBool::new(false));
         let events = Arc::new(Mutex::new(AcpEventQueue::default()));
         let response = Arc::new(Mutex::new(String::new()));
+        let reasoning_raw = Arc::new(Mutex::new(String::new()));
         let writer = Arc::new(Mutex::new(Some(stdin)));
         let waiters: Waiters = Arc::new(Mutex::new(HashMap::new()));
         let completions: Completions = Arc::new(Mutex::new(HashMap::new()));
@@ -357,6 +362,7 @@ impl AcpTransport {
             completions.clone(),
             events.clone(),
             response.clone(),
+            reasoning_raw.clone(),
             alive.clone(),
             options.permissions.clone(),
             queue.clone(),
@@ -424,6 +430,7 @@ impl AcpTransport {
             state: state.clone(),
             events: events.clone(),
             response,
+            reasoning_raw,
             session_id: session_id.clone(),
             notify_timeout: Duration::from_secs(options.notify_timeout_secs),
             cancel_grace,
@@ -806,6 +813,11 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 .push_back(AcpEvent::TurnStarted {
                     message_id: message.id.clone(),
                 });
+            worker
+                .reasoning_raw
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .clear();
             record_or_terminal(
                 &worker.journal,
                 &worker.events,
@@ -861,6 +873,15 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                     stop_reason,
                     ..
                 } => {
+                    // Ligne terminale C3 — y compris available:false (Gemini).
+                    let reasoning = take_reasoning_journal_payload(&worker.reasoning_raw);
+                    record_or_terminal(
+                        &worker.journal,
+                        &worker.events,
+                        "reasoning",
+                        Some(&message.id),
+                        reasoning,
+                    );
                     let mut payload = json!({ "stop_reason": stop_reason });
                     if message.reply {
                         payload["routed_to"] = json!(&message.from);
@@ -873,13 +894,23 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                         payload,
                     );
                 }
-                AcpEvent::DeliveryRejected { message_id, reason } => record_or_terminal(
-                    &worker.journal,
-                    &worker.events,
-                    "error",
-                    Some(message_id),
-                    json!({ "reason": reason }),
-                ),
+                AcpEvent::DeliveryRejected { message_id, reason } => {
+                    let reasoning = take_reasoning_journal_payload(&worker.reasoning_raw);
+                    record_or_terminal(
+                        &worker.journal,
+                        &worker.events,
+                        "reasoning",
+                        Some(message_id),
+                        reasoning,
+                    );
+                    record_or_terminal(
+                        &worker.journal,
+                        &worker.events,
+                        "error",
+                        Some(message_id),
+                        json!({ "reason": reason }),
+                    );
+                }
                 _ => {}
             }
             if let Some(observer) = &worker.test_observer {
@@ -983,6 +1014,7 @@ fn spawn_reader(
     completions: Completions,
     events: Arc<Mutex<AcpEventQueue>>,
     response: Arc<Mutex<String>>,
+    reasoning_raw: Arc<Mutex<String>>,
     alive: Arc<AtomicBool>,
     permissions: String,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
@@ -1112,16 +1144,13 @@ fn spawn_reader(
                     } else if let Some(thought) =
                         update_thought_text(&value, session_id.as_deref())
                     {
-                        // Variante standard SessionUpdate (effect-acp) : ne
-                        // plus la jeter — elle arrive AVANT les messages.
-                        let message_id = active_message_id(&queue);
-                        record_or_terminal(
-                            &journal,
-                            &events,
-                            "update",
-                            message_id.as_deref(),
-                            reasoning_journal_payload(thought),
-                        );
+                        // Variante standard SessionUpdate (effect-acp) : on
+                        // accumule pour la ligne terminale event=reasoning.
+                        // Pas de journal par chunk — alignement C3 / L3.
+                        reasoning_raw
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .push_str(thought);
                         events
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
@@ -1619,17 +1648,30 @@ impl AcpMessageDetailV1 {
     }
 }
 
-fn reasoning_journal_payload(text: &str) -> Value {
-    json!({
-        "kind": "reasoning",
-        "content": text,
-        "available": true,
-    })
+fn reasoning_journal_payload_from_raw(raw: &str) -> Value {
+    if raw.is_empty() {
+        // Absent ≠ vide : pas de summary/raw qui se liraient « pas réfléchi ».
+        json!({ "available": false })
+    } else {
+        json!({
+            "available": true,
+            "summary": raw,
+            "raw": raw,
+        })
+    }
 }
 
-/// Absorbe une notification `session/update` dans le détail C3.
-/// `agent_thought_chunk` → `reasoning` ; `tool_call` / `tool_call_update` →
-/// acte `tool` (ensemble fermé C3). Les autres variantes sont ignorées ici.
+fn take_reasoning_journal_payload(reasoning_raw: &Arc<Mutex<String>>) -> Value {
+    let mut raw = reasoning_raw
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    let payload = reasoning_journal_payload_from_raw(&raw);
+    raw.clear();
+    payload
+}
+
+/// Absorbe une notification `session/update` dans le détail C3 (aide tests /
+/// assemblage page). `agent_thought_chunk` → raw ; `tool_call*` → acte `tool`.
 fn absorb_acp_session_update(
     detail: &mut AcpMessageDetailV1,
     value: &Value,
@@ -1651,12 +1693,14 @@ fn absorb_acp_session_update(
     {
         let payload = tool_call_journal_payload(value, tool_titles);
         let text = payload
-            .get("tool")
+            .get("text")
+            .or_else(|| payload.get("tool"))
             .and_then(Value::as_str)
             .unwrap_or("inconnu")
             .to_string();
         let detail_text = payload
-            .get("summary")
+            .get("detail")
+            .or_else(|| payload.get("summary"))
             .and_then(Value::as_str)
             .filter(|summary| !summary.is_empty())
             .map(str::to_string);
@@ -1699,11 +1743,17 @@ fn tool_call_journal_payload(value: &Value, tool_titles: &mut HashMap<String, St
         .or_else(|| content.get("text"))
         .and_then(Value::as_str)
         .unwrap_or("");
+    // C3 : kind fermé `tool` (alignement L3). Champs legacy conservés pour
+    // corrélation toolCallId / attach tant que ce dernier n'est pas porté.
     let mut payload = serde_json::Map::from_iter([
-        ("kind".to_string(), Value::String("tool_call".to_string())),
+        ("kind".to_string(), Value::String("tool".to_string())),
+        ("text".to_string(), Value::String(tool.to_string())),
         ("tool".to_string(), Value::String(tool.to_string())),
         ("summary".to_string(), Value::String(summary.to_string())),
     ]);
+    if !summary.is_empty() {
+        payload.insert("detail".to_string(), Value::String(summary.to_string()));
+    }
     for (key, value) in [
         ("tool_call_id", tool_call_id),
         ("title", title.as_deref()),
@@ -2037,7 +2087,7 @@ mod tests {
         })
     }
 
-    /// T4.4 — présence de pensée → available true (contrôle positif du filet).
+    /// T4.4 — présence de pensée → ligne terminale available true.
     #[test]
     fn agent_thought_chunk_rend_reasoning_available_true() {
         let mut detail = AcpMessageDetailV1::new();
@@ -2062,31 +2112,29 @@ mod tests {
             &mut tool_titles,
         );
 
+        let terminal = reasoning_journal_payload_from_raw(
+            detail.reasoning.raw.as_deref().unwrap_or(""),
+        );
+        assert_eq!(terminal["available"], true);
+        assert_eq!(terminal["raw"], "je vais lire le fichier");
+        assert_eq!(terminal["summary"], "je vais lire le fichier");
+
         let json = detail.to_json();
-        assert_eq!(json["reasoning"]["available"], true);
-        assert_eq!(json["reasoning"]["raw"], "je vais lire le fichier");
-        assert_eq!(json["reasoning"]["summary"], "je vais lire le fichier");
         assert_eq!(json["acts"].as_array().unwrap().len(), 1);
         assert_eq!(json["acts"][0]["kind"], "tool");
         assert_eq!(json["acts"][0]["text"], "Read src/main.rs");
         assert_eq!(json["acts"][0]["detail"], "lecture");
-        // Le message n'est pas un acte tool / reasoning — absorb ne le mélange pas.
-        assert!(update_text(
-            &session_update("agent_message_chunk", "voici la réponse"),
-            Some("fixture-session")
-        )
-        .is_some());
-        assert!(
-            update_thought_text(
-                &session_update("agent_thought_chunk", "je vais lire le fichier"),
-                Some("fixture-session")
-            )
-            .is_some()
+        assert_eq!(
+            tool_call_journal_payload(
+                &session_tool_call("Read src/main.rs", "lecture"),
+                &mut HashMap::new()
+            )["kind"],
+            "tool"
         );
     }
 
-    /// T4.5 — aucun chunk de pensée → available false, jamais un objet vide
-    /// qui se lirait « il n'a pas réfléchi » (cas Gemini : chunk jamais émis).
+    /// T4.5 — aucun chunk de pensée → ligne terminale available false
+    /// (cas Gemini : chunk jamais émis). Pas de summary/raw vides.
     #[test]
     fn flux_sans_thought_chunk_rend_reasoning_available_false() {
         let mut detail = AcpMessageDetailV1::new();
@@ -2104,11 +2152,12 @@ mod tests {
             &mut tool_titles,
         );
 
-        let json = detail.to_json();
-        assert_eq!(json["reasoning"]["available"], false);
-        assert!(json["reasoning"].get("summary").is_none());
-        assert!(json["reasoning"].get("raw").is_none());
-        assert_eq!(json["acts"][0]["kind"], "tool");
+        let terminal = reasoning_journal_payload_from_raw("");
+        assert_eq!(terminal, json!({ "available": false }));
+        assert!(terminal.get("summary").is_none());
+        assert!(terminal.get("raw").is_none());
+        assert_eq!(detail.reasoning.available, false);
+        assert_eq!(detail.to_json()["acts"][0]["kind"], "tool");
     }
 
     /// T4.6 — mutant : si l'on rétablissait le filtre qui n'accepte que
@@ -2693,7 +2742,8 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
                     "v": 1, "session_id": "fixture-session", "event": "update",
                     "message_id": "journal-message",
                     "payload": {
-                        "kind":"tool_call", "tool_call_id":"tool-1", "tool":"Read src/main.rs",
+                        "kind":"tool", "text":"Read src/main.rs", "detail":"lecture",
+                        "tool_call_id":"tool-1", "tool":"Read src/main.rs",
                         "title":"Read src/main.rs", "name":"read_file",
                         "tool_kind":"read", "summary":"lecture"
                     }
@@ -2703,7 +2753,8 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
                         "v": 1, "session_id": "fixture-session", "event": "update",
                         "message_id": "journal-message",
                         "payload": {
-                            "kind":"tool_call", "tool_call_id":"tool-1", "tool":"Read src/main.rs",
+                            "kind":"tool", "text":"Read src/main.rs", "detail":summary,
+                            "tool_call_id":"tool-1", "tool":"Read src/main.rs",
                             "title":"Read src/main.rs", "summary":summary
                         }
                     })), "la mise à jour ACP {summary} doit porter le titre corrélé");
@@ -2720,6 +2771,11 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
                         "decision":{"outcome":"selected","option_id":"allow-1"}
                     }
                 })));
+                assert!(events.contains(&json!({
+                    "v": 1, "session_id": "fixture-session", "event": "reasoning",
+                    "message_id": "journal-message",
+                    "payload": {"available": false}
+                })), "sans thought_chunk : ligne terminale available:false");
                 assert!(events.contains(&json!({
                     "v": 1, "session_id": "fixture-session", "event": "turn_end",
                     "message_id": "journal-message",
