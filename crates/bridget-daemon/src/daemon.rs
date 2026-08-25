@@ -1875,42 +1875,57 @@ impl DaemonState {
     fn orphan_deliveries_after_presence_purge(&mut self, purged_instance_ids: &[String]) {
         const REASON: &str = "destinataire purgé — présence absente ; remise orpheline";
         for instance_id in purged_instance_ids {
-            let notices = match self
+            match self
                 .idempotency
                 .orphan_dispatching_for_instance(instance_id, REASON)
             {
-                Ok(notices) => notices,
-                Err(error) => {
-                    error!("orphelinage des remises de {instance_id}: {error}");
-                    continue;
-                }
-            };
-            for notice in notices {
-                info!(
-                    "remise orpheline delivery={} msg={} {}→{} ({})",
-                    notice.delivery_id, notice.message_id, notice.sender, notice.target, notice.reason
-                );
-                let body = format!(
-                    "ORPHELIN: le message {} destiné à {} n'a pas été livré — présence purgée (delivery {}). {}",
-                    notice.message_id, notice.target, notice.delivery_id, notice.reason
-                );
-                if let Some(agent) = self.router.get_agent(&notice.sender)
-                    && let Some(writer) = self.connections.get(&agent.connection_id)
-                {
-                    if let Err(error) = deliver_to_agent(writer, &notice.sender, &body) {
-                        warn!(
-                            "signal orphelin non délivré à {}: {error}",
-                            notice.sender
+                Ok(notices) => {
+                    for notice in &notices {
+                        info!(
+                            "remise orpheline delivery={} msg={} {}→{} ({})",
+                            notice.delivery_id,
+                            notice.message_id,
+                            notice.sender,
+                            notice.target,
+                            notice.reason
                         );
                     }
-                } else {
-                    // Émetteur hors ligne : le ledger + rejeu `orphaned` restent
-                    // la trace ; on ne peut pas pousser un Deliver vivant.
-                    warn!(
-                        "émetteur {} hors ligne pour signal orphelin {}",
-                        notice.sender, notice.delivery_id
-                    );
                 }
+                Err(error) => {
+                    error!("orphelinage des remises de {instance_id}: {error}");
+                }
+            }
+        }
+        self.flush_pending_orphan_emitter_notices();
+    }
+
+    /// Pousse les signaux ORPHELIN encore non notifiés (y compris après crash).
+    fn flush_pending_orphan_emitter_notices(&mut self) {
+        let pending = match self.idempotency.pending_orphan_emitter_notices() {
+            Ok(pending) => pending,
+            Err(error) => {
+                error!("lecture des notices orphelines: {error}");
+                return;
+            }
+        };
+        let now = unix_now_secs();
+        for (delivery_id, sender, body) in pending {
+            if let Some(agent) = self.router.get_agent(&sender)
+                && let Some(writer) = self.connections.get(&agent.connection_id)
+            {
+                match deliver_to_agent(writer, &sender, &body) {
+                    Ok(_) => {
+                        if let Err(error) = self
+                            .idempotency
+                            .mark_orphan_emitter_notified(&delivery_id, now)
+                        {
+                            error!("mark notice orphelin {delivery_id}: {error}");
+                        }
+                    }
+                    Err(error) => warn!("signal orphelin non délivré à {sender}: {error}"),
+                }
+            } else {
+                warn!("émetteur {sender} hors ligne pour signal orphelin {delivery_id}");
             }
         }
     }
@@ -1946,6 +1961,10 @@ impl DaemonState {
         // APRÈS la décision de purger (pas la politique de purge) : rendre
         // visibles les remises qui ne partiront plus.
         self.orphan_deliveries_after_presence_purge(&purged);
+        // Rejeu des notices dont le Deliver a échoué / crashé après orphan.
+        if purged.is_empty() {
+            self.flush_pending_orphan_emitter_notices();
+        }
         let mut agents: Vec<_> = self
             .router
             .list_agents()
@@ -9689,17 +9708,22 @@ mod presence_tests {
 
     /// ORACLE — à la purge de présence, une remise `dispatching` devient
     /// `orphaned` (visible), pas un `outcome_unknown` muet.
+    ///
+    /// Lot A : le retain lit `link_seen`. Stalifier seulement `last_seen`
+    /// laisserait le lien frais → présence non purgée → faux vert / faux rouge.
     #[test]
     fn purge_presence_orpheline_les_remises_dispatching() {
         use crate::idempotency::{IdempotencyKey, OperationKind, Reservation, SendDelivery};
 
         let (mut state, config) = state_with_registered_agent("purge-orphelin");
-        // busy + last_seen périmé : le retain jette (connected serait exempt).
+        // busy + les DEUX horloges périmées (capacité et lien).
         state.set_turn_state("conn-1", true).unwrap();
         let stale = Instant::now()
             .checked_sub(PRESENCE_RETENTION + Duration::from_secs(1))
             .expect("horloge");
-        state.presences.get_mut("instance-1").unwrap().last_seen = stale;
+        let presence = state.presences.get_mut("instance-1").unwrap();
+        presence.last_seen = stale;
+        presence.link_seen = stale;
 
         let key = IdempotencyKey::new(
             "012_scope_aaaaaaaaaaaa",
@@ -9763,6 +9787,112 @@ mod presence_tests {
                 expires_at: 1_000_000 + 3600,
                 reason: "destinataire purgé — présence absente ; remise orpheline".to_string(),
             }
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// ORACLE — moitié « pas en silence » : un Deliver ORPHELIN atteint l'émetteur.
+    /// Meurt si l'on retire le push (ou la notice durable) tout en gardant la phase.
+    #[test]
+    fn purge_presence_delivre_un_orphelin_a_l_emetteur() {
+        use crate::idempotency::{IdempotencyKey, OperationKind, Reservation, SendDelivery};
+        use std::io::Read;
+        use std::os::unix::net::UnixStream;
+
+        let (mut state, config) = state_with_registered_agent("purge-deliver");
+        // Émetteur « bridget » avec une vraie connexion lisible.
+        state
+            .router
+            .register(Some("bridget"), &bridget_core::AgentType::Claude, "conn-emitter")
+            .unwrap();
+        state
+            .conn_instances
+            .insert("conn-emitter".to_string(), "instance-emitter".to_string());
+        state.presences.insert(
+            "instance-emitter".to_string(),
+            Presence {
+                name: "bridget".to_string(),
+                agent_type: "claude".to_string(),
+                host: "macbook".to_string(),
+                transport: "acp".to_string(),
+                mode: Some(PresenceMode::Acp),
+                location: None,
+                journal_available: true,
+                os: "macOS".to_string(),
+                state: "connected".to_string(),
+                last_seen: Instant::now(),
+                link_seen: Instant::now(),
+                reconnect_count: 0,
+                model: None,
+                effort: None,
+                rate_limits: Default::default(),
+                served_model: None,
+                derived_domain: None,
+                domain: None,
+                dnd_until: None,
+            },
+        );
+        let (writer_stream, mut peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        state.connections.insert(
+            "conn-emitter".to_string(),
+            Arc::new(Mutex::new(BufWriter::new(writer_stream))),
+        );
+
+        state.set_turn_state("conn-1", true).unwrap();
+        let stale = Instant::now()
+            .checked_sub(PRESENCE_RETENTION + Duration::from_secs(1))
+            .expect("horloge");
+        let presence = state.presences.get_mut("instance-1").unwrap();
+        presence.last_seen = stale;
+        presence.link_seen = stale;
+
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            "msg-a-notifier",
+        )
+        .unwrap();
+        assert!(matches!(
+            state
+                .idempotency
+                .reserve(&key, b"canon-notify", 1_000_000, 3600, 1_000_000, 30),
+            Ok(Reservation::Prepared { .. })
+        ));
+        let mut message = BridgetMessage::new("bridget", "agent-2", "corps");
+        message.id = "msg-a-notifier".to_string();
+        state
+            .idempotency
+            .begin_send_delivery(
+                &key,
+                &SendDelivery {
+                    delivery_id: "delivery-notify".to_string(),
+                    recipient_instance_id: "instance-1".to_string(),
+                    delivery_generation: 1,
+                    expires_at: 1_000_000 + 3600,
+                    message_bytes: serde_json::to_vec(&message).unwrap(),
+                },
+            )
+            .unwrap();
+
+        let _ = state.agent_infos();
+
+        let mut buf = [0u8; 4096];
+        let n = peer
+            .read(&mut buf)
+            .expect("Deliver ORPHELIN attendu sur la socket émetteur");
+        let received = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            received.contains("ORPHELIN") && received.contains("msg-a-notifier"),
+            "la moitié « pas en silence » exige un Deliver lisible: {received}"
+        );
+        assert!(
+            state
+                .idempotency
+                .pending_orphan_emitter_notices()
+                .unwrap()
+                .is_empty(),
+            "après Deliver réussi, plus aucune notice en attente"
         );
         let _ = std::fs::remove_file(config.db_path);
     }

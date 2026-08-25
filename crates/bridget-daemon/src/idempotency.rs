@@ -441,7 +441,16 @@ impl IdempotencyStore {
                 PRIMARY KEY (id, target)
             );
             CREATE INDEX IF NOT EXISTS idx_ledger_ts ON ledger(ts);
-            CREATE INDEX IF NOT EXISTS idx_ledger_conv ON ledger(conversation_key, ts);",
+            CREATE INDEX IF NOT EXISTS idx_ledger_conv ON ledger(conversation_key, ts);
+            -- Signal émetteur durable : gravé dans la même TX que l'orphelinage,
+            -- notifié ensuite ; rejouable si le Deliver a crashé entre les deux.
+            CREATE TABLE IF NOT EXISTS orphan_emitter_notices (
+                delivery_id TEXT PRIMARY KEY,
+                sender TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                notified_at INTEGER
+            );",
         )?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let migration_applied = tx.query_row(
@@ -534,9 +543,27 @@ impl IdempotencyStore {
                     ON send_deliveries(issuer_scope, operation_kind, idempotency_key);
                 CREATE INDEX IF NOT EXISTS idx_send_deliveries_kind_key
                     ON send_deliveries(operation_kind, idempotency_key);
+                CREATE TABLE IF NOT EXISTS orphan_emitter_notices (
+                    delivery_id TEXT PRIMARY KEY,
+                    sender TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    notified_at INTEGER
+                );
                 INSERT INTO idempotency_schema_migrations(version) VALUES (4);",
             )?;
         }
+        // Bases déjà en v4 sans la table de signal : CREATE IF NOT EXISTS suffit
+        // (idempotent, hors numérotation — pas un no-op déguisé en migration).
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS orphan_emitter_notices (
+                delivery_id TEXT PRIMARY KEY,
+                sender TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                notified_at INTEGER
+            );",
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -1355,6 +1382,17 @@ impl IdempotencyStore {
             if delivery != 1 || record != 1 {
                 return Err(IdempotencyError::DispatchUnavailable);
             }
+            let body = format!(
+                "ORPHELIN: le message {} destiné à {} n'a pas été livré — présence purgée (delivery {}). {}",
+                message_id, target, delivery_id, reason
+            );
+            // Même transaction : le signal survit à un crash avant le Deliver.
+            tx.execute(
+                "INSERT INTO orphan_emitter_notices (delivery_id, sender, body, created_at, notified_at)
+                 VALUES (?1, ?2, ?3, strftime('%s','now'), NULL)
+                 ON CONFLICT(delivery_id) DO NOTHING",
+                params![delivery_id, sender, body],
+            )?;
             notices.push(OrphanedDeliveryNotice {
                 delivery_id,
                 message_id,
@@ -1365,6 +1403,33 @@ impl IdempotencyStore {
         }
         tx.commit()?;
         Ok(notices)
+    }
+
+    /// Notices émetteur encore non poussées (crash entre orphan et Deliver).
+    pub fn pending_orphan_emitter_notices(
+        &self,
+    ) -> Result<Vec<(String, String, String)>, IdempotencyError> {
+        let mut statement = self.conn.prepare(
+            "SELECT delivery_id, sender, body FROM orphan_emitter_notices
+             WHERE notified_at IS NULL ORDER BY created_at, delivery_id",
+        )?;
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn mark_orphan_emitter_notified(
+        &self,
+        delivery_id: &str,
+        now: i64,
+    ) -> Result<(), IdempotencyError> {
+        self.conn.execute(
+            "UPDATE orphan_emitter_notices SET notified_at = ?1
+             WHERE delivery_id = ?2 AND notified_at IS NULL",
+            params![now, delivery_id],
+        )?;
+        Ok(())
     }
 
     /// Accusé aval : la remise et le résultat public deviennent terminaux dans
@@ -1846,6 +1911,117 @@ mod tests {
                 .iter()
                 .any(|column| column == "resolved_definition_json")
         );
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// ORACLE — migration v4 : une base pré-orphaned DOIT élargir le CHECK.
+    /// Meurt si l'on retire le bloc v4 alors que le CREATE fresh porte déjà
+    /// `orphaned` (les oracles de phase restent verts, la montée reste muette).
+    #[test]
+    fn migration_v4_elargit_le_check_pour_accepter_orphaned() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-idempotency-v4-orphan-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        {
+            let legacy = Connection::open(&path).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE idempotency_schema_migrations (version INTEGER PRIMARY KEY);
+                     INSERT INTO idempotency_schema_migrations(version) VALUES (2);
+                     INSERT INTO idempotency_schema_migrations(version) VALUES (3);
+                     CREATE TABLE idempotency_records (
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL,
+                        idempotency_key TEXT NOT NULL,
+                        canonical_bytes BLOB NOT NULL,
+                        state TEXT NOT NULL,
+                        public_result_kind TEXT,
+                        public_result_category TEXT,
+                        public_result_reason TEXT,
+                        issued_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        PRIMARY KEY (issuer_scope, operation_kind, idempotency_key)
+                     );
+                     CREATE TABLE send_deliveries (
+                        delivery_id TEXT PRIMARY KEY,
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL CHECK (operation_kind = 'send'),
+                        idempotency_key TEXT NOT NULL,
+                        recipient_instance_id TEXT NOT NULL,
+                        delivery_generation INTEGER NOT NULL CHECK (delivery_generation > 0),
+                        phase TEXT NOT NULL CHECK (phase IN ('dispatching', 'acked', 'indeterminate')),
+                        expires_at INTEGER NOT NULL,
+                        message_bytes BLOB,
+                        FOREIGN KEY (issuer_scope, operation_kind, idempotency_key)
+                            REFERENCES idempotency_records(issuer_scope, operation_kind, idempotency_key)
+                            ON DELETE CASCADE
+                     );
+                     CREATE TABLE spawn_commands (
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL,
+                        command_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        generation INTEGER NOT NULL,
+                        persistent INTEGER NOT NULL,
+                        state TEXT NOT NULL,
+                        instance_id TEXT,
+                        deadline_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        issue_kind TEXT,
+                        issue_category TEXT,
+                        issue_reason TEXT,
+                        resolved_definition_json TEXT,
+                        PRIMARY KEY (issuer_scope, operation_kind, command_id)
+                     );
+                     INSERT INTO idempotency_records VALUES (
+                        '012_scope_aaaaaaaaaaaa', 'send', 'legacy-key', X'00',
+                        'dispatching', NULL, NULL, NULL, 1000000, 1003600
+                     );
+                     INSERT INTO send_deliveries VALUES (
+                        'delivery-legacy', '012_scope_aaaaaaaaaaaa', 'send', 'legacy-key',
+                        'instance-1', 1, 'dispatching', 1003600, X'7b7d'
+                     );",
+                )
+                .unwrap();
+            // Sur le CHECK pré-v4, orphaned est refusé.
+            let refused = legacy.execute(
+                "UPDATE send_deliveries SET phase = 'orphaned' WHERE delivery_id = 'delivery-legacy'",
+                [],
+            );
+            assert!(
+                refused.is_err(),
+                "précondition : le CHECK pré-v4 doit refuser orphaned"
+            );
+        }
+
+        let store = IdempotencyStore::open(&path).unwrap();
+        let has_v4: bool = store
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 4)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_v4, "la migration v4 doit être consignées");
+        store
+            .conn
+            .execute(
+                "UPDATE send_deliveries SET phase = 'orphaned' WHERE delivery_id = 'delivery-legacy'",
+                [],
+            )
+            .expect("après v4, orphaned doit passer le CHECK");
+        let phase: String = store
+            .conn
+            .query_row(
+                "SELECT phase FROM send_deliveries WHERE delivery_id = 'delivery-legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(phase, "orphaned");
         drop(store);
         std::fs::remove_file(path).unwrap();
     }
