@@ -425,6 +425,16 @@ fn post_v1_send_reply_true_cree_une_demande_suivie() {
         }
         response => panic!("DeliverIdempotent attendu, reçu {response:?}"),
     };
+    recipient.send(&WrapperToDaemon::ListAgents);
+    let agents = match recipient.read() {
+        DaemonToWrapper::AgentList { agents } => agents,
+        response => panic!("AgentList attendu, reçu {response:?}"),
+    };
+    let human = agents
+        .iter()
+        .find(|agent| agent.name == "humain")
+        .expect("présence humaine UI enregistrée");
+    assert_eq!(human.channel.as_deref(), Some("unix"));
     let requests = recipient.open_requests();
     assert!(
         requests.iter().any(|request| request.id == message_id),

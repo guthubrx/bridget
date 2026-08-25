@@ -8,7 +8,7 @@ Titre: Nommer le protocole réel sans perdre le canal
 Statut: Complete
 Priorité: P1
 Tâches: 8/8 (100%)
-Tests: 6/6 (100%)
+Tests: 7/7 (100%)
 
 Résumé:
 - Contexte: La projection `TRANSPORT` mélange protocole d'agent et canal réseau.

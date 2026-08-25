@@ -79,6 +79,47 @@ l'a rendue verte. Elle n'est pas imputée à G11.
 
 - Aucun redémarrage du daemon de production ni migration de la flotte vivante.
 - Aucun comptage workspace macOS post-changement.
+- Aucun croisement réel entre un ancien et un nouveau processus ; la
+  compatibilité filaire inverse reste établie statiquement par les structures
+  Serde sans `deny_unknown_fields`.
 - `--all-features` reste non compilable sur Linux à cause du banc historique
   `test-support` qui appelle `kqueue`/`kevent`; le schéma G11 y a néanmoins été
   mis à jour avant cette frontière de plateforme.
+
+## Amendement de composition sur main 2330dfde
+
+La composition avec la GUI a révélé une propriété distincte de la
+compatibilité filaire : un champ Serde optionnel reste obligatoire dans les
+constructeurs Rust exhaustifs. Après rebase, le premier `--no-run` a reproduit
+`E0063` dans l'initialiseur productif de la présence UI, puis dans trois
+initialiseurs de `guichet_integration_test` ajoutés sur la nouvelle base.
+
+Le canal UI n'a pas été deviné : `open_human_presence` appelle directement
+`UnixStream::connect`, donc sa trame `Register` annonce `channel=unix`. Un test
+lit cette trame réelle avant de terminer le handshake, puis le test
+d'intégration relit `AgentInfo.channel` depuis le daemon. Le mutant
+`channel=None` rend exactement 0 passé / 1 échoué avec `left=None` et
+`right=Some("unix")`; après restauration, le témoin rend 1/0/0.
+
+Mesures de composition, dans l'ordre demandé :
+
+- base nue `2330dfde` : `--no-run` vert, 962 tests listés,
+  **941 passés / 3 échoués / 18 ignorés** ;
+- composition : `--no-run` vert, 968 tests listés,
+  **947 passés / 3 échoués / 18 ignorés** ;
+- `ui_relay_test` exact : **11 passés / 0 échoué / 0 ignoré**.
+
+Les trois rouges de composition sont les mêmes références hors lot que sur la
+base. Un passage intermédiaire a aussi produit trois timeouts simultanés dans
+`guichet_integration_test`, tous à la lecture bornée commune. La cible isolée a
+ensuite rendu 6/0/0 sur la composition et 6/0/0 sur la base ; le passage complet
+final a retrouvé les seuls trois rouges de référence. Ce dernier tirage ne
+requalifie pas les timeouts en stabilité.
+
+Enfin, `sc005_attach_budget` a été listé à trois tests puis rejoué cinq fois sur
+la tête pré-amendement `cf26d1f` : cinq harnais sur cinq verts, chacun à
+2 passés / 0 échoué / 1 ignoré, soit 0 rouge observé sur 5 tirages. Le test
+ignoré est `sc001_append_vers_rendu_attach_reel_reste_sous_les_seuils_locaux`,
+par attribut source explicite de mesure locale ; le cas SC-005 litigieux a bien
+été exécuté et a passé cinq fois. Ce N ne suffit pas à qualifier le banc de
+stable.

@@ -121,6 +121,7 @@ fn open_human_presence(socket_path: &Path) -> Result<UiHumanPresence, UiError> {
                 name: Some(UI_SENDER.to_string()),
                 host: Some("localhost".to_string()),
                 transport: Some("unix".to_string()),
+                channel: Some("unix".to_string()),
                 mode: Some(PresenceMode::Cli),
                 location: None,
                 os: Some(std::env::consts::OS.to_string()),
@@ -1184,6 +1185,7 @@ fn status_text(status: u16) -> &'static str {
 mod tests {
     use super::*;
     use std::net::TcpStream;
+    use std::os::unix::net::UnixListener;
     use std::time::Duration;
 
     fn agent_info(name: &str, state: &str) -> bridget_transport::protocol::AgentInfo {
@@ -1210,6 +1212,51 @@ mod tests {
             body: format!("{sender} vers {target}"),
             delivery_status: None,
         }
+    }
+
+    #[test]
+    fn spec_024_presence_ui_annonce_canal_unix_dans_la_trame_register() {
+        let socket_path = std::env::temp_dir().join(format!(
+            "bridget-ui-register-{}.sock",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let (channel_sender, channel_receiver) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let registration: WrapperToDaemon = decode(line.trim()).unwrap();
+            let channel = match registration {
+                WrapperToDaemon::Register { channel, .. } => channel,
+                message => panic!("Register UI attendu, reçu {message:?}"),
+            };
+            channel_sender.send(channel).unwrap();
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::Registered {
+                    name: UI_SENDER.to_string(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::JournalReady
+            ));
+        });
+
+        let presence = open_human_presence(&socket_path).unwrap();
+        server.join().unwrap();
+        assert_eq!(channel_receiver.recv().unwrap().as_deref(), Some("unix"));
+        drop(presence);
+        std::fs::remove_file(socket_path).unwrap();
     }
 
     #[test]
