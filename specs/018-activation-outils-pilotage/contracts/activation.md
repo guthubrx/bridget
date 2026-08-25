@@ -20,8 +20,8 @@ Chaque précondition non satisfaite produit un refus non nul avant toute
 ## Sortie sûre
 
 - Artefact : `$HOME/.local/share/bridget/pilotage/releases/<SHA>/<outil>`.
-- Origine : fichier adjacent `<outil>.origin` contenant format, référence,
-  dépôt distant, SHA et SHA-256.
+- Origine : fichier adjacent `<outil>.origin` contenant format, remote,
+  référence, SHA, nom d'artefact et SHA-256, jamais l'URL Git brute.
 - Entrée active : `$HOME/.local/bin/<outil>`, lien absolu vers l'artefact.
 - Mode de l'artefact : lecture/exécution, sans écriture ordinaire.
 

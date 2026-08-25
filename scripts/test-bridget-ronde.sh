@@ -3,7 +3,6 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ronde="${root_dir}/scripts/bridget-ronde.py"
-installer="${root_dir}/scripts/install-bridget-ronde.sh"
 system_python="/usr/bin/python3"
 fixture_root="$(mktemp -d -t bridget-ronde-test.XXXXXX)"
 writer_pid=""
@@ -130,14 +129,8 @@ assert report["agents"]["unassigned_connected"] is None
 assert report["decision"] == "none" and report["delivery"] == "none"
 PY
 
-home="${fixture_root}/home"
-HOME="$home" "$installer" --config /tmp/maicie.json --report-dir "${fixture_root}/archive" --skip-activate
-[[ -x "${home}/.local/bin/bridget-ronde" ]]
-unit="${home}/Library/LaunchAgents/com.bridget.ronde.plist"
-[[ -f "$unit" ]] || unit="${home}/.config/systemd/user/bridget-ronde.service"
-[[ -f "$unit" ]]
-if rg -q '(send|spawn|stop|approve)' "$unit"; then
-  echo "une unité de ronde ne peut embarquer aucune action" >&2
-  exit 1
-fi
-echo "ronde portable : rapport normal, dégradation Maicie et unité passive vérifiés"
+# L'installateur refuse désormais, par contrat, tout worktree lié. Ses unités,
+# sa passivité et ses refus sans effet sont exercés depuis des dépôts Git
+# principaux jetables par le harnais dédié.
+[[ -x "${root_dir}/scripts/test-018-pilotage-install.sh" ]]
+echo "ronde portable : rapport normal et dégradation Maicie vérifiés ; installation couverte par test-018-pilotage-install"

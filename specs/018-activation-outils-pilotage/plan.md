@@ -51,7 +51,7 @@ le référencent jamais après activation.
   provenance et activation atomique.
 - `scripts/install-bridget-idle.sh` : parsing CLI puis appel de la politique.
 - `scripts/install-bridget-ronde.sh` : politique avant tout effet sur unités.
-- `scripts/test-pilotage-install.sh` : cinq refus, deux succès, idempotence,
+- `scripts/test-018-pilotage-install.sh` : cinq refus, deux succès, idempotence,
   corruption et survie à la suppression du dépôt.
 - `scripts/test-bridget-ronde.sh` : conserver les oracles métier ; déplacer la
   preuve d'installation vers le harnais gouverné.
@@ -80,7 +80,7 @@ le référencent jamais après activation.
 ## Validation prévue
 
 - `bash -n` sur les installateurs, le helper et les trois harnais.
-- `scripts/test-pilotage-install.sh` : scénarios de contrat.
+- `scripts/test-018-pilotage-install.sh` : scénarios de contrat.
 - `scripts/test-bridget-idle.sh` et `scripts/test-bridget-ronde.sh` : métier inchangé.
 - Mutants ciblés sur les gardes worktree, branche, propreté, ancestralité et copie.
 - `cargo test --workspace --no-run` avant tout comptage.

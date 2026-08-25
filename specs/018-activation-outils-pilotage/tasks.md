@@ -6,7 +6,7 @@
 
 ## Phase 2 — Oracles de la frontière
 
-- [ ] T002 [US2] Créer les contrôles positifs des cinq refus et de l'absence d'effet dans `scripts/test-pilotage-install.sh`
+- [ ] T002 [US2] Créer les contrôles positifs des cinq refus et de l'absence d'effet dans `scripts/test-018-pilotage-install.sh`
 
 ## Phase 3 — Release admise et durable
 
@@ -19,7 +19,7 @@
 
 ## Phase 5 — Validation et livraison
 
-- [ ] T006 [US1] Valider idempotence, corruption, origine lisible et survie sans dépôt via `scripts/test-pilotage-install.sh`
+- [ ] T006 [US1] Valider idempotence, corruption, origine lisible et survie sans dépôt via `scripts/test-018-pilotage-install.sh`
 - [ ] T007 Exécuter harnais métier, mutants, formatage, compilation, suite et Clippy puis consigner les comptes dans `specs/018-activation-outils-pilotage/implementation.md`
 - [ ] T008 Finaliser le REX, geler le SHA et livrer la branche `session-18-activation-outils-pilotage` via Bridget
 

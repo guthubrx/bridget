@@ -133,7 +133,7 @@ ronde prête.
 - **FR-007**: L'installation NE DOIT PAS effectuer de synchronisation réseau implicite ; une référence distante absente ou périmée doit produire une instruction explicite.
 - **FR-008**: La version active DOIT contenir exactement les octets du fichier suivi au SHA admis, indépendamment des octets présents dans le checkout au moment de l'activation.
 - **FR-009**: L'entrée de commande DOIT viser une version stockée hors de tout dépôt et worktree, identifiée par le SHA complet.
-- **FR-010**: L'origine de chaque commande active DOIT être lisible sous forme de référence d'admission, SHA complet, dépôt distant et empreinte de l'artefact.
+- **FR-010**: L'origine de chaque commande active DOIT être lisible sous forme de remote, référence d'admission, SHA complet, nom et empreinte de l'artefact, sans recopier une URL susceptible de contenir un secret.
 - **FR-011**: L'activation DOIT être atomique et son rejeu au même SHA idempotent.
 - **FR-012**: Une version matérialisée sous un SHA donné NE DOIT PAS être écrasée si ses octets diffèrent de l'objet Git correspondant.
 - **FR-013**: En cas de refus, l'installateur de ronde NE DOIT créer, modifier ni activer aucune unité de service.

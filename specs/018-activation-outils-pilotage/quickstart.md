@@ -34,8 +34,8 @@ Les deux cibles doivent vivre sous
 ```bash
 cd /home/moi/revue/ac3/.worktrees/session-18-activation-outils-pilotage
 bash -n scripts/lib/pilotage-release.sh scripts/install-bridget-idle.sh \
-  scripts/install-bridget-ronde.sh scripts/test-pilotage-install.sh
-scripts/test-pilotage-install.sh
+  scripts/install-bridget-ronde.sh scripts/test-018-pilotage-install.sh
+scripts/test-018-pilotage-install.sh
 scripts/test-bridget-idle.sh
 scripts/test-bridget-ronde.sh
 cargo test --workspace --no-run

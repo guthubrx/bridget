@@ -43,8 +43,9 @@ l'extraction par objet constitue la preuve mécanique.
 
 **Rationale** : la release survit à la suppression de tous les worktrees. Le
 SHA complet visible dans la cible distingue immédiatement une release d'un
-espace de travail. Un fichier d'origine adjacent donne la référence, le dépôt
-distant et l'empreinte de l'artefact.
+espace de travail. Un fichier d'origine adjacent donne le remote, la référence,
+le nom et l'empreinte de l'artefact. L'URL brute est volontairement omise car
+elle peut contenir des identifiants et varie entre HTTPS et SSH.
 
 **Alternatives considérées** :
 
