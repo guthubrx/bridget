@@ -7,8 +7,8 @@
 //! - `horloge_arretee` — buckets échus pendant une indisponibilité du tick
 //! - `rattrapage_borne:<N>` — trou tronqué ; N = buckets effacés sans ligne
 //! - `mandat_plus_vivant` — occurrence ouverte rétractée : le mandat attesté
-//!   n'existe plus ou est **annulé** (`annulee`). Une délégation `terminee`
-//!   (mission accomplie) n'est pas rétractée : elle attend la clôture.
+//!   est un cadavre au sens de `EtatDelegation::est_mandat_mort` (aujourd'hui
+//!   `annulee` ; `terminee` = mission accomplie, hors rétractation).
 
 use crate::app::{DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, delegate};
 use crate::config::DurationClasses;

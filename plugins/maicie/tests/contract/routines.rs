@@ -8,7 +8,7 @@
 
 use maicie::app::DelegationCandidate;
 use maicie::config::DurationClasses;
-use maicie::domain::SuiteObjective;
+use maicie::domain::{EtatDelegation, SuiteObjective};
 use maicie::routines::{
     EtatOccurrence, EtatRoutine, EvaluateRoutinesOpts, MAX_CATCHUP_BUCKETS, ProposeRoutineRequest,
     approve_routine, bucket_for, evaluate_routines, evaluate_routines_with, pause_routine,
@@ -961,9 +961,8 @@ fn relec1_serie_crash_reel_apres_adoption() {
 /// Matrice recalibrée (hotfix production), chemin coupure/orphelin N=5 :
 /// - terminal (`annulee`/`terminee`) → jamais adopté ; calendrier REPART
 /// - `annulee` sur une `ouverte` existante → RÉTRACTE (oracle voisin)
-/// Mutant rétractation : remettre `'terminee'` dans la liste morte fait
-/// rougir `retractation_distingue_mission_accomplie_et_avortee` (et peut
-/// inventer une `sautee` sur mission accomplie ici si une ouverte existe).
+/// Mutant rétractation : classer `Terminee` comme `est_mandat_mort` fait
+/// rougir `retractation_derivee_du_domaine_sur_chaque_etat`.
 #[test]
 fn occurrence_n_atteste_jamais_un_mandat_mort() {
     const N: usize = 5;
@@ -1066,7 +1065,7 @@ fn occurrence_n_atteste_jamais_un_mandat_mort() {
             // Chemin coupure/orphelin : un mandat terminal n'est jamais adopté ;
             // le calendrier repart (deleg≥2). La non-relance d'une mission
             // accomplie déjà attestée par une `ouverte` est l'oracle
-            // `retractation_distingue_mission_accomplie_et_avortee`.
+            // `retractation_derivee_du_domaine_sur_chaque_etat`.
             assert!(
                 delegations >= 2,
                 "{etat} clos={clore} tir {tir} : routine doit repartir (deleg≥2), obtenu {delegations}"
@@ -1161,11 +1160,10 @@ fn ouverte_retractee_quand_le_mandat_meurt_apres_coup() {
     assert!(delegations >= 2, "redélégation après cadavre, objectif encore ouvert");
 }
 
-/// relec1 — la rétractation distingue mission accomplie et mission avortée.
-/// Régime manquant que l'oracle d'adoption ne couvrait pas : `terminee` ×
-/// objectif ouvert. Trois tirs, trois bras (accomplie / avortée / vivante).
-/// Mutant : remettre `'terminee'` dans la liste morte → le bras accomplie
-/// meurt (`sautee/mandat_plus_vivant` + relance).
+/// Rétractation dérivée du domaine : **chaque** `EtatDelegation` est exercé.
+/// Classification via `est_terminal` / `est_mandat_mort` — pas une liste SQL.
+/// Mutant : classer `Terminee` comme mort → bras accomplie rouge ;
+/// omettre un état de `ALL` → l'oracle ne le croise plus.
 fn retract_tir(etat_delegation: &str, label: &str) -> (String, Option<String>, i64) {
     let guard = RootGuard::new(label);
     let database = guard.path.join("maicie.sqlite3");
@@ -1190,7 +1188,7 @@ fn retract_tir(etat_delegation: &str, label: &str) -> (String, Option<String>, i
     );
     drop(store);
 
-    // Mission rendue ou avortée — l'objectif reste OUVERT (régime manquant).
+    // Objectif reste OUVERT — isole la rétractation du rattrapage de clôture.
     let cx = rusqlite::Connection::open(&database).unwrap();
     cx.execute(
         "UPDATE delegations SET state = ?1",
@@ -1230,45 +1228,69 @@ fn retract_tir(etat_delegation: &str, label: &str) -> (String, Option<String>, i
 }
 
 #[test]
-fn retractation_distingue_mission_accomplie_et_avortee() {
+fn retractation_derivee_du_domaine_sur_chaque_etat() {
     for tir in 0..3 {
-        let (e_t, m_t, d_t) = retract_tir("terminee", &format!("ret-term-{tir}"));
-        let (e_a, m_a, d_a) = retract_tir("annulee", &format!("ret-annul-{tir}"));
-        let (e_v, m_v, d_v) = retract_tir("creee", &format!("ret-vivant-{tir}"));
+        for etat in EtatDelegation::ALL {
+            let sql = etat.as_sql();
+            let (e_occ, motif, deleg) =
+                retract_tir(sql, &format!("ret-{}-{tir}", sql));
 
-        // Accomplie : pas de sautee menteuse, pas de relance.
-        assert_ne!(
-            (e_t.as_str(), m_t.as_deref()),
-            ("sautee", Some("mandat_plus_vivant")),
-            "tir {tir} TERMINEE : mission accomplie rétractée à tort"
-        );
-        assert_eq!(
-            e_t, "ouverte",
-            "tir {tir} TERMINEE : l'occurrence attend la clôture (reste ouverte)"
-        );
-        assert_eq!(
-            d_t, 1,
-            "tir {tir} TERMINEE : relance interdite (deleg=1), obtenu {d_t}"
-        );
+            // Bras dérivés du prédicat (couverture de ALL).
+            if etat.est_mandat_mort() {
+                assert_eq!(
+                    (e_occ.as_str(), motif.as_deref()),
+                    ("sautee", Some("mandat_plus_vivant")),
+                    "tir {tir} {sql} : cadavre domaine non rétracté"
+                );
+                assert!(
+                    deleg >= 2,
+                    "tir {tir} {sql} : redélégation après cadavre (deleg≥2), obtenu {deleg}"
+                );
+            } else {
+                assert_ne!(
+                    (e_occ.as_str(), motif.as_deref()),
+                    ("sautee", Some("mandat_plus_vivant")),
+                    "tir {tir} {sql} : rétracté alors que est_mandat_mort=false"
+                );
+            }
 
-        // Avortée : rétractation juste + calendrier repart.
-        assert_eq!(
-            (e_a.as_str(), m_a.as_deref()),
-            ("sautee", Some("mandat_plus_vivant")),
-            "tir {tir} ANNULEE : cadavre non rétracté"
-        );
-        assert!(
-            d_a >= 2,
-            "tir {tir} ANNULEE : doit redéléguer (deleg≥2), obtenu {d_a}"
-        );
-
-        // Contrôle vivante : pas la clause delegation_id IS NULL.
-        assert_ne!(
-            (e_v.as_str(), m_v.as_deref()),
-            ("sautee", Some("mandat_plus_vivant")),
-            "tir {tir} CONTROLE vivante : occurrence normale rétractée (état={e_v}/{m_v:?})"
-        );
-        let _ = d_v;
+            // Propriétés indépendantes du prédicat — sans elles, muter
+            // `est_mandat_mort` garde production et oracle alignés (faux vert).
+            match etat {
+                EtatDelegation::Terminee => {
+                    assert_ne!(
+                        (e_occ.as_str(), motif.as_deref()),
+                        ("sautee", Some("mandat_plus_vivant")),
+                        "tir {tir} TERMINEE : mission accomplie rétractée à tort"
+                    );
+                    assert_eq!(e_occ, "ouverte", "tir {tir} TERMINEE : reste ouverte");
+                    assert_eq!(
+                        deleg, 1,
+                        "tir {tir} TERMINEE : relance interdite (deleg=1), obtenu {deleg}"
+                    );
+                }
+                EtatDelegation::Annulee => {
+                    assert_eq!(
+                        (e_occ.as_str(), motif.as_deref()),
+                        ("sautee", Some("mandat_plus_vivant")),
+                        "tir {tir} ANNULEE : mission avortée non rétractée"
+                    );
+                    assert!(
+                        deleg >= 2,
+                        "tir {tir} ANNULEE : redélégation (deleg≥2), obtenu {deleg}"
+                    );
+                }
+                EtatDelegation::EnAttentePrerequis
+                | EtatDelegation::Creee
+                | EtatDelegation::AEvaluer => {
+                    assert_ne!(
+                        (e_occ.as_str(), motif.as_deref()),
+                        ("sautee", Some("mandat_plus_vivant")),
+                        "tir {tir} {sql} : vivant rétracté (contrôle)"
+                    );
+                }
+            }
+        }
     }
 }
 

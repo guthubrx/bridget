@@ -196,6 +196,65 @@ pub enum EtatDelegation {
     Annulee,
 }
 
+impl EtatDelegation {
+    /// Liste unique pour itérer le domaine (oracles, clauses SQL dérivées).
+    /// L'ajout d'une variante force aussi les `match` exhaustifs ci-dessous.
+    pub const ALL: [Self; 5] = [
+        Self::EnAttentePrerequis,
+        Self::Creee,
+        Self::AEvaluer,
+        Self::Terminee,
+        Self::Annulee,
+    ];
+
+    /// Forme persistée (`snake_case`). Match exhaustif — une variante neuve
+    /// casse la compilation ici avant d'atteindre SQLite.
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            Self::EnAttentePrerequis => "en_attente_prerequis",
+            Self::Creee => "creee",
+            Self::AEvaluer => "a_evaluer",
+            Self::Terminee => "terminee",
+            Self::Annulee => "annulee",
+        }
+    }
+
+    /// Plus de suite possible (refus d'adoption, etc.). Match exhaustif.
+    pub fn est_terminal(self) -> bool {
+        match self {
+            Self::Terminee | Self::Annulee => true,
+            Self::EnAttentePrerequis | Self::Creee | Self::AEvaluer => false,
+        }
+    }
+
+    /// Cadavre pour la rétractation d'une occurrence `ouverte` : l'occurrence
+    /// ment et doit passer `sautee/mandat_plus_vivant`.
+    ///
+    /// `Terminee` = mission **accomplie** : l'occurrence attend la clôture
+    /// d'objectif — ce n'est **pas** un cadavre. Match exhaustif : un état
+    /// terminal ajouté au domaine doit choisir ici, pas dans une requête SQL.
+    pub fn est_mandat_mort(self) -> bool {
+        match self {
+            Self::Annulee => true,
+            Self::Terminee
+            | Self::EnAttentePrerequis
+            | Self::Creee
+            | Self::AEvaluer => false,
+        }
+    }
+
+    /// Clause `IN (...)` dérivée du prédicat domaine — jamais une liste SQL
+    /// recopiée à la main.
+    pub fn sql_in_clause(pred: impl Fn(Self) -> bool) -> String {
+        Self::ALL
+            .into_iter()
+            .filter(|etat| pred(*etat))
+            .map(|etat| format!("'{}'", etat.as_sql()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
 /// Types d'événements produits par le registre Maicie lui-même. Les faits
 /// transport A utilisent directement `CoordinationEventKind` du protocole
 /// public et ne sont jamais recopiés dans cette énumération.

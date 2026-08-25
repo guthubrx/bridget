@@ -2341,34 +2341,58 @@ impl MaicieStore {
     }
 
     /// Propriété : une occurrence `ouverte` ne doit jamais attester un mandat
-    /// **disparu ou annulé**. Rétracte en `sautee/mandat_plus_vivant` pour
-    /// que `has_open` retombe et que la routine puisse redéléguer — même si
-    /// l'objectif reste ouvert.
+    /// **mort** au sens du domaine (`EtatDelegation::est_mandat_mort`).
+    /// Rétracte en `sautee/mandat_plus_vivant` pour que `has_open` retombe.
     ///
-    /// `terminee` n'est **pas** un cadavre ici : la mission est accomplie,
-    /// l'occurrence attend la clôture d'objectif (`terminate_occurrences_with_closed_objectives`).
-    /// La rétracter relancerait la même ronde (has_open → faux → mandat neuf)
-    /// et écrirait « sautée » pour un travail déjà fait. L'adoption refuse
-    /// toujours `annulee` **et** `terminee` — ces deux contextes n'ont pas
-    /// le même sens.
+    /// La décision est portée par le domaine (match exhaustif), pas par une
+    /// énumération SQL recopiée : un état terminal ajouté demain (ex.
+    /// `soldee_par_cloture`) doit être classé dans `est_mandat_mort`, sinon
+    /// la compilation casse. `Terminee` n'est pas un cadavre — mission
+    /// accomplie, l'occurrence attend `terminate_occurrences_with_closed_objectives`.
     pub fn retract_occurrences_with_dead_mandates(&mut self) -> Result<usize, StoreError> {
-        let changed = self
+        let mut statement = self
             .connection
-            .execute(
-                "UPDATE routine_occurrences\n\
-                 SET state = 'sautee', reason = 'mandat_plus_vivant'\n\
-                 WHERE state = 'ouverte'\n\
-                   AND (\n\
-                       delegation_id IS NULL\n\
-                       OR NOT EXISTS (\n\
-                           SELECT 1 FROM delegations d\n\
-                           WHERE d.id = routine_occurrences.delegation_id\n\
-                             AND d.state != 'annulee'\n\
-                       )\n\
-                   )",
-                [],
+            .prepare(
+                "SELECT o.routine_id, o.bucket, o.delegation_id, d.state\n\
+                 FROM routine_occurrences o\n\
+                 LEFT JOIN delegations d ON d.id = o.delegation_id\n\
+                 WHERE o.state = 'ouverte'",
             )
             .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })
+            .map_err(StoreError::Sql)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Sql)?;
+        drop(statement);
+
+        let mut changed = 0usize;
+        for (routine_id, bucket, delegation_id, delegation_state) in rows {
+            let mort = match (delegation_id.as_deref(), delegation_state.as_deref()) {
+                (None, _) => true,
+                (Some(_), None) => true,
+                (Some(_), Some(state)) => parse_delegation_state(state)?.est_mandat_mort(),
+            };
+            if !mort {
+                continue;
+            }
+            changed += self
+                .connection
+                .execute(
+                    "UPDATE routine_occurrences\n\
+                     SET state = 'sautee', reason = 'mandat_plus_vivant'\n\
+                     WHERE routine_id = ?1 AND bucket = ?2 AND state = 'ouverte'",
+                    rusqlite::params![routine_id, bucket],
+                )
+                .map_err(StoreError::Sql)?;
+        }
         Ok(changed)
     }
 
@@ -2746,21 +2770,25 @@ impl MaicieStore {
     /// exiger les octets canoniques (adoption d'un mandat orphelin routines).
     /// Joint `delegations` comme les autres lookups : une ligne d'idempotence
     /// orpheline de sa délégation ne doit pas produire une occurrence ouverte
-    /// fantôme. Refuse aussi les mandats terminaux (`annulee` / `terminee`) —
-    /// sinon l'adoption ment (« mandat en cours ») et gèle la routine.
+    /// fantôme. Refuse les mandats **terminaux** (`EtatDelegation::est_terminal`)
+    /// — clause SQL dérivée du domaine, jamais recopié à la main.
     pub fn lookup_delegate_ids_by_key(
         &self,
         idempotency_key: &str,
     ) -> Result<Option<(Uuid, Uuid)>, StoreError> {
         validate_delegate_idempotency_key(idempotency_key)?;
+        let terminaux = EtatDelegation::sql_in_clause(EtatDelegation::est_terminal);
+        let sql = format!(
+            "SELECT i.objective_id, i.delegation_id\n\
+             FROM delegate_idempotency i\n\
+             JOIN delegations d ON d.id = i.delegation_id\n\
+             WHERE i.idempotency_key = ?1\n\
+               AND d.state NOT IN ({terminaux})"
+        );
         let row = self
             .connection
             .query_row(
-                "SELECT i.objective_id, i.delegation_id\n\
-                 FROM delegate_idempotency i\n\
-                 JOIN delegations d ON d.id = i.delegation_id\n\
-                 WHERE i.idempotency_key = ?1\n\
-                   AND d.state NOT IN ('annulee', 'terminee')",
+                &sql,
                 [idempotency_key],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
@@ -2788,15 +2816,17 @@ impl MaicieStore {
         let prefix = format!("routine:{routine_id}:");
         // UUID hex : pas de `%` / `_` à échapper — pas d'ESCAPE cosmétique.
         let pattern = format!("{prefix}%");
+        let terminaux = EtatDelegation::sql_in_clause(EtatDelegation::est_terminal);
+        let sql = format!(
+            "SELECT i.idempotency_key\n\
+             FROM delegate_idempotency i\n\
+             JOIN delegations d ON d.id = i.delegation_id\n\
+             WHERE i.idempotency_key LIKE ?1\n\
+               AND d.state NOT IN ({terminaux})"
+        );
         let mut stmt = self
             .connection
-            .prepare(
-                "SELECT i.idempotency_key\n\
-                 FROM delegate_idempotency i\n\
-                 JOIN delegations d ON d.id = i.delegation_id\n\
-                 WHERE i.idempotency_key LIKE ?1\n\
-                   AND d.state NOT IN ('annulee', 'terminee')",
-            )
+            .prepare(&sql)
             .map_err(StoreError::Sql)?;
         let keys = stmt
             .query_map([pattern], |row| row.get::<_, String>(0))
@@ -8003,13 +8033,7 @@ fn parse_objective_state(value: &str) -> Result<EtatObjectif, StoreError> {
 }
 
 fn delegation_state_name(state: EtatDelegation) -> &'static str {
-    match state {
-        EtatDelegation::EnAttentePrerequis => "en_attente_prerequis",
-        EtatDelegation::Creee => "creee",
-        EtatDelegation::AEvaluer => "a_evaluer",
-        EtatDelegation::Terminee => "terminee",
-        EtatDelegation::Annulee => "annulee",
-    }
+    state.as_sql()
 }
 
 fn parse_delegation_state(value: &str) -> Result<EtatDelegation, StoreError> {
