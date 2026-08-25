@@ -54,10 +54,16 @@ surveiller, sauf qu'il s'est matérialisé en régression plutôt qu'en oubli.
 
 ## Les trois ajouts du verdict (APPROVE_WITH_CHANGES sur `9f7bcc6`)
 
-1. **Reformuler la dette** — bascule en BLOCKED si elle reste dans ses termes
-   actuels. Ce n'est pas « l'occurrence reste ouverte » : c'est, mesuré sur
-   dix relèves, **la routine cesse définitivement de tourner, en silence,
-   pendant que `routine list` affiche toujours `active`**.
-2. Domicilier le contrat CLI des six sous-commandes (point 9 ci-dessus).
-3. Un oracle sur le refus AVANT l'écran — mutant prouvé : 76 tests restent
-   verts quand on retire la ligne ; contrôle positif fourni.
+1. **Reformuler la dette** — **FAIT** dans `plugins/maicie/README.md` §
+   Routines : pas « l'occurrence reste ouverte » mais **la routine cesse
+   définitivement de tourner, en silence, pendant que `routine list` affiche
+   toujours `active`**.
+2. Domicilier le contrat CLI des six sous-commandes — **FAIT** (même section).
+3. Un oracle sur le refus AVANT l'écran — **FAIT** :
+   `refus_avant_ecran_sur_gabarit_altere` (préflight extrait + contrôle positif).
+
+## Motif BLOCKED mesuré (borne × adoption) — remède attendu dans le lot
+
+Série 1/2/2 (reprise ×2 / ×65 / ×100) : au-delà de `MAX_CATCHUP_BUCKETS`,
+le mandat de la coupure restait orphelin hors fenêtre. Remède : adopter les
+orphelins de `after+1 ..= truncated_end` **avant** la sentinelle / le saut.
