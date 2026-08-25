@@ -1,7 +1,11 @@
 use maicie::catalogue::Severity;
-use maicie::review::{RegistryFinding, ReviewRegime, calculate_criticality};
+use maicie::config::ReviewProjectConfig;
+use maicie::review::{
+    RegistryFinding, ReviewLotSubmitPayload, ReviewRegime, calculate_criticality,
+};
 use maicie::review_git::{
-    GitMeasurementRequest, LimitKind, ReviewGitError, ReviewGitLimits, measure_repository,
+    GitMeasurementRequest, LimitKind, ReviewGitError, ReviewGitLimits, ReviewPreparationError,
+    ReviewPreparationRequest, measure_repository, prepare_review_submission,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -85,6 +89,23 @@ fn request<'a>(
         head,
         open_findings: &[],
         limits,
+    }
+}
+
+fn review_project(root: PathBuf, project_id: &str) -> ReviewProjectConfig {
+    ReviewProjectConfig {
+        project_id: project_id.to_string(),
+        repository_root: root,
+        referent_id: "bridget".to_string(),
+    }
+}
+
+fn submission_payload(project_id: &str, base: &str, head: &str) -> ReviewLotSubmitPayload {
+    ReviewLotSubmitPayload {
+        project_id: project_id.to_string(),
+        branch_ref: "refs/heads/fixture".to_string(),
+        base: base.to_string(),
+        head: head.to_string(),
     }
 }
 
@@ -361,5 +382,132 @@ fn t2511_les_variables_git_heritees_ne_changent_pas_la_paire_mesuree() {
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("1 passed"),
         "l'univers enfant doit contenir un test réel"
+    );
+}
+
+#[test]
+fn t2511f_prepare_la_soumission_depuis_la_racine_configuree() {
+    let repo = FixtureRepository::new("preparation-config");
+    repo.write("src/store.rs", "pub const VERSION: u8 = 1;\n");
+    let base = repo.commit("base");
+    repo.write(
+        "src/store.rs",
+        "pub const SCHEMA_VERSION: u8 = 2;\nALTER TABLE review ADD COLUMN regime TEXT;\n",
+    );
+    let head = repo.commit("head");
+    let project = review_project(repo.root.clone(), "cartae");
+    let payload = submission_payload("cartae", &base, &head);
+
+    let prepared = prepare_review_submission(&ReviewPreparationRequest {
+        project: &project,
+        payload: &payload,
+        author_id: "ac1",
+        open_findings: &[],
+        limits: ReviewGitLimits::default(),
+    })
+    .unwrap();
+
+    assert_eq!(prepared.submission.project_id, "cartae");
+    assert_eq!(prepared.submission.author_id, "ac1");
+    assert_eq!(prepared.submission.base, base);
+    assert_eq!(prepared.submission.head, head);
+    assert_eq!(
+        prepared.criticality.critical_changed_paths,
+        ["src/store.rs"]
+    );
+}
+
+#[test]
+fn t2511f_refuse_un_projet_incoherent_avant_l_acces_au_depot() {
+    let missing_root =
+        std::env::temp_dir().join(format!("maicie-review-missing-project-{}", Uuid::new_v4()));
+    let project = review_project(missing_root, "cartae");
+    let payload = submission_payload(
+        "autre-projet",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+
+    let result = prepare_review_submission(&ReviewPreparationRequest {
+        project: &project,
+        payload: &payload,
+        author_id: "ac1",
+        open_findings: &[],
+        limits: ReviewGitLimits::default(),
+    });
+
+    assert!(matches!(
+        result,
+        Err(ReviewPreparationError::ProjectMismatch)
+    ));
+}
+
+#[test]
+fn t2511f_refuse_la_racine_disparue_au_moment_de_la_soumission() {
+    let missing_root = std::env::temp_dir().join(format!(
+        "maicie-review-missing-repository-{}",
+        Uuid::new_v4()
+    ));
+    let project = review_project(missing_root, "cartae");
+    let payload = submission_payload(
+        "cartae",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+
+    let result = prepare_review_submission(&ReviewPreparationRequest {
+        project: &project,
+        payload: &payload,
+        author_id: "ac1",
+        open_findings: &[],
+        limits: ReviewGitLimits::default(),
+    });
+
+    assert!(matches!(
+        result,
+        Err(ReviewPreparationError::Git(
+            ReviewGitError::RepositoryUnavailable
+        ))
+    ));
+}
+
+#[test]
+fn t2511f_ne_recopie_aucun_contenu_source_dans_la_preparation() {
+    const SECRET: &str = "secret-sentinelle-025-ne-jamais-persister";
+    let repo = FixtureRepository::new("preparation-confidentialite");
+    repo.write("src/trace.rs", "pub const TRACE: bool = false;\n");
+    let base = repo.commit("base");
+    repo.write(
+        "src/trace.rs",
+        &format!("pub const TRACE: &str = \"{SECRET}\";\n"),
+    );
+    let head = repo.commit("head");
+    let project = review_project(repo.root.clone(), "cartae");
+    let payload = submission_payload("cartae", &base, &head);
+    let findings = [RegistryFinding {
+        id: "constat-025".to_string(),
+        severity: Severity::Blocker,
+        text: format!("src/trace.rs:1 contient {SECRET}"),
+    }];
+
+    let prepared = prepare_review_submission(&ReviewPreparationRequest {
+        project: &project,
+        payload: &payload,
+        author_id: "ac1",
+        open_findings: &findings,
+        limits: ReviewGitLimits::default(),
+    })
+    .unwrap();
+    let structured = serde_json::to_string(&prepared.criticality).unwrap();
+    let debug = format!("{prepared:?}");
+
+    assert!(!structured.contains(SECRET));
+    assert!(!debug.contains(SECRET));
+    assert!(
+        prepared
+            .criticality
+            .zones
+            .iter()
+            .any(|zone| zone.path == "src/trace.rs")
     );
 }

@@ -1,8 +1,10 @@
 //! Mesure bornée d'un diff entre deux objets Git immuables.
 
+use crate::config::ReviewProjectConfig;
 use crate::review::{
-    ContractDocument, FileChange, RegistryFinding, RepositorySnapshot, ReviewError, TrackedPath,
-    is_canonical_sha, is_full_branch_ref,
+    ContractDocument, CriticalityMap, FileChange, RegistryFinding, RepositorySnapshot, ReviewError,
+    ReviewLotSubmitPayload, ReviewSubmission, ReviewSubmissionError, TrackedPath,
+    calculate_criticality, create_review_submission, is_canonical_sha, is_full_branch_ref,
 };
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -65,6 +67,25 @@ pub struct GitMeasurementRequest<'a> {
     pub head: &'a str,
     pub open_findings: &'a [RegistryFinding],
     pub limits: ReviewGitLimits,
+}
+
+/// Entrées transitoires de la préparation. La racine vient exclusivement de
+/// la configuration chargée ; la charge réseau ne peut pas la remplacer.
+#[derive(Debug, Clone, Copy)]
+pub struct ReviewPreparationRequest<'a> {
+    pub project: &'a ReviewProjectConfig,
+    pub payload: &'a ReviewLotSubmitPayload,
+    pub author_id: &'a str,
+    pub open_findings: &'a [RegistryFinding],
+    pub limits: ReviewGitLimits,
+}
+
+/// Sortie sans instantané : aucun contenu de diff, contrat ou constat n'est
+/// conservé au-delà du calcul.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedReviewSubmission {
+    pub criticality: CriticalityMap,
+    pub submission: ReviewSubmission,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +153,47 @@ impl Error for ReviewGitError {}
 impl From<ReviewError> for ReviewGitError {
     fn from(source: ReviewError) -> Self {
         Self::Review(source)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewPreparationError {
+    ProjectMismatch,
+    Git(ReviewGitError),
+    Submission(ReviewSubmissionError),
+}
+
+impl std::fmt::Display for ReviewPreparationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProjectMismatch => {
+                formatter.write_str("projet soumis différent du projet configuré")
+            }
+            Self::Git(source) => write!(formatter, "mesure Git refusée : {source}"),
+            Self::Submission(source) => write!(formatter, "soumission invalide : {source}"),
+        }
+    }
+}
+
+impl Error for ReviewPreparationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::ProjectMismatch => None,
+            Self::Git(source) => Some(source),
+            Self::Submission(source) => Some(source),
+        }
+    }
+}
+
+impl From<ReviewGitError> for ReviewPreparationError {
+    fn from(source: ReviewGitError) -> Self {
+        Self::Git(source)
+    }
+}
+
+impl From<ReviewSubmissionError> for ReviewPreparationError {
+    fn from(source: ReviewSubmissionError) -> Self {
+        Self::Submission(source)
     }
 }
 
@@ -236,6 +298,38 @@ pub fn measure_repository(
         changes,
         contracts,
         open_findings: request.open_findings.to_vec(),
+    })
+}
+
+/// Mesure la paire Git configurée, calcule la carte puis prépare la soumission.
+///
+/// Aucun reçu ni état durable n'est produit. L'instantané contenant les textes
+/// sources est détruit au retour ; seule la projection structurée subsiste.
+/// Complexité : O(P + B + D + F), avec P chemins, B octets de blobs, D octets
+/// de diff et F constats ouverts, sous les bornes de `ReviewGitLimits`.
+pub fn prepare_review_submission(
+    request: &ReviewPreparationRequest<'_>,
+) -> Result<PreparedReviewSubmission, ReviewPreparationError> {
+    if request.payload.project_id != request.project.project_id {
+        return Err(ReviewPreparationError::ProjectMismatch);
+    }
+
+    let snapshot = measure_repository(&GitMeasurementRequest {
+        repository_root: &request.project.repository_root,
+        branch_ref: &request.payload.branch_ref,
+        base: &request.payload.base,
+        head: &request.payload.head,
+        open_findings: request.open_findings,
+        limits: request.limits,
+    })?;
+    let criticality = calculate_criticality(&snapshot)
+        .map_err(ReviewGitError::from)
+        .map_err(ReviewPreparationError::from)?;
+    let submission = create_review_submission(request.payload, request.author_id, &criticality)?;
+
+    Ok(PreparedReviewSubmission {
+        criticality,
+        submission,
     })
 }
 

@@ -27,6 +27,8 @@
 - [x] T2511C [US4] Vérifier les mutants du régime par défaut, du sens d’écart et de la protection propre.
 - [x] T2511D [US1] Écrire les oracles de la configuration projet sans carte manuelle et sans vérification prématurée du dépôt.
 - [x] T2511E [US1] Implémenter la configuration fermée et inclure sa source dans le régime propre fixé.
+- [x] T2511F [US1] Écrire les oracles de la préparation en lecture seule : racine configurée, projet exact, dépôt indisponible et confidentialité.
+- [x] T2511G [US1] Composer mesure, carte et soumission sans reçu ni état durable, puis vérifier les mutants de frontière.
 
 ## Phase 4 — Gate d’intégration des migrations
 
@@ -59,7 +61,7 @@
 
 ```text
 T2501–T2504
-    ├── T2505–T2508 ── T2509–T2511 ── T2511A–T2511E
+    ├── T2505–T2508 ── T2509–T2511 ── T2511A–T2511G
     └── attente externe T2512
                          ↓
                     T2513–T2514

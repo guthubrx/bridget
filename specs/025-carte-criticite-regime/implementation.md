@@ -107,6 +107,32 @@
   propriétaire unique, le greffe daemon ; son libellé attend la source fédérée
   de la session 026
 
+### T2511F–T2511G — Préparation en lecture seule
+
+- **Statut** : complété
+- **Rouge causal** :
+  `CARGO_TARGET_DIR=/home/moi/revue/rc2/.git/target-rc2-025 cargo test -p maicie --test review_git_integration --no-run`
+  échouait uniquement sur les trois symboles de préparation absents
+- **Univers vérifié avant comptage** : `review_git_integration` voit exactement
+  10 tests avec `cargo test -p maicie --test review_git_integration -- --list`
+- **Mesure** : 10 passés, 0 échoué, 0 ignoré après compilation préalable
+- **Non-régression après univers non vides** : configuration 18/0/0,
+  contrat 94/0/0 et binaire `maicie` 11/0/0
+- **Composition** : la racine vient exclusivement de `review_project` ; le
+  projet est confronté avant tout accès Git ; l’instantané borné alimente la
+  carte puis la soumission et n’appartient pas à la sortie préparée
+- **Frontière d’effet** : aucun reçu accepté, aucune condition fédérée, aucune
+  ouverture du store, aucune opération guichet et aucune écriture durable
+- **Confidentialité** : un secret synthétique présent simultanément dans un
+  diff et un constat reste absent de la carte sérialisée et du résultat de
+  préparation affichable
+- **Mutants tués dans les assertions, cardinal 1 vérifié** : garde projet
+  retirée (`review_git_integration.rs:439`), constats ouverts ignorés (`:506`),
+  auteur remplacé par le référent (`:411`) et instantané brut conservé dans la
+  sortie (`:505`)
+- **Lint** : Clippy strict est vert sur la bibliothèque et l’intégration Git ;
+  `git diff --check` est vert
+
 ## REX
 
 À compléter après les gates et la revue hostile.
