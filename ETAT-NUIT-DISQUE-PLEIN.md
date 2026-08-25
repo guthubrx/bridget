@@ -37,9 +37,37 @@ absent, alors qu'il avait servi à 18:56:02). **Node rend `ENOENT` quand le
 **cwd parfaitement valide** — là, seul le shell peut être en cause. 575702 est
 le **dernier spawn réussi de toute la machine**.
 
-**Confirmation indépendante** : restaurer le lien a rendu les mains à
+**Confirmation indépendante n°1** : restaurer le lien a rendu les mains à
 **vingt agents vivants, sans aucune relance de session**. Un seul fichier
 remis en place ne ressuscite pas une flotte si la cause était ailleurs.
+
+**Confirmation indépendante n°2 — LE JOURNAL UNIFIÉ macOS**, seule source
+qui ne dépende d'aucun agent (`log show --start "2026-08-24 21:40" --end
+"2026-08-24 22:05" --predicate 'eventMessage CONTAINS "zsh"'`) :
+
+- **Série A — le zsh Homebrew.** Lignes `Sandbox: logd_helper deny file-read-data
+  /opt/homebrew/Cellar/zsh/5.9.2/lib/zsh/parameter.bundle`, en continu :
+  21:40:05, 21:41:21, 21:42:01, 21:43:01, **21:44:25, 21:45:02, 21:45:13,
+  21:45:38, 21:46:05, 21:46:12**, 21:48:40, 21:49:16, 21:49:50, 21:50:05,
+  21:51:02, 21:52:17, 21:53:06, 21:53:18, 21:53:39, **21:53:55.201 — puis
+  plus jamais.** Deux exécutions nominatives dans le lot : `zsh[74778]` à
+  **21:45:13**, `zsh(24654)` à 21:51:00.
+- **Série B — le zsh d'Apple** (`com.apple.zsh`, job périodique) : 21:49:06,
+  21:51:06, 21:53:06, **21:55:06, 21:57:06, 21:59:06, 22:01:06, 22:03:06** —
+  **elle continue imperturbablement**, `/bin/zsh` n'ayant jamais été touché.
+
+**C'est le contrôle négatif** : ce n'est pas le journal qui s'arrête à
+21:53:55, c'est le Cellar Homebrew qui cesse d'être une cible. **Le shim naît
+à 21:53:52 — trois secondes avant.** Et pendant TOUTE la fenêtre
+21:44:32–21:47:45 qu'on voulait instruire, **le zsh Homebrew s'exécutait**.
+Il n'y a rien à y chercher, et personne à y trouver.
+
+**Trou du filtre comblé** : les **commandes shell** ont bien été cherchées
+(motifs `rm`, `rm -rf`, `unlink`, `mv`, `ln -s`, `ln -sf`) sur tous les
+terminaux de la fenêtre. Un seul `rm -rf`, avec sa variable **correctement
+substituée** (`JET=$(mktemp -d /tmp/rejeu-v0-XXXXXX)`), cible sous `/tmp`.
+Aucun `ln`, `mv` ni `chmod` visant `/opt/homebrew` ou `/usr/local`.
+L'hypothèse du chemin calculé non substitué a été **cherchée et écartée**.
 
 **La chaîne réelle, en cinq temps :**
 1. un répertoire temporaire s'évapore — **anodin, ne casse rien** ;
