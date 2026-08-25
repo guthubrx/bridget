@@ -49,7 +49,7 @@ persistés avant la réponse Bridget.
 
 ## Décision 3 — Vocabulaire fermé en Rust, stockage SQL ouvert
 
-v19 reconstruit `guichet_receptions` et `guichet_refusal_receptions` sans
+v18 reconstruit `guichet_receptions` et `guichet_refusal_receptions` sans
 recopier les listes `operation` et `reason` dans des `CHECK`. Les contraintes
 d'état, d'unicité, de non-nullité et de corrélation restent en SQL.
 
@@ -105,8 +105,10 @@ wrapper sans comportement. Les fonctions métier existantes (`delegate`,
    `b6eea777facf929d99a9c4f9ae75fb50e06dc2fd`.
 2. Attendre l'admission de 021, rebaser et relire ses motifs engendrés depuis
    une source unique.
-3. Composer v18 avant d'écrire v19 ; ne jamais faire passer directement une
-   base de v17 à un schéma marqué v19 qui ignorerait v18.
+3. Vérifier la forme v17, appliquer le DDL v18, puis marquer v18 dans cet ordre.
+   L'installation refuse toute source différente de v17 ; une base déjà v18
+   reste un no-op et une version future échoue. Le bootstrap vide prouve
+   séparément qu'il exécute tous les DDL intermédiaires.
 4. Livrer le paquet A avec ses témoins CLI/guichet et son audit durable.
 5. Livrer le paquet B par couches : protocole, store Bridget, greffe Maicie,
    contexte central, CLI/lookup.
@@ -141,7 +143,8 @@ Puis, dans cet ordre :
 
 1. témoins exacts des approbations interdites ;
 2. corpus de contradiction sur CLI locale et claim guichet ;
-3. tests v19 depuis les schémas v17 et v18, dont injection inconnue ;
+3. tests v18 depuis v17, refus des versions non adjacentes, bootstrap vide et
+   injection inconnue ;
 4. tests ciblés Maicie et guichet daemon ;
 5. parcours réel dépôt → relève → effet central → lookup terminal ;
 6. `cargo fmt --all --check`, clippy ciblé, puis workspace complet.
@@ -163,6 +166,6 @@ chaque rouge. Le gate `--features test-support` n'est pas forcé sur Linux s'il
 
 ## Non vérifié à ce jalon
 
-Le code partagé, la forme finale des motifs issue de 021, la composition v18 et
-les comptes workspace ne sont pas mesurés tant que leurs têtes ne sont pas
-admises. Les contre-tests initiaux sont volontairement rouges jusqu'au paquet B.
+Le code partagé, la forme finale des motifs issue de 021, l'implémentation v18
+et les comptes workspace finaux ne sont pas mesurés tant que 021 n'est pas
+admise. Les contre-tests initiaux sont volontairement rouges jusqu'au paquet B.

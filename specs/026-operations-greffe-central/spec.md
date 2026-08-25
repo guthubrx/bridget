@@ -4,7 +4,7 @@
 **Base de spécification** : `b6eea777facf929d99a9c4f9ae75fb50e06dc2fd`
 **Statut** : spécification et témoins TDD ; code partagé bloqué par la session 021
 **Priorité** : P1
-**Migration réservée** : v19, à composer après v18
+**Migration réservée** : v18, successeur direct de v17
 
 ## Contexte mesuré
 
@@ -191,7 +191,7 @@ une seconde intention.
   succès applicatif.
 - **FR-2610** : aucun repli n'ouvre la SQLite ou le catalogue local de
   l'appelant.
-- **FR-2611** : v19 retire les listes d'opérations/motifs recopiées dans les
+- **FR-2611** : v18 retire les listes d'opérations/motifs recopiées dans les
   `CHECK`, conserve les gardes d'état et échoue à la lecture d'une valeur Rust
   inconnue.
 - **FR-2612** : toute variante Rust autorisée possède un cas de corpus exact ;
@@ -209,6 +209,12 @@ une seconde intention.
 
 - La session 021 doit être admise avant tout code partagé ; elle refond les
   motifs de refus dans les mêmes fichiers Maicie et Bridget.
-- La migration v18 doit précéder v19 dans l'historique admis. Une tête 026 qui
-  sauterait v18 ne peut pas être livrée.
-- La session ne requiert aucune autre migration que v19.
+- La migration v18 vérifie que l'état durable immédiatement antérieur est v17,
+  applique son DDL, puis et seulement puis marque v18. L'étape d'installation
+  refuse une version antérieure ou une forme v17 incomplète sans modifier le
+  numéro ; une base déjà v18 s'ouvre sans rejouer le DDL et une version future
+  est refusée comme non prise en charge.
+- Un bootstrap vide applique et vérifie chaque DDL jusqu'à v18 ; il ne saute
+  aucun palier sous prétexte que la version cible est connue.
+- La session ne requiert aucune autre migration que v18. La future v19 dépendra
+  de cette tête, pas l'inverse.

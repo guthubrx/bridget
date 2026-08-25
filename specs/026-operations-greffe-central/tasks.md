@@ -3,16 +3,16 @@
 ## Phase 1 — Spécification et témoins sans collision
 
 - [x] T2601 Formaliser les propriétés, la frontière ADR 011 et la définition de contradiction attestable dans `specs/026-operations-greffe-central/spec.md`.
-- [x] T2602 Documenter l'architecture à une porte, la décision SQL/Rust, v19 et l'ordre de composition 021→v18→026 dans `specs/026-operations-greffe-central/plan.md`.
+- [x] T2602 Documenter l'architecture à une porte, la décision SQL/Rust, v18 et la dépendance unique sur 021 dans `specs/026-operations-greffe-central/plan.md`.
 - [x] T2603 [P] Écrire deux contre-tests autonomes distincts pour `profile_approve` et `routine_approve` dans `plugins/maicie/tests/guichet_forbidden_operations_contract.rs`; observable : les deux fonctions de test sont exécutées et comparent exactement outcome, opération et motif.
 - [x] T2604 Exécuter `cargo test --workspace --no-run`, puis le binaire de test T2603 et consigner les deux rouges attendus sans les attribuer à 021 dans le jalon de branche.
 
-## Phase 2 — Fondations après admission de 021 et v18
+## Phase 2 — Fondations après admission de 021
 
 - [ ] T2605 Rebaser sur la tête admise contenant 021, relire le vocabulaire de refus unifié et adapter `specs/026-operations-greffe-central/plan.md` sans réintroduire de projection manuelle.
-- [ ] T2606 Composer la migration v18 admise avant toute écriture de v19 dans `plugins/maicie/src/store.rs`; observable : une base v17 traverse v18 puis v19 sans saut de version.
-- [ ] T2607 Écrire les témoins v19 rouges dans `plugins/maicie/tests/schema_migration_guard.rs` : injection SQL inconnue fail-closed, round-trip exact de `ALL`, bijection enum↔corpus et conservation des `CHECK` d'état.
-- [ ] T2608 Implémenter v19 dans `plugins/maicie/src/store.rs` en ouvrant seulement les vocabulaires SQL et en conservant contraintes d'état, unicité et corrélation ; observable : T2607 vert depuis v17/v18.
+- [ ] T2606 Mesurer et geler la forme v17 attendue dans `plugins/maicie/tests/schema_migration_guard.rs`; observable : v16, une fausse v17 incomplète et une version future sont refusées sans changement, v18 est un no-op et un bootstrap vide exécute tous les DDL.
+- [ ] T2607 Écrire les témoins v18 rouges dans `plugins/maicie/tests/schema_migration_guard.rs` : injection SQL inconnue fail-closed, round-trip exact de `ALL`, bijection enum↔corpus et conservation des `CHECK` d'état.
+- [ ] T2608 Implémenter v18 dans `plugins/maicie/src/store.rs` en ouvrant seulement les vocabulaires SQL et en conservant contraintes d'état, unicité et corrélation ; observable : le DDL précède le marquage v18 et T2606–T2607 deviennent verts.
 - [ ] T2609 Créer une source Rust unique pour opérations et motifs dans `plugins/maicie/src/domain.rs` et supprimer les projections manuelles devenues redondantes dans `plugins/maicie/src/guichet.rs` et `plugins/maicie/src/store.rs`.
 
 ## Phase 3 — US2601 : validation partagée (P1)
@@ -50,14 +50,15 @@ seule délégation dans la base centrale, jamais dans une base leurre locale.
 - [ ] T2623 [US2605] Étendre `GuichetResult` et le lookup dans `crates/bridget-transport/src/protocol.rs`, `crates/bridget-daemon/src/store.rs` et `crates/bridget-daemon/src/daemon.rs` pour rendre issue et charge terminales durables.
 - [ ] T2624 [US2605] Étendre le CLI client dans `crates/bridget-daemon/src/cli.rs` avec erreur avant dépôt si tunnel absent et reprise stricte des mêmes id/date/octets.
 - [ ] T2625 [US2605] Rendre verts les deux contre-tests de `plugins/maicie/tests/guichet_forbidden_operations_contract.rs`; observable : deux refus durables exacts et zéro mutation métier.
-- [ ] T2626 [P] [US2605] Ajouter le quatrième oracle enum↔corpus et des mutants de comparaison exacte dans les tests de contrat Bridget et Maicie ; observable : ajout d'une variante sans fixture et assertion `contains` mutée font rougir.
+- [x] T2626 [P] [US2605] Ajouter dans `plugins/maicie/tests/guichet_forbidden_operations_contract.rs` le quatrième oracle enum↔corpus, engendré par une macro sans joker ; observable : une variante ajoutée sans fixture rend le `match` non exhaustif à la compilation.
+- [ ] T2627 [P] [US2605] Muter après composition l'enum et les comparaisons exactes dans les tests Bridget et Maicie ; observable : variante sans fixture et assertion par sous-chaîne font chacune rougir un oracle dédié.
 
 ## Phase 7 — Validation et livraison
 
-- [ ] T2627 Exécuter `cargo test --workspace --no-run` avant comptage, puis les suites ciblées, le parcours central réel, formatage et clippy ; consigner SHA, passés, rouges, ignorés et imputation de chaque rouge.
-- [ ] T2628 Mesurer les compositions 021, v18, 025/v20 et les autres têtes gelées touchant protocole/guichet/store ; observable : aucune divergence sémantique silencieuse.
-- [ ] T2629 Relire le diff complet selon les articles XIX/XX, supprimer les duplications et documenter précisément le code évité et les surfaces non mesurées.
-- [ ] T2630 Geler, pousser et livrer la tête de `session-026-operations-greffe-central` avec message Git strict et sans trailer.
+- [ ] T2628 Exécuter `cargo test --workspace --no-run` avant comptage, puis les suites ciblées, le parcours central réel, formatage et clippy ; consigner SHA, passés, rouges, ignorés et imputation de chaque rouge.
+- [ ] T2629 Mesurer les compositions 021, la future v19/rc3, 025/v20 et les autres têtes gelées touchant protocole/guichet/store ; observable : aucune divergence sémantique silencieuse.
+- [ ] T2630 Relire le diff complet selon les articles XIX/XX, supprimer les duplications et documenter précisément le code évité et les surfaces non mesurées.
+- [ ] T2631 Geler, pousser et livrer la tête de `session-026-operations-greffe-central` avec message Git strict et sans trailer.
 
 ## Dépendances et stratégie
 
@@ -79,8 +80,8 @@ neufs du jalon 026.
 
 - `cargo test --workspace --no-run` : compilation verte, aucun binaire de test
   absent.
-- `cargo test -p maicie --test guichet_forbidden_operations_contract` :
-  **0 passé, 2 rouges, 0 ignoré**.
+- `cargo test -p maicie --test guichet_forbidden_operations_contract` au jalon
+  initial : **0 passé, 2 rouges, 0 ignoré**.
 - Rouge `profile_approve_est_refuse_et_persiste_exactement` : imputé au défaut
   TDD attendu ; le code courant rend `UnsupportedOperation` sans refus terminal
   durable.
@@ -98,6 +99,21 @@ répertoire temporaire n'était pas en `0700`. Le fixture a été corrigé, reco
 avec `--no-run`, puis rejoué ; ce rouge de harnais n'est pas compté comme un
 défaut produit.
 
+### Addendum oracle exhaustif et renumérotation
+
+**SHA réellement mesuré** :
+`0bd24cba27cf7dea88ab5c763d5e18300922c82d`, avec le diff de l'oracle et de la
+renumérotation v19→v18.
+
+- `cargo test -p maicie --test guichet_forbidden_operations_contract --no-run` :
+  compilation verte.
+- Oracle `chaque_variante_operation_exige_une_fixture_exacte` isolé :
+  **1 passé, 0 rouge, 0 ignoré** (`2 filtered out`).
+- Binaire contractuel complet : **1 passé, 2 rouges, 0 ignoré** ; les deux
+  rouges et leur imputation `UnsupportedOperation` sans trace sont inchangés.
+- Aucun code de migration n'existait sous v19. La documentation réserve
+  désormais v18 et impose DDL réussi avant marquage de version.
+
 ## Self-review Article XIX/XX du jalon
 
 - **Pourquoi cette solution est nécessaire** : douze agents fédérés ne peuvent
@@ -106,12 +122,12 @@ défaut produit.
 - **Pourquoi elle est plus simple ou maintenable** : elle étend le guichet et
   les cas d'usage existants, sans second accès MCP au store, daemon Maicie ni
   validation dupliquée dans le CLI.
-- **Hypothèses prises** : 021 fournira le vocabulaire de refus unifié et v18
-  sera admise avant l'écriture de v19.
+- **Hypothèses prises** : 021 fournira le vocabulaire de refus unifié ; v18 est
+  réservée à 026 et succède directement à sa v17.
 - **Vérifications réalisées** : lecture des schémas et chemins d'appel,
   compilation workspace, exécution séparée des deux témoins, formatage ciblé,
   `git diff --check` et validation du format des tâches.
-- **Non vérifié** : implémentation, migration v18→v19, parcours central réel,
+- **Non vérifié** : implémentation, migration v17→v18, parcours central réel,
   suites `test-support` Linux et composition finale.
 - **Code supprimé ou évité** : aucun code de production à ce jalon ; un client
   MCP direct, un repli SQLite local, un interprète de prose et deux validateurs

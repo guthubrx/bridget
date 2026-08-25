@@ -1,3 +1,4 @@
+use bridget_transport::protocol::{ServiceRequestOperation, WrapperToDaemon, decode, encode};
 use maicie::app::process_guichet_claim;
 use maicie::bridget_client::GuichetClaim;
 use maicie::store::MaicieStore;
@@ -6,6 +7,26 @@ use serde_json::Value;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use uuid::Uuid;
+
+macro_rules! operation_corpus {
+    ($($variant:path => $fixture:expr),+ $(,)?) => {
+        const OPERATION_FIXTURES: &[(ServiceRequestOperation, &str)] = &[
+            $(($variant, $fixture),)+
+        ];
+
+        fn fixture_for(operation: ServiceRequestOperation) -> &'static str {
+            match operation {
+                $($variant => $fixture,)+
+            }
+        }
+    };
+}
+
+operation_corpus! {
+    ServiceRequestOperation::DeliveryReport => r#"{"type":"service_request","v":1,"issuer_scope":"scope-0123456789abcdef0123456789abcdef","request_id":"corpus-delivery","issued_at":1000,"from":"jc6","to":"maicie","operation":"delivery_report","payload":{"objective_id":"51000000-0000-4000-8000-000000000001","delegation_id":"52000000-0000-4000-8000-000000000002","delivery_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","in_reply_to":"53000000-0000-4000-8000-000000000003"}}"#,
+    ServiceRequestOperation::MissionStatus => r#"{"type":"service_request","v":1,"issuer_scope":"scope-0123456789abcdef0123456789abcdef","request_id":"corpus-status","issued_at":1000,"from":"jc6","to":"maicie","operation":"mission_status","payload":{"delegation_id":"52000000-0000-4000-8000-000000000002"}}"#,
+    ServiceRequestOperation::DeadlineQuestion => r#"{"type":"service_request","v":1,"issuer_scope":"scope-0123456789abcdef0123456789abcdef","request_id":"corpus-deadline","issued_at":1000,"from":"jc6","to":"maicie","operation":"deadline_question","payload":{"delegation_id":"52000000-0000-4000-8000-000000000002"}}"#,
+}
 
 fn claim(operation: &str) -> GuichetClaim {
     let request_id = format!("forbidden-{operation}");
@@ -77,6 +98,21 @@ fn assert_forbidden_operation_is_durable(operation: &str) {
         "le refus doit laisser exactement une ligne"
     );
     assert_eq!(mutation_count, 0, "une approbation interdite ne mute rien");
+}
+
+#[test]
+fn chaque_variante_operation_exige_une_fixture_exacte() {
+    for &(expected, fixture) in OPERATION_FIXTURES {
+        assert_eq!(fixture_for(expected), fixture);
+        let decoded = decode::<WrapperToDaemon>(fixture).unwrap();
+        assert_eq!(encode(&decoded).unwrap(), fixture);
+        match decoded {
+            WrapperToDaemon::ServiceRequest { operation, .. } => {
+                assert_eq!(operation, expected);
+            }
+            other => panic!("fixture hors service_request : {other:?}"),
+        }
+    }
 }
 
 #[test]
