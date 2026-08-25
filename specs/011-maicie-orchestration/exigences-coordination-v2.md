@@ -5,7 +5,48 @@ tenue par le référent humain-agent. Chaque règle exécutée à la main ici es
 candidate à devenir un comportement produit de Maicie. Hors périmètre de la
 v1 (spec 011) — intrants pour les itérations suivantes.
 
-## Tableau de bord — mis à jour le 2026-08-24, 21:33
+## Tableau de bord — mis à jour le 2026-08-25, 07:15
+
+**État de matin (07:15)** — tête `main` @ `8038096`. Le document à 21:33
+précédait **six lots** maintenant MERGÉS (et quatre suites Maicie de la
+même nuit). Schéma greffe en prod : **v16** (migration jouée après sauvegarde).
+
+**LES SIX LOTS** (fermant le tableau 21:33) :
+1. *consentement --migrate* — `324167b` (porte v0 tenue ; prérequis des
+   migrations de la nuit).
+2. *in_flight ≠ sort inconnu* — `5e4fb24` (surfaces client).
+3. *présences fantômes inventées* (après fin de tour) — `7364d30`.
+4. *ledger à l'émission* (visibilité ≠ accusé) — `9a875b7` ; résidu mesuré
+   ~1,1 % stuck sur copie prod (vs 33–67 % la nuit).
+5. *routines v15 + adoption des orphelins* (au-delà de la borne) — `a26fda2`.
+6. *vocabulaires en_vol / dispatching / in_flight reliés* — `99a8452`.
+
+**SUITES MERGÉES après les six** :
+- ne pas rétracter une mission accomplie + oracles de version — `1c75a0c` ;
+- carte de reprise : état greffe + discriminant règle 6 (trou documenté :
+  l'alerte s'éteint si le dépôt redevient à un seul worktree) — `b7f042e` ;
+- mandat mort dérivé du domaine + exhaustivité `EtatDelegation::ALL` —
+  `aca9fbb` ;
+- solde des délégations à la clôture d'objectif (`SoldeeParCloture`) +
+  outbox terminalisée — `74f3d9b`.
+
+**EN COURS (attesté, hors main)** :
+- jury 1+1 sur *lien ≠ capacité* (heartbeat zombie) — tête A `cfff497` ;
+- lot B *retain sans exemption `connected`* ;
+- greffe véridique : geste `Terminee` + `registre fermer` (motif+réf) —
+  session 018 ; `SoldeeParCloture` ne couvre PAS le verdict de succès ;
+- hygiène des résidus de build (Drop vs EOF) ; orphelinage silencieux des
+  remises à la purge ; `Annulee` hors objectif clos (« attends la suite ») ;
+- dette clippy `--all-targets` (`doc_lazy_continuation` routines.rs).
+
+**RÈGLES TOUJOURS VIVES** : revue à deux étages + jury 1+1 ; comptes
+REPRODUITS ; absence vérifiée dans la durée ; horodatage du ledger ;
+worktree auteur fermé au relecteur ; **règle 6** (jamais écrire sur le
+checkout primaire) ; greffe ≠ mains (carte de reprise).
+**OUVERT AU GREFFE** : le registre ne sait toujours pas *fermer* un constat
+(consigné `8038096`) — un Blocker déjà corrigé reste affiché.
+
+**Archive — état précédent (21:33)**
 
 **État de nuit (21:33)** — MERGÉS ce soir : correctif boot (8 s de démarrage),
 spawn-fantôme, hook StatusLine, checklist de redémarrage, lot outcome_unknown
@@ -78,18 +119,18 @@ bas ; ce tableau ne remplace pas la lecture, il dit où on en est.
 
 **ORDRE DE DÉROULÉ v2 (validé utilisateur le 24/08, 15h53)** :
 1. Finir l'orange (tout 🔄 ci-dessous) — aucun nouveau chantier avant.
-2. Phase AUTONOMIE : routines (bloc F reste, note de conception en cours)
-   + politiques 30-34 en produit (P31 plages déjà livré) + M5.
+2. Phase AUTONOMIE : routines v15 LIVRÉES (M5) ; reste politiques 30-34 +
+   état-pause #009 + terminaison succès (`Terminee`).
 3. Phase SÉCURITÉ, en UN chantier : C5/D21 opposabilité + M3 permissions
    sans terminal + second facteur ADR 011 + sortie du bypass (Supervised)
    + N6 confinement. Une seule UI d'approbation, pas quatre lots.
 4. Phase OUVERTURE : N4/K3 d'abord, puis N1 vitrine, N2 silos-transports,
-   N3 isolation-produit. Bloc M (référent géré) quand M5+M3 existent.
+   N3 isolation-produit. Bloc M (référent géré) quand M3 existe (M5 fait).
 Rayé d'un commun accord : J4, B7. À trier le moment venu : D22.
 
 **Bloc M — le référent géré** (détail en fin de document)
-- [ ] M5 rondes → routines — 🔄 note validée, commit 1 livré (27cc289,
-      cursor7), commit 2 état-pause #009 en cours, jury n°3 ensuite
+- [x] M5 rondes → routines — ✅ routines v15 MERGÉES (`a26fda2` + suites
+      orphelins / rétractation / SoldeeParCloture) ; état-pause #009 reste dû
 - [ ] M3 permissions sans terminal — ⬜ phase sécurité
 - [ ] M1 composer dans la page — ⬜ (intérim : attach est déjà un composer)
 - [ ] M2 référent spawné en flux natif — ⬜ après M3+M5
@@ -140,9 +181,10 @@ ont été créés directement dans ce fichier le 24/08.
 - [x] 18 identité Maicie joignable + demandes corrélées — LE GUICHET
       (sessions 015/016)
 - [x] 19 carte de réveil + préambule codex resume — livrés, reprise avec
-      mission active prouvée 2× le 24/08
-- [ ] 20 reprise d'équipe — 🔄 en cours (cursor6) ; cas réel du 24/08 :
-      7 agents non revenus au redémarrage, sans trace
+      mission active prouvée 2× le 24/08 ; état greffe + règle 6 sur la
+      carte MERGÉS (`b7f042e`)
+- [ ] 20 reprise d'équipe — 🔄 partiel (carte enrichie) ; cas réel du 24/08 :
+      7 agents non revenus au redémarrage, sans trace — D20 encore dû
 - [ ] 21 opposabilité des SpawnOrder (C5) — ⬜
 - [ ] 22 fond du backlog Maicie (SpawnLookup, dry-run, plafond, classe,
       boucle résidente) — ⬜
@@ -185,26 +227,27 @@ ont été créés directement dans ce fichier le 24/08.
       GUICHET (016 : dépôts durables, relève bornée, refus attestés)
 - [x] Parité de repli du binaire (D24 : --in-reply-to au CLI)
 - [x] Reprise après crash — carte de réveil déterministe LIVRÉE et prouvée
-      2× en production le 24/08 (reprise avec mission active)
+      2× en production le 24/08 ; état greffe + règle 6 MERGÉS (`b7f042e`)
 - [ ] Reprise après crash, restes — ⬜ `maicie profile refuse` absent ;
-      domain dans fleet.json et trace « N équipiers non revenus » à vérifier
+      D20 trace « N équipiers non revenus » encore dû ; heartbeat zombie /
+      retain `connected` en jury (hors main)
 - [ ] GUI — 🔄 première tranche LIVRÉE (page locale 3 zones + tunnel lecture
       seule + SSE) ; journal enrichi, abonnements, vue unifiée tous modes :
       restent ouverts (le journal des reconnectés est le bug en réparation)
 - [x] Périmètre 014 : livré intégralement (7/7, gate MERGEABLE, 23/08)
 - [x] Divers gravés : skill maicie, doctrine « zéro trace IA y compris
       contenu » — vivants
-- [ ] Routines planifiées (« bloc F ») — ⬜ non commencé ; doctrine posée
-      (une routine délègue, n'approuve jamais) ; NB : la ronde portable K2
-      en est le premier cousin opérationnel, côté référent
+- [x] Routines planifiées (« bloc F ») — ✅ v15 en production (`a26fda2`) ;
+      doctrine tenue (une routine délègue, n'approuve jamais) ; faille hash
+      tautologique FERMÉE à la source ; reste : état-pause #009, Terminee
 - [ ] Suivis post-gate 014 (C1-C7 fable-reviewer) — ⬜ non bloquants,
       ouverts à dessein (C3 croissance tool_titles à surveiller en priorité)
 - [x] Quota de flotte configurable (BRIDGET_FLEET_QUOTA, défaut 16, refus
       parlants) — Bloquant du 24/08 réglé en 50 min, mergé
 - [x] Claude gérés opérationnels (option A, décision utilisateur 14h34) —
       bypass mergé, validation outillée réussie (« mains opérationnelles »)
-- [ ] Équipement des Claude gérés (MCP + identité + PATH — envois archivés
-      « human », constat de traçabilité) — 🔄 en cours (cursor7)
+- [x] Équipement des Claude gérés (MCP + identité + PATH) — SOLDÉ (envois
+      signés du nom ; usurpation « human » éteinte)
 - [x] Extinction tmux ACHEVÉE 15h25 — plus aucun ouvrier tmux
 - [x] Chaîne identité SOLDÉE : MCP+identité+PATH injectés aux claude gérés,
       envois signés du NOM de l'agent (preuve vivante), usurpation éteinte
@@ -215,8 +258,10 @@ ont été créés directement dans ce fichier le 24/08.
       écrasement (effet au prochain redémarrage)
 - [x] Bloquants disque + rouge permanent SOLDÉS (ramasse-copies au boot,
       seuil 20 Gi, skip nommé) — registre à ZÉRO Bloquant
-- [ ] Routines Maicie — 🔄 implémentation (cursor7, v15, note validée)
-- [ ] outcome_unknown sur livraison réussie — 🔄 instruction (fable2)
+- [x] Routines Maicie — ✅ v15 MERGÉ + orphelins + SoldeeParCloture
+- [x] outcome_unknown / in_flight — ✅ surfaces distinctes (`5e4fb24`) +
+      ledger à l'émission (`9a875b7`) + vocabulaire en_vol (`99a8452`) ;
+      résidu orphelinage à la purge = lot séparé (déclaré, non commencé)
 
 **Bloc G — ponts natifs**
 - [x] G1 vocabulaire interne (ADR 010, couche `ManagedSession`)
