@@ -230,6 +230,30 @@ deux échecs successifs pour un même agent.)*
   et annonce le nouveau SHA au référent qui le transmet au jury. *(Deux
   incidents le 2026-08-24 : un jury lancé sur une tête déjà dépassée, puis un
   auteur livrant cinq SHA pendant que son jury mesurait le premier.)*
+- **Heartbeat = lien, pas capacité.** Le daemon distingue `link_seen`
+  (socket / heartbeat) et `last_seen` (capacité : register, tour, runtime /
+  usage). `who` expose l'âge de *capacité* (`last_seen_secs`) : un humain voit
+  enfin un âge vrai pour un wrapper vivant / shell mort. **Ce lot rend l'âge
+  honnête ; il ne change aucune décision** — `maicie` (`candidates_from` /
+  `available`) et le reaper (G3) décident sur `state`, que ce lot ne touche
+  pas : un zombie `connected` reste compté disponible exactement comme avant
+  (preuve grandeur nature : mandat jury parti à relec1 affiché connected et
+  mort). Chaîne : constat `presence-fantome-apres-fin-de-tour` (fantôme
+  *inventé*, correctif `c3b594b`) → constat `heartbeat-entretient-un-zombie`
+  (fantôme *entretenu*, ce lot) → exemption `connected` du retain TTL (lot B
+  séparé : le retain `connected || link_seen` est **inerte pour tout
+  connected** tant que B n'a pas levé l'exemption ; ce lot n'agit sur le
+  retain que pour les non-`connected`, typiquement un `busy` long).
+  **Ce qui reste faux après ce filet** : un shell mort resté `busy` (tour
+  jamais refermé) continue d'afficher OCCUPÉ tant que le lien bat. **Limite
+  structurelle, hors correctif** : le transport ACP ne produit aucun
+  événement de *contenu* qui rafraîchirait la capacité — même pour
+  `codex`/`claude`, la sonde runtime (20 s) n'émet qu'au *changement* de
+  modèle/effort ; ce qui les sauve, ce sont `usage` / `rate_limit` portés par
+  le flux de contenu. Un agent ACP/`cursor` en plein travail sans transition
+  de tour peut donc afficher une capacité vieille de heures : ce n'est pas ce
+  lot qui casse `who`, c'est l'absence d'événements de contenu (sonde cursor /
+  flux = lot futur).
 - **Jamais d'accent grave dans un mandat passé en ligne de commande.** Le
   shell les interprète comme une substitution : les mots encadrés
   DISPARAISSENT du mandat livré à l'agent, silencieusement, et seule une
