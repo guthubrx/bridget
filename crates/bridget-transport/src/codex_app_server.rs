@@ -14,6 +14,7 @@ use crate::protocol::PresenceMode;
 use crate::transport::{Transport, TransportError};
 use bridget_core::BridgetMessage;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
@@ -28,10 +29,13 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const RATE_LIMIT_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const TURN_POLL: Duration = Duration::from_millis(25);
 const SATURATION_RETRIES: u32 = 4;
+const CODEX_SATURATED_REASON: &str = "saturation Codex";
+const COMMAND_EXECUTION_APPROVAL_METHOD: &str = "item/commandExecution/requestApproval";
 
 type Writer = Arc<Mutex<Option<ChildStdin>>>;
 type Waiters = Arc<Mutex<HashMap<u64, mpsc::Sender<Result<ServerResponse, String>>>>>;
 type Journal = Arc<Mutex<Option<JournalWriter>>>;
+type PendingRequest = Arc<Mutex<Option<PendingProviderRequest>>>;
 
 #[derive(Debug)]
 struct ServerResponse {
@@ -59,6 +63,29 @@ struct QueueState {
     messages: VecDeque<BridgetMessage>,
     active: Option<ActiveTurn>,
     closed: bool,
+}
+
+
+struct PendingProviderRequest {
+    message_id: Option<String>,
+    method: String,
+    request_id: String,
+    turn_id: Option<String>,
+}
+
+impl PendingProviderRequest {
+    fn payload(&self) -> Value {
+        let mut payload = json!({
+            "provider": "codex",
+            "method": self.method,
+            "request_id": self.request_id,
+            "state": "pending",
+        });
+        if let Some(turn_id) = &self.turn_id {
+            payload["turn_id"] = Value::String(turn_id.clone());
+        }
+        payload
+    }
 }
 
 #[derive(Default)]
@@ -113,6 +140,18 @@ impl CodexActKind {
         self.as_update_kind().as_str()
     }
 }
+
+struct ReaderContext {
+    waiters: Waiters,
+    observations: Arc<(Mutex<Observations>, Condvar)>,
+    alive: Arc<AtomicBool>,
+    journal: Journal,
+    queue: Arc<(Mutex<QueueState>, Condvar)>,
+    pending_request: PendingRequest,
+    pinned_model: Option<String>,
+    active_detail: ActiveTurnDetail,
+}
+
 
 pub struct CodexAppServerTransport {
     connection_id: String,
@@ -186,14 +225,19 @@ impl CodexAppServerTransport {
         let alive = Arc::new(AtomicBool::new(true));
         let next_id = Arc::new(AtomicU64::new(1));
         let journal = Arc::new(Mutex::new(None));
+        let pending_request = Arc::new(Mutex::new(None));
         let reader_handle = spawn_reader(
             stdout,
-            waiters.clone(),
-            observations.clone(),
-            alive.clone(),
-            journal.clone(),
-            active_detail.clone(),
-            options.model.clone(),
+            ReaderContext {
+                waiters: waiters.clone(),
+                observations: observations.clone(),
+                alive: alive.clone(),
+                journal: journal.clone(),
+                queue: queue.clone(),
+                pending_request: pending_request.clone(),
+                pinned_model: options.model.clone(),
+                active_detail: active_detail.clone(),
+            },
         );
 
         let setup = (|| -> Result<String, TransportError> {
@@ -300,6 +344,7 @@ impl CodexAppServerTransport {
             thread_id: thread_id.clone(),
             journal: journal.clone(),
             active_detail,
+            pending_request,
             notify_timeout: Duration::from_secs(options.notify_timeout_secs),
         });
 
@@ -546,6 +591,7 @@ struct Worker {
     thread_id: String,
     journal: Journal,
     active_detail: ActiveTurnDetail,
+    pending_request: PendingRequest,
     notify_timeout: Duration,
 }
 
@@ -670,13 +716,18 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                     Some(&message.id),
                     payload,
                 );
+                take_pending_request(&worker.pending_request, &message.id);
             } else if let ManagedEventKind::DeliveryRejected { reason, .. } = &event {
+                let mut payload = json!({ "reason": reason });
+                if let Some(pending) = take_pending_request(&worker.pending_request, &message.id) {
+                    payload["pending_provider_request"] = pending.payload();
+                }
                 record_or_terminal(
                     &worker.journal,
                     &worker.observations,
                     "error",
                     Some(&message.id),
-                    json!({ "reason": reason }),
+                    payload,
                 );
             }
             push_internal(&worker.observations, event);
@@ -1100,10 +1151,7 @@ fn saturation_delay(attempt: u32, message_id: &str) -> Duration {
 }
 
 fn is_saturated(reason: &str) -> bool {
-    serde_json::from_str::<Value>(reason)
-        .ok()
-        .and_then(|value| value.get("code").and_then(Value::as_i64))
-        == Some(-32001)
+    reason == CODEX_SATURATED_REASON
 }
 
 fn request(
@@ -1220,15 +1268,17 @@ fn write_value(writer: &Writer, value: Value) -> Result<(), TransportError> {
         .map_err(|error| TransportError::Io(error.to_string()))
 }
 
-fn spawn_reader(
-    stdout: ChildStdout,
-    waiters: Waiters,
-    observations: Arc<(Mutex<Observations>, Condvar)>,
-    alive: Arc<AtomicBool>,
-    journal: Journal,
-    active_detail: ActiveTurnDetail,
-    pinned_model: Option<String>,
-) -> thread::JoinHandle<()> {
+fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHandle<()> {
+    let ReaderContext {
+        waiters,
+        observations,
+        alive,
+        journal,
+        queue,
+        pending_request,
+        pinned_model,
+        active_detail,
+    } = context;
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
@@ -1252,7 +1302,7 @@ fn spawn_reader(
             {
                 let result = value
                     .get("error")
-                    .map(|error| Err(error.to_string()))
+                    .map(|error| Err(provider_error_reason(error)))
                     .unwrap_or_else(|| {
                         Ok(ServerResponse {
                             value: value.get("result").cloned().unwrap_or(Value::Null),
@@ -1263,6 +1313,26 @@ fn spawn_reader(
                 continue;
             }
             let method = value.get("method").and_then(Value::as_str);
+            if let (Some(method), Some(request_id)) = (method, value.get("id"))
+                && let Err(detail) = record_provider_request(
+                    &journal,
+                    &queue,
+                    &pending_request,
+                    method,
+                    request_id,
+                    &value,
+                )
+            {
+                push_source(
+                    &observations,
+                    raw.clone(),
+                    ManagedEventKind::JournalFailed {
+                        detail: format!(
+                            "trace durable d'une requête fournisseur impossible: {detail}"
+                        ),
+                    },
+                );
+            }
             match method {
                 // Le schéma produit par `codex app-server` 0.149.0 publie
                 // `item/agentMessage/delta`. La forme sans préfixe reste
@@ -1508,13 +1578,16 @@ fn spawn_reader(
                         );
                     }
                 }
-                Some(other) => push_source(
-                    &observations,
-                    raw,
-                    ManagedEventKind::Update {
-                        detail: format!("notification Codex: {other}"),
-                    },
-                ),
+                Some(other) => {
+                    let method = project_provider_method(other);
+                    push_source(
+                        &observations,
+                        raw,
+                        ManagedEventKind::Update {
+                            detail: format!("notification Codex: {method}"),
+                        },
+                    )
+                }
                 None => push_source(
                     &observations,
                     raw,
@@ -1532,6 +1605,102 @@ fn spawn_reader(
         }
         observations.1.notify_all();
     })
+}
+
+fn take_pending_request(
+    pending_request: &PendingRequest,
+    message_id: &str,
+) -> Option<PendingProviderRequest> {
+    let mut pending = pending_request
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if pending
+        .as_ref()
+        .and_then(|request| request.message_id.as_deref())
+        != Some(message_id)
+    {
+        return None;
+    }
+    pending.take()
+}
+fn record_provider_request(
+    journal: &Journal,
+    queue: &Arc<(Mutex<QueueState>, Condvar)>,
+    pending_request: &PendingRequest,
+    method: &str,
+    request_id: &Value,
+    frame: &Value,
+) -> Result<(), String> {
+    // La réception est linéarisée par ce verrou : dès qu'un lecteur l'a pris,
+    // le worker terminal attendra que le fait soit mis en file avant de lire
+    // la dernière requête pendante.
+    let mut pending = pending_request
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let message_id = queue
+        .0
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .active
+        .as_ref()
+        .map(|active| active.message_id.clone());
+    let request = PendingProviderRequest {
+        message_id,
+        method: project_provider_method(method),
+        request_id: project_request_id(request_id),
+        turn_id: frame
+            .pointer("/params/turnId")
+            .and_then(Value::as_str)
+            .map(|turn_id| provider_fingerprint(b"turn-id", turn_id.as_bytes())),
+    };
+    let payload = request.payload();
+
+    let result = record(
+        journal,
+        "provider_request",
+        request.message_id.as_deref(),
+        payload,
+    );
+    *pending = Some(request);
+    result
+}
+fn project_provider_method(method: &str) -> String {
+    match method {
+        COMMAND_EXECUTION_APPROVAL_METHOD => COMMAND_EXECUTION_APPROVAL_METHOD.to_string(),
+        _ => provider_fingerprint(b"method", method.as_bytes()),
+    }
+}
+fn project_request_id(request_id: &Value) -> String {
+    match request_id {
+        Value::String(value) => provider_fingerprint(b"request-id:string", value.as_bytes()),
+        Value::Number(value) => {
+            provider_fingerprint(b"request-id:number", value.to_string().as_bytes())
+        }
+        Value::Null => provider_fingerprint(b"request-id:null", &[]),
+        Value::Bool(_) | Value::Array(_) | Value::Object(_) => {
+            provider_fingerprint(b"request-id:invalid", &[])
+        }
+    }
+}
+fn provider_error_reason(error: &Value) -> String {
+    let code = error.get("code").and_then(Value::as_i64);
+    if code == Some(-32001) {
+        return CODEX_SATURATED_REASON.to_string();
+    }
+    let reference = provider_fingerprint(b"error", error.to_string().as_bytes());
+    match code {
+        Some(code) => format!("erreur Codex (code {code}; référence {reference})"),
+        None => format!("erreur Codex (référence {reference})"),
+    }
+}
+fn provider_fingerprint(domain: &'static [u8], value: &[u8]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"bridget/provider-request/v1\0");
+    digest.update(domain);
+    digest.update(b"\0");
+    digest.update((value.len() as u64).to_be_bytes());
+    digest.update(value);
+    format!("sha256:{:x}", digest.finalize())
 }
 
 fn push_source(
@@ -1701,9 +1870,18 @@ mod tests {
                         *'"method":"turn/start"'*)
                             if [ "$started" != 1 ]; then printf '%s\n' '{"id":4,"error":{"code":-32099,"message":"initialized absent"}}'
                             elif [ "$saturated" = 0 ]; then saturated=1; printf '%s\n' '{"id":4,"error":{"code":-32001,"message":"saturated"}}'
+                            elif [ "${BRIDGET_CODEX_TURN_ERROR:-0}" = 1 ]; then malicious_reason='{"id":5,"error":{"code":-32098,"message":"SENTINELLE-RAISON-019\u001b[2J\r\u202e"}}'; printf '%s\n' "$malicious_reason" >> "$BRIDGET_CODEX_OUTPUT_TRACE"; printf '%s\n' "$malicious_reason"
                             else
                                 printf '%s\n' '{"id":5,"result":{"turn":{"id":"turn-native"}}}'
-                                if [ "${BRIDGET_CODEX_HOLD_TURN:-0}" != 1 ]; then
+                                if [ "${BRIDGET_CODEX_REQUEST_APPROVAL:-0}" = 1 ]; then
+                                    case "${BRIDGET_CODEX_REQUEST_VARIANT:-known}" in
+                                        method) printf '%s\n' '{"id":"approval-native","method":"SENTINELLE-METHOD-019\u001b[2J\r\u202e","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","command":"SENTINELLE-SECRETE-019"}}' ;;
+                                        request_id) printf '%s\n' '{"id":"SENTINELLE-REQUEST-ID-019","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","command":"SENTINELLE-SECRETE-019"}}' ;;
+                                        turn_id) printf '%s\n' '{"id":"approval-native","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"SENTINELLE-TURN-ID-019","itemId":"i","command":"SENTINELLE-SECRETE-019"}}' ;;
+                                        *) printf '%s\n' '{"id":"approval-native","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","command":"SENTINELLE-SECRETE-019"}}' ;;
+                                    esac
+                                    if [ "${BRIDGET_CODEX_EXIT_AFTER_REQUEST:-0}" = 1 ]; then exit 0; fi
+                                elif [ "${BRIDGET_CODEX_HOLD_TURN:-0}" != 1 ]; then
                                     if [ "${BRIDGET_CODEX_ACTIVITY:-0}" = 1 ]; then
                                         printf '%s\n' '{"method":"item/reasoning/summaryPartAdded","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"reasoning-1","summaryIndex":0}}'
                                         printf '%s\n' '{"method":"item/reasoning/summaryTextDelta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"reasoning-1","summaryIndex":0,"delta":"Je compare"}}'
@@ -1870,6 +2048,564 @@ mod tests {
     /// (A) Deltas → update avec TEXTE EXACT. Mutant content:"" doit tuer A seul.
     #[allow(non_snake_case)]
     #[test]
+
+    fn assert_no_provider_controls(text: &str) {
+        for forbidden in ["\u{1b}", "\r", "\u{202e}", "\\u001b", "\\r", "\\u202e"] {
+            assert!(
+                !text.contains(forbidden),
+                "contrôle fournisseur durable interdit: {forbidden:?}"
+            );
+        }
+    }
+
+    fn assert_fingerprint(value: &str) {
+        assert_eq!(value.len(), "sha256:".len() + 64);
+        assert!(value.starts_with("sha256:"));
+        assert!(
+            value["sha256:".len()..]
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+            "empreinte hexadécimale minuscule attendue"
+        );
+    }
+
+    fn assert_provider_projection_redacts(variant: &str, label: &str, sentinel: &str) {
+        let root = root(label);
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 1;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                (
+                    "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
+                    "1".to_string(),
+                ),
+                (
+                    "BRIDGET_CODEX_REQUEST_VARIANT".to_string(),
+                    variant.to_string(),
+                ),
+            ],
+            false,
+        )
+        .expect("session native");
+        transport
+            .activate_journal(&root, "codex-native", None)
+            .expect("journal activé");
+        let message_id = format!("provider-{label}-019");
+        transport.deliver(&message(&message_id)).expect("livraison");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut events = Vec::new();
+        while Instant::now() < deadline {
+            events.extend(transport.drain_events());
+            if events.iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::DeliveryRejected { ref message_id, ref reason }
+                        if message_id == &format!("provider-{label}-019")
+                            && reason == "échéance Codex dépassée"
+                )
+            }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            events.iter().any(|event| {
+                event
+                    .raw
+                    .windows(sentinel.len())
+                    .any(|window| window == sentinel.as_bytes())
+            }),
+            "sentinelle absente de la trame fournisseur effectivement lue"
+        );
+        if variant == "method" {
+            let detail = events
+                .iter()
+                .find_map(|event| match &event.kind {
+                    ManagedEventKind::Update { detail }
+                        if event
+                            .raw
+                            .windows(sentinel.len())
+                            .any(|window| window == sentinel.as_bytes()) =>
+                    {
+                        Some(detail.as_str())
+                    }
+                    _ => None,
+                })
+                .expect("détail opérateur de la méthode inconnue");
+            assert!(!detail.contains(sentinel));
+            assert_no_provider_controls(detail);
+            assert!(detail.contains("sha256:"));
+        }
+
+        transport.stop();
+        let journal_path = fs::read_dir(root.join("codex-native"))
+            .expect("répertoire journal")
+            .next()
+            .expect("fichier journal")
+            .expect("entrée journal")
+            .path();
+        let entries = crate::journal::valid_events(&journal_path);
+        let request = entries
+            .iter()
+            .find(|entry| entry["event"] == "provider_request")
+            .expect("requête fournisseur durable avant l'échéance");
+        let error = entries
+            .iter()
+            .find(|entry| entry["event"] == "error")
+            .expect("échéance durable");
+        for field in ["method", "request_id", "turn_id"] {
+            assert!(
+                request["payload"][field]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty()),
+                "corrélation {field} non vide"
+            );
+        }
+        assert_fingerprint(
+            request["payload"]["request_id"]
+                .as_str()
+                .expect("empreinte de requête"),
+        );
+        assert_fingerprint(
+            request["payload"]["turn_id"]
+                .as_str()
+                .expect("empreinte de tour"),
+        );
+        match variant {
+            "method" => assert_fingerprint(
+                request["payload"]["method"]
+                    .as_str()
+                    .expect("empreinte de méthode"),
+            ),
+            _ => assert_eq!(
+                request["payload"]["method"],
+                COMMAND_EXECUTION_APPROVAL_METHOD
+            ),
+        }
+        assert_eq!(
+            error["payload"]["pending_provider_request"], request["payload"],
+            "projection stable entre la requête et sa borne terminale"
+        );
+        let journal = fs::read_to_string(&journal_path).expect("journal brut");
+        assert!(
+            !journal.contains(sentinel),
+            "chaîne fournisseur libre persistée via {variant}"
+        );
+        assert_no_provider_controls(&journal);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_019_identifiant_json_rpc_invalide_ne_recopie_pas_son_contenu() {
+        let identifier = project_request_id(&json!({
+            "secret": "SENTINELLE-ID-019"
+        }));
+        assert_fingerprint(&identifier);
+        assert!(!identifier.contains("SENTINELLE-ID-019"));
+    }
+
+    #[test]
+    fn test_019_empreintes_sont_stables_et_separees_par_domaine() {
+        let method = provider_fingerprint(b"method", b"meme-valeur");
+        let request = provider_fingerprint(b"request-id:string", b"meme-valeur");
+        let turn = provider_fingerprint(b"turn-id", b"meme-valeur");
+        assert_fingerprint(&method);
+        assert_fingerprint(&request);
+        assert_fingerprint(&turn);
+        assert_eq!(method, provider_fingerprint(b"method", b"meme-valeur"));
+        assert_ne!(method, request);
+        assert_ne!(method, turn);
+        assert_ne!(request, turn);
+        assert_eq!(
+            project_provider_method(COMMAND_EXECUTION_APPROVAL_METHOD),
+            COMMAND_EXECUTION_APPROVAL_METHOD
+        );
+    }
+
+    #[test]
+    fn test_019_methode_libre_est_opaque_et_sans_controle() {
+        assert_provider_projection_redacts("method", "method-redaction", "SENTINELLE-METHOD-019");
+    }
+
+    #[test]
+    fn test_019_identifiant_chaine_valide_est_opaque() {
+        assert_provider_projection_redacts(
+            "request_id",
+            "request-id-redaction",
+            "SENTINELLE-REQUEST-ID-019",
+        );
+    }
+
+    #[test]
+    fn test_019_identifiant_de_tour_est_opaque() {
+        assert_provider_projection_redacts(
+            "turn_id",
+            "turn-id-redaction",
+            "SENTINELLE-TURN-ID-019",
+        );
+    }
+
+    #[test]
+    fn test_019_raison_fournisseur_est_opaque_et_sans_controle() {
+        let root = root("provider-reason-redaction");
+        let trace = root.join("trace.jsonl");
+        let output_trace = root.join("provider-output.jsonl");
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            fake_options(&trace),
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_TURN_ERROR".to_string(), "1".to_string()),
+                (
+                    "BRIDGET_CODEX_OUTPUT_TRACE".to_string(),
+                    output_trace.to_string_lossy().into_owned(),
+                ),
+            ],
+            false,
+        )
+        .expect("session native");
+        transport
+            .activate_journal(&root, "codex-native", None)
+            .expect("journal activé");
+        transport
+            .deliver(&message("provider-reason-019"))
+            .expect("livraison");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut events = Vec::new();
+        while Instant::now() < deadline {
+            events.extend(transport.drain_events());
+            if events.iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::DeliveryRejected { ref message_id, ref reason }
+                        if message_id == "provider-reason-019" && reason.contains("-32098")
+                )
+            }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let rejected_reason = events
+            .iter()
+            .find_map(|event| match &event.kind {
+                ManagedEventKind::DeliveryRejected { message_id, reason }
+                    if message_id == "provider-reason-019" && reason.contains("-32098") =>
+                {
+                    Some(reason.as_str())
+                }
+                _ => None,
+            })
+            .expect("la réponse d'erreur fournisseur n'a pas été lue");
+        assert!(!rejected_reason.contains("SENTINELLE-RAISON-019"));
+        assert_no_provider_controls(rejected_reason);
+        assert!(rejected_reason.contains("sha256:"));
+        let emitted = fs::read_to_string(&output_trace).expect("sortie fournisseur attestée");
+        assert!(emitted.contains("SENTINELLE-RAISON-019"));
+
+        transport.stop();
+        let journal_path = fs::read_dir(root.join("codex-native"))
+            .expect("répertoire journal")
+            .next()
+            .expect("fichier journal")
+            .expect("entrée journal")
+            .path();
+        let entries = crate::journal::valid_events(&journal_path);
+        let error = entries
+            .iter()
+            .find(|entry| entry["event"] == "error")
+            .expect("erreur fournisseur durable");
+        assert!(
+            error["payload"]["reason"]
+                .as_str()
+                .is_some_and(|reason| !reason.is_empty()),
+            "raison durable non vide"
+        );
+        assert!(
+            error["payload"]["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("sha256:")),
+            "référence opaque de l'erreur fournisseur"
+        );
+        let journal = fs::read_to_string(&journal_path).expect("journal brut");
+        assert!(
+            !journal.contains("SENTINELLE-RAISON-019"),
+            "raison fournisseur libre persistée"
+        );
+        assert_no_provider_controls(&journal);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_019_saturation_du_journal_devient_un_echec_observable() {
+        let root = root("provider-request-journal-full");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 1;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                (
+                    "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
+                    "1".to_string(),
+                ),
+            ],
+            false,
+        )
+        .expect("session native");
+        *transport
+            .journal
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) =
+            Some(JournalWriter::saturated_for_test());
+        transport
+            .deliver(&message("provider-journal-full-019"))
+            .expect("livraison");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut events = Vec::new();
+        while Instant::now() < deadline {
+            events.extend(transport.drain_events());
+            if events.iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::JournalFailed { ref detail }
+                        if detail.contains("requête fournisseur impossible")
+                )
+            }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let failure = events
+            .iter()
+            .find(|event| matches!(event.kind, ManagedEventKind::JournalFailed { .. }))
+            .expect("échec de journalisation observable");
+        assert!(matches!(
+            failure.kind,
+            ManagedEventKind::JournalFailed { ref detail }
+                if detail == "trace durable d'une requête fournisseur impossible: journal ACP saturé"
+        ));
+        assert!(
+            failure
+                .raw
+                .windows(b"item/commandExecution/requestApproval".len())
+                .any(|window| window == b"item/commandExecution/requestApproval")
+        );
+
+        transport.stop();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_019_requete_fournisseur_est_tracee_avant_echeance_sans_payload() {
+        let root = root("provider-request");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 1;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                (
+                    "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
+                    "1".to_string(),
+                ),
+            ],
+            false,
+        )
+        .expect("session native");
+        transport
+            .activate_journal(&root, "codex-native", None)
+            .expect("journal activé");
+        transport
+            .deliver(&message("provider-request-019"))
+            .expect("livraison");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut events = Vec::new();
+        while Instant::now() < deadline {
+            events.extend(transport.drain_events());
+            if events.iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::DeliveryRejected { ref message_id, ref reason }
+                        if message_id == "provider-request-019"
+                            && reason == "échéance Codex dépassée"
+                )
+            }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(events.iter().any(|event| matches!(
+            event.kind,
+            ManagedEventKind::DeliveryRejected { ref message_id, ref reason }
+                if message_id == "provider-request-019"
+                    && reason == "échéance Codex dépassée"
+        )));
+
+        let provider_frame = events
+            .iter()
+            .find(|event| {
+                event
+                    .raw
+                    .windows(b"item/commandExecution/requestApproval".len())
+                    .any(|window| window == b"item/commandExecution/requestApproval")
+            })
+            .expect("requête effectivement lue depuis stdout du faux pilote");
+        let provider_frame =
+            std::str::from_utf8(&provider_frame.raw).expect("trame fournisseur UTF-8");
+        assert!(provider_frame.contains("SENTINELLE-SECRETE-019"));
+
+        transport.stop();
+        let journal_path = fs::read_dir(root.join("codex-native"))
+            .expect("répertoire journal")
+            .next()
+            .expect("fichier journal")
+            .expect("entrée journal")
+            .path();
+        let entries = crate::journal::valid_events(&journal_path);
+        let request = entries
+            .iter()
+            .find(|entry| entry["event"] == "provider_request")
+            .expect("requête fournisseur durable avant l'échéance");
+        assert_eq!(request["message_id"], "provider-request-019");
+        assert_eq!(
+            request["payload"],
+            json!({
+                "provider": "codex",
+                "method": "item/commandExecution/requestApproval",
+                "request_id": provider_fingerprint(b"request-id:string", b"approval-native"),
+                "turn_id": provider_fingerprint(b"turn-id", b"turn-native"),
+                "state": "pending"
+            })
+        );
+        let journal = fs::read_to_string(&journal_path).expect("journal brut");
+        assert!(!journal.contains("SENTINELLE-SECRETE-019"));
+        let request_seq = request["seq"].as_u64().expect("séquence requête");
+        let error = entries
+            .iter()
+            .find(|entry| entry["event"] == "error")
+            .expect("échéance durable");
+        assert!(request_seq < error["seq"].as_u64().expect("séquence erreur"));
+        assert_eq!(error["message_id"], request["message_id"]);
+        assert_eq!(
+            error["payload"]["pending_provider_request"],
+            request["payload"]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_019_eof_reste_correle_a_la_derniere_requete_fournisseur() {
+        let root = root("provider-request-eof");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 60;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                (
+                    "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
+                    "1".to_string(),
+                ),
+                (
+                    "BRIDGET_CODEX_EXIT_AFTER_REQUEST".to_string(),
+                    "1".to_string(),
+                ),
+            ],
+            false,
+        )
+        .expect("session native");
+        transport
+            .activate_journal(&root, "codex-native", None)
+            .expect("journal activé");
+        transport
+            .deliver(&message("provider-eof-019"))
+            .expect("livraison");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut events = Vec::new();
+        while Instant::now() < deadline {
+            events.extend(transport.drain_events());
+            if events.iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::DeliveryRejected { ref message_id, ref reason }
+                        if message_id == "provider-eof-019"
+                            && reason == "stdout Codex fermé pendant le tour"
+                )
+            }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(events.iter().any(|event| matches!(
+            event.kind,
+            ManagedEventKind::DeliveryRejected { ref message_id, ref reason }
+                if message_id == "provider-eof-019"
+                    && reason == "stdout Codex fermé pendant le tour"
+        )));
+        assert!(events.iter().any(|event| {
+            event
+                .raw
+                .windows(b"item/commandExecution/requestApproval".len())
+                .any(|window| window == b"item/commandExecution/requestApproval")
+        }));
+
+        transport.stop();
+        let journal_path = fs::read_dir(root.join("codex-native"))
+            .expect("répertoire journal")
+            .next()
+            .expect("fichier journal")
+            .expect("entrée journal")
+            .path();
+        let entries = crate::journal::valid_events(&journal_path);
+        let request = entries
+            .iter()
+            .find(|entry| entry["event"] == "provider_request")
+            .expect("requête fournisseur durable avant EOF");
+        let error = entries
+            .iter()
+            .find(|entry| entry["event"] == "error")
+            .expect("EOF durable");
+        assert!(
+            request["seq"].as_u64().expect("séquence requête")
+                < error["seq"].as_u64().expect("séquence erreur")
+        );
+        assert_eq!(error["message_id"], request["message_id"]);
+        assert_eq!(
+            error["payload"]["pending_provider_request"],
+            request["payload"]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn TEMOIN_A_codex_app_server_retranscrit_les_deltas_en_update() {
         let events = journal_text_fixture("temoin-a", "deltas");
         let updates: Vec<_> = events
