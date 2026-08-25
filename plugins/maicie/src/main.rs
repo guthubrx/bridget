@@ -836,6 +836,29 @@ enum RegistreAction {
         date: String,
         text: String,
     },
+    /// Traité : ce fut vrai, ce ne l'est plus.
+    Fermer {
+        constat_id: String,
+        raison: catalogue::RaisonFermeture,
+        reference: String,
+        date: String,
+    },
+    /// Réfuté : ce ne fut jamais vrai.
+    Refuter {
+        constat_id: String,
+        raison: catalogue::RaisonRefutation,
+        reference: String,
+        date: String,
+    },
+    /// Requalifié : vrai, sévérité changée — reste ouvert.
+    Requalifier {
+        constat_id: String,
+        from: catalogue::Severity,
+        to: catalogue::Severity,
+        raison: catalogue::RaisonRequalification,
+        reference: Option<String>,
+        date: String,
+    },
 }
 
 #[derive(Debug)]
@@ -1563,7 +1586,7 @@ fn render_plage_list(rows: &[ResourceRangeReservation]) -> String {
 fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
     let Some((verb, tail)) = arguments.split_first() else {
         return Err(CliError::Usage(
-            "action registre obligatoire : list, add, migrer, qualifier ou consign",
+            "action registre obligatoire : list, add, migrer, qualifier, consign, fermer, refuter ou requalifier",
         ));
     };
     let mut config = None;
@@ -1578,6 +1601,11 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
     let mut source_failed = false;
     let mut fait = None;
     let mut text = None;
+    let mut constat_id = None;
+    let mut raison = None;
+    let mut reference = None;
+    let mut de = None;
+    let mut vers = None;
     let mut index = 0;
     while index < tail.len() {
         match tail[index].as_str() {
@@ -1614,6 +1642,23 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             }
             "--text" => {
                 set_once_string(&mut text, next_value(tail, &mut index, "--text")?, "text")?
+            }
+            "--constat" => set_once_string(
+                &mut constat_id,
+                next_value(tail, &mut index, "--constat")?,
+                "constat",
+            )?,
+            "--raison" => {
+                set_once_string(&mut raison, next_value(tail, &mut index, "--raison")?, "raison")?
+            }
+            "--ref" => set_once_string(
+                &mut reference,
+                next_value(tail, &mut index, "--ref")?,
+                "ref",
+            )?,
+            "--de" => set_once_string(&mut de, next_value(tail, &mut index, "--de")?, "de")?,
+            "--vers" => {
+                set_once_string(&mut vers, next_value(tail, &mut index, "--vers")?, "vers")?
             }
             "--attente" => {
                 if attente {
@@ -1721,9 +1766,53 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
                 ))?,
             }
         }
+        "fermer" => {
+            let raison_raw = raison.ok_or(CliError::Usage(
+                "--raison typée obligatoire pour registre fermer",
+            ))?;
+            let raison = catalogue::RaisonFermeture::parse(&raison_raw).ok_or(CliError::Usage(
+                "raison fermer : corrige_en_production|corrige_par_lot|absorbe_par_autre_constat|objectif_clos",
+            ))?;
+            RegistreAction::Fermer {
+                constat_id: constat_id.ok_or(CliError::Usage("--constat obligatoire"))?,
+                raison,
+                reference: reference.ok_or(CliError::Usage("--ref obligatoire"))?,
+                date: date.ok_or(CliError::Usage("--date obligatoire"))?,
+            }
+        }
+        "refuter" => {
+            let raison_raw = raison.ok_or(CliError::Usage(
+                "--raison typée obligatoire pour registre refuter",
+            ))?;
+            let raison = catalogue::RaisonRefutation::parse(&raison_raw).ok_or(CliError::Usage(
+                "raison refuter : charge_fausse_mesuree|hors_perimetre|deja_couvert|erreur_de_lecture",
+            ))?;
+            RegistreAction::Refuter {
+                constat_id: constat_id.ok_or(CliError::Usage("--constat obligatoire"))?,
+                raison,
+                reference: reference.ok_or(CliError::Usage("--ref obligatoire (mesure:N/M)"))?,
+                date: date.ok_or(CliError::Usage("--date obligatoire"))?,
+            }
+        }
+        "requalifier" => {
+            let raison_raw = raison.ok_or(CliError::Usage(
+                "--raison typée obligatoire pour registre requalifier",
+            ))?;
+            let raison = catalogue::RaisonRequalification::parse(&raison_raw).ok_or(
+                CliError::Usage("raison requalifier : severite_ajustee|perimetre_affine"),
+            )?;
+            RegistreAction::Requalifier {
+                constat_id: constat_id.ok_or(CliError::Usage("--constat obligatoire"))?,
+                from: parse_severity(&de.ok_or(CliError::Usage("--de obligatoire"))?)?,
+                to: parse_severity(&vers.ok_or(CliError::Usage("--vers obligatoire"))?)?,
+                raison,
+                reference,
+                date: date.ok_or(CliError::Usage("--date obligatoire"))?,
+            }
+        }
         _ => {
             return Err(CliError::Usage(
-                "action registre inconnue : list, add, migrer, qualifier ou consign",
+                "action registre inconnue : list, add, migrer, qualifier, consign, fermer, refuter ou requalifier",
             ));
         }
     };
@@ -1861,6 +1950,68 @@ fn run_registre(arguments: RegistreArgs, migrate: bool) -> Result<String, CliErr
                 AppendOutcome::IdempotentNoop => {
                     format!("registre consign: idempotent_noop ({kind})")
                 }
+            })
+        }
+        RegistreAction::Fermer {
+            constat_id,
+            raison,
+            reference,
+            date,
+        } => {
+            maicie::preuve::ensure_reference_fermeture_at_write(&reference).map_err(|error| {
+                CliError::Catalogue(CatalogueError::TransitionInvalide(error.to_string()))
+            })?;
+            let outcome = journal
+                .close_constat_attested(&constat_id, raison, &reference, &date)
+                .map_err(CliError::Catalogue)?;
+            Ok(match outcome {
+                AppendOutcome::Appended => "registre fermer: appended".into(),
+                AppendOutcome::IdempotentNoop => "registre fermer: idempotent_noop".into(),
+            })
+        }
+        RegistreAction::Refuter {
+            constat_id,
+            raison,
+            reference,
+            date,
+        } => {
+            maicie::preuve::ensure_reference_refutation_at_write(&reference).map_err(|error| {
+                CliError::Catalogue(CatalogueError::TransitionInvalide(error.to_string()))
+            })?;
+            let outcome = journal
+                .refute_constat_attested(&constat_id, raison, &reference, &date)
+                .map_err(CliError::Catalogue)?;
+            Ok(match outcome {
+                AppendOutcome::Appended => "registre refuter: appended".into(),
+                AppendOutcome::IdempotentNoop => "registre refuter: idempotent_noop".into(),
+            })
+        }
+        RegistreAction::Requalifier {
+            constat_id,
+            from,
+            to,
+            raison,
+            reference,
+            date,
+        } => {
+            if let Some(ref raw) = reference {
+                maicie::preuve::ensure_reference_fermeture_at_write(raw).map_err(|error| {
+                    CliError::Catalogue(CatalogueError::TransitionInvalide(error.to_string()))
+                })?;
+            }
+            let outcome = journal
+                .requalify_constat(
+                    &constat_id,
+                    from,
+                    to,
+                    raison,
+                    reference.as_deref(),
+                    &date,
+                )
+                .map_err(CliError::Catalogue)?;
+            Ok(match outcome {
+                AppendOutcome::Appended => "registre requalifier: appended".into(),
+                AppendOutcome::IdempotentNoop => "registre requalifier: idempotent_noop".into(),
             })
         }
     }

@@ -172,7 +172,8 @@ pub enum AddKind {
     Add,
 }
 
-/// Transition attestée `open → delivered`.
+/// Transition attestée. Même état dérivé `delivered` pour traité/réfuté —
+/// **pas la même lecture**. `requalified` reste `open` (charge réelle ajustée).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TransitionEntry {
@@ -181,9 +182,22 @@ pub struct TransitionEntry {
     pub constat_id: String,
     pub from: ConstatState,
     pub to: ConstatState,
+    /// Obligatoire pour `objective_closed` ; vide sinon.
     pub objective_id: String,
     pub observed_at: String,
     pub trigger: TransitionTrigger,
+    /// Raison typée (snake_case) — jamais un champ libre obligatoire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raison: Option<String>,
+    /// Preuve `sha:` ou `mesure:` selon le geste.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    /// Requalification : sévérité d'origine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity_from: Option<Severity>,
+    /// Requalification : nouvelle sévérité.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity_to: Option<Severity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,6 +217,99 @@ pub enum ConstatState {
 #[serde(rename_all = "snake_case")]
 pub enum TransitionTrigger {
     ObjectiveClosed,
+    /// Ce fut vrai, ce ne l'est plus.
+    RemediedAttested,
+    /// Ce ne fut jamais vrai.
+    Refuted,
+    /// Vrai, sévérité/portée changée — reste ouvert.
+    Requalified,
+}
+
+/// Raisons fermées de fermeture (traité).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RaisonFermeture {
+    CorrigeEnProduction,
+    CorrigeParLot,
+    AbsorbeParAutreConstat,
+    ObjectifClos,
+}
+
+impl RaisonFermeture {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CorrigeEnProduction => "corrige_en_production",
+            Self::CorrigeParLot => "corrige_par_lot",
+            Self::AbsorbeParAutreConstat => "absorbe_par_autre_constat",
+            Self::ObjectifClos => "objectif_clos",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "corrige_en_production" => Some(Self::CorrigeEnProduction),
+            "corrige_par_lot" => Some(Self::CorrigeParLot),
+            "absorbe_par_autre_constat" => Some(Self::AbsorbeParAutreConstat),
+            "objectif_clos" => Some(Self::ObjectifClos),
+            _ => None,
+        }
+    }
+}
+
+/// Raisons fermées de réfutation (plus grave — efface une charge).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RaisonRefutation {
+    ChargeFausseMesuree,
+    HorsPerimetre,
+    DejaCouvert,
+    ErreurDeLecture,
+}
+
+impl RaisonRefutation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ChargeFausseMesuree => "charge_fausse_mesuree",
+            Self::HorsPerimetre => "hors_perimetre",
+            Self::DejaCouvert => "deja_couvert",
+            Self::ErreurDeLecture => "erreur_de_lecture",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "charge_fausse_mesuree" => Some(Self::ChargeFausseMesuree),
+            "hors_perimetre" => Some(Self::HorsPerimetre),
+            "deja_couvert" => Some(Self::DejaCouvert),
+            "erreur_de_lecture" => Some(Self::ErreurDeLecture),
+            _ => None,
+        }
+    }
+}
+
+/// Raisons fermées de requalification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RaisonRequalification {
+    SeveriteAjustee,
+    PerimetreAffine,
+}
+
+impl RaisonRequalification {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SeveriteAjustee => "severite_ajustee",
+            Self::PerimetreAffine => "perimetre_affine",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "severite_ajustee" => Some(Self::SeveriteAjustee),
+            "perimetre_affine" => Some(Self::PerimetreAffine),
+            _ => None,
+        }
+    }
 }
 
 /// Entrée historique incomplète, hors liste ouverte, comptée dans P.
@@ -246,10 +353,21 @@ impl CatalogueEntry {
     fn identity_key(&self) -> String {
         match self {
             Self::Add(entry) => format!("add:{}", entry.id),
-            Self::Transition(entry) => format!(
-                "transition:{}:{}:{:?}",
-                entry.constat_id, entry.objective_id, entry.trigger
-            ),
+            Self::Transition(entry) => match entry.trigger {
+                TransitionTrigger::ObjectiveClosed => format!(
+                    "transition:{}:{}:{:?}",
+                    entry.constat_id, entry.objective_id, entry.trigger
+                ),
+                TransitionTrigger::RemediedAttested
+                | TransitionTrigger::Refuted
+                | TransitionTrigger::Requalified => format!(
+                    "transition:{}:{:?}:{}:{}",
+                    entry.constat_id,
+                    entry.trigger,
+                    entry.raison.as_deref().unwrap_or(""),
+                    entry.reference.as_deref().unwrap_or("")
+                ),
+            },
             Self::PendingQualification(entry) => format!("pending:{}", entry.id),
         }
     }
@@ -425,6 +543,7 @@ pub enum DerivedState {
 }
 
 /// Ligne ouverte de la vue `registre list`.
+/// Constat ouvert (éventuellement requalifié).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenConstatView {
     pub id: String,
@@ -434,6 +553,8 @@ pub struct OpenConstatView {
     pub gate_failed: bool,
     pub text: String,
     pub mission_source: MissionSource,
+    /// True si une requalification a ajusté la sévérité affichée.
+    pub requalifie: bool,
 }
 
 /// Entrée encore en attente de qualification humaine.
@@ -444,21 +565,44 @@ pub struct PendingView {
     pub text: String,
 }
 
-/// Pied de page déterministe N/M/K/P.
+/// Polarité d'un constat retiré des ouverts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosedKind {
+    Traite,
+    Refute,
+}
+
+/// Constat traité ou réfuté — lisible distinctement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClosedConstatView {
+    pub id: String,
+    pub kind: ClosedKind,
+    pub observed_at: String,
+    pub text: String,
+    pub raison: Option<String>,
+    pub reference: Option<String>,
+    pub recurrence_of: Option<String>,
+}
+
+/// Pied N/M/K/P + T/R/Q.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegistreFooter {
     pub ouverts: usize,
     pub recurrents: usize,
     pub gates_rates: usize,
     pub pending_qualification: usize,
+    pub traites: usize,
+    pub refutes: usize,
+    pub requalifies: usize,
 }
 
 /// Vue pure du registre.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistreView {
     pub ouverts: Vec<OpenConstatView>,
-    /// Pendings non encore qualifiés (aucun `add` de même `id`).
     pub attente: Vec<PendingView>,
+    pub traites: Vec<ClosedConstatView>,
+    pub refutes: Vec<ClosedConstatView>,
     pub footer: RegistreFooter,
 }
 
@@ -670,8 +814,176 @@ impl CatalogueJournal {
             objective_id: link.objective_id.clone(),
             observed_at: closure.observed_at.clone(),
             trigger: TransitionTrigger::ObjectiveClosed,
+            raison: None,
+            reference: None,
+            severity_from: None,
+            severity_to: None,
         };
         self.append_transition(entry)
+    }
+
+    /// Traite un constat : ce fut vrai, ce ne l'est plus.
+    pub fn close_constat_attested(
+        &mut self,
+        constat_id: &str,
+        raison: RaisonFermeture,
+        reference: &str,
+        observed_at: &str,
+    ) -> Result<AppendOutcome, CatalogueError> {
+        crate::preuve::parse_reference_fermeture(reference).map_err(|error| {
+            CatalogueError::TransitionInvalide(format!("fermeture refusée : {error}"))
+        })?;
+        self.settle_delivered(
+            constat_id,
+            TransitionTrigger::RemediedAttested,
+            raison.as_str(),
+            reference,
+            observed_at,
+        )
+    }
+
+    /// Réfute un constat : ce ne fut jamais vrai. Preuve `mesure:` obligatoire.
+    pub fn refute_constat_attested(
+        &mut self,
+        constat_id: &str,
+        raison: RaisonRefutation,
+        reference: &str,
+        observed_at: &str,
+    ) -> Result<AppendOutcome, CatalogueError> {
+        crate::preuve::parse_reference_refutation(reference).map_err(|error| {
+            CatalogueError::TransitionInvalide(format!("réfutation refusée : {error}"))
+        })?;
+        self.settle_delivered(
+            constat_id,
+            TransitionTrigger::Refuted,
+            raison.as_str(),
+            reference,
+            observed_at,
+        )
+    }
+
+    /// Requalifie : charge réelle, sévérité changée — reste ouvert.
+    pub fn requalify_constat(
+        &mut self,
+        constat_id: &str,
+        from: Severity,
+        to: Severity,
+        raison: RaisonRequalification,
+        reference: Option<&str>,
+        observed_at: &str,
+    ) -> Result<AppendOutcome, CatalogueError> {
+        if from == to {
+            return Err(CatalogueError::TransitionInvalide(
+                "requalification refusée : sévérité inchangée".into(),
+            ));
+        }
+        let reference = match reference {
+            Some(raw) if !raw.trim().is_empty() => {
+                crate::preuve::parse_reference_fermeture(raw).map_err(|error| {
+                    CatalogueError::TransitionInvalide(format!("requalification refusée : {error}"))
+                })?;
+                Some(raw.trim().to_string())
+            }
+            _ => None,
+        };
+        if constat_id.trim().is_empty() {
+            return Err(CatalogueError::Format("constat_id vide".into()));
+        }
+        let existing = self.read_entries()?;
+        let already_delivered = existing.iter().any(|prev| match prev {
+            CatalogueEntry::Transition(t) => {
+                t.constat_id == constat_id && t.to == ConstatState::Delivered
+            }
+            _ => false,
+        });
+        if already_delivered {
+            return Err(CatalogueError::TransitionInvalide(format!(
+                "constat {constat_id} déjà delivered : requalification refusée"
+            )));
+        }
+        let entry = TransitionEntry {
+            v: CATALOGUE_VERSION,
+            kind: TransitionKind::Transition,
+            constat_id: constat_id.to_string(),
+            from: ConstatState::Open,
+            to: ConstatState::Open,
+            objective_id: String::new(),
+            observed_at: observed_at.to_string(),
+            trigger: TransitionTrigger::Requalified,
+            raison: Some(raison.as_str().to_string()),
+            reference,
+            severity_from: Some(from),
+            severity_to: Some(to),
+        };
+        self.append_entry_with_existing(CatalogueEntry::Transition(entry), &existing)
+    }
+
+    fn settle_delivered(
+        &mut self,
+        constat_id: &str,
+        trigger: TransitionTrigger,
+        raison: &str,
+        reference: &str,
+        observed_at: &str,
+    ) -> Result<AppendOutcome, CatalogueError> {
+        let verb = match trigger {
+            TransitionTrigger::RemediedAttested => "fermeture",
+            TransitionTrigger::Refuted => "réfutation",
+            _ => {
+                return Err(CatalogueError::TransitionInvalide(
+                    "settle_delivered : trigger inadmissible".into(),
+                ));
+            }
+        };
+        if constat_id.trim().is_empty() {
+            return Err(CatalogueError::Format("constat_id vide".into()));
+        }
+        let entry = TransitionEntry {
+            v: CATALOGUE_VERSION,
+            kind: TransitionKind::Transition,
+            constat_id: constat_id.to_string(),
+            from: ConstatState::Open,
+            to: ConstatState::Delivered,
+            objective_id: String::new(),
+            observed_at: observed_at.to_string(),
+            trigger,
+            raison: Some(raison.to_string()),
+            reference: Some(reference.trim().to_string()),
+            severity_from: None,
+            severity_to: None,
+        };
+        validate_transition_shape(&entry)?;
+        let existing = self.read_entries()?;
+        let has_add = existing.iter().any(|line| match line {
+            CatalogueEntry::Add(add) => add.id == constat_id,
+            _ => false,
+        });
+        if !has_add {
+            return Err(CatalogueError::ReferenceInconnue {
+                field: "constat_id",
+                id: constat_id.to_string(),
+            });
+        }
+        let already_delivered = existing.iter().any(|prev| match prev {
+            CatalogueEntry::Transition(t) => {
+                t.constat_id == constat_id && t.to == ConstatState::Delivered
+            }
+            _ => false,
+        });
+        let wrapped = CatalogueEntry::Transition(entry);
+        let key = wrapped.identity_key();
+        let line = canonical_line(&wrapped)?;
+        if already_delivered {
+            for previous in &existing {
+                if previous.identity_key() == key && canonical_line(previous)? == line {
+                    return Ok(AppendOutcome::IdempotentNoop);
+                }
+            }
+            return Err(CatalogueError::TransitionInvalide(format!(
+                "constat {constat_id} déjà delivered : {verb} refusée"
+            )));
+        }
+        self.append_entry_with_existing(wrapped, &existing)
     }
 
     /// Réconcilie les clôtures attestées contre les liens d'arbitrage fournis.
@@ -1053,17 +1365,118 @@ fn validate_transition_shape(entry: &TransitionEntry) -> Result<(), CatalogueErr
             entry.v
         )));
     }
-    if entry.constat_id.trim().is_empty() || entry.objective_id.trim().is_empty() {
-        return Err(CatalogueError::Format(
-            "constat_id et objective_id sont obligatoires".into(),
-        ));
-    }
-    if entry.from != ConstatState::Open || entry.to != ConstatState::Delivered {
-        return Err(CatalogueError::TransitionInvalide(
-            "seule la transition open→delivered est admise en v1".into(),
-        ));
+    if entry.constat_id.trim().is_empty() {
+        return Err(CatalogueError::Format("constat_id obligatoire".into()));
     }
     validate_rfc3339_with_offset(&entry.observed_at)?;
+    match entry.trigger {
+        TransitionTrigger::ObjectiveClosed => {
+            if entry.objective_id.trim().is_empty() {
+                return Err(CatalogueError::Format(
+                    "objective_id obligatoire pour trigger objective_closed".into(),
+                ));
+            }
+            if entry.from != ConstatState::Open || entry.to != ConstatState::Delivered {
+                return Err(CatalogueError::TransitionInvalide(
+                    "objective_closed : seule open→delivered est admise".into(),
+                ));
+            }
+            if entry.raison.is_some()
+                || entry.reference.is_some()
+                || entry.severity_from.is_some()
+                || entry.severity_to.is_some()
+            {
+                return Err(CatalogueError::TransitionInvalide(
+                    "raison/référence/sévérité interdites pour objective_closed".into(),
+                ));
+            }
+        }
+        TransitionTrigger::RemediedAttested | TransitionTrigger::Refuted => {
+            if !entry.objective_id.is_empty() {
+                return Err(CatalogueError::TransitionInvalide(
+                    "objective_id doit être vide pour fermeture/réfutation".into(),
+                ));
+            }
+            if entry.from != ConstatState::Open || entry.to != ConstatState::Delivered {
+                return Err(CatalogueError::TransitionInvalide(
+                    "fermeture/réfutation : open→delivered obligatoire".into(),
+                ));
+            }
+            let Some(raison) = entry.raison.as_deref() else {
+                return Err(CatalogueError::TransitionInvalide(
+                    "raison typée obligatoire".into(),
+                ));
+            };
+            let Some(reference) = entry.reference.as_deref() else {
+                return Err(CatalogueError::TransitionInvalide(
+                    "référence obligatoire".into(),
+                ));
+            };
+            match entry.trigger {
+                TransitionTrigger::RemediedAttested => {
+                    if RaisonFermeture::parse(raison).is_none() {
+                        return Err(CatalogueError::TransitionInvalide(format!(
+                            "raison de fermeture inconnue '{raison}'"
+                        )));
+                    }
+                    crate::preuve::parse_reference_fermeture(reference).map_err(|error| {
+                        CatalogueError::TransitionInvalide(format!("fermeture refusée : {error}"))
+                    })?;
+                }
+                TransitionTrigger::Refuted => {
+                    if RaisonRefutation::parse(raison).is_none() {
+                        return Err(CatalogueError::TransitionInvalide(format!(
+                            "raison de réfutation inconnue '{raison}'"
+                        )));
+                    }
+                    crate::preuve::parse_reference_refutation(reference).map_err(|error| {
+                        CatalogueError::TransitionInvalide(format!("réfutation refusée : {error}"))
+                    })?;
+                }
+                _ => unreachable!(),
+            }
+            if entry.severity_from.is_some() || entry.severity_to.is_some() {
+                return Err(CatalogueError::TransitionInvalide(
+                    "sévérité interdite pour fermeture/réfutation".into(),
+                ));
+            }
+        }
+        TransitionTrigger::Requalified => {
+            if !entry.objective_id.is_empty() {
+                return Err(CatalogueError::TransitionInvalide(
+                    "objective_id doit être vide pour requalification".into(),
+                ));
+            }
+            if entry.from != ConstatState::Open || entry.to != ConstatState::Open {
+                return Err(CatalogueError::TransitionInvalide(
+                    "requalification : open→open obligatoire".into(),
+                ));
+            }
+            let Some(raison) = entry.raison.as_deref() else {
+                return Err(CatalogueError::TransitionInvalide(
+                    "raison de requalification obligatoire".into(),
+                ));
+            };
+            if RaisonRequalification::parse(raison).is_none() {
+                return Err(CatalogueError::TransitionInvalide(format!(
+                    "raison de requalification inconnue '{raison}'"
+                )));
+            }
+            match (entry.severity_from, entry.severity_to) {
+                (Some(from), Some(to)) if from != to => {}
+                _ => {
+                    return Err(CatalogueError::TransitionInvalide(
+                        "requalification : severity_from ≠ severity_to obligatoires".into(),
+                    ));
+                }
+            }
+            if let Some(reference) = entry.reference.as_deref() {
+                crate::preuve::parse_reference_fermeture(reference).map_err(|error| {
+                    CatalogueError::TransitionInvalide(format!("requalification refusée : {error}"))
+                })?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1266,7 +1679,8 @@ pub fn parse_prose_corpus(bytes: &[u8]) -> Result<Vec<ProseMigrationRecord>, Cat
 
 /// Réduit le journal en vue déterministe (aucune écriture).
 pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
-    let mut delivered: BTreeSet<String> = BTreeSet::new();
+    let mut delivered_by: BTreeMap<String, &TransitionEntry> = BTreeMap::new();
+    let mut requalifs: BTreeMap<String, &TransitionEntry> = BTreeMap::new();
     let mut adds: BTreeMap<String, &AddEntry> = BTreeMap::new();
     let mut pendings: BTreeMap<String, &PendingQualificationEntry> = BTreeMap::new();
 
@@ -1275,9 +1689,19 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
             CatalogueEntry::Add(add) => {
                 adds.insert(add.id.clone(), add);
             }
-            CatalogueEntry::Transition(transition) => {
-                delivered.insert(transition.constat_id.clone());
-            }
+            CatalogueEntry::Transition(transition) => match transition.trigger {
+                TransitionTrigger::Requalified => {
+                    // Dernière requalification gagne (ordre journal).
+                    requalifs.insert(transition.constat_id.clone(), transition);
+                }
+                TransitionTrigger::ObjectiveClosed
+                | TransitionTrigger::RemediedAttested
+                | TransitionTrigger::Refuted => {
+                    delivered_by
+                        .entry(transition.constat_id.clone())
+                        .or_insert(transition);
+                }
+            },
             CatalogueEntry::PendingQualification(pending) => {
                 pendings.insert(pending.id.clone(), pending);
             }
@@ -1286,19 +1710,54 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
 
     let mut ouverts: Vec<OpenConstatView> = adds
         .values()
-        .filter(|add| !delivered.contains(&add.id))
-        .map(|add| OpenConstatView {
-            id: add.id.clone(),
-            date: add.date.clone(),
-            severity: add.severity,
-            recurrence_of: add.recurrence_of.clone(),
-            gate_failed: add.mission_source.is_failed_gate(),
-            text: add.text.clone(),
-            mission_source: add.mission_source.clone(),
+        .filter(|add| !delivered_by.contains_key(&add.id))
+        .map(|add| {
+            let requalifie = requalifs.contains_key(&add.id);
+            let severity = requalifs
+                .get(&add.id)
+                .and_then(|t| t.severity_to)
+                .unwrap_or(add.severity);
+            OpenConstatView {
+                id: add.id.clone(),
+                date: add.date.clone(),
+                severity,
+                recurrence_of: add.recurrence_of.clone(),
+                gate_failed: add.mission_source.is_failed_gate(),
+                text: add.text.clone(),
+                mission_source: add.mission_source.clone(),
+                requalifie,
+            }
         })
         .collect();
 
     ouverts.sort_by(compare_open_constats);
+
+    let mut traites: Vec<ClosedConstatView> = Vec::new();
+    let mut refutes: Vec<ClosedConstatView> = Vec::new();
+    for (constat_id, transition) in &delivered_by {
+        let Some(add) = adds.get(constat_id) else {
+            continue;
+        };
+        let kind = match transition.trigger {
+            TransitionTrigger::Refuted => ClosedKind::Refute,
+            _ => ClosedKind::Traite,
+        };
+        let closed = ClosedConstatView {
+            id: add.id.clone(),
+            kind,
+            observed_at: transition.observed_at.clone(),
+            text: add.text.clone(),
+            raison: transition.raison.clone(),
+            reference: transition.reference.clone(),
+            recurrence_of: add.recurrence_of.clone(),
+        };
+        match kind {
+            ClosedKind::Traite => traites.push(closed),
+            ClosedKind::Refute => refutes.push(closed),
+        }
+    }
+    traites.sort_by(|a, b| a.observed_at.cmp(&b.observed_at).then_with(|| a.id.cmp(&b.id)));
+    refutes.sort_by(|a, b| a.observed_at.cmp(&b.observed_at).then_with(|| a.id.cmp(&b.id)));
 
     let mut attente: Vec<PendingView> = pendings
         .values()
@@ -1320,15 +1779,21 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
         .filter(|item| item.recurrence_of.is_some())
         .count();
     let gates_rates = ouverts.iter().filter(|item| item.gate_failed).count();
+    let requalifies = ouverts.iter().filter(|item| item.requalifie).count();
     let footer = RegistreFooter {
         ouverts: ouverts.len(),
         recurrents,
         gates_rates,
         pending_qualification: attente.len(),
+        traites: traites.len(),
+        refutes: refutes.len(),
+        requalifies,
     };
     RegistreView {
         ouverts,
         attente,
+        traites,
+        refutes,
         footer,
     }
 }
@@ -1362,6 +1827,11 @@ pub fn render_registre_list_with_attente(view: &RegistreView, show_attente: bool
         out.push_str("(aucun constat ouvert)\n");
     } else {
         for item in &view.ouverts {
+            let badge = if item.requalifie {
+                "[REQUALIFIÉ]"
+            } else {
+                "[OUVERT]"
+            };
             let recurrence = item
                 .recurrence_of
                 .as_deref()
@@ -1369,7 +1839,7 @@ pub fn render_registre_list_with_attente(view: &RegistreView, show_attente: bool
                 .unwrap_or_default();
             let gate = if item.gate_failed { " gate=failed" } else { "" };
             out.push_str(&format!(
-                "- [{severity:?}] {id} {date} source={source_kind}/{source_id}{recurrence}{gate}\n  {text}\n",
+                "- {badge} [{severity:?}] {id} {date} source={source_kind}/{source_id}{recurrence}{gate}\n  {text}\n",
                 severity = item.severity,
                 id = item.id,
                 date = item.date,
@@ -1380,6 +1850,46 @@ pub fn render_registre_list_with_attente(view: &RegistreView, show_attente: bool
                     MissionSourceKind::Gate => "gate",
                 },
                 source_id = item.mission_source.id,
+                text = item.text,
+            ));
+        }
+    }
+    out.push_str("--- traités (ce fut vrai, ce ne l'est plus) ---\n");
+    if view.traites.is_empty() {
+        out.push_str("(aucun constat traité)\n");
+    } else {
+        for item in &view.traites {
+            let recurrence = item
+                .recurrence_of
+                .as_deref()
+                .map(|id| format!(" recurrence_of={id}"))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "- [TRAITÉ] {id} {observed} raison={raison} ref={reference}{recurrence}\n  {text}\n",
+                id = item.id,
+                observed = item.observed_at,
+                raison = item.raison.as_deref().unwrap_or("-"),
+                reference = item.reference.as_deref().unwrap_or("-"),
+                text = item.text,
+            ));
+        }
+    }
+    out.push_str("--- réfutés (ce ne fut jamais vrai) ---\n");
+    if view.refutes.is_empty() {
+        out.push_str("(aucun constat réfuté)\n");
+    } else {
+        for item in &view.refutes {
+            let recurrence = item
+                .recurrence_of
+                .as_deref()
+                .map(|id| format!(" recurrence_of={id}"))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "- [RÉFUTÉ] {id} {observed} raison={raison} ref={reference}{recurrence}\n  {text}\n",
+                id = item.id,
+                observed = item.observed_at,
+                raison = item.raison.as_deref().unwrap_or("-"),
+                reference = item.reference.as_deref().unwrap_or("-"),
                 text = item.text,
             ));
         }
@@ -1400,11 +1910,14 @@ pub fn render_registre_list_with_attente(view: &RegistreView, show_attente: bool
         }
     }
     out.push_str(&format!(
-        "pied: {n} constats OUVERTS dont {m} récurrents, {k} liés à un gate raté, {p} en attente de qualification\n",
+        "pied: {n} OUVERTS dont {m} récurrents, {k} gates ratés, {p} en attente ; {t} TRAITÉS, {r} RÉFUTÉS, {q} REQUALIFIÉS\n",
         n = view.footer.ouverts,
         m = view.footer.recurrents,
         k = view.footer.gates_rates,
         p = view.footer.pending_qualification,
+        t = view.footer.traites,
+        r = view.footer.refutes,
+        q = view.footer.requalifies,
     ));
     out
 }
@@ -1958,6 +2471,61 @@ mod tests {
         let view = project_registre(&journal.read_entries().unwrap());
         assert_eq!(view.footer.ouverts, 0);
         assert_eq!(view.footer.pending_qualification, 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn traite_et_refute_ne_se_lisent_pas_pareil() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-catalogue-polarite-028-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let add = AddEntry {
+            v: 1,
+            kind: AddKind::Add,
+            id: "c-charge".into(),
+            date: "2026-08-24T22:00:00+02:00".into(),
+            mission_source: MissionSource {
+                kind: MissionSourceKind::Review,
+                id: "rev-jury".into(),
+                failed: None,
+            },
+            severity: Severity::Major,
+            recurrence_of: None,
+            text: "trois décisions sans témoin".into(),
+        };
+        let mut j_t = CatalogueJournal::open(root.join("t.jsonl")).unwrap();
+        j_t.append_add(add.clone()).unwrap();
+        j_t.close_constat_attested(
+            "c-charge",
+            RaisonFermeture::CorrigeParLot,
+            "mesure:3/3",
+            "2026-08-25T08:00:00Z",
+        )
+        .unwrap();
+        let mut j_r = CatalogueJournal::open(root.join("r.jsonl")).unwrap();
+        j_r.append_add(add).unwrap();
+        j_r.refute_constat_attested(
+            "c-charge",
+            RaisonRefutation::ChargeFausseMesuree,
+            "mesure:3/3",
+            "2026-08-25T08:00:00Z",
+        )
+        .unwrap();
+        let vt = project_registre(&j_t.read_entries().unwrap());
+        let vr = project_registre(&j_r.read_entries().unwrap());
+        assert_eq!(vt.footer.traites, 1);
+        assert_eq!(vt.footer.refutes, 0);
+        assert_eq!(vr.footer.traites, 0);
+        assert_eq!(vr.footer.refutes, 1);
+        let rt = render_registre_list(&vt);
+        let rr = render_registre_list(&vr);
+        assert!(rt.contains("[TRAITÉ]"));
+        assert!(!rt.contains("[RÉFUTÉ]"));
+        assert!(rr.contains("[RÉFUTÉ]"));
+        assert!(!rr.contains("[TRAITÉ] c-charge"));
+        assert_ne!(rt, rr);
         let _ = fs::remove_dir_all(&root);
     }
 }

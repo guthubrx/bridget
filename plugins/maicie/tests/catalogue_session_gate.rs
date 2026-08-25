@@ -353,6 +353,18 @@ fn gate_session_017_cinq_promesses() {
         "PROMESSE(5) VUE — MUTATION: footer P inventé ou oublié"
     );
     assert_eq!(
+        view.footer.traites, independent.traites,
+        "PROMESSE(5) VUE — MUTATION: footer traites inventé"
+    );
+    assert_eq!(
+        view.footer.refutes, independent.refutes,
+        "PROMESSE(5) VUE — MUTATION: footer refutes inventé"
+    );
+    assert_eq!(
+        view.footer.requalifies, independent.requalifies,
+        "PROMESSE(5) VUE — MUTATION: footer requalifies inventé"
+    );
+    assert_eq!(
         view.ouverts.len(),
         independent.ouverts,
         "PROMESSE(5) VUE — MUTATION: liste ouverts et footer.ouverts divergent"
@@ -436,7 +448,9 @@ fn gate_session_017_cinq_promesses() {
 /// Si la projection mente ou hardcode le pied, le gate échoue parce que ce
 /// compteur ne lit que les entrées brutes.
 fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts {
-    let mut delivered: BTreeSet<String> = BTreeSet::new();
+    use maicie::catalogue::TransitionTrigger;
+    let mut delivered: BTreeMap<String, TransitionTrigger> = BTreeMap::new();
+    let mut requalifs: BTreeSet<String> = BTreeSet::new();
     let mut adds: BTreeMap<String, &maicie::catalogue::AddEntry> = BTreeMap::new();
     let mut pendings: BTreeMap<String, &maicie::catalogue::PendingQualificationEntry> =
         BTreeMap::new();
@@ -446,9 +460,14 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
             CatalogueEntry::Add(add) => {
                 adds.insert(add.id.clone(), add);
             }
-            CatalogueEntry::Transition(transition) => {
-                delivered.insert(transition.constat_id.clone());
-            }
+            CatalogueEntry::Transition(transition) => match transition.trigger {
+                TransitionTrigger::Requalified => {
+                    requalifs.insert(transition.constat_id.clone());
+                }
+                other => {
+                    delivered.entry(transition.constat_id.clone()).or_insert(other);
+                }
+            },
             CatalogueEntry::PendingQualification(pending) => {
                 pendings.insert(pending.id.clone(), pending);
             }
@@ -457,7 +476,7 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
 
     let ouverts: Vec<_> = adds
         .values()
-        .filter(|add| !delivered.contains(&add.id))
+        .filter(|add| !delivered.contains_key(&add.id))
         .collect();
     let recurrents = ouverts
         .iter()
@@ -474,6 +493,21 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
         .values()
         .filter(|pending| !adds.contains_key(&pending.id))
         .count();
+    let mut traites = 0usize;
+    let mut refutes = 0usize;
+    for (id, trigger) in &delivered {
+        if !adds.contains_key(id) {
+            continue;
+        }
+        match trigger {
+            TransitionTrigger::Refuted => refutes += 1,
+            _ => traites += 1,
+        }
+    }
+    let requalifies = ouverts
+        .iter()
+        .filter(|add| requalifs.contains(&add.id))
+        .count();
 
     AuthorityCounts {
         ouverts: ouverts.len(),
@@ -481,6 +515,9 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
         gates_rates,
         pending_qualification,
         delivered: delivered.len(),
+        traites,
+        refutes,
+        requalifies,
     }
 }
 
@@ -491,4 +528,7 @@ struct AuthorityCounts {
     gates_rates: usize,
     pending_qualification: usize,
     delivered: usize,
+    traites: usize,
+    refutes: usize,
+    requalifies: usize,
 }

@@ -11,6 +11,7 @@ pub mod config;
 pub mod domain;
 pub mod outbox;
 pub mod profiles;
+pub mod preuve;
 pub mod reconcile;
 pub mod review;
 pub mod review_git;
