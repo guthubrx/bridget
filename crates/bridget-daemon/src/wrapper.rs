@@ -56,9 +56,11 @@ const ATTACH_RELAY_IDLE_WAIT: Duration = Duration::from_millis(10);
 /// persisté : le greffe Maicie et Git restent les seules autorités.
 ///
 /// La consigne dépend de l'état greffe au moment de la reprise : une mission
-/// close / à évaluer / synthétisée prescrit l'ATTENTE, jamais la relance de
-/// l'instruction d'origine. Le chemin worktree est validé contre la règle 6
-/// (jamais le checkout principal).
+/// close / à évaluer / synthétisée / en attente de prérequis prescrit
+/// l'ATTENTE, jamais la relance de l'instruction d'origine. Une panne de
+/// greffe prescrit l'attente ET le signalement — distincte de l'absence
+/// attestée. Le chemin worktree est validé contre la règle 6 (jamais le
+/// checkout principal d'un dépôt à worktrees liés).
 fn managed_resume_context(
     home: &Path,
     worktree: &Path,
@@ -90,6 +92,8 @@ fn managed_resume_context(
                 ResumeStance::Waiting(mission) => {
                     let header = if mission.objective_state == "clos" {
                         "Mission Maicie close au greffe"
+                    } else if mission.delegation_state == "en_attente_prerequis" {
+                        "Mission Maicie en attente de prérequis"
                     } else {
                         "Mission Maicie non actionnable (attente greffe)"
                     };
@@ -113,12 +117,16 @@ fn managed_resume_context(
                 ResumeStance::Absent => lines.push(format!(
                     "Mission Maicie : aucune mission active attestée pour {agent}. Aucun bureau inventé — attends un mandat explicite."
                 )),
+                ResumeStance::Unknown => {
+                    // Le corps porte déjà le détail d'erreur ; la consigne
+                    // distingue cette panne de l'absence attestée.
+                }
             }
-            Ok(stance)
+            stance
         }
         Err(error) => {
             lines.push(format!("Mission Maicie : indisponible ({error})."));
-            Err(())
+            ResumeStance::Unknown
         }
     };
     match managed_resume_worktree(worktree) {
@@ -138,9 +146,9 @@ fn managed_resume_context(
         }
         Err(error) => lines.push(format!("Worktree : indisponible ({error}).")),
     }
-    if worktree.join(".git").is_dir() {
+    if is_protected_principal_checkout(worktree) {
         lines.push(
-            "ALERTE règle 6 : ce chemin est le checkout principal (.git est un répertoire), pas un worktree lié. N'y écris PAS ; travaille uniquement dans un worktree attesté."
+            "ALERTE règle 6 : ce chemin est le checkout principal d'un dépôt à worktrees liés (entrée primaire de `git worktree list`, ≥2 worktrees). Ce n'est ni un worktree lié ni un clone de revue. N'y écris PAS ; travaille uniquement dans un worktree attesté."
                 .to_string(),
         );
     }
@@ -160,29 +168,93 @@ struct ResumeMission {
 
 /// Posture prescrite par le greffe au moment de la reprise.
 enum ResumeStance {
-    /// Objectif ouvert/en coordination et délégation encore exécutable.
+    /// Objectif ouvert/en coordination et délégation `Creee` (exécutable).
     Actionable(ResumeMission),
-    /// Close, livrée, gelée ou à évaluer — l'agent doit attendre, pas relancer.
+    /// Close, livrée, gelée, à évaluer, ou en attente de prérequis — ATTENDS.
     Waiting(ResumeMission),
-    /// Aucune mission attestée pour cet agent (naissance sans bureau).
+    /// Le greffe a répondu : aucune mission pour cet agent (fiable).
     Absent,
+    /// Le greffe n'a pas répondu : on ne sait pas si une mission existe.
+    Unknown,
 }
 
-fn managed_resume_consigne(stance: &Result<ResumeStance, ()>) -> &'static str {
+fn managed_resume_consigne(stance: &ResumeStance) -> &'static str {
     match stance {
-        Ok(ResumeStance::Actionable(_)) => {
+        ResumeStance::Actionable(_) => {
             "Consigne : lis ton diff, committe ce qui est prêt, puis reprends la mission ou signale le blocage."
         }
-        Ok(ResumeStance::Waiting(mission)) if mission.objective_state == "clos" => {
+        ResumeStance::Waiting(mission) if mission.objective_state == "clos" => {
             "Consigne : mission close au greffe — ATTENDS. N'exécute pas l'instruction d'origine ; attends un mandat explicite."
         }
-        Ok(ResumeStance::Waiting(_)) => {
+        ResumeStance::Waiting(mission) if mission.delegation_state == "en_attente_prerequis" => {
+            "Consigne : délégation en attente de prérequis — ATTENDS. Ne relance pas ; l'ordre F37 n'est pas encore ouvert."
+        }
+        ResumeStance::Waiting(_) => {
             "Consigne : objectif en attente au greffe (état attesté ci-dessus) — ATTENDS. Ne relance pas l'instruction ; attends la suite du greffe."
         }
-        Ok(ResumeStance::Absent) | Err(()) => {
-            "Consigne : aucun mandat actionnable attesté — ATTENDS un mandat explicite. Ne reprends aucune mission inventée."
+        ResumeStance::Absent => {
+            "Consigne : aucune mission attestée au greffe — ATTENDS un mandat explicite. Ne reprends aucune mission inventée."
+        }
+        ResumeStance::Unknown => {
+            "Consigne : le greffe est injoignable — j'ignore si tu as une mission. ATTENDS et signale la panne. Ne reprends aucune mission inventée."
         }
     }
+}
+
+/// Règle 6 — ce que cette détection GARANTIT exactement :
+/// alerte ssi `path` est l'entrée **primaire** de `git worktree list` d'un
+/// dépôt qui a **au moins un worktree lié** (≥ 2 entrées).
+///
+/// Ne s'applique donc PAS à :
+/// - un worktree lié (`.git` fichier / entrée non primaire) ;
+/// - un clone de revue isolé (une seule entrée — doctrine « copie détachée ») ;
+/// - un dépôt `git init` sans worktree lié ;
+/// - un arbre sans `.git`.
+///
+/// Elle ne compare PAS les URL distantes (un clone du même remote aurait la
+/// même URL) et ne dépend PAS d'un chemin absolu gravé en dur.
+fn is_protected_principal_checkout(path: &Path) -> bool {
+    let git = |args: &[&str]| -> Option<String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    };
+    let Some(toplevel) = git(&["rev-parse", "--show-toplevel"]) else {
+        return false;
+    };
+    let Ok(canonical_path) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    let Ok(canonical_top) = std::fs::canonicalize(PathBuf::from(&toplevel)) else {
+        return false;
+    };
+    if canonical_path != canonical_top {
+        return false;
+    }
+    let Some(list) = git(&["worktree", "list", "--porcelain"]) else {
+        return false;
+    };
+    let worktrees: Vec<PathBuf> = list
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree ").map(PathBuf::from))
+        .collect();
+    if worktrees.len() < 2 {
+        return false;
+    }
+    let Some(primary) = worktrees.first() else {
+        return false;
+    };
+    let Ok(canonical_primary) = std::fs::canonicalize(primary) else {
+        return false;
+    };
+    canonical_path == canonical_primary
 }
 
 fn resume_mission_actionable(
@@ -190,13 +262,13 @@ fn resume_mission_actionable(
     delegation: &maicie::domain::EtatDelegation,
 ) -> bool {
     use maicie::domain::{EtatDelegation, EtatObjectif};
+    // `EnAttentePrerequis` n'est PAS exécutable (domain.rs : aucune outbox
+    // tant que les prérequis --depends-on ne sont pas clos). Actionable =
+    // uniquement une délégation `Creee` sur objectif ouvert/en coordination.
     matches!(
         objective,
         EtatObjectif::Ouvert | EtatObjectif::EnCoordination
-    ) && matches!(
-        delegation,
-        EtatDelegation::EnAttentePrerequis | EtatDelegation::Creee
-    )
+    ) && matches!(delegation, EtatDelegation::Creee)
 }
 
 fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, String> {
@@ -235,8 +307,9 @@ fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, Stri
         })
         .max_by_key(|(item, delegation)| ranking(item, delegation));
     let candidate = actionable.or_else(|| {
-        // Mission close / livrée / gelée / à évaluer : la surface pour dire
-        // ATTENDS, plutôt que de laisser croire qu'il n'y a rien.
+        // Mission close / livrée / gelée / à évaluer / en attente de
+        // prérequis : la surface pour dire ATTENDS, plutôt que de laisser
+        // croire qu'il n'y a rien (Absent) ou qu'il faut relancer.
         for_agent
             .iter()
             .copied()
@@ -248,7 +321,8 @@ fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, Stri
                     )
                     || matches!(
                         delegation.etat,
-                        EtatDelegation::AEvaluer
+                        EtatDelegation::EnAttentePrerequis
+                            | EtatDelegation::AEvaluer
                             | EtatDelegation::Terminee
                             | EtatDelegation::Annulee
                     )
@@ -3693,8 +3767,8 @@ fn codex_model_from_args(args: &[String]) -> Option<String> {
 #[cfg(test)]
 mod prompt_tests {
     use super::{
-        codex_resume_bootstrap, interactive_bridget_prompt, managed_resume_context,
-        prepare_codex_agent_args,
+        codex_resume_bootstrap, interactive_bridget_prompt, is_protected_principal_checkout,
+        managed_resume_context, prepare_codex_agent_args,
     };
     use maicie::app::{DelegateRequest, DelegationCandidate, close, delegate};
     use maicie::config::DurationClasses;
@@ -3790,6 +3864,9 @@ mod prompt_tests {
     }
 
     fn init_principal_checkout(root: &std::path::Path) {
+        // Vrai checkout principal : dépôt avec AU MOINS un worktree lié.
+        // Un `git init` nu (ou un `git clone`) n'est PAS le principal au sens
+        // de la règle 6 — voir `is_protected_principal_checkout`.
         fs::create_dir_all(root).unwrap();
         assert!(
             Command::new("git")
@@ -3836,6 +3913,30 @@ mod prompt_tests {
                 .unwrap()
                 .success()
         );
+        let linked = root.parent().unwrap().join(format!(
+            "{}-linked",
+            root.file_name().unwrap().to_string_lossy()
+        ));
+        assert!(
+            Command::new("git")
+                .args([
+                    "-C",
+                    root.to_str().unwrap(),
+                    "worktree",
+                    "add",
+                    "-q",
+                    linked.to_str().unwrap(),
+                    "-b",
+                    "fixture-linked"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            linked.join(".git").is_file(),
+            "worktree lié attendu pour que le principal soit protégé"
+        );
     }
 
     fn write_maicie_config(home: &std::path::Path, database: &std::path::Path) {
@@ -3858,6 +3959,15 @@ mod prompt_tests {
     fn create_active_mission(
         database: &std::path::Path,
         participant: &str,
+    ) -> maicie::app::DelegationCreated {
+        create_mission(database, participant, &[], "resume-fixture")
+    }
+
+    fn create_mission(
+        database: &std::path::Path,
+        participant: &str,
+        depends_on: &[uuid::Uuid],
+        idempotency_key: &str,
     ) -> maicie::app::DelegationCreated {
         let mut store = MaicieStore::open(database).unwrap();
         let result = delegate(
@@ -3882,9 +3992,9 @@ mod prompt_tests {
                 reply: false,
                 constat_id: None,
                 suite: maicie::domain::SuiteObjective::Aucune,
-                depends_on: &[],
+                depends_on,
                 references: &[],
-                idempotency_key: "resume-fixture",
+                idempotency_key,
                 now: 100,
                 retry_until: 150,
                 dedup_retained_until: 200,
@@ -3896,6 +4006,25 @@ mod prompt_tests {
             maicie::app::DelegateResult::Created(created) => created,
             _ => panic!("délégation attendue"),
         }
+    }
+
+    fn create_waiting_prereq_mission(
+        database: &std::path::Path,
+        participant: &str,
+    ) -> maicie::app::DelegationCreated {
+        let prereq = create_mission(database, "seed-prereq", &[], "resume-prereq-seed");
+        let waiting = create_mission(
+            database,
+            participant,
+            &[prereq.objective_id],
+            "resume-prereq-waiting",
+        );
+        assert!(
+            waiting.waiting_on_prerequisites,
+            "fixture doit produire EnAttentePrerequis"
+        );
+        assert!(waiting.message_id.is_none());
+        waiting
     }
 
     #[test]
@@ -3985,6 +4114,14 @@ mod prompt_tests {
             "naissance sans bureau ne doit pas relancer: {context}"
         );
         assert!(
+            context.contains("aucune mission attestée au greffe"),
+            "Absent doit dire que le greffe a répondu vide: {context}"
+        );
+        assert!(
+            !context.contains("greffe est injoignable"),
+            "Absent ≠ Unknown: {context}"
+        );
+        assert!(
             context.contains("ATTENDS") || context.contains("attends"),
             "doit prescrire l'attente d'un mandat: {context}"
         );
@@ -4011,6 +4148,14 @@ mod prompt_tests {
         assert!(
             !context.contains("reprends la mission"),
             "source indisponible ne doit pas relancer: {context}"
+        );
+        assert!(
+            context.contains("greffe est injoignable") && context.contains("signale la panne"),
+            "Unknown doit distinguer la panne de l'absence: {context}"
+        );
+        assert!(
+            !context.contains("aucune mission attestée au greffe"),
+            "Unknown ≠ Absent: {context}"
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -4057,12 +4202,57 @@ mod prompt_tests {
     }
 
     #[test]
+    fn carte_de_reprise_en_attente_prerequis_ne_relance_pas() {
+        let root = resume_root("prereq");
+        let home = root.join("home");
+        let worktree = root.join("worktree");
+        let database = root.join("maicie.sqlite3");
+        write_maicie_config(&home, &database);
+        let mission = create_waiting_prereq_mission(&database, "agent-prereq");
+        init_worktree(&worktree);
+
+        let context = managed_resume_context(
+            &home,
+            &worktree,
+            "agent-prereq",
+            "fixture",
+            "acp",
+            "fixture-digest",
+        );
+        assert!(
+            context.contains("en_attente_prerequis") || context.contains("attente de prérequis"),
+            "doit attester l'état: {context}"
+        );
+        assert!(
+            context.contains("ATTENDS") || context.contains("attends"),
+            "EnAttentePrerequis doit prescrire l'attente: {context}"
+        );
+        assert!(
+            !context.contains("reprends la mission"),
+            "délégation non exécutable ne doit pas relancer: {context}"
+        );
+        assert!(
+            context.contains("NE PAS RELANCER") || context.contains("Ne relance pas"),
+            "{context}"
+        );
+        assert!(
+            context.contains(&format!("objectif_id={}", mission.objective_id)),
+            "{context}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn carte_de_reprise_checkout_principal_alerte_regle_6() {
         let root = resume_root("principal");
         let home = root.join("home");
         let principal = root.join("checkout-principal");
         write_maicie_config(&home, &root.join("maicie.sqlite3"));
         init_principal_checkout(&principal);
+        assert!(
+            is_protected_principal_checkout(&principal),
+            "fixture doit être un vrai principal (≥2 worktrees, entrée primaire)"
+        );
 
         let context = managed_resume_context(
             &home,
@@ -4074,11 +4264,55 @@ mod prompt_tests {
         );
         assert!(
             context.contains("ALERTE règle 6"),
-            "checkout principal (.git répertoire) doit alerter: {context}"
+            "checkout principal d'un dépôt à worktrees liés doit alerter: {context}"
         );
         assert!(
             context.contains("checkout principal") || context.contains("N'y écris PAS"),
             "{context}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Un clone de revue a un `.git` répertoire — comme le principal — mais
+    /// c'est la salle imposée par la doctrine de revue. La règle 6 ne doit
+    /// PAS l'appeler « checkout principal ».
+    #[test]
+    fn carte_de_reprise_clone_de_revue_ne_doit_pas_alerter() {
+        let root = resume_root("clone-revue");
+        let home = root.join("home");
+        let principal = root.join("checkout-principal");
+        let clone = root.join("clone-de-revue");
+        write_maicie_config(&home, &root.join("maicie.sqlite3"));
+        init_principal_checkout(&principal);
+        assert!(
+            Command::new("git")
+                .args([
+                    "clone",
+                    "-q",
+                    principal.to_str().unwrap(),
+                    clone.to_str().unwrap()
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(clone.join(".git").is_dir(), "un clone a bien un .git dir");
+        assert!(
+            !is_protected_principal_checkout(&clone),
+            "un clone isolé (1 worktree) ne doit pas être protégé"
+        );
+
+        let context = managed_resume_context(
+            &home,
+            &clone,
+            "sans-mission",
+            "fixture",
+            "acp",
+            "fixture-digest",
+        );
+        assert!(
+            !context.contains("ALERTE règle 6"),
+            "un clone de revue n'est PAS le checkout principal : {context}"
         );
         fs::remove_dir_all(root).unwrap();
     }
