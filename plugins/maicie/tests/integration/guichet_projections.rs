@@ -38,6 +38,7 @@ fn seed(database: &Path) -> maicie::app::DelegationCreated {
         duration: ClasseDuree::Normale,
         reply: true,
         constat_id: None,
+        review_target: None,
         suite: maicie::domain::SuiteObjective::Aucune,
         depends_on: &[],
         references: &[],

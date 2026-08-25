@@ -51,6 +51,20 @@ fn socket(home: &Path) -> PathBuf {
     home.join(".cache/bridget/bridget.sock")
 }
 
+fn git(repo: &Path, arguments: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(arguments)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {arguments:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
 /// Possède le daemon guichet. Créée avant le spawn : panique d'amorçage ou
 /// injectée ne laisse pas l'enfant sous PID 1. `Drop` ne panique jamais.
 struct DaemonGuard {
@@ -268,6 +282,7 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
             delegation_id: "delegation-1".to_string(),
             delivery_hash: "0".repeat(64),
             in_reply_to: "message-1".to_string(),
+            review_verdict: None,
         },
     };
     assert!(matches!(
@@ -370,8 +385,187 @@ fn reply(generation: u64, token: String, response_message_id: &str) -> WrapperTo
             objective_id: "objective-1".to_string(),
             delegation_id: "delegation-1".to_string(),
             delivery_hash: "0".repeat(64),
+            review_verdict: None,
         },
     }
+}
+
+/// Oracle binaire FR-2104 : le vrai `bridget guichet deposer` s'exécute dans
+/// un dépôt dont HEAD possède un commit local non poussé. Le mandat et le
+/// remote restent sur A ; la trame doit donc porter HEAD=B et remote=A. Copier
+/// `expected_head` dans l'un des champs d'observation fait rougir ce test.
+///
+/// Ce témoin atteste seulement l'identité Git observée par la CLI. Il ne lit ni
+/// propreté du worktree, ni target Cargo, ni dépendances, ni environnement de
+/// test, et ne gèle pas l'URL associée au nom du remote local.
+#[test]
+fn depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat() {
+    let home = unique_home();
+    std::fs::create_dir_all(&home).unwrap();
+    let remote = home.join("remote.git");
+    let repository = home.join("repo");
+    git(&home, &["init", "--bare", remote.to_str().unwrap()]);
+    git(&home, &["init", repository.to_str().unwrap()]);
+    git(
+        &repository,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    std::fs::write(repository.join("preuve.txt"), "A\n").unwrap();
+    git(&repository, &["add", "preuve.txt"]);
+    git(
+        &repository,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "fixture A",
+        ],
+    );
+    let expected_head = git(&repository, &["rev-parse", "HEAD"]);
+    git(
+        &repository,
+        &["push", "origin", "HEAD:refs/heads/fix/review"],
+    );
+    std::fs::write(repository.join("preuve.txt"), "B\n").unwrap();
+    git(&repository, &["add", "preuve.txt"]);
+    git(
+        &repository,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "fixture B locale",
+        ],
+    );
+    let measured_head = git(&repository, &["rev-parse", "HEAD"]);
+    assert_ne!(expected_head, measured_head, "le témoin exige deux têtes");
+
+    let daemon = DaemonGuard::start(&home);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let (mut recipient_reader, mut recipient_writer) = connect(&home);
+    assert!(matches!(
+        request(
+            &mut recipient_reader,
+            &mut recipient_writer,
+            WrapperToDaemon::Register {
+                agent_type: "codex".to_string(),
+                name: Some("codex-1".to_string()),
+                host: None,
+                transport: Some("unix".to_string()),
+                mode: None,
+                location: None,
+                os: None,
+                instance_id: Some("codex-review-instance".to_string()),
+                domain: None,
+                turn_in_progress: false,
+                journal_available: None,
+            },
+        ),
+        DaemonToWrapper::Registered { .. }
+    ));
+    let (mut maicie_reader, mut maicie_writer) = connect(&home);
+    assert!(matches!(
+        request(
+            &mut maicie_reader,
+            &mut maicie_writer,
+            WrapperToDaemon::Register {
+                agent_type: "maicie".to_string(),
+                name: Some("maicie".to_string()),
+                host: None,
+                transport: Some("unix".to_string()),
+                mode: None,
+                location: None,
+                os: None,
+                instance_id: Some("maicie-review-instance".to_string()),
+                domain: None,
+                turn_in_progress: false,
+                journal_available: None,
+            },
+        ),
+        DaemonToWrapper::Registered { .. }
+    ));
+    let mut tracked = BridgetMessage::new("maicie", "codex-1", "revue attendue");
+    tracked.reply = true;
+    tracked.reply_timeout = Some(60);
+    assert!(matches!(
+        request(
+            &mut maicie_reader,
+            &mut maicie_writer,
+            WrapperToDaemon::Send(tracked.clone())
+        ),
+        DaemonToWrapper::Ack { .. }
+    ));
+
+    let output = isolated_bridget_command()
+        .args([
+            "guichet",
+            "deposer",
+            "delivery-report",
+            "--objective",
+            "objective-review",
+            "--delegation",
+            "delegation-review",
+            "--hash",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--in-reply-to",
+            &tracked.id,
+            "--verdict",
+            "approve",
+            "--review-ref",
+            "origin/fix/review",
+            "--expected-head",
+            &expected_head,
+            "--id",
+            "gate-cli-review",
+            "--issued-at",
+            &now.to_string(),
+            "--issuer-scope",
+            SCOPE,
+        ])
+        .current_dir(&repository)
+        .env("HOME", &home)
+        .env("BRIDGET_AGENT_NAME", "codex-1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "dépôt de revue CLI: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let (mut service_reader, mut service_writer) = service(&home, SERVICE_SCOPE);
+    let canonical_request = match request(
+        &mut service_reader,
+        &mut service_writer,
+        WrapperToDaemon::GuichetClaimNext {
+            version: SERVICE_CONTRACT_VERSION,
+        },
+    ) {
+        DaemonToWrapper::GuichetClaimed {
+            request_id,
+            canonical_request,
+            ..
+        } if request_id == "gate-cli-review" => canonical_request,
+        other => panic!("claim du verdict CLI attendu, reçu {other:?}"),
+    };
+    let canonical: serde_json::Value = serde_json::from_slice(&canonical_request).unwrap();
+    let evidence = &canonical["payload"]["review_verdict"];
+    assert_eq!(evidence["expected_head"], expected_head);
+    assert_eq!(evidence["measured_head"], measured_head);
+    assert_eq!(evidence["observed_target_head"], expected_head);
+    assert_eq!(evidence["target_ref"], "origin/fix/review");
+
+    daemon.kill();
+    let _ = std::fs::remove_dir_all(home);
 }
 
 #[test]
@@ -544,6 +738,7 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
             delegation_id: "delegation-1".to_string(),
             delivery_hash: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
                 .to_string(),
+            review_verdict: None,
         },
     };
     assert!(matches!(

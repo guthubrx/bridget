@@ -1,3 +1,4 @@
+use bridget_transport::protocol::ReviewTarget;
 use maicie::app::{
     DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, delegate,
     pin_coordination_policy,
@@ -36,6 +37,7 @@ fn request<'a>(
         duration,
         reply: true,
         constat_id: None,
+        review_target: None,
         suite: maicie::domain::SuiteObjective::Aucune,
         depends_on: &[],
         references: &[],
@@ -75,6 +77,53 @@ fn cible_explicite_cree_objectif_delegation_et_outbox_atomiques() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].message_id, created.message_id.unwrap());
     assert_eq!(pending[0].timeout_secs, 90);
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cible_de_revue_est_persistee_et_rendue_dans_le_mandat_initial() {
+    let root = root("review-target");
+    let database = root.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let candidates = vec![DelegationCandidate {
+        name: "prospective".to_string(),
+        tags: vec!["review".to_string()],
+        available: true,
+        dnd: false,
+    }];
+    let target = ReviewTarget {
+        target_ref: "origin/fix/review".to_string(),
+        expected_head: "1".repeat(40),
+    };
+    let mut review_request = request(Some("prospective"), &[], ClasseDuree::Normale);
+    review_request.review_target = Some(&target);
+    review_request.idempotency_key = "delegate-review-target";
+    let DelegateResult::Created(created) = delegate(
+        &mut store,
+        durations(),
+        "maicie",
+        &candidates,
+        &review_request,
+    )
+    .unwrap() else {
+        panic!("délégation de revue attendue")
+    };
+    let pending = store.pending_delegation_outboxes().unwrap();
+    assert_eq!(pending.len(), 1);
+    let body = String::from_utf8(pending[0].body_bytes.clone()).unwrap();
+    assert!(body.contains("CIBLE DE REVUE GELÉE"));
+    assert!(body.contains("review_ref: origin/fix/review"));
+    assert!(body.contains(&format!("expected_head: {}", target.expected_head)));
+    assert_eq!(pending[0].public_message().unwrap().body, body);
+    let snapshot = &store
+        .objective_snapshots(Some(created.objective_id))
+        .unwrap()[0];
+    assert_eq!(
+        snapshot.delegations[0].review_target.as_ref(),
+        Some(&target)
+    );
+    assert_eq!(snapshot.delegations[0].instruction, body);
     drop(store);
     fs::remove_dir_all(root).unwrap();
 }
@@ -489,6 +538,7 @@ fn concurrent_delegate(
             duration: ClasseDuree::Normale,
             reply: true,
             constat_id: None,
+            review_target: None,
             suite: maicie::domain::SuiteObjective::Aucune,
             depends_on: &[],
             references: &[],

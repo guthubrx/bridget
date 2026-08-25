@@ -85,7 +85,10 @@ fn schema_v15_pose_les_tables_routines() {
     let root = root("schema");
     let database = root.join("maicie.sqlite3");
     let store = MaicieStore::open(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 16);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        maicie::store::SCHEMA_VERSION
+    );
     drop(store);
     fs::remove_dir_all(root).unwrap();
 }
@@ -934,7 +937,10 @@ fn relec1_serie_crash_reel_apres_adoption() {
                 })
                 .collect::<Vec<_>>()
         );
-        println!("  offsets mandates (tir 0)  : {:?}", tirs[0].offsets_mandates);
+        println!(
+            "  offsets mandates (tir 0)  : {:?}",
+            tirs[0].offsets_mandates
+        );
 
         assert!(
             comptes.iter().all(|c| *c == 1),
@@ -961,6 +967,7 @@ fn relec1_serie_crash_reel_apres_adoption() {
 /// Matrice recalibrée (hotfix production), chemin coupure/orphelin N=5 :
 /// - terminal (`annulee`/`terminee`) → jamais adopté ; calendrier REPART
 /// - `annulee` sur une `ouverte` existante → RÉTRACTE (oracle voisin)
+///
 /// Mutant rétractation : classer `Terminee` comme `est_mandat_mort` fait
 /// rougir `retractation_derivee_du_domaine_sur_chaque_etat`.
 #[test]
@@ -1157,7 +1164,10 @@ fn ouverte_retractee_quand_le_mandat_meurt_apres_coup() {
 
     assert_eq!(retractees, 1, "ouverte rétractée en mandat_plus_vivant");
     assert_eq!(ouvertes, 1, "un neuf doit pouvoir ouvrir");
-    assert!(delegations >= 2, "redélégation après cadavre, objectif encore ouvert");
+    assert!(
+        delegations >= 2,
+        "redélégation après cadavre, objectif encore ouvert"
+    );
 }
 
 /// Rétractation dérivée du domaine : **chaque** `EtatDelegation` est exercé.
@@ -1232,8 +1242,7 @@ fn retractation_derivee_du_domaine_sur_chaque_etat() {
     for tir in 0..3 {
         for &etat in EtatDelegation::ALL {
             let sql = etat.as_sql();
-            let (e_occ, motif, deleg) =
-                retract_tir(sql, &format!("ret-{}-{tir}", sql));
+            let (e_occ, motif, deleg) = retract_tir(sql, &format!("ret-{}-{tir}", sql));
 
             // Bras dérivés du prédicat (couverture de ALL).
             if etat.est_mandat_mort() {

@@ -187,6 +187,7 @@ fn prepared(issuer_scope: &str) -> PreparedDelegation {
         id: uuid(DELEGATION_ID),
         objectif_id: objective.id,
         constat_id: None,
+        review_target: None,
         participant: "prospective".to_string(),
         instruction: "Vérifie une issue".to_string(),
         duree: ClasseDuree::Normale,

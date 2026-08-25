@@ -421,6 +421,7 @@ impl Fixture {
                 duration: ClasseDuree::Normale,
                 reply: false,
                 constat_id: None,
+                review_target: None,
                 suite: maicie::domain::SuiteObjective::Aucune,
                 depends_on: &[],
                 references: &[],

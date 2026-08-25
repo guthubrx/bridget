@@ -981,6 +981,7 @@ fn fixture_with_body(
         id: uuid(DELEGATION_ID),
         objectif_id: objective.id,
         constat_id: None,
+        review_target: None,
         participant: "prospective".to_string(),
         instruction: body.clone(),
         duree: ClasseDuree::Normale,

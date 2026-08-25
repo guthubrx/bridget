@@ -6,6 +6,7 @@
 
 use super::{EtatRequeteGuichet, IssueGreffe, MotifRefusGreffe, OperationGuichet};
 use crate::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
+use bridget_transport::protocol::ReviewVerdictEvidence;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
@@ -52,6 +53,7 @@ pub struct RapportLivraison {
     pub delegation_id: Uuid,
     pub delivery_hash: String,
     pub in_reply_to: String,
+    pub review_verdict: Option<ReviewVerdictEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +126,8 @@ struct DeliveryReportPayload {
     delegation_id: String,
     delivery_hash: String,
     in_reply_to: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    review_verdict: Option<ReviewVerdictEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +173,15 @@ pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDoma
                     "hash de livraison invalide",
                 ));
             }
+            if payload
+                .review_verdict
+                .as_ref()
+                .is_some_and(|evidence| !evidence.is_valid())
+            {
+                return Err(GuichetDomainError::InvalidEnvelope(
+                    "attestation Git de revue invalide",
+                ));
+            }
             let objective_id = parse_uuid(&payload.objective_id)?;
             let delegation_id = parse_uuid(&payload.delegation_id)?;
             ensure_canonical(&claim.canonical_request, &wire, "delivery_report", &payload)?;
@@ -177,6 +190,7 @@ pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDoma
                 delegation_id,
                 delivery_hash: payload.delivery_hash,
                 in_reply_to: payload.in_reply_to,
+                review_verdict: payload.review_verdict,
             })
         }
         "mission_status" => {
@@ -379,6 +393,8 @@ struct DeliveryReplyPayload<'a> {
     objective_id: String,
     delegation_id: String,
     delivery_hash: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    review_verdict: Option<&'a ReviewVerdictEvidence>,
 }
 
 #[derive(Serialize)]
@@ -406,6 +422,7 @@ pub fn delivery_reply_bytes(
         objective_id: report.objective_id.to_string(),
         delegation_id: report.delegation_id.to_string(),
         delivery_hash: &report.delivery_hash,
+        review_verdict: report.review_verdict.as_ref(),
     };
     serde_json::to_vec(&GuichetReplyWire {
         kind: "guichet_reply",
@@ -442,6 +459,11 @@ pub fn refusal_reply_bytes(
         MotifRefusGreffe::DelegationAbsente => "delegation_missing",
         MotifRefusGreffe::RelationsInvalides => "relation_invalid",
         MotifRefusGreffe::EnveloppeDivergente => "envelope_mismatch",
+        MotifRefusGreffe::VerdictRevueRequis => "review_verdict_required",
+        MotifRefusGreffe::VerdictRevueInattendu => "review_verdict_unexpected",
+        MotifRefusGreffe::MandatRevueDivergent => "review_mandate_mismatch",
+        MotifRefusGreffe::TeteCibleDeplacee => "target_head_moved",
+        MotifRefusGreffe::TeteMesureeDivergente => "measured_head_mismatch",
     };
     let in_reply_to = request.request.in_reply_to(&request.request_id);
     serde_json::to_vec(&GuichetReplyWire {

@@ -4,7 +4,7 @@
 //! présence, livraison et délai restent détenus par Bridget.
 
 use bridget_transport::protocol::{
-    COORDINATION_STREAM_VERSION, CoordinationEventKind, DaemonToWrapper,
+    COORDINATION_STREAM_VERSION, CoordinationEventKind, DaemonToWrapper, ReviewTarget,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1763,6 +1763,11 @@ pub enum MotifRefusGreffe {
     DelegationAbsente,
     RelationsInvalides,
     EnveloppeDivergente,
+    VerdictRevueRequis,
+    VerdictRevueInattendu,
+    MandatRevueDivergent,
+    TeteCibleDeplacee,
+    TeteMesureeDivergente,
 }
 
 /// Preuve locale durable qu'une requête structurée a été traitée.
@@ -1889,6 +1894,10 @@ pub struct Delegation {
     /// peut jamais être ajouté a posteriori ni reconstruit depuis un texte.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub constat_id: Option<String>,
+    /// Cible Git gelée à la création d'une mission de revue. Une délégation
+    /// historique ou ordinaire n'en porte aucune.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_target: Option<ReviewTarget>,
     pub participant: String,
     pub instruction: String,
     pub duree: ClasseDuree,
@@ -1917,6 +1926,7 @@ impl Delegation {
             id: Uuid::new_v4(),
             objectif_id,
             constat_id: None,
+            review_target: None,
             participant,
             instruction,
             duree,
@@ -1940,6 +1950,15 @@ impl Delegation {
         Ok(self)
     }
 
+    /// Lie la délégation à une cible Git gelée avant toute persistance.
+    pub fn pour_revue(mut self, target: ReviewTarget) -> Result<Self, DomainError> {
+        if self.review_target.is_some() || !target.is_valid() {
+            return Err(DomainError::DonneeInvalide("cible de revue invalide"));
+        }
+        self.review_target = Some(target);
+        Ok(self)
+    }
+
     pub fn verifier(&self) -> Result<(), DomainError> {
         if self.participant.trim().is_empty()
             || self.instruction.trim().is_empty()
@@ -1949,6 +1968,13 @@ impl Delegation {
         }
         if let Some(constat_id) = &self.constat_id {
             validate_constat_id(constat_id)?;
+        }
+        if self
+            .review_target
+            .as_ref()
+            .is_some_and(|target| !target.is_valid())
+        {
+            return Err(DomainError::DonneeInvalide("cible de revue invalide"));
         }
         Ok(())
     }

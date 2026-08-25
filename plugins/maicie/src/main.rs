@@ -5,6 +5,7 @@
 //! décision durable à `app`. Après le commit, elle délègue l'émission au
 //! réconciliateur d'outbox commun : aucun second chemin d'envoi n'existe.
 
+use bridget_transport::protocol::ReviewTarget;
 use maicie::MAICIE_IDENTITY;
 use maicie::app::{
     CatalogueReconcileError, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate,
@@ -465,6 +466,7 @@ fn run_delegate(arguments: DelegateArgs, migrate: bool) -> Result<String, CliErr
         // corrélation de réponse attend T015b/Subscribe, sans la simuler ici.
         reply: false,
         constat_id: arguments.constat_id.as_deref(),
+        review_target: arguments.review_target.as_ref(),
         suite: arguments.suite.clone(),
         depends_on: &arguments.depends_on,
         references: &arguments.references,
@@ -823,6 +825,7 @@ struct DelegateArgs {
     required_tags: Vec<String>,
     duration: ClasseDuree,
     constat_id: Option<String>,
+    review_target: Option<ReviewTarget>,
     suite: SuiteObjective,
     depends_on: Vec<Uuid>,
     references: Vec<Uuid>,
@@ -1073,7 +1076,8 @@ fn parse_routine(arguments: &[String]) -> Result<RoutineArgs, CliError> {
 
 fn run_routine(arguments: RoutineArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let mut store = open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)?.store;
+    let mut store =
+        open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)?.store;
     let now = unix_now()?;
     match arguments.action {
         RoutineAction::Propose {
@@ -1180,7 +1184,10 @@ fn confirm_local_routine_approval(
             "approbation routine = terminal interactif uniquement",
         ));
     }
-    print!("{}", format_routine_approval_screen(routine_id, routine, expected_hash));
+    print!(
+        "{}",
+        format_routine_approval_screen(routine_id, routine, expected_hash)
+    );
     print!("Confirmer l'activation (oui) : ");
     io::stdout()
         .flush()
@@ -1197,9 +1204,7 @@ fn confirm_local_routine_approval(
 
 /// Recalcule le hash scellé et refuse AVANT tout écran si le gabarit a divergé.
 /// Extrait pour qu'un oracle puisse tuer le retrait de cette ligne (MUT-A).
-fn routine_approval_preflight(
-    routine: &maicie::routines::Routine,
-) -> Result<Vec<u8>, CliError> {
+fn routine_approval_preflight(routine: &maicie::routines::Routine) -> Result<Vec<u8>, CliError> {
     let expected_hash = maicie::routines::sealed_template_hash(routine);
     if expected_hash != routine.template_hash {
         return Err(CliError::Routine(RoutineError::Invalid("gabarit altéré")));
@@ -2016,6 +2021,8 @@ fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
     let mut target = None;
     let mut duration = ClasseDuree::Normale;
     let mut constat_id = None;
+    let mut review_ref = None;
+    let mut expected_head = None;
     let mut suite = None;
     let mut depends_on = Vec::new();
     let mut references = Vec::new();
@@ -2046,6 +2053,16 @@ fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
                 &mut constat_id,
                 next_value(arguments, &mut index, "--constat-id")?,
                 "constat-id",
+            )?,
+            "--review-ref" => set_once_string(
+                &mut review_ref,
+                next_value(arguments, &mut index, "--review-ref")?,
+                "review-ref",
+            )?,
+            "--expected-head" => set_once_string(
+                &mut expected_head,
+                next_value(arguments, &mut index, "--expected-head")?,
+                "expected-head",
             )?,
             "--suite" => {
                 if suite.is_some() {
@@ -2088,6 +2105,26 @@ fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
     let suite = suite.ok_or(CliError::Usage(
         "--suite est obligatoire (--suite <objectif-id> ou --suite aucune)",
     ))?;
+    let review_target = match (review_ref, expected_head) {
+        (None, None) => None,
+        (Some(target_ref), Some(expected_head)) => {
+            let target = ReviewTarget {
+                target_ref,
+                expected_head,
+            };
+            if !target.is_valid() {
+                return Err(CliError::Usage(
+                    "cible de revue invalide : <remote>/<branche> et SHA de 40 hexadécimaux minuscules attendus",
+                ));
+            }
+            Some(target)
+        }
+        _ => {
+            return Err(CliError::Usage(
+                "--review-ref et --expected-head doivent être fournis ensemble",
+            ));
+        }
+    };
     Ok(DelegateArgs {
         config,
         goal,
@@ -2095,6 +2132,7 @@ fn parse_delegate(arguments: &[String]) -> Result<DelegateArgs, CliError> {
         required_tags,
         duration,
         constat_id,
+        review_target,
         suite,
         depends_on,
         references,
@@ -2769,7 +2807,7 @@ enum CliError {
     Store(StoreError),
     Reconcile(ReconcileError),
     Profile(ProfileError),
-        ProfileActivation(ProfileActivationError),
+    ProfileActivation(ProfileActivationError),
     Routine(RoutineError),
 }
 
@@ -2873,6 +2911,7 @@ mod tests {
         delegate_error_for_cli, format_routine_approval_screen, parse_command, peel_migrate_flag,
         routine_approval_preflight, sanitize_terminal,
     };
+    use bridget_transport::protocol::ReviewTarget;
     use maicie::bridget_client::AgentInfo;
     use maicie::config::{DurationClasses, MaicieConfig, ProfileConfig};
     use maicie::domain::SuiteObjective;
@@ -2990,6 +3029,49 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(command, Command::Delegate(_)));
+    }
+
+    #[test]
+    fn delegate_exige_une_cible_de_revue_atomique_et_canonique() {
+        let base = vec![
+            "delegate".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+            "--goal".to_string(),
+            "audit".to_string(),
+            "--suite".to_string(),
+            "aucune".to_string(),
+        ];
+        let mut partial = base.clone();
+        partial.extend(["--review-ref".to_string(), "origin/fix/review".to_string()]);
+        assert!(parse_command(&partial).is_err());
+
+        let mut invalid = base.clone();
+        invalid.extend([
+            "--review-ref".to_string(),
+            "origin/fix/review".to_string(),
+            "--expected-head".to_string(),
+            "A".repeat(40),
+        ]);
+        assert!(parse_command(&invalid).is_err());
+
+        let mut valid = base;
+        valid.extend([
+            "--review-ref".to_string(),
+            "origin/fix/review".to_string(),
+            "--expected-head".to_string(),
+            "a".repeat(40),
+        ]);
+        let Command::Delegate(arguments) = parse_command(&valid).unwrap() else {
+            panic!("commande delegate attendue")
+        };
+        assert_eq!(
+            arguments.review_target,
+            Some(ReviewTarget {
+                target_ref: "origin/fix/review".to_string(),
+                expected_head: "a".repeat(40),
+            })
+        );
     }
 
     #[test]

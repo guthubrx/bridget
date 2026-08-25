@@ -1,3 +1,4 @@
+use bridget_transport::protocol::ReviewTarget;
 use maicie::app::{
     DelegateRequest, DelegateResult, DelegationCandidate, GuichetProcessResult, delegate,
     process_guichet_claim, record_guichet_lifecycle_event,
@@ -5,7 +6,7 @@ use maicie::app::{
 use maicie::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use maicie::config::DurationClasses;
 use maicie::domain::guichet::{RequeteGuichet, parse_claim};
-use maicie::domain::{ClasseDuree, EtatDelegation, EtatObjectif};
+use maicie::domain::{ClasseDuree, EtatDelegation, EtatObjectif, MotifRefusGreffe};
 use maicie::store::{GuichetCommitPhase, MaicieStore};
 use rusqlite::{Connection, ErrorCode};
 use std::fs;
@@ -44,6 +45,7 @@ fn seed(database: &Path) -> maicie::app::DelegationCreated {
         duration: ClasseDuree::Normale,
         reply: true,
         constat_id: None,
+        review_target: None,
         suite: maicie::domain::SuiteObjective::Aucune,
         depends_on: &[],
         references: &[],
@@ -61,10 +63,74 @@ fn seed(database: &Path) -> maicie::app::DelegationCreated {
     created
 }
 
+fn seed_review(database: &Path, key: &str) -> maicie::app::DelegationCreated {
+    let mut store = MaicieStore::open(database).unwrap();
+    let candidates = vec![DelegationCandidate {
+        name: "prospective".to_string(),
+        tags: vec!["review".to_string()],
+        available: true,
+        dnd: false,
+    }];
+    let target = ReviewTarget {
+        target_ref: "origin/fix/review".to_string(),
+        expected_head: "1".repeat(40),
+    };
+    let request = DelegateRequest {
+        goal: "relire la tête gelée",
+        explicit_target: Some("prospective"),
+        required_tags: &[],
+        duration: ClasseDuree::Normale,
+        reply: true,
+        constat_id: None,
+        review_target: Some(&target),
+        suite: maicie::domain::SuiteObjective::Aucune,
+        depends_on: &[],
+        references: &[],
+        idempotency_key: key,
+        now: 900,
+        retry_until: 1_100,
+        dedup_retained_until: 1_200,
+        max_frame_bytes: 256 * 1024,
+    };
+    let DelegateResult::Created(created) =
+        delegate(&mut store, durations(), "maicie", &candidates, &request).unwrap()
+    else {
+        panic!("délégation de revue attendue")
+    };
+    created
+}
+
 fn delivery_claim(request_id: &str, created: &maicie::app::DelegationCreated) -> GuichetClaim {
     let bytes = format!(
         "{{\"type\":\"service_request\",\"v\":1,\"issuer_scope\":\"scope-0123456789abcdef0123456789abcdef\",\"request_id\":\"{request_id}\",\"issued_at\":1000,\"from\":\"prospective\",\"to\":\"maicie\",\"operation\":\"delivery_report\",\"payload\":{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\",\"delivery_hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"in_reply_to\":\"{}\"}}}}",
         created.objective_id, created.delegation_id, created.message_id.unwrap()
+    )
+    .into_bytes();
+    GuichetClaim {
+        issuer_scope: "scope-0123456789abcdef0123456789abcdef".to_string(),
+        request_id: request_id.to_string(),
+        canonical_request: bytes,
+        claimed_at: 1_000,
+        claim_generation: 1,
+        claim_token: "claim-0123456789abcdef0123456789abcdef".to_string(),
+        claim_lease_expires_at: 1_100,
+        expires_at: 1_200,
+    }
+}
+
+fn review_claim(
+    request_id: &str,
+    created: &maicie::app::DelegationCreated,
+    target_ref: &str,
+    expected_head: &str,
+    measured_head: &str,
+    observed_target_head: &str,
+) -> GuichetClaim {
+    let bytes = format!(
+        "{{\"type\":\"service_request\",\"v\":1,\"issuer_scope\":\"scope-0123456789abcdef0123456789abcdef\",\"request_id\":\"{request_id}\",\"issued_at\":1000,\"from\":\"prospective\",\"to\":\"maicie\",\"operation\":\"delivery_report\",\"payload\":{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\",\"delivery_hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"in_reply_to\":\"{}\",\"review_verdict\":{{\"verdict\":\"approve\",\"target_ref\":\"{target_ref}\",\"expected_head\":\"{expected_head}\",\"measured_head\":\"{measured_head}\",\"observed_target_head\":\"{observed_target_head}\"}}}}}}",
+        created.objective_id,
+        created.delegation_id,
+        created.message_id.unwrap()
     )
     .into_bytes();
     GuichetClaim {
@@ -120,6 +186,245 @@ fn assert_single_graft(database: &Path, objective_id: Uuid) {
             .unwrap();
         assert_eq!(count, expected, "cardinalité inattendue dans {table}");
     }
+}
+
+fn assert_review_refusal(
+    database: &Path,
+    created: &maicie::app::DelegationCreated,
+    claim: &GuichetClaim,
+    expected: MotifRefusGreffe,
+) {
+    let mut store = MaicieStore::open(database).unwrap();
+    let result = process_guichet_claim(&mut store, claim, "response-review-refused", 1_010)
+        .expect("un écart de revue doit devenir un refus durable");
+    assert_eq!(result.refusal_reason, Some(expected));
+    let snapshot = &store
+        .objective_snapshots(Some(created.objective_id))
+        .unwrap()[0];
+    assert_eq!(snapshot.objective.etat, EtatObjectif::EnCoordination);
+    assert_eq!(snapshot.delegations[0].etat, EtatDelegation::Creee);
+    assert!(
+        snapshot.decisions.is_empty(),
+        "un refus ne greffe aucune décision"
+    );
+    drop(store);
+    let reason: String = Connection::open(database)
+        .unwrap()
+        .query_row(
+            "SELECT reason FROM guichet_refusal_receptions WHERE request_id = ?1",
+            [&claim.request_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&result.reply_bytes).contains(&reason),
+        "le reçu filaire et le motif durable doivent concorder"
+    );
+}
+
+#[test]
+fn mandat_revue_exige_un_verdict_et_delegation_ordinaire_le_refuse() {
+    let review_root = root("review-required");
+    let review_database = review_root.join("maicie.sqlite3");
+    let review_created = seed_review(&review_database, "review-required");
+    let missing = delivery_claim("request-review-required", &review_created);
+    assert_review_refusal(
+        &review_database,
+        &review_created,
+        &missing,
+        MotifRefusGreffe::VerdictRevueRequis,
+    );
+
+    let ordinary_root = root("review-unexpected");
+    let ordinary_database = ordinary_root.join("maicie.sqlite3");
+    let ordinary_created = seed(&ordinary_database);
+    let unexpected = review_claim(
+        "request-review-unexpected",
+        &ordinary_created,
+        "origin/fix/review",
+        &"1".repeat(40),
+        &"1".repeat(40),
+        &"1".repeat(40),
+    );
+    assert_review_refusal(
+        &ordinary_database,
+        &ordinary_created,
+        &unexpected,
+        MotifRefusGreffe::VerdictRevueInattendu,
+    );
+    fs::remove_dir_all(review_root).unwrap();
+    fs::remove_dir_all(ordinary_root).unwrap();
+}
+
+#[test]
+fn mandat_divergent_est_refuse_avant_les_observations_git() {
+    let root = root("review-mandate-mismatch");
+    let database = root.join("maicie.sqlite3");
+    let created = seed_review(&database, "review-mandate-mismatch");
+    let claim = review_claim(
+        "request-review-mandate-mismatch",
+        &created,
+        "origin/fix/autre",
+        &"2".repeat(40),
+        &"2".repeat(40),
+        &"2".repeat(40),
+    );
+    assert_review_refusal(
+        &database,
+        &created,
+        &claim,
+        MotifRefusGreffe::MandatRevueDivergent,
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cible_deplacee_prime_sur_un_head_local_egalement_divergent() {
+    let root = root("target-head-moved");
+    let database = root.join("maicie.sqlite3");
+    let created = seed_review(&database, "target-head-moved");
+    let claim = review_claim(
+        "request-target-head-moved",
+        &created,
+        "origin/fix/review",
+        &"1".repeat(40),
+        &"3".repeat(40),
+        &"2".repeat(40),
+    );
+    assert_review_refusal(
+        &database,
+        &created,
+        &claim,
+        MotifRefusGreffe::TeteCibleDeplacee,
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn mauvaise_tete_mesuree_est_distinguee_d_une_cible_deplacee() {
+    let root = root("measured-head-mismatch");
+    let database = root.join("maicie.sqlite3");
+    let created = seed_review(&database, "measured-head-mismatch");
+    let claim = review_claim(
+        "request-measured-head-mismatch",
+        &created,
+        "origin/fix/review",
+        &"1".repeat(40),
+        &"2".repeat(40),
+        &"1".repeat(40),
+    );
+    assert_review_refusal(
+        &database,
+        &created,
+        &claim,
+        MotifRefusGreffe::TeteMesureeDivergente,
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn verdict_concordant_termine_la_revue_sans_clore_l_objectif() {
+    let root = root("review-accepted");
+    let database = root.join("maicie.sqlite3");
+    let created = seed_review(&database, "review-accepted");
+    let head = "1".repeat(40);
+    let claim = review_claim(
+        "request-review-accepted",
+        &created,
+        "origin/fix/review",
+        &head,
+        &head,
+        &head,
+    );
+    let mut store = MaicieStore::open(&database).unwrap();
+    let result = process_guichet_claim(&mut store, &claim, "response-review-accepted", 1_010)
+        .expect("le verdict concordant doit être greffé");
+    assert_eq!(result.refusal_reason, None);
+    let reply = String::from_utf8(result.reply_bytes).unwrap();
+    assert!(reply.contains("\"outcome\":\"accepted\""));
+    assert!(reply.contains(&format!("\"measured_head\":\"{head}\"")));
+    let snapshot = &store
+        .objective_snapshots(Some(created.objective_id))
+        .unwrap()[0];
+    assert_eq!(snapshot.objective.etat, EtatObjectif::AEvaluer);
+    assert_ne!(snapshot.objective.etat, EtatObjectif::Clos);
+    assert_eq!(snapshot.delegations[0].etat, EtatDelegation::Terminee);
+    assert_eq!(snapshot.decisions.len(), 1);
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn migration_v17_conserve_les_refus_v16_et_ouvre_les_motifs_de_revue() {
+    let root = root("migration-v17-review-refusals");
+    let database = root.join("maicie.sqlite3");
+    drop(MaicieStore::open(&database).unwrap());
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "DROP TABLE guichet_refusal_receptions;
+             CREATE TABLE guichet_refusal_receptions (
+                 issuer_scope TEXT NOT NULL,
+                 request_id TEXT NOT NULL,
+                 canonical_request_bytes BLOB NOT NULL,
+                 operation TEXT NOT NULL CHECK(operation IN ('delivery_report','mission_status','deadline_question')),
+                 reason TEXT NOT NULL CHECK(reason IN ('delegation_missing','relation_invalid','envelope_mismatch')),
+                 response_message_id TEXT NOT NULL,
+                 reply_bytes BLOB NOT NULL,
+                 claim_generation INTEGER NOT NULL CHECK(claim_generation >= 0),
+                 claim_token TEXT NOT NULL,
+                 processed_at INTEGER NOT NULL,
+                 PRIMARY KEY(issuer_scope, request_id, canonical_request_bytes)
+             );
+             INSERT INTO guichet_refusal_receptions VALUES(
+                 'scope-v16','request-v16',X'0102','delivery_report','delegation_missing',
+                 'response-v16',X'0304',1,'claim-v16',1000
+             );
+             DELETE FROM schema_migrations WHERE version = 17;",
+        )
+        .unwrap();
+    connection.pragma_update(None, "user_version", 16).unwrap();
+    drop(connection);
+
+    let store = MaicieStore::open_and_migrate(&database).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 17);
+    drop(store);
+    let connection = Connection::open(&database).unwrap();
+    let historical: (String, Vec<u8>, Vec<u8>) = connection
+        .query_row(
+            "SELECT reason, canonical_request_bytes, reply_bytes
+             FROM guichet_refusal_receptions WHERE request_id = 'request-v16'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        historical,
+        ("delegation_missing".to_string(), vec![1, 2], vec![3, 4])
+    );
+    connection
+        .execute(
+            "INSERT INTO guichet_refusal_receptions VALUES(
+                 'scope-v17','request-v17',X'05','delivery_report','target_head_moved',
+                 'response-v17',X'06',1,'claim-v17',1001
+             )",
+            [],
+        )
+        .expect("le CHECK v17 doit accepter le motif de revue distinct");
+    let legacy_table: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'table' AND name = 'guichet_refusal_receptions_v16'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        legacy_table, 0,
+        "la table de migration ne doit pas survivre"
+    );
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -399,7 +704,10 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
     drop(connection);
 
     let mut store = MaicieStore::open_and_migrate(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 16);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        maicie::store::SCHEMA_VERSION
+    );
     assert_eq!(
         store
             .objective_snapshots(Some(created.objective_id))
@@ -414,7 +722,10 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
     // Une seconde ouverture d'une base déjà v7 est la vraie preuve
     // d'idempotence : la migration ne doit ni recréer, ni vider les tables.
     let mut reopened = MaicieStore::open(&database).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 16);
+    assert_eq!(
+        reopened.schema_version().unwrap(),
+        maicie::store::SCHEMA_VERSION
+    );
     let replay = process_guichet_claim(&mut reopened, &claim, "ignored", 1_020).unwrap();
     assert!(replay.replayed);
     assert_eq!(replay.reply_bytes, first.reply_bytes);

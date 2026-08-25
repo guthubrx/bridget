@@ -3786,6 +3786,7 @@ mod prompt_tests {
         codex_resume_bootstrap, interactive_bridget_prompt, is_protected_principal_checkout,
         managed_resume_context, prepare_codex_agent_args,
     };
+    use bridget_transport::protocol::ReviewTarget;
     use maicie::app::{DelegateRequest, DelegationCandidate, close, delegate};
     use maicie::config::DurationClasses;
     use maicie::domain::ClasseDuree;
@@ -3976,7 +3977,24 @@ mod prompt_tests {
         database: &std::path::Path,
         participant: &str,
     ) -> maicie::app::DelegationCreated {
-        create_mission(database, participant, &[], "resume-fixture")
+        create_mission(database, participant, &[], "resume-fixture", None)
+    }
+
+    fn create_review_mission(
+        database: &std::path::Path,
+        participant: &str,
+    ) -> maicie::app::DelegationCreated {
+        let target = ReviewTarget {
+            target_ref: "origin/fix/review".to_string(),
+            expected_head: "1".repeat(40),
+        };
+        create_mission(
+            database,
+            participant,
+            &[],
+            "resume-review-fixture",
+            Some(&target),
+        )
     }
 
     fn create_mission(
@@ -3984,6 +4002,7 @@ mod prompt_tests {
         participant: &str,
         depends_on: &[uuid::Uuid],
         idempotency_key: &str,
+        review_target: Option<&ReviewTarget>,
     ) -> maicie::app::DelegationCreated {
         let mut store = MaicieStore::open(database).unwrap();
         let result = delegate(
@@ -4007,6 +4026,7 @@ mod prompt_tests {
                 duration: ClasseDuree::Normale,
                 reply: false,
                 constat_id: None,
+                review_target,
                 suite: maicie::domain::SuiteObjective::Aucune,
                 depends_on,
                 references: &[],
@@ -4028,12 +4048,13 @@ mod prompt_tests {
         database: &std::path::Path,
         participant: &str,
     ) -> maicie::app::DelegationCreated {
-        let prereq = create_mission(database, "seed-prereq", &[], "resume-prereq-seed");
+        let prereq = create_mission(database, "seed-prereq", &[], "resume-prereq-seed", None);
         let waiting = create_mission(
             database,
             participant,
             &[prereq.objective_id],
             "resume-prereq-waiting",
+            None,
         );
         assert!(
             waiting.waiting_on_prerequisites,
@@ -4066,7 +4087,7 @@ mod prompt_tests {
         let worktree = root.join("worktree");
         let database = root.join("maicie.sqlite3");
         write_maicie_config(&home, &database);
-        let mission = create_active_mission(&database, "resurrected");
+        let mission = create_review_mission(&database, "resurrected");
         init_worktree(&worktree);
 
         let context = managed_resume_context(
@@ -4089,6 +4110,15 @@ mod prompt_tests {
                 .expect("délégation créée sans prérequis porte un message_id")
         )));
         assert!(context.contains("reprendre la bissection durable"));
+        assert!(context.contains("CIBLE DE REVUE GELÉE"), "{context}");
+        assert!(
+            context.contains("review_ref: origin/fix/review"),
+            "{context}"
+        );
+        assert!(
+            context.contains(&format!("expected_head: {}", "1".repeat(40))),
+            "{context}"
+        );
         assert!(context.contains("branche=resume-wt"), "{context}");
         assert!(context.contains(" M tracked.txt"));
         assert!(context.contains("lis ton diff, committe"));

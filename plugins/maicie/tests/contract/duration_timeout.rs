@@ -50,6 +50,7 @@ fn les_trois_classes_produisent_le_timeout_et_l_echeance_contractuelle_persistes
             duration,
             reply: false,
             constat_id: None,
+            review_target: None,
             suite: maicie::domain::SuiteObjective::Aucune,
             depends_on: &[],
             references: &[],

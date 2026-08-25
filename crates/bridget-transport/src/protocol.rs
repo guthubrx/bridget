@@ -112,6 +112,110 @@ pub enum ServiceRequestOperation {
     DeadlineQuestion,
 }
 
+/// Verdict fermé d'une revue. Le transport conserve le fait déclaré ; seule
+/// la greffe Maicie décide s'il correspond au mandat durable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewVerdict {
+    Approve,
+    ApproveWithChanges,
+    Amender,
+    Stop,
+}
+
+impl ReviewVerdict {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Approve => "approve",
+            Self::ApproveWithChanges => "approve_with_changes",
+            Self::Amender => "amender",
+            Self::Stop => "stop",
+        }
+    }
+}
+
+/// Cible Git gelée dans un mandat de revue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewTarget {
+    pub target_ref: String,
+    pub expected_head: String,
+}
+
+impl ReviewTarget {
+    /// Sépare `<remote>/<branche>` après validation de la forme fermée.
+    pub fn remote_and_branch(&self) -> Option<(&str, &str)> {
+        let (remote, branch) = self.target_ref.split_once('/')?;
+        valid_git_remote(remote)
+            .then_some(())
+            .and_then(|_| valid_git_branch(branch).then_some((remote, branch)))
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.remote_and_branch().is_some() && is_canonical_git_sha(&self.expected_head)
+    }
+}
+
+/// Observations Git produites par le binaire de dépôt, jamais fournies comme
+/// valeurs libres pour `measured_head` ou `observed_target_head`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewVerdictEvidence {
+    pub verdict: ReviewVerdict,
+    pub target_ref: String,
+    pub expected_head: String,
+    pub measured_head: String,
+    pub observed_target_head: String,
+}
+
+impl ReviewVerdictEvidence {
+    pub fn is_valid(&self) -> bool {
+        ReviewTarget {
+            target_ref: self.target_ref.clone(),
+            expected_head: self.expected_head.clone(),
+        }
+        .is_valid()
+            && is_canonical_git_sha(&self.measured_head)
+            && is_canonical_git_sha(&self.observed_target_head)
+    }
+}
+
+pub fn is_canonical_git_sha(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn valid_git_remote(remote: &str) -> bool {
+    !remote.is_empty()
+        && remote.len() <= 128
+        && remote
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && remote
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn valid_git_branch(branch: &str) -> bool {
+    !branch.is_empty()
+        && branch.len() <= 383
+        && !branch.starts_with(['-', '/', '.'])
+        && !branch.ends_with(['/', '.'])
+        && branch != "@"
+        && !branch.contains("..")
+        && !branch.contains("@{")
+        && !branch.contains("//")
+        && !branch
+            .bytes()
+            .any(|byte| byte <= b' ' || byte == 0x7f || b"~^:?*[\\".contains(&byte))
+        && branch
+            .split('/')
+            .all(|part| !part.is_empty() && !part.starts_with('.') && !part.ends_with(".lock"))
+}
+
 /// Charge canonique d'un dépôt de guichet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -121,6 +225,8 @@ pub enum ServiceRequestPayload {
         delegation_id: String,
         delivery_hash: String,
         in_reply_to: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        review_verdict: Option<ReviewVerdictEvidence>,
     },
     Delegation {
         delegation_id: String,
@@ -148,6 +254,11 @@ pub enum GuichetRefusalReason {
     DelegationMissing,
     RelationInvalid,
     EnvelopeMismatch,
+    ReviewVerdictRequired,
+    ReviewVerdictUnexpected,
+    ReviewMandateMismatch,
+    TargetHeadMoved,
+    MeasuredHeadMismatch,
 }
 
 /// Fait terminal attesté uniquement par Bridget pour une demande du guichet.
@@ -179,6 +290,8 @@ pub enum GuichetReplyPayload {
         objective_id: String,
         delegation_id: String,
         delivery_hash: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        review_verdict: Option<ReviewVerdictEvidence>,
     },
     MissionStatus {
         delegation_id: String,
@@ -1492,6 +1605,54 @@ mod tests {
     );
 
     #[test]
+    fn contrat_revue_valide_ref_et_sha_fermes() {
+        let valid = ReviewTarget {
+            target_ref: "origin/fix/review/sub".to_string(),
+            expected_head: "a".repeat(40),
+        };
+        assert_eq!(
+            valid.remote_and_branch(),
+            Some(("origin", "fix/review/sub"))
+        );
+        assert!(valid.is_valid());
+        for target_ref in ["origin", "./main", "origin/../main", "-origin/main"] {
+            assert!(
+                !ReviewTarget {
+                    target_ref: target_ref.to_string(),
+                    expected_head: "a".repeat(40),
+                }
+                .is_valid(),
+                "référence interdite acceptée : {target_ref}"
+            );
+        }
+        assert!(
+            !ReviewTarget {
+                target_ref: "origin/main".to_string(),
+                expected_head: "A".repeat(40),
+            }
+            .is_valid()
+        );
+    }
+
+    #[test]
+    fn delivery_report_ordinaire_conserve_ses_octets_sans_bloc_revue() {
+        let payload = ServiceRequestPayload::DeliveryReport {
+            objective_id: "objective-1".to_string(),
+            delegation_id: "delegation-1".to_string(),
+            delivery_hash: "0".repeat(64),
+            in_reply_to: "message-1".to_string(),
+            review_verdict: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&payload).unwrap(),
+            format!(
+                "{{\"objective_id\":\"objective-1\",\"delegation_id\":\"delegation-1\",\"delivery_hash\":\"{}\",\"in_reply_to\":\"message-1\"}}",
+                "0".repeat(64)
+            )
+        );
+    }
+
+    #[test]
     fn service_negotiation_v1_emploie_la_fixture_canonique_partagee() {
         let lines = SERVICE_NEGOTIATION_FIXTURE.lines().collect::<Vec<_>>();
         assert_eq!(lines.len(), 5, "la fixture couvre hello, welcome et refus");
@@ -2056,6 +2217,7 @@ mod tests {
                 objective_id: "objective-1".to_string(),
                 delegation_id: "delegation-1".to_string(),
                 delivery_hash: "0".repeat(64),
+                review_verdict: None,
             },
         };
         assert!(matches!(

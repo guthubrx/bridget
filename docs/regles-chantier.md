@@ -380,6 +380,45 @@ bridget guichet deposer delivery-report \
   et ce cas-là est encore FATAL pour Maicie, dette connue.
 - `--hash` fait exactement 64 caractères hexadécimaux.
 
+**Cas d'un jury lié à une tête Git.** Le référent gèle la cible dès la
+délégation ; les deux options sont atomiques :
+
+```
+maicie delegate \
+  --review-ref origin/<branche> \
+  --expected-head <SHA Git de 40 hexadécimaux minuscules> \
+  <autres options du mandat>
+```
+
+Le juré dépose ensuite son verdict fermé en recopiant seulement le mandat :
+
+```
+bridget guichet deposer delivery-report \
+  <options ordinaires ci-dessus> \
+  --verdict <approve|approve_with_changes|amender|stop> \
+  --review-ref origin/<branche> \
+  --expected-head <SHA gelé dans le mandat>
+```
+
+Le binaire mesure lui-même `HEAD` et la tête distante avec Git. Il n'existe
+aucune option permettant de fournir `measured_head` ou
+`observed_target_head`. Maicie compare ensuite dans la transaction de greffe :
+
+- `target_head_moved` : la branche distante a bougé depuis le mandat ; le
+  refus n'impute aucune faute au juré et exige un nouveau mandat gelé ;
+- `measured_head_mismatch` : la branche n'a pas bougé, mais le juré a mesuré
+  un autre `HEAD` ;
+- un verdict ou une attestation absents, inattendus ou liés à un autre mandat
+  sont également refusés avant toute transition.
+
+Sur le chemin CLI officiel, cette preuve porte uniquement sur l'identité des
+commits Git au moment du dépôt. Le nom du remote est résolu par la configuration
+Git locale ; son URL n'est pas gelée. Le filaire ne fournit pas non plus une
+attestation cryptographique contre un client alternatif qui fabriquerait
+directement ses observations. Enfin, la preuve ne couvre ni un worktree propre,
+ni un target de compilation sain, ni l'identité des dépendances, de
+l'environnement ou des services, ni le résultat des tests.
+
 Le référent doit transmettre **TROIS** identifiants dans le mandat, pas deux :
 `objective_id`, `delegation_id` ET le `message_id` de la délégation. Maicie
 rend les trois dans le même retour au moment du `delegate`. Sans les trois,

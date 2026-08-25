@@ -1,3 +1,4 @@
+use bridget_transport::protocol::ReviewTarget;
 use maicie::app::{DelegateRequest, DelegateResult, DelegationCandidate, delegate};
 use maicie::bridget_client::{BridgetClient, BridgetClientLimits};
 use maicie::config::DurationClasses;
@@ -65,6 +66,14 @@ fn seed(database: &std::path::Path) -> maicie::app::DelegationCreated {
 }
 
 fn seed_for(database: &std::path::Path, participant: &str) -> maicie::app::DelegationCreated {
+    seed_with_review(database, participant, None)
+}
+
+fn seed_with_review(
+    database: &std::path::Path,
+    participant: &str,
+    review_target: Option<&ReviewTarget>,
+) -> maicie::app::DelegationCreated {
     let mut store = MaicieStore::open(database).unwrap();
     let candidates = vec![DelegationCandidate {
         name: participant.to_string(),
@@ -84,6 +93,7 @@ fn seed_for(database: &std::path::Path, participant: &str) -> maicie::app::Deleg
             duration: ClasseDuree::Normale,
             reply: true,
             constat_id: None,
+            review_target,
             suite: maicie::domain::SuiteObjective::Aucune,
             depends_on: &[],
             references: &[],
@@ -201,6 +211,119 @@ fn releve_pull_only_greffe_repond_et_enregistre_l_evenement() {
             .len(),
         1
     );
+    drop(store);
+    server.join().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Oracle FR-2109 sur le chemin de production : relève socket réelle,
+/// `reconcile_guichet_startup_with_limits`, parsing canonique, transaction de
+/// greffe, refus durable puis réponse exacte. Retirer l'appel de comparaison
+/// dans `graft_delivery_report` transforme ce refus en acceptation et tue ce
+/// test. Il ne prouve PAS la provenance cryptographique de la trame, la
+/// propreté du worktree, du target de compilation, des dépendances ou de
+/// l'environnement ; ce sont des non-garanties du lot.
+#[test]
+fn releve_reelle_refuse_un_verdict_mesure_sur_un_autre_head() {
+    let root = root("review-mismatch");
+    let database = root.join("maicie.sqlite3");
+    let target = ReviewTarget {
+        target_ref: "origin/fix/review".to_string(),
+        expected_head: "1".repeat(40),
+    };
+    let created = seed_with_review(&database, "prospective", Some(&target));
+    let objective_id = created.objective_id;
+    let message_id = created.message_id.unwrap();
+    let issuer_scope = MaicieStore::open(&database)
+        .unwrap()
+        .issuer_scope()
+        .to_string();
+    let fixture = SocketFixture::new("review-mismatch");
+    let listener = fixture.bind();
+    let canonical_request = format!(
+        "{{\"type\":\"service_request\",\"v\":1,\"issuer_scope\":\"{issuer_scope}\",\"request_id\":\"request-review-mismatch\",\"issued_at\":1000,\"from\":\"prospective\",\"to\":\"maicie\",\"operation\":\"delivery_report\",\"payload\":{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\",\"delivery_hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"in_reply_to\":\"{}\",\"review_verdict\":{{\"verdict\":\"approve\",\"target_ref\":\"origin/fix/review\",\"expected_head\":\"{}\",\"measured_head\":\"{}\",\"observed_target_head\":\"{}\"}}}}}}",
+        created.objective_id,
+        created.delegation_id,
+        message_id,
+        "1".repeat(40),
+        "2".repeat(40),
+        "1".repeat(40),
+    )
+    .into_bytes();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let (mut reader, mut writer) = split(stream);
+        assert_service_handshake(&mut reader, &mut writer, &issuer_scope);
+        write_json(&mut writer, welcome());
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"guichet_claim_next","v":1})
+        );
+        write_json(
+            &mut writer,
+            claimed(
+                &issuer_scope,
+                "request-review-mismatch",
+                &canonical_request,
+                1,
+            ),
+        );
+        let reply = read_json(&mut reader);
+        assert_eq!(reply["outcome"], "refused");
+        assert_eq!(reply["payload"]["kind"], "refused");
+        assert_eq!(reply["payload"]["reason"], "measured_head_mismatch");
+        let response_message_id = reply["response_message_id"].as_str().unwrap().to_string();
+        write_json(
+            &mut writer,
+            json!({
+                "type":"guichet_result",
+                "v":1,
+                "issuer_scope":issuer_scope,
+                "request_id":"request-review-mismatch",
+                "issue":"accepted",
+                "expires_at":1200
+            }),
+        );
+        write_json(
+            &mut writer,
+            json!({
+                "type":"request_lifecycle_event",
+                "v":1,
+                "issuer_scope":issuer_scope,
+                "event_id":"event-review-mismatch",
+                "request_id":"request-review-mismatch",
+                "state":"answered",
+                "observed_at":1010,
+                "in_reply_to":message_id.to_string(),
+                "response_message_id":response_message_id
+            }),
+        );
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"guichet_claim_next","v":1})
+        );
+        write_json(&mut writer, json!({"type":"guichet_empty","v":1}));
+    });
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    let report =
+        reconcile_guichet_startup_with_limits(&mut store, fixture.path(), 1_010, limits()).unwrap();
+    assert!(report.actions.iter().any(|action| matches!(
+        action,
+        GuichetReconcileAction::RejetAtteste { request_id, reason }
+            if request_id == "request-review-mismatch"
+                && *reason == maicie::domain::MotifRefusGreffe::TeteMesureeDivergente
+    )));
+    let snapshot = &store.objective_snapshots(Some(objective_id)).unwrap()[0];
+    assert_eq!(
+        snapshot.objective.etat,
+        maicie::domain::EtatObjectif::EnCoordination
+    );
+    assert_eq!(
+        snapshot.delegations[0].etat,
+        maicie::domain::EtatDelegation::Creee
+    );
+    assert!(snapshot.decisions.is_empty());
     drop(store);
     server.join().unwrap();
     fs::remove_dir_all(root).unwrap();
