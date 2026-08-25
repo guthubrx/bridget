@@ -2910,6 +2910,46 @@ fn guichet_request_is_valid(
             | bridget_transport::protocol::ServiceRequestOperation::DeadlineQuestion,
             bridget_transport::protocol::ServiceRequestPayload::Delegation { delegation_id },
         ) => identifier(delegation_id),
+        (
+            bridget_transport::protocol::ServiceRequestOperation::Delegate,
+            bridget_transport::protocol::ServiceRequestPayload::Delegate {
+                goal,
+                explicit_target,
+                required_tags,
+                duration: _,
+                suite,
+                depends_on,
+                references,
+            },
+        ) => {
+            let suite_is_valid = match suite {
+                bridget_transport::protocol::ServiceSuiteDeclaration::Aucune => true,
+                bridget_transport::protocol::ServiceSuiteDeclaration::Objectif { objective_id } => {
+                    identifier(objective_id)
+                }
+            };
+            let mut relations = std::collections::BTreeSet::new();
+            let relations_are_valid = depends_on
+                .iter()
+                .chain(references)
+                .all(|value| identifier(value) && relations.insert(value.as_str()));
+            !goal.trim().is_empty()
+                && goal.len() <= 16 * 1024
+                && explicit_target
+                    .as_ref()
+                    .is_none_or(|target| identifier(target))
+                && required_tags.len() <= 32
+                && required_tags.iter().all(|tag| identifier(tag))
+                && required_tags
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    == required_tags.len()
+                && depends_on.len() <= 100
+                && references.len() <= 100
+                && suite_is_valid
+                && relations_are_valid
+        }
         _ => false,
     }
 }

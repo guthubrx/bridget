@@ -1,7 +1,8 @@
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
-    ConnectionRole, GuichetOutcome, GuichetReplyPayload, SERVICE_CONTRACT_VERSION,
-    ServiceCapability, ServiceRequestOperation, ServiceRequestPayload, decode, encode,
+    ConnectionRole, GuichetDurationClass, GuichetOutcome, GuichetReplyPayload,
+    SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRequestOperation, ServiceRequestPayload,
+    ServiceSuiteDeclaration, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -237,6 +238,101 @@ fn service(home: &Path, issuer_scope: &str) -> (BufReader<UnixStream>, BufWriter
         DaemonToWrapper::ServiceWelcome { .. }
     ));
     (reader, writer)
+}
+
+#[test]
+fn delegate_est_admis_comme_depot_sans_etre_confondu_avec_un_succes_metier() {
+    let home = unique_home();
+    let daemon = DaemonGuard::start(&home);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let (mut wrapper_reader, mut wrapper_writer) = connect(&home);
+    assert!(matches!(
+        request(
+            &mut wrapper_reader,
+            &mut wrapper_writer,
+            WrapperToDaemon::Register {
+                agent_type: "codex".to_string(),
+                name: Some("jc6".to_string()),
+                host: None,
+                transport: Some("unix".to_string()),
+                mode: None,
+                location: None,
+                os: None,
+                instance_id: Some("delegate-admission-instance".to_string()),
+                domain: None,
+                turn_in_progress: false,
+                journal_available: None,
+            },
+        ),
+        DaemonToWrapper::Registered { .. }
+    ));
+    let prerequisite = "51000000-0000-4000-8000-000000000001".to_string();
+    let deposit = WrapperToDaemon::ServiceRequest {
+        version: SERVICE_CONTRACT_VERSION,
+        issuer_scope: SCOPE.to_string(),
+        request_id: "delegate-admission-request".to_string(),
+        issued_at: now,
+        from: "jc6".to_string(),
+        to: "maicie".to_string(),
+        operation: ServiceRequestOperation::Delegate,
+        payload: ServiceRequestPayload::Delegate {
+            goal: format!("lot dépendant de {prerequisite}"),
+            explicit_target: Some("prospective".to_string()),
+            required_tags: Vec::new(),
+            duration: GuichetDurationClass::Normale,
+            suite: ServiceSuiteDeclaration::Aucune,
+            depends_on: vec![prerequisite],
+            references: Vec::new(),
+        },
+    };
+    assert!(matches!(
+        request(&mut wrapper_reader, &mut wrapper_writer, deposit),
+        DaemonToWrapper::GuichetResult { ref issue, .. } if issue == "queued"
+    ));
+
+    let (mut service_reader, mut service_writer) = service(&home, SERVICE_SCOPE);
+    let claimed = request(
+        &mut service_reader,
+        &mut service_writer,
+        WrapperToDaemon::GuichetClaimNext {
+            version: SERVICE_CONTRACT_VERSION,
+        },
+    );
+    let canonical_request = match claimed {
+        DaemonToWrapper::GuichetClaimed {
+            request_id,
+            canonical_request,
+            ..
+        } => {
+            assert_eq!(request_id, "delegate-admission-request");
+            canonical_request
+        }
+        other => panic!("claim delegate attendu, reçu {other:?}"),
+    };
+    let canonical_request = String::from_utf8(canonical_request).unwrap();
+    assert!(matches!(
+        decode::<WrapperToDaemon>(&canonical_request).unwrap(),
+        WrapperToDaemon::ServiceRequest {
+            operation: ServiceRequestOperation::Delegate,
+            payload: ServiceRequestPayload::Delegate {
+                suite: ServiceSuiteDeclaration::Aucune,
+                ref depends_on,
+                ..
+            },
+            ..
+        } if depends_on == &["51000000-0000-4000-8000-000000000001"]
+    ));
+
+    drop(wrapper_reader);
+    drop(wrapper_writer);
+    drop(service_reader);
+    drop(service_writer);
+    drop(daemon);
+    assert_daemon_count_for_home(&home, 0);
+    let _ = std::fs::remove_dir_all(home);
 }
 
 #[test]

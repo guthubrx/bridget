@@ -1872,8 +1872,9 @@ impl MaicieStore {
             | crate::domain::guichet::RequeteGuichet::DeadlineQuestion { delegation_id } => {
                 *delegation_id
             }
-            crate::domain::guichet::RequeteGuichet::DeliveryReport(_) => {
-                return Err(StoreError::Invalid("projection de livraison interdite"));
+            crate::domain::guichet::RequeteGuichet::DeliveryReport(_)
+            | crate::domain::guichet::RequeteGuichet::Delegate(_) => {
+                return Err(StoreError::Invalid("opération de projection interdite"));
             }
         };
         let facts = load_guichet_projection_facts(&tx, delegation_id)?;
@@ -4503,20 +4504,11 @@ fn review_verdict_refusal(
 }
 
 fn operation_name(operation: OperationGuichet) -> &'static str {
-    match operation {
-        OperationGuichet::DeliveryReport => "delivery_report",
-        OperationGuichet::MissionStatus => "mission_status",
-        OperationGuichet::DeadlineQuestion => "deadline_question",
-    }
+    operation.as_sql()
 }
 
 fn parse_operation_name(value: &str) -> Result<OperationGuichet, StoreError> {
-    match value {
-        "delivery_report" => Ok(OperationGuichet::DeliveryReport),
-        "mission_status" => Ok(OperationGuichet::MissionStatus),
-        "deadline_question" => Ok(OperationGuichet::DeadlineQuestion),
-        _ => Err(StoreError::Corrupt("opération guichet inconnue")),
-    }
+    OperationGuichet::parse_sql(value).ok_or(StoreError::Corrupt("opération guichet inconnue"))
 }
 
 fn issue_name(issue: IssueGreffe) -> &'static str {
@@ -4537,36 +4529,11 @@ fn parse_issue_name(value: &str) -> Result<IssueGreffe, StoreError> {
 }
 
 fn refusal_reason_name(reason: MotifRefusGreffe) -> &'static str {
-    match reason {
-        MotifRefusGreffe::DelegationAbsente => "delegation_missing",
-        MotifRefusGreffe::RelationsInvalides => "relation_invalid",
-        MotifRefusGreffe::EnveloppeDivergente => "envelope_mismatch",
-        MotifRefusGreffe::VerdictRevueRequis => "review_verdict_required",
-        MotifRefusGreffe::VerdictRevueInattendu => "review_verdict_unexpected",
-        MotifRefusGreffe::MandatRevueDivergent => "review_mandate_mismatch",
-        MotifRefusGreffe::TeteCibleDeplacee => "target_head_moved",
-        MotifRefusGreffe::TeteCibleDeplaceeEtTeteMesureeDivergente => {
-            "target_head_moved_and_measured_head_mismatch"
-        }
-        MotifRefusGreffe::TeteMesureeDivergente => "measured_head_mismatch",
-    }
+    reason.as_sql()
 }
 
 fn parse_refusal_reason_name(value: &str) -> Result<MotifRefusGreffe, StoreError> {
-    match value {
-        "delegation_missing" => Ok(MotifRefusGreffe::DelegationAbsente),
-        "relation_invalid" => Ok(MotifRefusGreffe::RelationsInvalides),
-        "envelope_mismatch" => Ok(MotifRefusGreffe::EnveloppeDivergente),
-        "review_verdict_required" => Ok(MotifRefusGreffe::VerdictRevueRequis),
-        "review_verdict_unexpected" => Ok(MotifRefusGreffe::VerdictRevueInattendu),
-        "review_mandate_mismatch" => Ok(MotifRefusGreffe::MandatRevueDivergent),
-        "target_head_moved" => Ok(MotifRefusGreffe::TeteCibleDeplacee),
-        "target_head_moved_and_measured_head_mismatch" => {
-            Ok(MotifRefusGreffe::TeteCibleDeplaceeEtTeteMesureeDivergente)
-        }
-        "measured_head_mismatch" => Ok(MotifRefusGreffe::TeteMesureeDivergente),
-        _ => Err(StoreError::Corrupt("motif de refus inconnu")),
-    }
+    MotifRefusGreffe::parse_sql(value).ok_or(StoreError::Corrupt("motif de refus inconnu"))
 }
 
 fn lifecycle_state_name(state: EtatRequeteGuichet) -> &'static str {

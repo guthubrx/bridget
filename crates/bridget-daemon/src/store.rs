@@ -1466,7 +1466,7 @@ fn guichet_outcome_name(outcome: GuichetOutcome) -> &'static str {
 fn linked_request_id(payload: &ServiceRequestPayload) -> Option<&str> {
     match payload {
         ServiceRequestPayload::DeliveryReport { in_reply_to, .. } => Some(in_reply_to),
-        ServiceRequestPayload::Delegation { .. } => None,
+        ServiceRequestPayload::Delegation { .. } | ServiceRequestPayload::Delegate { .. } => None,
     }
 }
 

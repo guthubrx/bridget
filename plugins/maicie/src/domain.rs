@@ -1740,13 +1740,47 @@ impl DefinitionCoordination {
     }
 }
 
-/// Opérations métier fermées acceptées par le guichet Maicie.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OperationGuichet {
-    DeliveryReport,
-    MissionStatus,
-    DeadlineQuestion,
+macro_rules! define_sql_vocabulary {
+    (
+        $(#[$meta:meta])*
+        pub enum $name:ident {
+            $($variant:ident => $sql:literal),+ $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum $name {
+            $($variant),+
+        }
+
+        impl $name {
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            pub const fn as_sql(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $sql),+
+                }
+            }
+
+            pub fn parse_sql(value: &str) -> Option<Self> {
+                match value {
+                    $($sql => Some(Self::$variant)),+,
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+define_sql_vocabulary! {
+    /// Opérations métier fermées acceptées par le guichet Maicie.
+    pub enum OperationGuichet {
+        DeliveryReport => "delivery_report",
+        MissionStatus => "mission_status",
+        DeadlineQuestion => "deadline_question",
+        Delegate => "delegate",
+    }
 }
 
 /// État terminal attesté par Bridget. Il reste un fait de transport et ne
@@ -1769,21 +1803,23 @@ pub enum IssueGreffe {
     Refusee,
 }
 
-/// Motif fermé d'un refus de relève. Il ne représente jamais une corruption
-/// SQLite ou une panne de transport : ces deux familles restent des erreurs
-/// techniques, sans reçu métier fabriqué.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MotifRefusGreffe {
-    DelegationAbsente,
-    RelationsInvalides,
-    EnveloppeDivergente,
-    VerdictRevueRequis,
-    VerdictRevueInattendu,
-    MandatRevueDivergent,
-    TeteCibleDeplacee,
-    TeteCibleDeplaceeEtTeteMesureeDivergente,
-    TeteMesureeDivergente,
+define_sql_vocabulary! {
+    /// Motif fermé d'un refus de relève. Il ne représente jamais une corruption
+    /// SQLite ou une panne de transport : ces deux familles restent des erreurs
+    /// techniques, sans reçu métier fabriqué.
+    pub enum MotifRefusGreffe {
+        DelegationAbsente => "delegation_missing",
+        RelationsInvalides => "relation_invalid",
+        EnveloppeDivergente => "envelope_mismatch",
+        VerdictRevueRequis => "review_verdict_required",
+        VerdictRevueInattendu => "review_verdict_unexpected",
+        MandatRevueDivergent => "review_mandate_mismatch",
+        TeteCibleDeplacee => "target_head_moved",
+        TeteCibleDeplaceeEtTeteMesureeDivergente => "target_head_moved_and_measured_head_mismatch",
+        TeteMesureeDivergente => "measured_head_mismatch",
+        SuiteAucuneAvecCitationNonClassee => "suite_none_with_unclassified_citation",
+        OperationNonDisponible => "operation_not_available",
+    }
 }
 
 /// Preuve locale durable qu'une requête structurée a été traitée.

@@ -26,6 +26,7 @@ operation_corpus! {
     ServiceRequestOperation::DeliveryReport => r#"{"type":"service_request","v":1,"issuer_scope":"scope-0123456789abcdef0123456789abcdef","request_id":"corpus-delivery","issued_at":1000,"from":"jc6","to":"maicie","operation":"delivery_report","payload":{"objective_id":"51000000-0000-4000-8000-000000000001","delegation_id":"52000000-0000-4000-8000-000000000002","delivery_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","in_reply_to":"53000000-0000-4000-8000-000000000003"}}"#,
     ServiceRequestOperation::MissionStatus => r#"{"type":"service_request","v":1,"issuer_scope":"scope-0123456789abcdef0123456789abcdef","request_id":"corpus-status","issued_at":1000,"from":"jc6","to":"maicie","operation":"mission_status","payload":{"delegation_id":"52000000-0000-4000-8000-000000000002"}}"#,
     ServiceRequestOperation::DeadlineQuestion => r#"{"type":"service_request","v":1,"issuer_scope":"scope-0123456789abcdef0123456789abcdef","request_id":"corpus-deadline","issued_at":1000,"from":"jc6","to":"maicie","operation":"deadline_question","payload":{"delegation_id":"52000000-0000-4000-8000-000000000002"}}"#,
+    ServiceRequestOperation::Delegate => r#"{"type":"service_request","v":1,"issuer_scope":"scope-0123456789abcdef0123456789abcdef","request_id":"corpus-delegate","issued_at":1000,"from":"jc6","to":"maicie","operation":"delegate","payload":{"goal":"objectif autonome","explicit_target":"prospective","duration":"normale","suite":{"kind":"aucune"}}}"#,
 }
 
 fn claim(operation: &str) -> GuichetClaim {
