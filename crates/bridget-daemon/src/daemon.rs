@@ -3213,16 +3213,18 @@ fn handle_register(
                         });
                 }
 
-                let previous = state.presences.get(&instance_id).cloned().or_else(|| {
-                    // Ré-inscription d'un géré déjà connu : la présence riche
-                    // peut encore vivre sous l'ancienne instance après une
-                    // reprise qui a émis un nouvel identifiant.
+                let previous_instance_key = if state.presences.contains_key(&instance_id) {
+                    Some(instance_id.clone())
+                } else {
                     state
                         .presences
-                        .values()
-                        .find(|presence| presence.name == final_name)
-                        .cloned()
-                });
+                        .iter()
+                        .find(|(_, presence)| presence.name == final_name)
+                        .map(|(key, _)| key.clone())
+                };
+                let previous = previous_instance_key
+                    .as_ref()
+                    .and_then(|key| state.presences.get(key).cloned());
                 let reconnect_count = previous
                     .as_ref()
                     .map(|presence| {
@@ -3332,6 +3334,31 @@ fn handle_register(
                         .is_some_and(|presence| presence.journal_available)
                         || transport == "acp"
                 });
+                // Migration des remises orphelines : un nouvel instance_id pour
+                // le même nom reprend les `dispatching` de l'ancienne instance
+                // avant de la retirer, sinon elles restent invisibles jusqu'à
+                // expiration (canal latéral muet après respawn).
+                if let Some(old_instance_id) = previous_instance_key
+                    .as_ref()
+                    .filter(|old| old.as_str() != instance_id.as_str())
+                {
+                    match state.idempotency.reassign_dispatching_deliveries(
+                        old_instance_id,
+                        &instance_id,
+                        unix_now_secs(),
+                    ) {
+                        Ok(migrated) if migrated > 0 => info!(
+                            "reprises idempotentes migrées : {} remise(s) {} → {}",
+                            migrated, old_instance_id, instance_id
+                        ),
+                        Ok(_) => {}
+                        Err(error) => error!(
+                            "migration des remises {} → {} : {error}",
+                            old_instance_id, instance_id
+                        ),
+                    }
+                    state.presences.remove(old_instance_id);
+                }
                 state.presences.insert(
                     instance_id.clone(),
                     Presence {
@@ -8438,6 +8465,10 @@ mod presence_tests {
                 CLIENT_ISSUED_AT_TOLERANCE_SECS,
             )
             .unwrap();
+        let mut ack_message =
+            bridget_core::BridgetMessage::new("sender-peer", "peer-1", "corps collège");
+        ack_message.id = "message-ack-wrapper".to_string();
+        let message_bytes = serde_json::to_vec(&ack_message).unwrap();
         state
             .idempotency
             .begin_send_delivery(
@@ -8447,7 +8478,7 @@ mod presence_tests {
                     recipient_instance_id: "instance-1".to_string(),
                     delivery_generation: 1,
                     expires_at: now + CLIENT_IDEMPOTENCY_HORIZON_SECS,
-                    message_bytes: b"ack-wrapper-message".to_vec(),
+                    message_bytes,
                 },
             )
             .unwrap();
@@ -10997,6 +11028,105 @@ mod presence_tests {
         state.router.unregister_by_conn("conn-2");
         state.mark_stopped("conn-2");
         assert_eq!(state.agent_infos()[0].state, "stopped");
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    /// Oracle (iii) bout-en-bout Register : un nouvel instance_id pour le même
+    /// nom reprend les remises `dispatching` de l'instance morte.
+    #[test]
+    fn register_migre_les_remises_dispatching_de_l_ancienne_instance() {
+        let (mut state, config) = state_with_registered_agent("migrate-dispatching");
+        let key = IdempotencyKey::new(
+            "012_scope_bbbbbbbbbbbb",
+            OperationKind::Send,
+            "msg-orphan-register",
+        )
+        .unwrap();
+        let now = unix_now_secs();
+        let mut message = bridget_core::BridgetMessage::new("peer-a", "agent-2", "collège en vol");
+        message.id = "msg-orphan-register".to_string();
+        state
+            .idempotency
+            .reserve(
+                &key,
+                b"orphan-register",
+                now,
+                CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                now,
+                CLIENT_ISSUED_AT_TOLERANCE_SECS,
+            )
+            .unwrap();
+        state
+            .idempotency
+            .begin_send_delivery(
+                &key,
+                &SendDelivery {
+                    delivery_id: "delivery-orphan-register".to_string(),
+                    recipient_instance_id: "instance-1".to_string(),
+                    delivery_generation: 11,
+                    expires_at: now + CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                    message_bytes: serde_json::to_vec(&message).unwrap(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            state
+                .idempotency
+                .dispatching_deliveries_for_instance("instance-1", now)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            state
+                .store
+                .recent_messages(20)
+                .unwrap()
+                .iter()
+                .filter(|entry| entry.id == "msg-orphan-register")
+                .count(),
+            1,
+            "visibilité d'émission avant respawn"
+        );
+
+        state.router.unregister_by_conn("conn-1");
+        state.mark_unreachable("conn-1");
+        let response = handle_register(
+            "conn-new",
+            "claude".to_string(),
+            Some("agent-2".to_string()),
+            Some("macbook".to_string()),
+            Some("acp".to_string()),
+            Some(PresenceMode::Acp),
+            None,
+            Some("macOS".to_string()),
+            Some("instance-2".to_string()),
+            None,
+            false,
+            Some(true),
+            &mut state,
+        );
+        assert!(matches!(response, DaemonToWrapper::Registered { .. }));
+        assert!(
+            !state.presences.contains_key("instance-1"),
+            "l'ancienne instance doit être retirée après migration"
+        );
+        assert!(state.presences.contains_key("instance-2"));
+        assert_eq!(
+            state
+                .idempotency
+                .dispatching_deliveries_for_instance("instance-1", now)
+                .unwrap()
+                .len(),
+            0
+        );
+        let revived = state
+            .idempotency
+            .dispatching_deliveries_for_instance("instance-2", now)
+            .unwrap();
+        assert_eq!(revived.len(), 1);
+        assert_eq!(revived[0].delivery_id, "delivery-orphan-register");
+        assert_eq!(revived[0].recipient_instance_id, "instance-2");
         let _ = std::fs::remove_file(&config.db_path);
     }
 

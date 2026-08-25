@@ -1038,11 +1038,66 @@ impl Store {
         Ok(count)
     }
 
-    /// Récupère les échanges récents d'une conversation.
+    /// Récupère les échanges récents, enrichis de la phase de remise quand une
+    /// saga `send_deliveries` existe pour le même identifiant de message.
     pub fn recent_messages(&self, limit: usize) -> Result<Vec<LedgerEntry>, StoreError> {
+        let has_deliveries = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'send_deliveries'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(StoreError::Sqlite)?
+            > 0;
+
+        if has_deliveries {
+            // L'index idx_send_deliveries_kind_key est posé par le batch DDL
+            // d'IdempotencyStore (même db_path au démarrage daemon). Pas de
+            // CREATE INDEX ici : une lecture ne doit pas exiger l'écriture
+            // (mode=ro → « attempt to write a readonly database »).
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT l.id, l.ts, l.sender, l.target, l.body,
+                            (SELECT d.phase FROM send_deliveries d
+                             WHERE d.operation_kind = 'send' AND d.idempotency_key = l.id
+                             ORDER BY CASE d.phase
+                                 WHEN 'acked' THEN 0
+                                 WHEN 'dispatching' THEN 1
+                                 ELSE 2
+                             END
+                             LIMIT 1) AS delivery_phase
+                     FROM ledger l
+                     ORDER BY l.ts DESC
+                     LIMIT ?1",
+                )
+                .map_err(StoreError::Sqlite)?;
+
+            let entries = stmt
+                .query_map(rusqlite::params![limit as i64], |row| {
+                    Ok(LedgerEntry {
+                        id: row.get(0)?,
+                        ts: row.get(1)?,
+                        sender: row.get(2)?,
+                        target: row.get(3)?,
+                        body: row.get(4)?,
+                        delivery_phase: row.get(5)?,
+                    })
+                })
+                .map_err(StoreError::Sqlite)?
+                .filter_map(|r| r.ok())
+                .collect();
+            return Ok(entries);
+        }
+
         let mut stmt = self
             .conn
-            .prepare("SELECT id, ts, sender, target, body FROM ledger ORDER BY ts DESC LIMIT ?1")
+            .prepare(
+                "SELECT id, ts, sender, target, body FROM ledger
+                 ORDER BY ts DESC LIMIT ?1",
+            )
             .map_err(StoreError::Sqlite)?;
 
         let entries = stmt
@@ -1053,6 +1108,7 @@ impl Store {
                     sender: row.get(2)?,
                     target: row.get(3)?,
                     body: row.get(4)?,
+                    delivery_phase: None,
                 })
             })
             .map_err(StoreError::Sqlite)?
@@ -1464,6 +1520,8 @@ pub struct LedgerEntry {
     pub sender: String,
     pub target: String,
     pub body: String,
+    /// Phase `send_deliveries` si une saga idempotente porte le même id.
+    pub delivery_phase: Option<String>,
 }
 
 #[derive(Debug)]
@@ -2158,6 +2216,175 @@ mod tests {
             store.aggregate_usage_window("claude-1", 1, 40).unwrap(),
             None,
             "échantillon après to_secs exclu"
+        );
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    const RECENT_MESSAGES_PLAN_SQL: &str = "SELECT l.id, l.ts, l.sender, l.target, l.body,
+            (SELECT d.phase FROM send_deliveries d
+             WHERE d.operation_kind = 'send' AND d.idempotency_key = l.id
+             ORDER BY CASE d.phase
+                 WHEN 'acked' THEN 0
+                 WHEN 'dispatching' THEN 1
+                 ELSE 2
+             END
+             LIMIT 1) AS delivery_phase
+     FROM ledger l
+     ORDER BY l.ts DESC
+     LIMIT ?1";
+
+    fn seed_ledger_with_deliveries(path: &Path, n: usize) {
+        use crate::idempotency::IdempotencyStore;
+        // Ouvre puis ferme : crée schéma + index v4, libère la connexion.
+        {
+            let _schema = IdempotencyStore::open(path).unwrap();
+        }
+        let conn = Connection::open(path).unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        for i in 0..n {
+            let id = format!("msg-{i:05}");
+            let scope = format!("012_scope_{i:016}");
+            tx.execute(
+                "INSERT INTO idempotency_records (
+                    issuer_scope, operation_kind, idempotency_key, canonical_bytes,
+                    state, issued_at, expires_at
+                 ) VALUES (?1, 'send', ?2, ?3, 'terminal', 1, 9_999_999_999)",
+                rusqlite::params![scope, id, format!("canon-{i}").as_bytes()],
+            )
+            .unwrap();
+            let phase = if i % 3 == 0 {
+                "acked"
+            } else if i % 3 == 1 {
+                "dispatching"
+            } else {
+                "indeterminate"
+            };
+            tx.execute(
+                "INSERT INTO send_deliveries (
+                    delivery_id, issuer_scope, operation_kind, idempotency_key,
+                    recipient_instance_id, delivery_generation, phase, expires_at, message_bytes
+                 ) VALUES (?1, ?2, 'send', ?3, 'instance-1', 1, ?4, 9_999_999_999, X'7B7D')",
+                rusqlite::params![format!("del-{i:05}"), scope, id, phase],
+            )
+            .unwrap();
+            tx.execute(
+                "INSERT INTO ledger (id, ts, sender, target, body, conversation_key)
+                 VALUES (?1, ?2, 'a', 'b', 'corps', 'a|b')",
+                rusqlite::params![id, i as i64],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    }
+
+    fn explain_recent_messages_plan(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {RECENT_MESSAGES_PLAN_SQL}"))
+            .unwrap();
+        stmt.query_map(rusqlite::params![50_i64], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    fn plan_searches_kind_key(plan: &[String]) -> bool {
+        plan.iter().any(|line| {
+            line.contains("send_deliveries")
+                && line.contains("SEARCH")
+                && line.contains("idx_send_deliveries_kind_key")
+        })
+    }
+
+    fn plan_scans_send_deliveries(plan: &[String]) -> bool {
+        // SQLite nomme parfois l'alias seul (« SCAN d ») dans la sous-requête.
+        plan.iter().any(|line| {
+            let trimmed = line.trim();
+            (trimmed == "SCAN d" || trimmed.starts_with("SCAN d "))
+                || (line.contains("SCAN") && line.contains("send_deliveries"))
+        })
+    }
+
+    /// Oracle + mutant : avec l'index → SEARCH ; sans l'index → SCAN (le test
+    /// ROUGIT si l'on retire seulement l'assertion positive — propriété gardée
+    /// = dépendance réelle à idx_send_deliveries_kind_key).
+    #[test]
+    fn recent_messages_explique_search_pas_scan_sur_send_deliveries() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-ledger-explain-{}-{}.db",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        seed_ledger_with_deliveries(&path, 200);
+        let store = Store::open(&path).unwrap();
+
+        let with_index = explain_recent_messages_plan(&store.conn);
+        let joined_with = with_index.join("\n");
+        assert!(
+            plan_searches_kind_key(&with_index),
+            "contrôle positif : SEARCH sur idx_send_deliveries_kind_key, plan:\n{joined_with}"
+        );
+        assert!(
+            !plan_scans_send_deliveries(&with_index),
+            "contrôle positif : pas de SCAN send_deliveries, plan:\n{joined_with}"
+        );
+        eprintln!("EXPLAIN avec index:\n{joined_with}");
+
+        store
+            .conn
+            .execute("DROP INDEX idx_send_deliveries_kind_key", [])
+            .unwrap();
+        let without_index = explain_recent_messages_plan(&store.conn);
+        let joined_without = without_index.join("\n");
+        assert!(
+            !plan_searches_kind_key(&without_index),
+            "mutant : sans l'index le plan ne doit plus SEARCH kind_key, plan:\n{joined_without}"
+        );
+        assert!(
+            plan_scans_send_deliveries(&without_index),
+            "mutant : sans l'index attendu SCAN send_deliveries, plan:\n{joined_without}"
+        );
+        eprintln!("EXPLAIN sans index (mutant):\n{joined_without}");
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Banc jury : LIMIT 50, 10 000 messages, médiane de 5 rounds < 20 ms.
+    #[test]
+    fn recent_messages_dix_mille_mediane_sous_vingt_ms() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-ledger-bench-{}-{}.db",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        seed_ledger_with_deliveries(&path, 10_000);
+        let store = Store::open(&path).unwrap();
+        // Amorçage : chauffe le plan (index déjà posé par IdempotencyStore).
+        let _ = store.recent_messages(50).unwrap();
+        let mut samples = Vec::with_capacity(5);
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            let rows = store.recent_messages(50).unwrap();
+            samples.push(started.elapsed());
+            assert_eq!(rows.len(), 50);
+        }
+        samples.sort();
+        let median = samples[2];
+        let rendered: Vec<String> = samples
+            .iter()
+            .map(|d| format!("{:.2}ms", d.as_secs_f64() * 1000.0))
+            .collect();
+        eprintln!(
+            "banc 10k LIMIT 50 ×5 : {:?} médiane={:.2}ms",
+            rendered,
+            median.as_secs_f64() * 1000.0
+        );
+        assert!(
+            median.as_secs_f64() * 1000.0 < 20.0,
+            "médiane {:.2} ms (échantillons {:?}) — seuil jury 20 ms à 10k",
+            median.as_secs_f64() * 1000.0,
+            rendered
         );
         drop(store);
         let _ = std::fs::remove_file(path);
