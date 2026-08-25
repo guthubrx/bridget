@@ -2386,13 +2386,6 @@ mod tests {
             }
             output
         }
-
-        fn close_master(&mut self) {
-            if self.master >= 0 {
-                assert_eq!(unsafe { libc::close(self.master) }, 0);
-                self.master = -1;
-            }
-        }
     }
 
     impl Drop for PseudoTerminal {
@@ -4318,16 +4311,32 @@ mod tests {
 
     #[test]
     fn raw_mode_restaure_le_terminal_apres_eof_du_pseudo_tty() {
-        let mut pseudo_tty = PseudoTerminal::open();
+        let pseudo_tty = PseudoTerminal::open();
         let before = pseudo_tty.attrs();
-        let raw = RawTerminal::enable_for_fd(pseudo_tty.slave)
-            .unwrap()
-            .expect("pseudo-TTY détecté");
-        pseudo_tty.close_master();
-        let mut byte = 0_u8;
-        let read = unsafe { libc::read(pseudo_tty.slave, (&mut byte as *mut u8).cast(), 1) };
-        assert!(read <= 0, "le pseudo-TTY fermé doit signaler EOF ou EIO");
-        drop(raw);
+        let (write_stream, _) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, false);
+
+        with_raw_terminal(pseudo_tty.slave, |raw_terminal| {
+            assert!(raw_terminal, "le pseudo-TTY doit activer le mode raw");
+            assert_eq!(
+                unsafe { libc::write(pseudo_tty.master, [0x04_u8].as_ptr().cast(), 1) },
+                1
+            );
+            let mut byte = 0_u8;
+            assert_eq!(
+                unsafe { libc::read(pseudo_tty.slave, (&mut byte as *mut u8).cast(), 1) },
+                1
+            );
+            assert_eq!(byte, 0x04, "Ctrl-D doit arriver à la boucle de saisie");
+            assert!(!handle_input_byte(
+                byte, &state, &input, &renderer, &writer, "codex-1",
+            )?);
+            Ok::<(), String>(())
+        })
+        .unwrap();
         assert_terminal_restored(&before, &pseudo_tty.attrs());
     }
 
