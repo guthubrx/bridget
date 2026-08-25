@@ -306,6 +306,17 @@ fn spawn_daemon(root: &Path, sync: Option<&Path>) -> DaemonProcess {
     }
 }
 
+/// Attend l'apparition d'un jalon fichier via kqueue (Darwin/BSD).
+/// Sous Linux le corps kqueue n'est pas compilé — voir le stub ci-dessous et les
+/// `#[cfg_attr(target_os = "linux", ignore = …)]` des tests qui l'appellent.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
 fn watch_marker(directory: &Path, marker: &Path) {
     let directory = CString::new(directory.as_os_str().as_bytes()).expect("répertoire sans NUL");
     let directory_fd = unsafe { libc::open(directory.as_ptr(), libc::O_RDONLY) };
@@ -345,6 +356,23 @@ fn watch_marker(directory: &Path, marker: &Path) {
         libc::close(queue);
         libc::close(directory_fd);
     }
+}
+
+/// Stub de liaison sous Linux : le fichier doit compiler avec `test-support`,
+/// mais aucun test kqueue-dépendant ne doit s'exécuter (ils portent `ignore`).
+/// Ce n'est PAS un équivalent inotify — hors périmètre SpecKit-030.
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+)))]
+fn watch_marker(_directory: &Path, _marker: &Path) {
+    panic!(
+        "watch_marker exige kqueue (Darwin/BSD) ; sous Linux le test appelant doit être #[ignore]"
+    );
 }
 
 #[allow(dead_code)]
@@ -624,7 +652,14 @@ fn run_amont_cycle(point: &str, serial: usize) {
 }
 
 #[test]
-#[ignore = "banc de gate SC-001 : cargo test --features test-support --test idempotency_crash_test -- --ignored --test-threads=1"]
+#[cfg_attr(
+    target_os = "linux",
+    ignore = "exige kqueue (Darwin/BSD) ; équivalent inotify hors périmètre SpecKit-030"
+)]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "banc de gate SC-001 : cargo test --features test-support --test idempotency_crash_test -- --ignored --test-threads=1"
+)]
 fn matrice_crash_sc001_redelivre_cinquante_prompts_uniques() {
     let root = test_root("sc001-matrix");
     let sync = root.join("sync");
@@ -815,6 +850,10 @@ fn destination_remplacee_reste_indeterminee_sans_reroutage() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "linux",
+    ignore = "exige kqueue (Darwin/BSD) ; équivalent inotify hors périmètre SpecKit-030"
+)]
 fn recovery_terminal_acked_rejoue_accepted_apres_crash_daemon() {
     let root = test_root("recovery-terminal");
     let (sync, marker) = checkpoint_root(&root, "after_delivery_acked");
@@ -853,6 +892,10 @@ fn recovery_terminal_acked_rejoue_accepted_apres_crash_daemon() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "linux",
+    ignore = "exige kqueue (Darwin/BSD) ; équivalent inotify hors périmètre SpecKit-030"
+)]
 fn recovery_ack_d_une_reponse_liee_cloture_la_demande_atomiquement() {
     let root = test_root("linked-reply-ack");
     let database = root.join(".cache/bridget/bridget.db");
@@ -1295,6 +1338,10 @@ fn recovery_acked_wrapper_finalise_accepted_apres_crash_daemon() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "linux",
+    ignore = "exige kqueue (Darwin/BSD) ; équivalent inotify hors périmètre SpecKit-030"
+)]
 fn recovery_seen_indeterminate_maintient_outcome_unknown_apres_crash_daemon() {
     let root = test_root("recovery-indeterminate");
     let (sync, marker) = checkpoint_root(&root, "after_delivery_indeterminate");
@@ -1336,6 +1383,10 @@ fn recovery_seen_indeterminate_maintient_outcome_unknown_apres_crash_daemon() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "linux",
+    ignore = "exige kqueue (Darwin/BSD) ; équivalent inotify hors périmètre SpecKit-030"
+)]
 fn recovery_absent_redelivre_sans_doublon_apres_crash_daemon() {
     let root = test_root("recovery-absent");
     let (sync, marker) = checkpoint_root(&root, "after_delivery_before_issue");
@@ -1375,6 +1426,10 @@ fn recovery_absent_redelivre_sans_doublon_apres_crash_daemon() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "linux",
+    ignore = "exige kqueue (Darwin/BSD) ; équivalent inotify hors périmètre SpecKit-030"
+)]
 fn recovery_prepared_reprend_le_dispatch_apres_crash_daemon() {
     let root = test_root("recovery-prepared");
     let (sync, marker) = checkpoint_root(&root, "after_prepared");
@@ -1423,6 +1478,10 @@ fn recovery_prepared_reprend_le_dispatch_apres_crash_daemon() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "linux",
+    ignore = "exige kqueue (Darwin/BSD) ; équivalent inotify hors périmètre SpecKit-030"
+)]
 fn recovery_terminal_acked_vrai_wrapper_rejoue_sans_second_prompt() {
     let root = test_root("acp-daemon-restart");
     let (sync, marker) = checkpoint_root(&root, "after_delivery_acked");
