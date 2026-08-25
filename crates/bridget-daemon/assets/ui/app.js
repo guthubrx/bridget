@@ -234,6 +234,56 @@
         );
       });
 
+      test("mount_resout_les_identifiants_kebab_case", () => {
+        const requested = [];
+        const listeners = new Map();
+        const createNode = (id = "generated") => ({
+          id,
+          dataset: {},
+          style: {},
+          value: "",
+          textContent: "",
+          scrollTop: 0,
+          scrollHeight: 0,
+          clientHeight: 0,
+          selectionStart: 0,
+          selectionEnd: 0,
+          addEventListener: (event) => {
+            const registered = listeners.get(id) || [];
+            registered.push(event);
+            listeners.set(id, registered);
+          },
+          append: () => {},
+          focus: () => {},
+          replaceChildren: () => {},
+          requestSubmit: () => {},
+          setAttribute: () => {},
+          setSelectionRange: () => {},
+        });
+        const nodes = new Map();
+        const documentRef = {
+          createElement: () => createNode(),
+          getElementById: (id) => {
+            requested.push(id);
+            if (!nodes.has(id)) nodes.set(id, createNode(id));
+            return nodes.get(id);
+          },
+        };
+        const mounted = api.mount(documentRef, {
+          clearTimeout: () => {},
+          location: { search: "" },
+          setTimeout: () => 1,
+        });
+
+        assert.ok(mounted, "mount doit trouver tous ses nœuds");
+        assert.ok(requested.includes("agent-list"));
+        assert.ok(requested.includes("new-messages"));
+        assert.ok(requested.includes("new-messages-label"));
+        assert.ok(requested.includes("close-detail"));
+        assert.ok(listeners.get("new-messages").includes("click"));
+        assert.ok(listeners.get("close-detail").includes("click"));
+      });
+
       test("compositeur_hors_du_sous_arbre_du_fil", () => {
         const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
         const stack = [];
@@ -861,36 +911,43 @@
     return minutes ? `${hours} h ${minutes} min` : `${hours} h`;
   }
 
+  const UI_NODE_IDS = Object.freeze({
+    agentList: "agent-list",
+    stoppedAgentList: "stopped-agent-list",
+    stoppedAgents: "stopped-agents",
+    stoppedCount: "stopped-count",
+    fleetCount: "fleet-count",
+    sourceState: "source-state",
+    selectedAgent: "selected-agent",
+    selectedMeta: "selected-meta",
+    selectedStateDot: "selected-state-dot",
+    connectionIndicator: "connection-indicator",
+    relayBanner: "relay-banner",
+    stoppedBanner: "stopped-banner",
+    thread: "thread",
+    newMessages: "new-messages",
+    newMessagesLabel: "new-messages-label",
+    composerShell: "composer-shell",
+    composer: "composer",
+    draft: "draft",
+    reply: "reply",
+    send: "send",
+    sendState: "send-state",
+    contextLine: "context-line",
+    detailPanel: "detail-panel",
+    detailTitle: "detail-title",
+    detailContent: "detail-content",
+    closeDetail: "close-detail",
+  });
+
+  function collectNodes(documentRef) {
+    return Object.fromEntries(
+      Object.entries(UI_NODE_IDS).map(([key, id]) => [key, documentRef.getElementById(id)]),
+    );
+  }
+
   function mount(documentRef, windowRef) {
-    const ids = [
-      "agent-list",
-      "stopped-agent-list",
-      "stopped-agents",
-      "stopped-count",
-      "fleet-count",
-      "source-state",
-      "selected-agent",
-      "selected-meta",
-      "selected-state-dot",
-      "connection-indicator",
-      "relay-banner",
-      "stopped-banner",
-      "thread",
-      "new-messages",
-      "new-messages-label",
-      "composer-shell",
-      "composer",
-      "draft",
-      "reply",
-      "send",
-      "send-state",
-      "context-line",
-      "detail-panel",
-      "detail-title",
-      "detail-content",
-      "close-detail",
-    ];
-    const nodes = Object.fromEntries(ids.map((id) => [id, documentRef.getElementById(id)]));
+    const nodes = collectNodes(documentRef);
     if (Object.values(nodes).some((node) => !node)) return null;
 
     const params = new URLSearchParams(windowRef.location.search);
@@ -1497,6 +1554,7 @@
     projectTimeline,
     peerLabel,
     formatDuration,
+    collectNodes,
     mount,
   });
 });
