@@ -95,6 +95,21 @@ impl Metrics {
 
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 const PRESENCE_RETENTION: Duration = Duration::from_secs(300);
+
+/// Retain : horloge **lien** seule (`link_seen`). Aucun état — y compris
+/// `connected` — n'est immortel (lot B, composé avec A). La capacité
+/// (`capacity_seen`) reste exposée par `who` (`last_seen_secs`) mais ne
+/// décide plus du retain.
+fn presence_within_retention(presence: &Presence) -> bool {
+    presence.link_seen.elapsed() <= PRESENCE_RETENTION
+}
+
+/// Mutant lot B : l'ancienne exemption `connected`. Hors chemin de production
+/// pour prouver que la restaurer cacherait le défaut (relec1 / relec5).
+#[cfg(test)]
+fn presence_within_retention_mutant_exempt_connected(presence: &Presence) -> bool {
+    presence.state == "connected" || presence.link_seen.elapsed() <= PRESENCE_RETENTION
+}
 const ATTACH_VIEW_BUFFER_BYTES: usize = 1024 * 1024;
 const ATTACH_VIEW_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 /// Plafond global (toutes connexions attach confondues) des accusés tardifs.
@@ -138,7 +153,7 @@ struct Presence {
     state: String,
     /// Dernière attestation de CAPACITÉ (register, tour, runtime…) — pas le
     /// heartbeat. C'est ce que `last_seen_secs` expose à who / bridget-idle.
-    last_seen: Instant,
+    capacity_seen: Instant,
     /// Dernière attestation de LIEN (socket / heartbeat). Le retain s'appuie
     /// dessus pour ne pas jeter un long tour `busy` vivant.
     link_seen: Instant,
@@ -188,7 +203,7 @@ impl Presence {
     /// l'entrée pour le retain.
     fn touch_capacity(&mut self) {
         let now = Instant::now();
-        self.last_seen = now;
+        self.capacity_seen = now;
         self.link_seen = now;
     }
 
@@ -1867,13 +1882,11 @@ impl DaemonState {
     }
 
     fn agent_infos(&mut self) -> Vec<bridget_transport::protocol::AgentInfo> {
-        // Retain : exemption `connected` (lot B) || horloge lien. Ce lot a
-        // passé last_seen → link_seen ; l'exemption court-circuite toujours
-        // pour tout connected — le correctif de retain n'agit donc que hors
-        // connected (busy long) tant que B n'a pas levé l'exemption.
-        self.presences.retain(|_, presence| {
-            presence.state == "connected" || presence.link_seen.elapsed() <= PRESENCE_RETENTION
-        });
+        // Lot B : exemption `connected` levée — retain = horloge lien seule.
+        // Un connected mort (plus de heartbeat) disparaît sans redémarrage ;
+        // un busy jury sous heartbeat survit même si la capacité est gelée.
+        self.presences
+            .retain(|_, presence| presence_within_retention(presence));
         // Présence expirée + nom encore au routeur = fantôme. On coupe le lien.
         self.release_router_for_dangling_instances();
         let mut agents: Vec<_> = self
@@ -1905,11 +1918,11 @@ impl DaemonState {
                     } else {
                         presence.state.clone()
                     },
-                    // Âge de CAPACITÉ (last_seen), pas du lien. Honnête à lire ;
+                    // Âge de CAPACITÉ (capacity_seen), pas du lien. Honnête à lire ;
                     // aucune décision maicie/reaper ne s'en sert — elles
                     // regardent `state`. ACP sans événement de contenu → âge
                     // figé (voir regles-chantier, limites de ce lot).
-                    last_seen_secs: presence.last_seen.elapsed().as_secs(),
+                    last_seen_secs: presence.capacity_seen.elapsed().as_secs(),
                     reconnect_count: presence.reconnect_count,
                     domain: presence.domain.clone(),
                     model: presence.model.clone(),
@@ -1977,7 +1990,7 @@ impl DaemonState {
                 location: presence.location.clone(),
                 os: presence.os.clone(),
                 state: presence.state.clone(),
-                last_seen_secs: presence.last_seen.elapsed().as_secs(),
+                last_seen_secs: presence.capacity_seen.elapsed().as_secs(),
                 reconnect_count: presence.reconnect_count,
                 domain: presence.domain.clone(),
                 // FR-010 : un agent injoignable garde sa dernière capacité connue.
@@ -3404,7 +3417,7 @@ fn handle_register(
                             "connected"
                         }
                         .to_string(),
-                        last_seen: Instant::now(),
+                        capacity_seen: Instant::now(),
                         link_seen: Instant::now(),
                         reconnect_count,
                         model,
@@ -6648,7 +6661,7 @@ mod presence_tests {
                 journal_available: false,
                 os: "Linux".to_string(),
                 state: "connected".to_string(),
-                last_seen: Instant::now(),
+                capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
                 model: Some("gpt-5.3-codex".to_string()),
@@ -6728,7 +6741,7 @@ mod presence_tests {
                 journal_available: true,
                 os: "macOS".to_string(),
                 state: "connected".to_string(),
-                last_seen: Instant::now(),
+                capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
                 model: None,
@@ -9375,7 +9388,7 @@ mod presence_tests {
 
     /// ORACLE PRINCIPAL — `agent_infos` ne ment plus.
     ///
-    /// Un `busy` dont `last_seen` a dépassé le retain (wrapper ACP sans
+    /// Un `busy` dont `capacity_seen` a dépassé le retain (wrapper ACP sans
     /// heartbeat d'autrefois) ne doit PAS réapparaître en `connected`/`unix`
     /// inventés : zéro présence fantôme dans l'annuaire, nom libéré.
     #[test]
@@ -9386,7 +9399,7 @@ mod presence_tests {
             .checked_sub(PRESENCE_RETENTION + Duration::from_secs(1))
             .expect("horloge");
         let presence = state.presences.get_mut("instance-1").unwrap();
-        presence.last_seen = stale;
+        presence.capacity_seen = stale;
         presence.link_seen = stale;
 
         let infos = state.agent_infos();
@@ -9499,15 +9512,15 @@ mod presence_tests {
 
     /// ORACLE — Heartbeat rafraîchit le LIEN, jamais la capacité ni l'état.
     ///
-    /// Sans la séparation : un wrapper vivant / shell mort garde `last_seen`
+    /// Sans la séparation : un wrapper vivant / shell mort garde `capacity_seen`
     /// frais et who / bridget-idle le comptent LIBRE. busy doit rester busy ;
-    /// `last_seen` (capacité) ne bouge pas sous heartbeat seul.
+    /// `capacity_seen` (capacité) ne bouge pas sous heartbeat seul.
     #[test]
     fn heartbeat_preserve_etat_metier() {
         let (mut state, config) = state_with_registered_agent("heartbeat-busy");
         state.set_turn_state("conn-1", true).unwrap();
         assert_eq!(state.presences.get("instance-1").unwrap().state, "busy");
-        let before_capacity = state.presences.get("instance-1").unwrap().last_seen;
+        let before_capacity = state.presences.get("instance-1").unwrap().capacity_seen;
         let before_link = state.presences.get("instance-1").unwrap().link_seen;
         std::thread::sleep(Duration::from_millis(5));
         let shared = Arc::new(Mutex::new(state));
@@ -9519,8 +9532,8 @@ mod presence_tests {
             "Heartbeat ne doit jamais écraser l'état métier (busy→connected serait un mensonge)"
         );
         assert_eq!(
-            presence.last_seen, before_capacity,
-            "Heartbeat ne doit pas rafraîchir la capacité (last_seen)"
+            presence.capacity_seen, before_capacity,
+            "Heartbeat ne doit pas rafraîchir la capacité (capacity_seen)"
         );
         assert!(
             presence.link_seen > before_link,
@@ -9531,7 +9544,7 @@ mod presence_tests {
 
     /// ORACLE lot A — zombie : wrapper qui heartbeate sans capacité.
     /// Contrôle positif : une capacité fraîche reste visible.
-    /// Mutant : si Heartbeat remettait last_seen à jour, last_seen_secs
+    /// Mutant : si Heartbeat remettait capacity_seen à jour, last_seen_secs
     /// redeviendrait ~0 et l'assertion « capacité gelée » tomberait.
     #[test]
     fn heartbeat_ne_rajeunit_pas_une_capacite_morte() {
@@ -9542,7 +9555,7 @@ mod presence_tests {
         {
             let presence = state.presences.get_mut("instance-1").unwrap();
             presence.state = "connected".to_string();
-            presence.last_seen = stale;
+            presence.capacity_seen = stale;
             // Lien encore frais (socket vivant) — c'est le cas nominal zombie.
             presence.link_seen = Instant::now();
         }
@@ -9558,9 +9571,9 @@ mod presence_tests {
             .get("instance-1")
             .expect("lien garde la présence");
         assert!(
-            presence.last_seen.elapsed() >= Duration::from_secs(1800),
+            presence.capacity_seen.elapsed() >= Duration::from_secs(1800),
             "la capacité doit rester gelée sous heartbeat seul: {:?}",
-            presence.last_seen.elapsed()
+            presence.capacity_seen.elapsed()
         );
         let infos = st.agent_infos();
         let agent = infos
@@ -9575,20 +9588,20 @@ mod presence_tests {
         let _ = std::fs::remove_file(&config.db_path);
     }
 
-    /// Contrôle positif lot A : un TurnState (capacité) rafraîchit last_seen.
+    /// Contrôle positif lot A : un TurnState (capacité) rafraîchit capacity_seen.
     #[test]
     fn capacite_vraie_rafraichit_last_seen() {
         let (mut state, config) = state_with_registered_agent("capacite-vraie");
         let stale = Instant::now()
             .checked_sub(Duration::from_secs(1900))
             .expect("horloge");
-        state.presences.get_mut("instance-1").unwrap().last_seen = stale;
+        state.presences.get_mut("instance-1").unwrap().capacity_seen = stale;
         state.presences.get_mut("instance-1").unwrap().link_seen = stale;
         std::thread::sleep(Duration::from_millis(5));
         state.set_turn_state("conn-1", false).unwrap();
         let presence = state.presences.get("instance-1").unwrap();
         assert!(
-            presence.last_seen.elapsed() < Duration::from_secs(2),
+            presence.capacity_seen.elapsed() < Duration::from_secs(2),
             "TurnState doit attestier une capacité fraîche"
         );
         assert!(
@@ -9606,6 +9619,96 @@ mod presence_tests {
             agent.last_seen_secs
         );
         let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    /// ORACLE lot B — busy jury composé (A+B) : capacité gelée 1 h, heartbeat
+    /// seul → survit (retain = horloge lien).
+    #[test]
+    fn lot_b_busy_jury_survit_sous_heartbeat_malgre_capacite_gelee() {
+        let (mut state, config) = state_with_registered_agent("lotb-busy-compose");
+        state.set_turn_state("conn-1", true).unwrap();
+        let capacity_stale = Instant::now()
+            .checked_sub(Duration::from_secs(3600))
+            .expect("horloge");
+        {
+            let p = state.presences.get_mut("instance-1").unwrap();
+            p.capacity_seen = capacity_stale;
+            p.link_seen = capacity_stale;
+        }
+        let shared = Arc::new(Mutex::new(state));
+        assert!(handle_wrapper_message("conn-1", WrapperToDaemon::Heartbeat, &shared).is_none());
+        let mut st = shared.lock().unwrap();
+        let p = st.presences.get("instance-1").expect("présence");
+        assert!(
+            p.capacity_seen.elapsed() >= Duration::from_secs(3500),
+            "capacité doit rester gelée sous heartbeat seul"
+        );
+        assert!(
+            presence_within_retention(p),
+            "busy + lien frais ⇒ keep_b_compose"
+        );
+        let infos = st.agent_infos();
+        assert!(
+            infos
+                .iter()
+                .any(|a| a.name == "agent-2" && a.state == "busy"),
+            "busy jury ne doit pas être purgé: {infos:?}"
+        );
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    /// ORACLE lot B — contrôle positif : capacité/lien frais → survit
+    /// (ne pas remplacer l'immortalité par la mortalité universelle).
+    #[test]
+    fn lot_b_presence_fraiche_survit_au_retain() {
+        let (mut state, config) = state_with_registered_agent("lotb-frais");
+        state.presences.get_mut("instance-1").unwrap().capacity_seen = Instant::now();
+        state.presences.get_mut("instance-1").unwrap().link_seen = Instant::now();
+        {
+            let p = state.presences.get("instance-1").unwrap();
+            assert!(
+                presence_within_retention(p),
+                "capacité/lien frais ⇒ keep_b_compose"
+            );
+        }
+        let infos = state.agent_infos();
+        assert!(
+            infos.iter().any(|a| a.name == "agent-2"),
+            "présence fraîche doit survivre: {infos:?}"
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// ORACLE lot B — connected mort (relec1/relec5) : deux horloges
+    /// périmées → purgé sans redémarrage. Mutant : exemption connected.
+    #[test]
+    fn lot_b_connected_mort_est_purge_sans_redemarrage() {
+        let (mut state, config) = state_with_registered_agent("lotb-connected-mort");
+        let stale = Instant::now()
+            .checked_sub(PRESENCE_RETENTION + Duration::from_secs(3600))
+            .expect("horloge");
+        {
+            let p = state.presences.get_mut("instance-1").unwrap();
+            p.state = "connected".to_string();
+            p.capacity_seen = stale;
+            p.link_seen = stale;
+            assert!(
+                presence_within_retention_mutant_exempt_connected(p),
+                "mutant exemption garderait le mort"
+            );
+            assert!(
+                !presence_within_retention(p),
+                "connected mort ⇒ keep_b_compose=false"
+            );
+        }
+        let infos = state.agent_infos();
+        assert!(
+            infos.iter().all(|a| a.name != "agent-2"),
+            "connected mort doit disparaître sans redémarrage: {infos:?}"
+        );
+        assert!(!state.presences.contains_key("instance-1"));
+        assert!(state.router.get_agent("agent-2").is_none());
+        let _ = std::fs::remove_file(config.db_path);
     }
 
     #[test]
