@@ -134,10 +134,11 @@ relève (~60 s). Elle **délègue**, n'approuve jamais. Surface CLI :
 Schéma SQLite `user_version = 15` : tables `routines` / `routine_occurrences`.
 La migration v15 n'est pas dans ce lot (`--migrate` ailleurs).
 L'adoption d'un mandat orphelin exige une délégation **vivante**
-(`state NOT IN (annulee, terminee)`) : un mandat terminal n'est jamais
-ressuscité en `ouverte/mandat_adopte`. Une `ouverte` qui pointerait déjà
-vers un mandat **disparu ou annulé** est rétractée en
-`sautee/mandat_plus_vivant` en tête de tick. Une délégation `terminee`
+(`!EtatDelegation::est_terminal()`, clause SQL dérivée du domaine) : un
+mandat terminal n'est jamais ressuscité en `ouverte/mandat_adopte`. Une
+`ouverte` qui atteste un mandat **mort** (`est_mandat_mort`, aujourd'hui
+`annulee`) est rétractée en `sautee/mandat_plus_vivant` en tête de tick —
+décision Rust sur le domaine, pas une liste SQL. Une délégation `terminee`
 (mission accomplie) n'est **pas** rétractée : l'occurrence attend la
 clôture d'objectif. **Choix** : sans attestation vivante ni accomplie,
 la routine redélègue même si l'objectif précédent reste ouvert — le
