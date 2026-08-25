@@ -11,14 +11,14 @@
 
 - [x] T001 [US1] Finaliser la propriété et les cas limites dans `specs/020-verification-pre-push/spec.md`
 - [x] T002 [US1] Décrire l'observation distante et le calcul d'ensemble dans `specs/020-verification-pre-push/plan.md`
-- [ ] T003 [US1] Écrire les sept scénarios dans `scripts/test-git-pre-push-authorship.sh`
-- [ ] T004 [US1] Exécuter les scénarios contre un stub permissif et conserver le compte rouge dans `specs/020-verification-pre-push/implementation.md`
+- [x] T003 [US1] Écrire les sept scénarios dans `scripts/test-git-pre-push-authorship.sh`
+- [x] T004 [US1] Exécuter les scénarios contre un stub permissif et conserver le compte rouge dans `specs/020-verification-pre-push/implementation.md`
 
 ## Phase 2 — Barrière transactionnelle
 
-- [ ] T005 [US1] Implémenter le calcul transactionnel fail-closed dans `scripts/git-pre-push-authorship.sh`
-- [ ] T006 [US2] Valider les contrôles positifs et l'héritage distant dans `scripts/test-git-pre-push-authorship.sh`
-- [ ] T007 [US4] Muter volontairement le motif réel, observer le rouge puis restaurer `scripts/git-pre-push-authorship.sh`
+- [x] T005 [US1] Implémenter le calcul transactionnel fail-closed dans `scripts/git-pre-push-authorship.sh`
+- [x] T006 [US2] Valider les contrôles positifs et l'héritage distant dans `scripts/test-git-pre-push-authorship.sh`
+- [x] T007 [US4] Muter volontairement le motif réel, observer le rouge puis restaurer `scripts/git-pre-push-authorship.sh`
 
 ## Phase 3 — Livraison sans activation
 

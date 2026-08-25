@@ -7,8 +7,8 @@ Spec: 020-verification-pre-push
 Titre: Vérification transactionnelle avant envoi
 Statut: In Progress
 Priorité: P1
-Tâches: 2/8 (25%)
-Tests: 0/7 (0%)
+Tâches: 7/8 (88%)
+Tests: 7/7 (100%)
 
 Résumé:
 - Contexte: un contrôle de message au moment de l'intégration ne voit pas les ancêtres importés par une branche.

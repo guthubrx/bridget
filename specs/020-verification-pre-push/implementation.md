@@ -23,3 +23,41 @@
 - **Fichiers** : `plan.md`, `research.md`, `quickstart.md`
 - **Validation** : contrat `pre-push` recoupé avec la documentation Git.
 - **Note** : l'activation reste dépendante de SPEC-018 et hors du lot.
+
+### T003–T004 — Banc rouge
+
+- **Statut** : complété
+- **Fichier** : `scripts/test-git-pre-push-authorship.sh`
+- **Mesure retenue sur stub permissif** : 1 passé / 6 rouges / 0 ignoré.
+- **Contrôle positif** : l'héritage déjà distant suivi de commits propres passe.
+- **Mesures écartées** : deux exécutions affichaient le même total mais les
+  fixtures échouaient avant de créer leurs commits ; elles ne constituent pas
+  une preuve et ne sont pas comptées.
+
+### T005–T006 — Hook transactionnel
+
+- **Statut** : complété
+- **Fichier** : `scripts/git-pre-push-authorship.sh`
+- **Mesure** : 7 passés / 0 rouge / 0 ignoré.
+- **Propriétés vérifiées** : union multi-références, branche sans amont,
+  force-push, filtre générique, héritage distant et échec fermé.
+
+### T007 — Mutation du filtre réel
+
+- **Statut** : complété
+- **Mutation** : ajout d'une virgule dans le motif de co-autorat.
+- **Mesure mutée** : 3 passés / 4 rouges / 0 ignoré.
+- **Rouges** : branche neuve, force-push, multi-références et filtre direct.
+- **Après restauration** : 7 passés / 0 rouge / 0 ignoré.
+
+## Revue hostile
+
+Deux problèmes trouvés et corrigés :
+
+1. Le nettoyage temporaire encodait le chemin dans une chaîne de trap :
+   remplacé par une fonction qui valide le préfixe avant suppression.
+2. La destination distante pouvait être interprétée comme une option :
+   ajout du séparateur d'options avant le chemin.
+
+Portabilité vérifiée avec un `TMPDIR` absolu contenant des espaces :
+7 passés / 0 rouge / 0 ignoré.
