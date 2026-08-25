@@ -61,6 +61,11 @@ const ATTACH_RELAY_IDLE_WAIT: Duration = Duration::from_millis(10);
 /// greffe prescrit l'attente ET le signalement — distincte de l'absence
 /// attestée. Le chemin worktree est validé contre la règle 6 (jamais le
 /// checkout principal d'un dépôt à worktrees liés).
+///
+/// Périmètre (déclaré aussi sur la carte) : greffe + Git uniquement — **pas**
+/// la capacité d'exécution (shell / mains). Une consigne « lis / committe /
+/// reprends » suppose un shell ; sans shell l'agent s'arrête et le dit
+/// (leçon de la nuit 2026-08-24/25), jamais il n'improvise.
 fn managed_resume_context(
     home: &Path,
     worktree: &Path,
@@ -71,6 +76,7 @@ fn managed_resume_context(
 ) -> String {
     let mut lines = vec![
         "Carte de reprise Bridget (faits durables, aucune mémoire reconstruite).".to_string(),
+        "Périmètre : greffe Maicie + Git uniquement — cette carte n'atteste PAS la capacité d'exécution (shell / mains). Sans shell : s'arrêter et le dire, jamais improviser.".to_string(),
         format!(
             "Identité figée : nom={agent}; type={agent_type}; protocole={protocol}; definition_digest={definition_digest}."
         ),
@@ -210,6 +216,15 @@ fn managed_resume_consigne(stance: &ResumeStance) -> &'static str {
 /// - un clone de revue isolé (une seule entrée — doctrine « copie détachée ») ;
 /// - un dépôt `git init` sans worktree lié ;
 /// - un arbre sans `.git`.
+///
+/// **Trou assumé (AWC 2026-08-25) :** la protection apparaît et disparaît
+/// avec le nombre de worktrees liés. Mesuré : le même principal alerte tant
+/// qu'un worktree lié existe, et **cesse d'alerter** dès que le dernier est
+/// purgé (`worktree remove`). Donc **nettoyer les worktrees désarme la
+/// règle 6** — exactement quand le dépôt redevient conforme aux règles de
+/// rangement (purge sous 24 h, plafond de worktrees). Sens de l'erreur
+/// choisi à dessein : se taire plutôt que crier faux sur un clone. Voir
+/// aussi `docs/regles-chantier.md` règle 6.
 ///
 /// Elle ne compare PAS les URL distantes (un clone du même remote aurait la
 /// même URL) et ne dépend PAS d'un chemin absolu gravé en dur.
@@ -4077,6 +4092,11 @@ mod prompt_tests {
         assert!(context.contains(" M tracked.txt"));
         assert!(context.contains("lis ton diff, committe"));
         assert!(context.contains("reprends la mission"), "{context}");
+        assert!(
+            context.contains("n'atteste PAS la capacité d'exécution")
+                || context.contains("shell / mains"),
+            "la carte doit déclarer son périmètre (greffe ≠ mains): {context}"
+        );
         assert!(
             !context.contains("ALERTE règle 6"),
             "worktree lié ne doit pas déclencher la règle 6: {context}"
