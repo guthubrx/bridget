@@ -1,9 +1,113 @@
 <!doctype html>
 <html lang="fr">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bridget</title>
-<link rel="stylesheet" href="/theme.css">
-<main id="app">Bridget</main>
-<script type="module" src="/app.js"></script>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Bridget</title>
+    <link rel="stylesheet" href="/theme.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="workspace" id="workspace">
+      <aside class="agent-pane" aria-label="Agents Bridget">
+        <header class="agent-pane__header">
+          <div>
+            <p class="eyebrow">Bridget</p>
+            <h1>Agents</h1>
+          </div>
+          <span class="fleet-count" id="fleet-count" aria-live="polite">—</span>
+        </header>
+
+        <p class="source-state" id="source-state" data-state="loading">
+          Lecture de la flotte…
+        </p>
+
+        <nav class="agent-list" id="agent-list" aria-label="Agents actifs"></nav>
+
+        <details class="stopped-agents" id="stopped-agents">
+          <summary>
+            <span>Agents arrêtés</span>
+            <span id="stopped-count">0</span>
+          </summary>
+          <nav id="stopped-agent-list" aria-label="Agents arrêtés"></nav>
+        </details>
+      </aside>
+
+      <section class="conversation" aria-label="Conversation courante">
+        <header class="conversation-header">
+          <div class="agent-heading">
+            <span class="state-dot" id="selected-state-dot" aria-hidden="true"></span>
+            <div>
+              <h2 id="selected-agent">Aucun agent</h2>
+              <p id="selected-meta">Sélectionnez un agent dans la liste.</p>
+            </div>
+          </div>
+          <span class="connection-indicator" id="connection-indicator">hors ligne</span>
+        </header>
+
+        <p class="relay-banner" id="relay-banner" data-state="connecting">
+          Connexion au relais…
+        </p>
+        <p class="stopped-banner" id="stopped-banner" hidden>
+          Cet agent est arrêté ; envoyer un message le relance.
+        </p>
+
+        <div class="thread-shell" id="thread-shell">
+          <main
+            class="thread"
+            id="thread"
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions"
+            aria-label="Messages"
+            tabindex="0"
+          >
+            <p class="empty-state">Les messages de l’agent apparaîtront ici.</p>
+          </main>
+          <button class="new-messages" id="new-messages" type="button" hidden>
+            <span id="new-messages-label">Nouveaux messages</span>
+            <span aria-hidden="true">↓</span>
+          </button>
+        </div>
+
+        <!-- Le compositeur est volontairement frère du fil. Le rendu du fil
+             peut remplacer #thread sans atteindre le brouillon ni son focus. -->
+        <footer class="composer-shell" id="composer-shell">
+          <form class="composer" id="composer" novalidate>
+            <label class="sr-only" for="draft">Message</label>
+            <textarea
+              id="draft"
+              name="body"
+              rows="1"
+              placeholder="Écrire à un agent…"
+              autocomplete="off"
+              spellcheck="true"
+            ></textarea>
+            <div class="composer-controls">
+              <label class="reply-control">
+                <input id="reply" name="reply" type="checkbox">
+                <span>Attendre une réponse</span>
+              </label>
+              <div class="send-controls">
+                <span class="send-state" id="send-state" aria-live="polite">prêt</span>
+                <button class="send-button" id="send" type="submit" aria-label="Envoyer">
+                  <span aria-hidden="true">↑</span>
+                </button>
+              </div>
+            </div>
+          </form>
+          <p class="context-line" id="context-line">Dépôt et branche non fournis par le relais.</p>
+        </footer>
+      </section>
+
+      <aside class="detail-panel" id="detail-panel" aria-label="Détails" hidden>
+        <header>
+          <h2 id="detail-title">Détails</h2>
+          <button class="quiet-action" id="close-detail" type="button">Fermer</button>
+        </header>
+        <div id="detail-content"></div>
+      </aside>
+    </div>
+  </body>
 </html>
