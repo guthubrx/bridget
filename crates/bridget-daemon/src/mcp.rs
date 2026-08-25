@@ -48,6 +48,27 @@ pub(crate) const REJEU_A_L_IDENTIQUE: &str = "rejouer à l'identique — même i
 const DIAGNOSTIC_REMISE_EN_VOL: &str = "remise en vol — le destinataire n'a pas encore accusé";
 const DIAGNOSTIC_SORT_INDETERMINE: &str = "sort indéterminé";
 const DIAGNOSTIC_ACCUSE_PERDU: &str = "accusé perdu après transmission";
+
+/// Statuts clients du couple dépôt-réussi / sort-inconnu.
+///
+/// Ils sont DIFFÉRENTS parce qu'un consommateur branche sur le champ `status`,
+/// jamais sur la prose du motif. Tant qu'ils étaient confondus, un lecteur
+/// prudent concluait à la panne devant un succès : un relecteur a lu deux
+/// `outcome_unknown` sur le même `id`, rejeu à l'identique compris, pour un
+/// message en cours d'acheminement — il en a déduit un canal cassé, et un
+/// constat BLOQUANT FAUX a été gravé au registre avant rétractation.
+pub(crate) const STATUT_IN_FLIGHT: &str = "in_flight";
+pub(crate) const STATUT_OUTCOME_UNKNOWN: &str = "outcome_unknown";
+
+/// Preuve de dépôt portée par une issue `OutcomeUnknown`, s'il y en a une.
+///
+/// Point de vérité UNIQUE du discriminant : le retour MCP et la sortie du
+/// binaire l'appellent tous les deux, donc ils ne peuvent pas diverger. Un
+/// identifiant vide n'est pas une preuve — le daemon n'en produit jamais, et
+/// l'accepter annoncerait un dépôt sur une valeur qu'il refuse lui-même.
+pub(crate) fn attestation_de_depot(delivery_id: Option<&str>) -> Option<&str> {
+    delivery_id.filter(|delivery_id| !delivery_id.trim().is_empty())
+}
 static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_CONNECTION_NAME: AtomicU64 = AtomicU64::new(1);
 
@@ -882,23 +903,30 @@ fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value
         // Le daemon répond AVANT l'accusé du destinataire : sur un premier envoi
         // nominal, l'issue est donc toujours `OutcomeUnknown`. Un `delivery_id`
         // atteste que la remise est en vol — rien n'est perdu. Sans lui, le sort
-        // est réellement indéterminé. Le distinguo évite d'annoncer une panne
-        // sur le cas nominal, et donc d'inviter au double envoi.
-        IdempotencyIssue::OutcomeUnknown { delivery_id, .. } => match delivery_id {
-            Some(delivery_id) => json!({
-                "status": "outcome_unknown",
-                "id": id,
-                "issued_at": issued_at,
-                "delivery_id": delivery_id,
-                "reason": format!("{DIAGNOSTIC_REMISE_EN_VOL} ; {REJEU_A_L_IDENTIQUE}")
-            }),
-            None => json!({
-                "status": "outcome_unknown",
-                "id": id,
-                "issued_at": issued_at,
-                "reason": format!("{DIAGNOSTIC_SORT_INDETERMINE} ; {REJEU_A_L_IDENTIQUE}")
-            }),
-        },
+        // est réellement indéterminé.
+        //
+        // Les deux cas portent des STATUTS DIFFÉRENTS, pas seulement des motifs
+        // différents : le lecteur d'un retour MCP branche sur `status`, jamais
+        // sur la prose. Tant que le cas nominal s'annonçait `outcome_unknown`,
+        // chaque agent revérifiait le ledger à la main — c'est le défaut mesuré
+        // sur ~100 envois d'une seule journée.
+        IdempotencyIssue::OutcomeUnknown { delivery_id, .. } => {
+            match attestation_de_depot(delivery_id.as_deref()) {
+                Some(delivery_id) => json!({
+                    "status": STATUT_IN_FLIGHT,
+                    "id": id,
+                    "issued_at": issued_at,
+                    "delivery_id": delivery_id,
+                    "reason": format!("{DIAGNOSTIC_REMISE_EN_VOL} ; {REJEU_A_L_IDENTIQUE}")
+                }),
+                None => json!({
+                    "status": STATUT_OUTCOME_UNKNOWN,
+                    "id": id,
+                    "issued_at": issued_at,
+                    "reason": format!("{DIAGNOSTIC_SORT_INDETERMINE} ; {REJEU_A_L_IDENTIQUE}")
+                }),
+            }
+        }
         IdempotencyIssue::EnvelopeMismatch => json!({
             "status": "envelope_mismatch",
             "id": id,
@@ -1599,6 +1627,9 @@ mod tests {
     /// répond avant l'accusé du destinataire, donc TOUT premier envoi passe
     /// par là. Annoncer « accusé perdu » sur un succès, c'est inviter au
     /// double envoi — le défaut mesuré sur ~100 envois d'une seule journée.
+    ///
+    /// Le statut lui-même doit changer : un lecteur branche sur `status`, pas
+    /// sur la prose du motif.
     #[test]
     fn une_remise_en_vol_ne_s_annonce_pas_comme_un_accuse_perdu() {
         let issue = IdempotencyIssue::OutcomeUnknown {
@@ -1606,7 +1637,7 @@ mod tests {
             delivery_id: Some("livraison-7".to_string()),
         };
         let rendered = send_issue_result("msg-1", 1_700_000_000, issue);
-        assert_eq!(rendered["status"], "outcome_unknown");
+        assert_eq!(rendered["status"], "in_flight");
         assert_eq!(rendered["delivery_id"], "livraison-7");
         // Forme CLOSE : diagnostic puis consigne, rien avant, rien après. Un
         // `contains` laissait passer tout préfixe ajouté — dont un préfixe qui
@@ -1672,7 +1703,9 @@ mod tests {
 
     /// Contre-épreuve : sans `delivery_id`, le sort est vraiment inconnu et le
     /// retour ne doit pas rassurer. Si ce test tombe, le correctif a effacé la
-    /// distinction qu'il avait pour but d'établir.
+    /// distinction qu'il avait pour but d'établir — c'est-à-dire qu'il aurait
+    /// remplacé un mensonge pessimiste par un mensonge optimiste, bien pire
+    /// dans un système d'attestation.
     #[test]
     fn un_sort_indetermine_ne_promet_pas_une_remise() {
         let issue = IdempotencyIssue::OutcomeUnknown {
@@ -1686,6 +1719,73 @@ mod tests {
             rendered["reason"].as_str().unwrap(),
             format!("{DIAGNOSTIC_SORT_INDETERMINE} ; {REJEU_A_L_IDENTIQUE}")
         );
+    }
+
+    /// L'invariant qui porte tout le correctif : les deux cas ne partagent pas
+    /// leur statut. Les deux tests précédents pourraient rester verts alors que
+    /// les statuts auraient reconvergé sur une valeur commune ; celui-ci le
+    /// constate directement.
+    #[test]
+    fn la_remise_en_vol_et_le_sort_inconnu_ne_partagent_pas_leur_statut() {
+        let en_vol = send_issue_result(
+            "msg-3",
+            1_700_000_000,
+            IdempotencyIssue::OutcomeUnknown {
+                expires_at: 1_700_000_060,
+                delivery_id: Some("livraison-8".to_string()),
+            },
+        );
+        let inconnu = send_issue_result(
+            "msg-3",
+            1_700_000_000,
+            IdempotencyIssue::OutcomeUnknown {
+                expires_at: 1_700_000_060,
+                delivery_id: None,
+            },
+        );
+        assert_ne!(
+            en_vol["status"], inconnu["status"],
+            "un dépôt réussi et un sort inconnu doivent se lire sur le statut seul"
+        );
+    }
+
+    /// Le discriminant vit à UN seul endroit, donc les deux surfaces ne peuvent
+    /// pas diverger. Sans cet oracle, rien n'empêche le retour MCP et la sortie
+    /// du binaire de répondre différemment à la même issue — et un agent qui
+    /// lit les deux n'aurait aucun moyen de savoir laquelle croire.
+    ///
+    /// Le cas `Some("")` est celui qui les faisait déjà diverger : la ligne du
+    /// binaire annonçait « en vol » quand son propre code de sortie refusait le
+    /// dépôt.
+    #[test]
+    fn le_statut_mcp_et_le_depot_du_binaire_ne_peuvent_pas_se_contredire() {
+        for (delivery_id, statut_attendu, depot_attendu) in [
+            (Some("livraison-9"), STATUT_IN_FLIGHT, true),
+            (None, STATUT_OUTCOME_UNKNOWN, false),
+            (Some(""), STATUT_OUTCOME_UNKNOWN, false),
+            (Some("   "), STATUT_OUTCOME_UNKNOWN, false),
+        ] {
+            let issue = IdempotencyIssue::OutcomeUnknown {
+                expires_at: 1_700_000_060,
+                delivery_id: delivery_id.map(str::to_string),
+            };
+            let rendu = send_issue_result("msg-4", 1_700_000_000, issue.clone());
+            assert_eq!(
+                rendu["status"], statut_attendu,
+                "statut MCP pour delivery_id={delivery_id:?}"
+            );
+            assert_eq!(
+                crate::cli::send_deposited(&issue),
+                depot_attendu,
+                "le binaire doit conclure comme le statut MCP pour delivery_id={delivery_id:?}"
+            );
+            // La preuve n'est publiée que lorsqu'elle atteste quelque chose.
+            assert_eq!(
+                rendu.get("delivery_id").is_some(),
+                depot_attendu,
+                "un delivery_id sans valeur probante ne doit pas être publié"
+            );
+        }
     }
 
     #[test]
@@ -1879,7 +1979,7 @@ mod tests {
             &socket,
         )
         .unwrap();
-        assert_eq!(first["status"], "outcome_unknown");
+        assert_eq!(first["status"], "in_flight");
         assert_eq!(first["delivery_id"], "livraison-differee");
         assert!(!first["reason"].as_str().unwrap().contains("perdu"));
 

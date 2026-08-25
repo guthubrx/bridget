@@ -948,10 +948,16 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
             }
         })
     };
+    // Le premier envoi est un DÉPÔT RÉUSSI, et ce banc le prouve bout en bout :
+    // le destinataire reçoit sa remise dès la ligne suivante. L'annoncer
+    // `outcome_unknown` gravait le défaut dans le contrat — c'est ce statut,
+    // lu comme une perte, qui a fait diagnostiquer un canal cassé à un
+    // relecteur et graver un constat bloquant faux au registre.
     let first = mcp.request(call(2, "request-a"));
-    assert_eq!(
-        first["result"]["structuredContent"]["status"],
-        "outcome_unknown"
+    assert_eq!(first["result"]["structuredContent"]["status"], "in_flight");
+    assert!(
+        first["result"]["structuredContent"]["delivery_id"].is_string(),
+        "un dépôt attesté doit publier la preuve qui le distingue d'un sort inconnu"
     );
     let (delivery_id, delivery_generation) = match receive_delivery(&mut recipient) {
         DaemonToWrapper::DeliverIdempotent {

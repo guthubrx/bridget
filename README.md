@@ -216,9 +216,33 @@ une enveloppe différente avec la même clé est refusée par
 `IdempotencyExpired` interdit toute réémission aveugle. Les trois options sont
 obligatoires ensemble ; un envoi historique sans elles reste inchangé. Une
 réponse portant `--in-reply-to` négocie toutefois ce contrat automatiquement :
-le binaire affiche son `id` et son `issued_at`, à réutiliser ensemble si le
-premier résultat vaut `outcome_unknown`. Sa portée stable vient de l'instance
+le binaire affiche son `id` et son `issued_at`, à réutiliser ensemble pour lire
+le sort d'un envoi non encore consolidé. Sa portée stable vient de l'instance
 Bridget courante, comme pour l'outil MCP.
+
+Le premier résultat d'un envoi nominal n'est pas un incident. L'issue durable
+`OutcomeUnknown` ci-dessus est celle du protocole ; côté client — binaire comme
+outil MCP — elle se lit sous deux statuts distincts, selon qu'un dépôt est
+attesté ou non. Un seul des deux décrit un problème :
+
+- **`in_flight` — dépôt attesté**, le destinataire n'a pas encore accusé.
+  **Aucune action n'est requise** : c'est un succès. Le daemon répond sans
+  jamais attendre l'aval, donc c'est le retour normal d'un premier envoi. Le
+  binaire l'annonce `DÉPÔT: in_flight (remise en vol)` et l'outil MCP rend le
+  même statut, `"in_flight"`, avec l'identifiant de remise qui l'atteste.
+- **`outcome_unknown` — le sort est inconnu**, pour l'une de deux raisons :
+  la connexion est tombée avant la réponse, ou le daemon a répondu sans
+  attester de dépôt (pas d'identifiant de remise). Dans les deux cas, le
+  message a pu partir ou non.
+
+Les deux surfaces nomment le même statut, il n'y a donc rien à traduire de
+l'une à l'autre.
+
+Pour lire le sort d'un envoi non encore consolidé — `in_flight` par curiosité,
+`outcome_unknown` par nécessité —, rejouez à l'identique : **même `id`, même
+`issued_at`, même corps**. C'est une consultation, jamais une seconde émission ;
+elle rend `accepted` une fois l'accusé du destinataire consolidé, et ne duplique
+jamais.
 
 Cette garantie est disponible sur le protocole local et la CLI.
 
@@ -509,8 +533,12 @@ bridget send --to agent-1 --in-reply-to fa09fa7800694 "Relecture terminée"
 La demande est marquée `answered` dans la même transition transactionnelle que
 les autres réponses liées ; ses rappels cessent. `bridget reply` reprend
 automatiquement l'identifiant de la dernière demande reçue, ou accepte le même
-flag pour lever une ambiguïté. Si le binaire annonce `outcome_unknown`, rejouez
-exactement le même corps avec les valeurs affichées :
+flag pour lever une ambiguïté. Pour lire le sort réel d'un dépôt `in_flight` —
+ou lever un `outcome_unknown` —, rejouez à l'identique : **même `id`, même
+`issued_at`, même corps**, c'est-à-dire le corps exact et les deux valeurs
+affichées. C'est une consultation, jamais une seconde émission ; changer le
+corps ferait de ce rejeu une autre enveloppe, que le daemon refuserait en
+`envelope_mismatch` :
 
 ```bash
 bridget send --to agent-1 --in-reply-to fa09fa7800694 \

@@ -295,7 +295,11 @@ while len(processed) < 4:
             },
         })
         status = sent["result"]["structuredContent"]["status"]
-        if status not in ("outcome_unknown", "accepted"):
+        # Le dépôt a deux noms honnêtes : « accepted » quand l'accusé aval est
+        # déjà consolidé, « in_flight » quand la remise est prise mais pas
+        # encore accusée — le cas nominal d'un premier envoi. « outcome_unknown »
+        # n'est plus un succès et ne doit plus être toléré ici.
+        if status not in ("in_flight", "accepted"):
             raise RuntimeError(f"réponse MCP refusée: {sent}")
         processed.append(body)
 with open(os.environ["BRIDGET_PROMPT_DONE"] + ".tmp", "w", encoding="utf-8") as output:

@@ -236,6 +236,25 @@ impl ReplayPublicMessage {
 }
 
 /// Issue durable du contrat client, sans inferrer d'etat Maicie.
+///
+/// DEUX MÉCANIQUES SERDE, souvent confondues, et elles n'ont pas du tout le
+/// même effet quand le daemon évolue :
+///
+/// - **Les VARIANTES ne sont pas tolérantes.** L'enum est tagué et ne porte
+///   aucune variante de repli : un `kind` inconnu ne se perd pas en silence, il
+///   fait ÉCHOUER le décodage (`unknown variant`, donc `BridgetClientError::
+///   Decode`). Ajouter une variante au protocole filaire CASSE donc ce
+///   consommateur — c'est bruyant, pas discret, mais c'est une casse.
+/// - **Les CHAMPS, eux, le sont.** Le `#[serde(default)]` ci-dessous rend
+///   `None` sans erreur quand le pair n'envoie pas `delivery_id` : là, et là
+///   seulement, l'information se perd silencieusement.
+///
+/// Conséquence tenue par le dépôt : la distinction dépôt-attesté / sort-inconnu
+/// vit sur la SURFACE CLIENT (le champ `status` du retour MCP et la sortie du
+/// binaire), jamais en variante filaire. Ce serait une casse pure — Maicie
+/// dispose déjà de la distinction par `delivery_id`. Voir l'oracle
+/// `le_jumeau_refuse_une_variante_inconnue_au_lieu_de_la_perdre`, qui mesure
+/// les deux mécaniques plutôt que de les supposer.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum IdempotencyIssue {
@@ -249,6 +268,7 @@ pub enum IdempotencyIssue {
     },
     OutcomeUnknown {
         expires_at: i64,
+        /// Tolérant par CHAMP : absent du fil, il vaut `None` sans erreur.
         #[serde(default)]
         delivery_id: Option<String>,
     },
@@ -2269,6 +2289,61 @@ mod tests {
     use std::sync::{Arc, MutexGuard, OnceLock};
     use std::thread;
     use std::time::{Duration, Instant};
+
+    /// Ce que le jumeau `IdempotencyIssue` fait d'une variante qu'il ne connaît
+    /// pas — mesuré, pas supposé, parce que la réponse décide du périmètre d'un
+    /// changement de statut.
+    ///
+    /// Le jumeau est un enum tagué SANS variante de repli. Une variante inconnue
+    /// sur le fil ne se perd donc pas en silence : elle fait ÉCHOUER le décodage.
+    /// C'est plus sûr qu'un oubli muet, mais ça signifie qu'ajouter une variante
+    /// `in_flight` au protocole filaire casserait ce consommateur — et ce, sans
+    /// rien lui apporter, puisque `delivery_id` lui donne déjà la distinction.
+    ///
+    /// D'où la frontière tenue par le lot : le statut distinct vit sur la
+    /// SURFACE CLIENT (le champ `status` du retour MCP), le fil reste inchangé.
+    /// Si ce test se met à passer avec un `Ok`, c'est qu'une variante de repli a
+    /// été ajoutée au jumeau, et la frontière peut être rediscutée.
+    #[test]
+    fn le_jumeau_refuse_une_variante_inconnue_au_lieu_de_la_perdre() {
+        let inconnue = json!({ "kind": "in_flight", "expires_at": 1_700_000_060, "delivery_id": "livraison-1" });
+        let decode: Result<super::IdempotencyIssue, _> = serde_json::from_value(inconnue);
+        let erreur = decode.expect_err(
+            "une variante inconnue doit être refusée : si elle passe, le consommateur \
+             lit un état qu'il n'a pas compris",
+        );
+        assert!(
+            erreur.to_string().contains("unknown variant"),
+            "le refus doit nommer la variante inconnue, sinon le diagnostic est illisible: {erreur}"
+        );
+
+        // Contre-épreuve : la variante CONNUE, elle, se décode — sans quoi le
+        // test ci-dessus passerait pour n'importe quelle raison (typo de champ,
+        // tag absent) et ne prouverait rien sur les variantes.
+        let connue = json!({ "kind": "outcome_unknown", "expires_at": 1_700_000_060, "delivery_id": "livraison-1" });
+        let decode: super::IdempotencyIssue = serde_json::from_value(connue).unwrap();
+        assert_eq!(
+            decode,
+            super::IdempotencyIssue::OutcomeUnknown {
+                expires_at: 1_700_000_060,
+                delivery_id: Some("livraison-1".to_string()),
+            }
+        );
+
+        // Et le `serde(default)` du champ, lui, EST silencieux : un fil sans
+        // `delivery_id` rend `None` sans erreur. C'est la mécanique à ne pas
+        // confondre avec la précédente — le champ absent se perd en silence, la
+        // variante inconnue non.
+        let sans_champ = json!({ "kind": "outcome_unknown", "expires_at": 1_700_000_060 });
+        let decode: super::IdempotencyIssue = serde_json::from_value(sans_champ).unwrap();
+        assert_eq!(
+            decode,
+            super::IdempotencyIssue::OutcomeUnknown {
+                expires_at: 1_700_000_060,
+                delivery_id: None,
+            }
+        );
+    }
 
     #[test]
     fn reprise_conserve_les_extensions_inconnues_octet_pour_octet() {

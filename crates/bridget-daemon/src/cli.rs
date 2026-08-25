@@ -1184,26 +1184,34 @@ fn print_idempotency_issue(issue: &IdempotencyIssue, options: &IdempotentSendOpt
             options.id,
             options.issued_at
         ),
-        // Une remise en vol n'est pas une panne : elle passe par la sortie
-        // standard, comme le succès dont elle est le premier temps.
-        IdempotencyIssue::OutcomeUnknown {
-            delivery_id: Some(delivery_id),
-            ..
-        } => {
-            println!(
-                "DÉPÔT: en vol id={} issued_at={} delivery_id={delivery_id} — {}",
-                options.id,
-                options.issued_at,
-                crate::mcp::REJEU_A_L_IDENTIQUE
-            );
-        }
-        IdempotencyIssue::OutcomeUnknown { .. } => {
-            eprintln!(
-                "ISSUE: outcome_unknown id={} issued_at={} — sort indéterminé ; {}",
-                options.id,
-                options.issued_at,
-                crate::mcp::REJEU_A_L_IDENTIQUE
-            );
+        // Le binaire nomme le MÊME statut que le retour MCP, via le même point
+        // de vérité : un agent qui lit les deux surfaces n'a aucune traduction
+        // à faire, et elles ne peuvent pas diverger.
+        //
+        // Le discriminant passe par `attestation_de_depot`, pas par un `Some`
+        // nu : un `Some("")` imprimait « en vol » sur la sortie standard alors
+        // que le code de sortie le refusait déjà en échec — la ligne disait
+        // dépôt, le `rc` disait panne.
+        IdempotencyIssue::OutcomeUnknown { delivery_id, .. } => {
+            match crate::mcp::attestation_de_depot(delivery_id.as_deref()) {
+                // Une remise en vol n'est pas une panne : elle passe par la
+                // sortie standard, comme le succès dont elle est le premier
+                // temps.
+                Some(delivery_id) => println!(
+                    "DÉPÔT: {} (remise en vol) id={} issued_at={} delivery_id={delivery_id} — {}",
+                    crate::mcp::STATUT_IN_FLIGHT,
+                    options.id,
+                    options.issued_at,
+                    crate::mcp::REJEU_A_L_IDENTIQUE
+                ),
+                None => eprintln!(
+                    "ISSUE: {} id={} issued_at={} — sort indéterminé ; {}",
+                    crate::mcp::STATUT_OUTCOME_UNKNOWN,
+                    options.id,
+                    options.issued_at,
+                    crate::mcp::REJEU_A_L_IDENTIQUE
+                ),
+            }
         }
         IdempotencyIssue::EnvelopeMismatch => eprintln!(
             "REJET: envelope_mismatch id={} issued_at={}",
@@ -1230,13 +1238,14 @@ fn print_idempotency_issue(issue: &IdempotencyIssue, options: &IdempotentSendOpt
 pub(crate) fn send_deposited(issue: &IdempotencyIssue) -> bool {
     match issue {
         IdempotencyIssue::Accepted { .. } => true,
-        // Un identifiant vide n'atteste rien : le daemon n'en produit jamais,
-        // et le prendre pour une preuve de dépôt ferait sortir en succès sur
-        // une valeur que lui-même refuserait. On exige la preuve, pas sa forme.
-        IdempotencyIssue::OutcomeUnknown {
-            delivery_id: Some(delivery_id),
-            ..
-        } => !delivery_id.trim().is_empty(),
+        // Même point de vérité que la ligne imprimée et que le `status` MCP :
+        // le code de sortie ne peut donc pas contredire ce qui est affiché.
+        // Un identifiant vide n'atteste rien — le daemon n'en produit jamais,
+        // et le prendre pour une preuve ferait sortir en succès sur une valeur
+        // que lui-même refuserait.
+        IdempotencyIssue::OutcomeUnknown { delivery_id, .. } => {
+            crate::mcp::attestation_de_depot(delivery_id.as_deref()).is_some()
+        }
         _ => false,
     }
 }
