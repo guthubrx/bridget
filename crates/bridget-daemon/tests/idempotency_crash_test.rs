@@ -358,9 +358,13 @@ fn watch_marker(directory: &Path, marker: &Path) {
     }
 }
 
-/// Stub de liaison sous Linux : le fichier doit compiler avec `test-support`,
-/// mais aucun test kqueue-dépendant ne doit s'exécuter (ils portent `ignore`).
+/// Stub de liaison hors Darwin/BSD : le fichier doit compiler avec
+/// `test-support`, mais aucun test kqueue-dépendant ne doit s'exécuter.
 /// Ce n'est PAS un équivalent inotify — hors périmètre SpecKit-030.
+///
+/// Si cette panique se déclenche, un `#[cfg_attr(target_os = "linux", ignore)]`
+/// a été retiré ou un nouvel appel a été ajouté sans la garde — ce n'est
+/// pas un flocon du banc, c'est une garde absente.
 #[cfg(not(any(
     target_os = "macos",
     target_os = "ios",
@@ -371,7 +375,14 @@ fn watch_marker(directory: &Path, marker: &Path) {
 )))]
 fn watch_marker(_directory: &Path, _marker: &Path) {
     panic!(
-        "watch_marker exige kqueue (Darwin/BSD) ; sous Linux le test appelant doit être #[ignore]"
+        "watch_marker: ce test exige kqueue (Darwin/BSD) et doit être \
+         #[ignore] sous Linux via cfg_attr(target_os = \"linux\", ignore = \
+         \"exige kqueue…\"). Stub de liaison uniquement — pas un observateur \
+         de jalon. Voir la garde kqueue / les cfg_attr ignore dans {file} \
+         (stub déclenché à la ligne {line}). Si tu lis ceci, un ignore a été \
+         retiré ou un appel a été ajouté sans la garde.",
+        file = file!(),
+        line = line!()
     );
 }
 
