@@ -4390,8 +4390,9 @@ fn update_guichet_aggregates(
 }
 
 /// Compare le verdict au mandat chargé DANS la transaction de greffe.
-/// L'ordre est normatif : une cible déplacée est signalée avant un éventuel
-/// HEAD local divergent, car ce mouvement n'est pas imputable au juré.
+/// Une cible déplacée n'exonère le juré que si son HEAD appartient encore au
+/// mandat ou déjà à la nouvelle cible ; un troisième SHA conserve les deux
+/// faits dans un motif composé.
 fn review_verdict_refusal(
     delegation: &Delegation,
     report: &RapportLivraison,
@@ -4406,7 +4407,13 @@ fn review_verdict_refusal(
             {
                 Some(MotifRefusGreffe::MandatRevueDivergent)
             } else if evidence.observed_target_head != target.expected_head {
-                Some(MotifRefusGreffe::TeteCibleDeplacee)
+                if evidence.measured_head == target.expected_head
+                    || evidence.measured_head == evidence.observed_target_head
+                {
+                    Some(MotifRefusGreffe::TeteCibleDeplacee)
+                } else {
+                    Some(MotifRefusGreffe::TeteCibleDeplaceeEtTeteMesureeDivergente)
+                }
             } else if evidence.measured_head != target.expected_head {
                 Some(MotifRefusGreffe::TeteMesureeDivergente)
             } else {
@@ -4459,6 +4466,9 @@ fn refusal_reason_name(reason: MotifRefusGreffe) -> &'static str {
         MotifRefusGreffe::VerdictRevueInattendu => "review_verdict_unexpected",
         MotifRefusGreffe::MandatRevueDivergent => "review_mandate_mismatch",
         MotifRefusGreffe::TeteCibleDeplacee => "target_head_moved",
+        MotifRefusGreffe::TeteCibleDeplaceeEtTeteMesureeDivergente => {
+            "target_head_moved_and_measured_head_mismatch"
+        }
         MotifRefusGreffe::TeteMesureeDivergente => "measured_head_mismatch",
     }
 }
@@ -4472,6 +4482,9 @@ fn parse_refusal_reason_name(value: &str) -> Result<MotifRefusGreffe, StoreError
         "review_verdict_unexpected" => Ok(MotifRefusGreffe::VerdictRevueInattendu),
         "review_mandate_mismatch" => Ok(MotifRefusGreffe::MandatRevueDivergent),
         "target_head_moved" => Ok(MotifRefusGreffe::TeteCibleDeplacee),
+        "target_head_moved_and_measured_head_mismatch" => {
+            Ok(MotifRefusGreffe::TeteCibleDeplaceeEtTeteMesureeDivergente)
+        }
         "measured_head_mismatch" => Ok(MotifRefusGreffe::TeteMesureeDivergente),
         _ => Err(StoreError::Corrupt("motif de refus inconnu")),
     }
@@ -7192,7 +7205,8 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
                  reason TEXT NOT NULL CHECK(reason IN (
                      'delegation_missing','relation_invalid','envelope_mismatch',
                      'review_verdict_required','review_verdict_unexpected',
-                     'review_mandate_mismatch','target_head_moved','measured_head_mismatch'
+                     'review_mandate_mismatch','target_head_moved','measured_head_mismatch',
+                     'target_head_moved_and_measured_head_mismatch'
                  )),
                  response_message_id TEXT NOT NULL,
                  reply_bytes BLOB NOT NULL,
@@ -7530,7 +7544,8 @@ fn migrate_review_refusal_reasons_v17(tx: &Transaction<'_>) -> Result<(), StoreE
              reason TEXT NOT NULL CHECK(reason IN (
                  'delegation_missing','relation_invalid','envelope_mismatch',
                  'review_verdict_required','review_verdict_unexpected',
-                 'review_mandate_mismatch','target_head_moved','measured_head_mismatch'
+                 'review_mandate_mismatch','target_head_moved','measured_head_mismatch',
+                 'target_head_moved_and_measured_head_mismatch'
              )),
              response_message_id TEXT NOT NULL,
              reply_bytes BLOB NOT NULL,

@@ -304,12 +304,58 @@ fn mandat_divergent_est_refuse_avant_les_observations_git() {
 }
 
 #[test]
-fn cible_deplacee_prime_sur_un_head_local_egalement_divergent() {
-    let root = root("target-head-moved");
+fn cible_deplacee_avec_head_du_mandat_exonere_le_jure() {
+    let root = root("target-head-moved-expected");
     let database = root.join("maicie.sqlite3");
-    let created = seed_review(&database, "target-head-moved");
+    let created = seed_review(&database, "target-head-moved-expected");
     let claim = review_claim(
-        "request-target-head-moved",
+        "request-target-head-moved-expected",
+        &created,
+        "origin/fix/review",
+        &"1".repeat(40),
+        &"1".repeat(40),
+        &"2".repeat(40),
+    );
+    assert_review_refusal(
+        &database,
+        &created,
+        &claim,
+        MotifRefusGreffe::TeteCibleDeplacee,
+        "target_head_moved",
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cible_deplacee_avec_head_distant_exonere_le_jure() {
+    let root = root("target-head-moved-observed");
+    let database = root.join("maicie.sqlite3");
+    let created = seed_review(&database, "target-head-moved-observed");
+    let claim = review_claim(
+        "request-target-head-moved-observed",
+        &created,
+        "origin/fix/review",
+        &"1".repeat(40),
+        &"2".repeat(40),
+        &"2".repeat(40),
+    );
+    assert_review_refusal(
+        &database,
+        &created,
+        &claim,
+        MotifRefusGreffe::TeteCibleDeplacee,
+        "target_head_moved",
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cible_deplacee_avec_head_etranger_conserve_les_deux_faits() {
+    let root = root("target-head-moved-and-measured-mismatch");
+    let database = root.join("maicie.sqlite3");
+    let created = seed_review(&database, "target-head-moved-and-measured-mismatch");
+    let claim = review_claim(
+        "request-target-head-moved-and-measured-mismatch",
         &created,
         "origin/fix/review",
         &"1".repeat(40),
@@ -320,8 +366,8 @@ fn cible_deplacee_prime_sur_un_head_local_egalement_divergent() {
         &database,
         &created,
         &claim,
-        MotifRefusGreffe::TeteCibleDeplacee,
-        "target_head_moved",
+        MotifRefusGreffe::TeteCibleDeplaceeEtTeteMesureeDivergente,
+        "target_head_moved_and_measured_head_mismatch",
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -432,12 +478,13 @@ fn migration_v17_conserve_les_refus_v16_et_ouvre_les_motifs_de_revue() {
     connection
         .execute(
             "INSERT INTO guichet_refusal_receptions VALUES(
-                 'scope-v17','request-v17',X'05','delivery_report','target_head_moved',
+                 'scope-v17','request-v17',X'05','delivery_report',
+                 'target_head_moved_and_measured_head_mismatch',
                  'response-v17',X'06',1,'claim-v17',1001
              )",
             [],
         )
-        .expect("le CHECK v17 doit accepter le motif de revue distinct");
+        .expect("le CHECK v17 doit accepter le motif composé de revue");
     let legacy_table: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master

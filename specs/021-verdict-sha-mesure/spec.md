@@ -6,8 +6,10 @@
 
 **Validation du lot** : 10/10 (100 %)
 
-**Suite workspace** : 944 réussis ; 3 rouges hors lot reproduits sur la base ;
-16 ignorés
+**Suite workspace Linux sans features** : 944 réussis ; 4 rouges hors lot ;
+16 ignorés. Trois rouges sont reproduits sur la base ; le quatrième,
+`matrice_fr008_compare_le_meme_corpus_et_les_frames_attach`, repasse 5/5 en
+isolation après son échec sous charge.
 
 ## Problème
 
@@ -41,13 +43,20 @@ octets canoniques du dépôt et de la réponse sont la preuve durable.
 L'ordre de décision est fermé :
 
 1. mandat fourni différent du mandat greffé → `review_mandate_mismatch` ;
-2. tête distante observée différente du SHA gelé → `target_head_moved` ;
-3. `HEAD` mesuré différent du SHA gelé → `measured_head_mismatch` ;
-4. égalité des trois SHA → verdict recevable.
+2. cible distante inchangée et `HEAD` différent du SHA gelé →
+   `measured_head_mismatch` ;
+3. cible distante passée de A à B et `HEAD` égal à A ou B →
+   `target_head_moved` ;
+4. cible distante passée de A à B et `HEAD` égal à un troisième SHA C →
+   `target_head_moved_and_measured_head_mismatch` ;
+5. égalité des trois SHA → verdict recevable.
 
-`target_head_moved` est évalué avant `measured_head_mismatch`. Si la branche a
-bougé pendant le jury, le verdict est refusé comme périmé sans imputer une
-faute au juré. Il faut geler une nouvelle tête et émettre un nouveau mandat.
+`target_head_moved` encode l'absence de faute du juré uniquement quand le
+`HEAD` mesuré appartient à l'ensemble fermé {tête gelée, tête distante
+observée}. Un troisième SHA constitue deux faits simultanés : la cible a bougé
+et le juré a mesuré une tête étrangère aux deux. Le motif composé conserve ces
+deux faits sans exonérer le juré. Dans tous les cas de cible déplacée, il faut
+geler une nouvelle tête et émettre un nouveau mandat.
 
 ### D3 — Garantie exacte
 
@@ -84,7 +93,7 @@ commande Git absente, ambiguë ou en échec interdit le dépôt.
 
 Pour une délégation de revue, un rapport sans verdict est refusé avec
 `review_verdict_required`. Un verdict sur une délégation ordinaire est refusé
-avec `review_verdict_unexpected`. Les cinq refus de revue sont persistés et
+avec `review_verdict_unexpected`. Les six refus de revue sont persistés et
 rejouables comme les refus guichet existants.
 
 ### US4 — Verdict recevable
@@ -110,7 +119,8 @@ décision explicite du référent. Un verdict ne clôt jamais l'objectif.
 - **FR-2107** : les refus sont distincts et durables :
   `review_verdict_required`, `review_verdict_unexpected`,
   `review_mandate_mismatch`, `target_head_moved`,
-  `measured_head_mismatch`.
+  `measured_head_mismatch` et
+  `target_head_moved_and_measured_head_mismatch`.
 - **FR-2108** : un verdict accepté termine la délégation de revue sans fermer
   l'objectif ni qualifier automatiquement le verdict.
 - **FR-2109** : le chemin de production guichet, et non seulement une fonction
@@ -122,8 +132,8 @@ décision explicite du référent. Un verdict ne clôt jamais l'objectif.
 
 - **SC-2101** : un `HEAD` ancien avec cible distante inchangée produit
   `measured_head_mismatch` et zéro transition.
-- **SC-2102** : une branche distante avancée produit `target_head_moved`, même
-  si le `HEAD` local diffère aussi.
+- **SC-2102** : une cible distante passée de A à B produit
+  `target_head_moved` lorsque le `HEAD` mesuré vaut A ou B.
 - **SC-2103** : un verdict sans attestation sur mandat de revue est refusé.
 - **SC-2104** : le binaire réel, lancé dans un dépôt Git jetable, dépose le SHA
   de son vrai `HEAD` et la tête d'un remote jetable.
@@ -131,3 +141,6 @@ décision explicite du référent. Un verdict ne clôt jamais l'objectif.
   fait rougir l'oracle bout en bout.
 - **SC-2106** : les rapports ordinaires v1 existants gardent leurs octets et
   leur comportement.
+- **SC-2107** : une cible distante passée de A à B avec un `HEAD` C distinct
+  de A et B produit `target_head_moved_and_measured_head_mismatch`, conserve
+  les trois SHA dans la pièce de refus et n'écrit aucune transition.

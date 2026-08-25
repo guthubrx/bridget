@@ -23,7 +23,7 @@ Maicie compare puis persiste.
   `expected_head`.
 - `ReviewVerdictEvidence` filaire : verdict, référence, SHA attendu, SHA
   mesuré et tête distante observée.
-- `MotifRefusGreffe` reçoit cinq variantes de revue.
+- `MotifRefusGreffe` reçoit six variantes de revue.
 - Schéma Maicie v17 : reconstruction de `guichet_refusal_receptions` avec le
   CHECK élargi ; les lignes historiques sont recopiées sans transformation.
 

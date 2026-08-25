@@ -463,6 +463,9 @@ pub fn refusal_reply_bytes(
         MotifRefusGreffe::VerdictRevueInattendu => "review_verdict_unexpected",
         MotifRefusGreffe::MandatRevueDivergent => "review_mandate_mismatch",
         MotifRefusGreffe::TeteCibleDeplacee => "target_head_moved",
+        MotifRefusGreffe::TeteCibleDeplaceeEtTeteMesureeDivergente => {
+            "target_head_moved_and_measured_head_mismatch"
+        }
         MotifRefusGreffe::TeteMesureeDivergente => "measured_head_mismatch",
     };
     let in_reply_to = request.request.in_reply_to(&request.request_id);

@@ -8,7 +8,7 @@
 - [x] **T2104** Mesurer `HEAD` et la référence distante dans le chemin CLI réel ;
   refuser toute observation Git absente ou ambiguë.
 - [x] **T2105** Comparer mandat et observations dans la transaction de greffe,
-  avec les cinq refus distincts et zéro transition sur refus.
+  avec les six refus distincts et zéro transition sur refus.
 - [x] **T2106** Terminer la délégation de revue sur verdict recevable, sans
   clôturer l'objectif.
 - [x] **T2107** Livrer la migration Maicie v17 et son oracle depuis v16.

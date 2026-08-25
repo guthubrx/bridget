@@ -40,13 +40,16 @@ absent. Pour une revue, le binaire ajoute ce bloc après avoir interrogé Git :
 | revue | absent | — | — | `review_verdict_required` |
 | ordinaire | présent | — | — | `review_verdict_unexpected` |
 | revue A | mandat déclaré ≠ A | — | — | `review_mandate_mismatch` |
-| revue A | A | B | A ou B | `target_head_moved` |
+| revue A | A | B | A | `target_head_moved` |
+| revue A | A | B | B | `target_head_moved` |
+| revue A | A | B | C, avec C ≠ A et C ≠ B | `target_head_moved_and_measured_head_mismatch` |
 | revue A | A | A | B | `measured_head_mismatch` |
 | revue A | A | A | A | accepté |
 
-Tous les refus précèdent toute transition. L'ordre `target_head_moved` avant
-`measured_head_mismatch` encode l'absence de faute du juré quand la cible a
-bougé sous lui.
+Tous les refus précèdent toute transition. `target_head_moved` encode l'absence
+de faute du juré seulement si son `HEAD` correspond encore au mandat A ou déjà
+à la nouvelle cible B. Un troisième SHA C conserve les deux faits dans un motif
+composé : déplacement de cible et tête mesurée étrangère à A comme à B.
 
 ## Non-garanties
 

@@ -1767,6 +1767,7 @@ pub enum MotifRefusGreffe {
     VerdictRevueInattendu,
     MandatRevueDivergent,
     TeteCibleDeplacee,
+    TeteCibleDeplaceeEtTeteMesureeDivergente,
     TeteMesureeDivergente,
 }
 

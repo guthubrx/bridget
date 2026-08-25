@@ -210,7 +210,9 @@ Pour une réponse `delivery_report` acceptée, le même bloc optionnel
 `review_verdict` est recopié après `delivery_hash`. Les refus de revue utilisent
 les motifs fermés `review_verdict_required`, `review_verdict_unexpected`,
 `review_mandate_mismatch`, `target_head_moved` et
-`measured_head_mismatch`. Bridget transporte ces valeurs sans les comparer.
+`measured_head_mismatch`, ainsi que le motif composé
+`target_head_moved_and_measured_head_mismatch`. Bridget transporte ces valeurs
+sans les comparer.
 
 Avant toute écriture, Bridget conditionne la transition `claimed → replied` à
 la conjonction durable suivante : `claim_owner` est la connexion courante,
