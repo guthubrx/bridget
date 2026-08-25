@@ -31,6 +31,7 @@ use crate::store::{
     DelegateReservation, GuichetProjectionFacts, MaicieStore, ObjectiveSnapshot, StoreError,
     StoredDelegateResult, StoredGuichetReply,
 };
+use bridget_transport::protocol::ReviewTarget;
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -360,6 +361,7 @@ fn guichet_process_result(
 
 fn deterministic_refusal_reason(error: &StoreError) -> Option<MotifRefusGreffe> {
     match error {
+        StoreError::GuichetRefusal(reason) => Some(*reason),
         StoreError::NotFound(_) => Some(MotifRefusGreffe::DelegationAbsente),
         StoreError::EnvelopeMismatch => Some(MotifRefusGreffe::EnveloppeDivergente),
         StoreError::Invalid("relations du rapport invalides")
@@ -519,7 +521,7 @@ pub fn handle_direct_message(
                 record,
                 help: ConversationHelp {
                     command: "maicie delegate",
-                    usage: "maicie delegate --goal <texte> --suite aucune| <objectif> [--to <agent>] [--depends-on <id>] [--reference <id>] [--duration courte|normale|longue]",
+                    usage: "maicie delegate --goal <texte> --suite aucune|<objectif> [--to <agent>] [--depends-on <id>] [--reference <id>] [--duration courte|normale|longue] [--review-ref <remote>/<branche> --expected-head <sha>]",
                 },
             })
         }
@@ -536,6 +538,8 @@ pub struct DelegateRequest<'a> {
     /// Identifiant exact du constat motivant cette délégation, s'il est déclaré
     /// à la construction. Absent : délégation ordinaire sans lien d'arbitrage.
     pub constat_id: Option<&'a str>,
+    /// Cible Git gelée d'une revue. Absente pour une délégation ordinaire.
+    pub review_target: Option<&'a ReviewTarget>,
     /// F36 — suite obligatoire (`Aucune` ou objectif nommé).
     pub suite: SuiteObjective,
     /// F37 — prérequis objectifs (arêtes OBJECTIF→OBJECTIF).
@@ -960,6 +964,12 @@ pub fn delegate(
     if request.goal.trim().is_empty() || request.now <= 0 {
         return Err(DelegateError::Invalid("objectif ou horodatage absent"));
     }
+    if request
+        .review_target
+        .is_some_and(|target| !target.is_valid())
+    {
+        return Err(DelegateError::Invalid("cible de revue invalide"));
+    }
     validate_suite_and_citations(store, request)?;
     let canonical_request_bytes = canonical_request_bytes(request)?;
     if let Some(stored) = store
@@ -1019,18 +1029,25 @@ pub fn delegate(
     } else {
         "égalité stricte des tags"
     };
-    let delegation = Delegation::nouvelle(
+    let instruction = delegation_instruction(request.goal, request.review_target);
+    let mut delegation = Delegation::nouvelle(
         objective.id,
         &selected,
-        request.goal,
+        instruction,
         request.duration,
         reason,
     )
-    .and_then(|delegation| match request.constat_id {
-        Some(constat_id) => delegation.pour_constat(constat_id),
-        None => Ok(delegation),
-    })
     .map_err(|_| DelegateError::Invalid("délégation invalide"))?;
+    if let Some(constat_id) = request.constat_id {
+        delegation = delegation
+            .pour_constat(constat_id)
+            .map_err(|_| DelegateError::Invalid("délégation invalide"))?;
+    }
+    if let Some(target) = request.review_target {
+        delegation = delegation
+            .pour_revue(target.clone())
+            .map_err(|_| DelegateError::Invalid("délégation invalide"))?;
+    }
 
     let waiting = {
         let mut needs_wait = false;
@@ -1082,7 +1099,7 @@ pub fn delegate(
             }
         }
     } else {
-        let body_bytes = request.goal.as_bytes().to_vec();
+        let body_bytes = delegation.instruction.as_bytes().to_vec();
         let outbox = OutboxDelegation {
             message_id: Uuid::new_v4(),
             delegation_id: delegation.id,
@@ -1244,6 +1261,8 @@ struct CanonicalDelegateRequest<'a> {
     reply: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     constat_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    review_target: Option<&'a ReviewTarget>,
     suite: CanonicalSuite<'a>,
     depends_on: Vec<String>,
     references: Vec<String>,
@@ -1295,18 +1314,33 @@ fn canonical_request_bytes(request: &DelegateRequest<'_>) -> Result<Vec<u8>, Del
         }
     };
     serde_json::to_vec(&CanonicalDelegateRequest {
-        v: 2,
+        v: if request.review_target.is_some() {
+            3
+        } else {
+            2
+        },
         goal: request.goal,
         explicit_target: request.explicit_target,
         required_tags,
         duration: duration_name(request.duration),
         reply: request.reply,
         constat_id: request.constat_id,
+        review_target: request.review_target,
         suite,
         depends_on,
         references,
     })
     .map_err(|_| DelegateError::Invalid("commande delegate non sérialisable"))
+}
+
+fn delegation_instruction(goal: &str, review_target: Option<&ReviewTarget>) -> String {
+    match review_target {
+        None => goal.to_string(),
+        Some(target) => format!(
+            "{goal}\n\nCIBLE DE REVUE GELÉE\nreview_ref: {}\nexpected_head: {}",
+            target.target_ref, target.expected_head
+        ),
+    }
 }
 
 /// Réconcilie le journal catalogue contre les faits durables du store.

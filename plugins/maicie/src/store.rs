@@ -49,7 +49,7 @@ use uuid::Uuid;
 
 /// Version courante du schéma SQLite. Les oracles de migration doivent lire
 /// cette constante — un littéral en dur meurt à chaque migration.
-pub const SCHEMA_VERSION: i64 = 16;
+pub const SCHEMA_VERSION: i64 = 17;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -1150,6 +1150,9 @@ impl MaicieStore {
         {
             return Err(StoreError::Invalid("relations du rapport invalides"));
         }
+        if let Some(reason) = review_verdict_refusal(&delegation, report) {
+            return Err(StoreError::GuichetRefusal(reason));
+        }
         // Un objectif déjà clos (ou une délégation hors greffe) n'est pas une
         // faute fatale : c'est le cas `request_already_terminal` du contrat.
         // On refuse sans rouvrir, on journalise, et le reçu empêche le rejeu.
@@ -1191,6 +1194,14 @@ impl MaicieStore {
                 .transition(EtatDelegation::AEvaluer)
                 .map_err(StoreError::Domain)?;
         }
+        if graftable
+            && delegation.review_target.is_some()
+            && delegation.etat == EtatDelegation::AEvaluer
+        {
+            delegation
+                .transition(EtatDelegation::Terminee)
+                .map_err(StoreError::Domain)?;
+        }
         update_guichet_aggregates(
             &tx,
             &previous_objective,
@@ -1212,9 +1223,17 @@ impl MaicieStore {
                 )
             } else {
                 match issue {
-                    IssueGreffe::Accepted => {
-                        format!("rapport de livraison greffé : {}", report.delivery_hash)
-                    }
+                    IssueGreffe::Accepted => match &report.review_verdict {
+                        Some(evidence) => format!(
+                            "verdict de revue {} reçu sur {} ; livraison {}",
+                            evidence.verdict.as_str(),
+                            evidence.measured_head,
+                            report.delivery_hash
+                        ),
+                        None => {
+                            format!("rapport de livraison greffé : {}", report.delivery_hash)
+                        }
+                    },
                     IssueGreffe::DemandeDejaTerminale => format!(
                         "rapport tardif greffé sans réouverture : {}",
                         report.delivery_hash
@@ -2787,11 +2806,9 @@ impl MaicieStore {
         );
         let row = self
             .connection
-            .query_row(
-                &sql,
-                [idempotency_key],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
+            .query_row(&sql, [idempotency_key], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
             .optional()
             .map_err(StoreError::Sql)?;
         row.map(|(objective_raw, delegation_raw)| {
@@ -2824,10 +2841,7 @@ impl MaicieStore {
              WHERE i.idempotency_key LIKE ?1\n\
                AND d.state NOT IN ({terminaux})"
         );
-        let mut stmt = self
-            .connection
-            .prepare(&sql)
-            .map_err(StoreError::Sql)?;
+        let mut stmt = self.connection.prepare(&sql).map_err(StoreError::Sql)?;
         let keys = stmt
             .query_map([pattern], |row| row.get::<_, String>(0))
             .map_err(StoreError::Sql)?;
@@ -4375,6 +4389,40 @@ fn update_guichet_aggregates(
     Ok(())
 }
 
+/// Compare le verdict au mandat chargé DANS la transaction de greffe.
+/// Une cible déplacée n'exonère le juré que si son HEAD appartient encore au
+/// mandat ou déjà à la nouvelle cible ; un troisième SHA conserve les deux
+/// faits dans un motif composé.
+fn review_verdict_refusal(
+    delegation: &Delegation,
+    report: &RapportLivraison,
+) -> Option<MotifRefusGreffe> {
+    match (&delegation.review_target, &report.review_verdict) {
+        (Some(_), None) => Some(MotifRefusGreffe::VerdictRevueRequis),
+        (None, Some(_)) => Some(MotifRefusGreffe::VerdictRevueInattendu),
+        (None, None) => None,
+        (Some(target), Some(evidence)) => {
+            if evidence.target_ref != target.target_ref
+                || evidence.expected_head != target.expected_head
+            {
+                Some(MotifRefusGreffe::MandatRevueDivergent)
+            } else if evidence.observed_target_head != target.expected_head {
+                if evidence.measured_head == target.expected_head
+                    || evidence.measured_head == evidence.observed_target_head
+                {
+                    Some(MotifRefusGreffe::TeteCibleDeplacee)
+                } else {
+                    Some(MotifRefusGreffe::TeteCibleDeplaceeEtTeteMesureeDivergente)
+                }
+            } else if evidence.measured_head != target.expected_head {
+                Some(MotifRefusGreffe::TeteMesureeDivergente)
+            } else {
+                None
+            }
+        }
+    }
+}
+
 fn operation_name(operation: OperationGuichet) -> &'static str {
     match operation {
         OperationGuichet::DeliveryReport => "delivery_report",
@@ -4414,6 +4462,14 @@ fn refusal_reason_name(reason: MotifRefusGreffe) -> &'static str {
         MotifRefusGreffe::DelegationAbsente => "delegation_missing",
         MotifRefusGreffe::RelationsInvalides => "relation_invalid",
         MotifRefusGreffe::EnveloppeDivergente => "envelope_mismatch",
+        MotifRefusGreffe::VerdictRevueRequis => "review_verdict_required",
+        MotifRefusGreffe::VerdictRevueInattendu => "review_verdict_unexpected",
+        MotifRefusGreffe::MandatRevueDivergent => "review_mandate_mismatch",
+        MotifRefusGreffe::TeteCibleDeplacee => "target_head_moved",
+        MotifRefusGreffe::TeteCibleDeplaceeEtTeteMesureeDivergente => {
+            "target_head_moved_and_measured_head_mismatch"
+        }
+        MotifRefusGreffe::TeteMesureeDivergente => "measured_head_mismatch",
     }
 }
 
@@ -4422,6 +4478,14 @@ fn parse_refusal_reason_name(value: &str) -> Result<MotifRefusGreffe, StoreError
         "delegation_missing" => Ok(MotifRefusGreffe::DelegationAbsente),
         "relation_invalid" => Ok(MotifRefusGreffe::RelationsInvalides),
         "envelope_mismatch" => Ok(MotifRefusGreffe::EnveloppeDivergente),
+        "review_verdict_required" => Ok(MotifRefusGreffe::VerdictRevueRequis),
+        "review_verdict_unexpected" => Ok(MotifRefusGreffe::VerdictRevueInattendu),
+        "review_mandate_mismatch" => Ok(MotifRefusGreffe::MandatRevueDivergent),
+        "target_head_moved" => Ok(MotifRefusGreffe::TeteCibleDeplacee),
+        "target_head_moved_and_measured_head_mismatch" => {
+            Ok(MotifRefusGreffe::TeteCibleDeplaceeEtTeteMesureeDivergente)
+        }
+        "measured_head_mismatch" => Ok(MotifRefusGreffe::TeteMesureeDivergente),
         _ => Err(StoreError::Corrupt("motif de refus inconnu")),
     }
 }
@@ -7138,7 +7202,12 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
                  request_id TEXT NOT NULL,
                  canonical_request_bytes BLOB NOT NULL,
                  operation TEXT NOT NULL CHECK(operation IN ('delivery_report','mission_status','deadline_question')),
-                 reason TEXT NOT NULL CHECK(reason IN ('delegation_missing','relation_invalid','envelope_mismatch')),
+                 reason TEXT NOT NULL CHECK(reason IN (
+                     'delegation_missing','relation_invalid','envelope_mismatch',
+                     'review_verdict_required','review_verdict_unexpected',
+                     'review_mandate_mismatch','target_head_moved','measured_head_mismatch',
+                     'target_head_moved_and_measured_head_mismatch'
+                 )),
                  response_message_id TEXT NOT NULL,
                  reply_bytes BLOB NOT NULL,
                  claim_generation INTEGER NOT NULL CHECK(claim_generation >= 0),
@@ -7445,6 +7514,10 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
     if current_version < 16 {
         migrate_orphan_delegations_on_closed_objectives(&tx)?;
     }
+    // v17 : élargit le vocabulaire fermé des refus aux preuves de revue.
+    if current_version < 17 {
+        migrate_review_refusal_reasons_v17(&tx)?;
+    }
     for version in (current_version + 1)..=SCHEMA_VERSION {
         tx.execute(
             "INSERT OR IGNORE INTO schema_migrations(version, applied_at)\n\
@@ -7456,6 +7529,41 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(StoreError::Sql)?;
     tx.commit().map_err(StoreError::Sql)
+}
+
+/// Migration v17 : reconstruit la table pour élargir son CHECK, sans modifier
+/// les octets ni le motif des refus historiques.
+fn migrate_review_refusal_reasons_v17(tx: &Transaction<'_>) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "ALTER TABLE guichet_refusal_receptions RENAME TO guichet_refusal_receptions_v16;
+         CREATE TABLE guichet_refusal_receptions (
+             issuer_scope TEXT NOT NULL,
+             request_id TEXT NOT NULL,
+             canonical_request_bytes BLOB NOT NULL,
+             operation TEXT NOT NULL CHECK(operation IN ('delivery_report','mission_status','deadline_question')),
+             reason TEXT NOT NULL CHECK(reason IN (
+                 'delegation_missing','relation_invalid','envelope_mismatch',
+                 'review_verdict_required','review_verdict_unexpected',
+                 'review_mandate_mismatch','target_head_moved','measured_head_mismatch',
+                 'target_head_moved_and_measured_head_mismatch'
+             )),
+             response_message_id TEXT NOT NULL,
+             reply_bytes BLOB NOT NULL,
+             claim_generation INTEGER NOT NULL CHECK(claim_generation >= 0),
+             claim_token TEXT NOT NULL,
+             processed_at INTEGER NOT NULL,
+             PRIMARY KEY(issuer_scope, request_id, canonical_request_bytes)
+         );
+         INSERT INTO guichet_refusal_receptions(
+             issuer_scope, request_id, canonical_request_bytes, operation, reason,
+             response_message_id, reply_bytes, claim_generation, claim_token, processed_at
+         )
+         SELECT issuer_scope, request_id, canonical_request_bytes, operation, reason,
+                response_message_id, reply_bytes, claim_generation, claim_token, processed_at
+         FROM guichet_refusal_receptions_v16;
+         DROP TABLE guichet_refusal_receptions_v16;",
+    )
+    .map_err(StoreError::Sql)
 }
 
 /// Vrai si la base contient déjà un objet de schéma utilisateur.
@@ -8474,6 +8582,7 @@ fn parse_uuid(value: &str) -> Result<Uuid, StoreError> {
 pub enum StoreError {
     Invalid(&'static str),
     Conflict(&'static str),
+    GuichetRefusal(MotifRefusGreffe),
     /// Plage déjà tenue par un autre objectif (comparaison exacte de noms).
     ResourceHeld {
         resource: String,
@@ -8503,6 +8612,9 @@ impl fmt::Display for StoreError {
         match self {
             Self::Invalid(reason) => write!(formatter, "store invalide : {reason}"),
             Self::Conflict(reason) => write!(formatter, "conflit store : {reason}"),
+            Self::GuichetRefusal(reason) => {
+                write!(formatter, "refus déterministe du guichet : {reason:?}")
+            }
             Self::ResourceHeld {
                 resource,
                 holder_objective_id,
@@ -8540,6 +8652,7 @@ impl std::error::Error for StoreError {
             Self::Domain(_) => None,
             Self::Invalid(_)
             | Self::Conflict(_)
+            | Self::GuichetRefusal(_)
             | Self::ResourceHeld { .. }
             | Self::EnvelopeMismatch
             | Self::NotFound(_)

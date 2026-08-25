@@ -86,6 +86,16 @@ Les seules valeurs de `operation` sont :
 | `mission_status` | `delegation_id` | mise en attente, sans mutation d'une demande suivie |
 | `deadline_question` | `delegation_id` | mise en attente, sans mutation d'une demande suivie |
 
+Extension 021, sans changement de version : `delivery_report` peut ajouter,
+après `in_reply_to`, le seul champ optionnel connu `review_verdict`. Son objet
+fermé contient, dans cet ordre, `verdict`, `target_ref`, `expected_head`,
+`measured_head`, `observed_target_head`. Son absence conserve exactement les
+octets v1 ci-dessus ; tout autre champ reste inconnu et refusé. La CLI
+officielle n'émet cette extension qu'après avoir elle-même observé Git, puis
+Maicie la décide contre le mandat durable. Le filaire seul n'authentifie pas la
+provenance de ces observations face à un client alternatif qui fabriquerait
+directement une trame.
+
 `to` est exactement `maicie`. Le daemon lie le dépôt à une connexion wrapper
 enregistrée et refuse si son nom courant ne correspond pas à `from`. Cette
 vérification ne transforme pas le champ déclaré en authentification forte.
@@ -195,6 +205,14 @@ Le retry re-soumet exactement les mêmes octets, y compris `issuer_scope` et
 - `recipient_unavailable` : la réponse est durable mais son destinataire
   déclaré n'est pas joignable ;
 - `refused` : refus déterministe de la relève, sans effet métier Bridget.
+
+Pour une réponse `delivery_report` acceptée, le même bloc optionnel
+`review_verdict` est recopié après `delivery_hash`. Les refus de revue utilisent
+les motifs fermés `review_verdict_required`, `review_verdict_unexpected`,
+`review_mandate_mismatch`, `target_head_moved` et
+`measured_head_mismatch`, ainsi que le motif composé
+`target_head_moved_and_measured_head_mismatch`. Bridget transporte ces valeurs
+sans les comparer.
 
 Avant toute écriture, Bridget conditionne la transition `claimed → replied` à
 la conjonction durable suivante : `claim_owner` est la connexion courante,

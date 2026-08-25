@@ -377,9 +377,7 @@ pub fn evaluate_routines_with(
                     continue;
                 }
                 let key = format!("routine:{}:{}", routine.id, bucket);
-                if let Some(adopted) =
-                    adopt_orphan_mandate(store, routine.id, bucket, &key, now)?
-                {
+                if let Some(adopted) = adopt_orphan_mandate(store, routine.id, bucket, &key, now)? {
                     if bucket < truncated_end {
                         adopted_in_hole += 1;
                     }
@@ -478,6 +476,7 @@ pub fn evaluate_routines_with(
                 duration: ClasseDuree::Normale,
                 reply: false,
                 constat_id: None,
+                review_target: None,
                 suite: routine.suite.clone(),
                 depends_on: &routine.depends_on,
                 references: &routine.references,

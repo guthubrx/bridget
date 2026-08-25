@@ -4,8 +4,9 @@ use crate::daemon::{self, DaemonConfig};
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole,
-    IdempotencyIssue, LedgerMessage, LedgerScope, PresenceMode, RequestInfo, RuntimeSource,
-    SERVICE_CONTRACT_VERSION, ServiceRequestOperation, ServiceRequestPayload, decode, encode,
+    IdempotencyIssue, LedgerMessage, LedgerScope, PresenceMode, RequestInfo, ReviewTarget,
+    ReviewVerdict, ReviewVerdictEvidence, RuntimeSource, SERVICE_CONTRACT_VERSION,
+    ServiceRequestOperation, ServiceRequestPayload, decode, encode, is_canonical_git_sha,
 };
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::fmt::Write as _;
@@ -1021,6 +1022,9 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
     let mut id = None;
     let mut issued_at = None;
     let mut issuer_scope = None;
+    let mut verdict = None;
+    let mut review_ref = None;
+    let mut expected_head = None;
     let mut index = 2;
     while index < args.len() {
         let option = args[index].as_str();
@@ -1034,6 +1038,9 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
             "--id" => id = Some(value),
             "--issued-at" => issued_at = Some(value),
             "--issuer-scope" => issuer_scope = Some(value),
+            "--verdict" => verdict = Some(value),
+            "--review-ref" => review_ref = Some(value),
+            "--expected-head" => expected_head = Some(value),
             _ => return Err(format!("option guichet inconnue: {option}")),
         }
         index += 1;
@@ -1056,18 +1063,31 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
                 crate::mcp::issuer_scope(&scope_identity),
             )
         });
+    if kind != "delivery-report"
+        && (verdict.is_some() || review_ref.is_some() || expected_head.is_some())
+    {
+        return Err("les options de verdict sont réservées à delivery-report".to_string());
+    }
     let (operation, payload) = match kind {
-        "delivery-report" => (
-            ServiceRequestOperation::DeliveryReport,
-            ServiceRequestPayload::DeliveryReport {
-                objective_id: objective_id.ok_or_else(|| "--objective est requis".to_string())?,
-                delegation_id: delegation_id
-                    .ok_or_else(|| "--delegation est requis".to_string())?,
-                delivery_hash: delivery_hash.ok_or_else(|| "--hash est requis".to_string())?,
-                in_reply_to: in_reply_to
-                    .ok_or_else(|| "--in-reply-to est requis pour delivery-report".to_string())?,
-            },
-        ),
+        "delivery-report" => {
+            let objective_id = objective_id.ok_or_else(|| "--objective est requis".to_string())?;
+            let delegation_id =
+                delegation_id.ok_or_else(|| "--delegation est requis".to_string())?;
+            let delivery_hash = delivery_hash.ok_or_else(|| "--hash est requis".to_string())?;
+            let in_reply_to = in_reply_to
+                .ok_or_else(|| "--in-reply-to est requis pour delivery-report".to_string())?;
+            let review_verdict = observe_review_verdict(verdict, review_ref, expected_head)?;
+            (
+                ServiceRequestOperation::DeliveryReport,
+                ServiceRequestPayload::DeliveryReport {
+                    objective_id,
+                    delegation_id,
+                    delivery_hash,
+                    in_reply_to,
+                    review_verdict,
+                },
+            )
+        }
         "mission-status" => (
             ServiceRequestOperation::MissionStatus,
             ServiceRequestPayload::Delegation {
@@ -1094,6 +1114,97 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
         operation,
         payload,
     })
+}
+
+fn observe_review_verdict(
+    verdict: Option<String>,
+    review_ref: Option<String>,
+    expected_head: Option<String>,
+) -> Result<Option<ReviewVerdictEvidence>, String> {
+    let (verdict, target_ref, expected_head) = match (verdict, review_ref, expected_head) {
+        (None, None, None) => return Ok(None),
+        (Some(verdict), Some(target_ref), Some(expected_head)) => {
+            (verdict, target_ref, expected_head)
+        }
+        _ => {
+            return Err(
+                "--verdict, --review-ref et --expected-head doivent être fournis ensemble"
+                    .to_string(),
+            );
+        }
+    };
+    let verdict = match verdict.as_str() {
+        "approve" => ReviewVerdict::Approve,
+        "approve_with_changes" => ReviewVerdict::ApproveWithChanges,
+        "amender" => ReviewVerdict::Amender,
+        "stop" => ReviewVerdict::Stop,
+        _ => {
+            return Err("--verdict attend approve|approve_with_changes|amender|stop".to_string());
+        }
+    };
+    let target = ReviewTarget {
+        target_ref,
+        expected_head,
+    };
+    let (remote, branch) = target
+        .remote_and_branch()
+        .ok_or_else(|| "--review-ref attend <remote>/<branche> valide".to_string())?;
+    if !is_canonical_git_sha(&target.expected_head) {
+        return Err("--expected-head attend exactement 40 hexadécimaux minuscules".to_string());
+    }
+
+    let _ = git_stdout(&["remote", "get-url", remote], "remote de revue")?;
+    let measured_head = git_stdout(&["rev-parse", "--verify", "HEAD^{commit}"], "HEAD")?;
+    if !is_canonical_git_sha(&measured_head) {
+        return Err("git rev-parse n'a pas rendu un SHA-1 canonique".to_string());
+    }
+    let remote_ref = format!("refs/heads/{branch}");
+    let remote_output = git_stdout(
+        &["ls-remote", "--exit-code", "--refs", remote, &remote_ref],
+        "référence distante",
+    )?;
+    let mut lines = remote_output.lines();
+    let line = lines
+        .next()
+        .ok_or_else(|| "git ls-remote n'a rendu aucune tête".to_string())?;
+    if lines.next().is_some() {
+        return Err("git ls-remote a rendu une tête ambiguë".to_string());
+    }
+    let mut fields = line.split_whitespace();
+    let observed_target_head = fields
+        .next()
+        .ok_or_else(|| "git ls-remote n'a rendu aucun SHA".to_string())?
+        .to_string();
+    let observed_ref = fields
+        .next()
+        .ok_or_else(|| "git ls-remote n'a rendu aucune référence".to_string())?;
+    if fields.next().is_some()
+        || observed_ref != remote_ref
+        || !is_canonical_git_sha(&observed_target_head)
+    {
+        return Err("git ls-remote a rendu une observation non canonique".to_string());
+    }
+
+    Ok(Some(ReviewVerdictEvidence {
+        verdict,
+        target_ref: target.target_ref,
+        expected_head: target.expected_head,
+        measured_head,
+        observed_target_head,
+    }))
+}
+
+fn git_stdout(arguments: &[&str], observation: &str) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args(arguments)
+        .output()
+        .map_err(|error| format!("git indisponible pour mesurer {observation}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("git n'a pas pu mesurer {observation}"));
+    }
+    String::from_utf8(output.stdout)
+        .map(|value| value.trim().to_string())
+        .map_err(|_| format!("git a rendu {observation} hors UTF-8"))
 }
 
 fn idempotent_options(

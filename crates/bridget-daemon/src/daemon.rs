@@ -2893,6 +2893,7 @@ fn guichet_request_is_valid(
                 delegation_id,
                 delivery_hash,
                 in_reply_to,
+                review_verdict,
             },
         ) => {
             identifier(objective_id)
@@ -2900,6 +2901,9 @@ fn guichet_request_is_valid(
                 && identifier(in_reply_to)
                 && delivery_hash.len() == 64
                 && delivery_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                && review_verdict
+                    .as_ref()
+                    .is_none_or(|evidence| evidence.is_valid())
         }
         (
             bridget_transport::protocol::ServiceRequestOperation::MissionStatus
@@ -2931,11 +2935,15 @@ fn guichet_reply_is_valid(
             objective_id,
             delegation_id,
             delivery_hash,
+            review_verdict,
         } => {
             identifier(objective_id)
                 && identifier(delegation_id)
                 && delivery_hash.len() == 64
                 && delivery_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                && review_verdict
+                    .as_ref()
+                    .is_none_or(|evidence| evidence.is_valid())
         }
         bridget_transport::protocol::GuichetReplyPayload::MissionStatus {
             delegation_id,
@@ -7681,6 +7689,7 @@ mod presence_tests {
                 duration: maicie::domain::ClasseDuree::Normale,
                 reply: false,
                 constat_id: None,
+                review_target: None,
                 suite: maicie::domain::SuiteObjective::Aucune,
                 depends_on: &[],
                 references: &[],
@@ -8096,6 +8105,7 @@ mod presence_tests {
                         objective_id: "objective-1".to_string(),
                         delegation_id: "delegation-1".to_string(),
                         delivery_hash: "0".repeat(64),
+                        review_verdict: None,
                     },
                 },
                 &shared,

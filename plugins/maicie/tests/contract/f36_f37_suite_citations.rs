@@ -45,6 +45,7 @@ fn base_request<'a>(
         duration: ClasseDuree::Normale,
         reply: false,
         constat_id: None,
+        review_target: None,
         suite,
         depends_on,
         references,

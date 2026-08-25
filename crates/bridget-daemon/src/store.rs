@@ -1809,6 +1809,7 @@ mod tests {
                 delegation_id: "delegation-1".to_string(),
                 delivery_hash: "0".repeat(64),
                 in_reply_to: "message-lie".to_string(),
+                review_verdict: None,
             },
             canonical_bytes: br#"{"type":"service_request"}"#.to_vec(),
         };
@@ -1984,6 +1985,7 @@ mod tests {
                     delegation_id: "delegation-1".to_string(),
                     delivery_hash: "0".repeat(64),
                     in_reply_to: request_id.to_string(),
+                    review_verdict: None,
                 },
                 canonical_bytes: format!("{{\"request\":\"{request_id}\"}}").into_bytes(),
             };
