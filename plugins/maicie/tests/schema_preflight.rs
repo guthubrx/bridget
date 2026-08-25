@@ -184,6 +184,32 @@ fn commande_preflight_refuse_avant_ecriture_avec_exit_store() {
 }
 
 #[test]
+fn preflight_exerce_une_ouverture_metier_sur_la_copie() {
+    let root = unique_root("ddl-incompatible");
+    let database = root.join("maicie.sqlite3");
+    drop(MaicieStore::open(&database).unwrap());
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "ALTER TABLE maicie_identity RENAME TO maicie_identity_valide;
+             CREATE TABLE maicie_identity (
+                 singleton INTEGER PRIMARY KEY CHECK(singleton = 1)
+             );
+             INSERT INTO maicie_identity(singleton) VALUES (1);
+             DROP TABLE maicie_identity_valide;",
+        )
+        .unwrap();
+    drop(connection);
+    let before = physical_snapshot(&database);
+
+    let error = MaicieStore::schema_preflight(&database).unwrap_err();
+
+    assert!(error.to_string().contains("issuer_scope"));
+    assert_physically_unchanged("DDL incompatible", &before, &physical_snapshot(&database));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn preflight_lit_la_version_commitee_dans_le_wal_sans_toucher_les_sidecars() {
     let root = unique_root("wal");
     let database = root.join("maicie.sqlite3");

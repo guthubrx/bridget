@@ -113,22 +113,31 @@ Avant de poser ou de réactiver Maicie, le chemin d'installation appelle :
 maicie preflight --config /chemin/absolu/vers/maicie.json --json
 ```
 
-Le préflight copie SQLite et son éventuel WAL dans un répertoire privé
-jetable, puis inspecte cette copie. Il ne crée donc ni base, ni table, ni
-sidecar dans le greffe d'autorité. Une base absente ou vide et une version
-exacte rendent exit 0 avec `write_schema_compatible=true`. Ce champ ne
-prétend pas tester les ACL ou l'état du montage. Un schéma antérieur **ou**
-postérieur au binaire rend l'erreur `store` (exit 6). Les lectures métier ne
-sont pas exemptées : un binaire incompatible ne sait aujourd'hui exécuter
-aucune des lectures CLI sans ouvrir le store.
+Le préflight copie SQLite et son éventuel WAL/journal dans un répertoire
+privé jetable, puis exerce `MaicieStore::open` sur cette copie. Il ne crée
+donc ni base, ni table, ni sidecar dans le greffe d'autorité. Un numéro de
+version exact dont le DDL est incompatible est refusé comme le serait une
+ouverture métier. Une base absente ou vide et une ouverture complète réussie
+rendent exit 0 avec `write_schema_compatible=true`. Ce champ ne prétend pas
+tester les ACL ou l'état du montage. Un schéma antérieur **ou** postérieur au
+binaire rend l'erreur `store` (exit 6). Les lectures métier ne sont pas
+exemptées : un binaire incompatible ne sait aujourd'hui exécuter aucune des
+lectures CLI sans ouvrir le store.
 
-`scripts/install-k1.sh` exécute ce gate même avec `--skip-verify`, sur le
-binaire qui resterait réellement actif : copie installée ou cible du symlink
-sans `--force`, candidat compilé avec `--force`. Ce contrôle prouve la
-compatibilité de schéma, pas la provenance du binaire. La règle d'activation
-gouvernée (projection d'un commit admis sur `origin/main`) doit être étendue
-aux binaires compilés puis l'englober ; elle ne doit pas créer un second
-contrôle de compatibilité concurrent.
+`scripts/install-k1.sh` exécute ce gate même avec `--skip-verify`. Il fige
+d'abord le binaire et la configuration finale dans un staging privé, contrôle
+cette paire, la publie, puis contrôle une seconde fois les deux chemins
+réellement inscrits dans les unités juste avant activation. `--force`
+remplace le binaire mais préserve toujours la configuration Maicie existante,
+notamment ses profils humains et son `database_path`. La relève installée
+repasse également le préflight avant chaque `status`.
+
+Ce contrôle prouve la compatibilité métier du schéma, pas la provenance du
+binaire. La règle d'activation gouvernée (projection d'un commit admis sur
+`origin/main`) doit être étendue aux binaires compilés puis l'englober ; elle
+ne doit pas créer un second contrôle de compatibilité concurrent. La ronde
+portable relève de cette extension gelée séparément et n'est pas modifiée par
+ce lot.
 
 ### Migration v16 — orphelines `soldee_par_cloture` (fail-closed)
 
