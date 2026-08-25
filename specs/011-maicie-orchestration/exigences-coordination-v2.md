@@ -5,7 +5,130 @@ tenue par le référent humain-agent. Chaque règle exécutée à la main ici es
 candidate à devenir un comportement produit de Maicie. Hors périmètre de la
 v1 (spec 011) — intrants pour les itérations suivantes.
 
-## Tableau de bord — mis à jour le 2026-08-24, 21:33
+> **État réconcilié avec `main` @ `8038096` du 2026-08-25 05:08:26 +0200**
+> (`git log -1 --format=%ci 8038096`).
+> **Borne de rattrapage** : depuis `c6b99c0` (dernière écriture de ce fichier,
+> `2026-08-24 21:33:31 +0200`, `git log -1 --format=%ci -- <ce fichier>`) —
+> **10 merges / 69 commits**
+> (`git rev-list --count --merges c6b99c0..8038096` /
+> `git rev-list --count c6b99c0..8038096`).
+> Un autre compte « 16 merges / 114 commits » existe depuis **19:00** le 24/08
+> (borne du redémarrage groupé) — vrai aussi, **autre question** ; ce document
+> rattrape depuis *sa* dernière écriture, donc **10/69**.
+> **Légende des marqueurs** : **[mesuré]** = vérifié dans le code ou par
+> commande git ; **[lu]** = trouvé dans un document, un commit message ou un
+> mandat ; **[prédit]** = déduit — n'emprunte aucune solidité au mesuré.
+
+## Tableau de bord — réconcilié le 2026-08-25 (horodatage d'édition : voir git)
+
+### Cœur — lots en cours (JAMAIS acquis)
+
+Sept chantiers ouverts sur greffe / présences.
+**[lu]** mandat Bridget : « deux en jury ». **[mesuré]** un seul tip hors
+`main` : `cfff497` (ahead 1). Les six autres branches pointent encore
+`8038096` (ahead 0) — ouvertes, **pas livrées**, sans commit propre.
+Preuve d'absence sur `main` : `git merge-base --is-ancestor <tip> 8038096`
+renvoie non-zéro ⇒ le tip n'est **pas** ancêtre de main.
+
+| Lot | Branche | Tête | Ahead de main | Sur main ? | Statut |
+|---|---|---|---|---|---|
+| Lien ≠ capacité (heartbeat zombie) | `fix/heartbeat-lien-vs-capacite` | `cfff497` | **1** **[mesuré]** | **NON** (`merge-base --is-ancestor cfff497 8038096` → exit 1) **[mesuré]** | **JURY** 1+1 **[lu]** mandats fable2/relec6 |
+| Retain sans exemption `connected` | `fix/retain-sans-exemption-connected` | `8038096` | 0 **[mesuré]** | tip = main ; **pas de commit propre** | **EN COURS** **[lu]** mandat cursorbridget lot B |
+| Greffe états véridiques (`Terminee` + `registre fermer`) | `fix/greffe-etats-veridiques` | `8038096` | 0 **[mesuré]** | tip = main ; pas de commit propre | **EN COURS** **[lu]** session 018 / cursor4 |
+| Hygiène résidus de build (Drop vs EOF) | `feat/hygiene-residus-build` | `8038096` | 0 **[mesuré]** | tip = main ; pas de commit propre | **EN COURS** **[lu]** mandat cursor7 |
+| Orphelinage silencieux des remises à la purge | `fix/purge-ne-doit-pas-orpheliner-en-silence` | `8038096` | 0 **[mesuré]** | tip = main ; pas de commit propre | **EN COURS** **[lu]** mandat cursor8 |
+| `Annulee` hors objectif clos (« attends la suite ») | `fix/annulee-hors-clos-sans-suite` | `8038096` | 0 **[mesuré]** | tip = main ; pas de commit propre | **EN COURS** **[lu]** mandat cursor6 |
+| clippy `--all-targets` (dette gate) | `fix/clippy-all-targets-gates` | `8038096` | 0 **[mesuré]** | tip = main ; pas de commit propre | **EN COURS** **[lu]** mandat cursor5 / constat catalogue |
+
+**[mesuré]** `link_seen` / `touch_link` : **absents** de `main` @ `8038096`
+(`git grep` vide) — le lot heartbeat n'est donc pas livré, malgré le jury.
+
+### Contradiction interne (pas un retard) — A.6
+
+Sur `c6b99c0`, **même fichier, même sujet, deux cases incompatibles** :
+
+- l.206-207 : `- [ ] Équipement des Claude gérés … 🔄 en cours (cursor7)`
+- l.209-210 : `- [x] Chaîne identité SOLDÉE : MCP+identité+PATH …`
+
+**[mesuré]** `git blame -L 206,210 c6b99c0` : la case « en cours » vient de
+`719f40a` (`2026-08-24 15:20:17 +0200`) ; la case « SOLDÉE » de `4f24753`
+(`2026-08-24 18:04:07 +0200`). Même auteur de commits de tableau de bord ;
+la seconde écriture **n'a pas retiré ni mis à jour** la première.
+**Leçon** : ce n'est pas de la péremption — deux vérités successives
+coexistent. Un rafraîchissement qui n'explique pas *pourquoi* reproduit le
+défaut. Ici : on coche **SOLDÉ** (l.209-210 tenait déjà) et on retire la
+case « en cours » obsolète.
+
+### Ce qui est entré sur `main` depuis `c6b99c0` (borne = doc)
+
+**[mesuré]** **10 merges** (`git rev-list --count --merges c6b99c0..8038096`) :
+
+1. `324167b` — consentement explicite `--migrate` (porte v0)
+2. `5e4fb24` — `in_flight` ≠ sort inconnu (surfaces client)
+3. `7364d30` — présences fantômes *inventées* (après fin de tour)
+4. `9a875b7` — ledger à l'émission (visibilité ≠ accusé)
+5. `a26fda2` — routines v15 + adoption des orphelins au-delà de la borne
+6. `99a8452` — vocabulaires `en_vol` / `dispatching` / `in_flight` reliés
+7. `1c75a0c` — ne pas rétracter une mission accomplie + oracles de version
+8. `b7f042e` — carte de reprise : état greffe + discriminant règle 6
+9. `aca9fbb` — `est_mandat_mort` dérivé du domaine + `EtatDelegation::ALL`
+10. `74f3d9b` — `SoldeeParCloture` + outbox terminalisée à la clôture
+
+**Absents du document à `c6b99c0`, présents dans le code `8038096`**
+(**[mesuré]** `git grep` sur le doc = 0 ; code cité) :
+
+- `SoldeeParCloture` / sql `soldee_par_cloture` — `plugins/maicie/src/domain.rs:301-310` ; `solder_par_cloture` `:1981-1990`
+- `est_mandat_mort` — `domain.rs:232-236` ; usage `store.rs:2344-2381`
+- `SCHEMA_VERSION = 16` — `store.rs:52` (le doc n'avait qu'une mention
+  générique F38 l.1702, pas l'état courant)
+
+**[lu]** greffe catalogue @ `8038096` : le registre ne sait toujours pas
+*fermer* un constat (Blocker corrigé reste affiché) — dû, pas acquis.
+**[lu]** `Terminee` autorisé (`domain.rs:1972`) mais sans écrivain de
+succès ; `SoldeeParCloture` ≠ verdict d'évaluation — dû (lot greffe
+véridique ci-dessus).
+
+**Règles toujours vives** : revue à deux étages + jury 1+1 ; comptes
+REPRODUITS **avec leur borne** ; absence vérifiée dans la durée ;
+horodatage du ledger ; worktree auteur fermé au relecteur ; **règle 6** ;
+greffe ≠ mains.
+
+### Classification des 40 cases non cochées (état `c6b99c0`)
+
+**[mesuré]** `git show c6b99c0:…/exigences-coordination-v2.md | rg -c '^- \[ \]'`
+→ **40**. Trois familles disjointes :
+
+#### 1. Fait sur main mais case non cochée / texte faux (retard de case)
+
+| Case (`c6b99c0`) | Preuve | Action |
+|---|---|---|
+| M5 routines « 🔄 » | merge `a26fda2` **[mesuré]** | → `[x]` ; reste #009 dû |
+| Routines planifiées « ⬜ non commencé » | idem | → `[x]` |
+| Routines Maicie « 🔄 » | idem + `74f3d9b` | → `[x]` |
+| outcome_unknown « 🔄 instruction » | `5e4fb24`+`9a875b7`+`99a8452` **[mesuré]** | → `[x]` ; résidu orphelinage = lot séparé |
+| Équipement Claude « 🔄 » (A.6) | contredit par l.209-210 du *même* fichier ; blame ci-dessus **[mesuré]** | retirer ; garder SOLDÉ |
+| G9 / L4 coût par mission « 🔄 » | merge `5059d3c` (`2026-08-24 15:48:20 +0200`) **déjà ancêtre de** `c6b99c0` **[mesuré]** ; table `objective_costs` `store.rs:7376` | → `[x]` — case périmée dès l'écriture du doc |
+
+#### 2. Périmé / rayé / ne plus traiter comme dû actif
+
+| Case | Motif |
+|---|---|
+| J4 journaux par pilote | **[lu]** « Rayé d'un commun accord : J4, B7 » (ordre de déroulé) |
+
+#### 3. Encore dû (ouvrir / poursuivre — pas cocher)
+
+M3, M1, M2, M4 ; N1–N6 (N3 partiel 🔄) ; B6, B7, B10 (partiel), B11 ;
+D20 (partiel — carte enrichie `b7f042e`, trace non-revenus absente) ;
+D21, D22 ; F30–F34 ; Amendement palette (digest livré, reste à vérifier) ;
+C5, C7 ; Reprise restes (`profile refuse`, D20) ; GUI reste ; Suivis
+post-gate 014 (ouverts à dessein) ; G11 (TRANSPORT partiel) ; L5 (busy
+redémarrage corrigé, entre-tours aveugle ; heartbeat en jury) ; J3 ; K3 (= N4).
+*(G9/L4 coût : reclassés en famille 1 — déjà sur main avant `c6b99c0`.)*
+
+Détail coché/non coché dans le plan ci-dessous ; cette table est
+l'autorité de lecture rapide.
+
+**Archive — état précédent (21:33)**
 
 **État de nuit (21:33)** — MERGÉS ce soir : correctif boot (8 s de démarrage),
 spawn-fantôme, hook StatusLine, checklist de redémarrage, lot outcome_unknown
@@ -78,22 +201,23 @@ bas ; ce tableau ne remplace pas la lecture, il dit où on en est.
 
 **ORDRE DE DÉROULÉ v2 (validé utilisateur le 24/08, 15h53)** :
 1. Finir l'orange (tout 🔄 ci-dessous) — aucun nouveau chantier avant.
-2. Phase AUTONOMIE : routines (bloc F reste, note de conception en cours)
-   + politiques 30-34 en produit (P31 plages déjà livré) + M5.
+2. Phase AUTONOMIE : routines v15 LIVRÉES (M5) ; reste politiques 30-34 +
+   état-pause #009 + terminaison succès (`Terminee`).
 3. Phase SÉCURITÉ, en UN chantier : C5/D21 opposabilité + M3 permissions
    sans terminal + second facteur ADR 011 + sortie du bypass (Supervised)
    + N6 confinement. Une seule UI d'approbation, pas quatre lots.
 4. Phase OUVERTURE : N4/K3 d'abord, puis N1 vitrine, N2 silos-transports,
-   N3 isolation-produit. Bloc M (référent géré) quand M5+M3 existent.
+   N3 isolation-produit. Bloc M (référent géré) quand M3 existe (M5 fait).
 Rayé d'un commun accord : J4, B7. À trier le moment venu : D22.
 
 **Bloc M — le référent géré** (détail en fin de document)
-- [ ] M5 rondes → routines — 🔄 note validée, commit 1 livré (27cc289,
-      cursor7), commit 2 état-pause #009 en cours, jury n°3 ensuite
-- [ ] M3 permissions sans terminal — ⬜ phase sécurité
-- [ ] M1 composer dans la page — ⬜ (intérim : attach est déjà un composer)
-- [ ] M2 référent spawné en flux natif — ⬜ après M3+M5
-- [ ] M4 session mécano à la demande — ⬜
+- [x] M5 rondes → routines — ✅ FAIT (était non coché) — routines v15
+      MERGÉES `a26fda2` **[mesuré]** + suites orphelins / rétractation /
+      `SoldeeParCloture` ; état-pause #009 reste ENCORE DÛ
+- [ ] M3 permissions sans terminal — ⬜ ENCORE DÛ (phase sécurité)
+- [ ] M1 composer dans la page — ⬜ ENCORE DÛ (intérim : attach est déjà un composer)
+- [ ] M2 référent spawné en flux natif — ⬜ ENCORE DÛ (après M3 ; M5 fait)
+- [ ] M4 session mécano à la demande — ⬜ ENCORE DÛ
 
 **Bloc N — produit & ouverture** (détail en fin de document)
 - [ ] N1 vitrine par la preuve (récit d'opérations + métriques) — ⬜
@@ -140,12 +264,13 @@ ont été créés directement dans ce fichier le 24/08.
 - [x] 18 identité Maicie joignable + demandes corrélées — LE GUICHET
       (sessions 015/016)
 - [x] 19 carte de réveil + préambule codex resume — livrés, reprise avec
-      mission active prouvée 2× le 24/08
-- [ ] 20 reprise d'équipe — 🔄 en cours (cursor6) ; cas réel du 24/08 :
-      7 agents non revenus au redémarrage, sans trace
-- [ ] 21 opposabilité des SpawnOrder (C5) — ⬜
+      mission active prouvée 2× le 24/08 ; état greffe + règle 6 sur la
+      carte MERGÉS (`b7f042e`)
+- [ ] 20 reprise d'équipe — 🔄 ENCORE DÛ (partiel) ; carte greffe+règle 6
+      MERGÉE `b7f042e` **[mesuré]** ; trace « N non revenus » / D20 absente
+- [ ] 21 opposabilité des SpawnOrder (C5) — ⬜ ENCORE DÛ
 - [ ] 22 fond du backlog Maicie (SpawnLookup, dry-run, plafond, classe,
-      boucle résidente) — ⬜
+      boucle résidente) — ⬜ ENCORE DÛ
 - [x] 23 build-id dans who (détection binaire périmé) — livré, a servi 2×
       le 24/08
 - [x] 24 --in-reply-to sur le binaire (parité de repli)
@@ -185,26 +310,29 @@ ont été créés directement dans ce fichier le 24/08.
       GUICHET (016 : dépôts durables, relève bornée, refus attestés)
 - [x] Parité de repli du binaire (D24 : --in-reply-to au CLI)
 - [x] Reprise après crash — carte de réveil déterministe LIVRÉE et prouvée
-      2× en production le 24/08 (reprise avec mission active)
-- [ ] Reprise après crash, restes — ⬜ `maicie profile refuse` absent ;
-      domain dans fleet.json et trace « N équipiers non revenus » à vérifier
-- [ ] GUI — 🔄 première tranche LIVRÉE (page locale 3 zones + tunnel lecture
-      seule + SSE) ; journal enrichi, abonnements, vue unifiée tous modes :
-      restent ouverts (le journal des reconnectés est le bug en réparation)
+      2× en production le 24/08 ; état greffe + règle 6 MERGÉS (`b7f042e`)
+- [ ] Reprise après crash, restes — ⬜ ENCORE DÛ : `maicie profile refuse`
+      absent ; D20 ; lots heartbeat/retain EN COURS (voir tableau Cœur —
+      **pas** acquis)
+- [ ] GUI — 🔄 ENCORE DÛ (première tranche livrée ; journal enrichi /
+      client riche restent)
 - [x] Périmètre 014 : livré intégralement (7/7, gate MERGEABLE, 23/08)
 - [x] Divers gravés : skill maicie, doctrine « zéro trace IA y compris
       contenu » — vivants
-- [ ] Routines planifiées (« bloc F ») — ⬜ non commencé ; doctrine posée
-      (une routine délègue, n'approuve jamais) ; NB : la ronde portable K2
-      en est le premier cousin opérationnel, côté référent
-- [ ] Suivis post-gate 014 (C1-C7 fable-reviewer) — ⬜ non bloquants,
-      ouverts à dessein (C3 croissance tool_titles à surveiller en priorité)
+- [x] Routines planifiées (« bloc F ») — ✅ FAIT (était « ⬜ non commencé »)
+      — v15 en production `a26fda2` **[mesuré]** ; faille hash tautologique
+      FERMÉE à la source **[lu]** catalogue ; reste : état-pause #009,
+      `Terminee` (lot greffe véridique EN COURS, pas acquis)
+- [ ] Suivis post-gate 014 (C1-C7 fable-reviewer) — ⬜ ENCORE DÛ (ouverts
+      à dessein ; C3 tool_titles en priorité)
 - [x] Quota de flotte configurable (BRIDGET_FLEET_QUOTA, défaut 16, refus
       parlants) — Bloquant du 24/08 réglé en 50 min, mergé
 - [x] Claude gérés opérationnels (option A, décision utilisateur 14h34) —
       bypass mergé, validation outillée réussie (« mains opérationnelles »)
-- [ ] Équipement des Claude gérés (MCP + identité + PATH — envois archivés
-      « human », constat de traçabilité) — 🔄 en cours (cursor7)
+- [x] Équipement des Claude gérés (MCP + identité + PATH) — ✅ FAIT ;
+      **résout A.6** : la case « 🔄 en cours » (`719f40a`) contredisait
+      « Chaîne identité SOLDÉE » (`4f24753`) dans le même fichier — on
+      conserve le soldé, on retire le faux « en cours »
 - [x] Extinction tmux ACHEVÉE 15h25 — plus aucun ouvrier tmux
 - [x] Chaîne identité SOLDÉE : MCP+identité+PATH injectés aux claude gérés,
       envois signés du NOM de l'agent (preuve vivante), usurpation éteinte
@@ -215,8 +343,12 @@ ont été créés directement dans ce fichier le 24/08.
       écrasement (effet au prochain redémarrage)
 - [x] Bloquants disque + rouge permanent SOLDÉS (ramasse-copies au boot,
       seuil 20 Gi, skip nommé) — registre à ZÉRO Bloquant
-- [ ] Routines Maicie — 🔄 implémentation (cursor7, v15, note validée)
-- [ ] outcome_unknown sur livraison réussie — 🔄 instruction (fable2)
+- [x] Routines Maicie — ✅ FAIT (était « 🔄 ») — v15 + orphelins +
+      `SoldeeParCloture` **[mesuré]** merges `a26fda2`/`74f3d9b`
+- [x] outcome_unknown / in_flight — ✅ FAIT (était « 🔄 instruction ») —
+      `5e4fb24`+`9a875b7`+`99a8452` **[mesuré]** ; résidu orphelinage à la
+      purge = lot `fix/purge-ne-doit-pas-orpheliner-en-silence` EN COURS
+      (pas acquis)
 
 **Bloc G — ponts natifs**
 - [x] G1 vocabulaire interne (ADR 010, couche `ManagedSession`)
@@ -228,20 +360,22 @@ ont été créés directement dans ce fichier le 24/08.
 - [x] G7 modèle véridique (définition figée affichée en permanence)
 - [x] G8 quota anticipé — Claude (L3) ET Codex (effort+limites app-server,
       mergé+déployé 14h : who affiche EFFORT et LIMITE 7 jours des codex)
-- [ ] G9 coût par mission — 🔄 corrections de revue LIVRÉES (anti-doublon
-      assistant+result oraclé, borne droite testée) ; rebase final v13
-      derrière la v12 mergée — merge imminent
+- [x] G9 coût par mission — ✅ FAIT (était « 🔄 merge imminent ») —
+      merge `5059d3c` **[mesuré]** déjà sur main *avant* `c6b99c0` ;
+      `objective_costs` `store.rs:7376` **[mesuré]**
 - [x] G10 pont Zed REFUSÉ sous toutes ses formes (4 formes + @version +
       chemin --equipier), DEPRECATIONS daté, ACP générique préservé
-- [ ] G11 nommer le protocole — 🔄 TRANSPORT affiche codex_app_server /
-      claude_stream_json depuis 0a3872b ; vérification liée en cours (coder3)
+- [ ] G11 nommer le protocole — 🔄 ENCORE DÛ (TRANSPORT affiche
+      codex_app_server / claude_stream_json depuis `0a3872b` **[lu]** ;
+      vérification complète ouverte)
 
 **Bloc J — outillage d'agents (rattrapage T3 Code)**
 - [x] J1 capacités déclarées par pilote et modèle (L1 : refus typé avant
       processus, matrice + digest)
 - [x] J2 ramasseur de sessions abandonnées (reaper Phase 0 + garde G9)
-- [ ] J3 répertoire des sessions — ⬜ non commencé
-- [ ] J4 journaux par pilote — ⬜ non commencé (journal d'attache commun)
+- [ ] J3 répertoire des sessions — ⬜ ENCORE DÛ
+- [ ] J4 journaux par pilote — ⬛ PÉRIMÉ / RAYÉ (commun accord avec B7 ;
+      ne plus traiter comme dû actif)
 
 **Bloc K — déployer ailleurs**
 - [x] K1 installateur bi-plateforme (macOS launchd + Linux systemd, rustup
@@ -259,11 +393,10 @@ ont été créés directement dans ce fichier le 24/08.
       mergés+déployés : écart épinglé≠servi visible dans who et au journal
 - [x] L3 quota anticipé Claude (fenêtre/statut/resetsAt dans LIMITE, aucune
       décision auto) — format compact 5h/7d en cours (coder4)
-- [ ] L4 coût par mission — 🔄 = G9, rebase final v11→v12→v13 en cours,
-      garde M1 en juge de paix
-- [ ] L5 voir qui travaille — 🔄 volet redémarrage CORRIGÉ (busy ré-annoncé
-      à la ré-inscription, mergé) ; l'entre-tours reste aveugle par
-      honnêteté (aucun signal attesté — pas de busy inventé)
+- [x] L4 coût par mission — ✅ FAIT (= G9) — `5059d3c` **[mesuré]**
+- [ ] L5 voir qui travaille — 🔄 ENCORE DÛ (volet redémarrage busy
+      ré-annoncé mergé **[lu]** ; entre-tours aveugle ; heartbeat
+      lien≠capacité EN JURY — pas acquis)
 - [x] BASCULE tmux→gérés FAITE le 24/08 12h25 (voir point d'étape bloc L) ;
       extinction ACHEVÉE à 15h25 : cxbridget, prospective puis coderBridget
       (pane fermé par l'utilisateur après sa dernière livraison — état
