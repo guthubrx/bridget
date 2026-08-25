@@ -7,7 +7,7 @@
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
-    LedgerMessage, LedgerScope, decode, encode,
+    LedgerMessage, LedgerScope, PresenceMode, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use maicie::ui_projection::{UiMissionProjectionV1, read_ui_mission_projection_v1};
@@ -18,6 +18,8 @@ use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -77,10 +79,112 @@ impl From<std::io::Error> for UiError {
     }
 }
 
+#[derive(Default)]
+struct UiRelayRuntime {
+    human_presence: Mutex<Option<UiHumanPresence>>,
+}
+
+struct UiHumanPresence {
+    alive: Arc<AtomicBool>,
+}
+
+impl UiRelayRuntime {
+    fn ensure_human_presence(&self, socket_path: &Path) -> Result<(), UiError> {
+        let mut presence = self
+            .human_presence
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if presence
+            .as_ref()
+            .is_some_and(|current| current.alive.load(Ordering::Acquire))
+        {
+            return Ok(());
+        }
+        *presence = Some(open_human_presence(socket_path)?);
+        Ok(())
+    }
+}
+
+fn open_human_presence(socket_path: &Path) -> Result<UiHumanPresence, UiError> {
+    let stream = UnixStream::connect(socket_path)?;
+    let read_stream = stream.try_clone()?;
+    let writer = Arc::new(Mutex::new(BufWriter::new(stream)));
+    let mut reader = BufReader::new(read_stream);
+    {
+        let mut writer_guard = writer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        send_daemon(
+            &mut writer_guard,
+            &WrapperToDaemon::Register {
+                agent_type: "ui".to_string(),
+                name: Some(UI_SENDER.to_string()),
+                host: Some("localhost".to_string()),
+                transport: Some("unix".to_string()),
+                mode: Some(PresenceMode::Cli),
+                location: None,
+                os: Some(std::env::consts::OS.to_string()),
+                instance_id: Some(format!("bridget-ui-{}", std::process::id())),
+                domain: Some("bridget".to_string()),
+                turn_in_progress: false,
+                journal_available: Some(false),
+            },
+        )?;
+    }
+    match read_daemon(&mut reader)? {
+        DaemonToWrapper::Registered { name } if name == UI_SENDER => {}
+        response => {
+            return Err(UiError::Protocol(format!(
+                "présence UI humaine refusée: {response:?}"
+            )));
+        }
+    }
+    {
+        let mut writer_guard = writer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        send_daemon(&mut writer_guard, &WrapperToDaemon::JournalReady)?;
+    }
+
+    let alive = Arc::new(AtomicBool::new(true));
+    let thread_alive = Arc::clone(&alive);
+    thread::spawn(move || {
+        while let Ok(event) = read_daemon(&mut reader) {
+            match event {
+                DaemonToWrapper::DeliverIdempotent {
+                    delivery_id,
+                    delivery_generation,
+                    ..
+                } => {
+                    let mut writer = writer
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if send_daemon(
+                        &mut writer,
+                        &WrapperToDaemon::DeliverAcked {
+                            delivery_id,
+                            delivery_generation,
+                        },
+                    )
+                    .is_err()
+                    {
+                        break;
+                    }
+                }
+                DaemonToWrapper::Disconnect => break,
+                _ => {}
+            }
+        }
+        thread_alive.store(false, Ordering::Release);
+    });
+    Ok(UiHumanPresence { alive })
+}
+
 /// Serveur HTTP local sans état métier propre.
 pub struct UiRelay {
     listener: TcpListener,
     config: UiRelayConfig,
+    runtime: Arc<UiRelayRuntime>,
 }
 
 impl UiRelay {
@@ -94,7 +198,11 @@ impl UiRelay {
             return Err(UiError::Configuration("jeton UI absent".to_string()));
         }
         let listener = TcpListener::bind(config.bind)?;
-        Ok(Self { listener, config })
+        Ok(Self {
+            listener,
+            config,
+            runtime: Arc::new(UiRelayRuntime::default()),
+        })
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr, UiError> {
@@ -114,9 +222,10 @@ impl UiRelay {
             match stream {
                 Ok(stream) => {
                     let config = self.config.clone();
+                    let runtime = Arc::clone(&self.runtime);
                     thread::spawn(move || {
                         let mut stream = stream;
-                        if let Err(error) = serve_connection(&mut stream, &config) {
+                        if let Err(error) = serve_connection(&mut stream, &config, &runtime) {
                             let _ = write_text(&mut stream, 500, &format!("relais UI: {error}"));
                         }
                     });
@@ -131,7 +240,7 @@ impl UiRelay {
     fn serve_one(&self) -> Result<(), UiError> {
         let (stream, _) = self.listener.accept()?;
         let mut stream = stream;
-        serve_connection(&mut stream, &self.config)
+        serve_connection(&mut stream, &self.config, &self.runtime)
     }
 }
 
@@ -230,7 +339,11 @@ struct UiJournalEventV1<'a> {
     event: &'a DaemonToWrapper,
 }
 
-fn serve_connection(stream: &mut TcpStream, config: &UiRelayConfig) -> Result<(), UiError> {
+fn serve_connection(
+    stream: &mut TcpStream,
+    config: &UiRelayConfig,
+    runtime: &UiRelayRuntime,
+) -> Result<(), UiError> {
     let request = read_request(stream)?;
     if request.path == "/v1/send" && request.method != "POST" {
         return write_text(stream, 405, "méthode non autorisée");
@@ -259,7 +372,7 @@ fn serve_connection(stream: &mut TcpStream, config: &UiRelayConfig) -> Result<()
     }
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/") => write_asset(stream, 200, "text/html; charset=utf-8", UI_INDEX),
-        ("POST", "/v1/send") => match post_ui_message(config, &request.body) {
+        ("POST", "/v1/send") => match post_ui_message(config, runtime, &request.body) {
             Ok(response) => write_json(stream, 202, &response),
             Err((status, code)) => write_json(
                 stream,
@@ -315,6 +428,7 @@ fn serve_connection(stream: &mut TcpStream, config: &UiRelayConfig) -> Result<()
 
 fn post_ui_message(
     config: &UiRelayConfig,
+    runtime: &UiRelayRuntime,
     body: &[u8],
 ) -> Result<UiSendAcceptedV1, (u16, &'static str)> {
     let request: UiSendRequestV1 =
@@ -326,6 +440,11 @@ fn post_ui_message(
 
     let agents = read_agent_list(&config.daemon_socket).map_err(|_| (503, "daemon_unavailable"))?;
     validate_ui_recipient(&agents, &request.to)?;
+    if request.reply {
+        runtime
+            .ensure_human_presence(&config.daemon_socket)
+            .map_err(|_| (503, "daemon_unavailable"))?;
+    }
     send_ui_message(&config.daemon_socket, request).map_err(|_| (503, "daemon_unavailable"))
 }
 
@@ -453,10 +572,10 @@ fn read_snapshot(
     config: &UiRelayConfig,
     focus_agent: Option<&str>,
 ) -> Result<UiSnapshotV1, UiError> {
-    let (agent_infos, messages, open_requests) = read_bridget_snapshot(&config.daemon_socket)?;
-    let agents = compose_agent_rows(agent_infos, &messages);
+    let facts = read_bridget_snapshot(&config.daemon_socket)?;
+    let agents = compose_agent_rows(facts.agents, &facts.messages);
     let peer_exchanges = focus_agent
-        .map(|agent| aggregate_peer_exchanges(agent, &messages))
+        .map(|agent| aggregate_peer_exchanges(agent, &facts.messages))
         .unwrap_or_default();
     let missions = read_ui_mission_projection_v1(&config.maicie_config)
         .map_err(|error| UiError::Configuration(error.to_string()))?;
@@ -465,7 +584,7 @@ fn read_snapshot(
         version: UI_VERSION,
         agents,
         peer_exchanges,
-        open_requests,
+        open_requests: facts.open_requests,
         missions,
         recovery_losses,
     })
@@ -603,16 +722,13 @@ fn read_recovery_losses(socket_path: &Path) -> Vec<UiRecoveryLossV1> {
 /// Projection globale déjà détenue par le daemon. La connexion reste dans le
 /// rôle wrapper historique, lequel autorise ces deux lectures sans créer une
 /// présence temporaire dans l'annuaire.
-fn read_bridget_snapshot(
-    socket_path: &Path,
-) -> Result<
-    (
-        Vec<bridget_transport::protocol::AgentInfo>,
-        Vec<LedgerMessage>,
-        Vec<bridget_transport::protocol::RequestInfo>,
-    ),
-    UiError,
-> {
+struct BridgetSnapshotFacts {
+    agents: Vec<bridget_transport::protocol::AgentInfo>,
+    messages: Vec<LedgerMessage>,
+    open_requests: Vec<bridget_transport::protocol::RequestInfo>,
+}
+
+fn read_bridget_snapshot(socket_path: &Path) -> Result<BridgetSnapshotFacts, UiError> {
     let stream = UnixStream::connect(socket_path)?;
     let read_stream = stream.try_clone()?;
     let mut writer = BufWriter::new(stream);
@@ -641,7 +757,11 @@ fn read_bridget_snapshot(
             )));
         }
     };
-    Ok((agents, messages, open_requests))
+    Ok(BridgetSnapshotFacts {
+        agents,
+        messages,
+        open_requests,
+    })
 }
 
 /// Traduit un unique abonnement Attach existant vers SSE. L'abonnement est

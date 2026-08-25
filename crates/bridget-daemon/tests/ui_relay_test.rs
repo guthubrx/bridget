@@ -104,6 +104,17 @@ impl LiveAgent {
             response => panic!("LedgerProjection attendu, reçu {response:?}"),
         }
     }
+
+    fn open_requests(&mut self) -> Vec<bridget_transport::protocol::RequestInfo> {
+        self.send(&WrapperToDaemon::LedgerProjection {
+            scope: LedgerScope::Requests,
+            limit: 200,
+        });
+        match self.read() {
+            DaemonToWrapper::LedgerProjection { requests, .. } => requests,
+            response => panic!("LedgerProjection attendu, reçu {response:?}"),
+        }
+    }
 }
 
 fn root(label: &str) -> PathBuf {
@@ -378,6 +389,57 @@ fn post_v1_send_valide_repond_202_et_livre_un_identifiant_non_vide() {
         }
         response => panic!("DeliverIdempotent attendu, reçu {response:?}"),
     }
+
+    drop(daemon);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn post_v1_send_reply_true_cree_une_demande_suivie() {
+    let root = root("send-reply");
+    let daemon = DaemonProcess::start(&root);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let mut recipient = LiveAgent::connect(&socket, "destinataire-reply");
+    let config = UiRelayConfig {
+        daemon_socket: socket,
+        maicie_config: write_maicie_config(&root),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-send-reply".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let response = read_response(request_http(
+        address,
+        "POST",
+        "/v1/send?token=jeton-send-reply",
+        Some(r#"{"version":1,"to":"destinataire-reply","body":"question suivie","reply":true}"#),
+    ));
+    assert!(response.starts_with("HTTP/1.1 202"), "{response}");
+    let message_id = match recipient.read() {
+        DaemonToWrapper::DeliverIdempotent { message, .. } => {
+            assert!(message.reply);
+            message.id
+        }
+        response => panic!("DeliverIdempotent attendu, reçu {response:?}"),
+    };
+    let requests = recipient.open_requests();
+    assert!(
+        requests.iter().any(|request| request.id == message_id),
+        "reply=true doit créer la demande suivie {message_id}: {requests:?}"
+    );
+    let mut reply = BridgetMessage::new("destinataire-reply", "humain", "réponse UI");
+    reply.in_reply_to = Some(message_id.clone());
+    recipient.send(&WrapperToDaemon::Send(reply));
+    assert!(matches!(recipient.read(), DaemonToWrapper::Ack { .. }));
+    assert!(
+        recipient
+            .open_requests()
+            .iter()
+            .all(|request| request.id != message_id),
+        "la réponse corrélée doit solder la demande suivie"
+    );
 
     drop(daemon);
     std::fs::remove_dir_all(root).unwrap();
