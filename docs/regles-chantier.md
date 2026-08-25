@@ -230,6 +230,13 @@ deux échecs successifs pour un même agent.)*
   et annonce le nouveau SHA au référent qui le transmet au jury. *(Deux
   incidents le 2026-08-24 : un jury lancé sur une tête déjà dépassée, puis un
   auteur livrant cinq SHA pendant que son jury mesurait le premier.)*
+- **Heartbeat = lien, pas capacité.** Le daemon distingue `link_seen`
+  (socket / heartbeat) et `last_seen` (capacité : register, tour, runtime).
+  `who` / `bridget-idle` exposent l'âge de *capacité* : un wrapper vivant /
+  shell mort ne reste plus LIBRE par le seul heartbeat. **Ce qui reste faux
+  après ce filet** (sonde d'exécution hors périmètre) : un shell mort resté
+  `busy` (tour jamais refermé) continue d'afficher OCCUPÉ tant que le lien
+  bat ; et `connected` reste exempt du TTL de retain (lot B séparé).
 - **Jamais d'accent grave dans un mandat passé en ligne de commande.** Le
   shell les interprète comme une substitution : les mots encadrés
   DISPARAISSENT du mandat livré à l'agent, silencieusement, et seule une
