@@ -136,20 +136,22 @@ La migration v15 n'est pas dans ce lot (`--migrate` ailleurs).
 L'adoption d'un mandat orphelin exige une délégation **vivante**
 (`state NOT IN (annulee, terminee)`) : un mandat terminal n'est jamais
 ressuscité en `ouverte/mandat_adopte`. Une `ouverte` qui pointerait déjà
-vers un cadavre est rétractée en `sautee/mandat_plus_vivant` en tête de
-tick. **Choix** : sans attestation vivante, la routine redélègue même si
-l'objectif précédent reste ouvert — le calendrier ne doit pas geler en
-silence sur un mandat mort ; le traitement propre d'`Annulee` / jamais-
-retour reste la dette hors lot.
+vers un mandat **disparu ou annulé** est rétractée en
+`sautee/mandat_plus_vivant` en tête de tick. Une délégation `terminee`
+(mission accomplie) n'est **pas** rétractée : l'occurrence attend la
+clôture d'objectif. **Choix** : sans attestation vivante ni accomplie,
+la routine redélègue même si l'objectif précédent reste ouvert — le
+calendrier ne doit pas geler en silence sur un mandat annulé ; le
+traitement propre d'`Annulee` / jamais-retour reste la dette hors lot.
 
 ### Dette assumée (hors lot) — formulation mesurée
 
-Si une délégation est **annulée** sans clôture d'objectif, l'occurrence reste
-`ouverte`, les relèves suivantes produisent des `differee`, **aucun nouveau
-mandat ne part**, et `routine list` continue d'afficher `active`. En termes
-mesurés : **la routine cesse définitivement de tourner, en silence, pendant
-que la surface affirme qu'elle est vivante.** Remède futur (~1 j) : états
-`Annulee` / jamais-retour. Banc de référence : mesure relec5 (dix relèves,
+Une délégation **annulée** ne gèle plus le calendrier : la rétractation
+`mandat_plus_vivant` libère `has_open` et un mandat neuf peut partir.
+Reste hors lot le traitement métier propre des états `Annulee` /
+jamais-retour (surface, greffe, clôture d'objectif associée) — la
+redélégation automatique n'est qu'un filet calendaire, pas une politique
+d'annulation. Banc de référence historique : mesure relec5 (dix relèves,
 contrôle positif objectif clos).
 
 ## Guichet Maicie

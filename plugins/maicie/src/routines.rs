@@ -7,7 +7,8 @@
 //! - `horloge_arretee` — buckets échus pendant une indisponibilité du tick
 //! - `rattrapage_borne:<N>` — trou tronqué ; N = buckets effacés sans ligne
 //! - `mandat_plus_vivant` — occurrence ouverte rétractée : le mandat attesté
-//!   n'existe plus ou est terminal (`annulee`/`terminee`)
+//!   n'existe plus ou est **annulé** (`annulee`). Une délégation `terminee`
+//!   (mission accomplie) n'est pas rétractée : elle attend la clôture.
 
 use crate::app::{DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, delegate};
 use crate::config::DurationClasses;

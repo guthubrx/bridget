@@ -2339,10 +2339,16 @@ impl MaicieStore {
     }
 
     /// Propriété : une occurrence `ouverte` ne doit jamais attester un mandat
-    /// inexistant ou terminal. Rétracte en `sautee/mandat_plus_vivant` pour
+    /// **disparu ou annulé**. Rétracte en `sautee/mandat_plus_vivant` pour
     /// que `has_open` retombe et que la routine puisse redéléguer — même si
-    /// l'objectif reste ouvert (choix : le calendrier ne doit pas geler sur
-    /// un cadavre ; la dette Annulee/jamais-retour reste hors lot).
+    /// l'objectif reste ouvert.
+    ///
+    /// `terminee` n'est **pas** un cadavre ici : la mission est accomplie,
+    /// l'occurrence attend la clôture d'objectif (`terminate_occurrences_with_closed_objectives`).
+    /// La rétracter relancerait la même ronde (has_open → faux → mandat neuf)
+    /// et écrirait « sautée » pour un travail déjà fait. L'adoption refuse
+    /// toujours `annulee` **et** `terminee` — ces deux contextes n'ont pas
+    /// le même sens.
     pub fn retract_occurrences_with_dead_mandates(&mut self) -> Result<usize, StoreError> {
         let changed = self
             .connection
@@ -2355,7 +2361,7 @@ impl MaicieStore {
                        OR NOT EXISTS (\n\
                            SELECT 1 FROM delegations d\n\
                            WHERE d.id = routine_occurrences.delegation_id\n\
-                             AND d.state NOT IN ('annulee', 'terminee')\n\
+                             AND d.state != 'annulee'\n\
                        )\n\
                    )",
                 [],

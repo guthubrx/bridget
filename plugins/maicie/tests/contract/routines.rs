@@ -955,11 +955,15 @@ fn relec1_serie_crash_reel_apres_adoption() {
     }
 }
 
-/// Propriété : une occurrence ne doit jamais attester un mandat mort.
-/// Matrice relec1 m6b (N=5 logique) : terminal + objectif ouvert → REPART
-/// (deleg≥2) ; terminal + objectif clos → REPART via rattrapage de clôture.
-/// Mutant : retirer le filtre d.state OU retract_occurrences_with_dead_mandates
-/// fait geler le bras « objectif ouvert ».
+/// Propriété : une occurrence ne doit jamais attester un mandat **annulé**
+/// ou disparu. `terminee` (mission accomplie) n'est pas un cadavre à
+/// rétracter — l'occurrence attend la clôture d'objectif.
+/// Matrice recalibrée (hotfix production), chemin coupure/orphelin N=5 :
+/// - terminal (`annulee`/`terminee`) → jamais adopté ; calendrier REPART
+/// - `annulee` sur une `ouverte` existante → RÉTRACTE (oracle voisin)
+/// Mutant rétractation : remettre `'terminee'` dans la liste morte fait
+/// rougir `mission_accomplie_n_est_pas_retractee_en_sautee` (et peut
+/// inventer une `sautee` sur mission accomplie ici si une ouverte existe).
 #[test]
 fn occurrence_n_atteste_jamais_un_mandat_mort() {
     const N: usize = 5;
@@ -1024,27 +1028,48 @@ fn occurrence_n_atteste_jamais_un_mandat_mort() {
             let delegations: i64 = cx
                 .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
                 .unwrap();
+            // Menteuse = ouverte qui atteste un mandat disparu ou annulé.
+            // `terminee` n'y figure PAS : mission accomplie, pas cadavre.
             let menteuses: i64 = cx
                 .query_row(
                     "SELECT COUNT(*) FROM routine_occurrences o\n\
                      LEFT JOIN delegations d ON d.id = o.delegation_id\n\
                      WHERE o.state = 'ouverte'\n\
                        AND (o.delegation_id IS NULL\n\
-                            OR d.state IN ('annulee', 'terminee')\n\
+                            OR d.state = 'annulee'\n\
                             OR d.id IS NULL)",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let sautees_fausses: i64 = cx
+                .query_row(
+                    "SELECT COUNT(*) FROM routine_occurrences o\n\
+                     JOIN delegations d ON d.id = o.delegation_id\n\
+                     WHERE o.state = 'sautee'\n\
+                       AND o.reason = 'mandat_plus_vivant'\n\
+                       AND d.state = 'terminee'",
                     [],
                     |r| r.get(0),
                 )
                 .unwrap();
             drop(cx);
 
+            assert_eq!(
+                menteuses, 0,
+                "{etat} clos={clore} tir {tir} : aucune ouverte ne doit attester un annulé/disparu"
+            );
+            assert_eq!(
+                sautees_fausses, 0,
+                "{etat} clos={clore} tir {tir} : jamais sautee/mandat_plus_vivant sur une mission accomplie"
+            );
+            // Chemin coupure/orphelin : un mandat terminal n'est jamais adopté ;
+            // le calendrier repart (deleg≥2). La non-relance d'une mission
+            // accomplie déjà attestée par une `ouverte` est l'oracle
+            // `mission_accomplie_n_est_pas_retractee_en_sautee`.
             assert!(
                 delegations >= 2,
                 "{etat} clos={clore} tir {tir} : routine doit repartir (deleg≥2), obtenu {delegations}"
-            );
-            assert_eq!(
-                menteuses, 0,
-                "{etat} clos={clore} tir {tir} : aucune ouverte ne doit attester un cadavre"
             );
         }
     }
@@ -1134,6 +1159,164 @@ fn ouverte_retractee_quand_le_mandat_meurt_apres_coup() {
     assert_eq!(retractees, 1, "ouverte rétractée en mandat_plus_vivant");
     assert_eq!(ouvertes, 1, "un neuf doit pouvoir ouvrir");
     assert!(delegations >= 2, "redélégation après cadavre, objectif encore ouvert");
+}
+
+/// relec5 — contrôle : délégation VIVANTE → l'occurrence n'est PAS rétractée.
+/// Distingue la clause `delegation_id IS NULL` de la clause d'état.
+#[test]
+fn controle_delegation_vivante_non_retractee() {
+    let guard = RootGuard::new("vivante-non-retract");
+    let database = guard.path.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let period = 60_i64;
+    let t0 = 1_787_580_000_i64;
+    seed_active(&mut store, t0, period);
+    evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0,
+    )
+    .unwrap();
+    drop(store);
+
+    let cx = rusqlite::Connection::open(&database).unwrap();
+    let did: Option<String> = cx
+        .query_row(
+            "SELECT delegation_id FROM routine_occurrences",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let etat: String = cx
+        .query_row("SELECT state FROM delegations", [], |r| r.get(0))
+        .unwrap();
+    drop(cx);
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0 + period,
+    )
+    .unwrap();
+    drop(store);
+
+    let cx = rusqlite::Connection::open(&database).unwrap();
+    let bn = bucket_for(t0, period);
+    let retractee: i64 = cx
+        .query_row(
+            "SELECT COUNT(*) FROM routine_occurrences\n\
+             WHERE bucket = ?1 AND state = 'sautee'\n\
+               AND reason = 'mandat_plus_vivant'",
+            [bn],
+            |r| r.get(0),
+        )
+        .unwrap();
+    drop(cx);
+
+    assert!(
+        did.is_some(),
+        "banc faux : occurrence sans delegation_id (état délégation={etat})"
+    );
+    assert_eq!(
+        retractee, 0,
+        "CLAUSE delegation_id IS NULL : occurrence normale rétractée alors que délégation='{etat}'"
+    );
+}
+
+/// relec5 — mission ACCOMPLIE (`terminee`, objectif pas encore clos) :
+/// l'occurrence ne doit PAS passer `sautee/mandat_plus_vivant`, et aucun
+/// mandat neuf ne doit partir. Mutant : remettre `'terminee'` dans la
+/// liste de rétractation → cette assertion meurt.
+#[test]
+fn mission_accomplie_n_est_pas_retractee_en_sautee() {
+    let guard = RootGuard::new("mission-accomplie");
+    let database = guard.path.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let period = 60_i64;
+    let t0 = 1_787_580_000_i64;
+    seed_active(&mut store, t0, period);
+    let produced = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0,
+    )
+    .unwrap();
+    let bn = bucket_for(t0, period);
+    assert!(
+        produced
+            .iter()
+            .any(|o| o.state == EtatOccurrence::Ouverte && o.bucket == bn),
+        "banc faux : pas d'occurrence ouverte initiale"
+    );
+    drop(store);
+
+    let cx = rusqlite::Connection::open(&database).unwrap();
+    let n = cx
+        .execute("UPDATE delegations SET state = 'terminee'", [])
+        .unwrap();
+    assert_eq!(n, 1, "banc faux : une délégation attendue");
+    let etat_obj: String = cx
+        .query_row("SELECT state FROM objectives", [], |r| r.get(0))
+        .unwrap();
+    assert_ne!(etat_obj, "clos", "banc faux : objectif déjà clos");
+    let avant: Vec<(i64, String, Option<String>)> = {
+        let mut stmt = cx
+            .prepare("SELECT bucket, state, reason FROM routine_occurrences ORDER BY bucket")
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+    drop(cx);
+
+    let mut store = MaicieStore::open(&database).unwrap();
+    evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0 + period,
+    )
+    .unwrap();
+    drop(store);
+
+    let cx = rusqlite::Connection::open(&database).unwrap();
+    let apres: Vec<(i64, String, Option<String>)> = {
+        let mut stmt = cx
+            .prepare("SELECT bucket, state, reason FROM routine_occurrences ORDER BY bucket")
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+    let deleg: i64 = cx
+        .query_row("SELECT COUNT(*) FROM delegations", [], |r| r.get(0))
+        .unwrap();
+    drop(cx);
+
+    let _ = (&avant, &apres); // pièces de mesure (greffe relec5)
+    let retractee = apres.iter().any(|(b, s, r)| {
+        *b == bn && s == "sautee" && r.as_deref() == Some("mandat_plus_vivant")
+    });
+    assert!(
+        !retractee,
+        "MISSION ACCOMPLIE RÉTRACTÉE : bucket {bn} en 'sautee/mandat_plus_vivant' \
+         alors que la délégation est 'terminee', objectif '{etat_obj}'. \
+         Le greffe dirait « sautée » pour un travail qui a été fait."
+    );
+    assert_eq!(
+        deleg, 1,
+        "relance interdite : mission accomplie ne doit pas ouvrir un 2ᵉ mandat (obtenu {deleg})"
+    );
 }
 
 /// Contrôle positif du filtre d'état : mandat vivant → toujours adopté.
