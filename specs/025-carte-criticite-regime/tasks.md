@@ -20,6 +20,12 @@
 - [x] T2510 [US1] Implémenter l’adaptateur borné dans `plugins/maicie/src/review_git.rs` sans checkout ni aide de diff externe.
 - [x] T2511 [US1] Vérifier que les mêmes SHA rendent les mêmes preuves malgré worktree et environnement divergents.
 
+## Phase 3 bis — Noyau pur de soumission et décision
+
+- [x] T2511A [US1] Écrire les oracles de l’identifiant de soumission, de l’attente sans défaut et des charges JSON fermées.
+- [x] T2511B [US4] Implémenter la transition pure confirmer, durcir ou alléger et le régime propre déjà fixé par le référent.
+- [x] T2511C [US4] Vérifier les mutants du régime par défaut, du sens d’écart et de la protection propre.
+
 ## Phase 4 — Gate d’intégration des migrations
 
 - [ ] T2512 Attendre puis vérifier l’absorption de la session 021/v17, de la session 026/v18 et de la session 027/v19 ; rebaser avant toute écriture store.
@@ -51,7 +57,7 @@
 
 ```text
 T2501–T2504
-    ├── T2505–T2508 ── T2509–T2511
+    ├── T2505–T2508 ── T2509–T2511 ── T2511A–T2511C
     └── attente externe T2512
                          ↓
                     T2513–T2514

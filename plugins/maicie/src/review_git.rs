@@ -2,6 +2,7 @@
 
 use crate::review::{
     ContractDocument, FileChange, RegistryFinding, RepositorySnapshot, ReviewError, TrackedPath,
+    is_canonical_sha, is_full_branch_ref,
 };
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -786,27 +787,6 @@ fn ensure_path(path: &str, limits: ReviewGitLimits) -> Result<(), ReviewGitError
 
 fn is_contract_path(path: &str) -> bool {
     path.starts_with("specs/") && path.contains("/contracts/")
-}
-
-fn is_canonical_sha(value: &str) -> bool {
-    value.len() == 40
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-fn is_full_branch_ref(value: &str) -> bool {
-    let allowed_prefix = value.starts_with("refs/heads/") || value.starts_with("refs/remotes/");
-    allowed_prefix
-        && !value.ends_with('/')
-        && !value.contains("..")
-        && !value.contains("@{")
-        && !value.contains("//")
-        && !value.chars().any(|character| {
-            character.is_control()
-                || character.is_whitespace()
-                || matches!(character, '~' | '^' | ':' | '?' | '*' | '[' | '\\')
-        })
 }
 
 fn output_line<'a>(bytes: &'a [u8], step: &'static str) -> Result<&'a str, ReviewGitError> {

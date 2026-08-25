@@ -26,3 +26,5 @@ mod guichet_domain;
 mod profiles;
 #[path = "contract/review_criticality.rs"]
 mod review_criticality;
+#[path = "contract/review_submission.rs"]
+mod review_submission;

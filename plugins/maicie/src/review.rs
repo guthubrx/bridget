@@ -166,6 +166,151 @@ pub struct CriticalityMap {
     pub critical_changed_paths: Vec<String>,
 }
 
+/// Charge fermée de soumission. L'auteur vient de l'enveloppe attestée et le
+/// chemin local du dépôt vient de la configuration, jamais de cette charge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewLotSubmitPayload {
+    pub project_id: String,
+    pub branch_ref: String,
+    pub base: String,
+    pub head: String,
+}
+
+/// Charge fermée de décision. L'écart entre les deux régimes est la donnée ;
+/// aucun motif libre n'appartient au contrat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewRegimeSelectPayload {
+    pub submission_id: String,
+    pub retained_regime: ReviewRegime,
+}
+
+/// Origine de la décision exigée pour une soumission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewSubmissionControl {
+    ReferentSelectionRequired,
+    FixedByReferentDecision,
+}
+
+/// États atteignables avant le futur lot d'élection des relecteurs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReviewSubmissionState {
+    #[serde(rename = "awaiting_decision")]
+    AwaitingDecision,
+    #[serde(rename = "decision_recorded")]
+    DecisionRecordedElectionUnavailable,
+}
+
+/// Sens calculé de l'écart entre proposition et décision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDirection {
+    Same,
+    Strengthened,
+    Lightened,
+}
+
+/// États fermés d'un écart. La décision pure ne peut créer que `Open` ; les
+/// autres valeurs seront alimentées par les faits exacts des lots dépendants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDeviationState {
+    Open,
+    Confirmed,
+    NotConfirmed,
+    Refuted,
+}
+
+/// Soumission sans contenu source. Les chemins conservés sont uniquement ceux
+/// du diff qui ont réellement déclenché le régime proposé.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewSubmission {
+    pub submission_id: String,
+    pub project_id: String,
+    pub author_id: String,
+    pub branch_ref: String,
+    pub base: String,
+    pub head: String,
+    pub proposed_regime: ReviewRegime,
+    pub retained_regime: Option<ReviewRegime>,
+    pub critical_changed_paths: Vec<String>,
+    pub unresolved_citations: usize,
+    pub control: ReviewSubmissionControl,
+}
+
+impl ReviewSubmission {
+    /// Projette l'état sans le stocker une seconde fois.
+    /// Complexité : O(1).
+    pub const fn state(&self) -> ReviewSubmissionState {
+        if self.retained_regime.is_some() {
+            ReviewSubmissionState::DecisionRecordedElectionUnavailable
+        } else {
+            ReviewSubmissionState::AwaitingDecision
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewDeviation {
+    pub deviation_id: String,
+    pub submission_id: String,
+    pub direction: ReviewDirection,
+    pub state: ReviewDeviationState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewRegimeDecision {
+    pub decision_id: String,
+    pub submission_id: String,
+    pub proposed_regime: ReviewRegime,
+    pub retained_regime: ReviewRegime,
+    pub direction: ReviewDirection,
+    pub decided_by: String,
+    pub deviation: Option<ReviewDeviation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewSubmissionError {
+    InvalidField(&'static str),
+}
+
+impl fmt::Display for ReviewSubmissionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidField(field) => {
+                write!(formatter, "champ de soumission invalide : {field}")
+            }
+        }
+    }
+}
+
+impl Error for ReviewSubmissionError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewDecisionError {
+    ReferentMismatch,
+    SubmissionMismatch,
+    SelfRegimeFixed,
+    DecisionAlreadyRecorded,
+}
+
+impl fmt::Display for ReviewDecisionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReferentMismatch => formatter.write_str("émetteur différent du référent"),
+            Self::SubmissionMismatch => formatter.write_str("soumission différente"),
+            Self::SelfRegimeFixed => formatter.write_str("régime propre fixé par le référent"),
+            Self::DecisionAlreadyRecorded => formatter.write_str("décision déjà enregistrée"),
+        }
+    }
+}
+
+impl Error for ReviewDecisionError {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewError {
     InvalidPath { field: &'static str, path: String },
@@ -198,6 +343,118 @@ const SELF_CRITICAL_PATHS: [&str; 3] = [
 /// Décision explicite du référent : le noyau F38 reste toujours en jury 2×2.
 /// Cette valeur n'est ni proposée, ni apprise, ni recalculée par la carte.
 pub const F38_FIXED_REGIME: ReviewRegime = ReviewRegime::JuryTwoByTwo;
+
+/// Crée la représentation pure d'une soumission mesurée.
+///
+/// Complexité : O(Z + C), avec Z preuves de zone et C chemins critiques.
+pub fn create_review_submission(
+    payload: &ReviewLotSubmitPayload,
+    author_id: &str,
+    map: &CriticalityMap,
+) -> Result<ReviewSubmission, ReviewSubmissionError> {
+    validate_submission_field("project_id", &payload.project_id)?;
+    validate_submission_field("author_id", author_id)?;
+    if !is_full_branch_ref(&payload.branch_ref) {
+        return Err(ReviewSubmissionError::InvalidField("branch_ref"));
+    }
+    if !is_canonical_sha(&payload.base) {
+        return Err(ReviewSubmissionError::InvalidField("base"));
+    }
+    if !is_canonical_sha(&payload.head) {
+        return Err(ReviewSubmissionError::InvalidField("head"));
+    }
+
+    let fixed_by_referent = map.zones.iter().any(|zone| {
+        zone.evidence
+            .iter()
+            .any(|evidence| evidence.kind == EvidenceKind::SelfProtection)
+    });
+    let proposed_regime = if fixed_by_referent {
+        F38_FIXED_REGIME
+    } else {
+        map.proposed_regime
+    };
+    let (retained_regime, control) = if fixed_by_referent {
+        (
+            Some(F38_FIXED_REGIME),
+            ReviewSubmissionControl::FixedByReferentDecision,
+        )
+    } else {
+        (None, ReviewSubmissionControl::ReferentSelectionRequired)
+    };
+
+    Ok(ReviewSubmission {
+        submission_id: deterministic_review_id(
+            b"review-submission-v1",
+            &[
+                &payload.project_id,
+                &payload.branch_ref,
+                &payload.base,
+                &payload.head,
+            ],
+        ),
+        project_id: payload.project_id.clone(),
+        author_id: author_id.to_string(),
+        branch_ref: payload.branch_ref.clone(),
+        base: payload.base.clone(),
+        head: payload.head.clone(),
+        proposed_regime,
+        retained_regime,
+        critical_changed_paths: map.critical_changed_paths.clone(),
+        unresolved_citations: map.unresolved_citations.len(),
+        control,
+    })
+}
+
+/// Confronte le choix explicite du référent à la proposition persistable.
+///
+/// Complexité : O(1). La mutation n'arrive qu'après toutes les gardes, afin
+/// qu'un refus laisse l'objet appelant bit-à-bit inchangé.
+pub fn decide_review_regime(
+    submission: &mut ReviewSubmission,
+    actor_id: &str,
+    referent_id: &str,
+    payload: &ReviewRegimeSelectPayload,
+) -> Result<ReviewRegimeDecision, ReviewDecisionError> {
+    if referent_id.is_empty() || actor_id != referent_id {
+        return Err(ReviewDecisionError::ReferentMismatch);
+    }
+    if payload.submission_id != submission.submission_id {
+        return Err(ReviewDecisionError::SubmissionMismatch);
+    }
+    if submission.control == ReviewSubmissionControl::FixedByReferentDecision {
+        return Err(ReviewDecisionError::SelfRegimeFixed);
+    }
+    if submission.retained_regime.is_some() {
+        return Err(ReviewDecisionError::DecisionAlreadyRecorded);
+    }
+
+    let direction = match payload.retained_regime.cmp(&submission.proposed_regime) {
+        std::cmp::Ordering::Equal => ReviewDirection::Same,
+        std::cmp::Ordering::Greater => ReviewDirection::Strengthened,
+        std::cmp::Ordering::Less => ReviewDirection::Lightened,
+    };
+    let decision_id =
+        deterministic_review_id(b"review-regime-decision-v1", &[&submission.submission_id]);
+    let deviation = (direction != ReviewDirection::Same).then(|| ReviewDeviation {
+        deviation_id: deterministic_review_id(b"review-regime-deviation-v1", &[&decision_id]),
+        submission_id: submission.submission_id.clone(),
+        direction,
+        state: ReviewDeviationState::Open,
+    });
+    let decision = ReviewRegimeDecision {
+        decision_id,
+        submission_id: submission.submission_id.clone(),
+        proposed_regime: submission.proposed_regime,
+        retained_regime: payload.retained_regime,
+        direction,
+        decided_by: actor_id.to_string(),
+        deviation,
+    };
+
+    submission.retained_regime = Some(payload.retained_regime);
+    Ok(decision)
+}
 
 #[derive(Debug)]
 struct PathIndex {
@@ -676,11 +933,58 @@ fn unresolved_citation(
 
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
-    let mut output = String::with_capacity(digest.len() * 2);
-    for byte in digest {
+    lowercase_hex(&digest)
+}
+
+fn deterministic_review_id(namespace: &[u8], fields: &[&str]) -> String {
+    let mut digest = Sha256::new();
+    digest.update((namespace.len() as u64).to_be_bytes());
+    digest.update(namespace);
+    for field in fields {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field.as_bytes());
+    }
+    lowercase_hex(&digest.finalize())
+}
+
+fn lowercase_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
         write!(&mut output, "{byte:02x}").expect("écriture dans une String");
     }
     output
+}
+
+fn validate_submission_field(
+    field: &'static str,
+    value: &str,
+) -> Result<(), ReviewSubmissionError> {
+    if value.is_empty() || value.trim() != value || value.chars().any(char::is_control) {
+        Err(ReviewSubmissionError::InvalidField(field))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn is_canonical_sha(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+pub(crate) fn is_full_branch_ref(value: &str) -> bool {
+    let allowed_prefix = value.starts_with("refs/heads/") || value.starts_with("refs/remotes/");
+    allowed_prefix
+        && !value.ends_with('/')
+        && !value.contains("..")
+        && !value.contains("@{")
+        && !value.contains("//")
+        && !value.chars().any(|character| {
+            character.is_control()
+                || character.is_whitespace()
+                || matches!(character, '~' | '^' | ':' | '?' | '*' | '[' | '\\')
+        })
 }
 
 fn first_marker<'a>(text: &str, markers: &'a [&str]) -> Option<&'a str> {

@@ -45,6 +45,37 @@
 - **Régime propre** : `jury_2x2` est une constante issue de la décision
   explicite du référent ; la carte ne la calcule, ne l’apprend ni ne la remplace
 
+### T2511A–T2511C — Noyau pur de soumission et décision
+
+- **Statut** : complété
+- **Rouge initial** :
+  `CARGO_TARGET_DIR=/home/moi/revue/rc2/.git/target-rc2-025 cargo test -p maicie --test contract --no-run`
+  échouait sur les neuf symboles de contrat encore absents
+- **Compilation préalable** : même commande, verte après implémentation
+- **Mesure ciblée** :
+  `CARGO_TARGET_DIR=/home/moi/revue/rc2/.git/target-rc2-025 cargo test -p maicie --test contract t2511a -- --nocapture`
+  — 7 passés, 0 échoué, 0 ignoré
+- **Non-régression** : contrat complet — 94 passés, 0 échoué, 0 ignoré ;
+  adaptateur Git — 6 passés, 0 échoué, 0 ignoré après son propre `--no-run`
+- **Invariants** : identifiant SHA-256 à champs préfixés par leur longueur ;
+  attente sans régime retenu ; décision exacte du référent ; refus sans mutation ;
+  aucun remplacement ; aucun champ libre ; état projeté plutôt que dupliqué
+- **Régime propre** : la soumission relit la preuve d’autoprotection mais prend
+  `jury_2x2` depuis `F38_FIXED_REGIME`, même si la proposition calculée est
+  mutée ; la décision humaine fixe reste donc la source de vérité
+- **Mutants tués dans les assertions** : régime proposé retenu implicitement
+  (`review_submission.rs:155`), sens durcir/alléger inversé (`:182`), garde
+  d’autoprotection retirée (`:253`), valeur propre reprise de la carte au lieu
+  de la constante (`:252`) et acceptation d’un champ `motif` (`:277`)
+- **Zéro écarté** : une première commande avec `--exact` mais sans nom de
+  module avait filtré les 94 tests ; elle n’est pas comptée et chaque mutant a
+  été rejoué avec exactement 1 test exécuté
+- **Lint** : strict sur la bibliothèque et l’intégration Git ; le contrat est
+  strict avec la seule règle `doc-lazy-continuation` neutralisée, car deux
+  avertissements préexistants se trouvent dans `contract/routines.rs`
+- **Gate** : aucune ouverture du store, aucune opération guichet et aucun DDL
+  v20 ; ces écritures restent interdites avant l’absorption réelle de v17–v19
+
 ## REX
 
 À compléter après les gates et la revue hostile.
