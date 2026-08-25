@@ -6,6 +6,33 @@
 use crate::message::AgentType;
 use std::collections::HashMap;
 
+const MAX_AGENT_NAME_LENGTH: usize = 100;
+
+/// Valide l'identité rendue dans les vues humaines et protocolaires.
+///
+/// La grammaire ASCII fermée écarte à la source les contrôles de ligne,
+/// les caractères de format bidi et les différences de largeur d'affichage.
+pub fn validate_agent_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("nom d'agent vide".to_string());
+    }
+    if name.len() > MAX_AGENT_NAME_LENGTH {
+        return Err(format!(
+            "nom d'agent trop long (max {MAX_AGENT_NAME_LENGTH} caractères)"
+        ));
+    }
+    if !name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(
+            "nom d'agent contient des caractères invalides (ASCII alphanumérique, -, _ uniquement)"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// Un agent enregistré auprès du daemon.
 #[derive(Debug, Clone)]
 pub struct RegisteredAgent {
@@ -76,7 +103,7 @@ impl Router {
 
         let name = match requested_name {
             Some(explicit) => {
-                // Vérifier l'unicité
+                validate_agent_name(explicit).map_err(RouterError::InvalidName)?;
                 if self.agents.contains_key(explicit) {
                     return Err(RouterError::AgentNotFound(format!(
                         "nom déjà pris: {}",
@@ -86,15 +113,20 @@ impl Router {
                 explicit.to_string()
             }
             None => {
-                // Auto-incrément
-                let counter = self.counters.entry(type_str.clone()).or_insert(0);
-                loop {
-                    *counter += 1;
-                    let candidate = format!("{}-{}", type_str, counter);
+                validate_agent_name(&type_str).map_err(RouterError::InvalidName)?;
+                let mut next_counter = self.counters.get(&type_str).copied().unwrap_or(0);
+                let candidate = loop {
+                    next_counter = next_counter.checked_add(1).ok_or_else(|| {
+                        RouterError::InvalidName("compteur de noms épuisé".to_string())
+                    })?;
+                    let candidate = format!("{}-{}", type_str, next_counter);
+                    validate_agent_name(&candidate).map_err(RouterError::InvalidName)?;
                     if !self.agents.contains_key(&candidate) {
                         break candidate;
                     }
-                }
+                };
+                self.counters.insert(type_str, next_counter);
+                candidate
             }
         };
 
@@ -127,10 +159,8 @@ impl Router {
         connection_id: &str,
         requested_name: &str,
     ) -> Result<(String, String), RouterError> {
-        let name = requested_name.trim();
-        if name.is_empty() || name != requested_name {
-            return Err(RouterError::InvalidName(requested_name.to_string()));
-        }
+        validate_agent_name(requested_name).map_err(RouterError::InvalidName)?;
+        let name = requested_name;
         let old_name = self
             .agents
             .iter()
@@ -216,6 +246,111 @@ mod tests {
             .register(Some("analyse"), &AgentType::Codex, "conn-1")
             .unwrap();
         assert_eq!(name, "analyse");
+    }
+
+    fn assert_register_refuses(name: &str) {
+        let mut router = Router::new();
+        assert!(
+            matches!(
+                router.register(Some(name), &AgentType::Codex, "conn-1"),
+                Err(RouterError::InvalidName(_))
+            ),
+            "Register ne doit jamais accepter l'identité {name:?}"
+        );
+        assert_eq!(router.agent_count(), 0);
+    }
+
+    fn assert_rename_refuses(name: &str) {
+        let mut router = Router::new();
+        router
+            .register(Some("avant"), &AgentType::Codex, "conn-1")
+            .unwrap();
+        assert!(
+            matches!(
+                router.rename("conn-1", name),
+                Err(RouterError::InvalidName(_))
+            ),
+            "Rename ne doit jamais accepter l'identité {name:?}"
+        );
+        assert!(router.get_agent("avant").is_some());
+    }
+
+    #[test]
+    fn register_refuse_un_nom_avec_lf() {
+        assert_register_refuses("relec\nadmin");
+    }
+
+    #[test]
+    fn rename_refuse_un_nom_avec_lf() {
+        assert_rename_refuses("relec\nadmin");
+    }
+
+    #[test]
+    fn register_refuse_un_nom_vide() {
+        assert_register_refuses("");
+    }
+
+    #[test]
+    fn rename_refuse_un_nom_vide() {
+        assert_rename_refuses("");
+    }
+
+    #[test]
+    fn register_refuse_un_nom_bidi() {
+        assert_register_refuses("relec\u{202e}nimda");
+    }
+
+    #[test]
+    fn rename_refuse_un_nom_bidi() {
+        assert_rename_refuses("relec\u{202e}nimda");
+    }
+
+    #[test]
+    fn register_refuse_nul_et_non_ascii() {
+        assert_register_refuses("relec\0admin");
+        assert_register_refuses("分析");
+    }
+
+    #[test]
+    fn register_refuse_un_nom_auto_derive_d_un_type_invalide() {
+        let mut router = Router::new();
+        assert!(matches!(
+            router.register(None, &AgentType::Custom("rel\nadmin".to_string()), "conn-1"),
+            Err(RouterError::InvalidName(_))
+        ));
+        assert_eq!(router.agent_count(), 0);
+        assert!(
+            router.counters.is_empty(),
+            "un Register refusé ne doit laisser aucun compteur piloté par l'entrée"
+        );
+    }
+
+    #[test]
+    fn register_et_rename_refusent_un_nom_de_plus_de_cent_octets() {
+        let name = "a".repeat(101);
+        assert_register_refuses(&name);
+        assert_rename_refuses(&name);
+    }
+
+    #[test]
+    fn rename_refuse_nul_et_non_ascii() {
+        assert_rename_refuses("relec\0admin");
+        assert_rename_refuses("分析");
+    }
+
+    #[test]
+    fn register_et_rename_acceptent_un_nom_ascii_ordinaire() {
+        let mut router = Router::new();
+        assert_eq!(
+            router
+                .register(Some("relec-6_test"), &AgentType::Codex, "conn-1")
+                .unwrap(),
+            "relec-6_test"
+        );
+        assert_eq!(
+            router.rename("conn-1", "relec-6-final").unwrap(),
+            ("relec-6_test".into(), "relec-6-final".into())
+        );
     }
 
     #[test]

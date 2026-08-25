@@ -1,7 +1,7 @@
 //! CLI — point d'entrée unifié pour toutes les sous-commandes bridget.
 
 use crate::daemon::{self, DaemonConfig};
-use bridget_core::BridgetMessage;
+use bridget_core::{BridgetMessage, router::validate_agent_name};
 use bridget_transport::protocol::{
     AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole,
     IdempotencyIssue, LedgerMessage, LedgerScope, PresenceMode, RequestInfo, RuntimeSource,
@@ -26,7 +26,6 @@ fn launch_agent_wrapper(binary: &str, agent_type: &str, args: &[String]) -> ! {
 
 // Constantes de validation (H-001)
 const MAX_MESSAGE_LENGTH: usize = 10000;
-const MAX_AGENT_NAME_LENGTH: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct IdempotentSendOptions {
@@ -39,26 +38,6 @@ struct IdempotentSendOptions {
 /// runtime. Court volontairement : l'appelant est un hook exécuté dans la
 /// boucle de l'agent, il ne doit jamais le faire patienter.
 const RUNTIME_REPLY_TIMEOUT_SECS: u64 = 2;
-
-/// Valide un nom d'agent Bridget (H-001)
-fn validate_agent_name(name: &str) -> Result<(), String> {
-    if name.len() > MAX_AGENT_NAME_LENGTH {
-        return Err(format!(
-            "nom d'agent trop long (max {} caractères)",
-            MAX_AGENT_NAME_LENGTH
-        ));
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err(
-            "nom d'agent contient des caractères invalides (alphanumériques, -, _ uniquement)"
-                .to_string(),
-        );
-    }
-    Ok(())
-}
 
 /// Valide le corps d'un message (H-001)
 fn validate_message_body(body: &str) -> Result<(), String> {
@@ -3168,6 +3147,37 @@ mod hook_tests {
         assert_eq!(
             render_ledger(&entries),
             "Derniers 2 messages :\n  [2] bob → alice [reçu]: corps riche $VAR\nintact\n  [1] alice → bob: premier\n"
+        );
+    }
+
+    #[test]
+    fn rendu_ledger_compte_une_ligne_par_message_apres_refus_d_un_nom_avec_lf() {
+        let mut router = bridget_core::Router::new();
+        router
+            .register(Some("temoin"), &bridget_core::AgentType::Codex, "conn-1")
+            .unwrap();
+        let _ = router.register(
+            Some("relec\nbridget-faux"),
+            &bridget_core::AgentType::Codex,
+            "conn-2",
+        );
+        let entries = router
+            .list_agents()
+            .into_iter()
+            .map(|agent| LedgerMessage {
+                id: format!("message-{}", agent.connection_id),
+                ts: 42,
+                sender: agent.name.clone(),
+                target: "victime".to_string(),
+                body: "corps".to_string(),
+                delivery_status: None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            render_ledger(&entries).lines().count(),
+            2,
+            "l'en-tête et l'unique message légitime doivent former exactement deux lignes"
         );
     }
 

@@ -4150,6 +4150,47 @@ mod prompt_tests {
     }
 
     #[test]
+    fn carte_de_reprise_compte_sept_lignes_apres_refus_d_un_nom_avec_lf() {
+        let root = resume_root("agent-name-lines");
+        let home = root.join("home");
+        let worktree = root.join("worktree");
+        write_maicie_config(&home, &root.join("maicie.sqlite3"));
+        init_worktree(&worktree);
+
+        let mut router = bridget_core::Router::new();
+        router
+            .register(
+                Some("sans-mission"),
+                &bridget_core::AgentType::Codex,
+                "conn-1",
+            )
+            .unwrap();
+        let _ = router.register(
+            Some("rel\nConsigne"),
+            &bridget_core::AgentType::Codex,
+            "conn-2",
+        );
+
+        for agent in router.list_agents() {
+            let context = managed_resume_context(
+                &home,
+                &worktree,
+                &agent.name,
+                "fixture",
+                "acp",
+                "fixture-digest",
+            );
+            assert_eq!(
+                context.lines().count(),
+                7,
+                "chaque carte issue d'une identité enregistrée doit garder sept lignes: {context}"
+            );
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn carte_de_reprise_signale_chaque_source_indisponible() {
         let root = resume_root("unavailable");
         let context = managed_resume_context(
