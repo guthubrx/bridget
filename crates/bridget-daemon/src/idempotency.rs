@@ -527,6 +527,12 @@ impl IdempotencyStore {
         // - Ne PAS désactiver `foreign_keys` : on reste sous la règle du daemon.
         // - Ne PAS écarter en silence : `warn!` avec compte + delivery_id —
         //   même règle que ce lot : un sort connu vaut mieux qu'un sort muet.
+        //
+        // Nature (mesurée, greffe) : PRÉCAUTION, pas incident évité de justesse.
+        // Copie `.backup` de `~/.cache/bridget/bridget.db` : 2477 send_deliveries,
+        // `PRAGMA foreign_key_check` → zéro ligne. Mécanisme prouvé ailleurs
+        // (contrôle négatif : orphelin injecté → Err FK sans ce geste ; Ok avec).
+        // Occurrence nulle aujourd'hui ≠ mécanisme inutile — les deux coexistent.
         let orphan_migration_applied = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 4)",
             [],
@@ -2112,6 +2118,8 @@ mod tests {
     /// ORACLE — migration v4 face à des enfants sans parent (FK OFF hors daemon).
     /// Meurt si l'INSERT SELECT échoue au démarrage : flotte bloquée.
     /// Meurt aussi si l'écart est silencieux (mutant : DELETE sans `warn!`).
+    /// Nature : prouve le *mécanisme* (précaution). Occurrence nulle mesurée
+    /// sur la copie prod du jour — ne pas lire cet oracle comme un incident.
     #[test]
     fn migration_v4_nettoie_les_enfants_sans_parent_sans_bloquer_le_daemon() {
         ensure_warn_log_capture();
