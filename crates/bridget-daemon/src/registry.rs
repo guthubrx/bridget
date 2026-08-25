@@ -107,7 +107,7 @@ impl AgentRegistry {
     }
 
     fn load_from_path(source: PathBuf) -> Result<Self, String> {
-        let mut agents = default_agents();
+        let mut agents = default_agents()?;
         match std::fs::symlink_metadata(&source) {
             Ok(_) => {
                 let content = read_private_registry(&source)?;
@@ -135,7 +135,7 @@ impl AgentRegistry {
         let user: AgentRegistryFile = serde_json::from_str(content)
             .map_err(|err| format!("registre invalide {}: {err}", source.display()))?;
         validate_registry(&user.agents, &source)?;
-        let mut agents = default_agents();
+        let mut agents = default_agents()?;
         agents.extend(user.agents);
         Ok(Self { agents, source })
     }
@@ -833,9 +833,9 @@ fn definition(
     }
 }
 
-fn native_claude_definition() -> AgentDefinition {
-    AgentDefinition {
-        command: native_claude_command(),
+fn native_claude_definition() -> Result<AgentDefinition, String> {
+    Ok(AgentDefinition {
+        command: native_claude_command()?,
         // Même contrat que le wrapper interactif (wrapper.rs) : sans ces
         // flags le flux stream-json émet des demandes d'outil auxquelles le
         // pilote géré ne répond pas — tours clos, zéro outil.
@@ -873,18 +873,24 @@ fn native_claude_definition() -> AgentDefinition {
             execution_paths: vec!["claude_stream_json".to_string()],
             models: BTreeMap::from([("claude-opus-5".to_string(), ModelCapabilities::default())]),
         },
-    }
+    })
 }
 
 /// Résout le CLI Claude depuis le HOME du daemon afin de conserver un chemin
 /// absolu sans publier le répertoire personnel d'une machine particulière.
-fn native_claude_command() -> String {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
+fn native_claude_command() -> Result<String, String> {
+    native_claude_command_from(std::env::var_os("HOME").map(PathBuf::from))
+}
+
+fn native_claude_command_from(home: Option<PathBuf>) -> Result<String, String> {
+    let home = home.ok_or_else(|| "HOME absent pour résoudre le CLI Claude".to_string())?;
+    if !home.is_absolute() {
+        return Err("HOME doit être absolu pour résoudre le CLI Claude".to_string());
+    }
+    Ok(home
         .join(".local/bin/claude")
         .to_string_lossy()
-        .into_owned()
+        .into_owned())
 }
 
 fn native_codex_definition() -> AgentDefinition {
@@ -955,10 +961,10 @@ fn native_cursor_definition() -> AgentDefinition {
     }
 }
 
-fn default_agents() -> BTreeMap<String, AgentDefinition> {
-    BTreeMap::from([
+fn default_agents() -> Result<BTreeMap<String, AgentDefinition>, String> {
+    Ok(BTreeMap::from([
         ("codex".to_string(), native_codex_definition()),
-        ("claude".to_string(), native_claude_definition()),
+        ("claude".to_string(), native_claude_definition()?),
         ("cursor".to_string(), native_cursor_definition()),
         (
             "gemini".to_string(),
@@ -976,7 +982,7 @@ fn default_agents() -> BTreeMap<String, AgentDefinition> {
                 "unsupported",
             ),
         ),
-    ])
+    ]))
 }
 
 #[cfg(test)]
@@ -1022,12 +1028,7 @@ mod tests {
             Some(&ModelCapabilities::default())
         );
         let claude = registry.get("claude").unwrap();
-        let expected_claude_command = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".local/bin/claude")
-            .to_string_lossy()
-            .into_owned();
+        let expected_claude_command = native_claude_command().unwrap();
         assert_eq!(claude.command, expected_claude_command);
         assert!(Path::new(&claude.command).is_absolute());
         assert_eq!(claude.protocol, "claude_stream_json");
@@ -1065,6 +1066,22 @@ mod tests {
         assert_eq!(
             runtime_model_and_effort(&cursor.args),
             Some(("auto".to_string(), None))
+        );
+    }
+
+    #[test]
+    fn commande_claude_refuse_home_absent_au_point_de_derivation() {
+        assert_eq!(
+            native_claude_command_from(None).unwrap_err(),
+            "HOME absent pour résoudre le CLI Claude"
+        );
+        assert_eq!(
+            native_claude_command_from(Some(PathBuf::from("home-relatif"))).unwrap_err(),
+            "HOME doit être absolu pour résoudre le CLI Claude"
+        );
+        assert_eq!(
+            native_claude_command_from(Some(PathBuf::from("/srv/bridget-test"))).unwrap(),
+            "/srv/bridget-test/.local/bin/claude"
         );
     }
 
@@ -1120,7 +1137,7 @@ mod tests {
         let warnings = registry_warnings(
             r#"{"agents":{"codex":{"command":"custom"}}}"#,
             Path::new("/tmp/agents.json"),
-            &default_agents(),
+            &default_agents().unwrap(),
         );
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("codex"));
@@ -1129,7 +1146,7 @@ mod tests {
         let explicit = registry_warnings(
             r#"{"agents":{"codex":{"command":"custom","forbidden_env":[]}}}"#,
             Path::new("/tmp/agents.json"),
-            &default_agents(),
+            &default_agents().unwrap(),
         );
         assert!(explicit.is_empty());
     }
@@ -1159,7 +1176,7 @@ mod tests {
         );
         assert_eq!(first.digest.len(), 64);
 
-        let baseline = default_agents().remove("codex").unwrap();
+        let baseline = default_agents().unwrap().remove("codex").unwrap();
         let mut mutations = Vec::new();
         let mut changed = baseline.clone();
         changed.command = "other".to_string();
@@ -1324,7 +1341,7 @@ mod tests {
         let warnings = registry_warnings(
             r#"{"agents":{"codex":{"command":"codex","forbidden_env":[],"surprise":true}}}"#,
             Path::new("/tmp/agents.json"),
-            &default_agents(),
+            &default_agents().unwrap(),
         );
         assert_eq!(
             warnings,
@@ -1337,7 +1354,7 @@ mod tests {
         let warnings = registry_warnings(
             r#"{"agents":{"codex":{"command":"codex","args":[],"protocol":"acp","forbidden_env":[],"pass_env":["CODEX_HOME"],"permissions":"allow","queue_capacity":32,"notify_timeout_secs":600}}}"#,
             Path::new("/tmp/agents.json"),
-            &default_agents(),
+            &default_agents().unwrap(),
         );
         assert!(warnings.is_empty());
     }
