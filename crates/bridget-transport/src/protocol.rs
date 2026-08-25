@@ -258,6 +258,7 @@ pub enum GuichetRefusalReason {
     ReviewVerdictUnexpected,
     ReviewMandateMismatch,
     TargetHeadMoved,
+    TargetHeadMovedAndMeasuredHeadMismatch,
     MeasuredHeadMismatch,
 }
 
@@ -2376,6 +2377,41 @@ mod tests {
             r#"{"type":"coordination_event","v":1,"event_id":"evt","request_id":"req","kind":"unknown_fact","reminder_message_id":"msg","recipient":"codex","generation":1,"observed_at":1}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn motif_compose_de_revue_fait_un_roundtrip_filaire_exact() {
+        let reply = WrapperToDaemon::GuichetReply {
+            version: SERVICE_CONTRACT_VERSION,
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+            request_id: "req-refused-compound".to_string(),
+            claim_generation: 2,
+            claim_token: "claim-refused-compound".to_string(),
+            response_message_id: "msg-refused-compound".to_string(),
+            in_reply_to: "message-refused-compound".to_string(),
+            outcome: GuichetOutcome::Refused,
+            payload: GuichetReplyPayload::Refused {
+                operation: ServiceRequestOperation::DeliveryReport,
+                reason: GuichetRefusalReason::TargetHeadMovedAndMeasuredHeadMismatch,
+            },
+        };
+
+        let wire = encode(&reply).unwrap();
+        assert_eq!(
+            wire,
+            r#"{"type":"guichet_reply","v":1,"issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","request_id":"req-refused-compound","claim_generation":2,"claim_token":"claim-refused-compound","response_message_id":"msg-refused-compound","in_reply_to":"message-refused-compound","outcome":"refused","payload":{"kind":"refused","operation":"delivery_report","reason":"target_head_moved_and_measured_head_mismatch"}}"#
+        );
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&wire).unwrap(),
+            WrapperToDaemon::GuichetReply {
+                outcome: GuichetOutcome::Refused,
+                payload: GuichetReplyPayload::Refused {
+                    operation: ServiceRequestOperation::DeliveryReport,
+                    reason: GuichetRefusalReason::TargetHeadMovedAndMeasuredHeadMismatch,
+                },
+                ..
+            }
+        ));
     }
 
     #[test]
