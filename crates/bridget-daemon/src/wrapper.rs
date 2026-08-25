@@ -2869,6 +2869,11 @@ fn launch_acp_with_status(
         reporter.startup_succeeded();
     }
 
+    // Même discipline que le wrapper interactif : sans heartbeat, un long tour
+    // `busy` laisse `last_seen` geler ; le retain daemon (300 s) jette alors la
+    // présence alors que le nom reste au routeur — fantôme unix/connected.
+    let mut last_heartbeat = Instant::now();
+
     loop {
         let events = transport.drain_events();
         let journal_failed =
@@ -2897,6 +2902,7 @@ fn launch_acp_with_status(
                 };
                 reader = new_reader;
                 my_name = registered_name;
+                last_heartbeat = Instant::now();
                 continue;
             }
             Ok(_) => match decode(line.trim()) {
@@ -2980,7 +2986,20 @@ fn launch_acp_with_status(
                 if matches!(
                     error.kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
+                ) =>
+            {
+                if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
+                    let heartbeat = encode(&WrapperToDaemon::Heartbeat).unwrap_or_default();
+                    if let Some(out) = writer.lock().unwrap().as_mut() {
+                        match writeln!(out, "{heartbeat}").and_then(|_| out.flush()) {
+                            Ok(()) => last_heartbeat = Instant::now(),
+                            Err(send_error) => {
+                                warn!("heartbeat ACP échoué: {send_error}");
+                            }
+                        }
+                    }
+                }
+            }
             Err(error) => {
                 warn!("connexion daemon ACP perdue : {error}");
                 relay.reset_generation();
@@ -3000,6 +3019,7 @@ fn launch_acp_with_status(
                 };
                 reader = new_reader;
                 my_name = registered_name;
+                last_heartbeat = Instant::now();
                 continue;
             }
         }
