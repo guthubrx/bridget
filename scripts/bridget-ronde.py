@@ -89,8 +89,11 @@ def read_maicie_read_only(config_path: str) -> tuple[dict[str, Any] | None, str 
                     "SELECT id, state FROM objectives WHERE state = 'a_evaluer' ORDER BY id"
                 ).fetchall()
                 participants = connection.execute(
-                    "SELECT d.payload_json FROM delegations d JOIN objectives o ON o.id = d.objective_id "
-                    "WHERE o.state = 'en_coordination' ORDER BY d.id"
+                    "SELECT d.payload_json FROM delegations d "
+                    "JOIN objectives o ON o.id = d.objective_id "
+                    "JOIN delegation_outbox b ON b.delegation_id = d.id "
+                    "WHERE o.state = 'en_coordination' AND b.state <> 'prepared' "
+                    "ORDER BY d.id"
                 ).fetchall()
             finally:
                 connection.close()
