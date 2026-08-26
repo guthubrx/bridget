@@ -103,9 +103,11 @@ fn write_ui_endpoint_state(path: &Path, endpoint: &UiEndpoint) -> Result<(), UiE
             {
                 Ok(file) => file,
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let absolute = std::fs::canonicalize(&tmp)
+                        .unwrap_or_else(|_| tmp.clone());
                     return Err(UiError::Configuration(format!(
-                        "fichier temporaire d'endpoint UI déjà présent ({}) — impossible de le recréer en exclusif",
-                        tmp.display()
+                        "fichier temporaire d'endpoint UI déjà présent — supprimez ce fichier puis relancez le relais : {}",
+                        absolute.display()
                     )));
                 }
                 Err(error) => return Err(UiError::Io(error)),
@@ -117,9 +119,10 @@ fn write_ui_endpoint_state(path: &Path, endpoint: &UiEndpoint) -> Result<(), UiE
         {
             let _ = std::fs::remove_file(&tmp);
             if tmp.exists() {
+                let absolute = std::fs::canonicalize(&tmp).unwrap_or_else(|_| tmp.clone());
                 return Err(UiError::Configuration(format!(
-                    "fichier temporaire d'endpoint UI déjà présent ({}) — impossible de le recréer en exclusif",
-                    tmp.display()
+                    "fichier temporaire d'endpoint UI déjà présent — supprimez ce fichier puis relancez le relais : {}",
+                    absolute.display()
                 )));
             }
             std::fs::write(&tmp, &body)?;
