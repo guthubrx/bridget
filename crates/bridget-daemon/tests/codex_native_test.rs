@@ -339,7 +339,12 @@ fn gate_reel_codex_app_server_gpt_5_6_terra_et_attach() {
     let codex = std::env::var("BRIDGET_CODEX_APP_SERVER_BIN")
         .unwrap_or_else(|_| "/opt/homebrew/bin/codex".to_string());
     assert!(Path::new(&codex).is_file(), "binaire Codex absent: {codex}");
-    let codex_home = std::env::var("CODEX_HOME").unwrap_or_else(|_| "/Users/moi/.codex".into());
+    let codex_home = std::env::var("CODEX_HOME").unwrap_or_else(|_| {
+        PathBuf::from(std::env::var("HOME").expect("CODEX_HOME ou HOME requis pour la gate réelle"))
+            .join(".codex")
+            .to_string_lossy()
+            .into_owned()
+    });
     let registry = serde_json::json!({
         "agents": {
             "codex": {
