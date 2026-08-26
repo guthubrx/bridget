@@ -1809,19 +1809,27 @@ fn render_journal_event(bytes: &[u8], agent: &str) -> String {
                 .to_string(),
         ),
         "update"
-            if payload.get("kind").and_then(serde_json::Value::as_str) == Some("tool_call") =>
+            if matches!(
+                payload.get("kind").and_then(serde_json::Value::as_str),
+                Some("tool" | "tool_call")
+            ) =>
         {
+            // Vocabulaire aligné sur la page (JOURNAL_ACT_KINDS) : `tool`
+            // (canonique ACP/Claude) et `tool_call` (legacy Cursor).
             let tool = payload
-                .get("title")
+                .get("text")
+                .or_else(|| payload.get("title"))
                 .or_else(|| payload.get("name"))
-                .or_else(|| payload.get("tool_kind"))
                 .or_else(|| payload.get("tool"))
+                .or_else(|| payload.get("tool_kind"))
                 .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
                 .unwrap_or("inconnu");
             (
                 format!("[outil] {tool}"),
                 payload
-                    .get("summary")
+                    .get("detail")
+                    .or_else(|| payload.get("summary"))
                     .and_then(serde_json::Value::as_str)
                     .filter(|summary| !summary.is_empty())
                     .unwrap_or("appel demandé")
@@ -1848,8 +1856,8 @@ fn render_journal_event(bytes: &[u8], agent: &str) -> String {
                 .to_string(),
         ),
         // Laissé volontairement brut : tout autre `event` (et tout `update` dont
-        // le `kind` n'est ni text ni tool_call). Aucun autre type n'apparaît
-        // aujourd'hui dans les journaux de production.
+        // le `kind` n'est ni text, tool, ni tool_call). Aucun autre type
+        // n'apparaît aujourd'hui dans les journaux de production.
         _ => (
             format!("[événement] {event}"),
             "payload v1 non pris en charge".to_string(),
@@ -4061,6 +4069,28 @@ mod tests {
         let rendered = render_journal_event(line.as_bytes(), "coder2");
         assert!(rendered.contains("[événement] update"));
         assert!(rendered.contains("payload v1 non pris en charge"));
+    }
+
+    /// Propriété : un acte `kind=tool` présent au journal EST affiché dans
+    /// l'attach (pas « non pris en charge »). Mutant : égalité stricte à
+    /// `tool_call` seule → left contient « non pris en charge », right le nom.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_attach_affiche_un_acte_kind_tool_present_au_journal() {
+        let line = r#"{"v":1,"seq":1,"ts":"2026-08-26T18:30:00Z","session_id":"s","event":"update","message_id":"m","payload":{"kind":"tool","text":"Read","tool":"Read","detail":"{\"file_path\":\"/tmp/demo.toml\",\"limit\":1}"}}"#;
+        let rendered = render_journal_event(line.as_bytes(), "claude");
+        let stamp = short_timestamp(Some("2026-08-26T18:30:00Z"));
+        assert_eq!(
+            rendered,
+            format!(
+                "{stamp} [outil] Read {{\"file_path\":\"/tmp/demo.toml\",\"limit\":1}}"
+            ),
+            "acte tool présent → visible dans attach ; reçu {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("non pris en charge"),
+            "ne doit pas tomber dans le bras générique, reçu {rendered:?}"
+        );
     }
 
     #[test]
