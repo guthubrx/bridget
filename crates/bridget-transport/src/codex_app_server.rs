@@ -2045,10 +2045,6 @@ mod tests {
         events
     }
 
-    /// (A) Deltas → update avec TEXTE EXACT. Mutant content:"" doit tuer A seul.
-    #[allow(non_snake_case)]
-    #[test]
-
     fn assert_no_provider_controls(text: &str) {
         for forbidden in ["\u{1b}", "\r", "\u{202e}", "\\u001b", "\\r", "\\u202e"] {
             assert!(
@@ -2606,6 +2602,9 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// (A) Deltas → update avec TEXTE EXACT. Mutant content:"" doit tuer A seul.
+    #[allow(non_snake_case)]
+    #[test]
     fn TEMOIN_A_codex_app_server_retranscrit_les_deltas_en_update() {
         let events = journal_text_fixture("temoin-a", "deltas");
         let updates: Vec<_> = events
