@@ -732,76 +732,98 @@
         );
       });
 
-      // Mesure (d343ac4) : CaughtUp pendant fragment non final → resume 622, perte.
-      // Correctif : processWatchJournalEnvelope plafonne au seq encore en tampon.
-      test("rattrapage_ne_depasse_pas_un_fragment_non_final", () => {
-        const buffers = new Map();
-        const resume = new Map([["bridget", 601]]);
-        const attested = new Set();
+      // Protocole cursor3 (ordre fautif isolé) : non-final seq=50 puis
+      // CaughtUp(50) ne doit PAS porter le curseur à 51 avant constitution.
+      // Contrôle positif : final avant CaughtUp → message présent, curseur 51.
+      test("ordonnancement_assemblage_avant_avancement_curseur", () => {
         const record = {
           v: 1,
-          seq: 610,
+          seq: 50,
           ts: "2026-08-26T07:00:00Z",
-          session_id: "sess-silent",
+          session_id: "sess-50",
           event: "turn_start",
-          message_id: "msg-610",
-          payload: { body: "MESSAGE QUI NE DOIT PAS DISPARAITRE" },
+          message_id: "msg-50",
+          payload: { body: "CORPS-50" },
         };
-        const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
+        const bytes = Buffer.from(`${JSON.stringify(record)}
+`);
         const split = Math.max(1, Math.floor(bytes.length / 2));
-
-        api.processWatchJournalEnvelope({
-          envelope: {
-            event: {
-              type: "JournalFragment",
-              subscription_id: "sub-1",
-              seq: 610,
-              offset: 0,
-              final: false,
-              bytes: bytes.subarray(0, split).toString("base64"),
-            },
+        const part = (final, offset, slice) => ({
+          event: {
+            type: "JournalFragment",
+            subscription_id: "sub",
+            seq: 50,
+            offset,
+            final,
+            bytes: slice.toString("base64"),
           },
-          agent: "bridget",
+        });
+
+        // Ordre fautif historique : non-final puis rattrapage.
+        const buffers = new Map();
+        const resume = new Map([["agent", 0]]);
+        const attested = new Set();
+        let step = api.processWatchJournalEnvelope({
+          envelope: part(false, 0, bytes.subarray(0, split)),
+          agent: "agent",
           buffers,
           resumeSeq: resume,
           attestedGaps: attested,
         });
-        assert.equal(resume.get("bridget"), 601);
-        assert.ok(buffers.has("sub-1:610"));
+        assert.equal(step.accepted.length, 0);
+        assert.equal(resume.get("agent"), 0);
+        assert.ok(buffers.has("sub:50"));
 
+        step = api.processWatchJournalEnvelope({
+          envelope: { event: { type: "SnapshotCaughtUp", through_seq: 50 } },
+          agent: "agent",
+          buffers,
+          resumeSeq: resume,
+          attestedGaps: attested,
+        });
+        // Propriété : le curseur ne dépasse pas un seq non encore constitué.
+        assert.equal(resume.get("agent"), 50);
+        assert.notEqual(resume.get("agent"), 51);
+        assert.match(api.buildWatchUrl("t", "agent", resume), /from_seq=50/);
+
+        step = api.processWatchJournalEnvelope({
+          envelope: part(true, split, bytes.subarray(split)),
+          agent: "agent",
+          buffers,
+          resumeSeq: resume,
+          attestedGaps: attested,
+        });
+        assert.equal(step.accepted.length, 1);
+        assert.equal(step.accepted[0].record.payload.body, "CORPS-50");
+        assert.equal(resume.get("agent"), 51);
+
+        // Contrôle positif : seule l'ORDRE change — final avant CaughtUp.
+        const buffersOk = new Map();
+        const resumeOk = new Map([["agent", 0]]);
+        const attestedOk = new Set();
         api.processWatchJournalEnvelope({
-          envelope: { event: { type: "SnapshotCaughtUp", through_seq: 621 } },
-          agent: "bridget",
-          buffers,
-          resumeSeq: resume,
-          attestedGaps: attested,
+          envelope: part(false, 0, bytes.subarray(0, split)),
+          agent: "agent",
+          buffers: buffersOk,
+          resumeSeq: resumeOk,
+          attestedGaps: attestedOk,
         });
-        assert.equal(resume.get("bridget"), 610);
-        assert.match(api.buildWatchUrl("tok", "bridget", resume), /from_seq=610/);
-
-        const finished = api.processWatchJournalEnvelope({
-          envelope: {
-            event: {
-              type: "JournalFragment",
-              subscription_id: "sub-1",
-              seq: 610,
-              offset: split,
-              final: true,
-              bytes: bytes.subarray(split).toString("base64"),
-            },
-          },
-          agent: "bridget",
-          buffers,
-          resumeSeq: resume,
-          attestedGaps: attested,
+        const assembled = api.processWatchJournalEnvelope({
+          envelope: part(true, split, bytes.subarray(split)),
+          agent: "agent",
+          buffers: buffersOk,
+          resumeSeq: resumeOk,
+          attestedGaps: attestedOk,
         });
-        assert.equal(finished.accepted.length, 1);
-        assert.equal(
-          finished.accepted[0].record.payload.body,
-          "MESSAGE QUI NE DOIT PAS DISPARAITRE",
-        );
-        assert.equal(resume.get("bridget"), 611);
-        assert.equal(buffers.size, 0);
+        assert.equal(assembled.accepted[0].record.payload.body, "CORPS-50");
+        api.processWatchJournalEnvelope({
+          envelope: { event: { type: "SnapshotCaughtUp", through_seq: 50 } },
+          agent: "agent",
+          buffers: buffersOk,
+          resumeSeq: resumeOk,
+          attestedGaps: attestedOk,
+        });
+        assert.equal(resumeOk.get("agent"), 51);
       });
 
       test("fragment_jsonl_incomplet_attend_sa_borne_finale", () => {
