@@ -956,8 +956,9 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// (A) Témoin retranscription : deltas → `update` journal.
-    /// Mutant : retirer `record(..., "update", ...)` sur `/event/delta/text`.
+    /// (A) Témoin retranscription : deltas → `update` journal avec TEXTE EXACT.
+    /// Mutant : retirer `record(..., "update", ...)` sur `/event/delta/text`,
+    /// ou vider `content` (`content:""`) — A doit mourir (présence ≠ propriété).
     #[allow(non_snake_case)]
     #[test]
     fn TEMOIN_A_claude_stream_json_retranscrit_les_deltas_en_update() {
@@ -966,16 +967,22 @@ mod tests {
             .iter()
             .filter(|event| event["event"] == "update")
             .collect();
-        assert!(
-            !updates.is_empty(),
-            "au moins un update journal attendu, reçu: {events:?}"
-        );
         assert!(updates.iter().all(|event| event["payload"]["kind"] == "text"));
-        // Pas de duplication : result porte le même texte mais text_updates>0.
+        let contents: Vec<&str> = updates
+            .iter()
+            .filter_map(|event| event["payload"]["content"].as_str())
+            .collect();
+        // Contenu en dur (comme B) : cardinal+kind seuls laissent passer content:"".
         assert_eq!(
-            updates.len(),
-            2,
-            "deux deltas seulement, pas de troisième update issu du result: {updates:?}"
+            contents,
+            vec!["BONJOUR ", "JE SUIS VIVANT"],
+            "deux deltas exacts, pas de troisième update issu du result: {contents:?} via {events:?}"
+        );
+        assert!(
+            updates
+                .iter()
+                .all(|event| event["message_id"] == "claude-abc-1"),
+            "même message_id que le tour, reçu {updates:?}"
         );
     }
 
