@@ -843,6 +843,166 @@
         assert.equal(api.rememberWatchResumeSeq(resume, "bridget", 701).get("bridget"), 701);
       });
 
+      function loadMarkdownEngines() {
+        const jsdomCandidates = [
+          path.join(__dirname, ".test-tools", "node_modules", "jsdom"),
+          "/Users/moi/.cache/bridget/ui-md-test-tools/node_modules/jsdom",
+        ];
+        let JSDOM;
+        for (const candidate of jsdomCandidates) {
+          try {
+            ({ JSDOM } = require(candidate));
+            break;
+          } catch (_error) {
+            // essai suivant
+          }
+        }
+        assert.ok(JSDOM, "jsdom requis pour les témoins Markdown (npm i --prefix assets/ui/.test-tools jsdom)");
+        const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+          runScripts: "outside-only",
+        });
+        const { window } = dom;
+        window.eval(fs.readFileSync(path.join(__dirname, "vendor", "marked.min.js"), "utf8"));
+        window.eval(fs.readFileSync(path.join(__dirname, "vendor", "purify.min.js"), "utf8"));
+        assert.equal(typeof window.marked.parse, "function");
+        assert.equal(typeof window.DOMPurify.sanitize, "function");
+        return {
+          window,
+          document: window.document,
+          parse: (source) => window.marked.parse(source, { async: false, breaks: true, gfm: true }),
+          purify: window.DOMPurify,
+        };
+      }
+
+      function collectTags(node, tags = new Set()) {
+        if (node && node.tagName) tags.add(String(node.tagName).toUpperCase());
+        for (const child of (node && node.childNodes) || []) collectTags(child, tags);
+        return tags;
+      }
+
+      test("TEMOIN_XSS_ASSAINISSEMENT", () => {
+        const engines = loadMarkdownEngines();
+        const traps = [
+          `<img src=x onerror="globalThis.__bridget_xss=1">`,
+          `<script>globalThis.__bridget_xss=1</script>`,
+          `<a href="javascript:globalThis.__bridget_xss=1">x</a>`,
+          `![x](javascript:globalThis.__bridget_xss=1)`,
+          `<div onclick="globalThis.__bridget_xss=1">clic</div>`,
+          "```\n</code></pre><img src=x onerror=alert(1)>\n```",
+        ];
+        for (const trap of traps) {
+          engines.window.__bridget_xss = 0;
+          const dirty = api.parseMessageMarkdown(trap, engines.parse);
+          const clean = api.sanitizeMessageHtml(dirty, engines.purify);
+          api.assertMessageHtmlSafe(clean);
+          assert.equal(api.messageHtmlLooksActive(clean), false, `actif après purify: ${trap}`);
+          const root = api.renderMessageMarkdown(engines.document, trap, {
+            parse: engines.parse,
+            purify: engines.purify,
+          });
+          assert.equal(engines.window.__bridget_xss, 0, `exécution pour: ${trap}`);
+          assert.equal(api.messageDomHasForbiddenSurface(root), false, `surface pour: ${trap}`);
+          const tags = [...collectTags(root)];
+          assert.equal(tags.includes("SCRIPT"), false);
+          assert.equal(tags.includes("IMG"), false);
+          assert.equal(tags.includes("A"), false);
+        }
+      });
+
+      test("mutant_retrait_assainissement_tue_TEMOIN_XSS_ASSAINISSEMENT", () => {
+        const engines = loadMarkdownEngines();
+        const trap = `<img src=x onerror="globalThis.__bridget_xss=1">`;
+        const dirty = api.parseMessageMarkdown(trap, engines.parse);
+        // Mutant : on retire DOMPurify — le HTML dangereux survit.
+        assert.equal(api.messageHtmlLooksActive(dirty), true);
+        assert.throws(
+          () => api.assertMessageHtmlSafe(dirty),
+          (error) => String(error && error.message) === "TEMOIN_XSS_ASSAINISSEMENT",
+        );
+        engines.window.__bridget_xss = 0;
+        const infected = api.renderMessageMarkdown(engines.document, trap, {
+          parse: engines.parse,
+          skipSanitize: true,
+        });
+        // Sans assainissement, une balise active peut exister dans le DOM rendu.
+        assert.ok(
+          infected.querySelector("img") || api.messageHtmlLooksActive(infected.innerHTML),
+          "le mutant doit laisser une surface exécutable",
+        );
+      });
+
+      test("message_markdown_rendu_tableaux_listes_gras_code", () => {
+        const engines = loadMarkdownEngines();
+        const source = [
+          "Intro **gras** et `code`.",
+          "",
+          "| Question | Reponse |",
+          "|---|---|",
+          "| A | B |",
+          "",
+          "1. premier",
+          "2. second",
+          "",
+          "- puce",
+          "",
+          "```",
+          "ligne code",
+          "```",
+        ].join("\n");
+        const root = api.renderMessageMarkdown(engines.document, source, {
+          parse: engines.parse,
+          purify: engines.purify,
+        });
+        assert.equal(root.className, "message-body");
+        assert.equal(api.messageDomHasForbiddenSurface(root), false);
+        const tags = collectTags(root);
+        assert.ok(tags.has("TABLE"));
+        assert.ok(tags.has("TH") || tags.has("TD"));
+        assert.ok(tags.has("OL"));
+        assert.ok(tags.has("UL"));
+        assert.ok(tags.has("LI"));
+        assert.ok(tags.has("STRONG"));
+        assert.ok(tags.has("CODE"));
+        assert.ok(tags.has("PRE"));
+        assert.match(root.textContent, /Question/);
+        assert.match(root.textContent, /Reponse/);
+        assert.match(root.textContent, /premier/);
+        assert.match(root.textContent, /puce/);
+        assert.match(root.textContent, /ligne code/);
+        assert.equal(root.textContent.includes("|---|"), false);
+      });
+
+      test("message_markdown_pas_de_lien_ni_image_actifs", () => {
+        const engines = loadMarkdownEngines();
+        const root = api.renderMessageMarkdown(
+          engines.document,
+          `[clic](https://evil.example) et ![img](https://evil.example/x.png)`,
+          { parse: engines.parse, purify: engines.purify },
+        );
+        const tags = collectTags(root);
+        assert.equal(tags.has("A"), false);
+        assert.equal(tags.has("IMG"), false);
+        assert.equal(api.messageDomHasForbiddenSurface(root), false);
+        assert.match(root.textContent, /evil\.example|clic|img/i);
+      });
+
+      test("message_markdown_sauts_de_ligne_simples_deviennent_br", () => {
+        const engines = loadMarkdownEngines();
+        const root = api.renderMessageMarkdown(
+          engines.document,
+          "ligne un\nligne deux\n\nparagraphe",
+          { parse: engines.parse, purify: engines.purify },
+        );
+        const html = root.innerHTML;
+        assert.match(html, /<br\s*\/?>/i);
+        assert.match(root.textContent, /ligne un/);
+        assert.match(root.textContent, /ligne deux/);
+        // Mutant : sans breaks, marked colle les deux lignes dans un seul nœud texte.
+        const glued = engines.parse === undefined
+          ? null
+          : engines.window.marked.parse("ligne un\nligne deux", { async: false, breaks: false });
+        assert.equal(/<br\s*\/?>/i.test(String(glued)), false);
+      });
 
       function makeFakeEventSource() {
         const urls = [];
@@ -2205,6 +2365,129 @@
     return minutes ? `${hours} h ${minutes} min` : `${hours} h`;
   }
 
+  // Markdown agents → HTML via marked, puis DOMPurify (jamais marked seul).
+  // Liens et images interdits : messages non fiables (écrits par des modèles).
+  const MESSAGE_MARKDOWN_TAGS = Object.freeze([
+    "DIV", "P", "STRONG", "EM", "B", "I", "CODE", "PRE", "UL", "OL", "LI",
+    "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "BR", "SPAN",
+    "BLOCKQUOTE", "H1", "H2", "H3", "H4", "H5", "H6", "HR",
+  ]);
+
+  const MESSAGE_PURIFY_CONFIG = Object.freeze({
+    ALLOWED_TAGS: Object.freeze([
+      "p", "br", "strong", "em", "b", "i", "code", "pre",
+      "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td",
+      "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "span",
+    ]),
+    ALLOWED_ATTR: Object.freeze([]),
+    FORBID_TAGS: Object.freeze([
+      "a", "img", "picture", "source", "video", "audio", "iframe", "object",
+      "embed", "form", "input", "button", "script", "style", "link", "meta",
+      "svg", "math",
+    ]),
+    FORBID_ATTR: Object.freeze([
+      "href", "src", "srcset", "xlink:href", "style", "action", "formaction",
+    ]),
+    ALLOW_DATA_ATTR: false,
+    ALLOW_UNKNOWN_PROTOCOLS: false,
+  });
+
+  function resolveMarkedParse(override) {
+    if (typeof override === "function") return override;
+    const markedApi = typeof globalThis !== "undefined" ? globalThis.marked : null;
+    if (markedApi && typeof markedApi.parse === "function") {
+      // breaks:true = équivalent remark-breaks (t3code) : un \n agent → <br>, sinon texte collé.
+      return (source) => markedApi.parse(source, { async: false, breaks: true, gfm: true });
+    }
+    if (typeof markedApi === "function") return markedApi;
+    throw new Error("moteur Markdown (marked) absent");
+  }
+
+  function resolveDomPurify(override) {
+    if (override && typeof override.sanitize === "function") return override;
+    const purifyApi = typeof globalThis !== "undefined" ? globalThis.DOMPurify : null;
+    if (purifyApi && typeof purifyApi.sanitize === "function") return purifyApi;
+    throw new Error("TEMOIN_XSS_ASSAINISSEMENT: assainisseur absent");
+  }
+
+  function sanitizeMessageHtml(dirtyHtml, purifyOverride) {
+    const purifyApi = resolveDomPurify(purifyOverride);
+    return purifyApi.sanitize(String(dirtyHtml == null ? "" : dirtyHtml), {
+      ...MESSAGE_PURIFY_CONFIG,
+      ALLOWED_TAGS: [...MESSAGE_PURIFY_CONFIG.ALLOWED_TAGS],
+      ALLOWED_ATTR: [...MESSAGE_PURIFY_CONFIG.ALLOWED_ATTR],
+      FORBID_TAGS: [...MESSAGE_PURIFY_CONFIG.FORBID_TAGS],
+      FORBID_ATTR: [...MESSAGE_PURIFY_CONFIG.FORBID_ATTR],
+    });
+  }
+
+  function parseMessageMarkdown(source, parseOverride) {
+    const parse = resolveMarkedParse(parseOverride);
+    return String(parse(String(source == null ? "" : source)) || "");
+  }
+
+  function messageHtmlLooksActive(html) {
+    const sample = String(html == null ? "" : html);
+    // Uniquement balises/attrs HTML réels — pas le texte échappé dans un <code>.
+    return /<(?:script|iframe|object|embed|img|a)\b/i.test(sample)
+      || /<[^>]+\son[a-z]+\s*=/i.test(sample)
+      || /(?:\shref|\ssrc)\s*=\s*(["']?)\s*(?:javascript:|data:text\/html)/i.test(sample);
+  }
+
+  function assertMessageHtmlSafe(html) {
+    if (messageHtmlLooksActive(html)) {
+      throw new Error("TEMOIN_XSS_ASSAINISSEMENT");
+    }
+    return html;
+  }
+
+  function renderMessageMarkdown(documentRef, source, options = {}) {
+    const dirty = parseMessageMarkdown(source, options.parse);
+    // Production : toujours assainir. options.skipSanitize = mutant de test uniquement.
+    const clean = options.skipSanitize
+      ? dirty
+      : sanitizeMessageHtml(dirty, options.purify);
+    if (!options.skipSanitize) assertMessageHtmlSafe(clean);
+    const root = documentRef.createElement("div");
+    root.className = "message-body";
+    if (typeof root.setHTML === "function") {
+      root.setHTML(clean);
+    } else {
+      // HTML déjà passé par DOMPurify — seul point d'innerHTML du fil.
+      root.innerHTML = clean;
+    }
+    return root;
+  }
+
+  function collectMessageDomTags(node, tags = new Set()) {
+    if (!node) return tags;
+    if (node.tagName) tags.add(String(node.tagName).toUpperCase());
+    const children = node.childNodes || node.children || [];
+    for (const child of children) collectMessageDomTags(child, tags);
+    return tags;
+  }
+
+  function messageDomHasForbiddenSurface(node) {
+    if (!node) return false;
+    const tag = node.tagName ? String(node.tagName).toUpperCase() : "";
+    if (tag && !MESSAGE_MARKDOWN_TAGS.includes(tag)) return true;
+    if (typeof node.getAttribute === "function") {
+      const names = typeof node.getAttributeNames === "function"
+        ? node.getAttributeNames()
+        : Object.keys(node.attributes || {});
+      for (const name of names) {
+        const lower = String(name).toLowerCase();
+        if (lower === "class") continue;
+        return true;
+      }
+    }
+    const children = node.childNodes || node.children || [];
+    for (const child of children) {
+      if (messageDomHasForbiddenSurface(child)) return true;
+    }
+    return false;
+  }
+
   const UI_NODE_IDS = Object.freeze({
     agentList: "agent-list",
     stoppedAgentList: "stopped-agent-list",
@@ -2449,7 +2732,8 @@
 
     const renderMessage = (entry) => {
       const wrapper = make("article", `message message--${entry.role === "user" ? "user" : "agent"}`);
-      const bubble = make("div", "bubble", entry.text);
+      const bubble = make("div", "bubble");
+      bubble.append(renderMessageMarkdown(document, entry.text));
       const meta = make("span", "message-meta", timestamp(entry.at));
       if (entry.status) meta.textContent += ` · ${entry.status}`;
       bubble.append(meta);
@@ -3151,6 +3435,14 @@
     projectTimeline,
     peerLabel,
     formatDuration,
+    renderMessageMarkdown,
+    sanitizeMessageHtml,
+    parseMessageMarkdown,
+    messageHtmlLooksActive,
+    assertMessageHtmlSafe,
+    messageDomHasForbiddenSurface,
+    MESSAGE_MARKDOWN_TAGS,
+    MESSAGE_PURIFY_CONFIG,
     collectNodes,
     mount,
     buildSearchRequest,

@@ -18,3 +18,4 @@ AUDIT_RAPPORT.md
 *.bak-*
 __pycache__/
 .DS_Store
+crates/bridget-daemon/assets/ui/.test-tools/

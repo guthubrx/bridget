@@ -455,11 +455,92 @@ input:focus-visible,
   font-size: 0.91rem;
   line-height: 1.62;
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
+  white-space: normal;
 }
 
 .message--user .bubble {
   background: var(--surface-hover);
+}
+
+.message-body {
+  white-space: normal;
+}
+
+.message-body > *:first-child {
+  margin-top: 0;
+}
+
+.message-body > *:last-child {
+  margin-bottom: 0;
+}
+
+.message-body p {
+  margin: 0.35em 0;
+}
+
+.message-body ul,
+.message-body ol {
+  margin: 0.35em 0;
+  padding-left: 1.35rem;
+}
+
+.message-body li {
+  margin: 0.12em 0;
+}
+
+.message-body strong {
+  font-weight: 700;
+}
+
+.message-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  background: var(--code-background);
+  border-radius: var(--radius-small);
+  padding: 0.05em 0.28em;
+}
+
+.message-body pre {
+  margin: 0.45em 0;
+  padding: 0.5em 0.65em;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  border-radius: var(--radius-small);
+  background: var(--code-background);
+}
+
+.message-body pre code {
+  font-size: 0.9em;
+  background: transparent;
+  padding: 0;
+}
+
+.message-body table {
+  width: 100%;
+  margin: 0.45em 0;
+  border-spacing: 0;
+  font-size: 0.95em;
+}
+
+.message-body th,
+.message-body td {
+  padding: 0.35em 0.55em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.message-body th {
+  font-weight: 700;
+  background: var(--surface-hover);
+}
+
+.message-body td {
+  background: var(--card);
+}
+
+.message-body tr + tr td {
+  outline: 1px solid color-mix(in srgb, var(--text-secondary) 28%, transparent);
+  outline-offset: -1px;
 }
 
 .message-meta {
