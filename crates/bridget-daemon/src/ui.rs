@@ -85,12 +85,28 @@ fn write_ui_endpoint_state(path: &Path, endpoint: &UiEndpoint) -> Result<(), UiE
     let body = serde_json::to_vec_pretty(&payload).map_err(|error| {
         UiError::Configuration(format!("sérialisation de l'endpoint UI: {error}"))
     })?;
-    std::fs::write(path, body)?;
-    #[cfg(unix)]
+    // Création directe en 0o600 (pas d'écriture monde puis chmod après coup).
+    let tmp = path.with_extension("json.tmp");
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            file.write_all(&body)?;
+            file.sync_all()?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&tmp, &body)?;
+        }
     }
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 
@@ -140,15 +156,6 @@ pub fn load_ui_endpoint(path: &Path) -> Result<UiEndpoint, UiError> {
     Ok(UiEndpoint {
         port: parsed.port,
         token: parsed.token,
-    })
-}
-
-/// Mutant de revue : ignore l'état et tire un jeton/port aléatoires à chaque appel.
-#[cfg(test)]
-fn mutant_load_ui_endpoint_always_random(_path: &Path) -> Result<UiEndpoint, UiError> {
-    Ok(UiEndpoint {
-        port: 10_000 + (uuid::Uuid::new_v4().as_u128() % 50_000) as u16,
-        token: uuid::Uuid::new_v4().simple().to_string(),
     })
 }
 
@@ -406,6 +413,9 @@ pub fn run(daemon_socket: PathBuf, maicie_config: PathBuf) -> Result<(), UiError
         config,
         crate::connection_channel::attested_connection_channel(),
     )?;
+    // VOLONTAIRE : l'URL complète (avec jeton) est la livraison à l'utilisateur.
+    // Ne pas retirer. Le jeton ne doit en revanche jamais apparaître dans un
+    // message d'erreur ni une trace de diagnostic — seulement ici, sur stdout.
     println!("Bridget UI (lecture et envoi) : {}", relay.url()?);
     relay.serve()
 }
@@ -1574,6 +1584,8 @@ mod tests {
     #[test]
     fn deux_demarrages_successifs_rendent_le_meme_port_et_le_meme_jeton() {
         // Attendu écrit en dur — pas recalculé par la fonction sous test.
+        // Garde la relecture seule ; le gardien d'écriture est
+        // premier_demarrage_persiste_puis_second_relit_sans_retirer.
         const PORT: u16 = 17888;
         const TOKEN: &str = "0123456789abcdef0123456789abcdef";
         let path = std::env::temp_dir().join(format!(
@@ -1604,38 +1616,6 @@ mod tests {
     }
 
     #[test]
-    fn mutant_tirage_aleatoire_a_chaque_lecture_tue_deux_demarrages_successifs_rendent_le_meme_port_et_le_meme_jeton()
-    {
-        const PORT: u16 = 17888;
-        const TOKEN: &str = "0123456789abcdef0123456789abcdef";
-        let path = std::env::temp_dir().join(format!(
-            "bridget-ui-endpoint-mutant-{}.json",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::write(
-            &path,
-            format!(r#"{{"version":1,"port":{PORT},"token":"{TOKEN}"}}"#),
-        )
-        .unwrap();
-
-        let first = mutant_load_ui_endpoint_always_random(&path).unwrap();
-        let second = mutant_load_ui_endpoint_always_random(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
-
-        // Propriété du témoin nommé : égalité aux constantes ET entre lectures.
-        let temoin_tient = first.port == PORT
-            && first.token == TOKEN
-            && second.port == PORT
-            && second.token == TOKEN
-            && first.port == second.port
-            && first.token == second.token;
-        assert!(
-            !temoin_tient,
-            "le mutant doit tuer deux_demarrages_successifs_rendent_le_meme_port_et_le_meme_jeton"
-        );
-    }
-
-    #[test]
     fn port_deja_pris_echoue_clairement_sans_repli_aleatoire() {
         let holder = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
         let occupied = holder.local_addr().unwrap().port();
@@ -1660,6 +1640,8 @@ mod tests {
         );
     }
 
+    /// Gardien d'écriture sur le chemin réel : load_or_create → fichier → relecture.
+    /// Un mutant qui n'écrit rien ou réécrit un jeton neuf à chaque fois tue ce témoin.
     #[test]
     fn premier_demarrage_persiste_puis_second_relit_sans_retirer() {
         let path = std::env::temp_dir().join(format!(
