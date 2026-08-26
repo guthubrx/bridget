@@ -629,6 +629,7 @@ pub fn run(agent: &str, initial_window: AttachWindow, socket_path: &Path) -> Res
             agent,
             initial_window,
             socket_path,
+            libc::STDIN_FILENO,
             raw_terminal,
             is_terminal(libc::STDOUT_FILENO),
         )
@@ -643,6 +644,7 @@ fn run_with_input(
     agent: &str,
     initial_window: AttachWindow,
     socket_path: &Path,
+    input_fd: RawFd,
     raw_terminal: bool,
     tty_output: bool,
 ) -> Result<(), String> {
@@ -670,7 +672,7 @@ fn run_with_input(
             &mut state,
             agent,
             socket_path,
-            libc::STDIN_FILENO,
+            input_fd,
             raw_terminal,
             tty_output,
         )? {
@@ -1393,6 +1395,7 @@ fn drive_interactive(
     );
 
     let mut reconnect = true;
+    let mut input_open = true;
     let mut reader_failure = None;
     loop {
         match status_rx.try_recv() {
@@ -1406,8 +1409,10 @@ fn drive_interactive(
             Err(mpsc::TryRecvError::Empty) => {}
         }
 
+        // POSIX ignore un descripteur négatif : après EOF non-TTY, la boucle
+        // attend encore le lecteur socket sans relire stdin ni tourner à vide.
         let mut pollfd = libc::pollfd {
-            fd: input_fd,
+            fd: if input_open { input_fd } else { -1 },
             events: libc::POLLIN,
             revents: 0,
         };
@@ -1434,7 +1439,11 @@ fn drive_interactive(
                     libc::read(input_fd, (&mut byte as *mut u8).cast::<libc::c_void>(), 1)
                 };
                 if read == 0 {
-                    reconnect = false;
+                    if raw_terminal {
+                        reconnect = false;
+                    } else {
+                        input_open = false;
+                    }
                     break;
                 }
                 if read < 0 {
@@ -1476,6 +1485,7 @@ fn drive_interactive(
                 reconnect = false;
                 break;
             }
+            input_open = false;
             render_expired_sends(&shared_state, &renderer_sender);
             continue;
         }
@@ -2386,13 +2396,6 @@ mod tests {
                 }
             }
             output
-        }
-
-        fn close_master(&mut self) {
-            if self.master >= 0 {
-                assert_eq!(unsafe { libc::close(self.master) }, 0);
-                self.master = -1;
-            }
         }
     }
 
@@ -3929,7 +3932,16 @@ mod tests {
             }
         });
 
-        let error = run("codex-1", AttachWindow::Today, &socket_path).unwrap_err();
+        let input = File::open("/dev/null").unwrap();
+        let error = run_with_input(
+            "codex-1",
+            AttachWindow::Today,
+            &socket_path,
+            input.as_raw_fd(),
+            false,
+            false,
+        )
+        .unwrap_err();
         assert!(error.contains("wrapper ACP de « codex-1 » est indisponible"));
         server.join().unwrap();
         std::fs::remove_file(socket_path).unwrap();
@@ -4320,16 +4332,32 @@ mod tests {
 
     #[test]
     fn raw_mode_restaure_le_terminal_apres_eof_du_pseudo_tty() {
-        let mut pseudo_tty = PseudoTerminal::open();
+        let pseudo_tty = PseudoTerminal::open();
         let before = pseudo_tty.attrs();
-        let raw = RawTerminal::enable_for_fd(pseudo_tty.slave)
-            .unwrap()
-            .expect("pseudo-TTY détecté");
-        pseudo_tty.close_master();
-        let mut byte = 0_u8;
-        let read = unsafe { libc::read(pseudo_tty.slave, (&mut byte as *mut u8).cast(), 1) };
-        assert!(read <= 0, "le pseudo-TTY fermé doit signaler EOF ou EIO");
-        drop(raw);
+        let (write_stream, _) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, false);
+
+        with_raw_terminal(pseudo_tty.slave, |raw_terminal| {
+            assert!(raw_terminal, "le pseudo-TTY doit activer le mode raw");
+            assert_eq!(
+                unsafe { libc::write(pseudo_tty.master, [0x04_u8].as_ptr().cast(), 1) },
+                1
+            );
+            let mut byte = 0_u8;
+            assert_eq!(
+                unsafe { libc::read(pseudo_tty.slave, (&mut byte as *mut u8).cast(), 1) },
+                1
+            );
+            assert_eq!(byte, 0x04, "Ctrl-D doit arriver à la boucle de saisie");
+            assert!(!handle_input_byte(
+                byte, &state, &input, &renderer, &writer, "codex-1",
+            )?);
+            Ok::<(), String>(())
+        })
+        .unwrap();
         assert_terminal_restored(&before, &pseudo_tty.attrs());
     }
 

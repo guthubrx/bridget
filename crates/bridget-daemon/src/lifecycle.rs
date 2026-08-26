@@ -627,12 +627,7 @@ mod tests {
                 "unknown",
                 SpawnRefusal::UnknownType {
                     requested_type: "absent".to_string(),
-                    known_types: vec![
-                        "claude".to_string(),
-                        "codex".to_string(),
-                        "fixture".to_string(),
-                        "gemini".to_string(),
-                    ],
+                    known_types: Vec::new(),
                     registry: "/tmp/t905-agents.json".to_string(),
                 },
             ),
@@ -703,6 +698,13 @@ mod tests {
                 }
                 _ => unreachable!(),
             };
+            let mut expected = expected;
+            if let SpawnRefusal::UnknownType { known_types, .. } = &mut expected {
+                // La composition du catalogue appartient au registre. Cette
+                // matrice vérifie que lifecycle relaie son instantané exact,
+                // sans recopier une liste native qui deviendrait périmée.
+                *known_types = registry.known_types();
+            }
             let actual = rejection(
                 submit_spawn(&supervisor, &registry, &env, &request, NOW, false).unwrap(),
             );
