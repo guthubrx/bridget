@@ -2224,8 +2224,8 @@ mod tests {
 
     #[test]
     fn spec_024_agent_info_expose_protocole_et_canal_independants() {
-        let json = r#"{"name":"cartae-agent","agent_type":"codex","connection_id":"conn-1",
-            "host":"cartae","transport":"tmux","channel":"ssh-unix","mode":"tmux",
+        let json = r#"{"name":"lab-agent","agent_type":"codex","connection_id":"conn-1",
+            "host":"lab-host","transport":"tmux","channel":"ssh-unix","mode":"tmux",
             "os":"Linux","state":"connected","last_seen_secs":0,"reconnect_count":0}"#;
         let info: AgentInfo = decode(json).unwrap();
         assert_eq!(info.transport, "tmux");
