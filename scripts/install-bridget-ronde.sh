@@ -50,14 +50,40 @@ pilotage_install_release "$root_dir" "scripts/bridget-ronde.py" "bridget-ronde" 
 installed_command="$PILOTAGE_INSTALLED_COMMAND"
 
 write_unit() {
-  local path="$1" label="$2"
-  if [[ -e "$path" && "$force" != 1 ]]; then
-    echo "déjà en place: $label ($path)" >&2
+  local path="$1" label="$2" directory prepared expected_hash actual_mode actual_hash
+  directory="$(dirname "$path")"
+  mkdir -p "$directory"
+  prepared="$(mktemp "${directory}/.prepare-$(basename "$path").XXXXXX")"
+  cat >"$prepared"
+  chmod 0644 "$prepared"
+  expected_hash="$(pilotage_release_hash "$prepared")"
+
+  if [[ -e "$path" || -L "$path" ]]; then
+    actual_mode="$(pilotage_file_mode "$path" 2>/dev/null || true)"
+    if [[ -f "$path" && ! -L "$path" && "$actual_mode" == 644 ]] \
+      && cmp -s "$path" "$prepared"; then
+      rm "$prepared"
+      echo "déjà en place: $label ($path)" >&2
+      return 0
+    fi
+    if [[ "$force" != 1 ]]; then
+      rm "$prepared"
+      pilotage_refuse "configuration différente: $label ($path); utiliser --force pour remplacer"
+      return 1
+    fi
+  fi
+
+  if ! pilotage_replace_entry "$prepared" "$path"; then
+    rm -f "$prepared"
+    pilotage_refuse "écriture atomique impossible: $label ($path)"
     return 1
   fi
-  mkdir -p "$(dirname "$path")"
-  cat >"$path"
-  chmod 0644 "$path"
+  actual_mode="$(pilotage_file_mode "$path" 2>/dev/null || true)"
+  actual_hash="$(pilotage_release_hash "$path" 2>/dev/null || true)"
+  if [[ ! -f "$path" || -L "$path" || "$actual_mode" != 644 || "$actual_hash" != "$expected_hash" ]]; then
+    pilotage_refuse "attestation unité invalide: $label ($path)"
+    return 1
+  fi
   echo "posé: $label ($path)" >&2
 }
 
@@ -67,7 +93,7 @@ chmod 0700 "$report_dir"
 case "$(uname -s)" in
   Darwin)
     unit="${HOME}/Library/LaunchAgents/com.bridget.ronde.plist"
-    write_unit "$unit" "unité launchd ronde" <<EOF || true
+    write_unit "$unit" "unité launchd ronde" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -95,7 +121,7 @@ EOF
   Linux)
     service="${HOME}/.config/systemd/user/bridget-ronde.service"
     timer="${HOME}/.config/systemd/user/bridget-ronde.timer"
-    write_unit "$service" "unité systemd ronde" <<EOF || true
+    write_unit "$service" "unité systemd ronde" <<EOF
 [Unit]
 Description=Bridget ronde (lecture seule)
 
@@ -105,7 +131,7 @@ ExecStart=/usr/bin/env python3 ${installed_command} --config ${config} --report-
 Environment=HOME=${HOME}
 Environment=PATH=${HOME}/.local/bin:/usr/bin:/bin
 EOF
-    write_unit "$timer" "timer systemd ronde" <<EOF || true
+    write_unit "$timer" "timer systemd ronde" <<EOF
 [Unit]
 Description=Timer Bridget ronde (lecture seule)
 

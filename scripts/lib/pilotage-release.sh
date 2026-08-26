@@ -14,6 +14,47 @@ pilotage_refuse() {
   return 1
 }
 
+pilotage_file_mode() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+  else
+    stat -f '%Lp' "$1"
+  fi
+}
+
+pilotage_validate_existing_file() {
+  local actual="$1" expected="$2" expected_mode="$3" label="$4" head="$5"
+  local actual_mode
+
+  if [[ -L "$actual" || ! -f "$actual" ]]; then
+    pilotage_refuse "$label invalide pour ${head}: attendu=fichier_regulier_non_lien, recu=$actual"
+    return 1
+  fi
+  actual_mode="$(pilotage_file_mode "$actual")" || {
+    pilotage_refuse "mode $label illisible pour ${head}: $actual"
+    return 1
+  }
+  if [[ "$actual_mode" != "$expected_mode" ]]; then
+    pilotage_refuse "mode $label invalide pour ${head}: attendu=${expected_mode}, recu=${actual_mode}"
+    return 1
+  fi
+  if ! cmp -s "$actual" "$expected"; then
+    pilotage_refuse "$label corrompue pour ${head}: $actual"
+    return 1
+  fi
+}
+
+# os.replace vise l'entrée exacte et reste atomique sur le même système de
+# fichiers, y compris lorsque la destination est un lien vers un répertoire.
+pilotage_replace_entry() {
+  python3 - "$1" "$2" <<'PY'
+import os
+import sys
+
+os.replace(sys.argv[1], sys.argv[2])
+PY
+}
+
 # Contrat : le caller fournit la racine, le chemin Git, le nom public et le
 # drapeau --force. Succès = artefact exact + preuve + lien actif ; refus Git =
 # zéro effet. Les seules écritures sont sous ~/.local/{share,bin} après toutes
@@ -110,15 +151,17 @@ pilotage_install_release() {
   } >"$prepared_origin"
   chmod 0444 "$prepared_origin"
 
-  if [[ -e "$release_command" ]] && ! cmp -s "$release_command" "$prepared_command"; then
-    rm -rf "$prepare_dir"
-    pilotage_refuse "release corrompue pour ${head}: $release_command"
-    return 1
+  if [[ -e "$release_command" || -L "$release_command" ]]; then
+    if ! pilotage_validate_existing_file "$release_command" "$prepared_command" 555 release "$head"; then
+      rm -rf "$prepare_dir"
+      return 1
+    fi
   fi
-  if [[ -e "$origin_file" ]] && ! cmp -s "$origin_file" "$prepared_origin"; then
-    rm -rf "$prepare_dir"
-    pilotage_refuse "preuve origine corrompue pour ${head}: $origin_file"
-    return 1
+  if [[ -e "$origin_file" || -L "$origin_file" ]]; then
+    if ! pilotage_validate_existing_file "$origin_file" "$prepared_origin" 444 "preuve origine" "$head"; then
+      rm -rf "$prepare_dir"
+      return 1
+    fi
   fi
 
   mkdir -p "$release_dir"
@@ -138,12 +181,16 @@ pilotage_install_release() {
     link_prepare="$(mktemp -d "${bin_dir}/.activate-${command_name}.XXXXXX")"
     prepared_link="${link_prepare}/${command_name}"
     ln -s "$release_command" "$prepared_link"
-    if ! mv -f "$prepared_link" "$installed_command"; then
+    if ! pilotage_replace_entry "$prepared_link" "$installed_command"; then
       rm -rf "$link_prepare"
       pilotage_refuse "activation atomique impossible: $installed_command"
       return 1
     fi
     rmdir "$link_prepare"
+    if [[ ! -L "$installed_command" || "$(readlink "$installed_command")" != "$release_command" ]]; then
+      pilotage_refuse "attestation activation invalide: attendu=$release_command, recu=$(readlink "$installed_command" 2>/dev/null || printf 'non_lien')"
+      return 1
+    fi
     echo "posé: $installed_command -> $release_command" >&2
   fi
   echo "origine: refs/remotes/origin/main contient $head; preuve: $origin_file" >&2

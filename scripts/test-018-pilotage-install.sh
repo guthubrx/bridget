@@ -25,6 +25,14 @@ hash_file() {
   fi
 }
 
+file_mode() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+  else
+    stat -f '%Lp' "$1"
+  fi
+}
+
 commit_fixture() {
   local message="$1"
   GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
@@ -125,6 +133,8 @@ assert_release() {
   target="$(readlink "${home}/.local/bin/${command}")"
   expected="${home}/.local/share/bridget/pilotage/releases/${sha}/${command}"
   [[ "$target" == "$expected" ]] || fail "cible $tool inattendue: $target != $expected"
+  [[ -f "$target" && ! -L "$target" ]] || fail "release $tool non régulière ou liée: $target"
+  [[ "$(file_mode "$target")" == 555 ]] || fail "mode release $tool inattendu: $(file_mode "$target")"
   [[ -x "$target" ]] || fail "artefact $tool non exécutable: $target"
   case "$target" in
     "$repo"/*|"$linked_worktree"/*) fail "artefact $tool encore lié au chantier: $target" ;;
@@ -132,6 +142,8 @@ assert_release() {
   git -C "$repo" show "${sha}:${source_relative}" >"${fixture_root}/expected-${tool}"
   cmp -s "$target" "${fixture_root}/expected-${tool}" || fail "octets $tool différents du blob Git"
   hash="$(hash_file "$target")"
+  [[ -f "${target}.origin" && ! -L "${target}.origin" ]] || fail "preuve origine $tool non régulière ou liée"
+  [[ "$(file_mode "${target}.origin")" == 444 ]] || fail "mode preuve origine $tool inattendu: $(file_mode "${target}.origin")"
   grep -Fxq 'format=bridget-pilotage-release-v1' "${target}.origin" || fail "format origine $tool absent"
   grep -Fxq 'source_ref=refs/remotes/origin/main' "${target}.origin" || fail "référence origine $tool absente"
   grep -Fxq 'remote=origin' "${target}.origin" || fail "remote origine $tool absent"
@@ -237,16 +249,89 @@ for tool in idle ronde; do
   printf 'installation_%s_idempotente: OK\n' "$tool"
 done
 
-# 9. Un SHA existant avec d'autres octets est corrompu, jamais « réparé » par --force.
+# 9. Une release de mêmes octets n'est identique ni sous forme de lien, ni
+# avec un mode plus permissif.
+linked_release_home="${fixture_root}/home-release-lien"
+run_installer "$repo" idle "$linked_release_home" >/dev/null
+linked_release="$(readlink "${linked_release_home}/.local/bin/bridget-idle")"
+chmod 0555 "${repo}/scripts/bridget-idle.py"
+rm "$linked_release"
+ln -s "${repo}/scripts/bridget-idle.py" "$linked_release"
+expect_refusal release_lien 'attendu=fichier_regulier_non_lien' "$repo" idle "$linked_release_home"
+chmod 0755 "${repo}/scripts/bridget-idle.py"
+
+mode_release_home="${fixture_root}/home-release-mode"
+run_installer "$repo" idle "$mode_release_home" >/dev/null
+mode_release="$(readlink "${mode_release_home}/.local/bin/bridget-idle")"
+chmod 0755 "$mode_release"
+expect_refusal release_mode 'mode release invalide' "$repo" idle "$mode_release_home"
+
+# 10. --force remplace l'entrée exacte même si elle est un lien vers répertoire,
+# puis la cible réellement obtenue est relue.
+directory_link_home="${fixture_root}/home-directory-link"
+mkdir -p "${directory_link_home}/.local/bin" "${directory_link_home}/ancienne-cible"
+ln -s "${directory_link_home}/ancienne-cible" "${directory_link_home}/.local/bin/bridget-idle"
+set +e
+directory_link_output="$(run_installer "$repo" idle "$directory_link_home" --force 2>&1)"
+directory_link_rc=$?
+set -e
+[[ "$directory_link_rc" -eq 0 ]] || fail "force_remplace_entree_exacte: échec inattendu ($directory_link_output)"
+grep -Fq "posé: ${directory_link_home}/.local/bin/bridget-idle ->" <<<"$directory_link_output" \
+  || fail "force_remplace_entree_exacte: attestation de pose absente ($directory_link_output)"
+assert_release idle "$directory_link_home" "$local_ahead_sha"
+[[ ! -e "${directory_link_home}/ancienne-cible/bridget-idle" ]] \
+  || fail "force_remplace_entree_exacte: lien préparé déplacé dans l'ancien répertoire"
+echo 'force_remplace_entree_exacte: OK'
+
+# 11. Même SHA mais configuration différente : refus non nul, unités intactes
+# et aucune annonce finale de succès.
+divergent_home="${fixture_root}/home-ronde-divergente"
+config_a="${fixture_root}/maicie-a.json"
+config_b="${fixture_root}/maicie-b.json"
+printf '{"version":"A"}\n' >"$config_a"
+printf '{"version":"B"}\n' >"$config_b"
+HOME="$divergent_home" "${repo}/scripts/install-bridget-ronde.sh" \
+  --config "$config_a" --report-dir "${divergent_home}/reports-a" \
+  --skip-activate >/dev/null
+service="${divergent_home}/.config/systemd/user/bridget-ronde.service"
+timer="${divergent_home}/.config/systemd/user/bridget-ronde.timer"
+cp "$service" "${fixture_root}/service-a"
+cp "$timer" "${fixture_root}/timer-a"
+set +e
+divergent_output="$(HOME="$divergent_home" "${repo}/scripts/install-bridget-ronde.sh" \
+  --config "$config_b" --report-dir "${divergent_home}/reports-b" \
+  --skip-activate 2>&1)"
+divergent_rc=$?
+set -e
+[[ "$divergent_rc" -ne 0 ]] \
+  || fail "configuration_divergente_refusee_sans_faux_succes: succès interdit ($divergent_output)"
+! grep -Fq 'ronde portable prête' <<<"$divergent_output" \
+  || fail "configuration_divergente_refusee_sans_faux_succes: annoncée prête"
+cmp -s "$service" "${fixture_root}/service-a" \
+  || fail "configuration_divergente_refusee_sans_faux_succes: service A modifié"
+cmp -s "$timer" "${fixture_root}/timer-a" \
+  || fail "configuration_divergente_refusee_sans_faux_succes: timer A modifié"
+echo 'configuration_divergente_refusee_sans_faux_succes: OK'
+
+forced_output="$(HOME="$divergent_home" "${repo}/scripts/install-bridget-ronde.sh" \
+  --config "$config_b" --report-dir "${divergent_home}/reports-b" \
+  --skip-activate --force 2>&1)"
+grep -Fq 'ronde portable prête' <<<"$forced_output" || fail "configuration B forcée non annoncée prête"
+grep -Fq "$config_b" "$service" || fail "configuration B forcée absente du service"
+! cmp -s "$service" "${fixture_root}/service-a" || fail "configuration B forcée n'a pas remplacé le service A"
+echo 'configuration_divergente_remplacee_sous_force: OK'
+
+# 12. Un SHA existant avec d'autres octets est corrompu, jamais « réparé » par --force.
 corrupt_home="${fixture_root}/home-corrupt"
 run_installer "$repo" idle "$corrupt_home" >/dev/null
 corrupt_target="$(readlink "${corrupt_home}/.local/bin/bridget-idle")"
 chmod u+w "$corrupt_target"
 printf '\n# corruption\n' >>"$corrupt_target"
+chmod 0555 "$corrupt_target"
 expect_refusal corruption 'release corrompue' "$repo" idle "$corrupt_home" --force
 grep -Fq '# corruption' "$corrupt_target" || fail "la corruption a été écrasée silencieusement"
 
-# 10. La production ne dépend plus du cycle de vie du dépôt source.
+# 13. La production ne dépend plus du cycle de vie du dépôt source.
 [[ "$repo" == "${fixture_root}/repo" ]] || fail "cible de suppression de fixture inattendue"
 rm -rf "$repo"
 HOME="$release_home" "${release_home}/.local/bin/bridget-idle" --help >/dev/null
