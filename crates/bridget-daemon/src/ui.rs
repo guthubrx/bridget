@@ -31,6 +31,9 @@ const MAX_UI_SSE_EVENTS: usize = 20_000;
 const MAX_UI_RECONNECT_ATTEMPTS: usize = 50;
 const UI_RECONNECT_DELAY: Duration = Duration::from_millis(100);
 const UI_SENDER: &str = "humain";
+/// Port loopback par défaut : stable d'un lancement à l'autre, sans option CLI.
+pub const DEFAULT_UI_PORT: u16 = 17888;
+const UI_ENDPOINT_STATE_VERSION: u8 = 1;
 const UI_INDEX: &[u8] = include_bytes!("../assets/ui/index.html");
 const UI_SCRIPT: &[u8] = include_bytes!("../assets/ui/app.js");
 const UI_THEME: &[u8] = include_bytes!("../assets/ui/theme.css");
@@ -43,14 +46,164 @@ pub struct UiRelayConfig {
     pub token: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct UiEndpointStateFile {
+    version: u8,
+    port: u16,
+    token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UiEndpoint {
+    pub port: u16,
+    pub token: String,
+}
+
+/// Chemin de l'état local port+jeton (hors dépôt, permissions restrictives).
+pub fn ui_endpoint_state_path() -> PathBuf {
+    crate::daemon::DaemonConfig::default()
+        .socket_path
+        .parent()
+        .map(|parent| parent.join("ui-endpoint.json"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/bridget-ui-endpoint.json"))
+}
+
+fn write_ui_endpoint_state(path: &Path, endpoint: &UiEndpoint) -> Result<(), UiError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+    let payload = UiEndpointStateFile {
+        version: UI_ENDPOINT_STATE_VERSION,
+        port: endpoint.port,
+        token: endpoint.token.clone(),
+    };
+    let body = serde_json::to_vec_pretty(&payload).map_err(|error| {
+        UiError::Configuration(format!("sérialisation de l'endpoint UI: {error}"))
+    })?;
+    // Résidu de plantage : un temporaire jamais renommé n'a jamais été validé.
+    // On le retire, puis création EXCLUSIVE en 0o600 (pas create+truncate qui
+    // hériterait de droits ouverts si le fichier existait encore).
+    let tmp = path.with_extension("json.tmp");
+    let _ = std::fs::remove_file(&tmp);
+    {
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)
+            {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let absolute = std::fs::canonicalize(&tmp)
+                        .unwrap_or_else(|_| tmp.clone());
+                    return Err(UiError::Configuration(format!(
+                        "fichier temporaire d'endpoint UI déjà présent — supprimez ce fichier puis relancez le relais : {}",
+                        absolute.display()
+                    )));
+                }
+                Err(error) => return Err(UiError::Io(error)),
+            };
+            file.write_all(&body)?;
+            file.sync_all()?;
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = std::fs::remove_file(&tmp);
+            if tmp.exists() {
+                let absolute = std::fs::canonicalize(&tmp).unwrap_or_else(|_| tmp.clone());
+                return Err(UiError::Configuration(format!(
+                    "fichier temporaire d'endpoint UI déjà présent — supprimez ce fichier puis relancez le relais : {}",
+                    absolute.display()
+                )));
+            }
+            std::fs::write(&tmp, &body)?;
+        }
+    }
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Charge l'endpoint persistant, ou le crée une seule fois (port défaut + jeton neuf).
+pub fn load_or_create_ui_endpoint(
+    path: &Path,
+    default_port: u16,
+) -> Result<UiEndpoint, UiError> {
+    if path.exists() {
+        return load_ui_endpoint(path);
+    }
+    let endpoint = UiEndpoint {
+        port: default_port,
+        token: uuid::Uuid::new_v4().simple().to_string(),
+    };
+    write_ui_endpoint_state(path, &endpoint)?;
+    Ok(endpoint)
+}
+
+/// Lit l'endpoint déjà persisté — ne tire jamais un jeton au hasard.
+pub fn load_ui_endpoint(path: &Path) -> Result<UiEndpoint, UiError> {
+    let raw = std::fs::read_to_string(path)?;
+    let parsed: UiEndpointStateFile = serde_json::from_str(&raw).map_err(|error| {
+        UiError::Configuration(format!(
+            "état UI illisible ({}) : {error}",
+            path.display()
+        ))
+    })?;
+    if parsed.version != UI_ENDPOINT_STATE_VERSION {
+        return Err(UiError::Configuration(format!(
+            "version d'état UI inconnue ({}) dans {}",
+            parsed.version,
+            path.display()
+        )));
+    }
+    if parsed.port == 0 {
+        return Err(UiError::Configuration(
+            "port UI invalide (0) dans l'état local — corrigez ou supprimez le fichier d'endpoint"
+                .to_string(),
+        ));
+    }
+    if parsed.token.is_empty() {
+        return Err(UiError::Configuration(
+            "jeton UI vide dans l'état local".to_string(),
+        ));
+    }
+    Ok(UiEndpoint {
+        port: parsed.port,
+        token: parsed.token,
+    })
+}
+
 impl UiRelayConfig {
-    pub fn loopback(daemon_socket: PathBuf, maicie_config: PathBuf) -> Self {
-        Self {
+    pub fn loopback(daemon_socket: PathBuf, maicie_config: PathBuf) -> Result<Self, UiError> {
+        Self::loopback_with_endpoint_path(
             daemon_socket,
             maicie_config,
-            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-            token: uuid::Uuid::new_v4().simple().to_string(),
-        }
+            &ui_endpoint_state_path(),
+            DEFAULT_UI_PORT,
+        )
+    }
+
+    pub fn loopback_with_endpoint_path(
+        daemon_socket: PathBuf,
+        maicie_config: PathBuf,
+        endpoint_path: &Path,
+        default_port: u16,
+    ) -> Result<Self, UiError> {
+        let endpoint = load_or_create_ui_endpoint(endpoint_path, default_port)?;
+        Ok(Self {
+            daemon_socket,
+            maicie_config,
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, endpoint.port)),
+            token: endpoint.token,
+        })
     }
 }
 
@@ -218,7 +371,16 @@ impl UiRelay {
         if config.token.is_empty() {
             return Err(UiError::Configuration("jeton UI absent".to_string()));
         }
-        let listener = TcpListener::bind(config.bind)?;
+        let listener = TcpListener::bind(config.bind).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AddrInUse {
+                UiError::Configuration(format!(
+                    "le port {} est déjà pris — arrêtez l'autre relais UI qui l'occupe ; aucun repli sur un port au hasard",
+                    config.bind.port()
+                ))
+            } else {
+                UiError::Io(error)
+            }
+        })?;
         Ok(Self {
             listener,
             config,
@@ -265,13 +427,17 @@ impl UiRelay {
     }
 }
 
-/// Lance `bridget ui`. Le terminal garde le jeton ; aucun secret ne part
-/// dans le HTML ou dans une configuration persistée.
+/// Lance `bridget ui`. Port et jeton sont stables d'un redémarrage à l'autre
+/// (état local hors dépôt). Le jeton ne figure jamais dans le HTML servi.
 pub fn run(daemon_socket: PathBuf, maicie_config: PathBuf) -> Result<(), UiError> {
+    let config = UiRelayConfig::loopback(daemon_socket, maicie_config)?;
     let relay = UiRelay::bind_with_attested_channel(
-        UiRelayConfig::loopback(daemon_socket, maicie_config),
+        config,
         crate::connection_channel::attested_connection_channel(),
     )?;
+    // VOLONTAIRE : l'URL complète (avec jeton) est la livraison à l'utilisateur.
+    // Ne pas retirer. Le jeton ne doit en revanche jamais apparaître dans un
+    // message d'erreur ni une trace de diagnostic — seulement ici, sur stdout.
     println!("Bridget UI (lecture et envoi) : {}", relay.url()?);
     relay.serve()
 }
@@ -1435,5 +1601,141 @@ mod tests {
         let encoded = serde_json::to_value(&exchanges[0]).unwrap();
         assert_eq!(encoded["count"], 1);
         assert_eq!(encoded["delivery_ids"], serde_json::json!(["premier"]));
+    }
+
+    #[test]
+    fn deux_demarrages_successifs_rendent_le_meme_port_et_le_meme_jeton() {
+        // Attendu écrit en dur — pas recalculé par la fonction sous test.
+        // Garde la relecture seule ; le gardien d'écriture est
+        // premier_demarrage_persiste_puis_second_relit_sans_retirer.
+        const PORT: u16 = 17888;
+        const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+        let path = std::env::temp_dir().join(format!(
+            "bridget-ui-endpoint-stable-{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::write(
+            &path,
+            format!(r#"{{"version":1,"port":{PORT},"token":"{TOKEN}"}}"#),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        let first = load_ui_endpoint(&path).unwrap();
+        let second = load_ui_endpoint(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(first.port, PORT);
+        assert_eq!(first.token, TOKEN);
+        assert_eq!(second.port, PORT);
+        assert_eq!(second.token, TOKEN);
+        assert_eq!(first.port, second.port);
+        assert_eq!(first.token, second.token);
+    }
+
+    #[test]
+    fn port_deja_pris_echoue_clairement_sans_repli_aleatoire() {
+        let holder = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+        let occupied = holder.local_addr().unwrap().port();
+        let config = UiRelayConfig {
+            daemon_socket: PathBuf::from("/tmp/ui-port-pris.sock"),
+            maicie_config: PathBuf::from("/tmp/ui-port-pris.json"),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, occupied)),
+            token: "jeton-port-pris".to_string(),
+        };
+        let error = match UiRelay::bind(config) {
+            Ok(_) => panic!("bind devait échouer sur port déjà pris"),
+            Err(err) => err,
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains("déjà pris") && message.contains(&occupied.to_string()),
+            "message attendu de refus explicite, reçu: {message}"
+        );
+        assert!(
+            message.contains("aucun repli"),
+            "{message}"
+        );
+    }
+
+    /// Gardien d'écriture sur le chemin réel : load_or_create → fichier → relecture.
+    /// Un mutant qui n'écrit rien ou réécrit un jeton neuf à chaque fois tue ce témoin.
+    #[test]
+    fn premier_demarrage_persiste_puis_second_relit_sans_retirer() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-ui-endpoint-create-{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("json.tmp"));
+        let created = load_or_create_ui_endpoint(&path, DEFAULT_UI_PORT).unwrap();
+        assert_eq!(created.port, DEFAULT_UI_PORT);
+        assert_eq!(created.token.len(), 32);
+        let reloaded = load_or_create_ui_endpoint(&path, DEFAULT_UI_PORT).unwrap();
+        assert_eq!(reloaded.port, created.port);
+        assert_eq!(reloaded.token, created.token);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "permissions jeton: {mode:#o}");
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Temporaire préexistant (plantage) aux droits ouverts : le démarrage doit
+    /// réussir et livrer un final 0600 — pas une impasse, pas un final lisible.
+    /// Meurt si create+truncate hérite des droits, ou si l'exclusif refuse sans nettoyer.
+    #[cfg(unix)]
+    #[test]
+    fn temporaire_preexistant_a_droits_ouverts_demarre_avec_final_protege() {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let path = std::env::temp_dir().join(format!(
+            "bridget-ui-endpoint-stale-tmp-{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let tmp = path.with_extension("json.tmp");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&tmp);
+
+        {
+            let mut stale = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o666)
+                .open(&tmp)
+                .unwrap();
+            stale.write_all(b"stale").unwrap();
+        }
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let stale_mode = std::fs::metadata(&tmp).unwrap().permissions().mode() & 0o777;
+        assert_eq!(stale_mode, 0o666, "précondition: temporaire ouvert {stale_mode:#o}");
+
+        let created = load_or_create_ui_endpoint(&path, DEFAULT_UI_PORT)
+            .expect("un résidu temporaire ne doit pas bloquer le démarrage");
+        assert_eq!(created.port, DEFAULT_UI_PORT);
+        assert_eq!(created.token.len(), 32);
+        assert!(path.exists(), "le final doit être livré");
+        let final_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            final_mode, 0o600,
+            "final ne doit pas hériter des droits ouverts du temporaire: {final_mode:#o}"
+        );
+        assert!(
+            !tmp.exists(),
+            "le temporaire ne doit plus rester après rename"
+        );
+
+        let reloaded = load_or_create_ui_endpoint(&path, DEFAULT_UI_PORT).unwrap();
+        assert_eq!(reloaded.token, created.token);
+
+        let _ = std::fs::remove_file(&tmp);
+        let _ = std::fs::remove_file(&path);
     }
 }

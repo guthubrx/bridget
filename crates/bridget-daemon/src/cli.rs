@@ -277,7 +277,7 @@ fn print_usage() {
          Daemon & client :\n  \
            daemon                 Lance le daemon\n  \
            mcp                    Lance le serveur MCP sur stdio\n  \
-           ui --maicie-config <P> Lance le relais UI loopback lecture seule\n  \
+           ui --maicie-config <P> Lance le relais UI (port+jeton stables)\n  \
            attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            spawn <TYPE>           Lance un équipier géré [--name N] [--persistent]\n  \
            stop <N>               Arrête un équipier géré\n  \
