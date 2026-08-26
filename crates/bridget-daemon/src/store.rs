@@ -1208,6 +1208,44 @@ impl Store {
         Ok(entries)
     }
 
+    /// Messages d'une conversation bilatérale : filtre sur le couple AVANT la borne.
+    /// Contrairement à `recent_messages`, le trafic d'autres conversations ne peut
+    /// pas éjecter ces lignes — `limit` borne uniquement ce fil.
+    pub fn conversation_messages(
+        &self,
+        party_a: &str,
+        party_b: &str,
+        limit: usize,
+    ) -> Result<Vec<LedgerEntry>, StoreError> {
+        let limit = limit.max(1) as i64;
+        let key_ab = format!("{party_a}|{party_b}");
+        let key_ba = format!("{party_b}|{party_a}");
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, ts, sender, target, body FROM ledger
+                 WHERE conversation_key IN (?1, ?2)
+                 ORDER BY ts ASC, id ASC
+                 LIMIT ?3",
+            )
+            .map_err(StoreError::Sqlite)?;
+        let entries = stmt
+            .query_map(rusqlite::params![key_ab, key_ba, limit], |row| {
+                Ok(LedgerEntry {
+                    id: row.get(0)?,
+                    ts: row.get(1)?,
+                    sender: row.get(2)?,
+                    target: row.get(3)?,
+                    body: row.get(4)?,
+                    delivery_phase: None,
+                })
+            })
+            .map_err(StoreError::Sqlite)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(entries)
+    }
+
     /// Parcourt le ledger (pas d'index FTS) : chaque mot doit apparaître dans
     /// le corps. Ordre chronologique. Les jokers LIKE du needle sont échappés.
     /// Accents repliés (cafe ↔ café). `truncated` si plus de hits que le plafond.
