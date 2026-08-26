@@ -10,7 +10,9 @@ use bridget_transport::protocol::{
     LedgerMessage, LedgerScope, PresenceMode, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
-use maicie::ui_projection::{UiMissionProjectionV1, read_ui_mission_projection_v1};
+use maicie::ui_projection::{
+    UiMissionProjectionV1, read_ui_mission_projection_v1, retain_living_objectives,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -876,8 +878,13 @@ fn read_snapshot(
     // human_referent_thread_messages). peer_exchange reste agent↔agent.
     let thread_messages =
         focus_agent.map(|agent| human_referent_thread_messages(agent, &facts.messages));
-    let missions = read_ui_mission_projection_v1(&config.maicie_config)
-        .map_err(|error| UiError::Configuration(error.to_string()))?;
+    // Chemin productif missions page : filtre vivants — un mutant qui retire
+    // cet appel dans read_snapshot doit tuer le témoin
+    // `chemin_productif_snapshot_emprunte_retain_living_objectives`.
+    let missions = retain_living_objectives(
+        read_ui_mission_projection_v1(&config.maicie_config)
+            .map_err(|error| UiError::Configuration(error.to_string()))?,
+    );
     let recovery_losses = read_recovery_losses(&config.daemon_socket);
     Ok(UiSnapshotV1 {
         version: UI_VERSION,
@@ -2127,6 +2134,22 @@ mod tests {
         assert!(
             watch_body.contains("push_live_thread_messages("),
             "le watch doit appeler push_live_thread_messages (chemin vivant)"
+        );
+    }
+
+    /// Garde anti-feuille : retirer l'appel à `retain_living_objectives` dans
+    /// `read_snapshot` (tout en laissant la fonction intacte) doit tuer ce témoin.
+    #[test]
+    fn chemin_productif_snapshot_emprunte_retain_living_objectives() {
+        let source = include_str!("ui.rs");
+        let read_body = function_body(source, "fn read_snapshot(");
+        assert!(
+            read_body.contains("retain_living_objectives("),
+            "read_snapshot doit appeler retain_living_objectives — sinon le mégaoctet clos revient et la page se fige"
+        );
+        assert!(
+            read_body.contains("missions"),
+            "le snapshot doit exposer missions au client"
         );
     }
 

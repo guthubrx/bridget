@@ -71,18 +71,57 @@ pub fn read_ui_mission_projection_v1(
     })
 }
 
+/// Pour l'instantané page : n'envoie que les objectifs encore vivants.
+/// L'historique `clos` reste dans le greffe ; la page ne l'affiche pas.
+pub fn retain_living_objectives(
+    mut projection: UiMissionProjectionV1,
+) -> UiMissionProjectionV1 {
+    use crate::domain::EtatObjectif;
+    projection
+        .objectives
+        .retain(|item| item.objective.etat != EtatObjectif::Clos);
+    projection
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{EtatObjectif, ModeObjectif};
     use crate::store::MaicieStore;
+    use uuid::Uuid;
+
+    fn objective(etat: EtatObjectif, but: &str) -> UiObjectiveProjection {
+        UiObjectiveProjection {
+            objective: ObjectifCoordonne {
+                id: Uuid::new_v4(),
+                but: but.to_string(),
+                mode: ModeObjectif::Delegue,
+                etat,
+                cree_at: 1,
+                mis_a_jour_at: 1,
+                synthese: None,
+                decision_en_attente_id: None,
+                suite: None,
+                depends_on: Vec::new(),
+                references: Vec::new(),
+            },
+            delegations: Vec::new(),
+            decisions: Vec::new(),
+            local_deliveries: Vec::new(),
+        }
+    }
 
     #[test]
     fn projection_ui_v1_expose_les_octets_durables_sans_rendu_cli() {
-        let path = std::env::temp_dir().join(format!(
-            "maicie-ui-projection-{}-{}.sqlite",
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "maicie-ui-projection-root-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.join("store.sqlite");
         let store = MaicieStore::open(&path).unwrap();
         let projection = UiMissionProjectionV1 {
             version: UI_MISSION_PROJECTION_VERSION,
@@ -102,6 +141,35 @@ mod tests {
         assert!(json.contains("\"version\":1"));
         assert!(json.contains("\"objectives\":[]"));
         drop(store);
-        std::fs::remove_file(path).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn instantane_page_n_envoie_que_les_objectifs_vivants() {
+        let living_but = "mandat vivant unique-temoin";
+        let closed_but = "historique clos ne-doit-pas-partir";
+        let projection = UiMissionProjectionV1 {
+            version: UI_MISSION_PROJECTION_VERSION,
+            objectives: vec![
+                objective(EtatObjectif::Clos, closed_but),
+                objective(EtatObjectif::EnCoordination, living_but),
+                objective(EtatObjectif::Clos, "autre clos"),
+                objective(EtatObjectif::AEvaluer, "a evaluer vivant"),
+            ],
+        };
+        let filtered = retain_living_objectives(projection);
+        assert_eq!(filtered.objectives.len(), 2);
+        assert!(filtered
+            .objectives
+            .iter()
+            .all(|item| item.objective.etat != EtatObjectif::Clos));
+        assert!(filtered
+            .objectives
+            .iter()
+            .any(|item| item.objective.but == living_but));
+        assert!(!filtered
+            .objectives
+            .iter()
+            .any(|item| item.objective.but == closed_but));
     }
 }
