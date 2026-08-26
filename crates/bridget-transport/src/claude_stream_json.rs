@@ -27,6 +27,20 @@ use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// Délai absolu daemon avant Connected (`DEFAULT_SPAWN_TIMEOUT_SECS` dans
+/// `bridget-daemon` cli). Le pilote doit rendre la main bien avant.
+pub const DAEMON_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+struct ResumeWatch {
+    attempted_id: String,
+    command: String,
+    args: Vec<String>,
+    environment: Vec<(String, String)>,
+    inherit_stderr: bool,
+    writer: Writer,
+    child: Arc<Mutex<Child>>,
+}
+
 type Writer = Arc<Mutex<Option<ChildStdin>>>;
 type Journal = Arc<Mutex<Option<JournalWriter>>>;
 type SessionStoreHandle = Arc<Mutex<Option<ProviderSessionStore>>>;
@@ -105,42 +119,17 @@ impl ClaudeStreamJsonTransport {
             }
             _ => None,
         };
+        // Injecte --resume si un id est persisté. Le pilote NE DOIT PAS attendre
+        // la première trame ici : le daemon refuse le spawn si Connected n'arrive
+        // pas avant DEFAULT_SPAWN_TIMEOUT_SECS (10 s). Une reprise réelle dépasse
+        // ce délai (mesure 2026-08-26 : ~10,5 s vs ~3 s sans --resume).
         let attempted_resume = prepare_launch_args(&mut options.args, session_store.as_ref());
         ensure_stream_arguments(&mut options.args)?;
 
-        let mut prefetch = Vec::new();
-        let mut resume_notice = None;
-        let spawned = match spawn_claude_child(
-            &options,
-            environment,
-            inherit_stderr,
-            attempted_resume.as_deref(),
-            &mut prefetch,
-            &mut resume_notice,
-            session_store.as_ref(),
-        )? {
-            Some(spawned) => spawned,
-            None => {
-                strip_resume_arg(&mut options.args);
-                spawn_claude_child(
-                    &options,
-                    environment,
-                    inherit_stderr,
-                    None,
-                    &mut prefetch,
-                    &mut resume_notice,
-                    session_store.as_ref(),
-                )?
-                .ok_or_else(|| {
-                    TransportError::Io(
-                        "repli Claude après échec de reprise indisponible".to_string(),
-                    )
-                })?
-            }
-        };
-
+        let spawned = spawn_claude_child(&options, environment, inherit_stderr)?;
         let pid = spawned.child.id();
         let writer = Arc::new(Mutex::new(Some(spawned.stdin)));
+        let child = Arc::new(Mutex::new(spawned.child));
         let queue = Arc::new((
             Mutex::new(QueueState {
                 messages: VecDeque::new(),
@@ -155,23 +144,25 @@ impl ClaudeStreamJsonTransport {
         let journal = Arc::new(Mutex::new(None));
         let session_store_handle = Arc::new(Mutex::new(session_store));
         let pinned_model = pinned_model_from_args(&options.args);
-        if let Some(notice) = resume_notice {
-            push_internal(
-                &events,
-                ManagedEventKind::Error {
-                    detail: notice,
-                },
-            );
-        }
+        let resume_watch = attempted_resume.map(|attempted_id| ResumeWatch {
+            attempted_id,
+            command: options.command.clone(),
+            args: options.args.clone(),
+            environment: environment.to_vec(),
+            inherit_stderr,
+            writer: writer.clone(),
+            child: child.clone(),
+        });
         let reader_handle = spawn_reader(
             spawned.stdout,
-            prefetch,
+            Vec::new(),
             queue.clone(),
             events.clone(),
             alive.clone(),
             journal.clone(),
             session_store_handle.clone(),
             pinned_model,
+            resume_watch,
         );
         let worker_handle = spawn_worker(
             queue.clone(),
@@ -190,7 +181,7 @@ impl ClaudeStreamJsonTransport {
             queue,
             queue_capacity: options.queue_capacity,
             writer,
-            child: Arc::new(Mutex::new(spawned.child)),
+            child,
             events,
             journal,
             session_store: session_store_handle,
@@ -436,21 +427,31 @@ struct SpawnedClaude {
     stdout: ChildStdout,
 }
 
-/// Lance le binaire Claude. Si `attempted_resume` est posé, lit la première
-/// ligne stdout : un échec fournisseur tue le fils, efface l'id périmé et
-/// renvoie `Ok(None)` pour forcer un repli sans `--resume`.
+/// Lance le binaire Claude sans attendre la première trame. La validation de
+/// `--resume` (échec nommé + repli session neuve) vit dans le reader, après
+/// que le wrapper ait pu s'enregistrer auprès du daemon.
 fn spawn_claude_child(
     options: &ClaudeStreamJsonOptions,
     environment: &[(String, String)],
     inherit_stderr: bool,
-    attempted_resume: Option<&str>,
-    prefetch: &mut Vec<String>,
-    resume_notice: &mut Option<String>,
-    session_store: Option<&ProviderSessionStore>,
-) -> Result<Option<SpawnedClaude>, TransportError> {
-    let mut command = Command::new(&options.command);
+) -> Result<SpawnedClaude, TransportError> {
+    spawn_claude_command(
+        &options.command,
+        &options.args,
+        environment,
+        inherit_stderr,
+    )
+}
+
+fn spawn_claude_command(
+    command_path: &str,
+    args: &[String],
+    environment: &[(String, String)],
+    inherit_stderr: bool,
+) -> Result<SpawnedClaude, TransportError> {
+    let mut command = Command::new(command_path);
     command
-        .args(&options.args)
+        .args(args)
         .envs(environment.iter().cloned())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -473,61 +474,21 @@ fn spawn_claude_child(
         .stdout
         .take()
         .ok_or_else(|| TransportError::Io("stdout Claude absent".to_string()))?;
-
-    let Some(attempted_id) = attempted_resume else {
-        return Ok(Some(SpawnedClaude {
-            child,
-            stdin,
-            stdout,
-        }));
-    };
-
-    let mut reader = BufReader::new(stdout);
-    let mut first_line = String::new();
-    match reader.read_line(&mut first_line) {
-        Ok(0) => {
-            terminate_group(&mut child);
-            let _ = session_store.map(ProviderSessionStore::clear);
-            *resume_notice = Some(format!(
-                "reprise Claude impossible: conversation introuvable pour l'identifiant {attempted_id} — démarrage d'une session neuve (stdout vide après --resume)"
-            ));
-            return Ok(None);
-        }
-        Ok(_) => {}
-        Err(error) => {
-            terminate_group(&mut child);
-            return Err(TransportError::Io(format!(
-                "lecture initiale Claude impossible: {error}"
-            )));
-        }
-    }
-    let trimmed = first_line.trim_end_matches(['\r', '\n']).to_string();
-    if let Ok(value) = serde_json::from_str::<Value>(&trimmed) {
-        if let Some(failure) = classify_resume_failure(&value, attempted_id) {
-            terminate_group(&mut child);
-            let _ = session_store.map(ProviderSessionStore::clear);
-            *resume_notice = Some(failure.named_message());
-            prefetch.clear();
-            return Ok(None);
-        }
-        if let Some(session_id) = session_id_from_system_init(&value) {
-            if let Some(store) = session_store {
-                let _ = store.store(&session_id);
-            }
-        }
-    }
-    prefetch.push(trimmed);
-    Ok(Some(SpawnedClaude {
+    Ok(SpawnedClaude {
         child,
         stdin,
-        stdout: reader.into_inner(),
-    }))
+        stdout,
+    })
 }
 
 fn terminate_group(child: &mut Child) {
     // `spawn_with_environment` crée ce groupe avec l'identifiant du fils :
     // le signal ne peut donc toucher ni le wrapper ni un autre équipier.
-    let _ = unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+    // On tue aussi le pid direct : sur certains noyaux, kill(-pgid) seul
+    // laisse le shell faux-binaire vivant et `wait` bloque indéfiniment.
+    let pid = child.id() as i32;
+    let _ = unsafe { libc::kill(-pid, libc::SIGKILL) };
+    let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
     let _ = child.wait();
 }
 
@@ -690,111 +651,90 @@ fn spawn_reader(
     journal: Journal,
     session_store: SessionStoreHandle,
     pinned_model: Option<String>,
+    mut resume_watch: Option<ResumeWatch>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let mut lines = prefetch.into_iter().map(Ok).chain(BufReader::new(stdout).lines());
-        while let Some(line) = lines.next() {
-            let Ok(line) = line else { break };
-            let raw = line.as_bytes().to_vec();
-            let value = match serde_json::from_str::<Value>(&line) {
-                Ok(value) => value,
-                Err(_) => {
-                    push_source(
-                        &events,
-                        raw,
-                        ManagedEventKind::Error {
-                            detail: "ligne Claude stream-json invalide".to_string(),
-                        },
-                    );
-                    continue;
-                }
-            };
-            if let Some(session_id) = session_id_from_system_init(&value) {
-                if let Some(store) = session_store
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
-                    .as_ref()
-                {
-                    let _ = store.store(&session_id);
-                }
-            }
-            let kind = value
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("inconnu");
-            // (A) Retranscription : chaque delta texte → journal `update`.
-            // Sans cela le fil ne voit que « a travaillé Ns ».
-            if let Some(delta) = value.pointer("/event/delta/text").and_then(Value::as_str) {
-                let message_id = {
-                    let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
-                    if let Some(active) = state.active.as_mut() {
-                        active.response.push_str(delta);
-                        active.text_updates = active.text_updates.saturating_add(1);
-                        Some(active.message_id.clone())
-                    } else {
-                        None
+        let mut current_stdout = Some(stdout);
+        let mut pending_prefetch = prefetch;
+        while let Some(stdout) = current_stdout.take() {
+            let prefetch_lines = std::mem::take(&mut pending_prefetch);
+            let mut lines = prefetch_lines
+                .into_iter()
+                .map(Ok)
+                .chain(BufReader::new(stdout).lines());
+            let mut restart_stdout = None;
+            while let Some(line) = lines.next() {
+                let Ok(line) = line else { break };
+                let raw = line.as_bytes().to_vec();
+                let value = match serde_json::from_str::<Value>(&line) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        push_source(
+                            &events,
+                            raw,
+                            ManagedEventKind::Error {
+                                detail: "ligne Claude stream-json invalide".to_string(),
+                            },
+                        );
+                        continue;
                     }
                 };
-                if let Some(message_id) = message_id {
-                    let _ = record(
-                        &journal,
-                        "update",
-                        Some(&message_id),
-                        json!({ "kind": "text", "content": delta }),
-                    );
-                }
-            }
-            // (B) Repli : message `assistant` complet si aucun delta n'a été
-            // journalisé (stdout sans include-partial, ou forme agrégée seule).
-            //
-            // Anti-doublon assistant↔deltas — écarté par écrit, pas par garde
-            // supplémentaire : `ensure_stream_arguments` impose
-            // `--include-partial-messages`. Sous ce contrat CLI/SDK, les
-            // `stream_event` (deltas) arrivent pendant la génération, PUIS le
-            // message `assistant` agrégé, PUIS `result`. L'ordre inverse
-            // (assistant puis deltas) n'est pas produit ; la garde
-            // `text_updates == 0` couvre donc le seul ordre réel
-            // (deltas→assistant→result, ou assistant→result sans partial).
-            // Une fixture assistant-puis-deltas testerait un fantôme de
-            // protocole, pas un trou du pilote.
-            if kind == "assistant" {
-                // TOOL : le content_block_start arrive tôt avec name mais
-                // input={}. On journalise ici le bloc assistant qui porte
-                // name + input complet (mesure /tmp/flux-outil.jsonl L19).
-                // Pas de tool_result : un Read de fichier peut saturer le
-                // journal ; le fil garde nom + arguments, pas le rendu.
-                record_tool_uses_from_assistant(&journal, &queue, &value);
-                let assistant_text = value
-                    .pointer("/message/content")
-                    .and_then(Value::as_array)
-                    .map(|blocks| {
-                        blocks
-                            .iter()
-                            .filter_map(|block| {
-                                if block.get("type").and_then(Value::as_str) == Some("text") {
-                                    block.get("text").and_then(Value::as_str)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                            .join("")
-                    })
-                    .unwrap_or_default();
-                if !assistant_text.is_empty() {
-                    let message_id = {
-                        let mut state =
-                            queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
-                        if let Some(active) = state.active.as_mut() {
-                            if active.text_updates == 0 {
-                                if active.response.is_empty() {
-                                    active.response.push_str(&assistant_text);
-                                }
-                                active.text_updates = active.text_updates.saturating_add(1);
-                                Some(active.message_id.clone())
-                            } else {
-                                None
+                if let Some(watch) = resume_watch.as_ref() {
+                    if let Some(failure) =
+                        classify_resume_failure(&value, &watch.attempted_id)
+                    {
+                        let notice = failure.named_message();
+                        if let Some(store) = session_store
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .as_ref()
+                        {
+                            let _ = store.clear();
+                        }
+                        push_internal(
+                            &events,
+                            ManagedEventKind::Error {
+                                detail: notice,
+                            },
+                        );
+                        match fallback_after_resume_failure(resume_watch.take().expect("watch")) {
+                            Ok((fresh_stdout, fresh_prefetch)) => {
+                                pending_prefetch = fresh_prefetch;
+                                restart_stdout = Some(fresh_stdout);
                             }
+                            Err(detail) => {
+                                push_internal(&events, ManagedEventKind::Error { detail });
+                                alive.store(false, Ordering::SeqCst);
+                            }
+                        }
+                        break;
+                    }
+                    if session_id_from_system_init(&value).is_some() {
+                        resume_watch = None;
+                    }
+                }
+                if let Some(session_id) = session_id_from_system_init(&value) {
+                    if let Some(store) = session_store
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .as_ref()
+                    {
+                        let _ = store.store(&session_id);
+                    }
+                }
+                let kind = value
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("inconnu");
+                // (A) Retranscription : chaque delta texte → journal `update`.
+                // Sans cela le fil ne voit que « a travaillé Ns ».
+                if let Some(delta) = value.pointer("/event/delta/text").and_then(Value::as_str) {
+                    let message_id = {
+                        let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                        if let Some(active) = state.active.as_mut() {
+                            active.response.push_str(delta);
+                            active.text_updates = active.text_updates.saturating_add(1);
+                            Some(active.message_id.clone())
                         } else {
                             None
                         }
@@ -804,99 +744,205 @@ fn spawn_reader(
                             &journal,
                             "update",
                             Some(&message_id),
-                            json!({ "kind": "text", "content": assistant_text }),
+                            json!({ "kind": "text", "content": delta }),
                         );
                     }
                 }
-            }
-            if kind == "result" {
-                let terminal = if value.get("is_error").and_then(Value::as_bool) == Some(false)
-                    && value.get("terminal_reason").and_then(Value::as_str) == Some("completed")
-                {
-                    ManagedTerminal::Completed
-                } else {
-                    ManagedTerminal::Failed {
-                        detail: value
-                            .get("terminal_reason")
-                            .and_then(Value::as_str)
-                            .unwrap_or("terminal Claude inconnu")
-                            .to_string(),
+                // (B) Repli : message `assistant` complet si aucun delta n'a été
+                // journalisé (stdout sans include-partial, ou forme agrégée seule).
+                //
+                // Anti-doublon assistant↔deltas — écarté par écrit, pas par garde
+                // supplémentaire : `ensure_stream_arguments` impose
+                // `--include-partial-messages`. Sous ce contrat CLI/SDK, les
+                // `stream_event` (deltas) arrivent pendant la génération, PUIS le
+                // message `assistant` agrégé, PUIS `result`. L'ordre inverse
+                // (assistant puis deltas) n'est pas produit ; la garde
+                // `text_updates == 0` couvre donc le seul ordre réel
+                // (deltas→assistant→result, ou assistant→result sans partial).
+                // Une fixture assistant-puis-deltas testerait un fantôme de
+                // protocole, pas un trou du pilote.
+                if kind == "assistant" {
+                    // TOOL : le content_block_start arrive tôt avec name mais
+                    // input={}. On journalise ici le bloc assistant qui porte
+                    // name + input complet (mesure /tmp/flux-outil.jsonl L19).
+                    // Pas de tool_result : un Read de fichier peut saturer le
+                    // journal ; le fil garde nom + arguments, pas le rendu.
+                    record_tool_uses_from_assistant(&journal, &queue, &value);
+                    let assistant_text = value
+                        .pointer("/message/content")
+                        .and_then(Value::as_array)
+                        .map(|blocks| {
+                            blocks
+                                .iter()
+                                .filter_map(|block| {
+                                    if block.get("type").and_then(Value::as_str) == Some("text") {
+                                        block.get("text").and_then(Value::as_str)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join("")
+                        })
+                        .unwrap_or_default();
+                    if !assistant_text.is_empty() {
+                        let message_id = {
+                            let mut state =
+                                queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                            if let Some(active) = state.active.as_mut() {
+                                if active.text_updates == 0 {
+                                    if active.response.is_empty() {
+                                        active.response.push_str(&assistant_text);
+                                    }
+                                    active.text_updates = active.text_updates.saturating_add(1);
+                                    Some(active.message_id.clone())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        };
+                        if let Some(message_id) = message_id {
+                            let _ = record(
+                                &journal,
+                                "update",
+                                Some(&message_id),
+                                json!({ "kind": "text", "content": assistant_text }),
+                            );
+                        }
                     }
-                };
-                // (C) Issue attestée : `terminal_reason` du résultat Claude
-                // (ex. "completed"), pas le champ stop_reason fournisseur
-                // (ex. "end_turn") — attach lit payload.stop_reason.
-                let stop_reason = value
-                    .get("terminal_reason")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|reason| !reason.is_empty())
-                    .map(str::to_string)
-                    .or_else(|| {
-                        value
-                            .get("stop_reason")
-                            .and_then(Value::as_str)
-                            .map(str::trim)
-                            .filter(|reason| !reason.is_empty())
-                            .map(str::to_string)
-                    });
-                let pending_result_update = {
-                    let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
-                    if let Some(active) = state.active.as_mut() {
-                        active.stop_reason = stop_reason;
-                        // (B) Repli result-only : texte final dans le fil SSI
-                        // aucun update texte n'a déjà été journalisé (pas de
-                        // duplication après deltas).
-                        if active.text_updates == 0
-                            && let Some(result) = value.get("result").and_then(Value::as_str)
-                            && !result.is_empty()
-                        {
-                            if active.response.is_empty() {
-                                active.response.push_str(result);
-                            }
-                            active.text_updates = 1;
-                            Some((active.message_id.clone(), result.to_string()))
-                        } else {
-                            if active.response.is_empty()
+                }
+                if kind == "result" {
+                    let terminal = if value.get("is_error").and_then(Value::as_bool) == Some(false)
+                        && value.get("terminal_reason").and_then(Value::as_str) == Some("completed")
+                    {
+                        ManagedTerminal::Completed
+                    } else {
+                        ManagedTerminal::Failed {
+                            detail: value
+                                .get("terminal_reason")
+                                .and_then(Value::as_str)
+                                .unwrap_or("terminal Claude inconnu")
+                                .to_string(),
+                        }
+                    };
+                    // (C) Issue attestée : `terminal_reason` du résultat Claude
+                    // (ex. "completed"), pas le champ stop_reason fournisseur
+                    // (ex. "end_turn") — attach lit payload.stop_reason.
+                    let stop_reason = value
+                        .get("terminal_reason")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|reason| !reason.is_empty())
+                        .map(str::to_string)
+                        .or_else(|| {
+                            value
+                                .get("stop_reason")
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .filter(|reason| !reason.is_empty())
+                                .map(str::to_string)
+                        });
+                    let pending_result_update = {
+                        let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                        if let Some(active) = state.active.as_mut() {
+                            active.stop_reason = stop_reason;
+                            // (B) Repli result-only : texte final dans le fil SSI
+                            // aucun update texte n'a déjà été journalisé (pas de
+                            // duplication après deltas).
+                            if active.text_updates == 0
                                 && let Some(result) = value.get("result").and_then(Value::as_str)
+                                && !result.is_empty()
                             {
-                                active.response.push_str(result);
+                                if active.response.is_empty() {
+                                    active.response.push_str(result);
+                                }
+                                active.text_updates = 1;
+                                Some((active.message_id.clone(), result.to_string()))
+                            } else {
+                                if active.response.is_empty()
+                                    && let Some(result) = value.get("result").and_then(Value::as_str)
+                                {
+                                    active.response.push_str(result);
+                                }
+                                None
                             }
+                        } else {
                             None
                         }
-                    } else {
-                        None
+                    };
+                    if let Some((message_id, result)) = pending_result_update {
+                        // (B) Réponse finale absente des deltas → journaliser `result`.
+                        let _ = record(
+                            &journal,
+                            "update",
+                            Some(&message_id),
+                            json!({ "kind": "text", "content": result }),
+                        );
+                    }
+                    let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                    if let Some(active) = state.active.as_mut() {
+                        let _ = active.completion.send(terminal);
+                    }
+                }
+                let managed_event = if kind == "rate_limit_event" {
+                    rate_limit_event(&value).unwrap_or_else(|| ManagedEventKind::Update {
+                        detail: "événement Claude rate_limit_event incomplet".to_string(),
+                    })
+                } else if let Some(served) = served_model_from_claude(&value) {
+                    maybe_record_mismatch(&journal, pinned_model.as_deref(), &served);
+                    ManagedEventKind::ModelObserved { model: served }
+                } else if let Some(usage) = usage_event(&value) {
+                    usage
+                } else {
+                    ManagedEventKind::Update {
+                        detail: format!("événement Claude: {kind}"),
                     }
                 };
-                if let Some((message_id, result)) = pending_result_update {
-                    // (B) Réponse finale absente des deltas → journaliser `result`.
-                    let _ = record(
-                        &journal,
-                        "update",
-                        Some(&message_id),
-                        json!({ "kind": "text", "content": result }),
-                    );
+                push_source(&events, raw, managed_event);
+            }
+            if let Some(stdout) = restart_stdout {
+                current_stdout = Some(stdout);
+                continue;
+            }
+            // EOF pendant une reprise surveillée : stdout vide ou processus mort
+            // avant tout system/init — même contrat nommé que l'échec fournisseur.
+            // Si `alive` est déjà faux, c'est un arrêt demandé (shutdown détient
+            // éventuellement `child`) : ne pas repli ni reprendre le verrou.
+            if let Some(watch) = resume_watch.take() {
+                if !alive.load(Ordering::SeqCst) {
+                    break;
                 }
-                let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
-                if let Some(active) = state.active.as_mut() {
-                    let _ = active.completion.send(terminal);
+                let notice = format!(
+                    "reprise Claude impossible: conversation introuvable pour l'identifiant {} — démarrage d'une session neuve (stdout vide après --resume)",
+                    watch.attempted_id
+                );
+                if let Some(store) = session_store
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .as_ref()
+                {
+                    let _ = store.clear();
+                }
+                push_internal(
+                    &events,
+                    ManagedEventKind::Error {
+                        detail: notice,
+                    },
+                );
+                match fallback_after_resume_failure(watch) {
+                    Ok((fresh_stdout, fresh_prefetch)) => {
+                        pending_prefetch = fresh_prefetch;
+                        current_stdout = Some(fresh_stdout);
+                        continue;
+                    }
+                    Err(detail) => {
+                        push_internal(&events, ManagedEventKind::Error { detail });
+                    }
                 }
             }
-            let managed_event = if kind == "rate_limit_event" {
-                rate_limit_event(&value).unwrap_or_else(|| ManagedEventKind::Update {
-                    detail: "événement Claude rate_limit_event incomplet".to_string(),
-                })
-            } else if let Some(served) = served_model_from_claude(&value) {
-                maybe_record_mismatch(&journal, pinned_model.as_deref(), &served);
-                ManagedEventKind::ModelObserved { model: served }
-            } else if let Some(usage) = usage_event(&value) {
-                usage
-            } else {
-                ManagedEventKind::Update {
-                    detail: format!("événement Claude: {kind}"),
-                }
-            };
-            push_source(&events, raw, managed_event);
+            break;
         }
         alive.store(false, Ordering::SeqCst);
         let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -909,8 +955,41 @@ fn spawn_reader(
     })
 }
 
-/// Extrait uniquement un fait complet du schéma `rate_limit_event` attesté par
-/// Claude. Une date absente reste `None` : aucune heure de retour n'est déduite.
+fn fallback_after_resume_failure(
+    mut watch: ResumeWatch,
+) -> Result<(ChildStdout, Vec<String>), String> {
+    {
+        let mut child = watch
+            .child
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        terminate_group(&mut child);
+    }
+    strip_resume_arg(&mut watch.args);
+    let spawned = spawn_claude_command(
+        &watch.command,
+        &watch.args,
+        &watch.environment,
+        watch.inherit_stderr,
+    )
+    .map_err(|error| format!("repli Claude après échec de reprise indisponible: {error}"))?;
+    {
+        let mut writer = watch
+            .writer
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *writer = Some(spawned.stdin);
+    }
+    {
+        let mut child = watch
+            .child
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *child = spawned.child;
+    }
+    Ok((spawned.stdout, Vec::new()))
+}
+
 fn pinned_model_from_args(args: &[String]) -> Option<String> {
     args.windows(2)
         .find(|pair| pair[0] == "--model")
@@ -1788,12 +1867,9 @@ done
             notice.contains("00000000-0000-0000-0000-000000000000"),
             "identifiant absent: {notice}"
         );
-        // L'id périmé doit être effacé pour ne pas boucler.
-        assert_eq!(store.load(), None);
-        // La session neuve a annoncé son id et l'a persisté.
+        // La session neuve a annoncé son id et l'a persisté (l'id périmé ne
+        // doit plus être relu — écrasé ou effacé puis réécrit).
         let fresh = crate::claude_provider_session::ProviderSessionStore::new(&root, "agent-x");
-        // activate_journal rebind — ici on vérifie via le fichier écrit par le reader
-        // après system/init du repli : chemin root/agent-x/claude_provider_session
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
             if fresh.load().as_deref() == Some("fresh-session-999") {
@@ -1802,7 +1878,110 @@ done
             thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(fresh.load().as_deref(), Some("fresh-session-999"));
+        assert_ne!(
+            fresh.load().as_deref(),
+            Some("00000000-0000-0000-0000-000000000000"),
+            "l'identifiant périmé ne doit plus être le fichier de session"
+        );
         transport.stop();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// P4 — une session persistée ne doit PAS empêcher le lancement d'aboutir
+    /// avant le délai daemon (10 s). Mutant : remettre l'attente synchrone de
+    /// la première trame dans `spawn` → cet oracle meurt seul.
+    /// Prouve D'ABORD qu'un lancement sans session réussit.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_P4_session_persistee_ne_bloque_pas_le_lancement_sous_delai_daemon() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-claude-resume-timeout-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let fake = root.join("fake-claude");
+        // Sans --resume : init immédiat. Avec --resume : dort 15 s (> délai
+        // daemon 10 s) avant d'émettre l'init — le spawn doit quand même
+        // rendre la main immédiatement.
+        fs::write(
+            &fake,
+            r#"#!/bin/sh
+resume=0
+for arg in "$@"; do
+  if [ "$arg" = "--resume" ]; then
+    resume=1
+  fi
+done
+if [ "$resume" = 1 ]; then
+  # Délai > DEFAULT_SPAWN_TIMEOUT_SECS (10). Pas de boucle read : le stop
+  # doit pouvoir tuer sans laisser le reader bloqué.
+  sleep 15
+  printf '%s\n' '{"type":"system","subtype":"init","session_id":"slow-resume-1","model":"claude-opus-5"}'
+  exit 0
+fi
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"fast-new-1","model":"claude-opus-5"}'
+exit 0
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&fake).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&fake, permissions).unwrap();
+        }
+
+        // 1) D'abord : sans session → lancement réussi et rapide.
+        let options_neuf = ClaudeStreamJsonOptions {
+            command: fake.to_string_lossy().into_owned(),
+            args: Vec::new(),
+            queue_capacity: 2,
+            notify_timeout_secs: 2,
+            session_store_root: Some(root.clone()),
+            agent_name: Some("agent-neuf".to_string()),
+        };
+        let started_neuf = Instant::now();
+        let transport_neuf = ClaudeStreamJsonTransport::spawn(options_neuf)
+            .expect("lancement sans session doit réussir");
+        let elapsed_neuf = started_neuf.elapsed();
+        assert!(
+            elapsed_neuf < DAEMON_SPAWN_TIMEOUT,
+            "lancement sans session a dépassé le délai daemon: {elapsed_neuf:?}"
+        );
+        transport_neuf.stop();
+
+        // 2) Avec session persistée : spawn doit rendre avant le délai même si
+        // le fournisseur met 15 s à émettre l'init de reprise.
+        let store = crate::claude_provider_session::ProviderSessionStore::new(&root, "agent-lent");
+        store.store("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap();
+        let options_lent = ClaudeStreamJsonOptions {
+            command: fake.to_string_lossy().into_owned(),
+            args: Vec::new(),
+            queue_capacity: 2,
+            notify_timeout_secs: 2,
+            session_store_root: Some(root.clone()),
+            agent_name: Some("agent-lent".to_string()),
+        };
+        let started_lent = Instant::now();
+        let transport_lent = ClaudeStreamJsonTransport::spawn(options_lent)
+            .expect("lancement avec session persistée doit réussir");
+        let elapsed_lent = started_lent.elapsed();
+        assert!(
+            elapsed_lent < DAEMON_SPAWN_TIMEOUT,
+            "session persistée a bloqué le lancement au-delà du délai daemon ({DAEMON_SPAWN_TIMEOUT:?}): {elapsed_lent:?}"
+        );
+        // Preuve d'existence du surcoût : le faux binaire dort 15 s — si on
+        // avait attendu l'init, elapsed_lent serait ≥ 15 s.
+        assert!(
+            elapsed_lent < Duration::from_secs(2),
+            "spawn encore trop lent pour un lancement non bloquant: {elapsed_lent:?}"
+        );
+        transport_lent.stop();
         let _ = fs::remove_dir_all(root);
     }
 }
