@@ -406,6 +406,93 @@
         assert.ok(listeners.get("close-detail").includes("click"));
       });
 
+      // Matérialise les nœuds depuis le HTML productif (attribut checked → .checked),
+      // puis passe par api.mount — pas une fonction extraite du défaut.
+      const mountPageFromProductiveHtml = () => {
+        const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+        const checkedById = new Map();
+        const tagRe = /<([a-z][a-z0-9-]*)([^>]*)>/gi;
+        let match;
+        while ((match = tagRe.exec(html)) !== null) {
+          const attrs = match[2];
+          const id = /\bid="([^"]+)"/.exec(attrs)?.[1];
+          if (!id) continue;
+          checkedById.set(id, /\bchecked\b/i.test(attrs));
+        }
+        const listeners = new Map();
+        const nodes = new Map();
+        const createNode = (id = "generated") => ({
+          id,
+          dataset: {},
+          style: {},
+          value: "",
+          textContent: "",
+          hidden: false,
+          checked: Boolean(checkedById.get(id)),
+          disabled: false,
+          scrollTop: 0,
+          scrollHeight: 0,
+          clientHeight: 0,
+          selectionStart: 0,
+          selectionEnd: 0,
+          addEventListener: (event, handler) => {
+            const registered = listeners.get(id) || [];
+            registered.push({ event, handler });
+            listeners.set(id, registered);
+          },
+          append: () => {},
+          focus: () => {},
+          replaceChildren: () => {},
+          requestSubmit: () => {},
+          setAttribute: () => {},
+          setSelectionRange: () => {},
+        });
+        const documentRef = {
+          createElement: () => createNode(),
+          getElementById: (id) => {
+            if (!nodes.has(id)) nodes.set(id, createNode(id));
+            return nodes.get(id);
+          },
+          activeElement: null,
+        };
+        const mounted = api.mount(documentRef, {
+          clearTimeout: () => {},
+          location: { search: "" },
+          setTimeout: () => 1,
+          fetch: async () => ({ ok: true, json: async () => ({}) }),
+        });
+        return { mounted, nodes, listeners, documentRef };
+      };
+
+      // Meurt si la case n'est plus cochée à l'ouverture (mutant : retirer checked du HTML).
+      test("ouverture_case_attendre_reponse_cochee_par_defaut", () => {
+        const { mounted, nodes } = mountPageFromProductiveHtml();
+        assert.ok(mounted, "le montage réel de la page doit réussir");
+        const reply = nodes.get("reply");
+        assert.ok(reply, "le nœud #reply doit exister après montage");
+        assert.equal(
+          reply.checked,
+          true,
+          "à l'ouverture, Attendre une réponse doit être cochée",
+        );
+      });
+
+      // Meurt si la case est figée cochée (mutant : empêcher de décocher après montage).
+      // Indépendant de l'état initial HTML : on part d'une case cochée puis on décoche.
+      test("decocher_case_attendre_reponse_reste_possible_apres_montage", () => {
+        const { mounted, nodes } = mountPageFromProductiveHtml();
+        assert.ok(mounted, "le montage réel de la page doit réussir");
+        const reply = nodes.get("reply");
+        assert.ok(reply, "le nœud #reply doit exister après montage");
+        reply.checked = true;
+        reply.checked = false;
+        assert.equal(
+          reply.checked,
+          false,
+          "l'utilisateur doit pouvoir décocher ; la case ne doit pas être figée",
+        );
+      });
+
       test("compositeur_hors_du_sous_arbre_du_fil", () => {
         const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
         const stack = [];
