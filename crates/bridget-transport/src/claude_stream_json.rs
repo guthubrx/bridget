@@ -558,15 +558,28 @@ fn spawn_reader(
                 .get("type")
                 .and_then(Value::as_str)
                 .unwrap_or("inconnu");
-            if let Some(delta) = value.pointer("/event/delta/text").and_then(Value::as_str)
-                && let Some(active) = queue
-                    .0
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
-                    .active
-                    .as_mut()
-            {
-                active.response.push_str(delta);
+            // Retranscription attach/UI : chaque delta texte doit devenir un
+            // événement journal `update` (même contrat que ACP). Sans cela le
+            // processus parle, la réponse finale arrive, mais la page web ne
+            // voit que « a travaillé Ns ».
+            if let Some(delta) = value.pointer("/event/delta/text").and_then(Value::as_str) {
+                let message_id = {
+                    let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                    if let Some(active) = state.active.as_mut() {
+                        active.response.push_str(delta);
+                        Some(active.message_id.clone())
+                    } else {
+                        None
+                    }
+                };
+                if let Some(message_id) = message_id {
+                    let _ = record(
+                        &journal,
+                        "update",
+                        Some(&message_id),
+                        json!({ "kind": "text", "content": delta }),
+                    );
+                }
             }
             if kind == "result" {
                 let terminal = if value.get("is_error").and_then(Value::as_bool) == Some(false)
@@ -827,6 +840,88 @@ mod tests {
                 && event.raw.starts_with(br#"{"type":"stream_event""#)
         }));
         transport.stop();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Témoin de retranscription : les deltas `stream_event` doivent devenir
+    /// des `update` journal (contrat attach/UI). Un mutant qui retire
+    /// `record(..., "update", ...)` dans `spawn_reader` meurt ici — c'est le
+    /// défaut mesuré sur essai-claude (0 update malgré stdout réel).
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_claude_stream_json_retranscrit_les_deltas_en_update() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-claude-update-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut streaming = options();
+        // Deux deltas texte distincts — le journal doit les porter tels quels.
+        streaming.args[1] = concat!(
+            "while IFS= read -r line; do ",
+            "printf '%s\\n' '{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"BON\"}}}'; ",
+            "printf '%s\\n' '{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"JOUR\"}}}'; ",
+            "printf '%s\\n' '{\"type\":\"result\",\"is_error\":false,\"terminal_reason\":\"completed\",\"result\":\"BONJOUR\"}'; ",
+            "done"
+        )
+        .to_string();
+        let mut transport = ClaudeStreamJsonTransport::spawn(streaming).unwrap();
+        transport
+            .activate_journal(&root, "claude-update", None)
+            .unwrap();
+        transport.deliver(&message("claude-upd-1")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut finished = false;
+        while Instant::now() < deadline {
+            finished |= transport.drain_events().iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::TurnFinished {
+                        terminal: ManagedTerminal::Completed,
+                        ref response,
+                        ..
+                    } if response == "BONJOUR"
+                )
+            });
+            if finished {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(finished, "le tour Claude n'a pas terminé");
+        transport.stop();
+
+        let journal_path = fs::read_dir(root.join("claude-update"))
+            .expect("répertoire journal")
+            .next()
+            .expect("fichier journal")
+            .expect("entrée journal")
+            .path();
+        let events = crate::journal::valid_events(&journal_path);
+        let updates: Vec<_> = events
+            .iter()
+            .filter(|event| event["event"] == "update")
+            .collect();
+        assert!(
+            !updates.is_empty(),
+            "au moins un update journal attendu, reçu: {events:?}"
+        );
+        let contents: Vec<&str> = updates
+            .iter()
+            .filter_map(|event| event["payload"]["content"].as_str())
+            .collect();
+        assert_eq!(
+            contents,
+            vec!["BON", "JOUR"],
+            "les deltas texte doivent être journalisés dans l'ordre"
+        );
+        assert!(updates.iter().all(|event| {
+            event["payload"]["kind"] == "text" && event["message_id"] == "claude-upd-1"
+        }));
         let _ = fs::remove_dir_all(root);
     }
 
