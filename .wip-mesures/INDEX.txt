@@ -1,0 +1,26 @@
+tip=2dd89d4ea070831c4e90cb2292913f18460382ac
+base=a9353c11291829ce762365b9d2af3cb267d73567
+pushed_at=2026-08-26T18:44:22Z
+arbitrage=CompteursRefusDelegationLocale+SchemaPreflight
+objective=0bbcb35a-c381-4d69-ad82-935f86f84645
+delegation=73b849b8-2416-4afa-ae72-9615f5e95d18
+total 1128
+drwxr-xr-x    19 moi   wheel     608 Aug 26 20:34 .
+drwxrwxrwt  8800 root  wheel  281600 Aug 26 20:44 ..
+-rw-r--r--     1 moi   wheel    6911 Aug 26 20:34 WIP-SNAPSHOT.txt
+-rw-r--r--     1 moi   wheel   10167 Aug 26 20:10 base-norun.txt
+-rw-r--r--     1 moi   wheel   51118 Aug 26 20:16 base-par-1.txt
+-rw-r--r--     1 moi   wheel   51113 Aug 26 20:17 base-par-2.txt
+-rw-r--r--     1 moi   wheel   51087 Aug 26 20:18 base-par-3.txt
+-rw-r--r--     1 moi   wheel   51265 Aug 26 20:19 base-par-4.txt
+-rw-r--r--     1 moi   wheel   51201 Aug 26 20:16 base-seq.txt
+-rw-r--r--     1 moi   wheel     264 Aug 26 20:09 env.txt
+-rw-r--r--     1 moi   wheel    6540 Aug 26 20:24 summary.txt
+-rw-r--r--     1 moi   wheel       0 Aug 26 20:21 tip-install-preflight.txt
+-rw-r--r--     1 moi   wheel   10290 Aug 26 20:20 tip-norun.txt
+-rw-r--r--     1 moi   wheel   47450 Aug 26 20:22 tip-par-1.txt
+-rw-r--r--     1 moi   wheel   51080 Aug 26 20:23 tip-par-2.txt
+-rw-r--r--     1 moi   wheel   51080 Aug 26 20:23 tip-par-3.txt
+-rw-r--r--     1 moi   wheel   51080 Aug 26 20:24 tip-par-4.txt
+-rw-r--r--     1 moi   wheel    1004 Aug 26 20:21 tip-schema.txt
+-rw-r--r--     1 moi   wheel   51081 Aug 26 20:22 tip-seq.txt
