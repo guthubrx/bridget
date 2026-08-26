@@ -1,0 +1,96 @@
+WIP cursor2 preflight rebase — snapshot avant coupure daemon
+tip=0ed80eb918746d425a3a7e29bff2be8abd8b4b87
+base=a9353c11291829ce762365b9d2af3cb267d73567
+arbitrage: import main.rs = CompteursRefusDelegationLocale (main) + SchemaPreflight (lot)
+worktree=/Users/moi/.cache/bridget/work-cursor2-maicie-installed-preflight-rebase
+Wed Aug 26 18:34:42 UTC 2026
+--- summary ---
+==== BASE SEQ --test-threads=1 ====
+passed=543 failed=3 ignored=6
+FAILED_NAMES=claude_gere_avec_bypass_ecrit_et_relit_un_fichier,claude_gere_recoit_mcp_identite_et_path,claude_gere_sans_bypass_reste_sans_outil
+66:test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.31s
+585:test result: ok. 497 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 29.81s
+591:test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+599:test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.57s
+622:test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.41s
+630:test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.72s
+635:test claude_gere_avec_bypass_ecrit_et_relit_un_fichier ... FAILED
+636:test claude_gere_recoit_mcp_identite_et_path ... FAILED
+637:test claude_gere_sans_bypass_reste_sans_outil ... FAILED
+678:test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+680:error: test failed, to rerun pass `-p bridget-daemon --test claude_native_permissions_test`
+==== BASE PAR run1 ====
+passed=543 failed=3 ignored=6
+FAILED_NAMES=claude_gere_sans_bypass_reste_sans_outil,claude_gere_avec_bypass_ecrit_et_relit_un_fichier,claude_gere_recoit_mcp_identite_et_path
+634:test claude_gere_sans_bypass_reste_sans_outil ... FAILED
+635:test claude_gere_avec_bypass_ecrit_et_relit_un_fichier ... FAILED
+636:test claude_gere_recoit_mcp_identite_et_path ... FAILED
+677:test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+==== BASE PAR run2 ====
+passed=543 failed=3 ignored=6
+FAILED_NAMES=claude_gere_sans_bypass_reste_sans_outil,claude_gere_avec_bypass_ecrit_et_relit_un_fichier,claude_gere_recoit_mcp_identite_et_path
+634:test claude_gere_sans_bypass_reste_sans_outil ... FAILED
+635:test claude_gere_avec_bypass_ecrit_et_relit_un_fichier ... FAILED
+636:test claude_gere_recoit_mcp_identite_et_path ... FAILED
+677:test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+==== BASE PAR run3 ====
+passed=543 failed=3 ignored=6
+FAILED_NAMES=claude_gere_avec_bypass_ecrit_et_relit_un_fichier,claude_gere_sans_bypass_reste_sans_outil,claude_gere_recoit_mcp_identite_et_path
+634:test claude_gere_avec_bypass_ecrit_et_relit_un_fichier ... FAILED
+635:test claude_gere_sans_bypass_reste_sans_outil ... FAILED
+636:test claude_gere_recoit_mcp_identite_et_path ... FAILED
+677:test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+==== BASE PAR run4 ====
+passed=543 failed=3 ignored=6
+FAILED_NAMES=claude_gere_sans_bypass_reste_sans_outil,claude_gere_avec_bypass_ecrit_et_relit_un_fichier,claude_gere_recoit_mcp_identite_et_path
+635:test claude_gere_sans_bypass_reste_sans_outil ... FAILED
+636:test claude_gere_avec_bypass_ecrit_et_relit_un_fichier ... FAILED
+637:test claude_gere_recoit_mcp_identite_et_path ... FAILED
+678:test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+==== TIP no-run ====
+  Executable tests/profile_approval_integration.rs (/tmp/bt-tip-target/debug/deps/profile_approval_integration-4daed694ce6b71d4)
+  Executable tests/review_git_integration.rs (/tmp/bt-tip-target/debug/deps/review_git_integration-53b10477a85a0caa)
+  Executable tests/schema_migration_guard.rs (/tmp/bt-tip-target/debug/deps/schema_migration_guard-6bc638693054e752)
+  Executable tests/schema_preflight.rs (/tmp/bt-tip-target/debug/deps/schema_preflight-e46926048783b458)
+  Executable tests/spawn_order_integration.rs (/tmp/bt-tip-target/debug/deps/spawn_order_integration-bf1586349739fe33)
+  Executable tests/status_benchmark_integration.rs (/tmp/bt-tip-target/debug/deps/status_benchmark_integration-90aebae07559fcfb)
+  Executable tests/status_sources_integration.rs (/tmp/bt-tip-target/debug/deps/status_sources_integration-a71ce85185fc997a)
+  Executable tests/store_outbox_integration.rs (/tmp/bt-tip-target/debug/deps/store_outbox_integration-4a1b50633a2caa6f)
+59
+==== TIP lot tests schema_preflight + maicie focused ====
+passed=6 failed=0 ignored=0
+INSTALL_PREFLIGHT_DONE
+==== TIP SEQ ====
+passed=543 failed=3 ignored=6
+FAILED_NAMES=claude_gere_avec_bypass_ecrit_et_relit_un_fichier,claude_gere_recoit_mcp_identite_et_path,claude_gere_sans_bypass_reste_sans_outil
+634:test claude_gere_avec_bypass_ecrit_et_relit_un_fichier ... FAILED
+635:test claude_gere_recoit_mcp_identite_et_path ... FAILED
+636:test claude_gere_sans_bypass_reste_sans_outil ... FAILED
+677:test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+==== TIP PAR run1 ====
+passed=537 failed=1 ignored=6
+FAILED_NAMES=mcp::tests::who_ouvre_une_connexion_ephemere_register_puis_commande
+397:test mcp::tests::who_ouvre_une_connexion_ephemere_register_puis_commande ... FAILED
+595:test result: FAILED. 496 passed; 1 failed; 6 ignored; 0 measured; 0 filtered out; finished in 7.17s
+==== TIP PAR run2 ====
+passed=543 failed=3 ignored=6
+FAILED_NAMES=claude_gere_avec_bypass_ecrit_et_relit_un_fichier,claude_gere_sans_bypass_reste_sans_outil,claude_gere_recoit_mcp_identite_et_path
+634:test claude_gere_avec_bypass_ecrit_et_relit_un_fichier ... FAILED
+635:test claude_gere_sans_bypass_reste_sans_outil ... FAILED
+636:test claude_gere_recoit_mcp_identite_et_path ... FAILED
+677:test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+==== TIP PAR run3 ====
+passed=543 failed=3 ignored=6
+FAILED_NAMES=claude_gere_sans_bypass_reste_sans_outil,claude_gere_avec_bypass_ecrit_et_relit_un_fichier,claude_gere_recoit_mcp_identite_et_path
+634:test claude_gere_sans_bypass_reste_sans_outil ... FAILED
+635:test claude_gere_avec_bypass_ecrit_et_relit_un_fichier ... FAILED
+636:test claude_gere_recoit_mcp_identite_et_path ... FAILED
+677:test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+==== TIP PAR run4 ====
+passed=543 failed=3 ignored=6
+FAILED_NAMES=claude_gere_sans_bypass_reste_sans_outil,claude_gere_avec_bypass_ecrit_et_relit_un_fichier,claude_gere_recoit_mcp_identite_et_path
+634:test claude_gere_sans_bypass_reste_sans_outil ... FAILED
+635:test claude_gere_avec_bypass_ecrit_et_relit_un_fichier ... FAILED
+636:test claude_gere_recoit_mcp_identite_et_path ... FAILED
+677:test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+ALL_DONE

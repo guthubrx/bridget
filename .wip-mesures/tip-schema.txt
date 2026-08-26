@@ -1,0 +1,16 @@
+   Compiling log v0.4.33
+   Compiling bridget-transport v0.1.0 (/Users/moi/.cache/bridget/work-cursor2-maicie-installed-preflight-rebase/crates/bridget-transport)
+   Compiling maicie v0.1.0 (/Users/moi/.cache/bridget/work-cursor2-maicie-installed-preflight-rebase/plugins/maicie)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.91s
+     Running tests/schema_preflight.rs (/tmp/bt-tip-target/debug/deps/schema_preflight-b23950a77635caac)
+
+running 6 tests
+test commande_preflight_refuse_avant_ecriture_avec_exit_store ... ok
+test preflight_base_absente_autorise_bootstrap_sans_creer_de_fichier ... ok
+test preflight_exerce_une_ouverture_metier_sur_la_copie ... ok
+test preflight_lit_la_version_commitee_dans_le_wal_sans_toucher_les_sidecars ... ok
+test preflight_refuse_les_deux_sens_sans_modifier_le_greffe ... ok
+test preflight_version_exacte_est_une_lecture_physiquement_neutre ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+

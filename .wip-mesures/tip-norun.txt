@@ -1,0 +1,146 @@
+   Compiling libc v0.2.189
+   Compiling proc-macro2 v1.0.107
+   Compiling memchr v2.8.3
+   Compiling quote v1.0.47
+   Compiling serde_core v1.0.229
+   Compiling unicode-ident v1.0.24
+   Compiling cfg-if v1.0.4
+   Compiling getrandom v0.4.3
+   Compiling zmij v1.0.23
+   Compiling serde v1.0.229
+   Compiling itoa v1.0.18
+   Compiling serde_json v1.0.151
+   Compiling version_check v0.9.5
+   Compiling log v0.4.33
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.10
+   Compiling typenum v1.20.1
+   Compiling pkg-config v0.3.33
+   Compiling cc v1.4.2
+   Compiling vcpkg v0.2.15
+   Compiling foldhash v0.1.5
+   Compiling bitflags v2.13.1
+   Compiling smallvec v1.15.2
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling fallible-iterator v0.3.0
+   Compiling base64 v0.22.1
+   Compiling generic-array v0.14.7
+   Compiling hashbrown v0.15.5
+   Compiling regex-syntax v0.8.11
+   Compiling utf8parse v0.2.2
+   Compiling jiff-core v0.1.0
+   Compiling aho-corasick v1.1.5
+   Compiling anstyle-parse v1.0.0
+   Compiling anstyle v1.0.14
+   Compiling signal-hook v0.3.18
+   Compiling hashbrown v0.17.1
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling equivalent v1.0.2
+   Compiling colorchoice v1.0.5
+   Compiling anstyle-query v1.1.5
+   Compiling unsafe-libyaml v0.2.11
+   Compiling anstream v1.0.0
+   Compiling bridget-daemon v0.1.0 (/Users/moi/.cache/bridget/work-cursor2-maicie-installed-preflight-rebase/crates/bridget-daemon)
+   Compiling syn v3.0.3
+   Compiling ryu v1.0.23
+   Compiling unicode-width v0.2.2
+   Compiling hashlink v0.10.0
+   Compiling cpufeatures v0.2.17
+   Compiling errno v0.3.14
+   Compiling signal-hook-registry v1.4.8
+   Compiling indexmap v2.14.0
+   Compiling libsqlite3-sys v0.35.0
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling jiff v0.2.35
+   Compiling digest v0.10.7
+   Compiling regex-automata v0.4.18
+   Compiling sha2 v0.10.9
+   Compiling uuid v1.24.0
+   Compiling serde_derive v1.0.229
+   Compiling regex v1.13.1
+   Compiling env_filter v2.0.0
+   Compiling env_logger v0.11.11
+   Compiling bridget-core v0.1.0 (/Users/moi/.cache/bridget/work-cursor2-maicie-installed-preflight-rebase/crates/bridget-core)
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling rusqlite v0.37.0
+   Compiling bridget-transport v0.1.0 (/Users/moi/.cache/bridget/work-cursor2-maicie-installed-preflight-rebase/crates/bridget-transport)
+   Compiling maicie v0.1.0 (/Users/moi/.cache/bridget/work-cursor2-maicie-installed-preflight-rebase/plugins/maicie)
+warning: function `older_page_from_turns` is never used
+    --> crates/bridget-daemon/src/ui.rs:1012:4
+     |
+1012 | fn older_page_from_turns(
+     |    ^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `bridget-daemon` (lib) generated 1 warning
+warning: function `older_journal_page_from_seq` is never used
+    --> crates/bridget-daemon/src/ui.rs:1061:4
+     |
+1061 | fn older_journal_page_from_seq(current_from_seq: u64) -> u64 {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `bridget-daemon` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 10s
+  Executable unittests src/lib.rs (/tmp/bt-tip-target/debug/deps/bridget_core-20ef73239eaf1e01)
+  Executable unittests src/lib.rs (/tmp/bt-tip-target/debug/deps/bridget_daemon-11ea7039ec6a0b21)
+  Executable unittests src/main.rs (/tmp/bt-tip-target/debug/deps/bridget-037f57b310db516c)
+  Executable tests/attach_journal_attestation_test.rs (/tmp/bt-tip-target/debug/deps/attach_journal_attestation_test-8a8c6b67a0368139)
+  Executable tests/build_id_integration_test.rs (/tmp/bt-tip-target/debug/deps/build_id_integration_test-92f267e03fc6ec2a)
+  Executable tests/capabilities_integration_test.rs (/tmp/bt-tip-target/debug/deps/capabilities_integration_test-08a9824212a17c02)
+  Executable tests/claude_native_permissions_test.rs (/tmp/bt-tip-target/debug/deps/claude_native_permissions_test-f49225c08ab7f6b4)
+  Executable tests/codex_native_test.rs (/tmp/bt-tip-target/debug/deps/codex_native_test-3fc5d551cf2d661e)
+  Executable tests/coordination_events_test.rs (/tmp/bt-tip-target/debug/deps/coordination_events_test-397de86d2fe1da31)
+  Executable tests/guichet_integration_test.rs (/tmp/bt-tip-target/debug/deps/guichet_integration_test-f4cc4457db3ed759)
+  Executable tests/idempotency_crash_test.rs (/tmp/bt-tip-target/debug/deps/idempotency_crash_test-1ba9f884fe96cc93)
+  Executable tests/idempotency_test.rs (/tmp/bt-tip-target/debug/deps/idempotency_test-c85a1a8d069cd37b)
+  Executable tests/integration_test.rs (/tmp/bt-tip-target/debug/deps/integration_test-d2bd63603f9af451)
+  Executable tests/managed_parity_test.rs (/tmp/bt-tip-target/debug/deps/managed_parity_test-4dce5bfd4cfca46e)
+  Executable tests/managed_wrapper_test.rs (/tmp/bt-tip-target/debug/deps/managed_wrapper_test-22c71e054070d8f7)
+  Executable tests/mcp_injection_smoke_test.rs (/tmp/bt-tip-target/debug/deps/mcp_injection_smoke_test-803f9c61e60e11ea)
+  Executable tests/sc005_attach_budget.rs (/tmp/bt-tip-target/debug/deps/sc005_attach_budget-90a9c38718d45e64)
+  Executable tests/ui_relay_test.rs (/tmp/bt-tip-target/debug/deps/ui_relay_test-0aa483e558fbfb2f)
+  Executable unittests src/lib.rs (/tmp/bt-tip-target/debug/deps/bridget_transport-99cf8d550d049d78)
+  Executable unittests src/lib.rs (/tmp/bt-tip-target/debug/deps/maicie-a3570b678aeb11b3)
+  Executable unittests src/main.rs (/tmp/bt-tip-target/debug/deps/maicie-7c4e865d416579a7)
+  Executable tests/ack_lost_recovery_integration.rs (/tmp/bt-tip-target/debug/deps/ack_lost_recovery_integration-48c20ec7e7640564)
+  Executable tests/approval_atomicity_integration.rs (/tmp/bt-tip-target/debug/deps/approval_atomicity_integration-f43a36e49c2a1d26)
+  Executable tests/arbitration_link_integration.rs (/tmp/bt-tip-target/debug/deps/arbitration_link_integration-e01b7d432add6318)
+  Executable tests/bridget_client_contract.rs (/tmp/bt-tip-target/debug/deps/bridget_client_contract-8d398a86bc747967)
+  Executable tests/catalogue_arbitration_reconcile_integration.rs (/tmp/bt-tip-target/debug/deps/catalogue_arbitration_reconcile_integration-2103edba9a75797c)
+  Executable tests/catalogue_session_gate.rs (/tmp/bt-tip-target/debug/deps/catalogue_session_gate-e4c2e43b30dd4c4b)
+  Executable tests/cli_delegate_integration.rs (/tmp/bt-tip-target/debug/deps/cli_delegate_integration-a2a9662d90289ea0)
+  Executable tests/cli_objective_integration.rs (/tmp/bt-tip-target/debug/deps/cli_objective_integration-424d1bdf09f77d69)
+  Executable tests/cli_profile_activation_integration.rs (/tmp/bt-tip-target/debug/deps/cli_profile_activation_integration-f04302d074dcf0e2)
+  Executable tests/cli_routine_surface.rs (/tmp/bt-tip-target/debug/deps/cli_routine_surface-a3b02d516bc3d6c9)
+  Executable tests/config_contract.rs (/tmp/bt-tip-target/debug/deps/config_contract-5d039e7ef671f791)
+  Executable tests/contract.rs (/tmp/bt-tip-target/debug/deps/contract-0882d8bed0836a66)
+  Executable tests/coordination_client_contract.rs (/tmp/bt-tip-target/debug/deps/coordination_client_contract-89aeb250972c7f1e)
+  Executable tests/coordination_dispatch_integration.rs (/tmp/bt-tip-target/debug/deps/coordination_dispatch_integration-a8cbc9c9a7ba4f45)
+  Executable tests/coordination_store_integration.rs (/tmp/bt-tip-target/debug/deps/coordination_store_integration-8b5a0183727e64cc)
+  Executable tests/delegate_contradiction_guichet_contract.rs (/tmp/bt-tip-target/debug/deps/delegate_contradiction_guichet_contract-1eba40d741faefb3)
+  Executable tests/delegation_outcomes_integration.rs (/tmp/bt-tip-target/debug/deps/delegation_outcomes_integration-99a2628e25ab622a)
+  Executable tests/delegation_soldee_par_cloture.rs (/tmp/bt-tip-target/debug/deps/delegation_soldee_par_cloture-339eca91059c5766)
+  Executable tests/direct_message_isolation.rs (/tmp/bt-tip-target/debug/deps/direct_message_isolation-fa0af3d7693d1833)
+  Executable tests/duration_timeout_contract.rs (/tmp/bt-tip-target/debug/deps/duration_timeout_contract-1cf0f65c9b54f756)
+  Executable tests/guichet_client_contract.rs (/tmp/bt-tip-target/debug/deps/guichet_client_contract-72d13a1769956883)
+  Executable tests/guichet_forbidden_operations_contract.rs (/tmp/bt-tip-target/debug/deps/guichet_forbidden_operations_contract-eea4a8d781d29b85)
+  Executable tests/guichet_gate_integration.rs (/tmp/bt-tip-target/debug/deps/guichet_gate_integration-564485ca7e9217b8)
+  Executable tests/guichet_greffe_integration.rs (/tmp/bt-tip-target/debug/deps/guichet_greffe_integration-302edce00e354742)
+  Executable tests/guichet_projections_integration.rs (/tmp/bt-tip-target/debug/deps/guichet_projections_integration-4562831ce2f1ab7c)
+  Executable tests/maicie_confirmation.rs (/tmp/bt-tip-target/debug/deps/maicie_confirmation-e133f2d4d75129e2)
+  Executable tests/migration_consent.rs (/tmp/bt-tip-target/debug/deps/migration_consent-0978db17a7c7d328)
+  Executable tests/migration_v19_guichet_refusals.rs (/tmp/bt-tip-target/debug/deps/migration_v19_guichet_refusals-1dc5d400c0ab2fee)
+  Executable tests/mvp_gate.rs (/tmp/bt-tip-target/debug/deps/mvp_gate-5edee90cc7f5b218)
+  Executable tests/plage_resource_ranges.rs (/tmp/bt-tip-target/debug/deps/plage_resource_ranges-a90c6edd1ece8703)
+  Executable tests/profile_approval_integration.rs (/tmp/bt-tip-target/debug/deps/profile_approval_integration-4daed694ce6b71d4)
+  Executable tests/review_git_integration.rs (/tmp/bt-tip-target/debug/deps/review_git_integration-53b10477a85a0caa)
+  Executable tests/schema_migration_guard.rs (/tmp/bt-tip-target/debug/deps/schema_migration_guard-6bc638693054e752)
+  Executable tests/schema_preflight.rs (/tmp/bt-tip-target/debug/deps/schema_preflight-e46926048783b458)
+  Executable tests/spawn_order_integration.rs (/tmp/bt-tip-target/debug/deps/spawn_order_integration-bf1586349739fe33)
+  Executable tests/status_benchmark_integration.rs (/tmp/bt-tip-target/debug/deps/status_benchmark_integration-90aebae07559fcfb)
+  Executable tests/status_sources_integration.rs (/tmp/bt-tip-target/debug/deps/status_sources_integration-a71ce85185fc997a)
+  Executable tests/store_outbox_integration.rs (/tmp/bt-tip-target/debug/deps/store_outbox_integration-4a1b50633a2caa6f)

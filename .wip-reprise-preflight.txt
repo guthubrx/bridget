@@ -1,0 +1,5 @@
+tip=0ed80eb918746d425a3a7e29bff2be8abd8b4b87
+base=a9353c11291829ce762365b9d2af3cb267d73567
+pushed=2026-08-26T18:34:42Z
+arbitrage=CompteursRefus+SchemaPreflight
+mesures=incompletes voir /tmp/bt-preflight-mesures

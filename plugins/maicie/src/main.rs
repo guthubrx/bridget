@@ -40,7 +40,7 @@ use maicie::routines::{
 use maicie::runtime::{RuntimeNature, RuntimeObservation, RuntimeSignal, RuntimeSubscription};
 use maicie::store::{
     CompteursRefusDelegationLocale, MaicieStore, ObjectiveSnapshot, ResourceRangeReservation,
-    StoreError,
+    SchemaPreflight, StoreError,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -84,6 +84,12 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
         Command::Registre(registre_args) => run_registre(registre_args, migrate),
         Command::Plage(plage_args) => run_plage(plage_args, migrate),
         Command::Routine(routine_args) => run_routine(routine_args, migrate),
+        Command::Preflight(preflight_args) => {
+            if migrate {
+                return Err(CliError::Usage("preflight n'accepte pas --migrate"));
+            }
+            run_preflight(preflight_args)
+        }
         Command::Migrate(migrate_args) => {
             if migrate {
                 return Err(CliError::Usage(
@@ -765,8 +771,16 @@ enum Command {
     Registre(RegistreArgs),
     Plage(PlageArgs),
     Routine(RoutineArgs),
+    /// Gate sans écriture, destiné au chemin d'installation/activation.
+    Preflight(PreflightArgs),
     /// Consentement explicite : applique les migrations de schéma.
     Migrate(MigrateArgs),
+}
+
+#[derive(Debug)]
+struct PreflightArgs {
+    config: PathBuf,
+    json: bool,
 }
 
 #[derive(Debug)]
@@ -899,11 +913,89 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
         "registre" => parse_registre(tail).map(Command::Registre),
         "plage" => parse_plage(tail).map(Command::Plage),
         "routine" => parse_routine(tail).map(Command::Routine),
+        "preflight" => parse_preflight(tail).map(Command::Preflight),
         "migrate" => parse_migrate(tail).map(Command::Migrate),
         _ => Err(CliError::Usage(
-            "commande inconnue : delegate, status, objective, profile, registre, plage, routine ou migrate",
+            "commande inconnue : delegate, status, objective, profile, registre, plage, routine, preflight ou migrate",
         )),
     }
+}
+
+fn parse_preflight(arguments: &[String]) -> Result<PreflightArgs, CliError> {
+    let mut config = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--config" => {
+                set_once_path(&mut config, next_value(arguments, &mut index, "--config")?)?
+            }
+            "--json" => {
+                if json {
+                    return Err(CliError::Usage("option --json dupliquée"));
+                }
+                json = true;
+            }
+            _ => return Err(CliError::Usage("option preflight inconnue")),
+        }
+        index += 1;
+    }
+    Ok(PreflightArgs {
+        config: config.ok_or(CliError::Usage("--config est obligatoire"))?,
+        json,
+    })
+}
+
+#[derive(Serialize)]
+struct SchemaPreflightOutput {
+    kind: &'static str,
+    state: &'static str,
+    database_schema: Option<i64>,
+    binary_schema: i64,
+    write_schema_compatible: bool,
+    bootstrap_required: bool,
+}
+
+impl From<SchemaPreflight> for SchemaPreflightOutput {
+    fn from(report: SchemaPreflight) -> Self {
+        Self {
+            kind: "schema_preflight",
+            state: if report.bootstrap_required {
+                "bootstrap_ready"
+            } else {
+                "compatible"
+            },
+            database_schema: report.database_version,
+            binary_schema: report.supported_version,
+            write_schema_compatible: true,
+            bootstrap_required: report.bootstrap_required,
+        }
+    }
+}
+
+fn run_preflight(arguments: PreflightArgs) -> Result<String, CliError> {
+    let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let output = SchemaPreflightOutput::from(
+        MaicieStore::schema_preflight(&config.database_path).map_err(CliError::Store)?,
+    );
+    if arguments.json {
+        return serde_json::to_string(&output)
+            .map_err(|_| CliError::Usage("sortie preflight JSON indisponible"));
+    }
+    Ok(format!(
+        "préflight schéma={} base={} binaire={} schéma-écriture=compatible bootstrap={}",
+        output.state,
+        output
+            .database_schema
+            .map(|version| version.to_string())
+            .unwrap_or_else(|| "absente".to_string()),
+        output.binary_schema,
+        if output.bootstrap_required {
+            "oui"
+        } else {
+            "non"
+        },
+    ))
 }
 
 fn parse_migrate(arguments: &[String]) -> Result<MigrateArgs, CliError> {
@@ -2920,15 +3012,17 @@ impl fmt::Display for CliError {
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, DelegateError, DelegateOutput, RegistreAction, RegistreArgs, candidates_from,
-        delegate_error_for_cli, format_routine_approval_screen, parse_command, peel_migrate_flag,
-        routine_approval_preflight, sanitize_terminal,
+        Command, DelegateError, DelegateOutput, RegistreAction, RegistreArgs,
+        SchemaPreflightOutput, candidates_from, delegate_error_for_cli,
+        format_routine_approval_screen, parse_command, peel_migrate_flag,
+        routine_approval_preflight, run, sanitize_terminal,
     };
     use bridget_transport::protocol::ReviewTarget;
     use maicie::bridget_client::AgentInfo;
     use maicie::config::{DurationClasses, MaicieConfig, ProfileConfig};
     use maicie::domain::SuiteObjective;
     use maicie::routines::{EtatRoutine, Routine, sealed_template_hash};
+    use maicie::store::{SCHEMA_VERSION, SchemaPreflight};
     use std::path::PathBuf;
     use uuid::Uuid;
 
@@ -3297,6 +3391,41 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(command, Command::Migrate(_)));
+    }
+
+    #[test]
+    fn preflight_est_une_commande_sans_consentement_de_migration() {
+        let command = parse_command(&[
+            "preflight".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+            "--json".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(command, Command::Preflight(_)));
+        let error = run(vec![
+            "preflight".to_string(),
+            "--migrate".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("n'accepte pas --migrate"));
+    }
+
+    #[test]
+    fn preflight_json_nomine_la_compatibilite_d_ecriture() {
+        let output = SchemaPreflightOutput::from(SchemaPreflight {
+            database_version: Some(SCHEMA_VERSION),
+            supported_version: SCHEMA_VERSION,
+            bootstrap_required: false,
+        });
+        assert_eq!(
+            serde_json::to_string(&output).unwrap(),
+            format!(
+                "{{\"kind\":\"schema_preflight\",\"state\":\"compatible\",\"database_schema\":{SCHEMA_VERSION},\"binary_schema\":{SCHEMA_VERSION},\"write_schema_compatible\":true,\"bootstrap_required\":false}}"
+            )
+        );
     }
 
     #[test]
