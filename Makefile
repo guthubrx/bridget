@@ -1,4 +1,4 @@
-.PHONY: build release test daemon install install-k1 install-ronde test-ronde uninstall clean
+.PHONY: build release test daemon install install-k1 test-install-k1-preflight install-ronde test-ronde uninstall clean
 
 BINARY = bridget
 INSTALL_DIR = $(HOME)/.local/bin
@@ -79,6 +79,9 @@ install-k1:
 		$(if $(SKIP_VERIFY),--skip-verify,) \
 		$(if $(VERIFY_DAEMON_ONLY),--verify-daemon-only,) \
 		$(if $(VERIFY_GUICHET),--verify-guichet,)
+
+test-install-k1-preflight:
+	@scripts/test-install-k1-preflight.sh
 
 install-ronde:
 	@scripts/install-bridget-ronde.sh --config $(MAICIE_CONFIG) \

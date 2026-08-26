@@ -17,7 +17,7 @@
 #
 # Flags :
 #   --catalogue-path PATH   journal du dû
-#   --force                 remplace explicitement
+#   --force                 remplace explicitement (config Maicie préservée)
 #   --skip-services         pose les unités sans les activer (bac à sable)
 #   --skip-launchd          alias de --skip-services (compat)
 #   --skip-verify           pas de vérification runtime
@@ -33,7 +33,7 @@ Plateformes : Darwin (launchd) | Linux (systemd --user). Windows refusé.
 
 Options:
   --catalogue-path PATH   chemin absolu du journal du dû
-  --force                 remplace les artefacts existants (explicite)
+  --force                 remplace les artefacts, sauf la config Maicie
   --skip-services         n'active pas launchd/systemd (pose seulement)
   --skip-launchd          alias de --skip-services
   --skip-verify           pas de vérification runtime
@@ -43,6 +43,8 @@ Options:
 
 Idempotence : sans --force, tout fichier déjà présent est laissé intact
 et annoncé « déjà en place ».
+La configuration Maicie déclarative reste toujours intacte : ses profils et
+son database_path ne sont jamais régénérés par --force.
 EOF
 }
 
@@ -109,9 +111,18 @@ MAICIE_CONFIG="${CONFIG_DIR_MAICIE}/config.json"
 
 DAEMON_PLIST="${LAUNCHD_DIR}/com.bridget.daemon.plist"
 MAICIE_RELEVE_PLIST="${LAUNCHD_DIR}/com.bridget.maicie.releve.plist"
+DAEMON_LABEL="com.bridget.daemon"
+MAICIE_RELEVE_LABEL="com.bridget.maicie.releve"
 DAEMON_SERVICE="${SYSTEMD_USER_DIR}/bridget-daemon.service"
 MAICIE_RELEVE_SERVICE="${SYSTEMD_USER_DIR}/bridget-maicie-releve.service"
 MAICIE_RELEVE_TIMER="${SYSTEMD_USER_DIR}/bridget-maicie-releve.timer"
+
+MAICIE_STAGE_DIR=""
+MAICIE_STAGED_BIN=""
+MAICIE_STAGED_CONFIG=""
+MAICIE_CANDIDATE_SOURCE=""
+MAICIE_BIN_NEEDS_PUBLISH="0"
+MAICIE_CONFIG_NEEDS_PUBLISH="0"
 
 TEST_AGENT_TYPE="k1-test-fixture"
 TEST_AGENT_NAME="k1-agent-1"
@@ -123,6 +134,13 @@ TOUCHED=0
 
 log() { echo "install-k1: $*"; }
 die() { echo "install-k1: ERREUR: $*" >&2; exit 1; }
+
+cleanup_maicie_stage() {
+  if [[ -n "$MAICIE_STAGE_DIR" && -d "$MAICIE_STAGE_DIR" ]]; then
+    rm -rf -- "$MAICIE_STAGE_DIR"
+  fi
+}
+trap cleanup_maicie_stage EXIT
 
 already() {
   log "déjà en place: $1"
@@ -225,6 +243,175 @@ install_binary() {
   created "$label ($dst)"
 }
 
+render_default_maicie_config() {
+  local destination="$1"
+  cat >"$destination" <<JSON
+{
+  "version": 1,
+  "bridget_socket": "$BRIDGET_SOCKET",
+  "database_path": "$MAICIE_DB_PATH",
+  "durations": {
+    "short_secs": 30,
+    "normal_secs": 300,
+    "long_secs": 3600
+  },
+  "status_capture_budget_ms": 250,
+  "catalogue_path": "$CATALOGUE_PATH",
+  "profiles": []
+}
+JSON
+  chmod 0600 "$destination"
+}
+
+# Fige les deux octets qui seront publiés. La configuration déclarative reste
+# propriété de l'utilisateur : --force remplace le binaire, jamais ses profils
+# ni son database_path. Une configuration absente est générée dans le staging.
+stage_maicie_activation() {
+  local candidate candidate_real
+  MAICIE_STAGE_DIR="$(mktemp -d -t maicie-k1-stage.XXXXXX)"
+  chmod 0700 "$MAICIE_STAGE_DIR"
+  MAICIE_STAGED_BIN="${MAICIE_STAGE_DIR}/maicie"
+  MAICIE_STAGED_CONFIG="${MAICIE_STAGE_DIR}/config.json"
+
+  if [[ -e "$MAICIE_CONFIG" ]]; then
+    cp "$MAICIE_CONFIG" "$MAICIE_STAGED_CONFIG"
+    chmod 0600 "$MAICIE_STAGED_CONFIG"
+    MAICIE_CONFIG_NEEDS_PUBLISH="0"
+    already "config maicie préservée ($MAICIE_CONFIG)"
+  else
+    render_default_maicie_config "$MAICIE_STAGED_CONFIG"
+    MAICIE_CONFIG_NEEDS_PUBLISH="1"
+  fi
+
+  if [[ -e "$MAICIE_BIN" && "$FORCE" != "1" ]]; then
+    candidate="$MAICIE_BIN"
+    MAICIE_BIN_NEEDS_PUBLISH="0"
+  else
+    candidate="${ROOT_DIR}/target/release/maicie"
+    MAICIE_BIN_NEEDS_PUBLISH="1"
+  fi
+  [[ -x "$candidate" ]] || die "gate Maicie: binaire candidat absent ou non exécutable ($candidate)"
+  cp "$candidate" "$MAICIE_STAGED_BIN"
+  chmod 0755 "$MAICIE_STAGED_BIN"
+  cmp -s "$candidate" "$MAICIE_STAGED_BIN" \
+    || die "gate Maicie: binaire candidat modifié pendant sa mise en staging ($candidate)"
+  MAICIE_CANDIDATE_SOURCE="$candidate"
+  candidate_real="$(python3 - "$candidate" <<'PY'
+import os, sys
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+  log "candidat Maicie figé: source=$candidate cible=$candidate_real stage=$MAICIE_STAGED_BIN"
+}
+
+# Gate de SCHÉMA Maicie uniquement : Bridget conserve exactement son chemin
+# de pose. La provenance origin/main appartient au gate d'activation gouvernée
+# (session 018), à étendre aux binaires compilés ; cette extension doit appeler
+# celui-ci en complément et non le remplacer.
+preflight_staged_maicie_activation() {
+  local report remedy
+  remedy=""
+  if [[ "$FORCE" != "1" ]]; then
+    remedy=" ; relancer avec --force pour construire puis contrôler le nouveau candidat"
+  fi
+  if ! report="$("$MAICIE_STAGED_BIN" preflight --config "$MAICIE_STAGED_CONFIG" --json 2>&1)"; then
+    die "gate Maicie refusé avant publication: binaire=$MAICIE_CANDIDATE_SOURCE config=$MAICIE_STAGED_CONFIG : $report$remedy"
+  fi
+  log "gate Maicie accepté sur la paire stagée: binaire=$MAICIE_CANDIDATE_SOURCE config=$MAICIE_STAGED_CONFIG $report"
+}
+
+atomic_publish_file() {
+  local source="$1" destination="$2" mode="$3" temporary
+  mkdir -p "$(dirname "$destination")"
+  temporary="$(mktemp "${destination}.maicie.XXXXXX")"
+  if ! install -m "$mode" "$source" "$temporary"; then
+    rm -f -- "$temporary"
+    die "publication Maicie impossible ($destination)"
+  fi
+  if ! mv -f -- "$temporary" "$destination"; then
+    rm -f -- "$temporary"
+    die "activation atomique Maicie impossible ($destination)"
+  fi
+}
+
+publish_staged_maicie_activation() {
+  if [[ "$MAICIE_BIN_NEEDS_PUBLISH" == "1" ]]; then
+    may_write "$MAICIE_BIN" "binaire maicie" \
+      || die "état de publication Maicie incohérent ($MAICIE_BIN)"
+    atomic_publish_file "$MAICIE_STAGED_BIN" "$MAICIE_BIN" 0755
+    created "binaire maicie ($MAICIE_BIN)"
+  fi
+
+  if [[ "$MAICIE_CONFIG_NEEDS_PUBLISH" == "1" ]]; then
+    mkdir -p "$(dirname "$CATALOGUE_PATH")"
+    if [[ ! -e "$CATALOGUE_PATH" ]]; then
+      : >"$CATALOGUE_PATH"
+      created "catalogue vide ($CATALOGUE_PATH)"
+    else
+      already "catalogue ($CATALOGUE_PATH)"
+    fi
+    atomic_publish_file "$MAICIE_STAGED_CONFIG" "$MAICIE_CONFIG" 0600
+    created "config maicie ($MAICIE_CONFIG) mode 0600, profiles=[], state_dir 0700"
+  fi
+
+  cmp -s "$MAICIE_STAGED_BIN" "$MAICIE_BIN" \
+    || die "binaire Maicie publié différent du candidat préflighté"
+  cmp -s "$MAICIE_STAGED_CONFIG" "$MAICIE_CONFIG" \
+    || die "configuration Maicie publiée différente de celle préflightée"
+}
+
+# Second témoin : il porte sur les chemins réellement écrits dans les unités,
+# après toute publication et immédiatement avant leur activation.
+preflight_published_maicie_activation() {
+  local report
+  if ! report="$("$MAICIE_BIN" preflight --config "$MAICIE_CONFIG" --json 2>&1)"; then
+    die "gate Maicie refusé sur la paire publiée: binaire=$MAICIE_BIN config=$MAICIE_CONFIG : $report"
+  fi
+  log "gate Maicie accepté sur la paire publiée: binaire=$MAICIE_BIN config=$MAICIE_CONFIG $report"
+}
+
+# La relève doit être arrêtée avant toute publication. Sinon un arrêt brutal
+# entre la publication et le second gate laisse un service actif avec un
+# binaire qui n'a jamais été contrôlé sur la paire publiée.
+quiesce_maicie_releve() {
+  if [[ "$SKIP_SERVICES" == "1" ]]; then
+    log "NON FAIT: arrêt préalable de la relève (--skip-services)"
+    return 0
+  fi
+  case "$SERVICE_BACKEND" in
+    launchd)
+      local domain="gui/$(id -u)"
+      if launchctl print "$domain/$MAICIE_RELEVE_LABEL" >/dev/null 2>&1; then
+        launchctl bootout "$domain/$MAICIE_RELEVE_LABEL" \
+          || die "arrêt préalable launchd impossible ($MAICIE_RELEVE_LABEL)"
+        if launchctl print "$domain/$MAICIE_RELEVE_LABEL" >/dev/null 2>&1; then
+          die "relève launchd encore chargée après son arrêt ($MAICIE_RELEVE_LABEL)"
+        fi
+        log "relève launchd arrêtée avant publication ($MAICIE_RELEVE_LABEL)"
+      else
+        log "relève launchd déjà arrêtée ($MAICIE_RELEVE_LABEL)"
+      fi
+      ;;
+    systemd)
+      local timer_unit="bridget-maicie-releve.timer"
+      local service_unit="bridget-maicie-releve.service"
+      if systemctl --user is-active --quiet "$timer_unit"; then
+        systemctl --user stop "$timer_unit" \
+          || die "arrêt préalable systemd impossible ($timer_unit)"
+      fi
+      if systemctl --user is-active --quiet "$service_unit"; then
+        systemctl --user stop "$service_unit" \
+          || die "arrêt préalable systemd impossible ($service_unit)"
+      fi
+      if systemctl --user is-active --quiet "$timer_unit" \
+        || systemctl --user is-active --quiet "$service_unit"; then
+        die "relève systemd encore active après son arrêt"
+      fi
+      log "relève systemd arrêtée avant publication"
+      ;;
+  esac
+}
+
 write_test_adapter() {
   may_write "$ADAPTER_PATH" "adapter test" || return 0
   cat >"$ADAPTER_PATH" <<'EOF'
@@ -281,43 +468,6 @@ PY
   created "registre agents.json ($AGENTS_JSON) mode 0600"
 }
 
-write_maicie_config() {
-  if [[ -e "$MAICIE_CONFIG" && "$FORCE" != "1" ]]; then
-    already "config maicie ($MAICIE_CONFIG)"
-    return 0
-  fi
-  if [[ -e "$MAICIE_CONFIG" && "$FORCE" == "1" ]]; then
-    log "remplacement explicite (--force): config maicie ($MAICIE_CONFIG)"
-    TOUCHED=$((TOUCHED + 1))
-  fi
-  mkdir -p "$(dirname "$CATALOGUE_PATH")"
-  mkdir -p -m 0700 "$MAICIE_STATE_DIR"
-  chmod 0700 "$MAICIE_STATE_DIR"
-  if [[ ! -e "$CATALOGUE_PATH" ]]; then
-    : >"$CATALOGUE_PATH"
-    created "catalogue vide ($CATALOGUE_PATH)"
-  else
-    already "catalogue ($CATALOGUE_PATH)"
-  fi
-  cat >"$MAICIE_CONFIG" <<JSON
-{
-  "version": 1,
-  "bridget_socket": "$BRIDGET_SOCKET",
-  "database_path": "$MAICIE_DB_PATH",
-  "durations": {
-    "short_secs": 30,
-    "normal_secs": 300,
-    "long_secs": 3600
-  },
-  "status_capture_budget_ms": 250,
-  "catalogue_path": "$CATALOGUE_PATH",
-  "profiles": []
-}
-JSON
-  chmod 0600 "$MAICIE_CONFIG"
-  created "config maicie ($MAICIE_CONFIG) mode 0600, profiles=[], state_dir 0700"
-}
-
 write_maicie_suivi() {
   may_write "$MAICIE_SUIVI_BIN" "lien maicie-suivi" || return 0
   cat >"$MAICIE_SUIVI_BIN" <<EOF
@@ -325,6 +475,7 @@ write_maicie_suivi() {
 set -euo pipefail
 CFG="${MAICIE_CONFIG}"
 echo "maicie-suivi: \$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+"${MAICIE_BIN}" preflight --config "\$CFG" --json >/dev/null
 exec "${MAICIE_BIN}" status --config "\$CFG" --json
 EOF
   chmod 0755 "$MAICIE_SUIVI_BIN"
@@ -371,11 +522,7 @@ write_plist_maicie_releve() {
   <key>Label</key><string>com.bridget.maicie.releve</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${MAICIE_BIN}</string>
-    <string>status</string>
-    <string>--config</string>
-    <string>${MAICIE_CONFIG}</string>
-    <string>--json</string>
+    <string>${MAICIE_SUIVI_BIN}</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -425,7 +572,7 @@ Description=Maicie guichet releve (pull-only)
 
 [Service]
 Type=oneshot
-ExecStart=${MAICIE_BIN} status --config ${MAICIE_CONFIG} --json
+ExecStart=${MAICIE_SUIVI_BIN}
 Environment=RUST_LOG=info
 Environment=HOME=${HOME}
 Environment=PATH=${HOME}/.local/bin:/usr/bin:/bin
@@ -472,12 +619,22 @@ activate_services() {
   case "$SERVICE_BACKEND" in
     launchd)
       log "charger services launchd"
-      launchctl bootstrap "gui/$(id -u)" "$DAEMON_PLIST" 2>/dev/null \
-        || launchctl load "$DAEMON_PLIST" 2>/dev/null \
-        || true
-      launchctl bootstrap "gui/$(id -u)" "$MAICIE_RELEVE_PLIST" 2>/dev/null \
+      local domain="gui/$(id -u)"
+      if ! launchctl print "$domain/$DAEMON_LABEL" >/dev/null 2>&1; then
+        launchctl bootstrap "$domain" "$DAEMON_PLIST" 2>/dev/null \
+          || launchctl load "$DAEMON_PLIST" 2>/dev/null \
+          || die "activation launchd impossible ($DAEMON_LABEL)"
+      else
+        log "daemon launchd déjà chargé, redémarrage hors périmètre ($DAEMON_LABEL)"
+      fi
+      launchctl print "$domain/$DAEMON_LABEL" >/dev/null 2>&1 \
+        || die "daemon launchd non détectable après activation ($DAEMON_LABEL)"
+
+      launchctl bootstrap "$domain" "$MAICIE_RELEVE_PLIST" 2>/dev/null \
         || launchctl load "$MAICIE_RELEVE_PLIST" 2>/dev/null \
-        || true
+        || die "activation launchd impossible ($MAICIE_RELEVE_LABEL)"
+      launchctl print "$domain/$MAICIE_RELEVE_LABEL" >/dev/null 2>&1 \
+        || die "relève launchd non détectable après activation ($MAICIE_RELEVE_LABEL)"
       ;;
     systemd)
       log "activer services systemd --user"
@@ -490,7 +647,7 @@ activate_services() {
       fi
       systemctl --user enable --now bridget-maicie-releve.timer
       # Relève immédiate une fois (oneshot), sans attendre le timer.
-      systemctl --user start bridget-maicie-releve.service 2>/dev/null || true
+      systemctl --user start bridget-maicie-releve.service
       ;;
   esac
 }
@@ -668,13 +825,14 @@ main() {
   if [[ -e "${ROOT_DIR}/target/release/bridget" ]]; then
     install_binary "${ROOT_DIR}/target/release/bridget" "$BRIDGET_BIN" "binaire bridget"
   fi
-  if [[ -e "${ROOT_DIR}/target/release/maicie" ]]; then
-    install_binary "${ROOT_DIR}/target/release/maicie" "$MAICIE_BIN" "binaire maicie"
-  fi
+  stage_maicie_activation
+  preflight_staged_maicie_activation
+  quiesce_maicie_releve
+  publish_staged_maicie_activation
+  preflight_published_maicie_activation
 
   write_test_adapter
   write_agents_json
-  write_maicie_config
   write_maicie_suivi
   write_services
   activate_services

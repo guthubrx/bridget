@@ -1,0 +1,679 @@
+warning: function `older_page_from_turns` is never used
+    --> crates/bridget-daemon/src/ui.rs:1012:4
+     |
+1012 | fn older_page_from_turns(
+     |    ^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `older_journal_page_from_seq` is never used
+    --> crates/bridget-daemon/src/ui.rs:1061:4
+     |
+1061 | fn older_journal_page_from_seq(current_from_seq: u64) -> u64 {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `bridget-daemon` (lib) generated 1 warning
+warning: `bridget-daemon` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (/tmp/bt-base-target/debug/deps/bridget_core-20ef73239eaf1e01)
+
+running 41 tests
+test circuit_breaker::tests::test_different_conversations_independent ... ok
+test circuit_breaker::tests::test_under_limit ... ok
+test circuit_breaker::tests::test_conv_key_symmetric ... ok
+test circuit_breaker::tests::test_window_expiry ... ok
+test dedup::tests::test_duplicate_second_time ... ok
+test dedup::tests::test_different_target_not_duplicate ... ok
+test dedup::tests::test_not_duplicate_first_time ... ok
+test envelope::tests::demande_suivie_affiche_l_identifiant_integral ... ok
+test envelope::tests::test_envelope_format ... ok
+test envelope::tests::test_guard_different_target_not_quarantined ... ok
+test message::tests::test_agent_type_display ... ok
+test envelope::tests::test_guard_quarantine ... ok
+test message::tests::content_key_keeps_distinct_tracked_replies_distinct ... ok
+test message::tests::test_content_key_differs_on_body ... ok
+test message::tests::test_content_key_differs_on_target ... ok
+test message::tests::test_content_key_stable ... ok
+test message::tests::test_decrement_hops ... ok
+test message::tests::test_message_json_roundtrip ... ok
+test message::tests::test_message_new_generates_id ... ok
+test router::tests::register_et_rename_acceptent_un_nom_ascii_ordinaire ... ok
+test router::tests::register_et_rename_refusent_un_nom_de_plus_de_cent_octets ... ok
+test router::tests::register_refuse_nul_et_non_ascii ... ok
+test router::tests::register_refuse_un_nom_auto_derive_d_un_type_invalide ... ok
+test router::tests::register_refuse_un_nom_avec_lf ... ok
+test router::tests::register_refuse_un_nom_bidi ... ok
+test router::tests::register_refuse_un_nom_vide ... ok
+test router::tests::rename_refuse_nul_et_non_ascii ... ok
+test router::tests::rename_refuse_un_nom_avec_lf ... ok
+test router::tests::rename_refuse_un_nom_bidi ... ok
+test router::tests::rename_refuse_un_nom_vide ... ok
+test router::tests::test_register_auto_increment ... ok
+test router::tests::test_register_duplicate_rejected ... ok
+test router::tests::test_register_explicit_name ... ok
+test router::tests::test_rename_replaces_the_lookup_key ... ok
+test router::tests::test_resolve_deliver ... ok
+test router::tests::test_resolve_hops_exhausted ... ok
+test router::tests::test_resolve_not_found ... ok
+test router::tests::test_resolve_self_send ... ok
+test router::tests::test_unregister ... ok
+test envelope::tests::test_guard_expiry ... ok
+test dedup::tests::test_expiry ... ok
+
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+
+     Running unittests src/lib.rs (/tmp/bt-base-target/debug/deps/bridget_daemon-11ea7039ec6a0b21)
+
+running 503 tests
+test attach::tests::borne_la_memoire_des_generations_retires ... ok
+test attach::tests::ack_ne_purge_pas_un_envoi_mais_le_rejet_tardif_oui_meme_apres_end ... ok
+test attach::tests::ctrl_c_et_eof_sur_tampon_vide_quittent_proprement_la_boucle_de_saisie ... ok
+test attach::tests::expiration_d_un_envoi_est_terminale_et_affiche_son_motif ... ok
+test attach::tests::explique_les_refus_non_acp_et_nom_inconnu ... ok
+test attach::tests::garde_raw_restaure_le_terminal_apres_panic ... ok
+test attach::tests::garde_raw_restaure_le_terminal_sur_erreur_et_degrade_un_pipe ... ok
+test attach::tests::golden_delta_transport_etiquette_title_name_kind_et_assainit_le_titre ... ok
+test attach::tests::golden_delta_tool_call_id_herite_le_titre_sur_toutes_les_mises_a_jour ... ok
+test attach::tests::champ_terminal_explicite_ferme_le_bloc_meme_sur_un_diagnostic ... ok
+test attach::tests::diagnostic_non_terminal_ne_ferme_pas_le_bloc ... ok
+test attach::tests::gap_end_et_ligne_corrompue_evacuant_un_tour_le_signalent_incomplet ... ok
+test attach::tests::evenement_hostile_ne_modifie_jamais_la_saisie_partielle ... ok
+test attach::tests::matrice_stdin_stdout_selectionne_le_renderer_par_stdout_seul ... ok
+test attach::tests::neutralise_la_fixture_hostile_et_indente_les_fausses_lignes ... ok
+test attach::tests::payload_v1_inconnu_reste_honnete_sans_crash ... ok
+test attach::tests::permission_complete_la_ligne_de_loutil_dans_le_meme_bloc ... ok
+test attach::tests::perte_de_correlation_apres_snapshot_evacuant_le_tour_incomplet ... ok
+test attach::tests::bloc_live_nefface_que_la_fenetre_visible_du_terminal ... ok
+test attach::tests::lot_de_chunks_live_ne_declenche_qu_un_redessin ... ok
+test attach::tests::pseudo_tty_garde_la_saisie_en_bas_pendant_le_flux_et_un_resize ... ok
+test attach::tests::raw_mode_lit_ctrl_c_comme_octet_et_restaure_le_pseudo_tty ... ok
+test attach::tests::rattrapage_tty_n_ecrit_chaque_bloc_qu_a_sa_cloture ... ok
+test attach::tests::raw_mode_restaure_le_terminal_apres_eof_du_pseudo_tty ... ok
+test attach::tests::reassemble_un_evenement_fragmenté_en_rejeu_puis_en_live_sans_boucle ... ok
+test attach::tests::reconnexion_reprend_a_la_sequence_suivante_et_purge_les_envois ... ok
+test attach::tests::abandonne_un_evenement_de_plus_de_quatre_mio_avec_un_seul_gap ... ok
+??:?? [événement] update payload v1 non pris en charge
+> [2K> de[2K> der[2K> [2K> [2K> 
+test attach::tests::negocie_le_role_attach ... ok
+attach: abonnement actif
+??:?? [erreur] événement journal illisible
+test attach::tests::rend_les_payloads_v1_des_fixtures_gelee_sans_json_brut ... ok
+test attach::tests::rend_prompt_dispatched_payload_vide_comme_accuse_lisible ... ok
+test attach::tests::retour_arriere_retire_un_scalaire_utf8_entier ... ok
+test attach::tests::rend_prompt_dispatched_v1_riche_comme_un_message_humain ... ok
+test attach::tests::saisie_attach_envoie_reply_false_et_conserve_la_correlation_jusqu_au_rejet_tardif ... ok
+test attach::tests::reprise_en_cours_de_tour_conserve_lheure_du_premier_evenement ... ok
+test attach::tests::snapshot_vide_end_reprend_le_selecteur_initial_et_ignore_l_ancienne_generation ... ok
+test attach::tests::saturation_coalesce_la_saisie_sans_perdre_ctrl_c_ni_la_restauration ... ok
+test attach::tests::borne_une_frame_socket_et_consomme_sa_fin ... ok
+test attach::tests::borne_et_signale_la_longueur_rendue ... ok
+test attach::tests::rend_l_heure_locale_dans_un_processus_a_tz_forcee ... ok
+test attach::tests::sc001_trois_tours_deterministes_tiennent_dans_un_ecran_80_par_24 ... ok
+test attach::tests::bloc_borne_affiche_sa_troncature ... ok
+test attach::tests::pseudo_tty_polin_hup_livre_le_dernier_send_et_restaure_le_terminal ... ok
+test attach::tests::socket_snapshot_vide_end_reabonne_et_livre_le_premier_evenement_une_fois ... ok
+test attach::tests::stdout_non_tty_reste_identique_octet_pour_octet_quel_que_soit_stdin ... ok
+test attach::tests::stdin_et_stdout_pipes_conservent_le_golden_sans_echo_de_saisie ... ok
+test attach::tests::update_kind_inconnu_reste_brut_volontairement ... ok
+test build_info::tests::ecart_de_build_id_observe_les_identifiants_pas_un_libelle ... ok
+test cli::depot_tests::un_identifiant_de_remise_vide_n_atteste_pas_un_depot ... ok
+test cli::depot_tests::les_refus_restent_des_echecs ... ok
+test cli::depot_tests::un_sort_indetermine_n_est_pas_un_depot ... ok
+test cli::depot_tests::une_remise_en_vol_est_un_depot_reussi ... ok
+test cli::hook_tests::arguments_attach_refusent_les_formes_ambigues ... ok
+test cli::hook_tests::arguments_attach_resolvent_les_trois_fenetres ... ok
+test cli::hook_tests::cellule_runtime_marque_une_valeur_absente ... ok
+test cli::hook_tests::hook_exige_l_accord_session_id_et_transcript ... ok
+test cli::hook_tests::installation_additive_puis_retrait_restaure_l_original ... ok
+test attach::tests::tour_tty_reste_un_bloc_de_la_bascule_replay_jusqu_a_la_fin_live ... ok
+test cli::hook_tests::installation_cree_la_section_hooks_absente ... ok
+test cli::hook_tests::refus_capacite_nomme_type_modele_et_capacite_absente ... ok
+test cli::hook_tests::installation_est_idempotente ... ok
+test cli::hook_tests::refus_type_inconnu_explique_l_instantane_du_daemon ... ok
+test cli::hook_tests::rendu_ledger_cli_reste_octet_pour_octet_stable ... ok
+test cli::hook_tests::rendu_ledger_compte_une_ligne_par_message_apres_refus_d_un_nom_avec_lf ... ok
+test cli::hook_tests::rendu_ledger_distingue_en_vol_et_recu ... ok
+test cli::hook_tests::repli_cli_prend_le_nom_dans_l_environnement ... ok
+test cli::hook_tests::requests_defaut_reste_participant_et_all_expose_de_vers ... ok
+test cli::hook_tests::retrait_sans_installation_prealable_ne_change_rien ... ok
+test attach::tests::writer_concurrent_produit_des_frames_entieres ... ok
+test cli::hook_tests::spawn_nomme_sans_persistent_avertit_qu_il_ne_survivra_pas ... ok
+test cli::hook_tests::statusline_ecarte_un_pourcentage_hors_domaine_sans_le_rabattre ... ok
+test cli::hook_tests::statusline_garde_la_fenetre_presente_et_ignore_l_absente ... ok
+test cli::hook_tests::statusline_n_invente_aucun_verdict_de_statut ... ok
+test cli::hook_tests::statusline_ne_pousse_pas_une_fenetre_sans_aucune_valeur ... ok
+test cli::hook_tests::spawn_roundtrip_rejoue_la_meme_issue_apres_reponse_perdue ... ok
+test cli::hook_tests::statusline_ne_prend_pas_le_contexte_pour_une_limite ... ok
+test cli::hook_tests::statusline_releve_les_deux_fenetres_attestees ... ok
+test cli::hook_tests::statusline_remplit_la_colonne_du_referent ... ok
+test cli::hook_tests::statusline_sans_bloc_limites_ne_pousse_rien ... ok
+test cli::hook_tests::stop_cli_genere_ou_reutilise_un_command_id ... ok
+test cli::hook_tests::statusline_tronque_le_pourcentage_fractionnaire ... ok
+test cli::hook_tests::structure_inattendue_ne_declenche_aucune_modification ... ok
+test cli::idempotency_projection_tests::depot_guichet_refuse_les_formes_ouvertes_ou_incompletes ... ok
+test cli::idempotency_projection_tests::options_idempotentes_sont_obligatoires_ensemble ... ok
+test cli::idempotency_projection_tests::depot_guichet_rejoue_le_canon_ferme_avec_les_trois_cles ... ok
+test cli::idempotency_projection_tests::who_affiche_mode_et_localisation_sans_dependre_d_un_tty ... ok
+test cli::idempotency_projection_tests::who_et_status_signalent_exactement_un_daemon_perime ... ok
+test cli::idempotency_projection_tests::who_marque_l_ecart_de_modele_et_reste_muet_sans_signal ... ok
+test connection_channel::tests::spec_024_absence_d_attestation_ne_devient_pas_unix ... ok
+test cli::idempotency_projection_tests::who_rend_une_limite_compacte_par_fenetre_et_garde_l_absence ... ok
+test connection_channel::tests::spec_024_divergence_entre_environnement_et_fichier_reste_inconnue ... ok
+test connection_channel::tests::spec_024_nouvelle_cle_prime_sur_alias_dans_chaque_source ... ok
+test connection_channel::tests::spec_024_sources_concordantes_ou_uniques_attestent_le_canal ... ok
+test daemon::presence_tests::canonical_send_ignore_le_nom_affiche_et_le_timeout_relatif ... ok
+test cli::hook_tests::statusline_n_emet_aucune_declaration_de_presence ... ok
+test cli::hook_tests::ecriture_atomique_preserve_le_contenu ... ok
+test cli::idempotency_projection_tests::projection_cli_et_client_reference_produisent_le_meme_envoi_et_le_meme_rejet ... ok
+test cli::hook_tests::spawn_cli_rejoue_l_enveloppe_memorisee_octet_pour_octet ... ok
+Initialized empty Git repository in /private/tmp/bt/bridget-build-id-30058/.git/
+test daemon::presence_tests::abonnement_attach_attend_le_wrapper_et_ignore_la_fin_d_une_ancienne_generation ... ok
+test daemon::presence_tests::client_hello_avant_role_et_depuis_attach_sont_refuses_sans_negociation ... ok
+test daemon::presence_tests::abonnement_attach_refuse_un_pilote_sans_journal_malgre_son_mode ... ok
+test daemon::presence_tests::capacite_vraie_rafraichit_last_seen ... ok
+test daemon::presence_tests::abonnement_attach_distingue_un_equipier_arrete_d_un_nom_inconnu ... ok
+test daemon::presence_tests::client_negocie_un_contrat_versionne_apres_son_role ... ok
+test daemon::presence_tests::connexion_attach_refuse_un_message_reserve_au_wrapper ... ok
+test daemon::presence_tests::client_refuse_version_et_scope_invalides_et_capacite_non_negociee ... ok
+test daemon::presence_tests::confirmation_vers_vue_fermee_desabonne_le_wrapper ... ok
+test daemon::presence_tests::boucle_busy_persiste_les_reports_et_expire_une_seule_fois ... ok
+test daemon::presence_tests::accuse_idempotent_d_une_reponse_liee_resout_la_demande_sans_relance ... ok
+test daemon::presence_tests::client_borne_les_scopes_actifs_sans_rejeter_un_scope_deja_actif ... ok
+test attach::tests::reconnexion_socket_reprend_exactement_a_last_seq_plus_un ... ok
+test daemon::presence_tests::end_abandonne_la_file_et_interdit_toute_frame_ulterieure ... ok
+[main (root-commit) 6e39f34] first
+ 1 file changed, 1 insertion(+)
+ create mode 100644 tracked.txt
+test daemon::presence_tests::eviction_ignore_les_fragments_restants_de_la_sequence_lachee ... ok
+test daemon::presence_tests::guichet_frame_limit_counts_the_wire_newline_and_parses_whitespace ... ok
+test daemon::presence_tests::dnd_expire_de_lui_meme_et_se_leve_a_la_demande ... ok
+test daemon::presence_tests::deux_vues_attach_recoivent_le_meme_flux_et_sont_recoltees ... ok
+test daemon::presence_tests::fait_five_hour_n_efface_pas_fait_seven_day ... ok
+test daemon::presence_tests::domaine_surcharge_puis_reinitialise ... ok
+test daemon::presence_tests::end_indelivrable_force_l_eof_de_la_vue ... ok
+test daemon::presence_tests::les_rappels_epargnent_un_agent_qui_ne_veut_pas_etre_derange ... ok
+test cli::hook_tests::statusline_attribue_ses_faits_sans_se_declarer ... ok
+test daemon::presence_tests::fermeture_ancienne_connexion_n_ecrase_pas_busy_de_la_reinscription ... ok
+test daemon::presence_tests::enregistrement_auxiliaire_mcp_ne_revendique_pas_la_presence_du_wrapper_vivant ... ok
+test daemon::presence_tests::expiration_transport_est_idempotente_cote_daemon ... ok
+test daemon::presence_tests::envoi_attach_force_humain_et_ne_clot_pas_une_demande_forgee ... ok
+test daemon::presence_tests::gere_acp_deja_connu_se_reinscrit_sous_nouvelle_instance_tient_mode_et_domaine ... ok
+test daemon::presence_tests::gere_acp_de_type_inconnu_tient_mode_et_runtime_de_sa_definition_figee ... ok
+test daemon::presence_tests::gere_acp_reconnecte_sans_champs_wrapper_tient_mode_et_domaine ... ok
+test daemon::presence_tests::heartbeat_ne_rajeunit_pas_une_capacite_morte ... ok
+test daemon::presence_tests::journal_ready_atteste_le_gate_attach_apres_register ... ok
+test daemon::presence_tests::limite_attestee_est_exposee_sans_decision_automatique ... ok
+test daemon::presence_tests::inscription_claude_geree_expose_acp_domaine_et_accepte_attach ... ok
+test daemon::presence_tests::lot_b_presence_fraiche_survit_au_retain ... ok
+test daemon::presence_tests::heartbeat_preserve_etat_metier ... ok
+test daemon::presence_tests::producteurs_de_vue_et_controle_partagent_des_lignes_json_decodables ... ok
+test daemon::presence_tests::lot_b_busy_jury_survit_sous_heartbeat_malgre_capacite_gelee ... ok
+test cli::idempotency_projection_tests::projection_cli_et_reference_partagent_le_canon_du_daemon_reel ... ok
+test daemon::presence_tests::recovery_daemon_child ... ignored
+test daemon::presence_tests::modes_reels_des_trois_enregistrements_ne_dependant_pas_du_transport ... ok
+test daemon::presence_tests::mort_du_wrapper_emporte_la_presence_du_routeur ... ok
+test daemon::presence_tests::intercalage_timeout_et_transport_n_autorise_qu_une_notification ... ok
+[main f554aa0] second
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test daemon::presence_tests::meme_cle_idempotente_avec_reponse_liee_divergente_est_refusee_sans_mutation ... ok
+test daemon::presence_tests::matrice_reprise_isole_echec_et_quota_sans_retry_infini ... ok
+test build_identity::tests::avance_head_et_marque_index_et_sources_sales ... ok
+test daemon::presence_tests::lot_b_connected_mort_est_purge_sans_redemarrage ... ok
+test daemon::presence_tests::pending_attach_expire_et_sont_nettoyes_a_la_deconnexion ... ok
+test daemon::presence_tests::open_request_is_restored_when_both_agents_reconnect ... ok
+test daemon::presence_tests::persistant_disparu_de_fleet_json_est_trace ... ok
+test daemon::presence_tests::premier_message_wrapper_fige_le_role_avant_un_handshake_tardif ... ok
+test daemon::presence_tests::mort_spontanee_rejette_les_demandes_marque_stopped_et_termine_les_vues ... ok
+test daemon::presence_tests::presence_expiree_ne_projette_plus_connected_unix_invente ... ok
+test daemon::presence_tests::reprise_en_conflit_avec_un_wrapper_terminal_echoue_sans_retry ... ok
+test daemon::presence_tests::redemarrage_daemon_reinscription_tour_en_cours_affiche_busy ... ok
+test daemon::presence_tests::rejet_tardif_attach_est_reroute_puis_purge ... ok
+test daemon::presence_tests::projection_ledger_est_bornee_et_lit_le_store_du_daemon ... ok
+test daemon::presence_tests::reconnexion_redeclare_busy_et_arret_propre_reste_stopped ... ok
+test daemon::presence_tests::reprise_natif_codex_affiche_protocole_fige_pas_unix_acp ... ok
+test daemon::presence_tests::register_migre_les_remises_dispatching_de_l_ancienne_instance ... ok
+test daemon::presence_tests::reprise_reserve_tous_les_noms_avant_ouverture_et_devient_visible ... ok
+test daemon::presence_tests::reprise_retire_une_trace_residuelle_si_zero_perte ... ok
+test daemon::presence_tests::reprise_trace_les_non_persistants_nommes_absents ... ok
+test daemon::presence_tests::sonde_build_id_partage_la_derivation_de_portee_client ... ok
+test daemon::presence_tests::roster_illisible_n_empeche_pas_la_reprise ... ok
+test daemon::presence_tests::reprise_passe_quand_bridget_fleet_quota_est_pose ... ok
+test daemon::presence_tests::reprise_trace_pertes_mixtes_au_meme_redemarrage ... ok
+test daemon::presence_tests::runtime_observation_remplace_le_couple_en_bloc ... ok
+test daemon::presence_tests::runtime_refuse_hors_agent_enregistre_et_valeurs_invalides ... ok
+test daemon::presence_tests::send_et_lookup_avant_welcome_ne_negocient_ni_ne_reservent ... ok
+test daemon::presence_tests::saturation_non_sequencee_notifie_et_recolte_la_vue_exactement_une_fois ... ok
+test daemon::presence_tests::runtime_survit_a_une_reconnexion_de_la_meme_instance ... ok
+test daemon::presence_tests::served_model_rend_l_ecart_visible_sans_inventer_si_muet ... ok
+test daemon::presence_tests::send_idempotent_persiste_un_refus_et_la_voie_historique_ne_contamine_pas_le_socle ... ok
+test daemon::presence_tests::send_idempotent_conserve_les_invariants_de_reponse_et_dnd ... ok
+test daemon::presence_tests::send_idempotent_rejoue_sans_rerouter_et_isole_les_scopes ... ok
+test daemon::presence_tests::service_capability_is_cleaned_after_a_broken_response_socket ... ok
+test daemon::presence_tests::service_maicie_negocie_sa_capacite_sans_lier_le_nom_au_droit ... ok
+test daemon::presence_tests::tour_busy_differe_les_rappels_sans_differe_l_echeance ... ok
+test daemon::presence_tests::spec_024_protocole_et_canal_explicites_restent_independants ... ok
+test daemon::presence_tests::startup_failed_commande_absente_repond_le_motif_du_canal_sans_residu ... ok
+test daemon::presence_tests::spec_024_trame_tmux_federee_historique_separe_protocole_et_canal ... ok
+test daemon::presence_tests::stop_marqueur_perime_retombe_sur_not_managed_sans_tuer_le_wrapper_terminal ... ok
+test daemon::presence_tests::takeover_refuse_un_nom_encore_live ... ok
+test daemon::presence_tests::stop_refuse_structurellement_un_wrapper_terminal ... ok
+test daemon::presence_tests::takeover_sur_fantome_reussit_sans_stop_prealable ... ok
+test daemon::presence_tests::stop_avant_marqueur_annule_la_generation_et_repond_apres_nettoyage ... ok
+test daemon::presence_tests::unreachable_presence_remains_visible ... ok
+test desired_state::tests::crash_before_rename_keeps_the_previous_fleet ... ok
+test desired_state::tests::crash_writer_child ... ignored, sous-processus contrôlé par crash_before_rename_keeps_the_previous_fleet
+test desired_state::tests::crash_after_rename_exposes_the_new_fleet_on_reopen ... ok
+test daemon::presence_tests::vue_suspendue_coalesce_un_gap_et_ne_garde_pas_de_fragment_orphelin ... ok
+test daemon::presence_tests::usage_atteste_s_agrege_et_sans_source_reste_inconnu ... ok
+test desired_state::tests::domain_est_ecrit_dans_fleet_json_apres_upsert ... ok
+test desired_state::tests::fleet_json_schema_1_sans_domain_se_relit ... ok
+test desired_state::tests::unsupported_or_invalid_schema_is_refused_with_the_path ... ok
+test desired_state::tests::fleet_schema_one_roundtrips_with_private_permissions ... ok
+test desired_state::tests::removing_an_entry_is_durable_before_returning ... ok
+test disk_hygiene::tests::copie_du_jour_est_epargnee ... ok
+test disk_hygiene::tests::orpheline_agee_est_ramassee ... ok
+test disk_hygiene::tests::processus_vivant_est_epargne ... ok
+test disk_hygiene::tests::proprietaire_inconnu_fail_closed ... ok
+test disk_hygiene::tests::purge_reelle_respecte_age_et_vivant ... ok
+test disk_hygiene::tests::seuil_franchi_produit_warn ... ok
+test fleet::tests::crash_child ... ignored, sous-processus contrôlé par crash_reel_aux_frontieres_d503
+test disk_hygiene::tests::borne_reporte_le_surplus_age ... ok
+test daemon::presence_tests::stop_apres_register_traverse_le_wrapper_et_le_superviseur_reels ... ok
+test daemon::presence_tests::vue_requests_expose_le_dernier_report_differe ... ok
+test fleet::tests::from_env_posee_releve_le_quota_consomme_par_le_daemon ... ok
+test fleet::tests::message_refus_reprise_quota_nomme_agent_quota_et_levier ... ok
+test fleet::tests::deux_spawns_simultanes_du_meme_nom_reservent_un_seul_slot ... ok
+test daemon::presence_tests::stop_apres_register_envoie_disconnect_puis_attend_la_fin_du_groupe ... ok
+test daemon::presence_tests::wrapper_accepte_les_accuses_idempotents_et_register_historique_reste_wrapper ... ok
+test fleet::tests::resolve_fleet_quota_lit_env_invalide_et_zero ... ok
+test daemon::presence_tests::wrapper_acp_historique_garde_son_journal_apres_reconnexion_vers_daemon_neuf ... ok
+test daemon::presence_tests::wrapper_recentre_reste_non_attachable_jusqu_a_journal_ready ... ok
+test fleet::tests::mismatch_expiration_et_register_tardif_sont_terminaux ... ok
+test fleet::tests::domain_est_persiste_dans_fleet_json_apres_connexion ... ok
+test idempotency::tests::a_single_byte_difference_is_an_envelope_mismatch ... ok
+test fleet::tests::quota_est_reserve_atomiquement_et_le_refus_est_rejouable ... ok
+test daemon::presence_tests::timeout_avant_connected_termine_le_groupe_reel_sans_fantome ... ok
+test idempotency::tests::begin_send_refuse_enveloppe_illisible_sans_creer_remise ... ok
+test idempotency::tests::creation_spawn_et_saga_sont_atomiques_sous_la_meme_fk ... ok
+test idempotency::tests::dispatch_and_delivery_are_persisted_in_one_transaction ... ok
+test idempotency::tests::echec_de_finalisation_socle_annule_la_finalisation_saga ... ok
+test idempotency::tests::failed_delivery_insert_rolls_back_the_dispatch_transition ... ok
+test daemon::presence_tests::stop_du_second_retablissement_gagne_avant_son_bootstrap ... ok
+test idempotency::tests::first_send_outside_its_horizon_is_expired ... ok
+test idempotency::tests::invalid_horizons_are_refused_for_a_first_reservation ... ok
+test idempotency::tests::issuer_scope_requires_a_base64url_sized_opaque_value ... ok
+test fleet::tests::reprise_expose_les_generations_en_vol_dans_l_ordre_des_noms ... ok
+test idempotency::tests::ledger_visible_pendant_dispatching_avant_accuse ... ok
+test fleet::tests::retry_en_vol_attend_le_vrai_register_sans_connected_synthetique ... ok
+test fleet::tests::scope_superviseur_et_issue_persistante_survivent_au_redemarrage ... ok
+test idempotency::tests::purge_expired_removes_its_delivery_through_the_foreign_key ... ok
+test idempotency::tests::purge_uses_each_record_expiry_not_a_new_configuration ... ok
+test idempotency::tests::reject_prepared_publishes_only_the_terminal_refusal ... ok
+test idempotency::tests::remises_dispatching_migrees_au_changement_d_instance ... ok
+test fleet::tests::stop_invalide_un_lancement_avant_toute_io_et_rejoue_cancelled ... ok
+test fleet::tests::stop_connecte_preserve_l_issue_spawn_mais_retire_l_etat_desire ... ok
+test daemon::presence_tests::stop_pendant_bootstrap_bloque_termine_le_processus_reel_avant_marqueur ... ok
+test idempotency::tests::reserve_then_replay_uses_the_same_record ... ok
+test idempotency::tests::retry_keeps_the_original_horizon_after_a_configuration_drop ... ok
+test idempotency::tests::retry_en_vol_rejoue_unknown_puis_accepted_apres_accuse ... ok
+test idempotency::tests::transitions_are_monotone ... ok
+test idempotency::tests::terminal_result_is_replayed_without_mutation ... ok
+test idempotency::tests::une_remise_en_quarantaine_ne_remonte_plus_comme_une_remise_en_vol ... ok
+test daemon::presence_tests::sigkill_daemon_reconcilie_l_ancien_groupe_avant_une_reprise_unique ... ok
+test fleet::tests::crash_reel_aux_frontieres_d503_rejoue_une_issue_unique ... ok
+test idempotency::tests::jury_lecture_totale_chemin_reprise ... ok
+test idempotency::tests::jury_lecture_totale_chemin_accuse ... ok
+test idempotency::tests::migration_v3_ajoute_la_definition_resolue_aux_sagas_existantes ... ok
+test idempotency::tests::failed_reply_tracking_rolls_back_then_a_retry_after_restart_prepares_both ... ok
+test idempotency::tests::migration_v1_classe_les_remises_sans_payload_sans_bloquer_les_valides ... ok
+test lifecycle::tests::environnement_construit_ne_copie_que_baseline_et_pass_env ... ok
+test idempotency::tests::reprise_reclasse_sans_enveloppe_en_indeterminate ... ok
+test idempotency::tests::une_remise_mise_en_quarantaine_par_la_migration_n_atteste_plus_un_depot ... ok
+test lifecycle::tests::capacite_absente_refuse_avant_reservation_et_sans_processus ... ok
+test managed_process::tests::bootstrap_child ... ignored
+test managed_process::tests::crash_controller_child ... ignored
+test idempotency::tests::reprise_isole_deux_remises_valides_d_une_sans_enveloppe ... ok
+test lifecycle::tests::effort_non_declare_est_refuse_et_reprise_revalidee_sur_definition_figee ... ok
+test managed_process::tests::fd_probe_child ... ignored
+test idempotency::tests::two_concurrent_reservations_have_one_winner ... ok
+test managed_process::tests::annulation_avant_marqueur_termine_le_bootstrap_sans_exec ... ok
+test managed_process::tests::marqueur_perime_est_retire_sans_signaler_le_pid_recycle ... ok
+test managed_process::tests::sous_mode_parse_une_commande_wrapper_sans_confondre_ses_arguments ... ok
+test managed_process::tests::marqueur_prive_roundtrip_et_refuse_un_nom_traversant ... ok
+test managed_process::tests::eof_abandonne_tandis_que_release_exec_la_sonde ... ok
+test managed_process::tests::stderr_refuse_un_repertoire_existant_aux_permissions_trop_larges ... ok
+test managed_process::tests::stderr_est_prive_separe_par_generation_et_purge_par_age ... ok
+test managed_process::tests::stderr_refuse_un_fichier_existant_non_regulier_ou_trop_permissif ... ok
+test mcp::tests::connexion_non_bloquante_refuse_un_budget_expire_avant_toute_attente ... ok
+test mcp::tests::accuse_retarde_rend_un_statut_honnete_puis_le_rejeu_lit_le_sort_sans_dupliquer ... ok
+test managed_process::tests::reconciliation_termine_un_groupe_reel_avant_de_supprimer_son_marqueur ... ok
+test mcp::tests::daemon_coupe_est_un_is_error_technique_immediat ... ok
+test mcp::tests::dto_ledger_respectent_le_contrat_outil ... ok
+test mcp::tests::coupure_apres_transmission_devient_outcome_unknown_et_le_retry_reste_identique ... ok
+test mcp::tests::issues_idempotentes_deterministes_restent_metier_et_inconnues_sont_preservees ... ok
+test mcp::tests::la_consigne_de_rejeu_nomme_ses_trois_invariants_et_l_absence_de_doublon ... ok
+test mcp::tests::huit_connexions_simultanees_ont_des_noms_ephemeres_distincts_et_la_neuvieme_est_busy ... ok
+test mcp::tests::la_remise_en_vol_et_le_sort_inconnu_ne_partagent_pas_leur_statut ... ok
+test mcp::tests::le_statut_mcp_et_le_depot_du_binaire_ne_peuvent_pas_se_contredire ... ok
+test mcp::tests::ledger_requests_scope_mine_par_defaut_et_all_accepte ... ok
+test mcp::tests::limite_d_appels_simultanes_refuse_avant_toute_connexion ... ok
+test mcp::tests::la_coupure_apres_ecriture_rend_les_cles_de_rejeu_et_les_trois_invariants ... ok
+test mcp::tests::matrice_fr009_couvre_les_quinze_cas ... ok
+test ledger::tests::projection_messages_est_bornee_et_preserve_le_corps ... ok
+test mcp::tests::resultat_mcp_duplique_le_payload_dans_textcontent ... ok
+test mcp::tests::resultats_metier_conservent_les_categories_de_refus_fermees ... ok
+test mcp::tests::schema_send_expose_in_reply_to_non_vide ... ok
+test mcp::tests::send_transmet_un_corps_riche_octet_pour_octet_et_negocie_le_client ... ok
+test mcp::tests::send_transmet_in_reply_to_dans_l_enveloppe_idempotente ... ok
+test mcp::tests::seul_le_diagnostic_de_remise_en_vol_atteste_quelque_chose ... ok
+test mcp::tests::stdout_ne_contient_que_des_reponses_json_rpc ... ok
+test mcp::tests::un_sort_indetermine_ne_promet_pas_une_remise ... ok
+test mcp::tests::tools_call_resout_l_identite_a_chaque_appel ... ok
+test mcp::tests::une_remise_en_vol_ne_s_annonce_pas_comme_un_accuse_perdu ... ok
+test mcp::tests::who_ouvre_une_connexion_ephemere_register_puis_commande ... ok
+test desired_state::tests::set_domain_ne_ecrase_pas_un_upsert_concurrent ... ok
+test mcp_identity::tests::ignore_un_nom_invalide_avant_de_consulter_les_ancetres ... ok
+test mcp_identity::tests::refuse_pid_recycle_hors_agent_legacy_et_instance_divergente ... ok
+test lifecycle::tests::session_claude_native_est_preparable_comme_equipier_gere ... ok
+test mcp_identity::tests::premier_agent_du_meme_binaire_gagne_dans_la_filiation ... ok
+test reaper::tests::build_report_lists_gap_when_background_missing ... ok
+test reaper::tests::double_observation_marks_stable ... ok
+test reaper::tests::harness_daemon_becomes_eligible_when_descendant_gone ... ok
+test reaper::tests::harness_daemon_orphan_can_be_eligible ... ok
+test reaper::tests::harness_daemon_protected_by_reparented_wrapper_sharing_home ... ok
+test reaper::tests::harness_daemon_with_living_descendant_is_not_eligible ... ok
+test reaper::tests::live_connected_wrapper_is_protege ... ok
+test reaper::tests::observer_module_has_no_kill_symbols_in_would_execution_path ... ok
+test reaper::tests::orphan_wrapper_fail_closed_without_background_signal ... ok
+test reaper::tests::parse_etime_variants ... ok
+test mcp_identity::tests::resout_la_filiation_sans_variables_applicatives ... ok
+test reaper::tests::temp_dir_orphaned_is_eligible ... ok
+test reaper::tests::temp_dir_with_owner_is_protege ... ok
+test reaper::tests::tmux_location_protects_even_if_daemon_confused ... ok
+test mcp_identity::tests::traverse_une_chaine_npx_de_trois_processus ... ok
+test mcp_identity::tests::suit_rename_et_les_ancetres_valides ... ok
+test managed_process::tests::stop_force_termine_l_intermediaire_npx_qui_ignore_l_annulation_et_son_descendant ... ok
+test ledger::tests::projection_requests_est_globale_tous_emetteurs ... ok
+test daemon::presence_tests::timeout_d_arret_conserve_le_groupe_reel_et_sa_supervision_jusqu_a_disparition ... ok
+test mcp::tests::deux_appels_outil_ne_partagent_pas_l_identite_resolue ... ok
+test receipt_store::tests::disappearance_after_initialization_is_fail_closed ... ok
+test receipt_store::tests::only_one_handle_can_open_an_instance_at_once ... ok
+test managed_process::tests::crash_reel_aux_trois_frontieres_preserve_la_preuve_attendue ... ok
+test receipt_store::tests::a_corrupted_acked_receipt_quarantines_without_reinjection ... ok
+test receipt_store::tests::deleting_an_enrolled_instance_directory_remains_fail_closed_after_reopen ... ok
+test recovery_trace::tests::crash_simule_nomme_chaque_absent_avec_sa_raison ... ok
+test receipt_store::tests::missing_sentinel_or_recreated_directory_is_fail_closed_after_initialization ... ok
+test receipt_store::tests::quota_saturation_is_a_terminal_refusal_before_a_seen_write ... ok
+test registry::tests::acp_generique_cursor_et_gemini_restent_admis ... ok
+test receipt_store::tests::concurrent_delivery_reserves_once_and_serializes_quota ... ok
+test recovery_trace::tests::roster_illisible_se_degrade_sans_erreur ... ok
+test receipt_store::tests::quota_reserves_the_final_acked_size_at_its_exact_boundary ... ok
+test registry::tests::ambiguous_command_is_refused_without_map_order_fallback ... ok
+test recovery_trace::tests::zero_perte_n_ecrit_pas_de_bruit ... ok
+test registry::tests::commande_claude_refuse_home_absent_au_point_de_derivation ... ok
+test registry::tests::bypass_permissions_change_le_digest_de_la_definition_claude ... ok
+test registry::tests::defaults_cover_the_three_priorities ... ok
+test registry::tests::defauts_natifs_codex_et_claude_ne_passent_pas_par_zed ... ok
+test registry::tests::definition_figee_historique_reste_reprise_avec_la_capacite_acp_de_migration ... ok
+test registry::tests::empty_command_is_rejected ... ok
+test registry::tests::etiquette_modele_auto_lue_depuis_les_args_cursor ... ok
+test receipt_store::tests::seen_then_acked_replays_the_ack_without_another_injection ... ok
+test receipt_store::tests::seen_without_ack_is_indeterminate_and_never_requests_a_second_injection ... ok
+test receipt_store::tests::private_state_permissions_and_compaction_are_enforced ... ok
+test registry::tests::historic_interactive_aliases_remain_available ... ok
+test registry::tests::generic_codex_command_resolves_through_the_registry ... ok
+test registry::tests::invalid_mcp_interactive_is_rejected ... ok
+test registry::tests::invalid_permissions_are_rejected ... ok
+test registry::tests::definition_resolue_est_complete_et_son_digest_est_deterministe ... ok
+test registry::tests::invalid_protocol_is_rejected ... ok
+test registry::tests::matrice_de_capacites_refuse_les_champs_inconnus_et_les_doublons ... ok
+test registry::tests::pont_zed_claude_est_refuse_avant_lancement ... ok
+test registry::tests::pont_zed_codex_est_refuse_avant_lancement ... ok
+test registry::tests::pass_env_est_borne_et_valide_atomiquement ... ok
+test registry::tests::remplacement_sans_forbidden_env_signale_la_perte_de_garde ... ok
+test registry::tests::undeclared_generic_command_names_source_and_choices ... ok
+test registry::tests::unknown_entry_key_is_reported ... ok
+test registry::tests::unknown_type_names_its_source_and_choices ... ok
+test registry::tests::user_entry_replaces_its_default ... ok
+test registry::tests::pont_zed_refuse_les_quatre_formes_de_chemin_vivantes ... ok
+test registry::tests::zero_queue_capacity_is_rejected ... ok
+test registry::tests::valid_entry_keys_produce_no_warning ... ok
+test reprise::tests::carte_nomme_chaque_absent_de_la_trace_de_reprise ... ok
+test reprise::tests::pin_frais_expose_le_geste ... ok
+test reprise::tests::bloc_0_expose_les_chemins_resolus_de_status_sans_reconstruire_home ... ok
+test reprise::tests::pin_plus_vieux_d_une_heure_s_affiche_comme_perime ... ok
+test reprise::tests::source_indisponible_se_declare_sans_inventer_ni_echouer_en_bloc ... ok
+test recovery_trace::tests::roster_draine_les_non_persistants_et_garde_les_persistants ... ok
+test runtime::tests::claude_effort_absent_reste_absent ... ok
+test runtime::tests::claude_transcript_nominal ... ok
+test runtime::tests::claude_ignore_le_sous_agent_et_les_lignes_sans_modele ... ok
+test registry::tests::lecture_privee_refuse_permissions_larges_et_accepte_0600 ... ok
+test registry::tests::lecture_privee_refuse_un_lien_symbolique ... ok
+test runtime::tests::derniere_ligne_incomplete_est_rejetee_au_profit_de_la_precedente ... ok
+test runtime::tests::codex_dernier_turn_context_sans_modele_est_ignore ... ok
+test runtime::tests::codex_rollout_nominal ... ok
+test runtime::tests::derniere_ligne_complete_sans_saut_final_est_lue ... ok
+test runtime::tests::fichier_vide_ou_absent_ne_produit_rien ... ok
+test runtime::tests::fenetre_tronquee_aux_deux_bornes ... ok
+test runtime::tests::json_invalide_est_ignore_sans_erreur ... ok
+test runtime::tests::rollout_actif_est_le_plus_recemment_ecrit ... ok
+test idempotency::tests::accuse_sans_enveloppe_respecte_les_trois_verdicts_metier ... ok
+test runtime::tests::fenetre_agrandie_quand_l_observation_est_plus_haut ... ok
+test ledger::tests::projection_rend_indetermine_distinctement ... ok
+test ledger::tests::projection_distingue_en_vol_et_recu ... ok
+test store::tests::depot_direct_refuse_une_trame_guichet_superieure_a_64_kio ... ok
+test store::tests::deferred_reminder_is_persisted_for_ledger_readers ... ok
+test store::tests::schema_guichet_ne_cree_plus_la_colonne_result_bytes ... ok
+test store::tests::guichet_reply_stale_ne_peut_pas_gagner_apres_lease_expire ... ok
+test store::tests::purge_supprime_avec_la_demande_les_evenements_associes ... ok
+test ui::tests::analyse_url_refuse_les_echappements_et_doublons ... ok
+test store::tests::purge_guichet_conserve_les_demandes_encore_vivantes ... ok
+test store::tests::cancellation_is_idempotent_and_terminal ... ok
+test ui::tests::chemin_productif_assets_emprunte_write_asset ... ok
+test ui::tests::chemin_productif_ouverture_journal_emprunte_fenetre_relais ... ok
+test store::tests::reponse_guichet_accepted_clot_atomiquement_la_demande_liee ... ok
+test ui::tests::chemin_productif_snapshot_emprunte_retain_living_objectives ... ok
+test ui::tests::chemin_productif_snapshot_emprunte_human_referent_thread_messages ... ok
+test ui::tests::deux_demarrages_successifs_rendent_le_meme_port_et_le_meme_jeton ... ok
+test store::tests::guichet_rejoue_les_octets_et_releve_fifo_apres_reouverture ... ok
+test ui::tests::contenu_modifie_refuse_le_304 ... ok
+test ui::tests::fil_humain_referent_entrant_porte_corps ... ok
+test ui::tests::fil_humain_referent_ordonne_entrant_puis_sortant ... ok
+test ui::tests::fil_humain_referent_sortant_porte_corps ... ok
+test ui::tests::garde_destinataire_refuse_absent_et_arrete_sans_refuser_un_agent_vivant ... ok
+test ui::tests::etag_inchange_rend_304_sans_corps ... ok
+test ui::tests::page_locale_charge_les_assets_sans_exposer_la_socket_daemon ... ok
+test ui::tests::peer_exchange_distingue_in_out_et_both ... ok
+test ui::tests::peer_exchange_garde_count_un_et_la_position_chronologique_reelle ... ok
+test ui::tests::pertes_ui_suivent_le_socket_du_relais_pas_le_home ... ok
+test ui::tests::plafond_ne_coupe_pas_un_tour_en_plein_milieu ... ok
+test ui::tests::port_deja_pris_echoue_clairement_sans_repli_aleatoire ... ok
+test ui::tests::assets_statiques_annoncent_etag_et_revalidation ... ok
+test ui::tests::ouverture_sans_from_seq_prend_dix_tours_projetes ... ok
+test ui::tests::remontee_from_seq_donne_l_ancien_par_pages_de_vingt ... ok
+test ui::tests::premier_demarrage_persiste_puis_second_relit_sans_retirer ... ok
+test ui::tests::requete_sans_jeton_est_refusee_avant_toute_socket_daemon ... ok
+test store::tests::guichet_claim_next_est_atomique_entre_deux_stores ... ok
+test ui::tests::spec_024_presence_ui_locale_annonce_unix_dans_la_trame_reelle ... ok
+test ui::tests::spec_024_presence_ui_sans_attestation_reste_inconnue_dans_la_trame_reelle ... ok
+test ui::tests::spec_024_presence_ui_federee_conserve_ssh_unix_dans_la_trame_reelle ... ok
+test mcp::tests::retry_rejoue_scope_et_horodatage_malgre_rename ... ok
+test ui::tests::temporaire_preexistant_livre_un_final_protege ... ok
+test ui::tests::temporaire_preexistant_ne_bloque_pas_le_demarrage ... ok
+test store::tests::usage_sans_echantillon_reste_inconnu_et_n_invente_pas_zero ... ok
+test ui::tests::cafe_sans_accent_trouve_cafe_avec_accent ... ok
+test store::tests::recent_messages_explique_search_pas_scan_sur_send_deliveries ... ok
+test store::tests::transitions_cancelled_et_timed_out_deposent_un_fait_guichet_unique ... ok
+test store::tests::second_handle_ne_revoque_un_claim_qu_au_bootstrap_explicite ... ok
+test ui::tests::echappement_like_exclut_les_leurres_joker ... ok
+test ui::tests::recherche_depuis_la_page_rend_corps_auteur_horodatage_en_ordre ... ok
+test wrapper::prompt_tests::carte_de_reprise_signale_chaque_source_indisponible ... ok
+test wrapper::prompt_tests::lancement_hors_reprise_conserve_le_prompt_historique ... ok
+test wrapper::prompt_tests::prompt_mcp_produit_exactement_la_fixture_reduite_versionnee ... ok
+test wrapper::prompt_tests::prompt_sans_mcp_conserve_exactement_le_bloc_historique ... ok
+test wrapper::prompt_tests::reprise_avec_prompt_prefixe_l_amorcage_sans_prendre_une_valeur_d_option ... ok
+test wrapper::prompt_tests::reprise_last_sans_prompt_recoit_l_amorcage_en_derniere_position ... ok
+test wrapper::prompt_tests::reprise_nommee_conserve_overrides_et_place_l_amorcage_apres_les_options ... ok
+test wrapper::prompt_tests::valeurs_d_options_et_images_ne_sont_jamais_prises_pour_la_sous_commande_ou_le_prompt ... ok
+test wrapper::reconnect_tests::api_key_forbidden_accepte_le_contournement_explicite ... ok
+test wrapper::reconnect_tests::api_key_forbidden_refuse_le_lancement_en_nommant_la_variable ... ok
+test wrapper::reconnect_tests::api_key_forbidden_utilise_la_seconde_variable_si_elle_est_seule ... ok
+test wrapper::reconnect_tests::bascule_snapshot_vers_live_preserve_la_continuite_sans_doublon ... ok
+test wrapper::reconnect_tests::branchement_mcp_n_ecrit_aucune_configuration_utilisateur ... ok
+test wrapper::reconnect_tests::chemin_transcript_claude_suit_le_slug_du_cwd ... ok
+test wrapper::reconnect_tests::contexte_tmux_exige_pane_et_localisation ... ok
+test daemon::presence_tests::vue_lente_est_recoltee_sans_bloquer_le_daemon_ni_les_autres_vues ... ok
+test wrapper::reconnect_tests::equipier_flag_is_removed_before_the_agent_is_started ... ok
+test wrapper::reconnect_tests::equipier_refuse_le_pont_zed_avant_tout_processus ... ok
+test wrapper::reconnect_tests::disparition_d_un_fichier_termine_l_abonnement_sans_boucle ... ok
+test wrapper::reconnect_tests::evenement_d_usage_claude_est_transmis_sans_zero_invente ... ok
+test wrapper::reconnect_tests::evenement_de_limite_claude_est_transmis_sans_transformation ... ok
+test disk_hygiene::tests::boot_avec_1000_jeunes_reste_sous_5s_sans_sonde ... ok
+test wrapper::reconnect_tests::journal_failure_requires_an_immediate_transport_shutdown ... ok
+test wrapper::reconnect_tests::fichier_mcp_ephemere_est_nettoye_avant_un_refus_de_spawn ... ok
+test wrapper::reconnect_tests::le_domaine_surcharge_prime_sur_le_derive ... ok
+test wrapper::reconnect_tests::le_domaine_derive_nomme_le_depot_courant ... ok
+test wrapper::reconnect_tests::le_nom_choisi_par_l_utilisateur_survit_a_la_reconnexion ... ok
+test wrapper::reconnect_tests::livraison_idempotente_interactive_injecte_une_fois_et_rejoue_l_accuse ... ok
+test wrapper::reconnect_tests::historic_and_idempotent_same_message_id_keep_dispatch_order ... ok
+test wrapper::reconnect_tests::modele_servi_claude_est_transmis_sans_decision ... ok
+test wrapper::reconnect_tests::nom_illisible_ou_vide_retombe_sur_le_nom_d_enregistrement ... ok
+test wrapper::reconnect_tests::projection_acp_conserve_l_environnement_vide_valide ... ok
+test lifecycle::tests::matrice_sc003_couvre_les_onze_familles_sans_residu_operationnel ... ok
+test wrapper::reconnect_tests::prompt_dispatched_persists_the_ack_before_reporting_it ... ok
+test wrapper::reconnect_tests::reconnect_delay_grows_then_stays_capped ... ok
+test wrapper::reconnect_tests::perte_du_flux_live_signale_un_gap_puis_rattrape_le_journal ... ok
+test wrapper::reconnect_tests::redelivery_after_seen_never_injects_a_second_prompt ... ok
+test wrapper::prompt_tests::carte_de_reprise_compte_sept_lignes_apres_refus_d_un_nom_avec_lf ... ok
+test wrapper::prompt_tests::carte_de_reprise_checkout_principal_alerte_regle_6 ... ok
+test wrapper::prompt_tests::carte_de_reprise_sans_mission_ne_l_invente_pas ... ok
+test wrapper::reconnect_tests::relais_marque_une_fenetre_vide_sans_through_seq ... ok
+test wrapper::reconnect_tests::replaced_instance_is_indeterminate_without_injection ... ok
+test wrapper::reconnect_tests::queue_partielle_corrompue_devient_un_diagnostic_sans_bloquer_le_suivi ... ok
+test wrapper::reconnect_tests::seul_le_contournement_egal_a_un_est_accepte ... ok
+test wrapper::reconnect_tests::shutdown_reste_borne_malgre_un_spam_de_commandes ... ok
+test wrapper::reconnect_tests::sonde_claude_ignore_l_historique_et_remonte_modele_effort_opaques ... ok
+test wrapper::reconnect_tests::relais_refuse_la_saturation_et_le_controle_passe_pendant_un_rejeu_suspendu ... ok
+test wrapper::reconnect_tests::sonde_republication_apres_reconnect_meme_observation ... ok
+test wrapper::reconnect_tests::same_message_id_from_two_scopes_keeps_each_delivery_acknowledgement ... ok
+test wrapper::reconnect_tests::relais_ne_lit_jamais_le_journal_sans_abonne ... ok
+test wrapper::reconnect_tests::spawn_gere_injecte_mcp_identite_et_path ... ok
+test wrapper::reconnect_tests::spec_024_canal_federe_prefere_la_nouvelle_cle_et_lit_l_alias ... ok
+test wrapper::reconnect_tests::spec_024_enregistrement_tmux_ecrit_protocole_et_canal_separes ... ok
+test ui::tests::troncature_est_signalee_quand_le_plafond_est_atteint ... ok
+test wrapper::reconnect_tests::relais_rejoue_la_rotation_par_tranches_et_conserve_la_continuite ... ok
+test wrapper::reconnect_tests::lignes_illisibles_et_trop_grandes_signalent_puis_laissent_progresser ... ok
+test wrapper::prompt_tests::carte_de_reprise_annulee_hors_clos_ne_promet_pas_de_suite ... ok
+test wrapper::prompt_tests::carte_de_reprise_clone_de_revue_ne_doit_pas_alerter ... ok
+test wrapper::prompt_tests::carte_de_reprise_a_evaluer_avec_levier_affiche_suite_du_greffe ... ok
+test wrapper::prompt_tests::carte_de_reprise_reconstruit_mission_et_worktree_durables ... ok
+test wrapper::prompt_tests::carte_de_reprise_en_attente_prerequis_ne_relance_pas ... ok
+test wrapper::reconnect_tests::sonde_ne_bascule_pas_vers_un_transcript_voisin_plus_recent ... ok
+test wrapper::prompt_tests::carte_de_reprise_mission_close_prescrit_attente ... ok
+test wrapper::reconnect_tests::reset_generation_purge_le_rejeu_avant_un_nouvel_abonnement ... ok
+test wrapper::reconnect_tests::today_et_date_suivent_la_rotation_apres_le_snapshot ... ok
+test wrapper::reconnect_tests::today_vide_ne_rejoue_pas_l_historique_anterieur ... ok
+test ui::tests::TEMOIN_fil_humain_survit_au_trafic_agent ... ok
+test wrapper::reconnect_tests::troncature_et_remplacement_repartent_du_nouvel_etat ... ok
+test store::tests::recent_messages_dix_mille_mediane_sous_vingt_ms ... ok
+test wrapper::reconnect_tests::unsubscribe_avant_consommation_annule_le_subscribe_sans_fuite ... ok
+test wrapper::reconnect_tests::sorties_des_abonnements_restent_equitablement_entrelacees ... ok
+
+test result: ok. 497 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 7.02s
+
+     Running unittests src/main.rs (/tmp/bt-base-target/debug/deps/bridget-037f57b310db516c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/attach_journal_attestation_test.rs (/tmp/bt-base-target/debug/deps/attach_journal_attestation_test-8a8c6b67a0368139)
+
+running 2 tests
+test pilote_sans_journal_reste_refuse_par_le_gate ... ok
+test wrapper_interactif_avec_journal_actif_est_attachable ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+     Running tests/build_id_integration_test.rs (/tmp/bt-base-target/debug/deps/build_id_integration_test-92f267e03fc6ec2a)
+
+running 1 test
+warning: function `older_page_from_turns` is never used
+    --> crates/bridget-daemon/src/ui.rs:1012:4
+     |
+1012 | fn older_page_from_turns(
+     |    ^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `older_page_from_turns` is never used
+    --> crates/bridget-daemon/src/ui.rs:1012:4
+     |
+1012 | fn older_page_from_turns(
+     |    ^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+test daemon_et_cli_reels_transmettent_et_comparent_le_build_id ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.45s
+
+     Running tests/capabilities_integration_test.rs (/tmp/bt-base-target/debug/deps/capabilities_integration_test-08a9824212a17c02)
+
+running 2 tests
+test modele_non_declare_est_refuse_avant_processus_et_ordre_durable ... ok
+test commande_native_absente_est_refusee_sans_residu_puis_reparable_au_meme_id ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+
+     Running tests/claude_native_permissions_test.rs (/tmp/bt-base-target/debug/deps/claude_native_permissions_test-f49225c08ab7f6b4)
+
+running 3 tests
+test claude_gere_sans_bypass_reste_sans_outil ... FAILED
+test claude_gere_avec_bypass_ecrit_et_relit_un_fichier ... FAILED
+test claude_gere_recoit_mcp_identite_et_path ... FAILED
+
+failures:
+
+---- claude_gere_sans_bypass_reste_sans_outil stdout ----
+
+thread '<unnamed>' (428768780) panicked at crates/bridget-daemon/tests/claude_native_permissions_test.rs:137:17:
+assertion failed: channel.as_deref().is_some_and(|value| value != "claude_stream_json")
+
+thread 'claude_gere_sans_bypass_reste_sans_outil' (428768755) panicked at crates/bridget-daemon/tests/claude_native_permissions_test.rs:226:5:
+assertion `left == right` failed: wrapper Claude géré
+  left: Err("EOF while parsing a value at line 1 column 0")
+ right: Ok(())
+
+---- claude_gere_avec_bypass_ecrit_et_relit_un_fichier stdout ----
+
+thread '<unnamed>' (428768779) panicked at crates/bridget-daemon/tests/claude_native_permissions_test.rs:137:17:
+assertion failed: channel.as_deref().is_some_and(|value| value != "claude_stream_json")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'claude_gere_avec_bypass_ecrit_et_relit_un_fichier' (428768753) panicked at crates/bridget-daemon/tests/claude_native_permissions_test.rs:226:5:
+assertion `left == right` failed: wrapper Claude géré
+  left: Err("EOF while parsing a value at line 1 column 0")
+ right: Ok(())
+
+---- claude_gere_recoit_mcp_identite_et_path stdout ----
+
+thread '<unnamed>' (428768781) panicked at crates/bridget-daemon/tests/claude_native_permissions_test.rs:137:17:
+assertion failed: channel.as_deref().is_some_and(|value| value != "claude_stream_json")
+
+thread 'claude_gere_recoit_mcp_identite_et_path' (428768754) panicked at crates/bridget-daemon/tests/claude_native_permissions_test.rs:226:5:
+assertion `left == right` failed: wrapper Claude géré
+  left: Err("EOF while parsing a value at line 1 column 0")
+ right: Ok(())
+
+
+failures:
+    claude_gere_avec_bypass_ecrit_et_relit_un_fichier
+    claude_gere_recoit_mcp_identite_et_path
+    claude_gere_sans_bypass_reste_sans_outil
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+error: test failed, to rerun pass `-p bridget-daemon --test claude_native_permissions_test`
