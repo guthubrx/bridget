@@ -20,7 +20,7 @@ cat >"$fake_bridget" <<'EOF'
 #!/usr/bin/env bash
 printf 'bridget %s\n' "$*" >>"$RONDE_COMMAND_LOG"
 case "$*" in
-  "agents --json") printf '%s\n' '[{"name":"alice","state":"connected","domain":"bridget","last_seen_secs":12},{"name":"bob","state":"connected","domain":"bridget","last_seen_secs":1901},{"name":"carol","state":"connected","domain":"bridget","last_seen_secs":13},{"name":"bridget","state":"connected","last_seen_secs":1}]' ;;
+  "agents --json") printf '%s\n' '[{"name":"alice","state":"connected","domain":"bridget","last_seen_secs":12},{"name":"bob","state":"connected","domain":"bridget","last_seen_secs":1901},{"name":"carol","state":"connected","domain":"bridget","last_seen_secs":13},{"name":"dave","state":"connected","domain":"bridget","last_seen_secs":14},{"name":"bridget","state":"connected","last_seen_secs":1}]' ;;
   "requests --all --json") printf '%s\n' '[{"id":"expired","sender":"alice","target":"bob","deadline_at":99},{"id":"live","sender":"alice","target":"bob","deadline_at":101}]' ;;
   *) exit 9 ;;
 esac
@@ -51,8 +51,10 @@ db.execute("INSERT INTO objectives VALUES ('evaluate', 'a_evaluer')")
 db.execute("INSERT INTO objectives VALUES ('active', 'en_coordination')")
 db.execute("INSERT INTO delegations VALUES ('d-active', 'active', '{\"participant\":\"alice\"}')")
 db.execute("INSERT INTO delegations VALUES ('d-prepared', 'active', '{\"participant\":\"carol\"}')")
+db.execute("INSERT INTO delegations VALUES ('d-future', 'active', '{\"participant\":\"dave\"}')")
 db.execute("INSERT INTO delegation_outbox VALUES ('d-active', 'accepted')")
 db.execute("INSERT INTO delegation_outbox VALUES ('d-prepared', 'prepared')")
+db.execute("INSERT INTO delegation_outbox VALUES ('d-future', 'dispatching')")
 db.commit()
 db.execute("SELECT COUNT(*) FROM objectives").fetchone()
 assert pathlib.Path(f"{database}-wal").exists()
@@ -91,9 +93,11 @@ assert report["maicie"]["objectives_to_evaluate_means"] == (
 assigned = [a["name"] for a in report["agents"]["unassigned_connected"]]
 if "carol" not in assigned:
     raise SystemExit("mandat_non_emis_ne_parait_pas_en_cours")
+if "dave" not in assigned:
+    raise SystemExit("etat_non_attestant_ne_parait_pas_en_cours")
 if "alice" in assigned:
     raise SystemExit("remise_attestee_fait_progresser_la_delegation")
-assert assigned == ["bob", "carol"]
+assert assigned == ["bob", "carol", "dave"]
 assert [r["id"] for r in report["requests"]["expired"]] == ["expired"]
 assert report["registry"]["view"] == "REGISTRE\nopen=1\n"
 PY
