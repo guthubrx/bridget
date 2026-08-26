@@ -15,6 +15,8 @@ La source existante est `delegation_outbox.state` ; aucun champ ni état nouveau
 n’est ajouté. Cette garde rend opposable l’arête R1 du graphe de contrôle décrit
 dans `specs/034-orchestration-graphe-de-controle/decision.md` (mandat attesté),
 sans bloquer la création d’une délégation et sans appeler de modèle.
+Le rattachement R1 s’appuie sur le dossier 034 livré sur sa branche, qui n’est
+pas encore fusionné dans `main`.
 
 ## Vérification
 
