@@ -604,6 +604,134 @@
         assert.equal(api.rememberWatchResumeSeq(resume, "bridget", 701).get("bridget"), 701);
       });
 
+      // L9 charge 1 — le chemin de connexion, pas la projection isolée.
+      // Contrôle positif : le curseur avance AVANT qu'on juge l'URL.
+      test("watch_connexion_porte_from_seq_apres_rattrapage", () => {
+        const resume = new Map();
+        api.advanceWatchResumeFromEnvelope(resume, "bridget", {
+          event: { type: "Gap", from_seq: 2, to_seq: 238 },
+        });
+        api.advanceWatchResumeFromEnvelope(resume, "bridget", {
+          event: { type: "SnapshotCaughtUp", through_seq: 621 },
+        });
+        assert.equal(api.resolveWatchFromSeq(resume, "bridget"), 622);
+        const urls = [];
+        class FakeEventSource {
+          constructor(url) {
+            urls.push(url);
+            this.url = url;
+          }
+          close() {}
+        }
+        const opened = api.connectWatchSource(
+          FakeEventSource,
+          "jeton",
+          "bridget",
+          resume,
+        );
+        assert.equal(opened.fromSeq, 622);
+        assert.match(opened.url, /from_seq=622/);
+        assert.deepEqual(urls, [
+          "/v1/watch?token=jeton&agent=bridget&from_seq=622",
+        ]);
+      });
+
+      // Hypothèse L9 : curseur resté à 0 + dédup = trou silencieux.
+      // Mesure : après rattrapage le curseur AVANCE, donc la reconnexion
+      // ne rejoue pas from_seq=0. Si resolveWatchFromSeq forçait 0, ce témoin meurt.
+      test("curseur_avance_reellement_apres_rattrapage_sinon_trou_silencieux", () => {
+        const resume = new Map();
+        const attested = new Set();
+        api.acceptTimelineEvents(
+          api.journalEnvelopeToEvents({
+            event: { type: "Gap", from_seq: 2, to_seq: 238 },
+          }, "bridget", new Map()),
+          "bridget",
+          attested,
+        );
+        api.advanceWatchResumeFromEnvelope(resume, "bridget", {
+          event: { type: "SnapshotCaughtUp", through_seq: 621 },
+        });
+        assert.equal(api.resolveWatchFromSeq(resume, "bridget"), 622);
+        assert.match(
+          api.buildWatchUrl("t", "bridget", resume),
+          /from_seq=622/,
+          "sans avancement réel, la dédup masquerait une lacune rejouée depuis 0",
+        );
+        assert.equal(api.resolveWatchFromSeq(new Map(), "bridget"), 0);
+      });
+
+      // L9 charge 2 — End / JournalReadError hors du fil (3e membre du cycle).
+      test("fin_et_erreur_lecture_n_ecrivent_plus_dans_le_fil", () => {
+        assert.deepEqual(
+          api.journalEnvelopeToEvents({ event: { type: "End" } }, "bridget", new Map()),
+          [],
+        );
+        assert.deepEqual(
+          api.journalEnvelopeToEvents(
+            { event: { type: "JournalReadError" } },
+            "bridget",
+            new Map(),
+          ),
+          [],
+        );
+        assert.equal(api.watchEnvelopeEndsStream({ event: { type: "End" } }), true);
+        assert.equal(
+          api.watchEnvelopeEndsStream({ event: { type: "Gap", from_seq: 1, to_seq: 2 } }),
+          false,
+        );
+      });
+
+      // L9 charge 4 — frein de reconnexion.
+      test("reconnexion_watch_croit_et_s_arrete_apres_fin_de_flux", () => {
+        assert.equal(api.watchReconnectDelayMs(1), 800);
+        assert.equal(api.watchReconnectDelayMs(2), 1600);
+        assert.equal(api.watchReconnectDelayMs(3), 3200);
+        assert.equal(api.watchReconnectDelayMs(10), 30000);
+        assert.equal(api.shouldScheduleWatchReconnect({ streamEnded: false }), true);
+        assert.equal(api.shouldScheduleWatchReconnect({ streamEnded: true }), false);
+      });
+
+      // L9 charge 5 — to_seq / through_seq convertis comme les seq de records.
+      test("avancement_curseur_convertit_to_seq_et_through_seq", () => {
+        const resume = new Map();
+        api.advanceWatchResumeFromEnvelope(resume, "a", {
+          event: { type: "Gap", from_seq: "2", to_seq: "238" },
+        });
+        assert.equal(resume.get("a"), 239);
+        api.advanceWatchResumeFromEnvelope(resume, "a", {
+          event: { type: "SnapshotCaughtUp", through_seq: "621" },
+        });
+        assert.equal(resume.get("a"), 622);
+      });
+
+      // L9 charge 3 — pendant le rattrapage, les records doivent pouvoir peindre.
+      test("rattrapage_autorise_le_rendu_des_records_avant_caught_up", () => {
+        const decision = api.decideWatchThreadRender({
+          replayingJournal: true,
+          caughtUp: false,
+          acceptedCount: 2,
+        });
+        assert.equal(decision.render, true);
+        assert.equal(decision.scrollMode, "replay");
+        assert.equal(
+          api.decideWatchThreadRender({
+            replayingJournal: true,
+            caughtUp: false,
+            acceptedCount: 0,
+          }).render,
+          false,
+        );
+        assert.deepEqual(
+          api.decideWatchThreadRender({
+            replayingJournal: true,
+            caughtUp: true,
+            acceptedCount: 0,
+          }),
+          { render: true, scrollMode: "reset", replayingJournal: false },
+        );
+      });
+
       test("fragment_jsonl_incomplet_attend_sa_borne_finale", () => {
         const record = { v: 1, seq: 9, ts: "2026-08-25T20:00:00Z", session_id: "s", event: "update", message_id: "m", payload: { kind: "text", content: "é" } };
         const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
@@ -1053,13 +1181,73 @@
     return resumeSeq;
   }
 
+  function resolveWatchFromSeq(resumeSeq, agent) {
+    const value = resumeSeq && typeof resumeSeq.get === "function"
+      ? resumeSeq.get(agent)
+      : undefined;
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function buildWatchUrl(token, agent, resumeSeq) {
+    return agentResourceUrl(
+      "/v1/watch",
+      token,
+      agent,
+      resolveWatchFromSeq(resumeSeq, agent),
+    );
+  }
+
+  function connectWatchSource(EventSourceCtor, token, agent, resumeSeq) {
+    const fromSeq = resolveWatchFromSeq(resumeSeq, agent);
+    const url = buildWatchUrl(token, agent, resumeSeq);
+    return { url, fromSeq, source: new EventSourceCtor(url) };
+  }
+
+  function watchReconnectDelayMs(attempt) {
+    const step = Math.max(1, Math.trunc(Number(attempt) || 1));
+    return Math.min(30000, 800 * (2 ** (step - 1)));
+  }
+
+  function shouldScheduleWatchReconnect(options) {
+    return !(options && options.streamEnded);
+  }
+
+  function watchEnvelopeEndsStream(envelope) {
+    const event = envelope && envelope.event ? envelope.event : envelope || {};
+    return event.type === "End";
+  }
+
+  function decideWatchThreadRender({ replayingJournal, caughtUp, acceptedCount }) {
+    if (caughtUp) {
+      return { render: true, scrollMode: "reset", replayingJournal: false };
+    }
+    if (replayingJournal) {
+      return {
+        render: acceptedCount > 0,
+        scrollMode: "replay",
+        replayingJournal: true,
+      };
+    }
+    return {
+      render: true,
+      scrollMode: acceptedCount > 0 ? "live" : "reset",
+      replayingJournal: false,
+    };
+  }
+
   function advanceWatchResumeFromEnvelope(resumeSeq, agent, envelope) {
     const event = envelope && envelope.event ? envelope.event : envelope || {};
-    if (event.type === "Gap" && Number.isFinite(event.to_seq)) {
-      rememberWatchResumeSeq(resumeSeq, agent, Number(event.to_seq) + 1);
+    if (event.type === "Gap") {
+      const toSeq = Number(event.to_seq);
+      if (Number.isFinite(toSeq)) {
+        rememberWatchResumeSeq(resumeSeq, agent, toSeq + 1);
+      }
     }
-    if (event.type === "SnapshotCaughtUp" && Number.isFinite(event.through_seq)) {
-      rememberWatchResumeSeq(resumeSeq, agent, Number(event.through_seq) + 1);
+    if (event.type === "SnapshotCaughtUp") {
+      const through = Number(event.through_seq);
+      if (Number.isFinite(through)) {
+        rememberWatchResumeSeq(resumeSeq, agent, through + 1);
+      }
     }
     return resumeSeq;
   }
@@ -1105,16 +1293,16 @@
         text: `Lacune attestée : séquences ${event.from_seq ?? "?"} à ${event.to_seq ?? "?"}.`,
       }];
     }
-    if (event.type === "JournalReadError") {
-      return [{ kind: "system", agent, at, text: "Journal momentanément illisible." }];
-    }
-    // Subscribed / SnapshotCaughtUp pilotent le rattrapage et le relais ;
-    // ils ne doivent jamais écrire dans le fil de conversation (L8).
-    if (event.type === "SnapshotCaughtUp" || event.type === "Subscribed") {
+    // JournalReadError / End / Subscribed / SnapshotCaughtUp : cycle de
+    // reconnexion — hors du fil (L8 + L9). End coupe le flux côté relais ;
+    // le client arrête de se reconnecter (shouldScheduleWatchReconnect).
+    if (
+      event.type === "JournalReadError"
+      || event.type === "SnapshotCaughtUp"
+      || event.type === "Subscribed"
+      || event.type === "End"
+    ) {
       return [];
-    }
-    if (event.type === "End") {
-      return [{ kind: "system", agent, at, text: "Flux du journal terminé." }];
     }
     return [];
   }
@@ -1363,6 +1551,8 @@
     let replayingJournal = true;
     let restoredTimer = null;
     let reconnectTimer = null;
+    let reconnectAttempts = 0;
+    let watchStreamEnded = false;
 
     const make = (tag, className, value) => {
       const node = documentRef.createElement(tag);
@@ -1829,16 +2019,19 @@
       if (!agent || !token || typeof windowRef.EventSource !== "function") return;
       const generation = sourceGeneration;
       replayingJournal = true;
+      watchStreamEnded = false;
       updateRelay("reconnecting");
-      const fromSeq = Number.isFinite(watchResumeSeq.get(agent))
-        ? watchResumeSeq.get(agent)
-        : 0;
-      source = new windowRef.EventSource(
-        agentResourceUrl("/v1/watch", token, agent, fromSeq),
+      const opened = connectWatchSource(
+        windowRef.EventSource,
+        token,
+        agent,
+        watchResumeSeq,
       );
+      source = opened.source;
       requestScopedSnapshot(agent, generation);
       source.onopen = () => {
         if (generation !== sourceGeneration) return;
+        reconnectAttempts = 0;
         updateRelay("connected");
       };
       source.addEventListener("snapshot", (message) => {
@@ -1858,6 +2051,9 @@
         if (generation !== sourceGeneration) return;
         try {
           const envelope = JSON.parse(message.data);
+          if (watchEnvelopeEndsStream(envelope)) {
+            watchStreamEnded = true;
+          }
           const caughtUp = envelope.event && envelope.event.type === "SnapshotCaughtUp";
           advanceWatchResumeFromEnvelope(watchResumeSeq, agent, envelope);
           const accepted = acceptTimelineEvents(
@@ -1877,9 +2073,15 @@
             return true;
           });
           state = appendTimelineBatch(state, accepted);
-          if (replayingJournal && !caughtUp) return;
-          replayingJournal = false;
-          renderThread(caughtUp ? 0 : accepted.length);
+          const decision = decideWatchThreadRender({
+            replayingJournal,
+            caughtUp,
+            acceptedCount: accepted.length,
+          });
+          replayingJournal = decision.replayingJournal;
+          if (decision.render) {
+            renderThread(decision.scrollMode === "live" ? accepted.length : 0);
+          }
         } catch (_error) {
           applyIncoming({
             kind: "system",
@@ -1926,10 +2128,16 @@
           source = null;
         }
         if (reconnectTimer) windowRef.clearTimeout(reconnectTimer);
+        if (!shouldScheduleWatchReconnect({ streamEnded: watchStreamEnded })) {
+          updateRelay("lost");
+          return;
+        }
+        reconnectAttempts += 1;
+        const delay = watchReconnectDelayMs(reconnectAttempts);
         reconnectTimer = windowRef.setTimeout(() => {
           if (generation !== sourceGeneration) return;
           if (state.selectedAgent === agent) connectWatch(agent);
-        }, 800);
+        }, delay);
       };
     };
 
@@ -2115,6 +2323,13 @@
     gapAnnouncementKey,
     rememberWatchResumeSeq,
     advanceWatchResumeFromEnvelope,
+    resolveWatchFromSeq,
+    buildWatchUrl,
+    connectWatchSource,
+    watchReconnectDelayMs,
+    shouldScheduleWatchReconnect,
+    watchEnvelopeEndsStream,
+    decideWatchThreadRender,
     acceptTimelineEvents,
     projectTimeline,
     peerLabel,
