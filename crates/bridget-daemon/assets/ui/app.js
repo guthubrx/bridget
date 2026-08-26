@@ -732,6 +732,78 @@
         );
       });
 
+      // Mesure (d343ac4) : CaughtUp pendant fragment non final → resume 622, perte.
+      // Correctif : processWatchJournalEnvelope plafonne au seq encore en tampon.
+      test("rattrapage_ne_depasse_pas_un_fragment_non_final", () => {
+        const buffers = new Map();
+        const resume = new Map([["bridget", 601]]);
+        const attested = new Set();
+        const record = {
+          v: 1,
+          seq: 610,
+          ts: "2026-08-26T07:00:00Z",
+          session_id: "sess-silent",
+          event: "turn_start",
+          message_id: "msg-610",
+          payload: { body: "MESSAGE QUI NE DOIT PAS DISPARAITRE" },
+        };
+        const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
+        const split = Math.max(1, Math.floor(bytes.length / 2));
+
+        api.processWatchJournalEnvelope({
+          envelope: {
+            event: {
+              type: "JournalFragment",
+              subscription_id: "sub-1",
+              seq: 610,
+              offset: 0,
+              final: false,
+              bytes: bytes.subarray(0, split).toString("base64"),
+            },
+          },
+          agent: "bridget",
+          buffers,
+          resumeSeq: resume,
+          attestedGaps: attested,
+        });
+        assert.equal(resume.get("bridget"), 601);
+        assert.ok(buffers.has("sub-1:610"));
+
+        api.processWatchJournalEnvelope({
+          envelope: { event: { type: "SnapshotCaughtUp", through_seq: 621 } },
+          agent: "bridget",
+          buffers,
+          resumeSeq: resume,
+          attestedGaps: attested,
+        });
+        assert.equal(resume.get("bridget"), 610);
+        assert.match(api.buildWatchUrl("tok", "bridget", resume), /from_seq=610/);
+
+        const finished = api.processWatchJournalEnvelope({
+          envelope: {
+            event: {
+              type: "JournalFragment",
+              subscription_id: "sub-1",
+              seq: 610,
+              offset: split,
+              final: true,
+              bytes: bytes.subarray(split).toString("base64"),
+            },
+          },
+          agent: "bridget",
+          buffers,
+          resumeSeq: resume,
+          attestedGaps: attested,
+        });
+        assert.equal(finished.accepted.length, 1);
+        assert.equal(
+          finished.accepted[0].record.payload.body,
+          "MESSAGE QUI NE DOIT PAS DISPARAITRE",
+        );
+        assert.equal(resume.get("bridget"), 611);
+        assert.equal(buffers.size, 0);
+      });
+
       test("fragment_jsonl_incomplet_attend_sa_borne_finale", () => {
         const record = { v: 1, seq: 9, ts: "2026-08-25T20:00:00Z", session_id: "s", event: "update", message_id: "m", payload: { kind: "text", content: "é" } };
         const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
@@ -1235,21 +1307,78 @@
     };
   }
 
-  function advanceWatchResumeFromEnvelope(resumeSeq, agent, envelope) {
+  function pendingJournalFragmentSeqs(buffers) {
+    if (!buffers || typeof buffers.keys !== "function") return [];
+    const seqs = [];
+    for (const key of buffers.keys()) {
+      const seq = Number(String(key).split(":").pop());
+      if (Number.isFinite(seq)) seqs.push(seq);
+    }
+    return seqs;
+  }
+
+  function clampResumeToPendingFragments(candidate, buffers) {
+    if (!Number.isFinite(candidate)) return candidate;
+    const pending = pendingJournalFragmentSeqs(buffers);
+    if (pending.length === 0) return candidate;
+    return Math.min(candidate, Math.min(...pending));
+  }
+
+  function advanceWatchResumeFromEnvelope(resumeSeq, agent, envelope, buffers) {
     const event = envelope && envelope.event ? envelope.event : envelope || {};
     if (event.type === "Gap") {
       const toSeq = Number(event.to_seq);
       if (Number.isFinite(toSeq)) {
-        rememberWatchResumeSeq(resumeSeq, agent, toSeq + 1);
+        const candidate = clampResumeToPendingFragments(toSeq + 1, buffers);
+        rememberWatchResumeSeq(resumeSeq, agent, candidate);
       }
     }
     if (event.type === "SnapshotCaughtUp") {
       const through = Number(event.through_seq);
       if (Number.isFinite(through)) {
-        rememberWatchResumeSeq(resumeSeq, agent, through + 1);
+        const candidate = clampResumeToPendingFragments(through + 1, buffers);
+        rememberWatchResumeSeq(resumeSeq, agent, candidate);
       }
     }
     return resumeSeq;
+  }
+
+  // Chemin réel : assembler AVANT d'avancer ; ne pas dépasser un fragment non final.
+  function processWatchJournalEnvelope({
+    envelope,
+    agent,
+    buffers,
+    resumeSeq,
+    attestedGaps,
+    seenRecords = null,
+  }) {
+    const caughtUp = Boolean(
+      envelope && envelope.event && envelope.event.type === "SnapshotCaughtUp",
+    );
+    const streamEnded = watchEnvelopeEndsStream(envelope);
+    let accepted = acceptTimelineEvents(
+      journalEnvelopeToEvents(envelope, agent, buffers),
+      agent,
+      attestedGaps,
+    );
+    if (seenRecords && typeof seenRecords.has === "function") {
+      accepted = accepted.filter((event) => {
+        if (event.kind !== "record") return true;
+        const key = `${agent}:${text(event.record && event.record.session_id)}:${String(event.record && event.record.seq)}`;
+        if (seenRecords.has(key)) return false;
+        seenRecords.add(key);
+        return true;
+      });
+    }
+    accepted.forEach((event) => {
+      if (event.kind !== "record") return;
+      const seq = Number(event.record && event.record.seq);
+      if (Number.isFinite(seq)) {
+        rememberWatchResumeSeq(resumeSeq, agent, seq + 1);
+      }
+    });
+    advanceWatchResumeFromEnvelope(resumeSeq, agent, envelope, buffers);
+    return { accepted, caughtUp, streamEnded };
   }
 
   function acceptTimelineEvents(events, agent, attestedGaps) {
@@ -2020,6 +2149,7 @@
       const generation = sourceGeneration;
       replayingJournal = true;
       watchStreamEnded = false;
+      fragmentBuffers.clear();
       updateRelay("reconnecting");
       const opened = connectWatchSource(
         windowRef.EventSource,
@@ -2051,31 +2181,26 @@
         if (generation !== sourceGeneration) return;
         try {
           const envelope = JSON.parse(message.data);
-          if (watchEnvelopeEndsStream(envelope)) {
+          const processed = processWatchJournalEnvelope({
+            envelope,
+            agent,
+            buffers: fragmentBuffers,
+            resumeSeq: watchResumeSeq,
+            attestedGaps,
+            seenRecords,
+          });
+          if (processed.streamEnded) {
             watchStreamEnded = true;
           }
-          const caughtUp = envelope.event && envelope.event.type === "SnapshotCaughtUp";
-          advanceWatchResumeFromEnvelope(watchResumeSeq, agent, envelope);
-          const accepted = acceptTimelineEvents(
-            journalEnvelopeToEvents(envelope, agent, fragmentBuffers),
-            agent,
-            attestedGaps,
-          ).filter((event) => {
+          const accepted = processed.accepted.filter((event) => {
             if (event.kind !== "record") return true;
             rememberEventBody(event);
-            const seq = Number(event.record && event.record.seq);
-            if (Number.isFinite(seq)) {
-              rememberWatchResumeSeq(watchResumeSeq, agent, seq + 1);
-            }
-            const key = `${agent}:${text(event.record.session_id)}:${String(event.record.seq)}`;
-            if (seenRecords.has(key)) return false;
-            seenRecords.add(key);
             return true;
           });
           state = appendTimelineBatch(state, accepted);
           const decision = decideWatchThreadRender({
             replayingJournal,
-            caughtUp,
+            caughtUp: processed.caughtUp,
             acceptedCount: accepted.length,
           });
           replayingJournal = decision.replayingJournal;
@@ -2323,6 +2448,9 @@
     gapAnnouncementKey,
     rememberWatchResumeSeq,
     advanceWatchResumeFromEnvelope,
+    pendingJournalFragmentSeqs,
+    clampResumeToPendingFragments,
+    processWatchJournalEnvelope,
     resolveWatchFromSeq,
     buildWatchUrl,
     connectWatchSource,
