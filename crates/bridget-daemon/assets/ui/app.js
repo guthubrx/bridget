@@ -798,6 +798,120 @@
         );
       });
 
+      // Charge 3 : la divergence filtre runtime ↔ vocabulaire doit tuer pour
+      // N'IMPORTE QUEL kind, pas seulement tool_call (témoin dédié ci-dessus).
+      function actPayloadForKind(kind) {
+        if (kind === "tool_call") {
+          return {
+            kind,
+            title: `acte-${kind}`,
+            tool: `acte-${kind}`,
+            summary: "détail",
+          };
+        }
+        if (kind === "tool") {
+          return { kind, text: `acte-${kind}`, tool: `acte-${kind}`, detail: "détail" };
+        }
+        return { kind, text: `acte-${kind}`, detail: "détail" };
+      }
+
+      function timelineEventsForActKind(kind) {
+        return [
+          {
+            kind: "record",
+            agent: "cursor4",
+            at: 1,
+            record: {
+              seq: 1,
+              ts: "2026-08-26T18:00:00Z",
+              session_id: `s-${kind}`,
+              message_id: `m-${kind}`,
+              event: "turn_start",
+              payload: {},
+            },
+          },
+          {
+            kind: "record",
+            agent: "cursor4",
+            at: 2,
+            record: {
+              seq: 2,
+              ts: "2026-08-26T18:00:01Z",
+              session_id: `s-${kind}`,
+              message_id: `m-${kind}`,
+              event: "update",
+              payload: actPayloadForKind(kind),
+            },
+          },
+          {
+            kind: "record",
+            agent: "cursor4",
+            at: 3,
+            record: {
+              seq: 3,
+              ts: "2026-08-26T18:00:02Z",
+              session_id: `s-${kind}`,
+              message_id: `m-${kind}`,
+              event: "turn_end",
+              payload: {},
+            },
+          },
+        ];
+      }
+
+      test("TEMOIN_vue_projette_chaque_kind_du_vocabulaire", () => {
+        const kinds = [...api.JOURNAL_ACT_KINDS];
+        assert.ok(kinds.length >= 1, "JOURNAL_ACT_KINDS ne doit pas être vide");
+        for (const kind of kinds) {
+          const timeline = api.projectTimeline(timelineEventsForActKind(kind));
+          const work = timeline.find((entry) => entry.kind === "work");
+          assert.ok(work, `kind ${kind}: une entrée work est attendue`);
+          assert.equal(
+            work.acts.length,
+            1,
+            `kind ${kind}: l'acte présent au journal doit être projeté (défaut JOURNAL_ACT_KINDS)`,
+          );
+          const expectedDisplay = kind === "tool_call" ? "tool" : kind;
+          assert.equal(work.acts[0].kind, expectedDisplay, `affichage de ${kind}`);
+          assert.equal(work.acts[0].text, `acte-${kind}`);
+        }
+      });
+
+      test("mutant_filtre_runtime_reduit_tue_TEMOIN_vue_projette_chaque_kind", () => {
+        // Mutant REAL_ACT_KINDS : filtre runtime ≠ JOURNAL_ACT_KINDS.
+        // Pour chaque kind retiré du filtre, la projection de CE kind devient vide
+        // alors que le défaut (JOURNAL_ACT_KINDS) reste vert — le témoin meurt.
+        for (const dropped of [...api.JOURNAL_ACT_KINDS]) {
+          const events = timelineEventsForActKind(dropped);
+          const healthy = api.projectTimeline(events);
+          assert.equal(
+            healthy.find((entry) => entry.kind === "work")?.acts?.length,
+            1,
+            `contrôle positif d'abord pour ${dropped}`,
+          );
+          const reduced = new Set(
+            [...api.JOURNAL_ACT_KINDS].filter((kind) => kind !== dropped),
+          );
+          const broken = api.projectTimeline(events, { actKinds: reduced });
+          const brokenActs = broken.find((entry) => entry.kind === "work")?.acts || [];
+          assert.equal(
+            brokenActs.length,
+            0,
+            `mutant sans ${dropped} doit rendre une projection d'actes vide`,
+          );
+          assert.throws(
+            () => {
+              if (brokenActs.length === 0) {
+                throw new Error("TEMOIN_vue_projette_chaque_kind_du_vocabulaire");
+              }
+            },
+            (error) =>
+              String(error && error.message) ===
+              "TEMOIN_vue_projette_chaque_kind_du_vocabulaire",
+          );
+        }
+      });
+
       test("corps_entrant_et_reponse_agent_deviennent_deux_bulles_exactes", () => {
         const events = [
           {

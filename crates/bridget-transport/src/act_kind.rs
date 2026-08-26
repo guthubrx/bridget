@@ -231,4 +231,61 @@ mod tests {
             "divergence vue↔écriture : write={write_acts:?} view={view_acts:?}"
         );
     }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_projectTimeline_filtre_par_defaut_est_JOURNAL_ACT_KINDS() {
+        // Charge 3 : mutant REAL_ACT_KINDS — JOURNAL_ACT_KINDS reste aligné sur
+        // l'enum (oracle contenu VERT) mais projectTimeline filtre via un autre
+        // Set. Ce témoin meurt dès que le repli par défaut n'est plus
+        // JOURNAL_ACT_KINDS, pour N'IMPORTE QUEL kind (pas seulement tool_call).
+        let ui_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../bridget-daemon/assets/ui/app.js");
+        let source = fs::read_to_string(&ui_path)
+            .unwrap_or_else(|err| panic!("lire {}: {err}", ui_path.display()));
+        let fn_marker = "function projectTimeline(";
+        let fn_start = source.find(fn_marker).unwrap_or_else(|| {
+            panic!("projectTimeline introuvable dans {}", ui_path.display())
+        });
+        // Fenêtre bornée : corps jusqu'à la fonction suivante de même niveau
+        // ou 2500 octets — assez pour le choix de filtre, sans avaler tout le fichier.
+        let window = &source[fn_start..fn_start.saturating_add(2500).min(source.len())];
+        let needle = "options.actKinds instanceof Set ? options.actKinds : JOURNAL_ACT_KINDS";
+        assert!(
+            window.contains(needle),
+            "projectTimeline doit filtrer par JOURNAL_ACT_KINDS par défaut \
+             (mutant REAL_ACT_KINDS : {needle} absent du corps)"
+        );
+        // Aucun autre repli `… : AUTRE_SET` sur la même ligne de décision.
+        for line in window.lines() {
+            if line.contains("options.actKinds instanceof Set") {
+                assert!(
+                    line.contains(": JOURNAL_ACT_KINDS"),
+                    "repli actKinds doit être JOURNAL_ACT_KINDS, trouvé: {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mutant_REAL_ACT_KINDS_tue_TEMOIN_projectTimeline_filtre_par_defaut() {
+        // Simule le mutant revue : constante alignée pour l'oracle contenu, mais
+        // filtre runtime branché sur un autre Set.
+        let healthy = "const actKinds = options.actKinds instanceof Set ? options.actKinds : JOURNAL_ACT_KINDS;";
+        let broken = "const actKinds = options.actKinds instanceof Set ? options.actKinds : REAL_ACT_KINDS;";
+        assert!(
+            healthy.contains(": JOURNAL_ACT_KINDS"),
+            "contrôle positif"
+        );
+        assert!(
+            !broken.contains(": JOURNAL_ACT_KINDS")
+                || broken.contains(": REAL_ACT_KINDS"),
+            "le mutant pointe ailleurs"
+        );
+        assert!(
+            broken.contains(": REAL_ACT_KINDS") && !broken.ends_with(": JOURNAL_ACT_KINDS;"),
+            "TEMOIN_projectTimeline_filtre_par_defaut: le mutant REAL_ACT_KINDS doit être détectable"
+        );
+    }
 }
