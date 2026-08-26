@@ -869,7 +869,7 @@
         return {
           window,
           document: window.document,
-          parse: (source) => window.marked.parse(source, { async: false }),
+          parse: (source) => window.marked.parse(source, { async: false, breaks: true, gfm: true }),
           purify: window.DOMPurify,
         };
       }
@@ -984,6 +984,24 @@
         assert.equal(tags.has("IMG"), false);
         assert.equal(api.messageDomHasForbiddenSurface(root), false);
         assert.match(root.textContent, /evil\.example|clic|img/i);
+      });
+
+      test("message_markdown_sauts_de_ligne_simples_deviennent_br", () => {
+        const engines = loadMarkdownEngines();
+        const root = api.renderMessageMarkdown(
+          engines.document,
+          "ligne un\nligne deux\n\nparagraphe",
+          { parse: engines.parse, purify: engines.purify },
+        );
+        const html = root.innerHTML;
+        assert.match(html, /<br\s*\/?>/i);
+        assert.match(root.textContent, /ligne un/);
+        assert.match(root.textContent, /ligne deux/);
+        // Mutant : sans breaks, marked colle les deux lignes dans un seul nœud texte.
+        const glued = engines.parse === undefined
+          ? null
+          : engines.window.marked.parse("ligne un\nligne deux", { async: false, breaks: false });
+        assert.equal(/<br\s*\/?>/i.test(String(glued)), false);
       });
 
       function makeFakeEventSource() {
@@ -2378,7 +2396,8 @@
     if (typeof override === "function") return override;
     const markedApi = typeof globalThis !== "undefined" ? globalThis.marked : null;
     if (markedApi && typeof markedApi.parse === "function") {
-      return (source) => markedApi.parse(source, { async: false });
+      // breaks:true = équivalent remark-breaks (t3code) : un \n agent → <br>, sinon texte collé.
+      return (source) => markedApi.parse(source, { async: false, breaks: true, gfm: true });
     }
     if (typeof markedApi === "function") return markedApi;
     throw new Error("moteur Markdown (marked) absent");
