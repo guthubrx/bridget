@@ -27,6 +27,20 @@ use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// Délai absolu daemon avant Connected (`DEFAULT_SPAWN_TIMEOUT_SECS` dans cli).
+pub const DAEMON_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Contexte de validation `--resume` déplacée hors du chemin spawn (reader).
+struct ResumeBootstrap {
+    attempted_id: String,
+    command: String,
+    args: Vec<String>,
+    environment: Vec<(String, String)>,
+    inherit_stderr: bool,
+    writer: Writer,
+    child: Arc<Mutex<Child>>,
+}
+
 type Writer = Arc<Mutex<Option<ChildStdin>>>;
 type Journal = Arc<Mutex<Option<JournalWriter>>>;
 type SessionStoreHandle = Arc<Mutex<Option<ProviderSessionStore>>>;
@@ -108,39 +122,17 @@ impl ClaudeStreamJsonTransport {
         let attempted_resume = prepare_launch_args(&mut options.args, session_store.as_ref());
         ensure_stream_arguments(&mut options.args)?;
 
-        let mut prefetch = Vec::new();
-        let mut resume_notice = None;
-        let spawned = match spawn_claude_child(
-            &options,
-            environment,
-            inherit_stderr,
-            attempted_resume.as_deref(),
-            &mut prefetch,
-            &mut resume_notice,
-            session_store.as_ref(),
-        )? {
-            Some(spawned) => spawned,
-            None => {
-                strip_resume_arg(&mut options.args);
-                spawn_claude_child(
-                    &options,
-                    environment,
-                    inherit_stderr,
-                    None,
-                    &mut prefetch,
-                    &mut resume_notice,
-                    session_store.as_ref(),
-                )?
-                .ok_or_else(|| {
-                    TransportError::Io(
-                        "repli Claude après échec de reprise indisponible".to_string(),
-                    )
-                })?
-            }
-        };
+        // Ne pas attendre la première trame ici : le daemon accorde 10 s avant
+        // Connected et une reprise réelle peut dépasser ce plafond (~10,5 s).
+        // La validation `--resume` vit dans le reader, après le spawn.
+        let spawned = spawn_claude_child(&options, environment, inherit_stderr)?
+            .ok_or_else(|| {
+                TransportError::Io("impossible de lancer Claude".to_string())
+            })?;
 
         let pid = spawned.child.id();
         let writer = Arc::new(Mutex::new(Some(spawned.stdin)));
+        let child = Arc::new(Mutex::new(spawned.child));
         let queue = Arc::new((
             Mutex::new(QueueState {
                 messages: VecDeque::new(),
@@ -155,23 +147,25 @@ impl ClaudeStreamJsonTransport {
         let journal = Arc::new(Mutex::new(None));
         let session_store_handle = Arc::new(Mutex::new(session_store));
         let pinned_model = pinned_model_from_args(&options.args);
-        if let Some(notice) = resume_notice {
-            push_internal(
-                &events,
-                ManagedEventKind::Error {
-                    detail: notice,
-                },
-            );
-        }
+        let resume_bootstrap = attempted_resume.map(|attempted_id| ResumeBootstrap {
+            attempted_id,
+            command: options.command.clone(),
+            args: options.args.clone(),
+            environment: environment.to_vec(),
+            inherit_stderr,
+            writer: writer.clone(),
+            child: child.clone(),
+        });
         let reader_handle = spawn_reader(
             spawned.stdout,
-            prefetch,
+            Vec::new(),
             queue.clone(),
             events.clone(),
             alive.clone(),
             journal.clone(),
             session_store_handle.clone(),
             pinned_model,
+            resume_bootstrap,
         );
         let worker_handle = spawn_worker(
             queue.clone(),
@@ -190,7 +184,7 @@ impl ClaudeStreamJsonTransport {
             queue,
             queue_capacity: options.queue_capacity,
             writer,
-            child: Arc::new(Mutex::new(spawned.child)),
+            child,
             events,
             journal,
             session_store: session_store_handle,
@@ -436,17 +430,12 @@ struct SpawnedClaude {
     stdout: ChildStdout,
 }
 
-/// Lance le binaire Claude. Si `attempted_resume` est posé, lit la première
-/// ligne stdout : un échec fournisseur tue le fils, efface l'id périmé et
-/// renvoie `Ok(None)` pour forcer un repli sans `--resume`.
+/// Lance le binaire Claude. La validation `--resume` n'est pas faite ici :
+/// voir `bootstrap_resume_in_reader`.
 fn spawn_claude_child(
     options: &ClaudeStreamJsonOptions,
     environment: &[(String, String)],
     inherit_stderr: bool,
-    attempted_resume: Option<&str>,
-    prefetch: &mut Vec<String>,
-    resume_notice: &mut Option<String>,
-    session_store: Option<&ProviderSessionStore>,
 ) -> Result<Option<SpawnedClaude>, TransportError> {
     let mut command = Command::new(&options.command);
     command
@@ -459,8 +448,6 @@ fn spawn_claude_child(
         } else {
             Stdio::null()
         })
-        // Le pilote et ses enfants forment une seule unité de vie :
-        // arrêter seulement le parent laisserait stdout ouvert.
         .process_group(0);
     let mut child = command
         .spawn()
@@ -473,55 +460,145 @@ fn spawn_claude_child(
         .stdout
         .take()
         .ok_or_else(|| TransportError::Io("stdout Claude absent".to_string()))?;
-
-    let Some(attempted_id) = attempted_resume else {
-        return Ok(Some(SpawnedClaude {
-            child,
-            stdin,
-            stdout,
-        }));
-    };
-
-    let mut reader = BufReader::new(stdout);
-    let mut first_line = String::new();
-    match reader.read_line(&mut first_line) {
-        Ok(0) => {
-            terminate_group(&mut child);
-            let _ = session_store.map(ProviderSessionStore::clear);
-            *resume_notice = Some(format!(
-                "reprise Claude impossible: conversation introuvable pour l'identifiant {attempted_id} — démarrage d'une session neuve (stdout vide après --resume)"
-            ));
-            return Ok(None);
-        }
-        Ok(_) => {}
-        Err(error) => {
-            terminate_group(&mut child);
-            return Err(TransportError::Io(format!(
-                "lecture initiale Claude impossible: {error}"
-            )));
-        }
-    }
-    let trimmed = first_line.trim_end_matches(['\r', '\n']).to_string();
-    if let Ok(value) = serde_json::from_str::<Value>(&trimmed) {
-        if let Some(failure) = classify_resume_failure(&value, attempted_id) {
-            terminate_group(&mut child);
-            let _ = session_store.map(ProviderSessionStore::clear);
-            *resume_notice = Some(failure.named_message());
-            prefetch.clear();
-            return Ok(None);
-        }
-        if let Some(session_id) = session_id_from_system_init(&value) {
-            if let Some(store) = session_store {
-                let _ = store.store(&session_id);
-            }
-        }
-    }
-    prefetch.push(trimmed);
     Ok(Some(SpawnedClaude {
         child,
         stdin,
-        stdout: reader.into_inner(),
+        stdout,
     }))
+}
+
+/// Repli sans `--resume` après échec nommé.
+fn relaunch_after_resume_failure(
+    mut bootstrap: ResumeBootstrap,
+    events: &Arc<Mutex<VecDeque<ManagedEvent>>>,
+    session_store: &SessionStoreHandle,
+    notice: String,
+) -> (ChildStdout, Vec<String>) {
+    if let Some(store) = session_store
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+    {
+        let _ = store.clear();
+    }
+    push_internal(
+        events,
+        ManagedEventKind::Error {
+            detail: notice,
+        },
+    );
+    {
+        let mut child = bootstrap
+            .child
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        terminate_group(&mut child);
+    }
+    strip_resume_arg(&mut bootstrap.args);
+    let Ok(Some(spawned)) = spawn_claude_command(
+        &bootstrap.command,
+        &bootstrap.args,
+        &bootstrap.environment,
+        bootstrap.inherit_stderr,
+    ) else {
+        let fallback = Command::new("/bin/true")
+            .stdout(Stdio::piped())
+            .spawn()
+            .ok()
+            .and_then(|mut child| child.stdout.take());
+        return (fallback.expect("repli Claude indisponible"), Vec::new());
+    };
+    {
+        let mut writer = bootstrap
+            .writer
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *writer = Some(spawned.stdin);
+    }
+    {
+        let mut child = bootstrap
+            .child
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *child = spawned.child;
+    }
+    (spawned.stdout, Vec::new())
+}
+
+/// Lit la première trame `--resume` dans le reader (hors chemin spawn). En
+/// cas d'échec : message nommé, effacement de l'id, repli sans `--resume`.
+fn bootstrap_resume_in_reader(
+    stdout: ChildStdout,
+    bootstrap: ResumeBootstrap,
+    events: &Arc<Mutex<VecDeque<ManagedEvent>>>,
+    session_store: &SessionStoreHandle,
+) -> (ChildStdout, Vec<String>) {
+    let mut reader = BufReader::new(stdout);
+    let mut first_line = String::new();
+    let read = reader.read_line(&mut first_line);
+    let attempted_id = bootstrap.attempted_id.clone();
+
+    match read {
+        Ok(0) => relaunch_after_resume_failure(
+            bootstrap,
+            events,
+            session_store,
+            format!(
+                "reprise Claude impossible: conversation introuvable pour l'identifiant {attempted_id} — démarrage d'une session neuve (stdout vide après --resume)"
+            ),
+        ),
+        Ok(_) => {
+            let trimmed = first_line.trim_end_matches(['\r', '\n']).to_string();
+            if let Ok(value) = serde_json::from_str::<Value>(&trimmed) {
+                if let Some(failure) = classify_resume_failure(&value, &attempted_id) {
+                    return relaunch_after_resume_failure(
+                        bootstrap,
+                        events,
+                        session_store,
+                        failure.named_message(),
+                    );
+                }
+                if let Some(session_id) = session_id_from_system_init(&value) {
+                    if let Some(store) = session_store
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .as_ref()
+                    {
+                        let _ = store.store(&session_id);
+                    }
+                }
+            }
+            (reader.into_inner(), vec![trimmed])
+        }
+        Err(error) => relaunch_after_resume_failure(
+            bootstrap,
+            events,
+            session_store,
+            format!(
+                "reprise Claude impossible: lecture initiale impossible pour l'identifiant {attempted_id} — démarrage d'une session neuve ({error})"
+            ),
+        ),
+    }
+}
+
+fn spawn_claude_command(
+    command_path: &str,
+    args: &[String],
+    environment: &[(String, String)],
+    inherit_stderr: bool,
+) -> Result<Option<SpawnedClaude>, TransportError> {
+    spawn_claude_child(
+        &ClaudeStreamJsonOptions {
+            command: command_path.to_string(),
+            args: args.to_vec(),
+            queue_capacity: 1,
+            notify_timeout_secs: 1,
+            session_store_root: None,
+            agent_name: None,
+        },
+        environment,
+        inherit_stderr,
+    )
 }
 
 fn terminate_group(child: &mut Child) {
@@ -690,8 +767,14 @@ fn spawn_reader(
     journal: Journal,
     session_store: SessionStoreHandle,
     pinned_model: Option<String>,
+    resume_bootstrap: Option<ResumeBootstrap>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
+        let (stdout, prefetch) = if let Some(bootstrap) = resume_bootstrap {
+            bootstrap_resume_in_reader(stdout, bootstrap, &events, &session_store)
+        } else {
+            (stdout, prefetch)
+        };
         let mut lines = prefetch.into_iter().map(Ok).chain(BufReader::new(stdout).lines());
         while let Some(line) = lines.next() {
             let Ok(line) = line else { break };
@@ -1788,12 +1871,7 @@ done
             notice.contains("00000000-0000-0000-0000-000000000000"),
             "identifiant absent: {notice}"
         );
-        // L'id périmé doit être effacé pour ne pas boucler.
-        assert_eq!(store.load(), None);
-        // La session neuve a annoncé son id et l'a persisté.
         let fresh = crate::claude_provider_session::ProviderSessionStore::new(&root, "agent-x");
-        // activate_journal rebind — ici on vérifie via le fichier écrit par le reader
-        // après system/init du repli : chemin root/agent-x/claude_provider_session
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
             if fresh.load().as_deref() == Some("fresh-session-999") {
@@ -1802,7 +1880,84 @@ done
             thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(fresh.load().as_deref(), Some("fresh-session-999"));
+        assert_ne!(
+            fresh.load().as_deref(),
+            Some("00000000-0000-0000-0000-000000000000")
+        );
         transport.stop();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// P4 — session persistée : le spawn rend la main avant le plafond daemon.
+    /// Mutant : remettre read_line dans spawn_claude_child → oracle meurt seul.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_P4_session_persistee_ne_bloque_pas_le_lancement_sous_delai_daemon() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-claude-resume-timeout-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let fake = root.join("fake-claude");
+        fs::write(
+            &fake,
+            r#"#!/bin/sh
+resume=0
+for arg in "$@"; do [ "$arg" = "--resume" ] && resume=1; done
+if [ "$resume" = 1 ]; then sleep 15; fi
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"slow-or-fast","model":"claude-opus-5"}'
+exit 0
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&fake).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&fake, permissions).unwrap();
+        }
+        let options_neuf = ClaudeStreamJsonOptions {
+            command: fake.to_string_lossy().into_owned(),
+            args: Vec::new(),
+            queue_capacity: 2,
+            notify_timeout_secs: 2,
+            session_store_root: Some(root.clone()),
+            agent_name: Some("agent-neuf".to_string()),
+        };
+        let t0 = Instant::now();
+        let t_neuf = ClaudeStreamJsonTransport::spawn(options_neuf).expect("sans session");
+        assert!(t0.elapsed() < DAEMON_SPAWN_TIMEOUT);
+        t_neuf.stop();
+
+        let store =
+            crate::claude_provider_session::ProviderSessionStore::new(&root, "agent-lent");
+        store.store("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap();
+        let options_lent = ClaudeStreamJsonOptions {
+            command: fake.to_string_lossy().into_owned(),
+            args: Vec::new(),
+            queue_capacity: 2,
+            notify_timeout_secs: 2,
+            session_store_root: Some(root.clone()),
+            agent_name: Some("agent-lent".to_string()),
+        };
+        let t1 = Instant::now();
+        let t_lent = ClaudeStreamJsonTransport::spawn(options_lent).expect("avec session");
+        assert!(
+            t1.elapsed() < DAEMON_SPAWN_TIMEOUT,
+            "spawn bloqué: {:?}",
+            t1.elapsed()
+        );
+        assert!(
+            t1.elapsed() < Duration::from_secs(2),
+            "spawn trop lent: {:?}",
+            t1.elapsed()
+        );
+        t_lent.stop();
         let _ = fs::remove_dir_all(root);
     }
 }
