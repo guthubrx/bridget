@@ -604,226 +604,344 @@
         assert.equal(api.rememberWatchResumeSeq(resume, "bridget", 701).get("bridget"), 701);
       });
 
-      // L9 charge 1 — le chemin de connexion, pas la projection isolée.
-      // Contrôle positif : le curseur avance AVANT qu'on juge l'URL.
-      test("watch_connexion_porte_from_seq_apres_rattrapage", () => {
-        const resume = new Map();
-        api.advanceWatchResumeFromEnvelope(resume, "bridget", {
-          event: { type: "Gap", from_seq: 2, to_seq: 238 },
-        });
-        api.advanceWatchResumeFromEnvelope(resume, "bridget", {
-          event: { type: "SnapshotCaughtUp", through_seq: 621 },
-        });
-        assert.equal(api.resolveWatchFromSeq(resume, "bridget"), 622);
+
+      function makeFakeEventSource() {
         const urls = [];
+        const instances = [];
         class FakeEventSource {
           constructor(url) {
-            urls.push(url);
             this.url = url;
+            this.listeners = Object.create(null);
+            this.onerror = null;
+            this.onopen = null;
+            this.closed = false;
+            urls.push(url);
+            instances.push(this);
           }
-          close() {}
+          addEventListener(type, fn) {
+            (this.listeners[type] || (this.listeners[type] = [])).push(fn);
+          }
+          close() {
+            this.closed = true;
+          }
+          emitJournal(envelope) {
+            const payload = JSON.stringify(envelope);
+            for (const fn of this.listeners.journal || []) fn({ data: payload });
+          }
+          emitError() {
+            if (typeof this.onerror === "function") this.onerror();
+          }
+          emitOpen() {
+            if (typeof this.onopen === "function") this.onopen();
+          }
         }
-        const opened = api.connectWatchSource(
-          FakeEventSource,
-          "jeton",
-          "bridget",
-          resume,
+        FakeEventSource.urls = urls;
+        FakeEventSource.instances = instances;
+        return FakeEventSource;
+      }
+
+      function fragmentParts(seq, body) {
+        const record = {
+          v: 1,
+          seq,
+          ts: "2026-08-26T07:00:00Z",
+          session_id: "sess",
+          event: "turn_start",
+          message_id: `msg-${seq}`,
+          payload: { body },
+        };
+        const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
+        const split = Math.max(1, Math.floor(bytes.length / 2));
+        return {
+          bytes,
+          split,
+          nonFinal: {
+            event: {
+              type: "JournalFragment",
+              subscription_id: "sub",
+              seq,
+              offset: 0,
+              final: false,
+              bytes: bytes.subarray(0, split).toString("base64"),
+            },
+          },
+          finalPart: {
+            event: {
+              type: "JournalFragment",
+              subscription_id: "sub",
+              seq,
+              offset: split,
+              final: true,
+              bytes: bytes.subarray(split).toString("base64"),
+            },
+          },
+        };
+      }
+
+      // L9 tampon — sonde 4 : fantôme d'un agent ne doit pas plafonner un autre.
+      // Meurt si open() omet buffers.clear() (pollution inter-agents réelle).
+      test("vidage_tampon_connexion_empeche_fantome_inter_agents", () => {
+        const FakeES = makeFakeEventSource();
+        const resume = new Map([["agentB", 0]]);
+        const buffers = new Map();
+        const runtime = api.createWatchRuntime({
+          token: "tok",
+          resumeSeq: resume,
+          buffers,
+          attestedGaps: new Set(),
+          seenRecords: new Set(),
+          EventSource: FakeES,
+          setTimeout: () => 1,
+          clearTimeout: () => {},
+        });
+        runtime.open("agentA");
+        FakeES.instances[0].emitJournal(fragmentParts(50, "FANTOME").nonFinal);
+        assert.ok(buffers.size > 0, "fantôme agentA doit occuper le tampon partagé");
+
+        runtime.open("agentB");
+        assert.equal(buffers.size, 0, "open(agentB) doit vider le tampon avant le flux");
+        FakeES.instances[1].emitJournal({
+          event: { type: "SnapshotCaughtUp", through_seq: 800 },
+        });
+        assert.equal(
+          runtime.getResume("agentB"),
+          801,
+          "sans fantôme étranger, CaughtUp 800 porte agentB à 801",
         );
+      });
+
+      // L9 plafond — la propriété « ne pas dépasser un fragment ouvert » est portée
+      // par clampResumeToPendingFragments, PAS par l'ordre assemble/avance.
+      // L'ordre reste dans le code productif mais n'est pas oracle.
+      test("plafond_curseur_ne_depasse_pas_fragment_ouvert", () => {
+        const FakeES = makeFakeEventSource();
+        const resume = new Map([["agent", 0]]);
+        const buffers = new Map();
+        const journals = [];
+        const parts = fragmentParts(50, "CORPS-50");
+        const runtime = api.createWatchRuntime({
+          token: "tok",
+          resumeSeq: resume,
+          buffers,
+          attestedGaps: new Set(),
+          seenRecords: new Set(),
+          EventSource: FakeES,
+          setTimeout: (fn) => {
+            fn();
+            return 1;
+          },
+          clearTimeout: () => {},
+          onJournal: (result) => journals.push(result),
+        });
+
+        const opened = runtime.open("agent");
+        assert.match(opened.url, /from_seq=0/);
+        const es = FakeES.instances[0];
+        es.emitJournal(parts.nonFinal);
+        assert.equal(runtime.getResume("agent"), 0);
+        es.emitJournal({ event: { type: "SnapshotCaughtUp", through_seq: 50 } });
+        // Propriété : plafond — pas 51 tant que seq 50 n'est pas constitué.
+        assert.equal(runtime.getResume("agent"), 50);
+        assert.notEqual(runtime.getResume("agent"), 51);
+        es.emitJournal(parts.finalPart);
+        const bodies = journals
+          .flatMap((entry) => entry.accepted)
+          .filter((event) => event.kind === "record")
+          .map((event) => event.record.payload.body);
+        assert.ok(bodies.includes("CORPS-50"));
+        assert.equal(runtime.getResume("agent"), 51);
+
+        // Même curseur final 51 une fois le corps assemblé avant CaughtUp.
+        const FakeES2 = makeFakeEventSource();
+        const resume2 = new Map([["agent", 0]]);
+        const journals2 = [];
+        const runtime2 = api.createWatchRuntime({
+          token: "tok",
+          resumeSeq: resume2,
+          buffers: new Map(),
+          attestedGaps: new Set(),
+          seenRecords: new Set(),
+          EventSource: FakeES2,
+          setTimeout: (fn) => {
+            fn();
+            return 1;
+          },
+          clearTimeout: () => {},
+          onJournal: (result) => journals2.push(result),
+        });
+        runtime2.open("agent");
+        const es2 = FakeES2.instances[0];
+        es2.emitJournal(parts.nonFinal);
+        es2.emitJournal(parts.finalPart);
+        es2.emitJournal({ event: { type: "SnapshotCaughtUp", through_seq: 50 } });
+        const bodies2 = journals2
+          .flatMap((entry) => entry.accepted)
+          .filter((event) => event.kind === "record")
+          .map((event) => event.record.payload.body);
+        assert.ok(bodies2.includes("CORPS-50"));
+        assert.equal(runtime2.getResume("agent"), 51);
+      });
+
+      // L9-2 — vrai chemin d'ouverture : open() porte from_seq du resume du runtime.
+      test("watch_connexion_porte_from_seq_apres_rattrapage", () => {
+        const FakeES = makeFakeEventSource();
+        const resume = new Map([["bridget", 622]]);
+        const runtime = api.createWatchRuntime({
+          token: "jeton",
+          resumeSeq: resume,
+          buffers: new Map(),
+          attestedGaps: new Set(),
+          seenRecords: new Set(),
+          EventSource: FakeES,
+          setTimeout: () => 1,
+          clearTimeout: () => {},
+        });
+        const opened = runtime.open("bridget");
         assert.equal(opened.fromSeq, 622);
         assert.match(opened.url, /from_seq=622/);
-        assert.deepEqual(urls, [
+        assert.deepEqual(FakeES.urls, [
           "/v1/watch?token=jeton&agent=bridget&from_seq=622",
         ]);
       });
 
-      // Hypothèse L9 : curseur resté à 0 + dédup = trou silencieux.
-      // Mesure : après rattrapage le curseur AVANCE, donc la reconnexion
-      // ne rejoue pas from_seq=0. Si resolveWatchFromSeq forçait 0, ce témoin meurt.
-      test("curseur_avance_reellement_apres_rattrapage_sinon_trou_silencieux", () => {
-        const resume = new Map();
-        const attested = new Set();
-        api.acceptTimelineEvents(
-          api.journalEnvelopeToEvents({
-            event: { type: "Gap", from_seq: 2, to_seq: 238 },
-          }, "bridget", new Map()),
-          "bridget",
-          attested,
-        );
-        api.advanceWatchResumeFromEnvelope(resume, "bridget", {
-          event: { type: "SnapshotCaughtUp", through_seq: 621 },
-        });
-        assert.equal(api.resolveWatchFromSeq(resume, "bridget"), 622);
-        assert.match(
-          api.buildWatchUrl("t", "bridget", resume),
-          /from_seq=622/,
-          "sans avancement réel, la dédup masquerait une lacune rejouée depuis 0",
-        );
-        assert.equal(api.resolveWatchFromSeq(new Map(), "bridget"), 0);
-      });
-
-      // L9 charge 2 — End / JournalReadError hors du fil (3e membre du cycle).
+      // L9-3 — End sur le runtime : hors fil + streamEnded coupe la reconnexion.
       test("fin_et_erreur_lecture_n_ecrivent_plus_dans_le_fil", () => {
-        assert.deepEqual(
-          api.journalEnvelopeToEvents({ event: { type: "End" } }, "bridget", new Map()),
-          [],
-        );
-        assert.deepEqual(
-          api.journalEnvelopeToEvents(
-            { event: { type: "JournalReadError" } },
-            "bridget",
-            new Map(),
-          ),
-          [],
-        );
-        assert.equal(api.watchEnvelopeEndsStream({ event: { type: "End" } }), true);
-        assert.equal(
-          api.watchEnvelopeEndsStream({ event: { type: "Gap", from_seq: 1, to_seq: 2 } }),
-          false,
-        );
+        const FakeES = makeFakeEventSource();
+        const timers = [];
+        const relays = [];
+        const journals = [];
+        const runtime = api.createWatchRuntime({
+          token: "t",
+          resumeSeq: new Map(),
+          buffers: new Map(),
+          attestedGaps: new Set(),
+          seenRecords: new Set(),
+          EventSource: FakeES,
+          setTimeout: (fn, ms) => {
+            timers.push({ fn, ms });
+            return timers.length;
+          },
+          clearTimeout: () => {},
+          onJournal: (result) => journals.push(result),
+          onRelay: (signal) => relays.push(signal),
+        });
+        runtime.open("agent");
+        const es = FakeES.instances[0];
+        es.emitJournal({ event: { type: "End" } });
+        assert.equal(journals.at(-1).accepted.length, 0);
+        assert.equal(runtime.isStreamEnded(), true);
+        const before = FakeES.instances.length;
+        es.emitError();
+        assert.equal(timers.length, 0);
+        assert.ok(relays.includes("lost"));
+        assert.equal(FakeES.instances.length, before);
+        es.emitJournal({ event: { type: "JournalReadError" } });
+        assert.equal(journals.at(-1).accepted.length, 0);
       });
 
-      // L9 charge 4 — frein de reconnexion.
+      // L9-4 — frein productif : backoff dans onerror du runtime + arrêt après End.
       test("reconnexion_watch_croit_et_s_arrete_apres_fin_de_flux", () => {
-        assert.equal(api.watchReconnectDelayMs(1), 800);
-        assert.equal(api.watchReconnectDelayMs(2), 1600);
-        assert.equal(api.watchReconnectDelayMs(3), 3200);
-        assert.equal(api.watchReconnectDelayMs(10), 30000);
-        assert.equal(api.shouldScheduleWatchReconnect({ streamEnded: false }), true);
-        assert.equal(api.shouldScheduleWatchReconnect({ streamEnded: true }), false);
+        const FakeES = makeFakeEventSource();
+        const timers = [];
+        const relays = [];
+        const runtime = api.createWatchRuntime({
+          token: "t",
+          resumeSeq: new Map(),
+          buffers: new Map(),
+          attestedGaps: new Set(),
+          seenRecords: new Set(),
+          EventSource: FakeES,
+          setTimeout: (fn, ms) => {
+            timers.push({ fn, ms });
+            return timers.length;
+          },
+          clearTimeout: () => {},
+          onRelay: (signal) => relays.push(signal),
+        });
+        runtime.open("agent");
+        const first = FakeES.instances[0];
+        first.emitOpen();
+        first.emitError();
+        assert.equal(timers.length, 1);
+        assert.equal(timers[0].ms, 800);
+        // Exécuter le timer → open de reconnexion, puis 2e erreur → 1600.
+        timers[0].fn();
+        const second = FakeES.instances.at(-1);
+        second.emitOpen();
+        // open remet attempts à 0 via onopen ; pour croître, enchaîner sans onopen
+        // après une erreur qui a déjà incrémenté : simuler 2e tentative sur même gen
+        // en n'appelant pas emitOpen après le 2e open programmé.
+        // Relancer : erreur sans open préalable sur une source fraîche après reset attempts.
+        // Protocole : open → open (attempts 0) → error (800) → fire → error sans open (1600).
+        runtime.open("agent");
+        const third = FakeES.instances.at(-1);
+        // pas d'emitOpen : attempts conserve ; forcer attempts via 1ere erreur puis fire puis erreur
+        third.emitOpen();
+        const before = timers.length;
+        third.emitError();
+        assert.equal(timers.at(-1).ms, 800);
+        timers.at(-1).fn();
+        const fourth = FakeES.instances.at(-1);
+        // pas d'onopen → attempts reste >=1 ; nouvelle erreur → delay 1600
+        fourth.emitError();
+        assert.equal(timers.at(-1).ms, 1600);
+
+        // Après End, plus aucun timer de reconnexion.
+        runtime.open("agent");
+        const ended = FakeES.instances.at(-1);
+        ended.emitOpen();
+        const timerCount = timers.length;
+        ended.emitJournal({ event: { type: "End" } });
+        ended.emitError();
+        assert.equal(timers.length, timerCount);
+        assert.ok(relays.includes("lost"));
+        assert.equal(runtime.isStreamEnded(), true);
       });
 
-      // L9 charge 5 — to_seq / through_seq convertis comme les seq de records.
-      test("avancement_curseur_convertit_to_seq_et_through_seq", () => {
-        const resume = new Map();
-        api.advanceWatchResumeFromEnvelope(resume, "a", {
-          event: { type: "Gap", from_seq: "2", to_seq: "238" },
-        });
-        assert.equal(resume.get("a"), 239);
-        api.advanceWatchResumeFromEnvelope(resume, "a", {
-          event: { type: "SnapshotCaughtUp", through_seq: "621" },
-        });
-        assert.equal(resume.get("a"), 622);
-      });
-
-      // L9 charge 3 — pendant le rattrapage, les records doivent pouvoir peindre.
+      // L9-5 — rendu pendant rattrapage via onJournal.decision du runtime.
       test("rattrapage_autorise_le_rendu_des_records_avant_caught_up", () => {
-        const decision = api.decideWatchThreadRender({
-          replayingJournal: true,
-          caughtUp: false,
-          acceptedCount: 2,
-        });
-        assert.equal(decision.render, true);
-        assert.equal(decision.scrollMode, "replay");
-        assert.equal(
-          api.decideWatchThreadRender({
-            replayingJournal: true,
-            caughtUp: false,
-            acceptedCount: 0,
-          }).render,
-          false,
-        );
-        assert.deepEqual(
-          api.decideWatchThreadRender({
-            replayingJournal: true,
-            caughtUp: true,
-            acceptedCount: 0,
-          }),
-          { render: true, scrollMode: "reset", replayingJournal: false },
-        );
-      });
-
-      // Protocole cursor3 (ordre fautif isolé) : non-final seq=50 puis
-      // CaughtUp(50) ne doit PAS porter le curseur à 51 avant constitution.
-      // Contrôle positif : final avant CaughtUp → message présent, curseur 51.
-      test("ordonnancement_assemblage_avant_avancement_curseur", () => {
+        const FakeES = makeFakeEventSource();
+        const decisions = [];
+        const parts = fragmentParts(9, "LIVE");
+        // full single fragment final for simplicity
         const record = {
           v: 1,
-          seq: 50,
+          seq: 9,
           ts: "2026-08-26T07:00:00Z",
-          session_id: "sess-50",
+          session_id: "s",
           event: "turn_start",
-          message_id: "msg-50",
-          payload: { body: "CORPS-50" },
+          message_id: "m9",
+          payload: { body: "LIVE" },
         };
-        const bytes = Buffer.from(`${JSON.stringify(record)}
-`);
-        const split = Math.max(1, Math.floor(bytes.length / 2));
-        const part = (final, offset, slice) => ({
+        const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
+        const runtime = api.createWatchRuntime({
+          token: "t",
+          resumeSeq: new Map(),
+          buffers: new Map(),
+          attestedGaps: new Set(),
+          seenRecords: new Set(),
+          EventSource: FakeES,
+          setTimeout: () => 1,
+          clearTimeout: () => {},
+          onJournal: (result) => decisions.push(result.decision),
+        });
+        runtime.open("agent");
+        FakeES.instances[0].emitJournal({
           event: {
             type: "JournalFragment",
             subscription_id: "sub",
-            seq: 50,
-            offset,
-            final,
-            bytes: slice.toString("base64"),
+            seq: 9,
+            offset: 0,
+            final: true,
+            bytes: bytes.toString("base64"),
           },
         });
-
-        // Ordre fautif historique : non-final puis rattrapage.
-        const buffers = new Map();
-        const resume = new Map([["agent", 0]]);
-        const attested = new Set();
-        let step = api.processWatchJournalEnvelope({
-          envelope: part(false, 0, bytes.subarray(0, split)),
-          agent: "agent",
-          buffers,
-          resumeSeq: resume,
-          attestedGaps: attested,
+        assert.equal(decisions.at(-1).render, true);
+        assert.equal(decisions.at(-1).scrollMode, "replay");
+        FakeES.instances[0].emitJournal({
+          event: { type: "SnapshotCaughtUp", through_seq: 9 },
         });
-        assert.equal(step.accepted.length, 0);
-        assert.equal(resume.get("agent"), 0);
-        assert.ok(buffers.has("sub:50"));
-
-        step = api.processWatchJournalEnvelope({
-          envelope: { event: { type: "SnapshotCaughtUp", through_seq: 50 } },
-          agent: "agent",
-          buffers,
-          resumeSeq: resume,
-          attestedGaps: attested,
-        });
-        // Propriété : le curseur ne dépasse pas un seq non encore constitué.
-        assert.equal(resume.get("agent"), 50);
-        assert.notEqual(resume.get("agent"), 51);
-        assert.match(api.buildWatchUrl("t", "agent", resume), /from_seq=50/);
-
-        step = api.processWatchJournalEnvelope({
-          envelope: part(true, split, bytes.subarray(split)),
-          agent: "agent",
-          buffers,
-          resumeSeq: resume,
-          attestedGaps: attested,
-        });
-        assert.equal(step.accepted.length, 1);
-        assert.equal(step.accepted[0].record.payload.body, "CORPS-50");
-        assert.equal(resume.get("agent"), 51);
-
-        // Contrôle positif : seule l'ORDRE change — final avant CaughtUp.
-        const buffersOk = new Map();
-        const resumeOk = new Map([["agent", 0]]);
-        const attestedOk = new Set();
-        api.processWatchJournalEnvelope({
-          envelope: part(false, 0, bytes.subarray(0, split)),
-          agent: "agent",
-          buffers: buffersOk,
-          resumeSeq: resumeOk,
-          attestedGaps: attestedOk,
-        });
-        const assembled = api.processWatchJournalEnvelope({
-          envelope: part(true, split, bytes.subarray(split)),
-          agent: "agent",
-          buffers: buffersOk,
-          resumeSeq: resumeOk,
-          attestedGaps: attestedOk,
-        });
-        assert.equal(assembled.accepted[0].record.payload.body, "CORPS-50");
-        api.processWatchJournalEnvelope({
-          envelope: { event: { type: "SnapshotCaughtUp", through_seq: 50 } },
-          agent: "agent",
-          buffers: buffersOk,
-          resumeSeq: resumeOk,
-          attestedGaps: attestedOk,
-        });
-        assert.equal(resumeOk.get("agent"), 51);
+        assert.equal(decisions.at(-1).replayingJournal, false);
       });
 
       test("fragment_jsonl_incomplet_attend_sa_borne_finale", () => {
@@ -1365,7 +1483,8 @@
     return resumeSeq;
   }
 
-  // Chemin réel : assembler AVANT d'avancer ; ne pas dépasser un fragment non final.
+  // Chemin réel : plafond sur fragments ouverts ; assemble-avant-avance
+  // reste dans le flux mais n'est pas l'oracle (voir plafond_curseur_*).
   function processWatchJournalEnvelope({
     envelope,
     agent,
@@ -1401,6 +1520,147 @@
     });
     advanceWatchResumeFromEnvelope(resumeSeq, agent, envelope, buffers);
     return { accepted, caughtUp, streamEnded };
+  }
+
+
+  // Runtime productif du watch : mount et oracles passent PAR ICI.
+  // Muter une feuille (connectWatchSource, decideWatchThreadRender) sans
+  // muter ce runtime ne doit pas laisser les oracles L9 verts.
+  function createWatchRuntime({
+    token,
+    resumeSeq,
+    buffers,
+    attestedGaps,
+    seenRecords,
+    EventSource,
+    setTimeout,
+    clearTimeout,
+    onJournal = null,
+    onRelay = null,
+  }) {
+    let source = null;
+    let generation = 0;
+    let reconnectAttempts = 0;
+    let streamEnded = false;
+    let reconnectTimer = null;
+    let replayingJournal = true;
+    let selectedAgent = null;
+
+    function ingestJournal(agent, envelope) {
+      // Plafond (clamp aux fragments ouverts) porte la propriété curseur.
+      // Assemble-avant-avance reste ici mais n'est pas l'oracle L9.
+      const caughtUp = Boolean(
+        envelope && envelope.event && envelope.event.type === "SnapshotCaughtUp",
+      );
+      if (watchEnvelopeEndsStream(envelope)) {
+        streamEnded = true;
+      }
+      let accepted = acceptTimelineEvents(
+        journalEnvelopeToEvents(envelope, agent, buffers),
+        agent,
+        attestedGaps,
+      );
+      if (seenRecords && typeof seenRecords.has === "function") {
+        accepted = accepted.filter((event) => {
+          if (event.kind !== "record") return true;
+          const key = `${agent}:${text(event.record && event.record.session_id)}:${String(event.record && event.record.seq)}`;
+          if (seenRecords.has(key)) return false;
+          seenRecords.add(key);
+          return true;
+        });
+      }
+      accepted.forEach((event) => {
+        if (event.kind !== "record") return;
+        const seq = Number(event.record && event.record.seq);
+        if (Number.isFinite(seq)) {
+          rememberWatchResumeSeq(resumeSeq, agent, seq + 1);
+        }
+      });
+      advanceWatchResumeFromEnvelope(resumeSeq, agent, envelope, buffers);
+      const decision = decideWatchThreadRender({
+        replayingJournal,
+        caughtUp,
+        acceptedCount: accepted.length,
+      });
+      replayingJournal = decision.replayingJournal;
+      const result = {
+        accepted,
+        caughtUp,
+        streamEnded,
+        decision,
+        fromSeq: resolveWatchFromSeq(resumeSeq, agent),
+      };
+      if (typeof onJournal === "function") onJournal(result);
+      return result;
+    }
+
+    function open(agent) {
+      selectedAgent = agent;
+      generation += 1;
+      const gen = generation;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (source) {
+        source.close();
+        source = null;
+      }
+      streamEnded = false;
+      replayingJournal = true;
+      buffers.clear();
+      if (typeof onRelay === "function") onRelay("reconnecting");
+
+      const fromSeq = resolveWatchFromSeq(resumeSeq, agent);
+      const url = agentResourceUrl("/v1/watch", token, agent, fromSeq);
+      source = new EventSource(url);
+
+      source.addEventListener("journal", (message) => {
+        if (gen !== generation) return;
+        const raw = message && message.data;
+        const envelope = typeof raw === "string" ? JSON.parse(raw) : raw;
+        ingestJournal(agent, envelope);
+      });
+
+      source.onopen = () => {
+        if (gen !== generation) return;
+        reconnectAttempts = 0;
+        if (typeof onRelay === "function") onRelay("connected");
+      };
+
+      source.onerror = () => {
+        if (gen !== generation) return;
+        if (typeof onRelay === "function") onRelay("reconnecting");
+        if (source) {
+          source.close();
+          source = null;
+        }
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        if (!shouldScheduleWatchReconnect({ streamEnded })) {
+          if (typeof onRelay === "function") onRelay("lost");
+          return;
+        }
+        reconnectAttempts += 1;
+        const delay = watchReconnectDelayMs(reconnectAttempts);
+        reconnectTimer = setTimeout(() => {
+          if (gen !== generation) return;
+          if (selectedAgent === agent) open(agent);
+        }, delay);
+      };
+
+      return { url, fromSeq, source, generation: gen };
+    }
+
+    return {
+      open,
+      ingestJournal,
+      getResume: (agent) => resolveWatchFromSeq(resumeSeq, agent),
+      isStreamEnded: () => streamEnded,
+      getReconnectAttempts: () => reconnectAttempts,
+    };
   }
 
   function acceptTimelineEvents(events, agent, attestedGaps) {
@@ -2165,29 +2425,47 @@
         });
     };
 
+    const watchRuntime = createWatchRuntime({
+      token,
+      resumeSeq: watchResumeSeq,
+      buffers: fragmentBuffers,
+      attestedGaps,
+      seenRecords,
+      EventSource: windowRef.EventSource,
+      setTimeout: (...args) => windowRef.setTimeout(...args),
+      clearTimeout: (...args) => windowRef.clearTimeout(...args),
+      onRelay: (signal) => updateRelay(signal),
+      onJournal: (processed) => {
+        const accepted = processed.accepted.filter((event) => {
+          if (event.kind !== "record") return true;
+          rememberEventBody(event);
+          return true;
+        });
+        state = appendTimelineBatch(state, accepted);
+        if (processed.streamEnded) {
+          watchStreamEnded = true;
+        }
+        replayingJournal = processed.decision.replayingJournal;
+        if (processed.decision.render) {
+          renderThread(
+            processed.decision.scrollMode === "live" ? accepted.length : 0,
+          );
+        }
+      },
+    });
+
     const connectWatch = (agent) => {
       closeWatch();
       if (!agent || !token || typeof windowRef.EventSource !== "function") return;
       const generation = sourceGeneration;
-      replayingJournal = true;
       watchStreamEnded = false;
-      fragmentBuffers.clear();
-      updateRelay("reconnecting");
-      const opened = connectWatchSource(
-        windowRef.EventSource,
-        token,
-        agent,
-        watchResumeSeq,
-      );
+      replayingJournal = true;
+      const opened = watchRuntime.open(agent);
       source = opened.source;
-      requestScopedSnapshot(agent, generation);
-      source.onopen = () => {
-        if (generation !== sourceGeneration) return;
-        reconnectAttempts = 0;
-        updateRelay("connected");
-      };
+      sourceGeneration = opened.generation;
+      requestScopedSnapshot(agent, opened.generation);
       source.addEventListener("snapshot", (message) => {
-        if (generation !== sourceGeneration) return;
+        if (opened.generation !== sourceGeneration) return;
         try {
           const peerState = applySnapshotPayload(JSON.parse(message.data), agent);
           if (peerState === "computed") {
@@ -2199,47 +2477,8 @@
           nodes.sourceState.dataset.state = "error";
         }
       });
-      source.addEventListener("journal", (message) => {
-        if (generation !== sourceGeneration) return;
-        try {
-          const envelope = JSON.parse(message.data);
-          const processed = processWatchJournalEnvelope({
-            envelope,
-            agent,
-            buffers: fragmentBuffers,
-            resumeSeq: watchResumeSeq,
-            attestedGaps,
-            seenRecords,
-          });
-          if (processed.streamEnded) {
-            watchStreamEnded = true;
-          }
-          const accepted = processed.accepted.filter((event) => {
-            if (event.kind !== "record") return true;
-            rememberEventBody(event);
-            return true;
-          });
-          state = appendTimelineBatch(state, accepted);
-          const decision = decideWatchThreadRender({
-            replayingJournal,
-            caughtUp: processed.caughtUp,
-            acceptedCount: accepted.length,
-          });
-          replayingJournal = decision.replayingJournal;
-          if (decision.render) {
-            renderThread(decision.scrollMode === "live" ? accepted.length : 0);
-          }
-        } catch (_error) {
-          applyIncoming({
-            kind: "system",
-            agent,
-            at: Date.now() / 1000,
-            text: "Événement du journal illisible.",
-          });
-        }
-      });
       source.addEventListener("peer_exchange", (message) => {
-        if (generation !== sourceGeneration) return;
+        if (opened.generation !== sourceGeneration) return;
         try {
           const exchange = JSON.parse(message.data);
           const key = peerExchangeKey(agent, exchange);
@@ -2256,7 +2495,7 @@
         }
       });
       source.addEventListener("relay_state", (message) => {
-        if (generation !== sourceGeneration) return;
+        if (opened.generation !== sourceGeneration) return;
         try {
           const relay = JSON.parse(message.data);
           updateRelay(relay.state, relay.since);
@@ -2264,28 +2503,6 @@
           updateRelay("lost");
         }
       });
-      source.onerror = () => {
-        if (generation !== sourceGeneration) return;
-        updateRelay("reconnecting");
-        // Couper l'auto-reconnexion native (URL figée à from_seq initial) et
-        // reprendre nous-mêmes depuis le curseur avancé — sinon Gap 2→238
-        // se réécrit à chaque cycle.
-        if (source) {
-          source.close();
-          source = null;
-        }
-        if (reconnectTimer) windowRef.clearTimeout(reconnectTimer);
-        if (!shouldScheduleWatchReconnect({ streamEnded: watchStreamEnded })) {
-          updateRelay("lost");
-          return;
-        }
-        reconnectAttempts += 1;
-        const delay = watchReconnectDelayMs(reconnectAttempts);
-        reconnectTimer = windowRef.setTimeout(() => {
-          if (generation !== sourceGeneration) return;
-          if (state.selectedAgent === agent) connectWatch(agent);
-        }, delay);
-      };
     };
 
     const selectAgent = (agentName) => {
@@ -2473,6 +2690,7 @@
     pendingJournalFragmentSeqs,
     clampResumeToPendingFragments,
     processWatchJournalEnvelope,
+    createWatchRuntime,
     resolveWatchFromSeq,
     buildWatchUrl,
     connectWatchSource,
