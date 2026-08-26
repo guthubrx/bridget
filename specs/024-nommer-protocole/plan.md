@@ -28,6 +28,10 @@ L'ancien champ `transport` reste accepté. Pour une ancienne trame tmux, sa
 valeur est reclassée comme canal et le protocole devient `tmux`. Pour un géré,
 la définition reste prioritaire. `AgentInfoWire.channel` a une valeur par
 défaut absente afin qu'un client récent lise un ancien daemon.
+L'état `Omitted` autorise séparément le repli depuis l'ancien `transport` et
+depuis `previous.channel`; l'état `Unknown` interdit les deux. Chaque entrée
+garde son propre oracle afin qu'une modification de l'une ne soit pas masquée
+par le comportement correct de l'autre.
 
 ## D-2404 — Corriger l'écrivain, garder les alias
 

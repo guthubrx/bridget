@@ -7,8 +7,8 @@ Spec: 024-nommer-protocole
 Titre: Nommer le protocole réel sans perdre le canal
 Statut: Complete
 Priorité: P1
-Tâches: 11/11 (100%)
-Tests: 20/20 (100%)
+Tâches: 12/12 (100%)
+Tests: 22/22 (100%)
 
 Résumé:
 - Contexte: La projection `TRANSPORT` mélange protocole d'agent et canal réseau.
@@ -84,6 +84,7 @@ conserve l'indication de fédération déjà annoncée.
 2. **Given** un ancien client qui lit `AgentInfo`, **When** le daemon ajoute `channel`, **Then** les champs historiques restent inchangés.
 3. **Given** une présence UI locale, fédérée ou sans attestation, **When** elle s'enregistre, **Then** son canal vaut respectivement `unix`, `ssh-unix` ou reste absent dans la trame et dans `AgentInfo`.
 4. **Given** un canal déjà attesté, **When** un client moderne annonce explicitement l'inconnu, **Then** le canal est effacé ; une trame historique qui omet réellement le champ conserve en revanche la dernière attestation.
+5. **Given** une valeur réseau historique dans `transport`, **When** une trame moderne annonce `channel:null`, **Then** cette valeur ne redevient pas un canal ; une trame qui omet réellement `channel` peut encore la reprendre.
 
 ## Requirements
 
@@ -101,6 +102,7 @@ conserve l'indication de fédération déjà annoncée.
 - **FR-2410**: Tout `Register` productif DOIT publier un canal attesté ou aucun canal ; le type local de la socket NE DOIT PAS devenir une preuve réseau.
 - **FR-2411**: Deux sources d'attestation divergentes DOIVENT produire un canal inconnu, jamais une priorité accidentelle.
 - **FR-2412**: Le fil DOIT distinguer une omission historique d'un inconnu explicitement mesuré ; le premier peut conserver une attestation antérieure, le second DOIT l'effacer.
+- **FR-2413**: Un inconnu explicite DOIT interdire séparément le repli depuis `previous.channel` et depuis une valeur réseau historique de `transport` ; une omission historique peut autoriser ces deux compatibilités.
 
 ### Non-Functional Requirements
 

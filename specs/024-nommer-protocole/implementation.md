@@ -200,7 +200,9 @@ Les oracles exécutés sur le vrai daemon attestent :
 2. `unix` puis une clé réellement omise conserve `unix` ;
 3. un vrai sous-processus `bridget ui` recevant des attestations environnement
    et fichier divergentes efface le canal `unix` antérieur ;
-4. le codec distingue et reproduit omission, `null` et chaîne.
+4. le codec distingue et reproduit omission, `null` et chaîne ;
+5. `Unknown` avec `transport=unix` ou `transport=ssh-unix` reste sans canal,
+   tandis que `Omitted` conserve séparément ces deux replis historiques.
 
 Le mutant qui traite de nouveau `Unknown` comme `Omitted` meurt dans
 `spec_024_reconnexion_inconnue_explicite_efface_le_canal_precedent`, sur
@@ -208,33 +210,55 @@ l'assertion finale `AgentInfo` avec `Some("unix")` observé contre `None`
 attendu. La mise en place reste verte ; le fichier productif est restauré au
 même SHA-256 avant et après le mutant.
 
+Un second mutant, limité à la branche `Unknown`, réautorise le repli depuis
+`reported_transport`. Il meurt dans
+`spec_024_inconnu_explicite_interdit_repli_transport_historique`, après
+`Registered`, sur l'assertion finale `AgentInfo` avec `Some("unix")` observé
+contre `None`. Le fichier productif restauré vaut
+`b8665026932159c71e3581d62e2d96d02083b668a5c908798e7caac550ec568a` en
+SHA-256. Les deux mutants et leurs deux témoins restent distincts.
+
 Dette explicitement laissée hors périmètre : la présence UI est projetée avec
 `AgentInfo.transport=cli`. Cette approximation est préexistante et visible
 dans `who` et `agents --json`; la modifier ici changerait le contrat public.
 Le chemin de normalisation concerné est `crates/bridget-daemon/src/daemon.rs`
 autour de la branche `PresenceMode::Cli`.
 
+Deux autres dettes restent explicites. Le `Default` public de `ChannelReport`
+vaut `Omitted` : un futur constructeur pourrait donc conserver silencieusement
+un canal alors qu'il voulait déclarer l'inconnu. Aucun producteur actuel ne
+l'utilise accidentellement, mais le choix de provenance doit rester explicite
+à la construction. Par ailleurs, un canal reste une chaîne non vide libre ;
+une évolution dédiée devra définir un ensemble fermé unique, rejeter
+bruyamment toute casse, tout séparateur ou tout littéral invalide, et énumérer
+explicitement les éventuels alias de transition.
+
 Fermeture finale sur la même closure
 `bridget-transport + maicie + bridget-daemon`, avec targets séparés et
 `--no-run` vert des deux côtés avant inventaire :
 
 - base `2c5271f` : 963 tests listés,
-  **942 passés / 3 échoués / 18 ignorés** ;
-- tête amendée : 982 tests listés,
-  **961 passés / 3 échoués / 18 ignorés** ;
-- `ui_relay_test` exact : **17 passés / 0 échoué / 0 ignoré** ;
-- famille Rust `spec_024_*` : **19 passés / 0 échoué**, plus le test shell de
-  fédération vert, soit 20 oracles G11.
+  **941 passés / 4 échoués / 18 ignorés** ;
+- tête amendée : 984 tests listés,
+  **963 passés / 3 échoués / 18 ignorés** ;
+- `ui_relay_test` exact : **19 passés / 0 échoué / 0 ignoré** ;
+- famille Rust `spec_024_*` : **21 passés / 0 échoué**, plus le test shell de
+  fédération vert, soit 22 oracles G11.
 
-Les deux côtés rendent uniquement les trois références Linux : `attach`
-raw-mode (`tcgetattr` EIO), `attach` reconnexion (course `BrokenPipe`) et
-`lifecycle::matrice_sc003` (fixture `known_types`). Le rouge supplémentaire
-`wrapper_interactif_avec_journal_actif_est_attachable`, vu sous charge par un
-relecteur sur la base puis vert isolément des deux côtés, ne réapparaît pas
-dans cette exécution séquentielle et reste imputé hors lot.
+Les deux côtés rendent les trois références Linux : `attach` raw-mode
+(`tcgetattr` EIO), `attach` reconnexion (course `BrokenPipe`) et
+`lifecycle::matrice_sc003` (fixture `known_types`). La base seule rend aussi
+`wrapper_codex_natif_repond_et_reste_attachable` rouge sous charge
+(`AgentUnknown`) ; il passe isolément 1/0 sur la base et sur la tête et reste
+imputé hors lot. Le rouge supplémentaire
+`wrapper_interactif_avec_journal_actif_est_attachable`, vu auparavant sous
+charge par un relecteur puis vert isolément des deux côtés, ne réapparaît pas
+dans ce passage.
 
-Restent non mesurés après cet amendement : un vrai tunnel SSH inter-hôtes,
-un croisement effectif ancien/nouveau processus, macOS et le comportement
-d'un ancien daemon recevant `channel:null` (il le traite encore comme
-l'ancienne absence). Aucun redémarrage ni migration de la flotte vivante n'a
+La compatibilité inverse a désormais été mesurée : le daemon de base accepte
+`channel:null` et `channel:"unix"` en ignorant le champ inconnu ; le client
+récent relit sa réponse, affiche `—` et avertit que le daemon est périmé. La
+vérité du canal exige donc un déploiement daemon-first si elle doit être
+immédiate. Restent non mesurés après cet amendement : un vrai tunnel SSH
+inter-hôtes et macOS. Aucun redémarrage ni migration de la flotte vivante n'a
 été effectué.

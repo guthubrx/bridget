@@ -47,3 +47,8 @@
   Modéliser les trois états sans changer leur JSON, conserver le canal sous
   omission historique, l'effacer sous `null` moderne et tuer le mutant qui
   confond les deux sur l'assertion `AgentInfo`.
+
+- [x] **T2412 [FR-2413] Garder séparément les deux replis historiques.**
+  Vérifier sur le vrai daemon que `Unknown` interdit les replis `unix` et
+  `ssh-unix`, que `Omitted` les conserve, et tuer le mutant qui réactive
+  `reported_transport` sur l'assertion finale `AgentInfo`.

@@ -127,6 +127,15 @@ impl LiveAgent {
     }
 
     fn connect_with_channel_report(socket: &Path, name: &str, channel: ChannelReport) -> Self {
+        Self::connect_with_transport_and_channel_report(socket, name, "cli", channel)
+    }
+
+    fn connect_with_transport_and_channel_report(
+        socket: &Path,
+        name: &str,
+        transport: &str,
+        channel: ChannelReport,
+    ) -> Self {
         let stream = UnixStream::connect(socket).unwrap();
         let read_stream = stream.try_clone().unwrap();
         let mut agent = Self {
@@ -137,7 +146,7 @@ impl LiveAgent {
             agent_type: "ui-test".to_string(),
             name: Some(name.to_string()),
             host: Some("test".to_string()),
-            transport: Some("cli".to_string()),
+            transport: Some(transport.to_string()),
             channel,
             mode: Some(PresenceMode::Cli),
             location: None,
@@ -318,6 +327,24 @@ fn observe_reconnection_channel(label: &str, report: ChannelReport) -> Option<St
     channel
 }
 
+fn observe_fresh_registration_channel(
+    label: &str,
+    transport: &str,
+    report: ChannelReport,
+) -> Option<String> {
+    let root = root(label);
+    let daemon = DaemonProcess::start(&root);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let name = format!("humain-{label}");
+    let mut agent =
+        LiveAgent::connect_with_transport_and_channel_report(&socket, &name, transport, report);
+    let channel = agent.listed_channel(&name);
+    drop(agent);
+    drop(daemon);
+    std::fs::remove_dir_all(root).unwrap();
+    channel
+}
+
 fn request(address: SocketAddr, path: &str) -> TcpStream {
     request_http(address, "GET", path, None)
 }
@@ -403,6 +430,37 @@ fn spec_024_reconnexion_historique_omise_conserve_le_canal_precedent() {
         observe_reconnection_channel("transition-omise", ChannelReport::Omitted).as_deref(),
         Some("unix")
     );
+}
+
+#[test]
+fn spec_024_inconnu_explicite_interdit_repli_transport_historique() {
+    for transport in ["unix", "ssh-unix"] {
+        assert_eq!(
+            observe_fresh_registration_channel(
+                &format!("inconnu-sans-repli-{transport}"),
+                transport,
+                ChannelReport::Unknown,
+            ),
+            None,
+            "le transport historique {transport} ne doit pas devenir un canal moderne",
+        );
+    }
+}
+
+#[test]
+fn spec_024_omission_historique_conserve_repli_transport() {
+    for transport in ["unix", "ssh-unix"] {
+        assert_eq!(
+            observe_fresh_registration_channel(
+                &format!("omission-avec-repli-{transport}"),
+                transport,
+                ChannelReport::Omitted,
+            )
+            .as_deref(),
+            Some(transport),
+            "l’omission historique doit conserver le canal {transport}",
+        );
+    }
 }
 
 #[test]
