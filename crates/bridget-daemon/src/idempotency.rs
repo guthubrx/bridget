@@ -123,6 +123,29 @@ pub struct SendDelivery {
     pub message_bytes: Vec<u8>,
 }
 
+/// Projection de stockage : la colonne `message_bytes` reste nullable pour
+/// les lignes héritées de v1, classées `indeterminate` par la migration v2.
+struct StoredSendDelivery {
+    delivery_id: String,
+    recipient_instance_id: String,
+    delivery_generation: u64,
+    expires_at: i64,
+    phase: String,
+    message_bytes: Option<Vec<u8>>,
+}
+
+impl StoredSendDelivery {
+    fn into_delivery(self) -> Option<SendDelivery> {
+        self.message_bytes.map(|message_bytes| SendDelivery {
+            delivery_id: self.delivery_id,
+            recipient_instance_id: self.recipient_instance_id,
+            delivery_generation: self.delivery_generation,
+            expires_at: self.expires_at,
+            message_bytes,
+        })
+    }
+}
+
 /// Demande suivie créée avec la remise d'un `reply=yes` dans l'unique
 /// transaction SQLite : aucune remise idempotente ne peut survivre sans son
 /// cycle de réponse durable.
@@ -1059,24 +1082,40 @@ impl IdempotencyStore {
     /// réussi, rejouez pour lire le sort », rc=0, sur un message qui ne
     /// partirait plus jamais. Le mensonge optimiste est pire que celui qu'on
     /// corrige — d'où `dispatching` seul.
+    ///
+    /// Complexité : O(log n) via l'index unique de la clé idempotente.
     pub fn send_delivery(
         &self,
         key: &IdempotencyKey,
     ) -> Result<Option<SendDelivery>, IdempotencyError> {
+        let Some(delivery) = self.stored_send_delivery(key)? else {
+            return Ok(None);
+        };
+        if delivery.phase != "dispatching" {
+            return Ok(None);
+        }
+        Ok(delivery.into_delivery())
+    }
+
+    fn stored_send_delivery(
+        &self,
+        key: &IdempotencyKey,
+    ) -> Result<Option<StoredSendDelivery>, IdempotencyError> {
         self.conn
             .query_row(
-                "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at, message_bytes
+                "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at,
+                        phase, message_bytes
                  FROM send_deliveries
-                 WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2
-                   AND phase = 'dispatching'",
+                 WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2",
                 params![key.issuer_scope, key.idempotency_key],
                 |row| {
-                    Ok(SendDelivery {
+                    Ok(StoredSendDelivery {
                         delivery_id: row.get(0)?,
                         recipient_instance_id: row.get(1)?,
                         delivery_generation: row.get(2)?,
                         expires_at: row.get(3)?,
-                        message_bytes: row.get(4)?,
+                        phase: row.get(4)?,
+                        message_bytes: row.get(5)?,
                     })
                 },
             )
@@ -1084,31 +1123,88 @@ impl IdempotencyStore {
             .map_err(Into::into)
     }
 
+    /// Mutant livré : retire uniquement la garde de phase, sans modifier la
+    /// projection nullable. Hors chemin de production par construction.
+    #[cfg(test)]
+    fn send_delivery_mutant_sans_filtre_de_phase(
+        &self,
+        key: &IdempotencyKey,
+    ) -> Result<Option<SendDelivery>, IdempotencyError> {
+        Ok(self
+            .stored_send_delivery(key)?
+            .and_then(StoredSendDelivery::into_delivery))
+    }
+
     /// Reprise bornée : seules les remises encore en cours pour l'instance
     /// exacte sont relivrées. Une remise Acked ou Indeterminate ne l'est pas.
+    /// Toute ligne `dispatching` sans enveloppe est classée `indeterminate`
+    /// dans la même transaction avant que les autres remises soient rendues.
+    ///
+    /// Complexité : O(N), N étant le nombre total de remises faute d'index sur
+    /// l'instance ; le reclassement est groupé pour éviter N écritures.
     pub fn dispatching_deliveries_for_instance(
-        &self,
+        &mut self,
         recipient_instance_id: &str,
         now: i64,
     ) -> Result<Vec<SendDelivery>, IdempotencyError> {
-        let mut statement = self.conn.prepare(
-            "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at, message_bytes
-             FROM send_deliveries
-             WHERE recipient_instance_id = ?1 AND phase = 'dispatching' AND expires_at > ?2
-             ORDER BY delivery_id",
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let reclassified = tx.execute(
+            "UPDATE send_deliveries SET phase = 'indeterminate'
+             WHERE recipient_instance_id = ?1 AND phase = 'dispatching'
+               AND message_bytes IS NULL",
+            params![recipient_instance_id],
         )?;
-        statement
-            .query_map(params![recipient_instance_id, now], |row| {
-                Ok(SendDelivery {
-                    delivery_id: row.get(0)?,
-                    recipient_instance_id: row.get(1)?,
-                    delivery_generation: row.get(2)?,
-                    expires_at: row.get(3)?,
-                    message_bytes: row.get(4)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(Into::into)
+        let stored = {
+            let mut statement = tx.prepare(
+                "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at, message_bytes
+                 FROM send_deliveries
+                 WHERE recipient_instance_id = ?1 AND phase = 'dispatching' AND expires_at > ?2
+                 ORDER BY delivery_id",
+            )?;
+            statement
+                .query_map(params![recipient_instance_id, now], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, u64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, Option<Vec<u8>>>(4)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let deliveries = stored
+            .into_iter()
+            .map(
+                |(
+                    delivery_id,
+                    recipient_instance_id,
+                    delivery_generation,
+                    expires_at,
+                    message_bytes,
+                )| {
+                    let message_bytes = message_bytes.ok_or(IdempotencyError::CorruptRecord(
+                        "remise dispatching sans enveloppe après reclassement",
+                    ))?;
+                    Ok(SendDelivery {
+                        delivery_id,
+                        recipient_instance_id,
+                        delivery_generation,
+                        expires_at,
+                        message_bytes,
+                    })
+                },
+            )
+            .collect::<Result<Vec<_>, IdempotencyError>>()?;
+        tx.commit()?;
+        if reclassified > 0 {
+            log::warn!(
+                "{reclassified} remise(s) de {recipient_instance_id} classée(s) indeterminate: enveloppe locale absente"
+            );
+        }
+        Ok(deliveries)
     }
 
     /// Une marque `Seen` sans observable d'injection reste indéterminée : le
@@ -1156,7 +1252,7 @@ impl IdempotencyStore {
                 row.get::<_, String>(2)?,
                 row.get::<_, u64>(3)?,
                 row.get::<_, String>(4)?,
-                row.get::<_, Vec<u8>>(5)?,
+                row.get::<_, Option<Vec<u8>>>(5)?,
             )),
         ).optional()?.ok_or(IdempotencyError::InvalidDelivery)?;
         if row.2 != recipient_instance_id || row.3 != delivery_generation {
@@ -1169,7 +1265,11 @@ impl IdempotencyStore {
         if row.4 != "dispatching" {
             return Err(IdempotencyError::InvalidDelivery);
         }
-        let message = serde_json::from_slice::<bridget_core::BridgetMessage>(&row.5).ok();
+        let envelope_missing = row.5.is_none();
+        let message = row
+            .5
+            .as_deref()
+            .and_then(|bytes| serde_json::from_slice::<bridget_core::BridgetMessage>(bytes).ok());
         let delivery = tx.execute("UPDATE send_deliveries SET phase = 'acked' WHERE delivery_id = ?1 AND phase = 'dispatching'", params![delivery_id])?;
         let record = tx.execute(
             "UPDATE idempotency_records SET state = 'terminal', public_result_kind = 'accepted', public_result_category = NULL, public_result_reason = NULL
@@ -1195,6 +1295,11 @@ impl IdempotencyStore {
             None
         };
         tx.commit()?;
+        if envelope_missing {
+            log::warn!(
+                "accusé idempotent {delivery_id} enregistré sans enveloppe locale: corrélation in_reply_to impossible"
+            );
+        }
         Ok(answered_request)
     }
 
@@ -1492,11 +1597,46 @@ fn to_sql_error(error: IdempotencyError) -> rusqlite::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Barrier};
+    use std::sync::{Arc, Barrier, Mutex, Once};
     use std::thread;
 
     const NOW: i64 = 1_000_000;
     const HORIZON: i64 = 3600;
+
+    struct TraceSansEnveloppe;
+
+    static TRACE_SANS_ENVELOPPE: TraceSansEnveloppe = TraceSansEnveloppe;
+    static TRACES_SANS_ENVELOPPE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static INIT_TRACE_SANS_ENVELOPPE: Once = Once::new();
+
+    impl log::Log for TraceSansEnveloppe {
+        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+            metadata.level() <= log::Level::Warn
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            if self.enabled(record.metadata()) {
+                let message = record.args().to_string();
+                if message.contains("corrélation in_reply_to impossible") {
+                    TRACES_SANS_ENVELOPPE.lock().unwrap().push(message);
+                }
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    fn commencer_capture_trace_sans_enveloppe() {
+        INIT_TRACE_SANS_ENVELOPPE.call_once(|| {
+            log::set_logger(&TRACE_SANS_ENVELOPPE).expect("logger de test installable");
+            log::set_max_level(log::LevelFilter::Warn);
+        });
+        TRACES_SANS_ENVELOPPE.lock().unwrap().clear();
+    }
+
+    fn traces_sans_enveloppe() -> Vec<String> {
+        TRACES_SANS_ENVELOPPE.lock().unwrap().clone()
+    }
 
     fn key() -> IdempotencyKey {
         IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, "message-1").unwrap()
@@ -2289,7 +2429,7 @@ mod tests {
         }
         drop(conn);
 
-        let store = IdempotencyStore::open(&path).unwrap();
+        let mut store = IdempotencyStore::open(&path).unwrap();
         let deliveries = store
             .dispatching_deliveries_for_instance("instance-1", NOW)
             .unwrap();
@@ -2331,7 +2471,9 @@ mod tests {
     /// un état ABSORBANT : plus aucune transition n'en sort, ce message ne sera
     /// jamais accusé.
     ///
-    /// Cet oracle meurt si le filtre de phase disparaît.
+    /// Cet oracle tue le mutant exact qui retire la garde de phase : avec une
+    /// enveloppe présente, l'écart porte sur le sens métier et non sur le
+    /// décodage SQLite.
     #[test]
     fn une_remise_en_quarantaine_ne_remonte_plus_comme_une_remise_en_vol() {
         let mut store = IdempotencyStore::open_in_memory().unwrap();
@@ -2350,12 +2492,20 @@ mod tests {
         store.begin_send_delivery(&key, &delivery).unwrap();
         // Avant la quarantaine, la remise est bien en vol : sans ce constat,
         // l'oracle passerait aussi pour une clé qui n'a jamais rien déposé.
-        assert_eq!(store.send_delivery(&key).unwrap(), Some(delivery));
+        assert_eq!(store.send_delivery(&key).unwrap(), Some(delivery.clone()));
 
         store
             .mark_delivery_indeterminate("delivery-quarantaine", "instance-1", 4)
             .unwrap();
 
+        assert_eq!(
+            store
+                .send_delivery_mutant_sans_filtre_de_phase(&key)
+                .unwrap(),
+            Some(delivery),
+            "contrôle positif du mutant : sans garde de phase, une enveloppe \
+             présente ferait passer la quarantaine pour une remise en vol"
+        );
         assert_eq!(
             store.send_delivery(&key).unwrap(),
             None,
@@ -2386,7 +2536,10 @@ mod tests {
     /// définitivement inaccusables qui continuaient à s'annoncer comme des
     /// dépôts réussis.
     ///
-    /// Cet oracle meurt si le filtre de phase disparaît.
+    /// Cet oracle garde la projection nullable : même sous le mutant exact qui
+    /// retire la garde de phase, l'absence d'enveloppe reste non relivrable et
+    /// ne fuit jamais en `InvalidColumnType`. L'oracle runtime voisin, dont
+    /// l'enveloppe est présente, est celui qui tue ce mutant sur le sens métier.
     #[test]
     fn une_remise_mise_en_quarantaine_par_la_migration_n_atteste_plus_un_depot() {
         let path = std::env::temp_dir().join(format!(
@@ -2450,12 +2603,289 @@ mod tests {
         );
 
         assert_eq!(
+            store
+                .send_delivery_mutant_sans_filtre_de_phase(&key())
+                .unwrap(),
+            None,
+            "le mutant de phase ne doit pas réintroduire l'échec de décodage : \
+             sans enveloppe, la remise reste non relivrable"
+        );
+        assert_eq!(
             store.send_delivery(&key()).unwrap(),
             None,
             "une remise mise en quarantaine par la migration ne doit pas \
              attester un dépôt : une montée de version en fabriquerait en masse"
         );
         std::fs::remove_file(path).unwrap();
+    }
+
+    // ========== ORACLES JURY (relecteur fable2 du lot parent) ==========
+    // PROPRIÉTÉ SOUS TEST — celle que le lot déclare tenir :
+    // « toute lecture de send_deliveries est totale sur le schéma hérité ;
+    //   si message_bytes vaut NULL, aucun Sqlite(InvalidColumnType) ne fuit. »
+    // Le lot parent la tient sur send_delivery. Ces deux oracles couvrent les
+    // DEUX AUTRES chemins de lecture de message_bytes restés ouverts. Base
+    // héritée où la quarantaine ne rejoue pas (v2 déjà marquée).
+
+    fn base_heritee_dispatching_sans_enveloppe() -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-jury-lecture-totale-{}-{}.db",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE idempotency_records (
+                issuer_scope TEXT NOT NULL,
+                operation_kind TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                canonical_bytes BLOB NOT NULL,
+                state TEXT NOT NULL,
+                public_result_kind TEXT,
+                public_result_category TEXT,
+                public_result_reason TEXT,
+                issued_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                PRIMARY KEY (issuer_scope, operation_kind, idempotency_key)
+            );
+            CREATE TABLE send_deliveries (
+                delivery_id TEXT PRIMARY KEY,
+                issuer_scope TEXT NOT NULL,
+                operation_kind TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                recipient_instance_id TEXT NOT NULL,
+                delivery_generation INTEGER NOT NULL,
+                phase TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                message_bytes BLOB
+            );
+            CREATE TABLE idempotency_schema_migrations (version INTEGER PRIMARY KEY);
+            INSERT INTO idempotency_schema_migrations(version) VALUES (2);
+            INSERT INTO idempotency_schema_migrations(version) VALUES (3);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO idempotency_records VALUES (?1, 'send', 'message-1', X'00', 'dispatching', NULL, NULL, NULL, ?2, ?3)",
+            params!["012_scope_aaaaaaaaaaaa", NOW, NOW + HORIZON],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO send_deliveries VALUES ('delivery-encore-en-vol', ?1, 'send', 'message-1', 'instance-1', 1, 'dispatching', ?2, NULL)",
+            params!["012_scope_aaaaaaaaaaaa", NOW + HORIZON],
+        )
+        .unwrap();
+        drop(conn);
+        path
+    }
+
+    fn ajouter_remise_valide_heritee(path: &Path, key: &str, delivery_id: &str, generation: u64) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute(
+            "INSERT INTO idempotency_records VALUES (?1, 'send', ?2, X'00', 'dispatching', NULL, NULL, NULL, ?3, ?4)",
+            params!["012_scope_aaaaaaaaaaaa", key, NOW, NOW + HORIZON],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO send_deliveries VALUES (?1, ?2, 'send', ?3, 'instance-1', ?4, 'dispatching', ?5, ?6)",
+            params![
+                delivery_id,
+                "012_scope_aaaaaaaaaaaa",
+                key,
+                generation,
+                NOW + HORIZON,
+                sample_message_bytes(key, "instance-1"),
+            ],
+        )
+        .unwrap();
+    }
+
+    /// Chemin de REPRISE (daemon.rs:2293). `collect::<Result<Vec<_>>>` : une
+    /// seule ligne sans enveloppe fait échouer la reprise ENTIÈRE de
+    /// l'instance, y compris ses remises légitimes.
+    #[test]
+    fn jury_lecture_totale_chemin_reprise() {
+        let path = base_heritee_dispatching_sans_enveloppe();
+        let mut store = IdempotencyStore::open(&path).unwrap();
+        let lu = store.dispatching_deliveries_for_instance("instance-1", NOW);
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            lu.is_ok(),
+            "lecture non totale sur le chemin de reprise : {:?}",
+            lu.err()
+        );
+    }
+
+    /// Chemin d'ACCUSÉ. La lecture stricte de message_bytes précède même la
+    /// garde de phase : aucune phase ne protège de la fuite.
+    #[test]
+    fn jury_lecture_totale_chemin_accuse() {
+        let path = base_heritee_dispatching_sans_enveloppe();
+        let mut store = IdempotencyStore::open(&path).unwrap();
+        let lu = store.acknowledge_send_delivery("delivery-encore-en-vol", "instance-1", 1);
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            !matches!(
+                lu,
+                Err(IdempotencyError::Sqlite(
+                    rusqlite::Error::InvalidColumnType(..)
+                ))
+            ),
+            "lecture non totale sur le chemin d'accusé : {:?}",
+            lu.err()
+        );
+    }
+
+    #[test]
+    fn reprise_reclasse_sans_enveloppe_en_indeterminate() {
+        let path = base_heritee_dispatching_sans_enveloppe();
+        let mut store = IdempotencyStore::open(&path).unwrap();
+
+        let deliveries = store
+            .dispatching_deliveries_for_instance("instance-1", NOW)
+            .expect("la reprise doit lire totalement le schéma hérité");
+
+        assert_eq!(deliveries, Vec::<SendDelivery>::new());
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT phase FROM send_deliveries WHERE delivery_id = 'delivery-encore-en-vol'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "indeterminate",
+            "écarter une enveloppe absente sans reclasser laisserait un état absorbant silencieux"
+        );
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn reprise_isole_deux_remises_valides_d_une_sans_enveloppe() {
+        let path = base_heritee_dispatching_sans_enveloppe();
+        ajouter_remise_valide_heritee(&path, "message-valid-a", "delivery-valid-a", 2);
+        ajouter_remise_valide_heritee(&path, "message-valid-b", "delivery-valid-b", 3);
+        let mut store = IdempotencyStore::open(&path).unwrap();
+
+        let ids = store
+            .dispatching_deliveries_for_instance("instance-1", NOW)
+            .expect("une remise illisible ne doit pas faire échouer toute l'instance")
+            .into_iter()
+            .map(|delivery| delivery.delivery_id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            ids,
+            vec![
+                "delivery-valid-a".to_string(),
+                "delivery-valid-b".to_string(),
+            ]
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT phase FROM send_deliveries WHERE delivery_id = 'delivery-encore-en-vol'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "indeterminate",
+            "rendre les valides ne suffit pas si la remise écartée reste dispatching"
+        );
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn accuse_sans_enveloppe_respecte_les_trois_verdicts_metier() {
+        commencer_capture_trace_sans_enveloppe();
+
+        let path_dispatching = base_heritee_dispatching_sans_enveloppe();
+        let mut store = IdempotencyStore::open(&path_dispatching).unwrap();
+        let acknowledgement =
+            store.acknowledge_send_delivery("delivery-encore-en-vol", "instance-1", 1);
+        let durable_state = store
+            .conn
+            .query_row(
+                "SELECT d.phase, r.state, r.public_result_kind
+                 FROM send_deliveries d
+                 JOIN idempotency_records r
+                   ON r.issuer_scope = d.issuer_scope
+                  AND r.operation_kind = d.operation_kind
+                  AND r.idempotency_key = d.idempotency_key
+                 WHERE d.delivery_id = 'delivery-encore-en-vol'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        let traces = traces_sans_enveloppe();
+        assert!(
+            matches!(acknowledgement, Ok(None))
+                && durable_state
+                    == (
+                        "acked".to_string(),
+                        "terminal".to_string(),
+                        Some("accepted".to_string()),
+                    )
+                && traces.iter().any(|trace| {
+                    trace.contains("delivery-encore-en-vol")
+                        && trace.contains("corrélation in_reply_to impossible")
+                }),
+            "l'accusé et sa trace doivent survivre à l'enveloppe locale absente: résultat={acknowledgement:?}, état={durable_state:?}, traces={traces:?}"
+        );
+        drop(store);
+        std::fs::remove_file(path_dispatching).unwrap();
+
+        let path_acked = base_heritee_dispatching_sans_enveloppe();
+        let conn = Connection::open(&path_acked).unwrap();
+        conn.execute(
+            "UPDATE send_deliveries SET phase = 'acked' WHERE delivery_id = 'delivery-encore-en-vol'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE idempotency_records SET state = 'terminal', public_result_kind = 'accepted' WHERE idempotency_key = 'message-1'",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let mut store = IdempotencyStore::open(&path_acked).unwrap();
+        assert_eq!(
+            store
+                .acknowledge_send_delivery("delivery-encore-en-vol", "instance-1", 1)
+                .expect("un accusé déjà enregistré reste idempotent"),
+            None
+        );
+        drop(store);
+        std::fs::remove_file(path_acked).unwrap();
+
+        let path_indeterminate = base_heritee_dispatching_sans_enveloppe();
+        let conn = Connection::open(&path_indeterminate).unwrap();
+        conn.execute(
+            "UPDATE send_deliveries SET phase = 'indeterminate' WHERE delivery_id = 'delivery-encore-en-vol'",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let mut store = IdempotencyStore::open(&path_indeterminate).unwrap();
+        assert!(matches!(
+            store.acknowledge_send_delivery("delivery-encore-en-vol", "instance-1", 1),
+            Err(IdempotencyError::InvalidDelivery)
+        ));
+        assert_eq!(
+            delivery_phase(&store, "delivery-encore-en-vol"),
+            "indeterminate"
+        );
+        drop(store);
+        std::fs::remove_file(path_indeterminate).unwrap();
     }
 
     #[test]

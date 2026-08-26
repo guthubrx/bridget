@@ -33,6 +33,8 @@ au nettoyage final.
 | SC-005 | Tests `purge_uses_each_record_expiry_not_a_new_configuration` et `first_send_outside_its_horizon_is_expired`. |
 | SC-006 | Tests de négociation client et non-régression workspace des chemins 007/008. |
 
+> **Qualification datée — `aa3468bc` garantit la totalité du lecteur `send_delivery` face à une enveloppe absente ; la totalité des lecteurs `dispatching_deliveries_for_instance` et `acknowledge_send_delivery` reste ouverte et est portée par la session 031 `lecture-totale-remises-sans-enveloppe`.**
+
 ## Dépréciations
 
 `docs/DEPRECATIONS.md` a été relu : la session 012 n'ajoute ni ne retire de
