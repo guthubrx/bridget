@@ -589,8 +589,9 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                     message_id: message.id.clone(),
                 },
             );
-            let _ = record(
+            record_or_terminal(
                 &worker.journal,
+                &worker.observations,
                 "turn_start",
                 Some(&message.id),
                 json!({ "body": message.body }),
@@ -615,8 +616,9 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                             message_id: message.id.clone(),
                         },
                     );
-                    let _ = record(
+                    record_or_terminal(
                         &worker.journal,
+                        &worker.observations,
                         "prompt_dispatched",
                         Some(&message.id),
                         json!({
@@ -633,7 +635,13 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
             };
             if turn_started {
                 let reasoning = finish_reasoning(&worker.active_detail, &message.id);
-                let _ = record(&worker.journal, "reasoning", Some(&message.id), reasoning);
+                record_or_terminal(
+                    &worker.journal,
+                    &worker.observations,
+                    "reasoning",
+                    Some(&message.id),
+                    reasoning,
+                );
             } else {
                 worker
                     .active_detail
@@ -655,10 +663,17 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                 if message.reply {
                     payload["routed_to"] = json!(&message.from);
                 }
-                let _ = record(&worker.journal, "turn_end", Some(&message.id), payload);
-            } else if let ManagedEventKind::DeliveryRejected { reason, .. } = &event {
-                let _ = record(
+                record_or_terminal(
                     &worker.journal,
+                    &worker.observations,
+                    "turn_end",
+                    Some(&message.id),
+                    payload,
+                );
+            } else if let ManagedEventKind::DeliveryRejected { reason, .. } = &event {
+                record_or_terminal(
+                    &worker.journal,
+                    &worker.observations,
                     "error",
                     Some(&message.id),
                     json!({ "reason": reason }),
@@ -784,6 +799,20 @@ fn record(
         })
 }
 
+/// Miroir ACP `record_or_terminal` : échec d'enqueue (dont kind hors vocabulaire)
+/// → `JournalFailed`, jamais avalé par `let _ = record(...)`.
+fn record_or_terminal(
+    journal: &Journal,
+    observations: &Arc<(Mutex<Observations>, Condvar)>,
+    event: &str,
+    message_id: Option<&str>,
+    payload: Value,
+) {
+    if let Err(detail) = record(journal, event, message_id, payload) {
+        push_internal(observations, ManagedEventKind::JournalFailed { detail });
+    }
+}
+
 fn source_matches_active_turn(detail: &CodexTurnDetail, value: &Value) -> bool {
     value.pointer("/params/threadId").and_then(Value::as_str) == Some(detail.thread_id.as_str())
         && detail.turn_id.as_deref().is_none_or(|turn_id| {
@@ -805,6 +834,7 @@ fn set_active_turn_id(active_detail: &ActiveTurnDetail, message_id: &str, turn_i
 
 fn record_active_act(
     journal: &Journal,
+    observations: &Arc<(Mutex<Observations>, Condvar)>,
     active_detail: &ActiveTurnDetail,
     value: &Value,
     kind: CodexActKind,
@@ -819,19 +849,29 @@ fn record_active_act(
         .map(|active| active.message_id.clone());
     if let Some(message_id) = message_id {
         let mut payload = serde_json::Map::from_iter([
-            ("kind".to_string(), Value::String(kind.as_str().to_string())),
+            (
+                "kind".to_string(),
+                Value::String(kind.as_str().to_string()),
+            ),
             ("text".to_string(), Value::String(text.to_string())),
         ]);
         if let Some(detail) = detail {
             payload.insert("detail".to_string(), Value::String(detail.to_string()));
         }
-        let _ = record(journal, "update", Some(&message_id), Value::Object(payload));
+        record_or_terminal(
+            journal,
+            observations,
+            "update",
+            Some(&message_id),
+            Value::Object(payload),
+        );
     }
 }
 
 /// (A) Journalise un fragment texte assistant et incrémente `text_updates`.
 fn record_agent_text_delta(
     journal: &Journal,
+    observations: &Arc<(Mutex<Observations>, Condvar)>,
     active_detail: &ActiveTurnDetail,
     value: &Value,
     content: &str,
@@ -849,8 +889,9 @@ fn record_agent_text_delta(
         detail.text_updates = detail.text_updates.saturating_add(1);
         detail.message_id.clone()
     };
-    let _ = record(
+    record_or_terminal(
         journal,
+        observations,
         "update",
         Some(&message_id),
         json!({ "kind": "text", "content": content }),
@@ -861,6 +902,7 @@ fn record_agent_text_delta(
 /// si aucun delta n'a déjà été journalisé (anti-doublon).
 fn maybe_record_final_agent_message(
     journal: &Journal,
+    observations: &Arc<(Mutex<Observations>, Condvar)>,
     active_detail: &ActiveTurnDetail,
     value: &Value,
     content: &str,
@@ -884,8 +926,9 @@ fn maybe_record_final_agent_message(
         detail.text_updates = 1;
         detail.message_id.clone()
     };
-    let _ = record(
+    record_or_terminal(
         journal,
+        observations,
         "update",
         Some(&message_id),
         json!({ "kind": "text", "content": content }),
@@ -1001,12 +1044,18 @@ fn served_model_from_codex(value: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-fn maybe_record_mismatch(journal: &Journal, pinned: Option<&str>, served: &str) {
+fn maybe_record_mismatch(
+    journal: &Journal,
+    observations: &Arc<(Mutex<Observations>, Condvar)>,
+    pinned: Option<&str>,
+    served: &str,
+) {
     let Some(pinned) = pinned.filter(|pinned| *pinned != served) else {
         return;
     };
-    let _ = record(
+    record_or_terminal(
         journal,
+        observations,
         "model_mismatch",
         None,
         json!({ "pinned": pinned, "served": served }),
@@ -1222,7 +1271,13 @@ fn spawn_reader(
                             .entry(turn_id.to_string())
                             .or_default()
                             .push_str(delta);
-                        record_agent_text_delta(&journal, &active_detail, &value, delta);
+                        record_agent_text_delta(
+                            &journal,
+                            &observations,
+                            &active_detail,
+                            &value,
+                            delta,
+                        );
                     }
                     push_source(
                         &observations,
@@ -1262,6 +1317,7 @@ fn spawn_reader(
                         }
                         maybe_record_final_agent_message(
                             &journal,
+                            &observations,
                             &active_detail,
                             &value,
                             text,
@@ -1297,6 +1353,7 @@ fn spawn_reader(
                     {
                         record_active_act(
                             &journal,
+                            &observations,
                             &active_detail,
                             &value,
                             CodexActKind::Command,
@@ -1330,6 +1387,7 @@ fn spawn_reader(
                                 .filter(|kind| !kind.is_empty());
                             record_active_act(
                                 &journal,
+                                &observations,
                                 &active_detail,
                                 &value,
                                 CodexActKind::File,
@@ -1354,6 +1412,7 @@ fn spawn_reader(
                     {
                         record_active_act(
                             &journal,
+                            &observations,
                             &active_detail,
                             &value,
                             CodexActKind::Plan,
@@ -1372,6 +1431,7 @@ fn spawn_reader(
                 Some(method) if is_approval_request(method) => {
                     record_active_act(
                         &journal,
+                        &observations,
                         &active_detail,
                         &value,
                         CodexActKind::Approval,
@@ -1415,7 +1475,12 @@ fn spawn_reader(
                 }
                 Some("modelRerouted" | "model/rerouted" | "ModelReroutedNotification") => {
                     if let Some(served) = served_model_from_codex(&value) {
-                        maybe_record_mismatch(&journal, pinned_model.as_deref(), &served);
+                        maybe_record_mismatch(
+                            &journal,
+                            &observations,
+                            pinned_model.as_deref(),
+                            &served,
+                        );
                         push_source(
                             &observations,
                             raw,
@@ -1493,6 +1558,120 @@ mod tests {
         ));
         fs::create_dir_all(&root).expect("racine temporaire");
         root
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_codex_refus_update_hors_vocabulaire_emet_JournalFailed() {
+        let root = root("act-kind-visible");
+        let observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
+        let journal = Arc::new(Mutex::new(Some(
+            JournalWriter::start(
+                &root,
+                "codex-1",
+                "session-1",
+                Arc::new(Mutex::new(crate::acp::AcpEventQueue::default())),
+            )
+            .unwrap(),
+        )));
+        record_or_terminal(
+            &journal,
+            &observations,
+            "update",
+            Some("m1"),
+            json!({"kind":"command","text":"ls"}),
+        );
+        assert!(
+            observations
+                .0
+                .lock()
+                .unwrap()
+                .events
+                .iter()
+                .all(|event| !matches!(event.kind, ManagedEventKind::JournalFailed { .. })),
+            "écriture command valide ne doit pas émettre JournalFailed"
+        );
+        record_or_terminal(
+            &journal,
+            &observations,
+            "update",
+            Some("m1"),
+            json!({"kind":"intent","text":"fantôme"}),
+        );
+        let drained: Vec<_> = observations
+            .0
+            .lock()
+            .unwrap()
+            .events
+            .drain(..)
+            .collect();
+        assert!(
+            drained.iter().any(|event| matches!(
+                &event.kind,
+                ManagedEventKind::JournalFailed { detail }
+                    if detail.contains("hors vocabulaire")
+            )),
+            "refus hors vocabulaire doit être visible via JournalFailed, got {drained:?}"
+        );
+        if let Some(writer) = journal.lock().unwrap().take() {
+            writer.stop();
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mutant_avale_err_record_tue_TEMOIN_codex_JournalFailed() {
+        fn broken_swallow(
+            journal: &Journal,
+            _observations: &Arc<(Mutex<Observations>, Condvar)>,
+            event: &str,
+            message_id: Option<&str>,
+            payload: Value,
+        ) {
+            let _ = record(journal, event, message_id, payload);
+        }
+        let root = root("act-kind-mutant");
+        let observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
+        let journal = Arc::new(Mutex::new(Some(
+            JournalWriter::start(
+                &root,
+                "codex-1",
+                "session-1",
+                Arc::new(Mutex::new(crate::acp::AcpEventQueue::default())),
+            )
+            .unwrap(),
+        )));
+        broken_swallow(
+            &journal,
+            &observations,
+            "update",
+            Some("m1"),
+            json!({"kind":"intent"}),
+        );
+        assert!(
+            observations.0.lock().unwrap().events.is_empty(),
+            "le mutant avale l'erreur"
+        );
+        record_or_terminal(
+            &journal,
+            &observations,
+            "update",
+            Some("m1"),
+            json!({"kind":"intent"}),
+        );
+        assert!(
+            observations.0.lock().unwrap().events.iter().any(|event| matches!(
+                &event.kind,
+                ManagedEventKind::JournalFailed { detail }
+                    if detail.contains("hors vocabulaire")
+            )),
+            "TEMOIN_codex_JournalFailed doit mourir si Err est avalée"
+        );
+        if let Some(writer) = journal.lock().unwrap().take() {
+            writer.stop();
+        }
+        let _ = fs::remove_dir_all(root);
     }
 
     fn fake_options(_trace: &std::path::Path) -> CodexAppServerOptions {
