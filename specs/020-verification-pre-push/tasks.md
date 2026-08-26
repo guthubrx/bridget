@@ -24,6 +24,13 @@
 
 - [x] T008 [US3] Exécuter la suite finale, relire le diff et compléter `specs/020-verification-pre-push/implementation.md`
 
+## Phase 4 — Amendements après jury
+
+- [x] T009 [US3] Faire refuser une erreur du filtre et tuer isolément le retour optimiste
+- [x] T010 [US3] Arrêter le banc si `mktemp` ou une fixture échoue, avant dérivation ou faux vert
+- [x] T011 [US1] Remplacer les U rescans distants par une indexation O(U+R)
+- [x] T012 [US3] Séparer les quatre causes fail-closed et tuer chacune par un mutant isolé
+
 ## Dépendances et stratégie
 
 T001 et T002 précèdent le banc. T003 précède T004. T005 ne commence qu'après

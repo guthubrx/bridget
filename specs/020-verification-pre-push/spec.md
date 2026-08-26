@@ -7,8 +7,8 @@ Spec: 020-verification-pre-push
 Titre: Vérification transactionnelle avant envoi
 Statut: Implemented
 Priorité: P1
-Tâches: 8/8 (100%)
-Tests: 7/7 (100%)
+Tâches: 12/12 (100%)
+Tests: 15/15 (100%)
 
 Résumé:
 - Contexte: un contrôle de message au moment de l'intégration ne voit pas les ancêtres importés par une branche.
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch**: `session-20-verification-pre-push`
 **Created**: 2026-08-25
-**Status**: Implemented
+**Status**: Completed
 **Priority**: P1
 **Dependencies**: SPEC-018 uniquement pour l'activation du hook après jury
 
@@ -110,6 +110,9 @@ fait rougir ce témoin.
   les espaces de présentation, DOIT être interdite sans énumérer de noms.
 - **FR-0208** — Toute erreur d'observation, de lecture ou de calcul DOIT
   produire un refus non nul et un diagnostic sur la sortie d'erreur.
+- **FR-0208a** — Le filtre de message DOIT distinguer exactement une
+  occurrence (`grep=0`), une absence (`grep=1`) et une erreur (`grep>1`) ;
+  seule l'absence est un résultat propre.
 - **FR-0209** — Un seul commit interdit DOIT refuser toute la transaction,
   y compris ses autres références propres.
 - **FR-0210** — Le hook ne DOIT PAS être activé depuis un espace de travail
@@ -117,11 +120,12 @@ fait rougir ce témoin.
 
 ## Critères mesurables
 
-- **SC-0201** — Les sept témoins validés passent sans réseau externe.
+- **SC-0201** — Les quinze témoins validés passent sans réseau externe.
 - **SC-0202** — Une transaction contenant 100 % de commits propres est
   acceptée ; une transaction contenant au moins un commit interdit est refusée.
-- **SC-0203** — Chaque mode d'indétermination testé produit un refus et un
-  message expliquant l'action corrective.
+- **SC-0203** — Chacun des quatre modes d'indétermination — distant inconnu,
+  objet absent, état divergent et calcul impossible — possède un témoin
+  distinct qui produit un refus et nomme sa cause.
 - **SC-0204** — Le calcul visite au plus une fois l'union des commits
   introduits ; sa complexité est linéaire dans le nombre de mises à jour,
   références distantes et commits introduits.

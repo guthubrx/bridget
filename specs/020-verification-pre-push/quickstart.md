@@ -6,7 +6,7 @@
 bash scripts/test-git-pre-push-authorship.sh
 ```
 
-Le banc doit annoncer sept témoins passés, zéro rouge et zéro ignoré.
+Le banc doit annoncer quinze témoins passés, zéro rouge et zéro ignoré.
 
 ## Limite d'activation
 

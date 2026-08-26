@@ -56,25 +56,6 @@ append_commit_tip() {
   esac
 }
 
-lookup_remote_oid() {
-  local remote_refs_file="$1"
-  local wanted_ref="$2"
-  awk -v wanted="$wanted_ref" '
-    $2 == wanted {
-      count += 1
-      object_id = $1
-    }
-    END {
-      if (count > 1) {
-        exit 2
-      }
-      if (count == 1) {
-        print object_id
-      }
-    }
-  ' "$remote_refs_file"
-}
-
 main() {
   [[ "$#" -eq 2 ]] || refuse "deux arguments Git attendus: nom et destination du distant"
   local remote_name="$1"
@@ -93,6 +74,7 @@ main() {
   local local_commits_file="${pre_push_temp_dir}/local-commits"
   local remote_refs_file="${pre_push_temp_dir}/remote-refs"
   local remote_commits_file="${pre_push_temp_dir}/remote-commits"
+  local remote_state_file="${pre_push_temp_dir}/remote-state"
   local revisions_file="${pre_push_temp_dir}/revisions"
   local introduced_file="${pre_push_temp_dir}/introduced"
   local message_file="${pre_push_temp_dir}/message"
@@ -125,19 +107,50 @@ main() {
     refuse "état du distant ${remote_name} impossible à observer"
   fi
 
-  local observed_oid
-  while IFS=$'\t' read -r local_ref local_oid remote_ref remote_oid; do
-    if ! observed_oid="$(lookup_remote_oid "$remote_refs_file" "$remote_ref")"; then
-      refuse "référence distante dupliquée dans l'observation: ${remote_ref}"
-    fi
-    if is_zero_oid "$remote_oid"; then
-      [[ -z "$observed_oid" ]] ||
-        refuse "la référence annoncée neuve existe désormais: ${remote_ref}"
-    else
-      [[ "$observed_oid" == "$remote_oid" ]] ||
-        refuse "état distant divergent pour ${remote_ref}; actualiser puis retenter"
-    fi
-  done <"$updates_file"
+  local tab=$'\t'
+  # O(R + U) : chaque référence observée et chaque mise à jour sont indexées une fois.
+  if ! LC_ALL=C awk -F "$tab" '
+    FILENAME == ARGV[1] {
+      remote_count[$2] += 1
+      remote_oid[$2] = $1
+      next
+    }
+    FILENAME == ARGV[2] {
+      remote_ref = $3
+      announced_oid = $4
+      if (remote_count[remote_ref] > 1) {
+        printf "duplicate\t%s\n", remote_ref
+        exit 10
+      }
+      observed_oid = remote_count[remote_ref] == 1 ? remote_oid[remote_ref] : ""
+      if (announced_oid ~ /^0+$/) {
+        if (observed_oid != "") {
+          printf "concurrent-creation\t%s\n", remote_ref
+          exit 11
+        }
+      } else if (observed_oid != announced_oid) {
+        printf "divergent\t%s\n", remote_ref
+        exit 12
+      }
+    }
+  ' "$remote_refs_file" "$updates_file" >"$remote_state_file"; then
+    local remote_state remote_state_ref remote_state_extra
+    IFS=$'\t' read -r remote_state remote_state_ref remote_state_extra <"$remote_state_file" || true
+    [[ -n "${remote_state_ref:-}" && -z "${remote_state_extra:-}" ]] ||
+      refuse "comparaison de l'état distant impossible"
+    case "$remote_state" in
+      duplicate)
+        refuse "référence distante dupliquée dans l'observation: ${remote_state_ref}"
+        ;;
+      concurrent-creation)
+        refuse "la référence annoncée neuve existe désormais: ${remote_state_ref}"
+        ;;
+      divergent)
+        refuse "état distant divergent pour ${remote_state_ref}; actualiser puis retenter"
+        ;;
+      *) refuse "comparaison de l'état distant impossible" ;;
+    esac
+  fi
 
   [[ -s "$local_objects_file" ]] || exit 0
 
@@ -158,8 +171,6 @@ main() {
   done <"$remote_refs_file"
 
   [[ -s "$local_commits_file" ]] || exit 0
-  sort -u "$local_commits_file" -o "$local_commits_file"
-  sort -u "$remote_commits_file" -o "$remote_commits_file"
   cat "$local_commits_file" >"$revisions_file"
   if [[ -s "$remote_commits_file" ]]; then
     printf '%s\n' '--not' >>"$revisions_file"
@@ -178,10 +189,20 @@ main() {
     if ! git show -s --format=%B "$commit_id" >"$message_file"; then
       refuse "message illisible pour le commit ${commit_id}"
     fi
+    local authorship_status
     if message_has_forbidden_authorship "$message_file"; then
-      printf 'REFUS pre-push: co-autorat interdit dans le commit %s\n' "$commit_id" >&2
-      forbidden_count=$((forbidden_count + 1))
+      authorship_status=0
+    else
+      authorship_status=$?
     fi
+    case "$authorship_status" in
+      0)
+        printf 'REFUS pre-push: co-autorat interdit dans le commit %s\n' "$commit_id" >&2
+        forbidden_count=$((forbidden_count + 1))
+        ;;
+      1) ;;
+      *) refuse "inspection du message impossible pour le commit ${commit_id}" ;;
+    esac
   done <"$introduced_file"
 
   [[ "$forbidden_count" -eq 0 ]] ||

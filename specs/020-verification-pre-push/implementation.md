@@ -6,7 +6,9 @@
 - **Branche** : session-20-verification-pre-push
 - **Démarré** : 2026-08-25
 - **Terminé** : en cours
-- **Base mesurée** : b6eea777facf929d99a9c4f9ae75fb50e06dc2fd
+- **Base historique** : b6eea777facf929d99a9c4f9ae75fb50e06dc2fd
+- **Base de jury des amendements** : 7024df31de5b23bfeca27eb5588a5465a872a8b8
+- **Base de livraison** : à inscrire après le rebase final tardif
 
 ## Progression
 
@@ -76,11 +78,46 @@ Portabilité vérifiée avec un `TMPDIR` absolu contenant des espaces :
 - **Non mesuré** : exécution macOS et analyse ShellCheck, indisponible sur la
   machine ; aucune suite Cargo, car aucun fichier Rust n'est modifié.
 
+### T009–T012 — Amendements après jury
+
+- **Tête fautive reproduite** :
+  `479ae728326fcb2006f58a5e22ead1d1e6cccf6f`.
+- **M1 sans mutation** : un commit portant réellement un trailer interdit,
+  avec `grep` instrumenté à `rc=2`, était accepté par le hook (`rc=0`) alors
+  que `FAKE_GREP_READ_ERROR` attestait l'erreur de lecture.
+- **M2 sans mutation** : `mktemp` à `rc=1` laissait `fixture_root` vide ; un
+  faux `mkdir` a observé la dérivation `-p /new-branch/local`. Aucun chemin
+  racine n'a été créé.
+- **M3 sans mutation** : cinq mises à jour provoquaient cinq lectures `awk`
+  complètes de l'observation distante, soit la borne O(U×R) reprochée.
+- **M4 sans mutation** : divergence et échec de `rev-list` refusaient déjà
+  avec `rc=1`; la dette portait sur deux témoins absents, pas sur le comportement.
+- **Banc rouge avant correction** : 10 passés / 3 rouges / 0 ignoré ; rouges
+  nommés `erreur du filtre refuse le commit hostile`, `index distant linéaire`
+  et `échec mktemp avant dérivation`.
+- **Correction** : contrat trois états du filtre, arrêt explicite du banc sur
+  échec de `mktemp`, index distant en une passe O(U+R), suppression des tris
+  inutiles, quatre oracles fail-closed séparés.
+- **Auto-revue du runner** : Bash neutralisait `set -e` parce que le sous-shell
+  était directement la condition d'un `if`. Le témoin ajouté a rendu 13 passés
+  / 1 rouge / 0 ignoré avant de déplacer la capture du statut hors du `if`.
+- **Banc restauré** : 15 passés / 0 rouge / 0 ignoré.
+- **Mutants isolés** : neuf campagnes à 14 passés / 1 rouge / 0 ignoré. Chaque
+  campagne tue uniquement son témoin : retour optimiste M1, rescan M3,
+  panne de l'indexeur, initialisation M2, runner conditionnel, distant inconnu,
+  objet absent, état divergent et calcul `rev-list` impossible.
+- **Mutant syntaxique historique** : 11 passés / 4 rouges / 0 ignoré ; rouges
+  nommés branche neuve, envoi forcé, transaction multi-références et filtre
+  réel avec nom inventé.
+- **Cas limites rejoués après l'indexation** : distant vide et suppression
+  acceptés ; tag annoté menant à un commit interdit, entrée mal formée et
+  création concurrente refusés avec leur diagnostic exact.
+
 ## REX
 
-**Date** : 2026-08-25
-**Tâches complétées** : 8/8
-**Tests** : 7/7
+**Date** : 2026-08-26
+**Tâches complétées** : 12/12
+**Tests** : 15/15
 
 ### Ce qui a bien fonctionné
 
