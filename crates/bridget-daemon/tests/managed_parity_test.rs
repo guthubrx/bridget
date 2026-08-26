@@ -2140,7 +2140,8 @@ fn TEMOIN_abandon_apres_N_tentatives_est_nomme() {
     fs::set_permissions(&adapter, fs::Permissions::from_mode(0o700)).unwrap();
     let _ = kill_provider_sigterm(pgids[0]);
 
-    // Attendre la disparition de l'agent (wrapper abandonne et quitte).
+    // Le daemon conserve l'entrée en state=stopped après Unregister — ne pas
+    // exiger la disparition du roster. La propriété mesurée : plus joignable.
     let gone_deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let mut observer = Peer::register(&daemon.socket, "abandon-observer");
@@ -2149,12 +2150,15 @@ fn TEMOIN_abandon_apres_N_tentatives_est_nomme() {
             DaemonToWrapper::AgentList { agents } => agents,
             other => panic!("liste inattendue: {other:?}"),
         };
-        if agents.iter().all(|agent| agent.name != name) {
+        let still_connected = agents
+            .iter()
+            .any(|agent| agent.name == name && agent.state == "connected");
+        if !still_connected {
             break;
         }
         assert!(
             Instant::now() < gone_deadline,
-            "agent encore présent après abandon attendu: {agents:?}"
+            "agent encore connected après abandon attendu: {agents:?}"
         );
         thread::sleep(Duration::from_millis(100));
     }
