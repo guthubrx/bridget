@@ -115,3 +115,14 @@
 - `shellcheck` n'est pas installé sur l'hôte.
 - L'activation launchd et l'exécution réelle sur macOS ne sont pas mesurées.
 - Aucun installateur n'a été exécuté sur les commandes actives de production.
+
+## Reprise après verdict STOP — 2026-08-26
+
+- **Base rebasée** : `7024df31de5b23bfeca27eb5588a5465a872a8b8`.
+- **Statut** : en cours.
+- **Charges reproduites à venir** : identité et mode d'une release existante,
+  destination liée à un répertoire, configuration de ronde divergente dont
+  l'échec était neutralisé.
+- **Non visité** : macOS/launchd réel, activation systemd réelle sans saut,
+  concurrence entre installateurs et falsification volontaire de références
+  Git.

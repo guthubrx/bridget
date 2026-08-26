@@ -74,6 +74,9 @@ le référencent jamais après activation.
 | Un fichier sale est copié malgré le SHA annoncé | Refus de l'arbre sale + extraction directe du blob Git |
 | Une ancienne copie de ronde reste active | Refus non nul avant toute unité sans `--force` |
 | Une release portant un SHA est altérée | Comparaison des octets et refus fail-closed |
+| Des octets exacts masquent un lien ou un mode mutable | Contrôle de représentation et de mode avant l'idempotence |
+| `mv` suit un lien actif vers un répertoire | Remplacement de l'entrée exacte puis attestation de la cible obtenue |
+| Une unité existante diffère de la configuration demandée | Comparaison exacte ; refus non nul sans `--force` |
 | Coupure pendant l'activation | Préparation temporaire puis renommage atomique |
 | Différence macOS/Linux | Pas de `readlink -f`, fallback SHA-256, Bash 3.2 |
 
@@ -83,6 +86,8 @@ le référencent jamais après activation.
 - `scripts/test-018-pilotage-install.sh` : scénarios de contrat.
 - `scripts/test-bridget-idle.sh` et `scripts/test-bridget-ronde.sh` : métier inchangé.
 - Mutants ciblés sur les gardes worktree, branche, propreté, ancestralité et copie.
+- Témoins ciblés sur release liée, mode `0755`, lien actif vers répertoire et
+  rejeu de ronde avec configuration divergente.
 - `cargo test --workspace --no-run` avant tout comptage.
 - Suite complète sans `test-support` avec passés/rouges/ignorés et imputation.
 - `cargo fmt --all --check` et Clippy selon les capacités Linux.

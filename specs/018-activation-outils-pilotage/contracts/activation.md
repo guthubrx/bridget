@@ -24,6 +24,10 @@ Chaque précondition non satisfaite produit un refus non nul avant toute
   référence, SHA, nom d'artefact et SHA-256, jamais l'URL Git brute.
 - Entrée active : `$HOME/.local/bin/<outil>`, lien absolu vers l'artefact.
 - Mode de l'artefact : lecture/exécution, sans écriture ordinaire.
+- Représentation : l'artefact est un fichier régulier non lien au mode `0555` ;
+  sa preuve est un fichier régulier non lien au mode `0444`.
+- Postcondition : l'entrée active est relue après remplacement et sa cible
+  textuelle doit être exactement l'artefact attendu.
 
 ## Idempotence
 
@@ -31,6 +35,10 @@ Rejouer l'installation depuis le même SHA avec une release intacte et la même
 cible rend un succès explicite sans changer les octets. Une release existante
 mais différente rend un échec de corruption et n'est jamais réparée
 silencieusement.
+
+Pour la ronde, l'idempotence porte aussi sur le contenu et le mode exacts des
+unités. Une configuration différente sans `--force` est un refus non nul ; elle
+ne peut jamais être masquée par une annonce finale de succès.
 
 ## Refus spécifique à la ronde
 

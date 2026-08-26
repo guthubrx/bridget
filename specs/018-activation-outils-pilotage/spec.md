@@ -5,10 +5,10 @@
 
 Spec: 018-activation-outils-pilotage
 Titre: Activation gouvernée des outils de pilotage
-Statut: Completed
+Statut: In Progress — reprise après verdict STOP
 Priorité: P1
-Tâches: 8/8 (100%)
-Tests: 10/10 (100%)
+Tâches: 8/12 (67%)
+Tests: 10/13 (77%)
 
 Résumé:
 - Contexte: `bridget-idle` a été activé par un lien vers un worktree avant son jury et son merge ; sa suppression aurait cassé l'outil actif.
@@ -28,7 +28,7 @@ Fichiers:
 
 **Feature Branch**: `session-18-activation-outils-pilotage`
 **Created**: 2026-08-25
-**Status**: Completed
+**Status**: In Progress — reprise après verdict STOP
 **Priority**: P1
 **Dependencies**: SPEC-011
 
@@ -119,6 +119,12 @@ ronde prête.
 - Une version déjà matérialisée dont les octets ne correspondent plus au commit annoncé doit être considérée corrompue et ne jamais être écrasée silencieusement.
 - Un lien existant vers un checkout ou un autre SHA exige une autorisation explicite de remplacement.
 - Une interruption pendant la préparation ne doit jamais laisser l'entrée de commande viser un artefact partiel.
+- Une release aux bons octets mais représentée par un lien, ou portant un mode
+  différent, n'est pas la release immuable attendue et doit être refusée.
+- Avec `--force`, un lien actif vers un répertoire doit être remplacé comme une
+  entrée exacte ; la cible obtenue doit être attestée avant toute annonce.
+- Un rejeu de ronde au même SHA mais avec une configuration différente n'est
+  pas idempotent : sans `--force`, il doit échouer sans annoncer la ronde prête.
 
 ## Requirements
 
@@ -138,6 +144,15 @@ ronde prête.
 - **FR-012**: Une version matérialisée sous un SHA donné NE DOIT PAS être écrasée si ses octets diffèrent de l'objet Git correspondant.
 - **FR-013**: En cas de refus, l'installateur de ronde NE DOIT créer, modifier ni activer aucune unité de service.
 - **FR-014**: L'autorisation explicite de remplacement DOIT permettre la migration contrôlée d'une copie ou d'un ancien lien uniquement après validation de toutes les conditions Git.
+- **FR-015**: Une release préexistante DOIT être un fichier régulier qui n'est
+  pas un lien, aux octets et au mode exacts attendus ; la preuve d'origine
+  adjacente obéit au même invariant de représentation, d'octets et de mode.
+- **FR-016**: Après une activation, l'installateur DOIT relire l'entrée active
+  et attester qu'elle est un lien dont la cible textuelle est exactement la
+  release attendue avant d'annoncer le succès.
+- **FR-017**: Une unité de ronde préexistante n'est idempotente que si son
+  contenu et son mode sont exactement ceux demandés. Toute divergence sans
+  `--force` DOIT produire un refus non nul sans annonce finale de succès.
 
 ### Non-Functional Requirements
 
@@ -162,6 +177,23 @@ ronde prête.
 - **SC-004**: Deux installations consécutives du même outil au même SHA produisent une cible et une empreinte strictement identiques.
 - **SC-005**: Le scénario de copie régulière de la ronde sans autorisation produit un échec non nul, zéro unité créée et zéro octet modifié.
 - **SC-006**: Les harnais existants des outils et la batterie projet ne présentent aucun rouge imputable à la session.
+- **SC-007**: Remplacer une release par un lien de mêmes octets, ou modifier son
+  mode de `0555` à `0755`, produit deux refus discriminants.
+- **SC-008**: Avec `--force`, une entrée active liée à un répertoire devient le
+  lien exact vers la release ; aucun lien n'est déposé dans l'ancien répertoire.
+- **SC-009**: Un rejeu de ronde avec une configuration différente échoue, garde
+  les unités initiales octet pour octet et n'imprime jamais `ronde portable prête`.
+
+## Reprise après verdict STOP — 2026-08-26
+
+La contre-épreuve a établi trois invariants manquants, pas un besoin de
+refactor : identité de la release dans le système de fichiers, remplacement de
+l'entrée active exacte et égalité réelle des unités lors d'un rejeu. La base de
+reprise est `7024df31de5b23bfeca27eb5588a5465a872a8b8`.
+
+Ne sont pas mesurés par cette reprise : macOS et launchd réels, activation
+systemd sans `--skip-activate`, course entre deux installateurs et falsification
+volontaire des références Git.
 
 ## Assumptions
 

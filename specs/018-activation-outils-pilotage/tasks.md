@@ -23,6 +23,17 @@
 - [x] T007 Exécuter harnais métier, mutants, formatage, compilation, suite et Clippy puis consigner les comptes dans `specs/018-activation-outils-pilotage/implementation.md`
 - [x] T008 Finaliser le REX, geler le SHA et livrer la branche `session-18-activation-outils-pilotage` via Bridget
 
+## Phase 6 — Levée du verdict STOP
+
+- [ ] T009 Reproduire séparément la release liée, le mode `0755`, le lien actif
+  vers répertoire et le faux succès d'une configuration de ronde divergente.
+- [ ] T010 Valider la représentation et le mode des releases, remplacer
+  l'entrée active exacte et attester la cible réellement obtenue.
+- [ ] T011 Rendre le rejeu des unités exactement idempotent et supprimer tout
+  avalement d'échec par `|| true`.
+- [ ] T012 Rejouer les gates, tuer les mutants ciblés, documenter le non-visité
+  puis livrer une tête rebasée sur `7024df31`.
+
 ## Dépendances
 
 ```text
