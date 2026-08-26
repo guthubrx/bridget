@@ -39,6 +39,10 @@ struct ActiveTurn {
     message_id: String,
     completion: mpsc::Sender<ManagedTerminal>,
     response: String,
+    /// Nombre d'événements journal `update` texte déjà écrits pour ce tour.
+    text_updates: usize,
+    /// Issue fournisseur (`end_turn`, …) — absente ⇒ le fil affiche « inconnu ».
+    stop_reason: Option<String>,
 }
 
 struct QueueState {
@@ -433,6 +437,8 @@ fn spawn_worker(
                 message_id: message.id.clone(),
                 completion,
                 response: String::new(),
+                text_updates: 0,
+                stop_reason: None,
             });
             busy.store(true, Ordering::SeqCst);
             push_internal(
@@ -481,29 +487,37 @@ fn spawn_worker(
                     detail: error.to_string(),
                 },
             };
-            let response = queue
-                .0
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .active
-                .take()
-                .map(|active| active.response)
-                .unwrap_or_default();
-            let event = match terminal {
+            let (response, stop_reason) = {
+                let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                match state.active.take() {
+                    Some(active) => (active.response, active.stop_reason),
+                    None => (String::new(), None),
+                }
+            };
+            let event = match &terminal {
                 ManagedTerminal::Completed | ManagedTerminal::Cancelled => {
                     ManagedEventKind::TurnFinished {
                         message: message.clone(),
                         response,
-                        terminal,
+                        terminal: terminal.clone(),
                     }
                 }
                 ManagedTerminal::Failed { detail } => ManagedEventKind::DeliveryRejected {
                     message_id: message.id.clone(),
-                    reason: detail,
+                    reason: detail.clone(),
                 },
             };
             if matches!(event, ManagedEventKind::TurnFinished { .. }) {
-                let _ = record(&journal, "turn_end", Some(&message.id), json!({}));
+                let stop_reason = stop_reason.unwrap_or_else(|| match &terminal {
+                    ManagedTerminal::Cancelled => "cancelled".to_string(),
+                    ManagedTerminal::Completed => "completed".to_string(),
+                    ManagedTerminal::Failed { detail } => detail.clone(),
+                });
+                let mut payload = json!({ "stop_reason": stop_reason });
+                if message.reply {
+                    payload["routed_to"] = json!(&message.from);
+                }
+                let _ = record(&journal, "turn_end", Some(&message.id), payload);
             }
             push_internal(&events, event);
             busy.store(false, Ordering::SeqCst);
@@ -558,15 +572,14 @@ fn spawn_reader(
                 .get("type")
                 .and_then(Value::as_str)
                 .unwrap_or("inconnu");
-            // Retranscription attach/UI : chaque delta texte doit devenir un
-            // événement journal `update` (même contrat que ACP). Sans cela le
-            // processus parle, la réponse finale arrive, mais la page web ne
-            // voit que « a travaillé Ns ».
+            // (A) Retranscription : chaque delta texte → journal `update`.
+            // Sans cela le fil ne voit que « a travaillé Ns ».
             if let Some(delta) = value.pointer("/event/delta/text").and_then(Value::as_str) {
                 let message_id = {
                     let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
                     if let Some(active) = state.active.as_mut() {
                         active.response.push_str(delta);
+                        active.text_updates = active.text_updates.saturating_add(1);
                         Some(active.message_id.clone())
                     } else {
                         None
@@ -579,6 +592,54 @@ fn spawn_reader(
                         Some(&message_id),
                         json!({ "kind": "text", "content": delta }),
                     );
+                }
+            }
+            // (B) Repli : message `assistant` complet si aucun delta n'a été
+            // journalisé (stdout sans include-partial, ou forme agrégée seule).
+            if kind == "assistant" {
+                let assistant_text = value
+                    .pointer("/message/content")
+                    .and_then(Value::as_array)
+                    .map(|blocks| {
+                        blocks
+                            .iter()
+                            .filter_map(|block| {
+                                if block.get("type").and_then(Value::as_str) == Some("text") {
+                                    block.get("text").and_then(Value::as_str)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("")
+                    })
+                    .unwrap_or_default();
+                if !assistant_text.is_empty() {
+                    let message_id = {
+                        let mut state =
+                            queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                        if let Some(active) = state.active.as_mut() {
+                            if active.text_updates == 0 {
+                                if active.response.is_empty() {
+                                    active.response.push_str(&assistant_text);
+                                }
+                                active.text_updates = active.text_updates.saturating_add(1);
+                                Some(active.message_id.clone())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(message_id) = message_id {
+                        let _ = record(
+                            &journal,
+                            "update",
+                            Some(&message_id),
+                            json!({ "kind": "text", "content": assistant_text }),
+                        );
+                    }
                 }
             }
             if kind == "result" {
@@ -595,13 +656,62 @@ fn spawn_reader(
                             .to_string(),
                     }
                 };
+                // (C) Issue attestée : `terminal_reason` du résultat Claude
+                // (ex. "completed"), pas le champ stop_reason fournisseur
+                // (ex. "end_turn") — attach lit payload.stop_reason.
+                let stop_reason = value
+                    .get("terminal_reason")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|reason| !reason.is_empty())
+                    .map(str::to_string)
+                    .or_else(|| {
+                        value
+                            .get("stop_reason")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|reason| !reason.is_empty())
+                            .map(str::to_string)
+                    });
+                let pending_result_update = {
+                    let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                    if let Some(active) = state.active.as_mut() {
+                        active.stop_reason = stop_reason;
+                        // (B) Repli result-only : texte final dans le fil SSI
+                        // aucun update texte n'a déjà été journalisé (pas de
+                        // duplication après deltas).
+                        if active.text_updates == 0
+                            && let Some(result) = value.get("result").and_then(Value::as_str)
+                            && !result.is_empty()
+                        {
+                            if active.response.is_empty() {
+                                active.response.push_str(result);
+                            }
+                            active.text_updates = 1;
+                            Some((active.message_id.clone(), result.to_string()))
+                        } else {
+                            if active.response.is_empty()
+                                && let Some(result) = value.get("result").and_then(Value::as_str)
+                            {
+                                active.response.push_str(result);
+                            }
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+                if let Some((message_id, result)) = pending_result_update {
+                    // (B) Réponse finale absente des deltas → journaliser `result`.
+                    let _ = record(
+                        &journal,
+                        "update",
+                        Some(&message_id),
+                        json!({ "kind": "text", "content": result }),
+                    );
+                }
                 let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
                 if let Some(active) = state.active.as_mut() {
-                    if active.response.is_empty()
-                        && let Some(result) = value.get("result").and_then(Value::as_str)
-                    {
-                        active.response.push_str(result);
-                    }
                     let _ = active.completion.send(terminal);
                 }
             }
@@ -769,7 +879,10 @@ fn push_source(events: &Arc<Mutex<VecDeque<ManagedEvent>>>, raw: Vec<u8>, kind: 
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
     use std::time::Instant;
+
+    static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
 
     fn options() -> ClaudeStreamJsonOptions {
         ClaudeStreamJsonOptions {
@@ -843,37 +956,116 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// Témoin de retranscription : les deltas `stream_event` doivent devenir
-    /// des `update` journal (contrat attach/UI). Un mutant qui retire
-    /// `record(..., "update", ...)` dans `spawn_reader` meurt ici — c'est le
-    /// défaut mesuré sur essai-claude (0 update malgré stdout réel).
+    /// (A) Témoin retranscription : deltas → `update` journal.
+    /// Mutant : retirer `record(..., "update", ...)` sur `/event/delta/text`.
     #[allow(non_snake_case)]
     #[test]
-    fn TEMOIN_claude_stream_json_retranscrit_les_deltas_en_update() {
+    fn TEMOIN_A_claude_stream_json_retranscrit_les_deltas_en_update() {
+        let events = journal_fixture_deltas();
+        let updates: Vec<_> = events
+            .iter()
+            .filter(|event| event["event"] == "update")
+            .collect();
+        assert!(
+            !updates.is_empty(),
+            "au moins un update journal attendu, reçu: {events:?}"
+        );
+        assert!(updates.iter().all(|event| event["payload"]["kind"] == "text"));
+        // Pas de duplication : result porte le même texte mais text_updates>0.
+        assert_eq!(
+            updates.len(),
+            2,
+            "deux deltas seulement, pas de troisième update issu du result: {updates:?}"
+        );
+    }
+
+    /// (B) Témoin M1 : flux result-only — le TEXTE FINAL EXACT dans le fil,
+    /// même message_id. Mutant : retirer le repli result→record(update)
+    /// (text_updates==0) → left=[] / right=["REPONSE FINALE"].
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_B_claude_stream_json_reponse_finale_result_only_dans_le_fil() {
+        let events = journal_fixture_result_only();
+        let updates: Vec<_> = events
+            .iter()
+            .filter(|event| event["event"] == "update")
+            .collect();
+        let contents: Vec<&str> = updates
+            .iter()
+            .filter_map(|event| event["payload"]["content"].as_str())
+            .collect();
+        assert_eq!(
+            contents,
+            vec!["REPONSE FINALE"],
+            "repli result-only → update exact, reçu {contents:?} via {events:?}"
+        );
+        assert!(
+            updates
+                .iter()
+                .all(|event| event["message_id"] == "claude-abc-1"),
+            "même message_id que le tour, reçu {updates:?}"
+        );
+    }
+
+    /// (C) Témoin M2 : turn_end.payload.stop_reason = issue attestée
+    /// (`completed` = terminal_reason fournisseur). Mutant : turn_end {} →
+    /// attach affiche « inconnu » (left=Null / right="completed").
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_C_claude_stream_json_turn_end_porte_stop_reason_completed() {
+        let events = journal_fixture_result_only();
+        let turn_end = events
+            .iter()
+            .find(|event| event["event"] == "turn_end")
+            .expect("turn_end attendu");
+        assert_eq!(
+            turn_end["payload"]["stop_reason"].as_str(),
+            Some("completed"),
+            "stop_reason manquant → attach affiche « inconnu », payload={}",
+            turn_end["payload"]
+        );
+        assert_eq!(
+            turn_end["payload"]["routed_to"].as_str(),
+            Some("bridget"),
+            "reply=true doit porter routed_to, payload={}",
+            turn_end["payload"]
+        );
+    }
+
+    fn journal_fixture_deltas() -> Vec<Value> {
+        journal_fixture(concat!(
+            "while IFS= read -r line; do ",
+            "printf '%s\\n' '{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"BONJOUR \"}}}'; ",
+            "printf '%s\\n' '{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"JE SUIS VIVANT\"}}}'; ",
+            "printf '%s\\n' '{\"type\":\"result\",\"is_error\":false,\"terminal_reason\":\"completed\",\"stop_reason\":\"end_turn\",\"result\":\"BONJOUR JE SUIS VIVANT\"}'; ",
+            "done"
+        ))
+    }
+
+    fn journal_fixture_result_only() -> Vec<Value> {
+        journal_fixture(concat!(
+            "while IFS= read -r line; do ",
+            "printf '%s\\n' '{\"type\":\"result\",\"is_error\":false,\"terminal_reason\":\"completed\",\"stop_reason\":\"end_turn\",\"result\":\"REPONSE FINALE\"}'; ",
+            "done"
+        ))
+    }
+
+    fn journal_fixture(provider_script: &str) -> Vec<Value> {
+        // Compteur atomique : sous parallelisme, SystemTime::nanos peut
+        // coincider et un remove_dir_all efface le journal d'un autre témoin.
         let root = std::env::temp_dir().join(format!(
-            "bridget-claude-update-{}-{}",
+            "bridget-claude-abc-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            FIXTURE_SEQ.fetch_add(1, AtomicOrdering::Relaxed)
         ));
         fs::create_dir_all(&root).unwrap();
-        let mut streaming = options();
-        // Deux deltas texte distincts — le journal doit les porter tels quels.
-        streaming.args[1] = concat!(
-            "while IFS= read -r line; do ",
-            "printf '%s\\n' '{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"BON\"}}}'; ",
-            "printf '%s\\n' '{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"JOUR\"}}}'; ",
-            "printf '%s\\n' '{\"type\":\"result\",\"is_error\":false,\"terminal_reason\":\"completed\",\"result\":\"BONJOUR\"}'; ",
-            "done"
-        )
-        .to_string();
-        let mut transport = ClaudeStreamJsonTransport::spawn(streaming).unwrap();
+        let mut opts = options();
+        opts.args[1] = provider_script.to_string();
+        let mut transport = ClaudeStreamJsonTransport::spawn(opts).unwrap();
         transport
-            .activate_journal(&root, "claude-update", None)
+            .activate_journal(&root, "claude-abc", None)
             .unwrap();
-        transport.deliver(&message("claude-upd-1")).unwrap();
+        transport.deliver(&message("claude-abc-1")).unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut finished = false;
         while Instant::now() < deadline {
@@ -882,9 +1074,8 @@ mod tests {
                     event.kind,
                     ManagedEventKind::TurnFinished {
                         terminal: ManagedTerminal::Completed,
-                        ref response,
                         ..
-                    } if response == "BONJOUR"
+                    }
                 )
             });
             if finished {
@@ -894,35 +1085,15 @@ mod tests {
         }
         assert!(finished, "le tour Claude n'a pas terminé");
         transport.stop();
-
-        let journal_path = fs::read_dir(root.join("claude-update"))
+        let journal_path = fs::read_dir(root.join("claude-abc"))
             .expect("répertoire journal")
             .next()
             .expect("fichier journal")
             .expect("entrée journal")
             .path();
         let events = crate::journal::valid_events(&journal_path);
-        let updates: Vec<_> = events
-            .iter()
-            .filter(|event| event["event"] == "update")
-            .collect();
-        assert!(
-            !updates.is_empty(),
-            "au moins un update journal attendu, reçu: {events:?}"
-        );
-        let contents: Vec<&str> = updates
-            .iter()
-            .filter_map(|event| event["payload"]["content"].as_str())
-            .collect();
-        assert_eq!(
-            contents,
-            vec!["BON", "JOUR"],
-            "les deltas texte doivent être journalisés dans l'ordre"
-        );
-        assert!(updates.iter().all(|event| {
-            event["payload"]["kind"] == "text" && event["message_id"] == "claude-upd-1"
-        }));
-        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(&root);
+        events
     }
 
     #[test]
