@@ -75,6 +75,7 @@ le référencent jamais après activation.
 | Une ancienne copie de ronde reste active | Refus non nul avant toute unité sans `--force` |
 | Une release portant un SHA est altérée | Comparaison des octets et refus fail-closed |
 | Des octets exacts masquent un lien ou un mode mutable | Contrôle de représentation et de mode avant l'idempotence |
+| Des feuilles exactes sont portées par un parent lié au dépôt | Comparaison des chemins canoniques avant toute écriture |
 | `mv` suit un lien actif vers un répertoire | Remplacement de l'entrée exacte puis attestation de la cible obtenue |
 | Une unité existante diffère de la configuration demandée | Comparaison exacte ; refus non nul sans `--force` |
 | Coupure pendant l'activation | Préparation temporaire puis renommage atomique |

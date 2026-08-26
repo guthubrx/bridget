@@ -34,10 +34,18 @@
 - [x] T012 Rejouer les gates, tuer les mutants ciblés, documenter le non-visité
   puis livrer une tête rebasée sur `7024df31`.
 
+## Phase 7 — Contre-relecture du chemin canonique
+
+- [x] T013 Déplacer release et preuve exactes sous `.git`, lier le répertoire
+  SHA, reproduire le faux succès puis la rupture `rc=127` après déplacement du
+  dépôt.
+- [x] T014 Refuser toute résolution canonique de release dans le dépôt source,
+  tuer le mutant associé, rejouer les univers et rendre la nouvelle tête.
+
 ## Dépendances
 
 ```text
-T001 → T002 → T003 → T004 → T005 → T006 → T007 → T008 → T009 → T010 → T011 → T012
+T001 → T002 → T003 → T004 → T005 → T006 → T007 → T008 → T009 → T010 → T011 → T012 → T013 → T014
 ```
 
 La politique et les deux installateurs touchent la même frontière ; aucune

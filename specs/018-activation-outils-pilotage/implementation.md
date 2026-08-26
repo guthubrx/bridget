@@ -192,3 +192,23 @@ l'exécution des deux commandes après suppression du dépôt source.
 - **Non visité** : macOS/launchd réel, activation systemd réelle sans saut,
   concurrence entre installateurs et falsification volontaire de références
   Git.
+
+### Contre-relecture B1 — chemin canonique
+
+- **Contre-exemple externe** : tête `8716f98`, base `7024df31`, composition sur
+  `b0a8cea0`. Release et preuve, toujours régulières, aux bons modes et aux bons
+  octets, sont déplacées sous `.git/borrowed-release` ; seul le répertoire SHA
+  devient un lien. Le rejeu annonçait `déjà en place`, puis le déplacement du
+  dépôt cassait la commande avec `rc=127`.
+- **Reproduction locale avant correction** : même faux succès puis mort exacte
+  de `independance_reelle` avec `rc=127` après déplacement réel de la fixture.
+- **Correction** : le chemin canonique complet du répertoire de release est
+  comparé au chemin canonique du dépôt avant toute écriture. Cela couvre le
+  lien sur le répertoire SHA comme sur l'un de ses parents.
+- **Commit productif** : `de5db6b51b36c043a57b886969e869c6a101c279`.
+- **Mutant sans garde canonique** : `independance_reelle` meurt à nouveau avec
+  `rc=127` après déplacement du dépôt.
+- **Nominal restauré** : les trois univers shell passent, zéro échec, zéro
+  ignoré ; six syntaxes Bash passent ; `git diff --check` est vert.
+- **Cargo** : non rejoué selon le même mandat ; le delta reste limité aux
+  scripts et à la documentation, sans référence depuis `crates/` ou `plugins/`.

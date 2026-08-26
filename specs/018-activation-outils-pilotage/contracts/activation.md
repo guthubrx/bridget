@@ -26,6 +26,9 @@ Chaque précondition non satisfaite produit un refus non nul avant toute
 - Mode de l'artefact : lecture/exécution, sans écriture ordinaire.
 - Représentation : l'artefact est un fichier régulier non lien au mode `0555` ;
   sa preuve est un fichier régulier non lien au mode `0444`.
+- Résolution : le chemin canonique du répertoire de release reste hors du
+  dépôt source, même si le répertoire SHA ou un parent a été remplacé par un
+  lien.
 - Postcondition : l'entrée active est relue après remplacement et sa cible
   textuelle doit être exactement l'artefact attendu.
 

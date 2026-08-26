@@ -7,8 +7,8 @@ Spec: 018-activation-outils-pilotage
 Titre: Activation gouvernée des outils de pilotage
 Statut: Prête en contre-relecture
 Priorité: P1
-Tâches: 12/12 (100%)
-Tests: 13/13 (100%)
+Tâches: 14/14 (100%)
+Tests: 14/14 (100%)
 
 Résumé:
 - Contexte: `bridget-idle` a été activé par un lien vers un worktree avant son jury et son merge ; sa suppression aurait cassé l'outil actif.
@@ -121,6 +121,8 @@ ronde prête.
 - Une interruption pendant la préparation ne doit jamais laisser l'entrée de commande viser un artefact partiel.
 - Une release aux bons octets mais représentée par un lien, ou portant un mode
   différent, n'est pas la release immuable attendue et doit être refusée.
+- Des feuilles régulières exactes ne suffisent pas si leur répertoire, ou l'un
+  de ses parents, se résout canoniquement dans le dépôt source.
 - Avec `--force`, un lien actif vers un répertoire doit être remplacé comme une
   entrée exacte ; la cible obtenue doit être attestée avant toute annonce.
 - Un rejeu de ronde au même SHA mais avec une configuration différente n'est
@@ -146,7 +148,8 @@ ronde prête.
 - **FR-014**: L'autorisation explicite de remplacement DOIT permettre la migration contrôlée d'une copie ou d'un ancien lien uniquement après validation de toutes les conditions Git.
 - **FR-015**: Une release préexistante DOIT être un fichier régulier qui n'est
   pas un lien, aux octets et au mode exacts attendus ; la preuve d'origine
-  adjacente obéit au même invariant de représentation, d'octets et de mode.
+  adjacente obéit au même invariant de représentation, d'octets et de mode. Le
+  chemin canonique de leur répertoire DOIT rester hors du dépôt source.
 - **FR-016**: Après une activation, l'installateur DOIT relire l'entrée active
   et attester qu'elle est un lien dont la cible textuelle est exactement la
   release attendue avant d'annoncer le succès.
@@ -183,6 +186,9 @@ ronde prête.
   lien exact vers la release ; aucun lien n'est déposé dans l'ancien répertoire.
 - **SC-009**: Un rejeu de ronde avec une configuration différente échoue, garde
   les unités initiales octet pour octet et n'imprime jamais `ronde portable prête`.
+- **SC-010**: Si le répertoire SHA est remplacé par un lien vers des feuilles
+  exactes sous `.git`, le rejeu refuse ; retirer cette garde puis déplacer le
+  dépôt casse réellement la commande avec un code non nul.
 
 ## Reprise après verdict STOP — 2026-08-26
 
