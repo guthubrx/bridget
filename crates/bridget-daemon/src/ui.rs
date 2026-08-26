@@ -15,6 +15,7 @@ use maicie::ui_projection::{
     UiMissionProjectionV1, read_ui_mission_projection_v1, retain_living_objectives,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
@@ -617,33 +618,34 @@ fn serve_connection(
     if request.method != "GET" && request.method != "POST" {
         return write_text(stream, 405, "méthode non autorisée");
     }
+    let if_none_match = request.headers.get("if-none-match").map(String::as_str);
     if request.method == "GET" {
         match request.path.as_str() {
             "/app.js" => {
                 return write_asset(
                     stream,
-                    200,
                     "application/javascript; charset=utf-8",
                     UI_SCRIPT,
+                    if_none_match,
                 );
             }
             "/theme.css" => {
-                return write_asset(stream, 200, "text/css; charset=utf-8", UI_THEME);
+                return write_asset(stream, "text/css; charset=utf-8", UI_THEME, if_none_match);
             }
             "/vendor/marked.min.js" => {
                 return write_asset(
                     stream,
-                    200,
                     "application/javascript; charset=utf-8",
                     UI_MARKED,
+                    if_none_match,
                 );
             }
             "/vendor/purify.min.js" => {
                 return write_asset(
                     stream,
-                    200,
                     "application/javascript; charset=utf-8",
                     UI_PURIFY,
+                    if_none_match,
                 );
             }
             _ => {}
@@ -653,7 +655,12 @@ fn serve_connection(
         return write_text(stream, 403, "jeton UI invalide");
     }
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/") => write_asset(stream, 200, "text/html; charset=utf-8", UI_INDEX),
+        ("GET", "/") => write_asset(
+            stream,
+            "text/html; charset=utf-8",
+            UI_INDEX,
+            if_none_match,
+        ),
         ("POST", "/v1/send") => match post_ui_message(config, runtime, &request.body) {
             Ok(response) => write_json(stream, 202, &response),
             Err((status, code)) => write_json(
@@ -1700,6 +1707,7 @@ struct HttpRequest {
     method: String,
     path: String,
     query: HashMap<String, String>,
+    headers: HashMap<String, String>,
     body: Vec<u8>,
 }
 
@@ -1777,6 +1785,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, UiError> {
         method,
         path: path.to_string(),
         query: parse_query(query)?,
+        headers,
         body,
     })
 }
@@ -1831,16 +1840,47 @@ fn write_text(stream: &mut TcpStream, status: u16, body: &str) -> Result<(), UiE
     Ok(())
 }
 
+/// ETag = empreinte du corps. Change à chaque livraison de binaire ; le navigateur
+/// revalide systématiquement (`Cache-Control: no-cache`) et reçoit 304 si inchangé.
+fn asset_etag(body: &[u8]) -> String {
+    format!("\"{:x}\"", Sha256::digest(body))
+}
+
+fn if_none_match_hits(header: &str, etag: &str) -> bool {
+    let wanted = etag.trim().trim_matches('"');
+    header.split(',').any(|candidate| {
+        let candidate = candidate.trim();
+        let candidate = candidate
+            .strip_prefix("W/")
+            .unwrap_or(candidate)
+            .trim()
+            .trim_matches('"');
+        !candidate.is_empty() && candidate == wanted
+    })
+}
+
+/// Assets UI : fraîcheur d'abord. `no-cache` force la revalidation à chaque
+/// ouverture ; ETag évite de renvoyer ~200 Ko quand le fichier n'a pas bougé.
 fn write_asset(
     stream: &mut TcpStream,
-    status: u16,
     content_type: &str,
     body: &[u8],
+    if_none_match: Option<&str>,
 ) -> Result<(), UiError> {
+    let etag = asset_etag(body);
+    if if_none_match.is_some_and(|value| if_none_match_hits(value, &etag)) {
+        write!(
+            stream,
+            "HTTP/1.1 304 {}\r\nETag: {etag}\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
+            status_text(304),
+        )?;
+        stream.flush()?;
+        return Ok(());
+    }
     write!(
         stream,
-        "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        status_text(status),
+        "HTTP/1.1 200 {}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nETag: {etag}\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
+        status_text(200),
         body.len()
     )?;
     stream.write_all(body)?;
@@ -1866,6 +1906,7 @@ fn status_text(status: u16) -> &'static str {
     match status {
         200 => "OK",
         202 => "Accepted",
+        304 => "Not Modified",
         400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
@@ -2867,5 +2908,161 @@ mod tests {
         assert_eq!(outcome.hits[0].id, "accent");
         assert!(outcome.hits[0].body.contains("café"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn get_asset(address: SocketAddr, path: &str, if_none_match: Option<&str>) -> (u16, String) {
+        let mut client = TcpStream::connect(address).unwrap();
+        let extra = match if_none_match {
+            Some(etag) => format!("If-None-Match: {etag}\r\n"),
+            None => String::new(),
+        };
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: localhost\r\n{extra}Connection: close\r\n\r\n"
+        );
+        client.write_all(request.as_bytes()).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        let text = String::from_utf8(response).unwrap();
+        let status = text
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        (status, text)
+    }
+
+    fn header_value(raw: &str, name: &str) -> Option<String> {
+        let name = name.to_ascii_lowercase();
+        raw.split("\r\n\r\n")
+            .next()?
+            .lines()
+            .skip(1)
+            .find_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                if key.trim().eq_ignore_ascii_case(&name) {
+                    Some(value.trim().to_string())
+                } else {
+                    None
+                }
+            })
+    }
+
+    fn spawn_asset_relay() -> (UiRelay, SocketAddr) {
+        let config = UiRelayConfig {
+            daemon_socket: PathBuf::from("/tmp/ui-cache-ne-doit-pas-ouvrir.sock"),
+            maicie_config: PathBuf::from("/tmp/ui-cache-ne-doit-pas-ouvrir.json"),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "jeton-cache".to_string(),
+        };
+        let relay = UiRelay::bind(config).unwrap();
+        let address = relay.local_addr().unwrap();
+        (relay, address)
+    }
+
+    /// Témoin « en-têtes absents » : un mutant qui retire ETag ou no-cache meurt ici.
+    #[test]
+    fn assets_statiques_annoncent_etag_et_revalidation() {
+        let (relay, address) = spawn_asset_relay();
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let (status, raw) = get_asset(address, "/app.js", None);
+        worker.join().unwrap();
+        assert_eq!(status, 200, "{raw}");
+        let etag = header_value(&raw, "ETag").expect("ETag obligatoire sur asset statique");
+        assert!(etag.starts_with('"') && etag.ends_with('"'), "ETag fort: {etag}");
+        let cache = header_value(&raw, "Cache-Control").expect("Cache-Control obligatoire");
+        assert!(
+            cache.split(',').any(|d| d.trim() == "no-cache"),
+            "fraîcheur d'abord — no-cache requis, reçu {cache}"
+        );
+        assert!(
+            !cache.contains("max-age=31536000") && !cache.contains("immutable"),
+            "cache agressif interdit (livraison figée), reçu {cache}"
+        );
+        assert_eq!(etag, asset_etag(UI_SCRIPT));
+    }
+
+    /// Témoin « inchangé → 304 » : second GET avec If-None-Match ne renvoie pas le corps.
+    #[test]
+    fn etag_inchange_rend_304_sans_corps() {
+        let (relay, address) = spawn_asset_relay();
+        let worker = thread::spawn(move || {
+            relay.serve_one().unwrap();
+            relay.serve_one().unwrap();
+        });
+        let (first_status, first) = get_asset(address, "/theme.css", None);
+        assert_eq!(first_status, 200, "{first}");
+        let etag = header_value(&first, "ETag").expect("ETag sur premier GET");
+        let (second_status, second) = get_asset(address, "/theme.css", Some(&etag));
+        worker.join().unwrap();
+        assert_eq!(second_status, 304, "{second}");
+        assert!(
+            header_value(&second, "ETag").as_deref() == Some(etag.as_str()),
+            "304 doit rappeler l'ETag, reçu {second}"
+        );
+        assert!(
+            header_value(&second, "Cache-Control")
+                .as_deref()
+                .is_some_and(|c| c.split(',').any(|d| d.trim() == "no-cache")),
+            "304 garde no-cache, reçu {second}"
+        );
+        let body = second.split("\r\n\r\n").nth(1).unwrap_or("x");
+        assert!(body.is_empty(), "304 ne doit pas renvoyer le CSS, corps={body:?}");
+    }
+
+    /// Témoin « modifié servi comme inchangé » : mauvais ETag → 200 corps complet.
+    /// Un mutant qui répond 304 dès qu'If-None-Match est présent meurt ici.
+    #[test]
+    fn contenu_modifie_refuse_le_304() {
+        assert_ne!(
+            asset_etag(b"v1"),
+            asset_etag(b"v2"),
+            "ETag doit suivre le contenu — sinon livraison figée après correctif"
+        );
+        let (relay, address) = spawn_asset_relay();
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let stale = "\"0000000000000000000000000000000000000000000000000000000000000000\"";
+        let (status, raw) = get_asset(address, "/vendor/marked.min.js", Some(stale));
+        worker.join().unwrap();
+        assert_eq!(status, 200, "ETag périmé doit forcer le téléchargement: {raw}");
+        let body = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+        assert_eq!(body.as_bytes(), UI_MARKED, "corps 200 doit être le fichier actuel");
+        assert_eq!(
+            header_value(&raw, "ETag").as_deref(),
+            Some(asset_etag(UI_MARKED).as_str())
+        );
+    }
+
+    /// Anti-feuille : les routes productives doivent passer par write_asset (ETag).
+    #[test]
+    fn chemin_productif_assets_emprunte_write_asset() {
+        let source = include_str!("ui.rs");
+        let serve_body = function_body(source, "fn serve_connection(");
+        for path in [
+            "\"/app.js\"",
+            "\"/theme.css\"",
+            "\"/vendor/marked.min.js\"",
+            "\"/vendor/purify.min.js\"",
+        ] {
+            assert!(
+                serve_body.contains(path),
+                "route {path} absente de serve_connection"
+            );
+        }
+        let write_body = function_body(source, "fn write_asset(");
+        assert!(
+            write_body.contains("Cache-Control: no-cache"),
+            "write_asset doit annoncer no-cache"
+        );
+        assert!(
+            write_body.contains("ETag:"),
+            "write_asset doit annoncer ETag"
+        );
+        assert!(
+            write_body.contains("304"),
+            "write_asset doit savoir répondre 304"
+        );
     }
 }
