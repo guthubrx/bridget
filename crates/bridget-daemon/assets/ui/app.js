@@ -102,6 +102,25 @@
         assert.equal(clicked.showNewMessages, false);
       });
 
+      test("recherche_hit_caracteres_inattendus_reste_du_texte", () => {
+        const hit = {
+          id: "x1",
+          ts: 42,
+          sender: "bridget",
+          target: "cursor4",
+          body: `ligne <script>alert(1)</script> et 100%_wild & "guillemets"`,
+        };
+        assert.equal(api.threadPeerForHit(hit), "bridget");
+        const request = api.buildSearchRequest(`100%_wild & <tag>`);
+        assert.equal(request.version, 1);
+        assert.equal(request.q, `100%_wild & <tag>`);
+        const label = api.searchHitParts(hit, () => "00:00:42");
+        assert.equal(label.author, "bridget");
+        assert.equal(label.when, "00:00:42");
+        assert.equal(label.body, hit.body);
+        assert.ok(!label.body.includes("undefined"));
+      });
+
       test("stick_to_bottom_seulement_si_deja_au_fond", () => {
         const mid = { scrollTop: 100, scrollHeight: 1000, clientHeight: 400 };
         const bottom = { scrollTop: 599, scrollHeight: 1000, clientHeight: 400 };
@@ -1967,6 +1986,9 @@
     stoppedCount: "stopped-count",
     fleetCount: "fleet-count",
     sourceState: "source-state",
+    messageSearch: "message-search",
+    messageSearchInput: "message-search-input",
+    messageSearchResults: "message-search-results",
     selectedAgent: "selected-agent",
     selectedMeta: "selected-meta",
     selectedStateDot: "selected-state-dot",
@@ -1988,6 +2010,26 @@
     detailContent: "detail-content",
     closeDetail: "close-detail",
   });
+
+  function buildSearchRequest(query) {
+    return { version: 1, q: String(query ?? "") };
+  }
+
+  function threadPeerForHit(hit) {
+    const sender = text(hit && hit.sender);
+    const target = text(hit && hit.target);
+    if (sender && sender !== "humain") return sender;
+    if (target && target !== "humain") return target;
+    return sender || target || "";
+  }
+
+  function searchHitParts(hit, formatTime) {
+    return {
+      author: text(hit && hit.sender) || "?",
+      when: typeof formatTime === "function" ? formatTime(Number(hit && hit.ts) || 0) : "",
+      body: text(hit && hit.body),
+    };
+  }
 
   function collectNodes(documentRef) {
     return Object.fromEntries(
@@ -2686,6 +2728,55 @@
       nodes.detailPanel.hidden = true;
     });
 
+    const renderSearchHits = (hits) => {
+      nodes.messageSearchResults.replaceChildren();
+      const list = Array.isArray(hits) ? hits : [];
+      nodes.messageSearchResults.hidden = list.length === 0;
+      list.forEach((hit) => {
+        const parts = searchHitParts(hit, timestamp);
+        const item = make("li");
+        const button = make("button", "message-search-hit");
+        button.type = "button";
+        const meta = make(
+          "span",
+          "message-search-hit__meta",
+          `${parts.author} · ${parts.when}`,
+        );
+        const body = make("span", "message-search-hit__body", parts.body);
+        button.append(meta, body);
+        button.addEventListener("click", () => {
+          const peer = threadPeerForHit(hit);
+          if (peer) selectAgent(peer);
+        });
+        item.append(button);
+        nodes.messageSearchResults.append(item);
+      });
+    };
+
+    nodes.messageSearch.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (!token) return;
+      const q = nodes.messageSearchInput.value;
+      windowRef
+        .fetch("/v1/search?token=" + encodeURIComponent(token), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(buildSearchRequest(q)),
+        })
+        .then(async (response) => {
+          if (!response.ok) throw new Error("search_http");
+          return response.json();
+        })
+        .then((payload) => {
+          renderSearchHits(payload && payload.hits);
+        })
+        .catch(() => {
+          renderSearchHits([]);
+          nodes.sourceState.textContent = "Recherche indisponible.";
+          nodes.sourceState.dataset.state = "error";
+        });
+    });
+
     renderRelay();
     renderAgents();
     renderHeader();
@@ -2768,5 +2859,8 @@
     formatDuration,
     collectNodes,
     mount,
+    buildSearchRequest,
+    threadPeerForHit,
+    searchHitParts,
   });
 });

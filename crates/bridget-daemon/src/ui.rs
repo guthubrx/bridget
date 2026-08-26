@@ -35,6 +35,12 @@ const UI_INDEX: &[u8] = include_bytes!("../assets/ui/index.html");
 const UI_SCRIPT: &[u8] = include_bytes!("../assets/ui/app.js");
 const UI_THEME: &[u8] = include_bytes!("../assets/ui/theme.css");
 
+// Coupure de test : force la production à rendre zéro hit (mute le vrai chemin).
+#[cfg(test)]
+thread_local! {
+    static MUTE_UI_LEDGER_SEARCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 #[derive(Debug, Clone)]
 pub struct UiRelayConfig {
     pub daemon_socket: PathBuf,
@@ -328,6 +334,28 @@ struct UiSendRequestV1 {
     reply: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiSearchRequestV1 {
+    version: u8,
+    q: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct UiSearchHitV1 {
+    id: String,
+    ts: i64,
+    sender: String,
+    target: String,
+    body: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UiSearchResponseV1 {
+    version: u8,
+    hits: Vec<UiSearchHitV1>,
+}
+
 #[derive(Debug, Serialize)]
 struct UiSendAcceptedV1 {
     version: u8,
@@ -408,6 +436,10 @@ fn serve_connection(
                 },
             ),
         },
+        ("POST", "/v1/search") => match post_ui_search(config, &request.body) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, message)) => write_text(stream, status, message),
+        },
         ("GET", "/v1/snapshot") => {
             let focus_agent = request.query.get("agent").map(String::as_str);
             if let Some(agent) = focus_agent {
@@ -471,6 +503,51 @@ fn post_ui_message(
             .map_err(|_| (503, "daemon_unavailable"))?;
     }
     send_ui_message(&config.daemon_socket, request).map_err(|_| (503, "daemon_unavailable"))
+}
+
+fn post_ui_search(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiSearchResponseV1, (u16, &'static str)> {
+    let request: UiSearchRequestV1 =
+        serde_json::from_slice(body).map_err(|_| (400, "requête de recherche invalide"))?;
+    if request.version != UI_VERSION {
+        return Err((400, "requête de recherche invalide"));
+    }
+    let db_path = ledger_db_path_for_socket(&config.daemon_socket);
+    let hits = search_ui_ledger(&db_path, &request.q).map_err(|_| (503, "ledger indisponible"))?;
+    Ok(UiSearchResponseV1 {
+        version: UI_VERSION,
+        hits,
+    })
+}
+
+/// Chemin réel emprunté par la page : lit le store à côté de la socket daemon
+/// (pas de nouveau RPC — la flotte tourne sans redémarrage).
+fn search_ui_ledger(db_path: &Path, query: &str) -> Result<Vec<UiSearchHitV1>, UiError> {
+    #[cfg(test)]
+    if MUTE_UI_LEDGER_SEARCH.with(|flag| flag.get()) {
+        return Ok(Vec::new());
+    }
+    let store = crate::store::Store::open(db_path)
+        .map_err(|error| UiError::Configuration(error.to_string()))?;
+    let entries = store
+        .search_messages(query, crate::store::MAX_LEDGER_SEARCH_PUBLIC)
+        .map_err(|error| UiError::Configuration(error.to_string()))?;
+    Ok(entries
+        .into_iter()
+        .map(|entry| UiSearchHitV1 {
+            id: entry.id,
+            ts: entry.ts,
+            sender: entry.sender,
+            target: entry.target,
+            body: entry.body,
+        })
+        .collect())
+}
+
+fn ledger_db_path_for_socket(socket_path: &Path) -> PathBuf {
+    socket_path.with_extension("db")
 }
 
 fn validate_ui_recipient(
@@ -1435,5 +1512,165 @@ mod tests {
         let encoded = serde_json::to_value(&exchanges[0]).unwrap();
         assert_eq!(encoded["count"], 1);
         assert_eq!(encoded["delivery_ids"], serde_json::json!(["premier"]));
+    }
+
+    fn seed_search_ledger(db_path: &Path) {
+        let store = crate::store::Store::open(db_path).unwrap();
+        drop(store);
+        let conn = rusqlite::Connection::open(db_path).unwrap();
+        conn.execute_batch(
+            r#"
+            DELETE FROM ledger;
+            INSERT INTO ledger (id, ts, sender, target, body, conversation_key) VALUES
+              ('hit-early', 100, 'bridget', 'cursor4', 'alpha cible premiere', 'bridget:cursor4'),
+              ('noise', 150, 'jc2', 'jc6', 'rien a voir', 'jc2:jc6'),
+              ('hit-late', 200, 'cursor4', 'bridget', 'seconde cible avec <tag> et 100%_wild', 'cursor4:bridget');
+            "#,
+        )
+        .unwrap();
+    }
+
+    fn post_search(address: SocketAddr, token: &str, body: &str) -> (u16, String) {
+        let relay_body = body.to_string();
+        let token = token.to_string();
+        // Le serveur traite une connexion ; on envoie depuis le thread courant
+        // après avoir lancé serve_one ailleurs — helper utilisé avec worker externe.
+        let mut client = TcpStream::connect(address).unwrap();
+        let payload = relay_body.as_bytes();
+        let request = format!(
+            "POST /v1/search?token={token} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            payload.len()
+        );
+        client.write_all(request.as_bytes()).unwrap();
+        client.write_all(payload).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        let text = String::from_utf8(response).unwrap();
+        let status = text
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        (status, text)
+    }
+
+    #[test]
+    fn recherche_depuis_la_page_rend_corps_auteur_horodatage_en_ordre() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-ui-search-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("bridget.sock");
+        let db = root.join("bridget.db");
+        seed_search_ledger(&db);
+
+        let config = UiRelayConfig {
+            daemon_socket: socket,
+            maicie_config: root.join("maicie.json"),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "jeton-search".to_string(),
+        };
+        let relay = UiRelay::bind(config).unwrap();
+        let address = relay.local_addr().unwrap();
+
+        // --- hit : mots présents ---
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let hit_body = r#"{"version":1,"q":"cible"}"#;
+        let (hit_status, hit_raw) = post_search(address, "jeton-search", hit_body);
+        worker.join().unwrap();
+        assert_eq!(hit_status, 200, "{hit_raw}");
+        let hit_json = hit_raw.split("\r\n\r\n").nth(1).unwrap_or("");
+        let hit_value: serde_json::Value = serde_json::from_str(hit_json).unwrap();
+        // Attendu écrit en dur — pas recalculé par search_ui_ledger.
+        assert_eq!(hit_value["hits"].as_array().map(|a| a.len()), Some(2));
+        assert_eq!(hit_value["hits"][0]["id"], "hit-early");
+        assert_eq!(hit_value["hits"][0]["sender"], "bridget");
+        assert_eq!(hit_value["hits"][0]["ts"], 100);
+        assert_eq!(hit_value["hits"][0]["body"], "alpha cible premiere");
+        assert_eq!(hit_value["hits"][1]["id"], "hit-late");
+        assert_eq!(hit_value["hits"][1]["sender"], "cursor4");
+        assert_eq!(hit_value["hits"][1]["ts"], 200);
+        assert_eq!(
+            hit_value["hits"][1]["body"],
+            "seconde cible avec <tag> et 100%_wild"
+        );
+        assert!(
+            hit_value["hits"][0]["ts"].as_i64().unwrap()
+                < hit_value["hits"][1]["ts"].as_i64().unwrap()
+        );
+
+        // --- miss dans le MÊME test : absence prouvée contre un hit déjà vu ---
+        let config = UiRelayConfig {
+            daemon_socket: root.join("bridget.sock"),
+            maicie_config: root.join("maicie.json"),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "jeton-search".to_string(),
+        };
+        let relay = UiRelay::bind(config).unwrap();
+        let address = relay.local_addr().unwrap();
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let (miss_status, miss_raw) =
+            post_search(address, "jeton-search", r#"{"version":1,"q":"motabsentxyz"}"#);
+        worker.join().unwrap();
+        assert_eq!(miss_status, 200, "{miss_raw}");
+        let miss_json = miss_raw.split("\r\n\r\n").nth(1).unwrap_or("");
+        let miss_value: serde_json::Value = serde_json::from_str(miss_json).unwrap();
+        assert_eq!(miss_value["hits"].as_array().map(|a| a.len()), Some(0));
+
+        // --- caractères spéciaux dans la requête (LIKE) ne cassent pas ---
+        let config = UiRelayConfig {
+            daemon_socket: root.join("bridget.sock"),
+            maicie_config: root.join("maicie.json"),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "jeton-search".to_string(),
+        };
+        let relay = UiRelay::bind(config).unwrap();
+        let address = relay.local_addr().unwrap();
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let (wild_status, wild_raw) =
+            post_search(address, "jeton-search", r#"{"version":1,"q":"100%_wild"}"#);
+        worker.join().unwrap();
+        assert_eq!(wild_status, 200, "{wild_raw}");
+        let wild_json = wild_raw.split("\r\n\r\n").nth(1).unwrap_or("");
+        let wild_value: serde_json::Value = serde_json::from_str(wild_json).unwrap();
+        assert_eq!(wild_value["hits"].as_array().map(|a| a.len()), Some(1));
+        assert_eq!(wild_value["hits"][0]["id"], "hit-late");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn mutant_mute_search_ui_ledger_tue_recherche_depuis_la_page_rend_corps_auteur_horodatage_en_ordre()
+    {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-ui-search-mutant-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let db = root.join("bridget.db");
+        seed_search_ledger(&db);
+
+        MUTE_UI_LEDGER_SEARCH.with(|flag| flag.set(true));
+        let hits = search_ui_ledger(&db, "cible").unwrap();
+        MUTE_UI_LEDGER_SEARCH.with(|flag| flag.set(false));
+
+        // Propriété du témoin nommé : hit non vide, corps/auteur/ts, ordre.
+        let temoin_tient = hits.len() == 2
+            && hits[0].id == "hit-early"
+            && hits[0].sender == "bridget"
+            && hits[0].ts == 100
+            && hits[0].body == "alpha cible premiere"
+            && hits[1].id == "hit-late"
+            && hits[1].ts == 200
+            && hits[0].ts < hits[1].ts;
+        assert!(
+            !temoin_tient,
+            "le mutant doit tuer recherche_depuis_la_page_rend_corps_auteur_horodatage_en_ordre"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -10,6 +10,24 @@ use uuid::Uuid;
 
 const GUICHET_LEASE_SECS: i64 = 60;
 pub(crate) const MAX_GUICHET_FRAME_BYTES: usize = 64 * 1024;
+const MAX_LEDGER_SEARCH: usize = 100;
+
+/// Plafond exposé au relais UI (même borne que la recherche store).
+pub(crate) const MAX_LEDGER_SEARCH_PUBLIC: usize = MAX_LEDGER_SEARCH;
+
+fn escape_like_needle(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
 
 /// Requête de guichet validée par le daemon avant toute persistance.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1113,6 +1131,54 @@ impl Store {
             })
             .map_err(StoreError::Sqlite)?
             .filter_map(|r| r.ok())
+            .collect();
+        Ok(entries)
+    }
+
+    /// Parcourt le ledger (pas d'index FTS) : chaque mot doit apparaître dans
+    /// le corps. Ordre chronologique. Les jokers LIKE du needle sont échappés.
+    pub fn search_messages(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<LedgerEntry>, StoreError> {
+        let limit = limit.clamp(1, MAX_LEDGER_SEARCH);
+        let needles: Vec<String> = query
+            .split_whitespace()
+            .filter(|token| !token.is_empty())
+            .map(escape_like_needle)
+            .collect();
+        if needles.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut sql = String::from(
+            "SELECT id, ts, sender, target, body FROM ledger WHERE 1=1",
+        );
+        for _ in &needles {
+            sql.push_str(" AND body LIKE ? ESCAPE '\\'");
+        }
+        sql.push_str(" ORDER BY ts ASC, id ASC LIMIT ?");
+
+        let mut stmt = self.conn.prepare(&sql).map_err(StoreError::Sqlite)?;
+        let mut binds: Vec<rusqlite::types::Value> = needles
+            .iter()
+            .map(|needle| rusqlite::types::Value::Text(format!("%{needle}%")))
+            .collect();
+        binds.push(rusqlite::types::Value::Integer(limit as i64));
+        let entries = stmt
+            .query_map(rusqlite::params_from_iter(binds), |row| {
+                Ok(LedgerEntry {
+                    id: row.get(0)?,
+                    ts: row.get(1)?,
+                    sender: row.get(2)?,
+                    target: row.get(3)?,
+                    body: row.get(4)?,
+                    delivery_phase: None,
+                })
+            })
+            .map_err(StoreError::Sqlite)?
+            .filter_map(|row| row.ok())
             .collect();
         Ok(entries)
     }
