@@ -11,12 +11,18 @@ Propriété mécanique (BLOQUÉS) : un agent connecté peut cesser de consommer 
 remises sans que la présence (heartbeat) ni la mission greffe ne le signalent.
 Signal : âge de la plus vieille remise `send_deliveries.phase=dispatching`
 jointe au ledger (copie seule).
+
+La ronde expose aussi les références distantes locales non fusionnées. Cette
+vue Git est bornée, sans fetch et sans écriture dans le dépôt observé. La
+greffe ne portant aucun verdict structuré exploitable, le blocage métier reste
+explicitement indéterminé au lieu d'être déduit de messages libres.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
 import sqlite3
@@ -42,6 +48,12 @@ EXTERNAL_DOMAINS = frozenset({"46.Thunderbridge", "30.infra", "moi"})
 # Une compile de ~10 min reste sous le seuil (exigence anti fausse alerte).
 BLOCKED_AFTER_SECS = 1500
 DEFAULT_BRIDGET_DB = str(Path.home() / ".cache/bridget/bridget.db")
+DEFAULT_GIT_REPO = str(Path(__file__).resolve().parent.parent)
+DEFAULT_GIT_TIMEOUT_SECS = 5.0
+BRANCH_BACKLOG_UNAVAILABLE = "greffe sans etat exploitable"
+BRANCH_REFS_SCOPE = "refs locales sans fetch"
+BRANCH_AGE_BASIS = "age du commit de tete uniquement"
+BRANCH_DELIVERY_LIMIT = "une ref distante ne prouve pas une livraison"
 
 
 def args() -> argparse.Namespace:
@@ -54,6 +66,17 @@ def args() -> argparse.Namespace:
     parser.add_argument("--config", default=str(Path.home() / ".config/maicie/config.json"))
     parser.add_argument("--bridget-bin", default=os.environ.get("BRIDGET_BIN", "bridget"))
     parser.add_argument("--bridget-db", default=os.environ.get("BRIDGET_DB", DEFAULT_BRIDGET_DB))
+    parser.add_argument("--git-bin", default=os.environ.get("GIT_BIN", "git"))
+    parser.add_argument(
+        "--git-repo", default=os.environ.get("BRIDGET_REPO", DEFAULT_GIT_REPO)
+    )
+    parser.add_argument(
+        "--git-timeout-secs",
+        type=float,
+        default=DEFAULT_GIT_TIMEOUT_SECS,
+        help="budget total de la vue branches (défaut: 5 secondes)",
+    )
+    parser.add_argument("--now", type=int, help="horodatage injecté pour le harnais")
     parser.add_argument("--silent-after-secs", type=int, default=1800)
     parser.add_argument("--blocked-after-secs", type=int, default=BLOCKED_AFTER_SECS)
     parser.add_argument("--exclude", default=DEFAULT_EXCLUDE)
@@ -75,6 +98,10 @@ def args() -> argparse.Namespace:
         parser.error("--silent-after-secs doit être positif ou nul")
     if value.blocked_after_secs < 0:
         parser.error("--blocked-after-secs doit être positif ou nul")
+    if not math.isfinite(value.git_timeout_secs) or value.git_timeout_secs <= 0:
+        parser.error("--git-timeout-secs doit être strictement positif")
+    if value.now is not None and value.now < 0:
+        parser.error("--now doit être positif ou nul")
     return value
 
 
@@ -165,6 +192,294 @@ def read_backlog_ages_from_bridget_copy(
         if isinstance(target, str) and isinstance(age, int):
             ages[target] = age
     return ages, None
+
+
+def _git_detail(result: subprocess.CompletedProcess[str]) -> str:
+    return (result.stderr or result.stdout).strip().replace("\n", " ")[
+        :180
+    ] or f"sortie {result.returncode}"
+
+
+def _run_git(
+    repository: Path,
+    arguments: list[str],
+    *,
+    deadline: float,
+    git_bin: str,
+    extra_env: dict[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str] | None, str | None]:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None, "delai Git depasse"
+    environment = os.environ.copy()
+    for variable in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ):
+        environment.pop(variable, None)
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    if extra_env:
+        environment.update(extra_env)
+    try:
+        result = subprocess.run(
+            [git_bin, *arguments],
+            cwd=repository,
+            env=environment,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            check=False,
+            timeout=remaining,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "delai Git depasse"
+    except OSError as error:
+        return None, f"Git inaccessible: {error}"
+    return result, None
+
+
+def read_branch_backlog(
+    repository_path: str,
+    *,
+    now: int | None = None,
+    timeout_secs: float = DEFAULT_GIT_TIMEOUT_SECS,
+    git_bin: str = "git",
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Vue Git locale des branches non fusionnées, bornée et sans mutation.
+
+    Complexité : O(n log n), n = nombre de refs distantes locales ; O(n)
+    commandes Git, toutes incluses dans une seule échéance murale.
+    """
+    if not math.isfinite(timeout_secs) or timeout_secs <= 0:
+        return None, "budget Git invalide"
+    repository = Path(repository_path).resolve()
+    deadline = time.monotonic() + timeout_secs
+    stamp = int(time.time()) if now is None else now
+    main_ref = "origin/main"
+    full_main_ref = "refs/remotes/origin/main"
+
+    main_result, error = _run_git(
+        repository,
+        ["rev-parse", "--verify", f"{full_main_ref}^{{commit}}"],
+        deadline=deadline,
+        git_bin=git_bin,
+    )
+    if error:
+        return None, error
+    assert main_result is not None
+    if main_result.returncode:
+        return None, f"{main_ref} indisponible: {_git_detail(main_result)}"
+    main_head = main_result.stdout.strip()
+    if not main_head:
+        return None, f"{main_ref} vide"
+
+    refs_result, error = _run_git(
+        repository,
+        [
+            "for-each-ref",
+            "--sort=refname",
+            "--format=%(refname)\t%(refname:short)\t%(objectname)\t%(committerdate:unix)\t%(symref)",
+            "refs/remotes/origin/",
+        ],
+        deadline=deadline,
+        git_bin=git_bin,
+    )
+    if error:
+        return None, error
+    assert refs_result is not None
+    if refs_result.returncode:
+        return None, f"refs distantes indisponibles: {_git_detail(refs_result)}"
+
+    objects_result, error = _run_git(
+        repository,
+        ["rev-parse", "--git-path", "objects"],
+        deadline=deadline,
+        git_bin=git_bin,
+    )
+    if error:
+        return None, error
+    assert objects_result is not None
+    if objects_result.returncode:
+        return None, f"object store indisponible: {_git_detail(objects_result)}"
+    objects_path = Path(objects_result.stdout.strip())
+    if not objects_path.is_absolute():
+        objects_path = repository / objects_path
+    objects_path = objects_path.resolve()
+    if not objects_path.is_dir():
+        return None, f"object store absent: {objects_path}"
+
+    temp_root = Path(tempfile.gettempdir()).resolve()
+    try:
+        inside_repository = os.path.commonpath(
+            [str(temp_root), str(repository)]
+        ) == str(repository)
+    except ValueError:
+        inside_repository = False
+    if inside_repository:
+        return None, "repertoire temporaire Git situe dans le depot observe"
+
+    parsed_refs: list[tuple[str, str, int]] = []
+    for line in refs_result.stdout.splitlines():
+        fields = line.split("\t")
+        if len(fields) != 5:
+            return None, "sortie for-each-ref invalide"
+        full_ref, short_ref, head, commit_ts_raw, symref = fields
+        if full_ref == full_main_ref or symref:
+            continue
+        try:
+            commit_ts = int(commit_ts_raw)
+        except ValueError:
+            return None, f"date Git invalide pour {short_ref}"
+        parsed_refs.append((short_ref, head, commit_ts))
+    if time.monotonic() >= deadline:
+        return None, "delai Git depasse"
+
+    lots: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(
+        prefix="bridget-idle-merge-", dir=temp_root
+    ) as directory:
+        temporary_objects = Path(directory) / "objects"
+        temporary_objects.mkdir(mode=0o700)
+        merge_environment = {
+            "GIT_OBJECT_DIRECTORY": str(temporary_objects),
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(objects_path),
+        }
+
+        for short_ref, head, commit_ts in parsed_refs:
+            ancestor_result, error = _run_git(
+                repository,
+                ["merge-base", "--is-ancestor", head, main_head],
+                deadline=deadline,
+                git_bin=git_bin,
+            )
+            if error:
+                return None, error
+            assert ancestor_result is not None
+            if ancestor_result.returncode == 0:
+                continue
+            if ancestor_result.returncode != 1:
+                return (
+                    None,
+                    f"ascendance invalide pour {short_ref}: {_git_detail(ancestor_result)}",
+                )
+
+            base_result, error = _run_git(
+                repository,
+                ["merge-base", main_head, head],
+                deadline=deadline,
+                git_bin=git_bin,
+            )
+            if error:
+                return None, error
+            assert base_result is not None
+            base_sha = base_result.stdout.strip()
+            if base_result.returncode == 1 and not base_sha:
+                base_state = "perimee"
+                blocking = "base perimee, a rebaser"
+            elif base_result.returncode:
+                return (
+                    None,
+                    f"base invalide pour {short_ref}: {_git_detail(base_result)}",
+                )
+            else:
+                base_state = "dans_main"
+                blocking = f"indetermine — {BRANCH_BACKLOG_UNAVAILABLE}"
+
+            merge_arguments = ["merge-tree", "--write-tree", "--no-messages"]
+            if base_state == "perimee":
+                merge_arguments.append("--allow-unrelated-histories")
+            merge_arguments.extend((main_head, head))
+            merge_result, error = _run_git(
+                repository,
+                merge_arguments,
+                deadline=deadline,
+                git_bin=git_bin,
+                extra_env=merge_environment,
+            )
+            if error:
+                return None, error
+            assert merge_result is not None
+            if merge_result.returncode == 0:
+                textual_merge = "sans conflit textuel"
+            elif merge_result.returncode == 1:
+                textual_merge = "en conflit"
+                if base_state == "dans_main":
+                    blocking = "en conflit"
+            else:
+                return (
+                    None,
+                    f"merge-tree invalide pour {short_ref}: {_git_detail(merge_result)}",
+                )
+
+            lots.append(
+                {
+                    "ref": short_ref,
+                    "head": head,
+                    "age_secs": max(0, stamp - commit_ts),
+                    "base_state": base_state,
+                    "base_sha": base_sha or None,
+                    "textual_merge": textual_merge,
+                    "verdict_state": "indisponible",
+                    "blocking": blocking,
+                }
+            )
+
+    lots.sort(key=lambda item: (-item["age_secs"], item["ref"]))
+    if time.monotonic() >= deadline:
+        return None, "delai Git depasse"
+    return {
+        "state": "partial",
+        "reason": BRANCH_BACKLOG_UNAVAILABLE,
+        "main_ref": main_ref,
+        "main_head": main_head,
+        "refs_scope": BRANCH_REFS_SCOPE,
+        "age_basis": BRANCH_AGE_BASIS,
+        "delivery_limit": BRANCH_DELIVERY_LIMIT,
+        "timeout_secs": timeout_secs,
+        "lots": lots,
+    }, None
+
+
+def _format_age(seconds: int) -> str:
+    if seconds < 3600:
+        return f"{seconds // 60}min"
+    if seconds < 48 * 3600:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}j"
+
+
+def format_branch_backlog(
+    branch_backlog: dict[str, Any] | None, *, branch_error: str | None
+) -> str:
+    lines: list[str] = []
+    if branch_error or branch_backlog is None:
+        lines.append(
+            f"BACKLOG BRANCHES INDISPONIBLE ({(branch_error or 'inconnu')[:120]})"
+        )
+    else:
+        lines.append(f"BACKLOG BRANCHES INDISPONIBLE ({branch_backlog['reason']})")
+        lots = branch_backlog["lots"]
+        if lots:
+            lines.append("LOTS LIVRES NON MERGES :")
+            for lot in lots:
+                if lot["base_state"] == "dans_main":
+                    base = f"base {lot['base_sha'][:12]} dans main"
+                else:
+                    base = "base perimee"
+                lines.append(
+                    f"  {lot['ref']} {_format_age(lot['age_secs'])} | {base} | "
+                    f"{lot['textual_merge']} | verdict indisponible | {lot['blocking']}"
+                )
+        else:
+            lines.append("LOTS LIVRES NON MERGES : aucun dans les refs locales")
+    lines.append(
+        "LIMITES BRANCHES : refs locales sans fetch ; age du commit de tete uniquement ; "
+        "une ref distante ne prouve pas une livraison"
+    )
+    return "\n".join(lines)
 
 
 def domain_in_fleet_scope(domain: Any) -> bool:
@@ -407,10 +722,23 @@ def main() -> int:
         raw = json.loads(Path(options.backlog_json).read_text(encoding="utf-8"))
         backlog_ages = {str(k): int(v) for k, v in raw.items()}
     else:
-        backlog_ages, backlog_error = read_backlog_ages_from_bridget_copy(options.bridget_db)
+        backlog_ages, backlog_error = read_backlog_ages_from_bridget_copy(
+            options.bridget_db, now=options.now
+        )
         if backlog_ages is None:
             backlog_error = backlog_error or "indisponible"
             backlog_ages = {}
+
+    try:
+        branch_backlog, branch_error = read_branch_backlog(
+            options.git_repo,
+            now=options.now,
+            timeout_secs=options.git_timeout_secs,
+            git_bin=options.git_bin,
+        )
+    except OSError as error:
+        branch_backlog = None
+        branch_error = f"temporaire Git indisponible: {error}"
 
     assert isinstance(agents, list)
     typed_agents = [a for a in agents if isinstance(a, dict)]
@@ -450,6 +778,17 @@ def main() -> int:
                 if backlog_error
                 else {"state": "available", "targets": len(backlog_ages)}
             ),
+            "branch_backlog": (
+                branch_backlog
+                if branch_backlog is not None
+                else {
+                    "state": "unavailable",
+                    "reason": branch_error or "inconnu",
+                    "refs_scope": BRANCH_REFS_SCOPE,
+                    "age_basis": BRANCH_AGE_BASIS,
+                    "delivery_limit": BRANCH_DELIVERY_LIMIT,
+                }
+            ),
         }
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     else:
@@ -459,6 +798,7 @@ def main() -> int:
                 f"BACKLOG INDISPONIBLE ({backlog_error[:60]}) — BLOQUES non calculables\n"
                 + text
             )
+        text += "\n" + format_branch_backlog(branch_backlog, branch_error=branch_error)
         print(text)
     return 0
 
