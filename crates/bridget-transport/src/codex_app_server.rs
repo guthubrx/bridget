@@ -1748,6 +1748,102 @@ mod tests {
         );
     }
 
+    fn journal_echeance_fixture(label: &str) -> Vec<Value> {
+        let root = root(label);
+        let trace = root.join("trace.jsonl");
+        // HOLD_TURN : turn/start OK, aucun turn/completed → wait_for_turn
+        // tombe sur « échéance Codex dépassée » (notify_timeout_secs=2).
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 1;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
+            ],
+            false,
+        )
+        .expect("session native échéance");
+        transport
+            .activate_journal(&root, "codex-native", None)
+            .expect("journal échéance activé");
+        let mut msg = message(label);
+        msg.id = "codex-echeance-1".to_string();
+        transport.deliver(&msg).expect("livraison échéance");
+
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut rejected = false;
+        while Instant::now() < deadline {
+            rejected |= transport.drain_events().iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::DeliveryRejected { ref reason, .. }
+                        if reason == "échéance Codex dépassée"
+                )
+            });
+            if rejected {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            rejected,
+            "DeliveryRejected échéance attendu; trace={}",
+            fs::read_to_string(&trace).unwrap_or_else(|error| error.to_string())
+        );
+        transport.stop();
+
+        let journal_path = fs::read_dir(root.join("codex-native"))
+            .expect("répertoire du journal")
+            .next()
+            .expect("fichier du journal")
+            .expect("entrée du journal")
+            .path();
+        let events = crate::journal::valid_events(&journal_path);
+        fs::remove_dir_all(root).expect("nettoyage échéance");
+        events
+    }
+
+    /// (D) Séparation verrouillée : échéance → error, AUCUN turn_end.
+    /// Mutant INTERDIT : écrire turn_end completed sur DeliveryRejected → D meurt
+    /// (A/B/C restent verts — c'est exactement le trou signalé par cursor6).
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_D_codex_app_server_echeance_ecrit_error_sans_turn_end() {
+        let events = journal_echeance_fixture("temoin-d");
+        let errors: Vec<_> = events
+            .iter()
+            .filter(|event| event["event"] == "error")
+            .collect();
+        assert_eq!(
+            errors.len(),
+            1,
+            "une seule error d'échéance, reçu {errors:?} via {events:?}"
+        );
+        assert_eq!(
+            errors[0]["payload"]["reason"].as_str(),
+            Some("échéance Codex dépassée"),
+            "raison en dur, reçu {}",
+            errors[0]["payload"]
+        );
+        assert_eq!(
+            errors[0]["message_id"].as_str(),
+            Some("codex-echeance-1"),
+            "même message_id, reçu {errors:?}"
+        );
+        let turn_ends: Vec<_> = events
+            .iter()
+            .filter(|event| event["event"] == "turn_end")
+            .collect();
+        assert!(
+            turn_ends.is_empty(),
+            "échéance SANS turn_end (≠ succès Claude à payload vide) ; reçu {turn_ends:?}"
+        );
+    }
+
     #[test]
     fn journal_codex_atteste_presence_puis_absence_et_ne_valide_pas_approbation() {
         let (present, outbound) = journal_detail_fixture("detail-present", true);
