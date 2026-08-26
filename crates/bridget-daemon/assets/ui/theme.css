@@ -265,6 +265,17 @@ input:focus-visible,
   font-size: 0.82rem;
 }
 
+.message-search-status {
+  margin: 0;
+  padding: 0 0.75rem 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.message-search-status[hidden] {
+  display: none;
+}
+
 .agent-list {
   display: grid;
   gap: 0.2rem;

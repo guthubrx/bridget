@@ -15,7 +15,8 @@ const MAX_LEDGER_SEARCH: usize = 100;
 /// Plafond exposé au relais UI (même borne que la recherche store).
 pub(crate) const MAX_LEDGER_SEARCH_PUBLIC: usize = MAX_LEDGER_SEARCH;
 
-fn escape_like_needle(raw: &str) -> String {
+/// Échappe les jokers LIKE pour une recherche littérale.
+pub(crate) fn escape_like_needle(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for ch in raw.chars() {
         match ch {
@@ -27,6 +28,78 @@ fn escape_like_needle(raw: &str) -> String {
         }
     }
     out
+}
+
+/// Repli des accents français → ASCII, pour que « cafe » trouve « café ».
+pub(crate) fn fold_for_search(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        let mapped = match ch {
+            'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' | 'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => 'a',
+            'È' | 'É' | 'Ê' | 'Ë' | 'è' | 'é' | 'ê' | 'ë' => 'e',
+            'Ì' | 'Í' | 'Î' | 'Ï' | 'ì' | 'í' | 'î' | 'ï' => 'i',
+            'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'ò' | 'ó' | 'ô' | 'õ' | 'ö' => 'o',
+            'Ù' | 'Ú' | 'Û' | 'Ü' | 'ù' | 'ú' | 'û' | 'ü' => 'u',
+            'Ý' | 'ÿ' | 'ý' => 'y',
+            'Ç' | 'ç' => 'c',
+            'Ñ' | 'ñ' => 'n',
+            other => other,
+        };
+        for lower in mapped.to_lowercase() {
+            out.push(lower);
+        }
+    }
+    out
+}
+
+/// Expression SQL qui replie le corps avant LIKE (miroir de `fold_for_search`).
+fn folded_body_sql() -> String {
+    let mut expr = "body".to_string();
+    for (from, to) in [
+        ("É", "e"),
+        ("È", "e"),
+        ("Ê", "e"),
+        ("Ë", "e"),
+        ("é", "e"),
+        ("è", "e"),
+        ("ê", "e"),
+        ("ë", "e"),
+        ("À", "a"),
+        ("Â", "a"),
+        ("Ä", "a"),
+        ("à", "a"),
+        ("â", "a"),
+        ("ä", "a"),
+        ("Î", "i"),
+        ("Ï", "i"),
+        ("î", "i"),
+        ("ï", "i"),
+        ("Ô", "o"),
+        ("Ö", "o"),
+        ("ô", "o"),
+        ("ö", "o"),
+        ("Ù", "u"),
+        ("Û", "u"),
+        ("Ü", "u"),
+        ("ù", "u"),
+        ("û", "u"),
+        ("ü", "u"),
+        ("Ç", "c"),
+        ("ç", "c"),
+        ("Ñ", "n"),
+        ("ñ", "n"),
+        ("Ÿ", "y"),
+        ("ÿ", "y"),
+    ] {
+        expr = format!("REPLACE({expr}, '{from}', '{to}')");
+    }
+    format!("LOWER({expr})")
+}
+
+#[derive(Debug)]
+pub struct LedgerSearchOutcome {
+    pub hits: Vec<LedgerEntry>,
+    pub truncated: bool,
 }
 
 /// Requête de guichet validée par le daemon avant toute persistance.
@@ -1137,27 +1210,31 @@ impl Store {
 
     /// Parcourt le ledger (pas d'index FTS) : chaque mot doit apparaître dans
     /// le corps. Ordre chronologique. Les jokers LIKE du needle sont échappés.
+    /// Accents repliés (cafe ↔ café). `truncated` si plus de hits que le plafond.
     pub fn search_messages(
         &self,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<LedgerEntry>, StoreError> {
+    ) -> Result<LedgerSearchOutcome, StoreError> {
         let limit = limit.clamp(1, MAX_LEDGER_SEARCH);
         let needles: Vec<String> = query
             .split_whitespace()
             .filter(|token| !token.is_empty())
-            .map(escape_like_needle)
+            .map(|token| escape_like_needle(&fold_for_search(token)))
             .collect();
         if needles.is_empty() {
-            return Ok(Vec::new());
+            return Ok(LedgerSearchOutcome {
+                hits: Vec::new(),
+                truncated: false,
+            });
         }
 
-        let mut sql = String::from(
-            "SELECT id, ts, sender, target, body FROM ledger WHERE 1=1",
-        );
+        let folded = folded_body_sql();
+        let mut sql = String::from("SELECT id, ts, sender, target, body FROM ledger WHERE 1=1");
         for _ in &needles {
-            sql.push_str(" AND body LIKE ? ESCAPE '\\'");
+            sql.push_str(&format!(" AND {folded} LIKE ? ESCAPE '\\'"));
         }
+        // limit+1 pour détecter la troncature sans mensonge par omission.
         sql.push_str(" ORDER BY ts ASC, id ASC LIMIT ?");
 
         let mut stmt = self.conn.prepare(&sql).map_err(StoreError::Sqlite)?;
@@ -1165,8 +1242,8 @@ impl Store {
             .iter()
             .map(|needle| rusqlite::types::Value::Text(format!("%{needle}%")))
             .collect();
-        binds.push(rusqlite::types::Value::Integer(limit as i64));
-        let entries = stmt
+        binds.push(rusqlite::types::Value::Integer((limit as i64) + 1));
+        let mut entries: Vec<LedgerEntry> = stmt
             .query_map(rusqlite::params_from_iter(binds), |row| {
                 Ok(LedgerEntry {
                     id: row.get(0)?,
@@ -1180,7 +1257,14 @@ impl Store {
             .map_err(StoreError::Sqlite)?
             .filter_map(|row| row.ok())
             .collect();
-        Ok(entries)
+        let truncated = entries.len() > limit;
+        if truncated {
+            entries.truncate(limit);
+        }
+        Ok(LedgerSearchOutcome {
+            hits: entries,
+            truncated,
+        })
     }
 
     /// Purge les messages plus anciens que N jours.
