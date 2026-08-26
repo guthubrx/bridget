@@ -23,6 +23,26 @@
           Lecture de la flotte…
         </p>
 
+        <form class="message-search" id="message-search" novalidate>
+          <label class="sr-only" for="message-search-input">Chercher dans les messages</label>
+          <input
+            id="message-search-input"
+            name="q"
+            type="search"
+            placeholder="Chercher dans les messages…"
+            autocomplete="off"
+            spellcheck="true"
+          >
+          <button type="submit">Chercher</button>
+        </form>
+        <ol
+          class="message-search-results"
+          id="message-search-results"
+          aria-label="Résultats de recherche"
+          hidden
+        ></ol>
+        <p class="message-search-status" id="message-search-status" hidden></p>
+
         <nav class="agent-list" id="agent-list" aria-label="Agents actifs"></nav>
 
         <details class="stopped-agents" id="stopped-agents">

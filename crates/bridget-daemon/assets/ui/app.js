@@ -102,6 +102,108 @@
         assert.equal(clicked.showNewMessages, false);
       });
 
+      test("recherche_hit_caracteres_inattendus_reste_du_texte", () => {
+        const hit = {
+          id: "x1",
+          ts: 42,
+          sender: "bridget",
+          target: "cursor4",
+          body: `ligne <script>alert(1)</script> et 100%_wild & "guillemets"`,
+        };
+        assert.equal(api.threadPeerForHit(hit), "bridget");
+        const request = api.buildSearchRequest(`100%_wild & <tag>`);
+        assert.equal(request.version, 1);
+        assert.equal(request.q, `100%_wild & <tag>`);
+        const label = api.searchHitParts(hit, () => "00:00:42");
+        assert.equal(label.author, "bridget");
+        assert.equal(label.when, "00:00:42");
+        assert.equal(label.body, hit.body);
+        assert.ok(!label.body.includes("undefined"));
+      });
+
+      // Meurt si le câblage productif n'appelle plus /v1/search (mutant : autre URL).
+      test("page_appelle_la_route_v1_search_au_clic", async () => {
+        assert.equal(
+          api.buildSearchUrl("jeton-route"),
+          "/v1/search?token=jeton-route",
+        );
+        const src = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
+        assert.match(
+          src,
+          /fetch\(\s*buildSearchUrl\(\s*token\s*\)/,
+          "le submit productif doit passer par buildSearchUrl(token)",
+        );
+        assert.match(
+          src,
+          /function buildSearchUrl\(token\) \{\s*return agentResourceUrl\("\/v1\/search", token\);/,
+          "buildSearchUrl productif doit cibler /v1/search",
+        );
+
+        const calls = [];
+        const listeners = new Map();
+        const createNode = (id = "generated") => {
+          const node = {
+            id,
+            dataset: {},
+            style: {},
+            value: id === "message-search-input" ? "cible" : "",
+            textContent: "",
+            hidden: false,
+            scrollTop: 0,
+            scrollHeight: 0,
+            clientHeight: 0,
+            selectionStart: 0,
+            selectionEnd: 0,
+            addEventListener: (event, handler) => {
+              const registered = listeners.get(id) || [];
+              registered.push({ event, handler });
+              listeners.set(id, registered);
+            },
+            append: () => {},
+            focus: () => {},
+            replaceChildren: () => {},
+            requestSubmit: () => {},
+            setAttribute: () => {},
+            setSelectionRange: () => {},
+          };
+          return node;
+        };
+        const nodes = new Map();
+        const documentRef = {
+          createElement: () => createNode(),
+          getElementById: (id) => {
+            if (!nodes.has(id)) nodes.set(id, createNode(id));
+            return nodes.get(id);
+          },
+        };
+        const mounted = api.mount(documentRef, {
+          clearTimeout: () => {},
+          location: { search: "?token=jeton-route" },
+          setTimeout: () => 1,
+          fetch: async (url, options = {}) => {
+            calls.push({ url, method: options.method || "GET", body: options.body });
+            return {
+              ok: true,
+              json: async () => ({ version: 1, hits: [], truncated: false }),
+            };
+          },
+        });
+        assert.ok(mounted);
+        const submit = (listeners.get("message-search") || []).find(
+          (entry) => entry.event === "submit",
+        );
+        assert.ok(submit, "le formulaire de recherche doit être câblé");
+        await submit.handler({ preventDefault() {} });
+        assert.ok(
+          calls.some(
+            (call) =>
+              call.method === "POST"
+              && call.url === "/v1/search?token=jeton-route",
+          ),
+          `fetch productif attendu sur /v1/search, appels=${JSON.stringify(calls)}`,
+        );
+      });
+
       test("stick_to_bottom_seulement_si_deja_au_fond", () => {
         const mid = { scrollTop: 100, scrollHeight: 1000, clientHeight: 400 };
         const bottom = { scrollTop: 599, scrollHeight: 1000, clientHeight: 400 };
@@ -2023,6 +2125,10 @@
     stoppedCount: "stopped-count",
     fleetCount: "fleet-count",
     sourceState: "source-state",
+    messageSearch: "message-search",
+    messageSearchInput: "message-search-input",
+    messageSearchResults: "message-search-results",
+    messageSearchStatus: "message-search-status",
     selectedAgent: "selected-agent",
     selectedMeta: "selected-meta",
     selectedStateDot: "selected-state-dot",
@@ -2044,6 +2150,37 @@
     detailContent: "detail-content",
     closeDetail: "close-detail",
   });
+
+  function buildSearchRequest(query) {
+    return { version: 1, q: String(query ?? "") };
+  }
+
+  function buildSearchUrl(token) {
+    return agentResourceUrl("/v1/search", token);
+  }
+
+  function threadPeerForHit(hit) {
+    const sender = text(hit && hit.sender);
+    const target = text(hit && hit.target);
+    if (sender && sender !== "humain") return sender;
+    if (target && target !== "humain") return target;
+    return sender || target || "";
+  }
+
+  function searchHitParts(hit, formatTime) {
+    return {
+      author: text(hit && hit.sender) || "?",
+      when: typeof formatTime === "function" ? formatTime(Number(hit && hit.ts) || 0) : "",
+      body: text(hit && hit.body),
+    };
+  }
+
+  function searchStatusText(payload) {
+    if (payload && payload.truncated) {
+      return "Résultats tronqués : seuls les 100 premiers sont affichés.";
+    }
+    return "";
+  }
 
   function collectNodes(documentRef) {
     return Object.fromEntries(
@@ -2795,6 +2932,58 @@
       nodes.detailPanel.hidden = true;
     });
 
+    const renderSearchHits = (payload) => {
+      const hits = payload && Array.isArray(payload.hits) ? payload.hits : [];
+      nodes.messageSearchResults.replaceChildren();
+      nodes.messageSearchResults.hidden = hits.length === 0;
+      hits.forEach((hit) => {
+        const parts = searchHitParts(hit, timestamp);
+        const item = make("li");
+        const button = make("button", "message-search-hit");
+        button.type = "button";
+        const meta = make(
+          "span",
+          "message-search-hit__meta",
+          `${parts.author} · ${parts.when}`,
+        );
+        const body = make("span", "message-search-hit__body", parts.body);
+        button.append(meta, body);
+        button.addEventListener("click", () => {
+          const peer = threadPeerForHit(hit);
+          if (peer) selectAgent(peer);
+        });
+        item.append(button);
+        nodes.messageSearchResults.append(item);
+      });
+      const status = searchStatusText(payload);
+      nodes.messageSearchStatus.textContent = status;
+      nodes.messageSearchStatus.hidden = !status;
+    };
+
+    nodes.messageSearch.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (!token) return;
+      const q = nodes.messageSearchInput.value;
+      windowRef
+        .fetch(buildSearchUrl(token), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(buildSearchRequest(q)),
+        })
+        .then(async (response) => {
+          if (!response.ok) throw new Error("search_http");
+          return response.json();
+        })
+        .then((payload) => {
+          renderSearchHits(payload);
+        })
+        .catch(() => {
+          renderSearchHits({ hits: [], truncated: false });
+          nodes.sourceState.textContent = "Recherche indisponible.";
+          nodes.sourceState.dataset.state = "error";
+        });
+    });
+
     renderRelay();
     renderAgents();
     renderHeader();
@@ -2877,5 +3066,10 @@
     formatDuration,
     collectNodes,
     mount,
+    buildSearchRequest,
+    buildSearchUrl,
+    threadPeerForHit,
+    searchHitParts,
+    searchStatusText,
   });
 });

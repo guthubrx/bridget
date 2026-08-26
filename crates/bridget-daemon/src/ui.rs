@@ -518,6 +518,29 @@ struct UiSendRequestV1 {
     reply: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiSearchRequestV1 {
+    version: u8,
+    q: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct UiSearchHitV1 {
+    id: String,
+    ts: i64,
+    sender: String,
+    target: String,
+    body: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UiSearchResponseV1 {
+    version: u8,
+    hits: Vec<UiSearchHitV1>,
+    truncated: bool,
+}
+
 #[derive(Debug, Serialize)]
 struct UiSendAcceptedV1 {
     version: u8,
@@ -598,6 +621,10 @@ fn serve_connection(
                 },
             ),
         },
+        ("POST", "/v1/search") => match post_ui_search(config, &request.body) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, message)) => write_text(stream, status, message),
+        },
         ("GET", "/v1/snapshot") => {
             let focus_agent = request.query.get("agent").map(String::as_str);
             if let Some(agent) = focus_agent {
@@ -661,6 +688,59 @@ fn post_ui_message(
             .map_err(|_| (503, "daemon_unavailable"))?;
     }
     send_ui_message(&config.daemon_socket, request).map_err(|_| (503, "daemon_unavailable"))
+}
+
+fn post_ui_search(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiSearchResponseV1, (u16, &'static str)> {
+    let request: UiSearchRequestV1 =
+        serde_json::from_slice(body).map_err(|_| (400, "requête de recherche invalide"))?;
+    if request.version != UI_VERSION {
+        return Err((400, "requête de recherche invalide"));
+    }
+    let db_path = ledger_db_path_for_socket(&config.daemon_socket);
+    let outcome =
+        search_ui_ledger(&db_path, &request.q).map_err(|_| (503, "ledger indisponible"))?;
+    Ok(UiSearchResponseV1 {
+        version: UI_VERSION,
+        hits: outcome.hits,
+        truncated: outcome.truncated,
+    })
+}
+
+#[derive(Debug)]
+struct UiSearchOutcome {
+    hits: Vec<UiSearchHitV1>,
+    truncated: bool,
+}
+
+/// Chemin réel emprunté par la page : lit le store à côté de la socket daemon
+/// (pas de nouveau RPC — la flotte tourne sans redémarrage).
+fn search_ui_ledger(db_path: &Path, query: &str) -> Result<UiSearchOutcome, UiError> {
+    let store = crate::store::Store::open(db_path)
+        .map_err(|error| UiError::Configuration(error.to_string()))?;
+    let outcome = store
+        .search_messages(query, crate::store::MAX_LEDGER_SEARCH_PUBLIC)
+        .map_err(|error| UiError::Configuration(error.to_string()))?;
+    Ok(UiSearchOutcome {
+        hits: outcome
+            .hits
+            .into_iter()
+            .map(|entry| UiSearchHitV1 {
+                id: entry.id,
+                ts: entry.ts,
+                sender: entry.sender,
+                target: entry.target,
+                body: entry.body,
+            })
+            .collect(),
+        truncated: outcome.truncated,
+    })
+}
+
+fn ledger_db_path_for_socket(socket_path: &Path) -> PathBuf {
+    socket_path.with_extension("db")
 }
 
 fn validate_ui_recipient(
@@ -2060,5 +2140,227 @@ mod tests {
             .map(|offset| after + offset)
             .unwrap_or(source.len());
         &source[start..end]
+    }
+
+    fn seed_search_ledger(db_path: &Path) {
+        let store = crate::store::Store::open(db_path).unwrap();
+        drop(store);
+        let conn = rusqlite::Connection::open(db_path).unwrap();
+        // Décoys `100Xwild` : sans échappement LIKE, `100%_wild` les matche
+        // toutes ( % = joker, _ = un caractère ). Avec échappement : 1 seule.
+        conn.execute_batch(
+            r#"
+            DELETE FROM ledger;
+            INSERT INTO ledger (id, ts, sender, target, body, conversation_key) VALUES
+              ('hit-early', 100, 'bridget', 'cursor4', 'alpha cible premiere', 'bridget:cursor4'),
+              ('noise', 150, 'jc2', 'jc6', 'rien a voir', 'jc2:jc6'),
+              ('decoy-a', 160, 'jc2', 'jc6', 'prefix 100awild suffix', 'jc2:jc6'),
+              ('decoy-b', 161, 'jc2', 'jc6', 'prefix 100bwild suffix', 'jc2:jc6'),
+              ('decoy-c', 162, 'jc2', 'jc6', 'prefix 100cwild suffix', 'jc2:jc6'),
+              ('decoy-d', 163, 'jc2', 'jc6', 'prefix 100dwild suffix', 'jc2:jc6'),
+              ('decoy-e', 164, 'jc2', 'jc6', 'prefix 100ewild suffix', 'jc2:jc6'),
+              ('hit-late', 200, 'cursor4', 'bridget', 'seconde cible avec <tag> et 100%_wild', 'cursor4:bridget'),
+              ('accent', 220, 'bridget', 'cursor4', 'Le café est prêt', 'bridget:cursor4');
+            "#,
+        )
+        .unwrap();
+    }
+
+    fn seed_truncated_ledger(db_path: &Path, count: usize) {
+        let store = crate::store::Store::open(db_path).unwrap();
+        drop(store);
+        let conn = rusqlite::Connection::open(db_path).unwrap();
+        conn.execute_batch("DELETE FROM ledger;").unwrap();
+        for index in 0..count {
+            conn.execute(
+                "INSERT INTO ledger (id, ts, sender, target, body, conversation_key)
+                 VALUES (?1, ?2, 'bridget', 'cursor4', ?3, 'bridget:cursor4')",
+                rusqlite::params![
+                    format!("row-{index}"),
+                    1_000 + index as i64,
+                    format!("motif-troncature numero {index}"),
+                ],
+            )
+            .unwrap();
+        }
+    }
+
+    fn post_search(address: SocketAddr, token: &str, body: &str) -> (u16, String) {
+        let mut client = TcpStream::connect(address).unwrap();
+        let payload = body.as_bytes();
+        let request = format!(
+            "POST /v1/search?token={token} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            payload.len()
+        );
+        client.write_all(request.as_bytes()).unwrap();
+        client.write_all(payload).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        let text = String::from_utf8(response).unwrap();
+        let status = text
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        (status, text)
+    }
+
+    fn json_body(raw: &str) -> serde_json::Value {
+        let json = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn recherche_depuis_la_page_rend_corps_auteur_horodatage_en_ordre() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-ui-search-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("bridget.sock");
+        let db = root.join("bridget.db");
+        seed_search_ledger(&db);
+
+        let config = UiRelayConfig {
+            daemon_socket: socket,
+            maicie_config: root.join("maicie.json"),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "jeton-search".to_string(),
+        };
+        let relay = UiRelay::bind(config).unwrap();
+        let address = relay.local_addr().unwrap();
+
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let (hit_status, hit_raw) =
+            post_search(address, "jeton-search", r#"{"version":1,"q":"cible"}"#);
+        worker.join().unwrap();
+        assert_eq!(hit_status, 200, "{hit_raw}");
+        let hit_value = json_body(&hit_raw);
+        assert_eq!(hit_value["hits"].as_array().map(|a| a.len()), Some(2));
+        assert_eq!(hit_value["hits"][0]["id"], "hit-early");
+        assert_eq!(hit_value["hits"][0]["sender"], "bridget");
+        assert_eq!(hit_value["hits"][0]["ts"], 100);
+        assert_eq!(hit_value["hits"][0]["body"], "alpha cible premiere");
+        assert_eq!(hit_value["hits"][1]["id"], "hit-late");
+        assert_eq!(hit_value["hits"][1]["sender"], "cursor4");
+        assert_eq!(hit_value["hits"][1]["ts"], 200);
+        assert_eq!(
+            hit_value["hits"][1]["body"],
+            "seconde cible avec <tag> et 100%_wild"
+        );
+        assert_eq!(hit_value["truncated"], false);
+        assert!(
+            hit_value["hits"][0]["ts"].as_i64().unwrap()
+                < hit_value["hits"][1]["ts"].as_i64().unwrap()
+        );
+
+        let config = UiRelayConfig {
+            daemon_socket: root.join("bridget.sock"),
+            maicie_config: root.join("maicie.json"),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "jeton-search".to_string(),
+        };
+        let relay = UiRelay::bind(config).unwrap();
+        let address = relay.local_addr().unwrap();
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let (miss_status, miss_raw) =
+            post_search(address, "jeton-search", r#"{"version":1,"q":"motabsentxyz"}"#);
+        worker.join().unwrap();
+        assert_eq!(miss_status, 200, "{miss_raw}");
+        let miss_value = json_body(&miss_raw);
+        assert_eq!(miss_value["hits"].as_array().map(|a| a.len()), Some(0));
+        assert_eq!(miss_value["truncated"], false);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn echappement_like_exclut_les_leurres_joker() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-ui-search-escape-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let db = root.join("bridget.db");
+        seed_search_ledger(&db);
+
+        // Attendu en dur : un seul hit littéral. Sans escape_like_needle,
+        // les 5 leurres 100Xwild passent aussi → len != 1.
+        let outcome = crate::store::Store::open(&db)
+            .unwrap()
+            .search_messages("100%_wild", 100)
+            .unwrap();
+        assert_eq!(
+            outcome.hits.len(),
+            1,
+            "sans échappement les leurres 100Xwild passeraient, ids={:?}",
+            outcome
+                .hits
+                .iter()
+                .map(|hit| hit.id.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(outcome.hits[0].id, "hit-late");
+        assert!(outcome.hits[0].body.contains("100%_wild"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn troncature_est_signalee_quand_le_plafond_est_atteint() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-ui-search-trunc-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let db = root.join("bridget.db");
+        seed_truncated_ledger(&db, 120);
+
+        let config = UiRelayConfig {
+            daemon_socket: root.join("bridget.sock"),
+            maicie_config: root.join("maicie.json"),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "jeton-trunc".to_string(),
+        };
+        let relay = UiRelay::bind(config).unwrap();
+        let address = relay.local_addr().unwrap();
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let (status, raw) = post_search(
+            address,
+            "jeton-trunc",
+            r#"{"version":1,"q":"motif-troncature"}"#,
+        );
+        worker.join().unwrap();
+        assert_eq!(status, 200, "{raw}");
+        let value = json_body(&raw);
+        assert_eq!(value["hits"].as_array().map(|a| a.len()), Some(100));
+        assert_eq!(
+            value["truncated"], true,
+            "120 correspondances doivent signaler truncated=true, reçu {value}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cafe_sans_accent_trouve_cafe_avec_accent() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-ui-search-accent-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let db = root.join("bridget.db");
+        seed_search_ledger(&db);
+        let outcome = crate::store::Store::open(&db)
+            .unwrap()
+            .search_messages("cafe", 100)
+            .unwrap();
+        assert_eq!(outcome.hits.len(), 1);
+        assert_eq!(outcome.hits[0].id, "accent");
+        assert!(outcome.hits[0].body.contains("café"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
