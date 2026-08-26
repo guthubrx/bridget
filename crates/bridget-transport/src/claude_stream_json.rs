@@ -4,6 +4,10 @@
 //! module ne projette ni modèle, ni quota, ni consommation : G5 ne couvre que
 //! la session gérée, le journal et son cycle de vie.
 
+use crate::claude_provider_session::{
+    ProviderSessionStore, classify_resume_failure, prepare_launch_args, session_id_from_system_init,
+    strip_resume_arg,
+};
 use crate::journal::{JournalFailureSink, JournalLiveFeed, JournalWriter};
 use crate::managed_session::{
     ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource, ManagedSession,
@@ -16,7 +20,7 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
@@ -25,6 +29,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 type Writer = Arc<Mutex<Option<ChildStdin>>>;
 type Journal = Arc<Mutex<Option<JournalWriter>>>;
+type SessionStoreHandle = Arc<Mutex<Option<ProviderSessionStore>>>;
 
 #[derive(Debug, Clone)]
 pub struct ClaudeStreamJsonOptions {
@@ -33,6 +38,11 @@ pub struct ClaudeStreamJsonOptions {
     pub args: Vec<String>,
     pub queue_capacity: usize,
     pub notify_timeout_secs: u64,
+    /// Racine durable `~/.cache/bridget/sessions` (même arbre que le journal).
+    /// Survit à la mort du wrapper et au redémarrage du daemon.
+    pub session_store_root: Option<PathBuf>,
+    /// Nom d'agent sous lequel lire/écrire `claude_provider_session`.
+    pub agent_name: Option<String>,
 }
 
 struct ActiveTurn {
@@ -62,6 +72,7 @@ pub struct ClaudeStreamJsonTransport {
     child: Arc<Mutex<Child>>,
     events: Arc<Mutex<VecDeque<ManagedEvent>>>,
     journal: Journal,
+    session_store: SessionStoreHandle,
     reader_handle: Mutex<Option<thread::JoinHandle<()>>>,
     worker_handle: Mutex<Option<thread::JoinHandle<()>>>,
 }
@@ -88,34 +99,48 @@ impl ClaudeStreamJsonTransport {
                 "queue Claude de capacité nulle".to_string(),
             ));
         }
+        let session_store = match (&options.session_store_root, &options.agent_name) {
+            (Some(root), Some(agent)) if !agent.trim().is_empty() => {
+                Some(ProviderSessionStore::new(root.clone(), agent.clone()))
+            }
+            _ => None,
+        };
+        let attempted_resume = prepare_launch_args(&mut options.args, session_store.as_ref());
         ensure_stream_arguments(&mut options.args)?;
-        let mut command = Command::new(&options.command);
-        command
-            .args(&options.args)
-            .envs(environment.iter().cloned())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(if inherit_stderr {
-                Stdio::inherit()
-            } else {
-                Stdio::null()
-            })
-            // Le pilote et ses enfants forment une seule unité de vie :
-            // arrêter seulement le parent laisserait stdout ouvert.
-            .process_group(0);
-        let mut child = command
-            .spawn()
-            .map_err(|error| TransportError::Io(format!("impossible de lancer Claude: {error}")))?;
-        let pid = child.id();
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| TransportError::Io("stdin Claude absent".to_string()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| TransportError::Io("stdout Claude absent".to_string()))?;
-        let writer = Arc::new(Mutex::new(Some(stdin)));
+
+        let mut prefetch = Vec::new();
+        let mut resume_notice = None;
+        let spawned = match spawn_claude_child(
+            &options,
+            environment,
+            inherit_stderr,
+            attempted_resume.as_deref(),
+            &mut prefetch,
+            &mut resume_notice,
+            session_store.as_ref(),
+        )? {
+            Some(spawned) => spawned,
+            None => {
+                strip_resume_arg(&mut options.args);
+                spawn_claude_child(
+                    &options,
+                    environment,
+                    inherit_stderr,
+                    None,
+                    &mut prefetch,
+                    &mut resume_notice,
+                    session_store.as_ref(),
+                )?
+                .ok_or_else(|| {
+                    TransportError::Io(
+                        "repli Claude après échec de reprise indisponible".to_string(),
+                    )
+                })?
+            }
+        };
+
+        let pid = spawned.child.id();
+        let writer = Arc::new(Mutex::new(Some(spawned.stdin)));
         let queue = Arc::new((
             Mutex::new(QueueState {
                 messages: VecDeque::new(),
@@ -128,13 +153,24 @@ impl ClaudeStreamJsonTransport {
         let busy = Arc::new(AtomicBool::new(false));
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let journal = Arc::new(Mutex::new(None));
+        let session_store_handle = Arc::new(Mutex::new(session_store));
         let pinned_model = pinned_model_from_args(&options.args);
+        if let Some(notice) = resume_notice {
+            push_internal(
+                &events,
+                ManagedEventKind::Error {
+                    detail: notice,
+                },
+            );
+        }
         let reader_handle = spawn_reader(
-            stdout,
+            spawned.stdout,
+            prefetch,
             queue.clone(),
             events.clone(),
             alive.clone(),
             journal.clone(),
+            session_store_handle.clone(),
             pinned_model,
         );
         let worker_handle = spawn_worker(
@@ -154,9 +190,10 @@ impl ClaudeStreamJsonTransport {
             queue,
             queue_capacity: options.queue_capacity,
             writer,
-            child: Arc::new(Mutex::new(child)),
+            child: Arc::new(Mutex::new(spawned.child)),
             events,
             journal,
+            session_store: session_store_handle,
             reader_handle: Mutex::new(Some(reader_handle)),
             worker_handle: Mutex::new(Some(worker_handle)),
         })
@@ -294,6 +331,13 @@ impl ManagedSession for ClaudeStreamJsonTransport {
                 failure,
                 live_feed,
             )?);
+        // Même racine que le journal : le session_id fournisseur survit ainsi
+        // à la mort du wrapper et au redémarrage du daemon.
+        *self
+            .session_store
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) =
+            Some(ProviderSessionStore::new(root, agent));
         Ok(())
     }
 
@@ -384,6 +428,100 @@ fn ensure_stream_arguments(args: &mut Vec<String>) -> Result<(), TransportError>
         .map(str::to_string),
     );
     Ok(())
+}
+
+struct SpawnedClaude {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: ChildStdout,
+}
+
+/// Lance le binaire Claude. Si `attempted_resume` est posé, lit la première
+/// ligne stdout : un échec fournisseur tue le fils, efface l'id périmé et
+/// renvoie `Ok(None)` pour forcer un repli sans `--resume`.
+fn spawn_claude_child(
+    options: &ClaudeStreamJsonOptions,
+    environment: &[(String, String)],
+    inherit_stderr: bool,
+    attempted_resume: Option<&str>,
+    prefetch: &mut Vec<String>,
+    resume_notice: &mut Option<String>,
+    session_store: Option<&ProviderSessionStore>,
+) -> Result<Option<SpawnedClaude>, TransportError> {
+    let mut command = Command::new(&options.command);
+    command
+        .args(&options.args)
+        .envs(environment.iter().cloned())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(if inherit_stderr {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
+        // Le pilote et ses enfants forment une seule unité de vie :
+        // arrêter seulement le parent laisserait stdout ouvert.
+        .process_group(0);
+    let mut child = command
+        .spawn()
+        .map_err(|error| TransportError::Io(format!("impossible de lancer Claude: {error}")))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| TransportError::Io("stdin Claude absent".to_string()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| TransportError::Io("stdout Claude absent".to_string()))?;
+
+    let Some(attempted_id) = attempted_resume else {
+        return Ok(Some(SpawnedClaude {
+            child,
+            stdin,
+            stdout,
+        }));
+    };
+
+    let mut reader = BufReader::new(stdout);
+    let mut first_line = String::new();
+    match reader.read_line(&mut first_line) {
+        Ok(0) => {
+            terminate_group(&mut child);
+            let _ = session_store.map(ProviderSessionStore::clear);
+            *resume_notice = Some(format!(
+                "reprise Claude impossible: conversation introuvable pour l'identifiant {attempted_id} — démarrage d'une session neuve (stdout vide après --resume)"
+            ));
+            return Ok(None);
+        }
+        Ok(_) => {}
+        Err(error) => {
+            terminate_group(&mut child);
+            return Err(TransportError::Io(format!(
+                "lecture initiale Claude impossible: {error}"
+            )));
+        }
+    }
+    let trimmed = first_line.trim_end_matches(['\r', '\n']).to_string();
+    if let Ok(value) = serde_json::from_str::<Value>(&trimmed) {
+        if let Some(failure) = classify_resume_failure(&value, attempted_id) {
+            terminate_group(&mut child);
+            let _ = session_store.map(ProviderSessionStore::clear);
+            *resume_notice = Some(failure.named_message());
+            prefetch.clear();
+            return Ok(None);
+        }
+        if let Some(session_id) = session_id_from_system_init(&value) {
+            if let Some(store) = session_store {
+                let _ = store.store(&session_id);
+            }
+        }
+    }
+    prefetch.push(trimmed);
+    Ok(Some(SpawnedClaude {
+        child,
+        stdin,
+        stdout: reader.into_inner(),
+    }))
 }
 
 fn terminate_group(child: &mut Child) {
@@ -545,14 +683,17 @@ fn write_input(writer: &Writer, message: &BridgetMessage) -> Result<(), Transpor
 
 fn spawn_reader(
     stdout: ChildStdout,
+    prefetch: Vec<String>,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     events: Arc<Mutex<VecDeque<ManagedEvent>>>,
     alive: Arc<AtomicBool>,
     journal: Journal,
+    session_store: SessionStoreHandle,
     pinned_model: Option<String>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
+        let mut lines = prefetch.into_iter().map(Ok).chain(BufReader::new(stdout).lines());
+        while let Some(line) = lines.next() {
             let Ok(line) = line else { break };
             let raw = line.as_bytes().to_vec();
             let value = match serde_json::from_str::<Value>(&line) {
@@ -568,6 +709,15 @@ fn spawn_reader(
                     continue;
                 }
             };
+            if let Some(session_id) = session_id_from_system_init(&value) {
+                if let Some(store) = session_store
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .as_ref()
+                {
+                    let _ = store.store(&session_id);
+                }
+            }
             let kind = value
                 .get("type")
                 .and_then(Value::as_str)
@@ -979,6 +1129,8 @@ mod tests {
             ],
             queue_capacity: 2,
             notify_timeout_secs: 2,
+            session_store_root: None,
+            agent_name: None,
         }
     }
 
@@ -1552,5 +1704,105 @@ mod tests {
         )
         .unwrap())
         .is_none());
+    }
+
+    /// P2 bout-en-bout : `--resume` fantôme → message nommé + session neuve.
+    /// Mutant : avaler l'échec sans Error event → oracle meurt seul.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_P2_spawn_repli_nomme_apres_echec_resume() {
+        use crate::claude_provider_session::CLAUDE_RESUME_FAILED_PREFIX;
+        let root = std::env::temp_dir().join(format!(
+            "bridget-claude-resume-fail-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let fake = root.join("fake-claude");
+        fs::write(
+            &fake,
+            r#"#!/bin/sh
+if [ "$1" = "--resume" ]; then
+  printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: 00000000-0000-0000-0000-000000000000"]}'
+  exit 1
+fi
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"fresh-session-999","model":"claude-opus-5"}'
+while IFS= read -r line; do
+  printf '%s\n' '{"type":"result","is_error":false,"terminal_reason":"completed","result":"ok"}'
+done
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&fake).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&fake, permissions).unwrap();
+        }
+        let store = crate::claude_provider_session::ProviderSessionStore::new(&root, "agent-x");
+        store
+            .store("00000000-0000-0000-0000-000000000000")
+            .unwrap();
+        let options = ClaudeStreamJsonOptions {
+            command: fake.to_string_lossy().into_owned(),
+            args: Vec::new(),
+            queue_capacity: 2,
+            notify_timeout_secs: 2,
+            session_store_root: Some(root.clone()),
+            agent_name: Some("agent-x".to_string()),
+        };
+        let transport = ClaudeStreamJsonTransport::spawn(options).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut events = Vec::new();
+        while Instant::now() < deadline {
+            events.extend(transport.drain_events());
+            if events.iter().any(|event| {
+                matches!(
+                    &event.kind,
+                    ManagedEventKind::Error { detail }
+                        if detail.starts_with(CLAUDE_RESUME_FAILED_PREFIX)
+                )
+            }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let notice = events.iter().find_map(|event| match &event.kind {
+            ManagedEventKind::Error { detail } => Some(detail.clone()),
+            _ => None,
+        });
+        let notice = notice.expect("le message d'échec de reprise doit exister");
+        assert!(
+            notice.starts_with(CLAUDE_RESUME_FAILED_PREFIX),
+            "échec non nommé: {notice}"
+        );
+        assert!(
+            notice.contains("conversation introuvable"),
+            "cause absente: {notice}"
+        );
+        assert!(
+            notice.contains("00000000-0000-0000-0000-000000000000"),
+            "identifiant absent: {notice}"
+        );
+        // L'id périmé doit être effacé pour ne pas boucler.
+        assert_eq!(store.load(), None);
+        // La session neuve a annoncé son id et l'a persisté.
+        let fresh = crate::claude_provider_session::ProviderSessionStore::new(&root, "agent-x");
+        // activate_journal rebind — ici on vérifie via le fichier écrit par le reader
+        // après system/init du repli : chemin root/agent-x/claude_provider_session
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if fresh.load().as_deref() == Some("fresh-session-999") {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(fresh.load().as_deref(), Some("fresh-session-999"));
+        transport.stop();
+        let _ = fs::remove_dir_all(root);
     }
 }

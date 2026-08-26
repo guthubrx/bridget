@@ -3027,6 +3027,10 @@ fn launch_acp_with_status(
                 args: native_args,
                 queue_capacity: definition.queue_capacity,
                 notify_timeout_secs: definition.notify_timeout_secs,
+                // Même arbre que le journal d'agent : survit à la mort du
+                // managed-wrapper et au redémarrage du daemon.
+                session_store_root: Some(home.join(".cache/bridget/sessions")),
+                agent_name: effective_name.clone(),
             };
             let environment = string_environment(&mcp_environment);
             if managed_reporter.is_some() {
