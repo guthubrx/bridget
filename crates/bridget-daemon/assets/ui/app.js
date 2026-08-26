@@ -647,6 +647,157 @@
         assert.equal(work.durationMs, 5000);
       });
 
+      // Contrôle positif d'abord : un acte présent au journal DOIT être affiché.
+      // Un oracle d'absence seul passerait sur une projection vide et ne garderait rien.
+      test("TEMOIN_vue_affiche_acte_present_au_journal", () => {
+        const records = [
+          {
+            v: 1,
+            seq: 1,
+            ts: "2026-08-26T18:00:00Z",
+            session_id: "s-act",
+            event: "turn_start",
+            message_id: "m-act",
+            payload: {},
+          },
+          {
+            v: 1,
+            seq: 2,
+            ts: "2026-08-26T18:00:01Z",
+            session_id: "s-act",
+            event: "update",
+            message_id: "m-act",
+            // Forme Cursor/ACP legacy encore dominante dans les journaux mesurés.
+            payload: {
+              kind: "tool_call",
+              title: "Read src/main.rs",
+              tool: "Read src/main.rs",
+              summary: "lecture",
+              tool_call_id: "call-1",
+            },
+          },
+          {
+            v: 1,
+            seq: 3,
+            ts: "2026-08-26T18:00:02Z",
+            session_id: "s-act",
+            event: "update",
+            message_id: "m-act",
+            payload: { kind: "command", text: "cargo test", detail: "13 passés" },
+          },
+          {
+            v: 1,
+            seq: 4,
+            ts: "2026-08-26T18:00:03Z",
+            session_id: "s-act",
+            event: "turn_end",
+            message_id: "m-act",
+            payload: {},
+          },
+        ];
+        const buffers = new Map();
+        const events = records.flatMap((record) =>
+          api.journalEnvelopeToEvents(
+            {
+              event: {
+                type: "JournalFragment",
+                subscription_id: "sub-act",
+                seq: record.seq,
+                offset: 0,
+                final: true,
+                bytes: Buffer.from(`${JSON.stringify(record)}\n`).toString("base64"),
+              },
+            },
+            "cursor4",
+            buffers,
+          ),
+        );
+        const timeline = api.projectTimeline(events);
+        const work = timeline.find((entry) => entry.kind === "work");
+        assert.ok(work, "un tour avec actes journalisés doit produire une entrée work");
+        assert.equal(work.acts.length, 2, "les deux actes présents au journal doivent être projetés");
+        assert.equal(work.acts[0].kind, "tool");
+        assert.equal(work.acts[0].text, "Read src/main.rs");
+        assert.equal(work.acts[0].detail, "lecture");
+        assert.equal(work.acts[1].kind, "command");
+        assert.equal(work.acts[1].text, "cargo test");
+        assert.ok(
+          api.JOURNAL_ACT_KINDS.has("tool_call"),
+          "tool_call doit rester dans le vocabulaire journal, sinon Cursor redevient invisible",
+        );
+      });
+
+      test("mutant_filtre_c3_sans_tool_call_tue_TEMOIN_vue_affiche_acte_present_au_journal", () => {
+        const events = [
+          {
+            kind: "record",
+            agent: "cursor4",
+            at: 1,
+            record: {
+              seq: 1,
+              ts: "2026-08-26T18:00:00Z",
+              session_id: "s-mut",
+              message_id: "m-mut",
+              event: "turn_start",
+              payload: {},
+            },
+          },
+          {
+            kind: "record",
+            agent: "cursor4",
+            at: 2,
+            record: {
+              seq: 2,
+              ts: "2026-08-26T18:00:01Z",
+              session_id: "s-mut",
+              message_id: "m-mut",
+              event: "update",
+              payload: {
+                kind: "tool_call",
+                title: "Read src/main.rs",
+                tool: "Read src/main.rs",
+              },
+            },
+          },
+          {
+            kind: "record",
+            agent: "cursor4",
+            at: 3,
+            record: {
+              seq: 3,
+              ts: "2026-08-26T18:00:02Z",
+              session_id: "s-mut",
+              message_id: "m-mut",
+              event: "turn_end",
+              payload: {},
+            },
+          },
+        ];
+        const healthy = api.projectTimeline(events);
+        assert.equal(healthy.find((entry) => entry.kind === "work")?.acts?.length, 1);
+        // Mutant : ancien filtre C3 aspiratif (intent/peer, sans tool_call).
+        const ghostKinds = new Set([
+          "intent",
+          "command",
+          "file",
+          "tool",
+          "plan",
+          "peer",
+          "approval",
+        ]);
+        const broken = api.projectTimeline(events, { actKinds: ghostKinds });
+        const brokenActs = broken.find((entry) => entry.kind === "work")?.acts || [];
+        assert.equal(brokenActs.length, 0, "le mutant doit rendre une projection d'actes vide");
+        assert.throws(
+          () => {
+            if (brokenActs.length === 0) {
+              throw new Error("TEMOIN_vue_affiche_acte_present_au_journal");
+            }
+          },
+          (error) => String(error && error.message) === "TEMOIN_vue_affiche_acte_present_au_journal",
+        );
+      });
+
       test("corps_entrant_et_reponse_agent_deviennent_deux_bulles_exactes", () => {
         const events = [
           {
@@ -2215,7 +2366,18 @@
     );
   }
 
-  function projectTimeline(events) {
+  // Ensemble fermé des payload.kind d'ACTES journalisés (pas le catalogue C3 aspiratif).
+  // Voir commentaire dans projectTimeline pour l'instruction producteur par producteur.
+  const JOURNAL_ACT_KINDS = new Set([
+    "command",
+    "file",
+    "tool",
+    "tool_call",
+    "plan",
+    "approval",
+  ]);
+
+  function projectTimeline(events, options = {}) {
     const ordered = (Array.isArray(events) ? events : [])
       .map((event, index) => ({ ...event, __order: index }))
       .sort((left, right) => (left.at || 0) - (right.at || 0) || left.__order - right.__order);
@@ -2231,15 +2393,24 @@
     );
     const turns = new Map();
     const projected = [];
-    const actKinds = new Set([
-      "intent",
-      "command",
-      "file",
-      "tool",
-      "plan",
-      "peer",
-      "approval",
-    ]);
+    // Vocabulaire d'actes = kinds que les PILOTES ÉCRIVENT dans payload.kind.
+    // Mesure 2026-08-26 (journaux du jour, après correctifs des deux pilotes) :
+    //   text · tool_call · command · approval — rien d'autre.
+    // Producteurs source :
+    //   command / file / plan / approval ← CodexActKind (codex_app_server.rs)
+    //   tool ← ACP tool_call_journal_payload (C3, depuis 78d57dc)
+    //   tool_call ← forme LEGACY encore dominante chez Cursor tant que le
+    //     daemon vivant n'a pas repris le binaire post-78d57dc ; fixtures attach.
+    // Retirés — aucun producteur de payload.kind journal :
+    //   intent — le contrat C3 le mappait depuis agentMessage/delta, mais les
+    //     pilotes écrivent kind:text (traité à part ci-dessous).
+    //   peer — les échanges sont des entrées timeline `peer_exchange` (relais),
+    //     jamais un update.payload.kind.
+    // file / plan : producteur Codex réel, mais 0 occurrence dans les journaux
+    //   relec* mesurés (aucune méthode item/fileChange ni item/plan émise —
+    //   seulement commandExecution + approval). Conservés pour ne pas
+    //   recréer le trou le jour où Codex les émet.
+    const actKinds = options.actKinds instanceof Set ? options.actKinds : JOURNAL_ACT_KINDS;
 
     function turnFor(record, at) {
       const key = recordKey(record);
@@ -2292,10 +2463,19 @@
             turn.textAt ||= entry.at;
           }
         } else if (actKinds.has(payload.kind)) {
+          // tool_call legacy porte title/tool/summary, pas text/content.
+          const label = text(
+            payload.text,
+            text(
+              payload.content,
+              text(payload.title, text(payload.tool, payload.kind)),
+            ),
+          );
+          const displayKind = payload.kind === "tool_call" ? "tool" : payload.kind;
           turn.acts.push({
-            kind: payload.kind,
-            text: text(payload.text, text(payload.content, payload.kind)),
-            detail: text(payload.detail),
+            kind: displayKind,
+            text: label,
+            detail: text(payload.detail, text(payload.summary)),
             at: entry.at,
           });
         }
@@ -3477,6 +3657,7 @@
     decideWatchThreadRender,
     acceptTimelineEvents,
     projectTimeline,
+    JOURNAL_ACT_KINDS,
     peerLabel,
     formatDuration,
     renderMessageMarkdown,
