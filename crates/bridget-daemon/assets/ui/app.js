@@ -843,6 +843,149 @@
         assert.equal(api.rememberWatchResumeSeq(resume, "bridget", 701).get("bridget"), 701);
       });
 
+      // Faux DOM arborescent : append / textContent / tagName — sans moteur HTML.
+      function makeMarkdownTestDocument() {
+        const createNode = (tagName) => {
+          const node = {
+            tagName: String(tagName).toUpperCase(),
+            className: "",
+            childNodes: [],
+            attributes: Object.create(null),
+            _text: "",
+            get textContent() {
+              if (node.childNodes.length === 0) return node._text;
+              return node.childNodes.map((child) => child.textContent).join("");
+            },
+            set textContent(value) {
+              node._text = String(value == null ? "" : value);
+              node.childNodes = [];
+            },
+            append(...children) {
+              for (const child of children) node.childNodes.push(child);
+            },
+            getAttribute(name) {
+              return Object.prototype.hasOwnProperty.call(node.attributes, name)
+                ? node.attributes[name]
+                : null;
+            },
+            getAttributeNames() {
+              return Object.keys(node.attributes);
+            },
+            setAttribute(name, value) {
+              node.attributes[name] = String(value);
+            },
+          };
+          return node;
+        };
+        return {
+          createElement: (tag) => createNode(tag),
+          createTextNode: (value) => ({
+            tagName: undefined,
+            textContent: String(value == null ? "" : value),
+            childNodes: [],
+            getAttributeNames: () => [],
+          }),
+        };
+      }
+
+      function collectTags(node, tags = new Set()) {
+        if (node && node.tagName) tags.add(node.tagName);
+        for (const child of (node && node.childNodes) || []) collectTags(child, tags);
+        return tags;
+      }
+
+      test("message_markdown_securite_temoin_meurt_si_surface_interdite", () => {
+        const documentRef = makeMarkdownTestDocument();
+        const traps = [
+          `<img src=x onerror="globalThis.__bridget_xss=1">`,
+          `<script>globalThis.__bridget_xss=1</script>`,
+          `<a href="javascript:globalThis.__bridget_xss=1">x</a>`,
+          `![x](javascript:globalThis.__bridget_xss=1)`,
+          `<div onclick="globalThis.__bridget_xss=1">clic</div>`,
+          `\`\`\`\n</code></pre><img src=x onerror=alert(1)>\n\`\`\``,
+        ];
+        for (const trap of traps) {
+          globalThis.__bridget_xss = 0;
+          const root = api.renderMessageMarkdown(documentRef, trap);
+          assert.equal(
+            globalThis.__bridget_xss,
+            0,
+            `le mutant XSS a tourné pour: ${trap}`,
+          );
+          assert.equal(
+            api.messageDomHasForbiddenSurface(root),
+            false,
+            `surface interdite pour: ${trap}`,
+          );
+          const tags = [...collectTags(root)];
+          for (const tag of tags) {
+            assert.ok(
+              api.MESSAGE_MARKDOWN_TAGS.includes(tag),
+              `balise hors liste (${tag}) pour: ${trap}`,
+            );
+          }
+          assert.equal(tags.includes("SCRIPT"), false);
+          assert.equal(tags.includes("IMG"), false);
+          assert.equal(tags.includes("A"), false);
+          // Le piège reste du texte, jamais une balise active.
+          assert.match(root.textContent, /onerror|script|javascript|onclick/i);
+        }
+      });
+
+      test("message_markdown_rendu_tableaux_listes_gras_code", () => {
+        const documentRef = makeMarkdownTestDocument();
+        const source = [
+          "Intro **gras** et `code`.",
+          "",
+          "| Question | Reponse |",
+          "|---|---|",
+          "| A | B |",
+          "",
+          "1. premier",
+          "2. second",
+          "",
+          "- puce",
+          "",
+          "```",
+          "ligne code",
+          "```",
+        ].join("\n");
+        const root = api.renderMessageMarkdown(documentRef, source);
+        assert.equal(root.className, "message-body");
+        assert.equal(api.messageDomHasForbiddenSurface(root), false);
+        const tags = collectTags(root);
+        assert.ok(tags.has("TABLE"));
+        assert.ok(tags.has("TH"));
+        assert.ok(tags.has("TD"));
+        assert.ok(tags.has("OL"));
+        assert.ok(tags.has("UL"));
+        assert.ok(tags.has("LI"));
+        assert.ok(tags.has("STRONG"));
+        assert.ok(tags.has("CODE"));
+        assert.ok(tags.has("PRE"));
+        assert.match(root.textContent, /Question/);
+        assert.match(root.textContent, /Reponse/);
+        assert.match(root.textContent, /premier/);
+        assert.match(root.textContent, /puce/);
+        assert.match(root.textContent, /ligne code/);
+        assert.equal(root.textContent.includes("|---|"), false);
+        // Mutant : si on repasse en texte brut, le séparateur de tableau réapparaît.
+        const rawBubble = { textContent: source };
+        assert.ok(rawBubble.textContent.includes("|---|"));
+      });
+
+      test("message_markdown_pas_de_lien_ni_image_actifs", () => {
+        const documentRef = makeMarkdownTestDocument();
+        const root = api.renderMessageMarkdown(
+          documentRef,
+          `[clic](https://evil.example) et ![img](https://evil.example/x.png)`,
+        );
+        const tags = collectTags(root);
+        assert.equal(tags.has("A"), false);
+        assert.equal(tags.has("IMG"), false);
+        assert.equal(api.messageDomHasForbiddenSurface(root), false);
+        assert.match(root.textContent, /evil\.example/);
+      });
 
       function makeFakeEventSource() {
         const urls = [];
@@ -2205,6 +2348,193 @@
     return minutes ? `${hours} h ${minutes} min` : `${hours} h`;
   }
 
+  // Sous-ensemble Markdown sûr : DOM via createElement/textContent uniquement.
+  // Aucune dépendance. Pas d'innerHTML avec contenu message. Pas de liens/images actifs.
+  const MESSAGE_MARKDOWN_TAGS = Object.freeze([
+    "DIV", "P", "STRONG", "CODE", "PRE", "UL", "OL", "LI",
+    "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "BR", "SPAN",
+  ]);
+
+  function createDomText(documentRef, value) {
+    if (typeof documentRef.createTextNode === "function") {
+      return documentRef.createTextNode(String(value == null ? "" : value));
+    }
+    const span = documentRef.createElement("span");
+    span.textContent = String(value == null ? "" : value);
+    return span;
+  }
+
+  function appendInlineMarkdown(parent, text, documentRef) {
+    const source = String(text == null ? "" : text);
+    let index = 0;
+    while (index < source.length) {
+      if (source[index] === "`") {
+        const end = source.indexOf("`", index + 1);
+        if (end > index) {
+          const code = documentRef.createElement("code");
+          code.textContent = source.slice(index + 1, end);
+          parent.append(code);
+          index = end + 1;
+          continue;
+        }
+      }
+      if (source.startsWith("**", index)) {
+        const end = source.indexOf("**", index + 2);
+        if (end > index) {
+          const strong = documentRef.createElement("strong");
+          strong.textContent = source.slice(index + 2, end);
+          parent.append(strong);
+          index = end + 2;
+          continue;
+        }
+      }
+      let next = source.length;
+      const tick = source.indexOf("`", index);
+      const star = source.indexOf("**", index);
+      if (tick >= index) next = Math.min(next, tick);
+      if (star >= index) next = Math.min(next, star);
+      parent.append(createDomText(documentRef, source.slice(index, next)));
+      index = next;
+    }
+  }
+
+  function isTableSeparator(line) {
+    const cells = String(line).trim().split("|").map((part) => part.trim()).filter(Boolean);
+    return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+  }
+
+  function splitTableRow(line) {
+    const trimmed = String(line).trim().replace(/^\|/, "").replace(/\|$/, "");
+    return trimmed.split("|").map((cell) => cell.trim());
+  }
+
+  function appendMarkdownParagraph(parent, lines, documentRef) {
+    const paragraph = documentRef.createElement("p");
+    appendInlineMarkdown(paragraph, lines.join("\n"), documentRef);
+    parent.append(paragraph);
+  }
+
+  function renderMessageMarkdown(documentRef, source) {
+    const root = documentRef.createElement("div");
+    root.className = "message-body";
+    const text = String(source == null ? "" : source).replace(/\r\n/g, "\n");
+    if (!text) {
+      root.append(createDomText(documentRef, ""));
+      return root;
+    }
+    const lines = text.split("\n");
+    let index = 0;
+    while (index < lines.length) {
+      const line = lines[index];
+      if (/^\s*```/.test(line)) {
+        index += 1;
+        const chunk = [];
+        while (index < lines.length && !/^\s*```/.test(lines[index])) {
+          chunk.push(lines[index]);
+          index += 1;
+        }
+        if (index < lines.length) index += 1;
+        const pre = documentRef.createElement("pre");
+        const code = documentRef.createElement("code");
+        code.textContent = chunk.join("\n");
+        pre.append(code);
+        root.append(pre);
+        continue;
+      }
+      if (line.includes("|") && index + 1 < lines.length && isTableSeparator(lines[index + 1])) {
+        const headers = splitTableRow(line);
+        index += 2;
+        const table = documentRef.createElement("table");
+        const thead = documentRef.createElement("thead");
+        const headRow = documentRef.createElement("tr");
+        headers.forEach((header) => {
+          const th = documentRef.createElement("th");
+          appendInlineMarkdown(th, header, documentRef);
+          headRow.append(th);
+        });
+        thead.append(headRow);
+        table.append(thead);
+        const tbody = documentRef.createElement("tbody");
+        while (index < lines.length && lines[index].includes("|") && lines[index].trim() !== "") {
+          const row = documentRef.createElement("tr");
+          splitTableRow(lines[index]).forEach((cell) => {
+            const td = documentRef.createElement("td");
+            appendInlineMarkdown(td, cell, documentRef);
+            row.append(td);
+          });
+          tbody.append(row);
+          index += 1;
+        }
+        table.append(tbody);
+        root.append(table);
+        continue;
+      }
+      const unordered = /^\s*[-*]\s+/.test(line);
+      const ordered = /^\s*\d+\.\s+/.test(line);
+      if (unordered || ordered) {
+        const list = documentRef.createElement(ordered ? "ol" : "ul");
+        while (index < lines.length) {
+          const current = lines[index];
+          const match = ordered
+            ? current.match(/^\s*\d+\.\s+(.*)$/)
+            : current.match(/^\s*[-*]\s+(.*)$/);
+          if (!match) break;
+          const item = documentRef.createElement("li");
+          appendInlineMarkdown(item, match[1], documentRef);
+          list.append(item);
+          index += 1;
+        }
+        root.append(list);
+        continue;
+      }
+      if (line.trim() === "") {
+        index += 1;
+        continue;
+      }
+      const chunk = [];
+      while (index < lines.length && lines[index].trim() !== "") {
+        const current = lines[index];
+        if (/^\s*```/.test(current)) break;
+        if (current.includes("|") && index + 1 < lines.length && isTableSeparator(lines[index + 1])) break;
+        if (/^\s*[-*]\s+/.test(current) || /^\s*\d+\.\s+/.test(current)) break;
+        chunk.push(current);
+        index += 1;
+      }
+      appendMarkdownParagraph(root, chunk, documentRef);
+    }
+    return root;
+  }
+
+  function collectMessageDomTags(node, tags = new Set()) {
+    if (!node) return tags;
+    if (node.tagName) tags.add(String(node.tagName).toUpperCase());
+    const children = node.childNodes || node.children || [];
+    for (const child of children) collectMessageDomTags(child, tags);
+    return tags;
+  }
+
+  function messageDomHasForbiddenSurface(node) {
+    if (!node) return false;
+    const tag = node.tagName ? String(node.tagName).toUpperCase() : "";
+    if (tag && !MESSAGE_MARKDOWN_TAGS.includes(tag)) return true;
+    if (typeof node.getAttribute === "function") {
+      // Aucun attribut actif : href/src/on* interdits sur le rendu message.
+      const names = typeof node.getAttributeNames === "function"
+        ? node.getAttributeNames()
+        : Object.keys(node.attributes || {});
+      for (const name of names) {
+        const lower = String(name).toLowerCase();
+        if (lower === "class") continue;
+        return true;
+      }
+    }
+    const children = node.childNodes || node.children || [];
+    for (const child of children) {
+      if (messageDomHasForbiddenSurface(child)) return true;
+    }
+    return false;
+  }
+
   const UI_NODE_IDS = Object.freeze({
     agentList: "agent-list",
     stoppedAgentList: "stopped-agent-list",
@@ -2449,7 +2779,8 @@
 
     const renderMessage = (entry) => {
       const wrapper = make("article", `message message--${entry.role === "user" ? "user" : "agent"}`);
-      const bubble = make("div", "bubble", entry.text);
+      const bubble = make("div", "bubble");
+      bubble.append(renderMessageMarkdown(document, entry.text));
       const meta = make("span", "message-meta", timestamp(entry.at));
       if (entry.status) meta.textContent += ` · ${entry.status}`;
       bubble.append(meta);
@@ -3151,6 +3482,9 @@
     projectTimeline,
     peerLabel,
     formatDuration,
+    renderMessageMarkdown,
+    messageDomHasForbiddenSurface,
+    MESSAGE_MARKDOWN_TAGS,
     collectNodes,
     mount,
     buildSearchRequest,
