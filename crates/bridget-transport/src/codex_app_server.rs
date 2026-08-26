@@ -74,6 +74,9 @@ struct CodexTurnDetail {
     message_id: String,
     thread_id: String,
     turn_id: Option<String>,
+    /// Nombre d'updates texte déjà journalisés (deltas ou repli
+    /// `item/completed` agentMessage). Sert d'anti-doublon pour B.
+    text_updates: usize,
     reasoning_seen: bool,
     summary: String,
     raw_reasoning: String,
@@ -629,9 +632,21 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                     .unwrap_or_else(|poison| poison.into_inner())
                     .take();
             }
-            let is_finished = matches!(event, ManagedEventKind::TurnFinished { .. });
-            if is_finished {
-                let _ = record(&worker.journal, "turn_end", Some(&message.id), json!({}));
+            // (C) Succès / annulation attestés → turn_end avec issue exacte.
+            // L'échéance (DeliveryRejected « échéance Codex dépassée ») n'écrit
+            // PAS de turn_end : c'est une cause distincte du « inconnu » Claude
+            // (succès + payload vide). Ne pas fusionner les deux.
+            if let ManagedEventKind::TurnFinished { terminal, .. } = &event {
+                let stop_reason = match terminal {
+                    ManagedTerminal::Completed => "completed".to_string(),
+                    ManagedTerminal::Cancelled => "cancelled".to_string(),
+                    ManagedTerminal::Failed { detail } => detail.clone(),
+                };
+                let mut payload = json!({ "stop_reason": stop_reason });
+                if message.reply {
+                    payload["routed_to"] = json!(&message.from);
+                }
+                let _ = record(&worker.journal, "turn_end", Some(&message.id), payload);
             } else if let ManagedEventKind::DeliveryRejected { reason, .. } = &event {
                 let _ = record(
                     &worker.journal,
@@ -803,6 +818,69 @@ fn record_active_act(
         }
         let _ = record(journal, "update", Some(&message_id), Value::Object(payload));
     }
+}
+
+/// (A) Journalise un fragment texte assistant et incrémente `text_updates`.
+fn record_agent_text_delta(
+    journal: &Journal,
+    active_detail: &ActiveTurnDetail,
+    value: &Value,
+    content: &str,
+) {
+    let message_id = {
+        let mut active = active_detail
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let Some(detail) = active
+            .as_mut()
+            .filter(|active| source_matches_active_turn(active, value))
+        else {
+            return;
+        };
+        detail.text_updates = detail.text_updates.saturating_add(1);
+        detail.message_id.clone()
+    };
+    let _ = record(
+        journal,
+        "update",
+        Some(&message_id),
+        json!({ "kind": "text", "content": content }),
+    );
+}
+
+/// (B) Repli sans delta : `item/completed` agentMessage → un seul update
+/// si aucun delta n'a déjà été journalisé (anti-doublon).
+fn maybe_record_final_agent_message(
+    journal: &Journal,
+    active_detail: &ActiveTurnDetail,
+    value: &Value,
+    content: &str,
+) {
+    if content.is_empty() {
+        return;
+    }
+    let message_id = {
+        let mut active = active_detail
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let Some(detail) = active
+            .as_mut()
+            .filter(|active| source_matches_active_turn(active, value))
+        else {
+            return;
+        };
+        if detail.text_updates > 0 {
+            return;
+        }
+        detail.text_updates = 1;
+        detail.message_id.clone()
+    };
+    let _ = record(
+        journal,
+        "update",
+        Some(&message_id),
+        json!({ "kind": "text", "content": content }),
+    );
 }
 
 fn append_indexed(
@@ -1120,6 +1198,8 @@ fn spawn_reader(
                 // `item/agentMessage/delta`. La forme sans préfixe reste
                 // tolérée pour les traces antérieures à v2, sans modifier
                 // les octets sources que la frontière commune conserve.
+                // (A) Retranscription : chaque delta → journal `update` avec
+                // le CONTENU exact. `forward_managed_events` ignore Update.
                 Some("item/agentMessage/delta" | "agentMessage/delta") => {
                     if let (Some(turn_id), Some(delta)) = (
                         value.pointer("/params/turnId").and_then(Value::as_str),
@@ -1133,12 +1213,56 @@ fn spawn_reader(
                             .entry(turn_id.to_string())
                             .or_default()
                             .push_str(delta);
+                        record_agent_text_delta(&journal, &active_detail, &value, delta);
                     }
                     push_source(
                         &observations,
                         raw,
                         ManagedEventKind::Update {
                             detail: "agentMessage/delta Codex".to_string(),
+                        },
+                    );
+                }
+                // (B) Repli : message agent complet sans aucun delta (stdout
+                // sans flux partiel). `item/completed` type agentMessage.
+                Some("item/completed") => {
+                    let item = value.pointer("/params/item");
+                    let is_agent = item
+                        .and_then(|item| item.get("type"))
+                        .and_then(Value::as_str)
+                        == Some("agentMessage");
+                    if is_agent
+                        && let Some(text) = item
+                            .and_then(|item| item.get("text"))
+                            .and_then(Value::as_str)
+                    {
+                        if let Some(turn_id) =
+                            value.pointer("/params/turnId").and_then(Value::as_str)
+                        {
+                            let mut observed = observations
+                                .0
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner());
+                            let entry = observed
+                                .response_by_turn
+                                .entry(turn_id.to_string())
+                                .or_default();
+                            if entry.is_empty() {
+                                entry.push_str(text);
+                            }
+                        }
+                        maybe_record_final_agent_message(
+                            &journal,
+                            &active_detail,
+                            &value,
+                            text,
+                        );
+                    }
+                    push_source(
+                        &observations,
+                        raw,
+                        ManagedEventKind::Update {
+                            detail: "item/completed Codex".to_string(),
                         },
                     );
                 }
@@ -1347,16 +1471,16 @@ fn push_source(
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
     use std::time::Instant;
+
+    static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
 
     fn root(label: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(
             "bridget-codex-native-{label}-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("horloge système")
-                .as_nanos()
+            FIXTURE_SEQ.fetch_add(1, AtomicOrdering::Relaxed)
         ));
         fs::create_dir_all(&root).expect("racine temporaire");
         root
@@ -1394,7 +1518,19 @@ mod tests {
                                         printf '%s\n' '{"id":"approval-9","method":"item/permissions/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"approval-3","startedAtMs":1787686800000,"cwd":"/tmp","permissions":{},"reason":"accès réseau"}}'
                                         printf '%s\n' '{"method":"item/futureWidget/delta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"future-1","delta":"ne pas inventer"}}'
                                     fi
-                                    printf '%s\n' '{  "method" : "item/agentMessage/delta" , "params" : { "threadId" : "thread-native" , "turnId" : "turn-native" , "itemId":"i", "delta" : "réponse native" } }'
+                                    case "${BRIDGET_CODEX_TEXT_MODE:-default}" in
+                                        deltas)
+                                            printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","delta":"BONJOUR "}}'
+                                            printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","delta":"JE SUIS VIVANT"}}'
+                                            printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-native","turnId":"turn-native","completedAtMs":1,"item":{"id":"i","type":"agentMessage","text":"BONJOUR JE SUIS VIVANT"}}}'
+                                            ;;
+                                        final_only)
+                                            printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-native","turnId":"turn-native","completedAtMs":1,"item":{"id":"i","type":"agentMessage","text":"REPONSE FINALE"}}}'
+                                            ;;
+                                        *)
+                                            printf '%s\n' '{  "method" : "item/agentMessage/delta" , "params" : { "threadId" : "thread-native" , "turnId" : "turn-native" , "itemId":"i", "delta" : "réponse native" } }'
+                                            ;;
+                                    esac
                                     printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"completed","items":[]}}}'
                                 fi
                             fi ;;
@@ -1411,6 +1547,7 @@ mod tests {
     fn message(id: &str) -> BridgetMessage {
         let mut message = BridgetMessage::new("bridget", "codex-native", format!("mission {id}"));
         message.id = id.to_string();
+        message.reply = true;
         message
     }
 
@@ -1473,6 +1610,144 @@ mod tests {
         (events, frames)
     }
 
+    fn journal_text_fixture(label: &str, text_mode: &str) -> Vec<Value> {
+        let root = root(label);
+        let trace = root.join("trace.jsonl");
+        let environment = vec![
+            (
+                "BRIDGET_CODEX_TRACE".to_string(),
+                trace.to_string_lossy().into_owned(),
+            ),
+            (
+                "BRIDGET_CODEX_TEXT_MODE".to_string(),
+                text_mode.to_string(),
+            ),
+        ];
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            fake_options(&trace),
+            &environment,
+            false,
+        )
+        .expect("session native texte");
+        transport
+            .activate_journal(&root, "codex-native", None)
+            .expect("journal texte activé");
+        let mut msg = message(label);
+        msg.id = "codex-abc-1".to_string();
+        transport.deliver(&msg).expect("livraison texte");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut finished = false;
+        while Instant::now() < deadline {
+            finished |= transport.drain_events().iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::TurnFinished {
+                        terminal: ManagedTerminal::Completed,
+                        ..
+                    }
+                )
+            });
+            if finished {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(finished, "le tour texte Codex n'a pas terminé");
+        transport.stop();
+
+        let journal_path = fs::read_dir(root.join("codex-native"))
+            .expect("répertoire du journal")
+            .next()
+            .expect("fichier du journal")
+            .expect("entrée du journal")
+            .path();
+        let events = crate::journal::valid_events(&journal_path);
+        fs::remove_dir_all(root).expect("nettoyage de la fixture texte");
+        events
+    }
+
+    /// (A) Deltas → update avec TEXTE EXACT. Mutant content:"" doit tuer A seul.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_A_codex_app_server_retranscrit_les_deltas_en_update() {
+        let events = journal_text_fixture("temoin-a", "deltas");
+        let updates: Vec<_> = events
+            .iter()
+            .filter(|event| {
+                event["event"] == "update" && event["payload"]["kind"] == "text"
+            })
+            .collect();
+        let contents: Vec<&str> = updates
+            .iter()
+            .filter_map(|event| event["payload"]["content"].as_str())
+            .collect();
+        assert_eq!(
+            contents,
+            vec!["BONJOUR ", "JE SUIS VIVANT"],
+            "deux deltas exacts sans doublon item/completed: {contents:?} via {events:?}"
+        );
+        assert!(
+            updates
+                .iter()
+                .all(|event| event["message_id"] == "codex-abc-1"),
+            "même message_id, reçu {updates:?}"
+        );
+    }
+
+    /// (B) Tour sans delta : item/completed agentMessage → texte final exact.
+    /// Mutant : retirer maybe_record_final_agent_message → left=[].
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_B_codex_app_server_reponse_finale_sans_delta_dans_le_fil() {
+        let events = journal_text_fixture("temoin-b", "final_only");
+        let updates: Vec<_> = events
+            .iter()
+            .filter(|event| {
+                event["event"] == "update" && event["payload"]["kind"] == "text"
+            })
+            .collect();
+        let contents: Vec<&str> = updates
+            .iter()
+            .filter_map(|event| event["payload"]["content"].as_str())
+            .collect();
+        assert_eq!(
+            contents,
+            vec!["REPONSE FINALE"],
+            "repli item/completed → update exact, reçu {contents:?} via {events:?}"
+        );
+        assert!(
+            updates
+                .iter()
+                .all(|event| event["message_id"] == "codex-abc-1"),
+            "même message_id, reçu {updates:?}"
+        );
+    }
+
+    /// (C) turn_end d'un SUCCÈS porte stop_reason=completed (+ routed_to si reply).
+    /// Distinct de l'échéance DeliveryRejected sans turn_end. Mutant turn_end {} → C meurt.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_C_codex_app_server_turn_end_porte_stop_reason_completed() {
+        let events = journal_text_fixture("temoin-c", "final_only");
+        let turn_end = events
+            .iter()
+            .find(|event| event["event"] == "turn_end")
+            .expect("turn_end attendu sur succès");
+        assert_eq!(
+            turn_end["payload"]["stop_reason"].as_str(),
+            Some("completed"),
+            "stop_reason manquant → attach « inconnu », payload={}",
+            turn_end["payload"]
+        );
+        assert_eq!(
+            turn_end["payload"]["routed_to"].as_str(),
+            Some("bridget"),
+            "reply=true doit porter routed_to, payload={}",
+            turn_end["payload"]
+        );
+    }
+
     #[test]
     fn journal_codex_atteste_presence_puis_absence_et_ne_valide_pas_approbation() {
         let (present, outbound) = journal_detail_fixture("detail-present", true);
@@ -1532,7 +1807,9 @@ mod tests {
         assert_eq!(
             present
                 .iter()
-                .filter(|event| event["event"] == "update")
+                .filter(|event| {
+                    event["event"] == "update" && event["payload"]["kind"] != "text"
+                })
                 .count(),
             6,
             "une notification inconnue doit rester un événement système inerte"
