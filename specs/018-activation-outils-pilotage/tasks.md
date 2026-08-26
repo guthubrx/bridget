@@ -32,7 +32,8 @@
 - [x] T011 Rendre le rejeu des unités exactement idempotent et supprimer tout
   avalement d'échec par `|| true`.
 - [x] T012 Rejouer les gates, tuer les mutants ciblés, documenter le non-visité
-  puis livrer une tête rebasée sur `7024df31`.
+  puis livrer une tête rebasée sur la tête de `main` fetchée juste avant le
+  rendu (`2b89f479` pour cette livraison).
 
 ## Phase 7 — Contre-relecture du chemin canonique
 

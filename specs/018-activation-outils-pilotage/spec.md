@@ -194,8 +194,9 @@ ronde prête.
 
 La contre-épreuve a établi trois invariants manquants, pas un besoin de
 refactor : identité de la release dans le système de fichiers, remplacement de
-l'entrée active exacte et égalité réelle des unités lors d'un rejeu. La base de
-reprise est `7024df31de5b23bfeca27eb5588a5465a872a8b8`.
+l'entrée active exacte et égalité réelle des unités lors d'un rejeu. La tête de
+`main` fetchée juste avant le rendu est
+`2b89f4794961a494200a3714e8bf0d86caeebbef`.
 
 Ne sont pas mesurés par cette reprise : macOS et launchd réels, activation
 systemd sans `--skip-activate`, course entre deux installateurs et falsification

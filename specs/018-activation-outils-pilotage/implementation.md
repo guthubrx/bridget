@@ -12,7 +12,7 @@
 ### Tâche T001 : Spécification, contrat et décision
 
 - **Statut** : ✅ Complété
-- **Commit rebasé** : `7070636aa4821e532d54a117ccd5c36e317a100b`
+- **Commit rebasé** : `0e49156582fec45672c1369c800160413c728938`
 - **Fichiers créés** : spec, checklist, recherche, contrat, plan, quickstart,
   tâches, journal et ADR de la session 018
 - **Tests exécutés** :
@@ -25,7 +25,7 @@
 ### Tâches T002 à T006 : Oracles, politique commune et deux installateurs
 
 - **Statut** : ✅ Complété
-- **Commit rebasé** : `495e142e2dd60c05fab51e14a2733881722bb6c2`
+- **Commit rebasé** : `a284735983b08f85030a76fca151c26515ea473b`
 - **Contrôle positif TDD** : avant l'implémentation, le nouveau harnais a
   échoué sur le worktree lié avec `baseline_rc=1` ; l'ancien installateur avait
   posé le lien interdit.
@@ -118,9 +118,10 @@
 
 ## Reprise après verdict STOP — 2026-08-26
 
-- **Base rebasée** : `7024df31de5b23bfeca27eb5588a5465a872a8b8`.
-- **Commit de formalisation** : `496542d14fc974dbbbb96df564318e6ac62c1b61`.
-- **Commit productif** : `ea6f49c7925788bd2fddb2076d3b049c56cd5096`.
+- **Base rebasée au moment du rendu** :
+  `2b89f4794961a494200a3714e8bf0d86caeebbef`.
+- **Commit de formalisation** : `20f833608271ac2936d8a2e1d68aa4d540408f7b`.
+- **Commit productif** : `7abab8b9fca82448706ab1cbf351b13b4615fa60`.
 - **Statut** : complété, prêt en contre-relecture.
 
 ### Reproduction avant correction
@@ -195,8 +196,9 @@ l'exécution des deux commandes après suppression du dépôt source.
 
 ### Contre-relecture B1 — chemin canonique
 
-- **Contre-exemple externe** : tête `8716f98`, base `7024df31`, composition sur
-  `b0a8cea0`. Release et preuve, toujours régulières, aux bons modes et aux bons
+- **Contre-exemple externe, mesure historique de jc3** : tête `8716f98`, base
+  `7024df31`, composition sur `b0a8cea0`. Release et preuve, toujours
+  régulières, aux bons modes et aux bons
   octets, sont déplacées sous `.git/borrowed-release` ; seul le répertoire SHA
   devient un lien. Le rejeu annonçait `déjà en place`, puis le déplacement du
   dépôt cassait la commande avec `rc=127`.
@@ -205,10 +207,12 @@ l'exécution des deux commandes après suppression du dépôt source.
 - **Correction** : le chemin canonique complet du répertoire de release est
   comparé au chemin canonique du dépôt avant toute écriture. Cela couvre le
   lien sur le répertoire SHA comme sur l'un de ses parents.
-- **Commit productif** : `de5db6b51b36c043a57b886969e869c6a101c279`.
+- **Commit productif rebasé** :
+  `b1ac792731e13dc73b628b0191befc970c79d131`.
 - **Mutant sans garde canonique** : `independance_reelle` meurt à nouveau avec
   `rc=127` après déplacement du dépôt.
-- **Nominal restauré** : les trois univers shell passent, zéro échec, zéro
-  ignoré ; six syntaxes Bash passent ; `git diff --check` est vert.
+- **Nominal restauré après rebase sur `2b89f479`** : chacun des trois univers
+  shell rend un passé, zéro échec et zéro ignoré ; les six syntaxes Bash
+  passent ; `git diff --check` est vert.
 - **Cargo** : non rejoué selon le même mandat ; le delta reste limité aux
   scripts et à la documentation, sans référence depuis `crates/` ou `plugins/`.
