@@ -518,6 +518,92 @@
         assert.equal(api.localDayKey(afterMidnight, "Europe/Paris"), "2026-08-26");
       });
 
+      test("lacune_deja_attestee_n_est_pas_reannoncee", () => {
+        const attested = new Set();
+        const first = api.acceptTimelineEvents(
+          api.journalEnvelopeToEvents({
+            event: { type: "Gap", from_seq: 2, to_seq: 238 },
+          }, "bridget", new Map()),
+          "bridget",
+          attested,
+        );
+        const second = api.acceptTimelineEvents(
+          api.journalEnvelopeToEvents({
+            event: { type: "Gap", from_seq: 2, to_seq: 238 },
+          }, "bridget", new Map()),
+          "bridget",
+          attested,
+        );
+        assert.equal(first.length, 1);
+        assert.match(first[0].text, /Lacune attestée : séquences 2 à 238/);
+        assert.deepEqual(second, []);
+        assert.deepEqual(
+          api.journalEnvelopeToEvents({ event: { type: "Subscribed" } }, "bridget", new Map()),
+          [],
+        );
+        assert.deepEqual(
+          api.journalEnvelopeToEvents({ event: { type: "SnapshotCaughtUp", through_seq: 621 } }, "bridget", new Map()),
+          [],
+        );
+      });
+
+      test("message_arrivant_en_direct_apparait_dans_le_fil", () => {
+        const attested = new Set();
+        const resume = new Map();
+        const firstGap = api.acceptTimelineEvents(
+          api.journalEnvelopeToEvents({
+            event: { type: "Gap", from_seq: 2, to_seq: 238 },
+          }, "bridget", new Map()),
+          "bridget",
+          attested,
+        );
+        assert.equal(firstGap.length, 1);
+        api.advanceWatchResumeFromEnvelope(resume, "bridget", {
+          event: { type: "Gap", from_seq: 2, to_seq: 238 },
+        });
+        api.advanceWatchResumeFromEnvelope(resume, "bridget", {
+          event: { type: "SnapshotCaughtUp", through_seq: 621 },
+        });
+        assert.equal(resume.get("bridget"), 622);
+
+        // Contrôle positif : un message live est d'abord VU arriver.
+        const liveRecord = {
+          kind: "record",
+          agent: "bridget",
+          at: Date.parse("2026-08-26T06:17:00Z") / 1000,
+          record: {
+            ts: "2026-08-26T06:17:00Z",
+            event: "turn_start",
+            message_id: "live-08h17",
+            session_id: "sess-live",
+            seq: 700,
+            payload: { body: "DEMONSTRATION — ce message doit apparaitre dans le fil." },
+          },
+        };
+        const accepted = api.acceptTimelineEvents([liveRecord], "bridget", attested);
+        assert.equal(accepted.length, 1);
+        assert.equal(accepted[0].record.payload.body, "DEMONSTRATION — ce message doit apparaitre dans le fil.");
+
+        const projected = api.projectTimeline(accepted);
+        const bodies = projected.filter((entry) => entry.kind === "message").map((entry) => entry.text);
+        assert.ok(
+          bodies.includes("DEMONSTRATION — ce message doit apparaitre dans le fil."),
+          "le fil doit contenir le corps live",
+        );
+        // Une reconnexion ne doit pas réécrire la lacune déjà attestée.
+        assert.deepEqual(
+          api.acceptTimelineEvents(
+            api.journalEnvelopeToEvents({
+              event: { type: "Gap", from_seq: 2, to_seq: 238 },
+            }, "bridget", new Map()),
+            "bridget",
+            attested,
+          ),
+          [],
+        );
+        assert.equal(api.rememberWatchResumeSeq(resume, "bridget", 701).get("bridget"), 701);
+      });
+
       test("fragment_jsonl_incomplet_attend_sa_borne_finale", () => {
         const record = { v: 1, seq: 9, ts: "2026-08-25T20:00:00Z", session_id: "s", event: "update", message_id: "m", payload: { kind: "text", content: "é" } };
         const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
@@ -955,6 +1041,43 @@
     return decoded.split("\n").filter(Boolean).map((line) => JSON.parse(line));
   }
 
+  function gapAnnouncementKey(agent, fromSeq, toSeq) {
+    return `${text(agent, "?")}:${String(fromSeq)}:${String(toSeq)}`;
+  }
+
+  function rememberWatchResumeSeq(resumeSeq, agent, candidate) {
+    if (!Number.isFinite(candidate) || candidate < 0) return resumeSeq;
+    const next = Math.trunc(candidate);
+    const previous = resumeSeq.get(agent);
+    if (!Number.isFinite(previous) || next > previous) resumeSeq.set(agent, next);
+    return resumeSeq;
+  }
+
+  function advanceWatchResumeFromEnvelope(resumeSeq, agent, envelope) {
+    const event = envelope && envelope.event ? envelope.event : envelope || {};
+    if (event.type === "Gap" && Number.isFinite(event.to_seq)) {
+      rememberWatchResumeSeq(resumeSeq, agent, Number(event.to_seq) + 1);
+    }
+    if (event.type === "SnapshotCaughtUp" && Number.isFinite(event.through_seq)) {
+      rememberWatchResumeSeq(resumeSeq, agent, Number(event.through_seq) + 1);
+    }
+    return resumeSeq;
+  }
+
+  function acceptTimelineEvents(events, agent, attestedGaps) {
+    return (Array.isArray(events) ? events : []).filter((event) => {
+      if (!event || event.kind !== "system" || !event.gap) return true;
+      const key = gapAnnouncementKey(
+        agent,
+        event.gap.from_seq,
+        event.gap.to_seq,
+      );
+      if (attestedGaps.has(key)) return false;
+      attestedGaps.add(key);
+      return true;
+    });
+  }
+
   function journalEnvelopeToEvents(payload, agent, buffers) {
     const event = payload && payload.event ? payload.event : payload || {};
     const at = Date.now() / 1000;
@@ -975,17 +1098,20 @@
         kind: "system",
         agent,
         at,
+        gap: {
+          from_seq: event.from_seq,
+          to_seq: event.to_seq,
+        },
         text: `Lacune attestée : séquences ${event.from_seq ?? "?"} à ${event.to_seq ?? "?"}.`,
       }];
     }
     if (event.type === "JournalReadError") {
       return [{ kind: "system", agent, at, text: "Journal momentanément illisible." }];
     }
-    if (event.type === "SnapshotCaughtUp") {
-      return [{ kind: "system", agent, at, text: "Historique rattrapé." }];
-    }
-    if (event.type === "Subscribed") {
-      return [{ kind: "system", agent, at, text: "Fil en direct." }];
+    // Subscribed / SnapshotCaughtUp pilotent le rattrapage et le relais ;
+    // ils ne doivent jamais écrire dans le fil de conversation (L8).
+    if (event.type === "SnapshotCaughtUp" || event.type === "Subscribed") {
+      return [];
     }
     if (event.type === "End") {
       return [{ kind: "system", agent, at, text: "Flux du journal terminé." }];
@@ -1222,6 +1348,8 @@
     const expandedPeers = new Set();
     const seenPeers = new Set();
     const seenRecords = new Set();
+    const attestedGaps = new Set();
+    const watchResumeSeq = new Map();
     const drafts = new Map();
     const readThrough = new Map();
     const dateFormatter = new Intl.DateTimeFormat("fr-FR", {
@@ -1234,6 +1362,7 @@
     let sourceGeneration = 0;
     let replayingJournal = true;
     let restoredTimer = null;
+    let reconnectTimer = null;
 
     const make = (tag, className, value) => {
       const node = documentRef.createElement(tag);
@@ -1664,6 +1793,10 @@
 
     const closeWatch = () => {
       sourceGeneration += 1;
+      if (reconnectTimer) {
+        windowRef.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       if (source) source.close();
       source = null;
     };
@@ -1697,8 +1830,11 @@
       const generation = sourceGeneration;
       replayingJournal = true;
       updateRelay("reconnecting");
+      const fromSeq = Number.isFinite(watchResumeSeq.get(agent))
+        ? watchResumeSeq.get(agent)
+        : 0;
       source = new windowRef.EventSource(
-        agentResourceUrl("/v1/watch", token, agent, 0),
+        agentResourceUrl("/v1/watch", token, agent, fromSeq),
       );
       requestScopedSnapshot(agent, generation);
       source.onopen = () => {
@@ -1723,15 +1859,23 @@
         try {
           const envelope = JSON.parse(message.data);
           const caughtUp = envelope.event && envelope.event.type === "SnapshotCaughtUp";
-          const accepted = journalEnvelopeToEvents(envelope, agent, fragmentBuffers)
-            .filter((event) => {
-              if (event.kind !== "record") return true;
-              rememberEventBody(event);
-              const key = `${agent}:${text(event.record.session_id)}:${String(event.record.seq)}`;
-              if (seenRecords.has(key)) return false;
-              seenRecords.add(key);
-              return true;
-            });
+          advanceWatchResumeFromEnvelope(watchResumeSeq, agent, envelope);
+          const accepted = acceptTimelineEvents(
+            journalEnvelopeToEvents(envelope, agent, fragmentBuffers),
+            agent,
+            attestedGaps,
+          ).filter((event) => {
+            if (event.kind !== "record") return true;
+            rememberEventBody(event);
+            const seq = Number(event.record && event.record.seq);
+            if (Number.isFinite(seq)) {
+              rememberWatchResumeSeq(watchResumeSeq, agent, seq + 1);
+            }
+            const key = `${agent}:${text(event.record.session_id)}:${String(event.record.seq)}`;
+            if (seenRecords.has(key)) return false;
+            seenRecords.add(key);
+            return true;
+          });
           state = appendTimelineBatch(state, accepted);
           if (replayingJournal && !caughtUp) return;
           replayingJournal = false;
@@ -1774,7 +1918,18 @@
       source.onerror = () => {
         if (generation !== sourceGeneration) return;
         updateRelay("reconnecting");
-        // EventSource garde la responsabilité de sa reconnexion automatique.
+        // Couper l'auto-reconnexion native (URL figée à from_seq initial) et
+        // reprendre nous-mêmes depuis le curseur avancé — sinon Gap 2→238
+        // se réécrit à chaque cycle.
+        if (source) {
+          source.close();
+          source = null;
+        }
+        if (reconnectTimer) windowRef.clearTimeout(reconnectTimer);
+        reconnectTimer = windowRef.setTimeout(() => {
+          if (generation !== sourceGeneration) return;
+          if (state.selectedAgent === agent) connectWatch(agent);
+        }, 800);
       };
     };
 
@@ -1957,6 +2112,10 @@
     rememberJournalMessage,
     peerExchangeTexts,
     journalEnvelopeToEvents,
+    gapAnnouncementKey,
+    rememberWatchResumeSeq,
+    advanceWatchResumeFromEnvelope,
+    acceptTimelineEvents,
     projectTimeline,
     peerLabel,
     formatDuration,
