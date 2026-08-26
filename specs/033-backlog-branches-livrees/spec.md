@@ -1,6 +1,6 @@
 # Spécification 033 — Backlog des branches livrées non fusionnées
 
-**Statut** : Validée — implémentation en cours
+**Statut** : Prête en relecture
 
 **Base gelée du lot** : `52b831b791b44382bfe0b90715fd7caf37acdcea`
 
@@ -108,7 +108,7 @@ présentée comme complète.
 ## Critères de succès
 
 - **SC-3301** : dans un dépôt jetable, une branche distante non fusionnée est
-  vue avec son contenu exact avant tout oracle d'absence.
+  vue avec sa référence, sa tête et son âge exacts avant tout oracle d'absence.
 - **SC-3302** : dans le même dépôt, une branche distante fusionnée et encore
   présente est absente du backlog.
 - **SC-3303** : deux modifications incompatibles sont libellées `en conflit` ;
