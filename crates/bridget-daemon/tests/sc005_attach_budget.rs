@@ -77,34 +77,34 @@ fn write_message(writer: &mut BufWriter<UnixStream>, message: &WrapperToDaemon) 
     writer.flush().expect("flush socket");
 }
 
-fn read_message(reader: &mut BufReader<UnixStream>) -> DaemonToWrapper {
+fn read_message(reader: &mut impl BufRead) -> DaemonToWrapper {
     let mut line = String::new();
     reader.read_line(&mut line).expect("lecture socket");
     assert!(!line.is_empty(), "EOF daemon inattendu");
     decode(line.trim()).expect("frame daemon valide")
 }
 
-fn query_agent_list(socket: &Path) -> Vec<AgentInfo> {
-    let stream = UnixStream::connect(socket).expect("connexion ListAgents");
-    let reader_stream = stream.try_clone().expect("clone ListAgents");
+fn query_agent_list(socket: &Path) -> Option<Vec<AgentInfo>> {
+    let stream = UnixStream::connect(socket).ok()?;
+    let reader_stream = stream.try_clone().ok()?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(reader_stream);
     write_message(&mut writer, &WrapperToDaemon::ListAgents);
     match read_message(&mut reader) {
-        DaemonToWrapper::AgentList { agents } => agents,
+        DaemonToWrapper::AgentList { agents } => Some(agents),
         other => panic!("ListAgents inattendu: {other:?}"),
     }
 }
 
 fn agent_state(socket: &Path, name: &str) -> Option<String> {
-    query_agent_list(socket)
+    query_agent_list(socket)?
         .into_iter()
         .find(|agent| agent.name == name)
         .map(|agent| agent.state)
 }
 
 fn agent_ready_for_send(socket: &Path, name: &str) -> bool {
-    query_agent_list(socket).into_iter().any(|agent| {
+    query_agent_list(socket).into_iter().flatten().any(|agent| {
         agent.name == name && agent.state == "connected" && !agent.connection_id.is_empty()
     })
 }
@@ -117,13 +117,15 @@ fn wait_for_agent_ready_for_send(socket: &Path, name: &str, deadline: Instant) {
     );
 }
 
-fn expect_send_ack(reader: &mut BufReader<UnixStream>, socket: &Path, agent: &str, turn: &str) {
+fn expect_send_ack(reader: &mut impl BufRead, socket: &Path, agent: &str, turn: &str) {
     match read_message(reader) {
         DaemonToWrapper::Ack { .. } => {}
-        other => panic!(
-            "Send {turn} (agent={:?}): accusé Ack attendu, reçu {other:?}",
-            agent_state(socket, agent)
-        ),
+        other => {
+            // Trame d'abord : si ListAgents échoue, le non-Ack reste lisible.
+            let frame = format!("{other:?}");
+            let state = agent_state(socket, agent);
+            panic!("Send {turn} (agent={state:?}): accusé Ack attendu, reçu {frame}");
+        }
     }
 }
 
@@ -790,4 +792,32 @@ fn sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon() {
         "rotation vers le fichier courant absente"
     );
     harness.finish(deadline);
+}
+
+/// Contrôle d'instrument : un non-Ack doit apparaître dans le message de panique,
+/// pas seulement « matches! a échoué ».
+#[test]
+fn sc005_diagnostic_non_ack_affiche_la_trame() {
+    let frame = encode(&DaemonToWrapper::Nack {
+        id: "probe-id".to_string(),
+        reason: "cible introuvable".to_string(),
+    })
+    .expect("Nack sérialisable");
+    let mut reader = BufReader::new(std::io::Cursor::new(format!("{frame}\n")));
+    let socket = PathBuf::from("/tmp/bridget-sc005-diagnostic-absent.sock");
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        expect_send_ack(&mut reader, &socket, "codex-bench", "diagnostic");
+    }));
+    let message = caught.expect_err("le non-Ack doit paniquer");
+    let text = message
+        .downcast_ref::<String>()
+        .map(|s| s.as_str())
+        .or_else(|| message.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(
+        text.contains("accusé Ack attendu")
+            && text.contains("Nack")
+            && text.contains("cible introuvable"),
+        "diagnostic muet ou incomplet: {text:?}"
+    );
 }
