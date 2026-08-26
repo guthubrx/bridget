@@ -95,13 +95,27 @@ fn managed_resume_context(
                     ),
                     format!("Instruction : {}", mission.instruction),
                 ]),
-                ResumeStance::Waiting(mission) => {
-                    let header = if mission.objective_state == "clos" {
-                        "Mission Maicie close au greffe"
-                    } else if mission.delegation_state == "en_attente_prerequis" {
-                        "Mission Maicie en attente de prérequis"
-                    } else {
-                        "Mission Maicie non actionnable (attente greffe)"
+                ResumeStance::Waiting { mission, reason } => {
+                    // Exhaustif sur ResumeWaitReason — pas de catch-all header.
+                    let header = match reason {
+                        ResumeWaitReason::MandatExpliciteApresClos => {
+                            "Mission Maicie close au greffe"
+                        }
+                        ResumeWaitReason::ClotureDesPrerequis => {
+                            "Mission Maicie en attente de prérequis"
+                        }
+                        ResumeWaitReason::AucunLevierApresAnnulation => {
+                            "Mission Maicie annulée au greffe"
+                        }
+                        ResumeWaitReason::MandatExpliciteApresTerminaison => {
+                            "Mission Maicie terminée au greffe"
+                        }
+                        ResumeWaitReason::MandatExpliciteApresSolde => {
+                            "Mission Maicie soldée par clôture au greffe"
+                        }
+                        ResumeWaitReason::SuiteDuGreffe => {
+                            "Mission Maicie non actionnable (attente greffe)"
+                        }
                     };
                     lines.extend([
                         format!(
@@ -172,12 +186,36 @@ struct ResumeMission {
     instruction: String,
 }
 
+/// Motif d'attente — **exhaustif**. Aucun bras `_` dans la consigne ni
+/// l'en-tête : ajouter une variante oblige à écrire son message **et** à
+/// nommer le mécanisme qui peut lever l'attente (commentaire / nom).
+/// Ferme la fabrique du catch-all `Waiting(_)` (lot attente-sans-attendant).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResumeWaitReason {
+    /// Levier : nouveau mandat explicite (objectif déjà clos).
+    MandatExpliciteApresClos,
+    /// Levier : clôture des objectifs `depends-on` (voie F37).
+    ClotureDesPrerequis,
+    /// Aucun levier sur cette délégation (annulée) — seul un mandat neuf hors d'elle.
+    /// Distinct de `MandatExpliciteApresTerminaison` : échec ≠ accomplissement.
+    AucunLevierApresAnnulation,
+    /// Levier : mandat explicite après verdict d'accomplissement.
+    MandatExpliciteApresTerminaison,
+    /// Levier : mandat explicite après solde par clôture d'objectif.
+    MandatExpliciteApresSolde,
+    /// Levier : suite du greffe (évaluation / synthèse / délégation à évaluer).
+    SuiteDuGreffe,
+}
+
 /// Posture prescrite par le greffe au moment de la reprise.
 enum ResumeStance {
     /// Objectif ouvert/en coordination et délégation `Creee` (exécutable).
     Actionable(ResumeMission),
-    /// Close, livrée, gelée, à évaluer, ou en attente de prérequis — ATTENDS.
-    Waiting(ResumeMission),
+    /// ATTENDS — le `reason` porte le libellé ; pas de catch-all muet.
+    Waiting {
+        mission: ResumeMission,
+        reason: ResumeWaitReason,
+    },
     /// Le greffe a répondu : aucune mission pour cet agent (fiable).
     Absent,
     /// Le greffe n'a pas répondu : on ne sait pas si une mission existe.
@@ -185,19 +223,33 @@ enum ResumeStance {
 }
 
 fn managed_resume_consigne(stance: &ResumeStance) -> &'static str {
+    // Match exhaustif sur ResumeStance puis ResumeWaitReason — pas de `_`.
+    // Propriété : un message d'attente n'est licite que si un mécanisme
+    // attesté peut le lever. Seul `SuiteDuGreffe` promet la suite.
     match stance {
-        ResumeStance::Actionable(_) => {
+        ResumeStance::Actionable(_mission) => {
             "Consigne : lis ton diff, committe ce qui est prêt, puis reprends la mission ou signale le blocage."
         }
-        ResumeStance::Waiting(mission) if mission.objective_state == "clos" => {
-            "Consigne : mission close au greffe — ATTENDS. N'exécute pas l'instruction d'origine ; attends un mandat explicite."
-        }
-        ResumeStance::Waiting(mission) if mission.delegation_state == "en_attente_prerequis" => {
-            "Consigne : délégation en attente de prérequis — ATTENDS. Ne relance pas ; l'ordre F37 n'est pas encore ouvert."
-        }
-        ResumeStance::Waiting(_) => {
-            "Consigne : objectif en attente au greffe (état attesté ci-dessus) — ATTENDS. Ne relance pas l'instruction ; attends la suite du greffe."
-        }
+        ResumeStance::Waiting { reason, mission: _ } => match reason {
+            ResumeWaitReason::MandatExpliciteApresClos => {
+                "Consigne : mission close au greffe — ATTENDS. N'exécute pas l'instruction d'origine ; attends un mandat explicite."
+            }
+            ResumeWaitReason::ClotureDesPrerequis => {
+                "Consigne : délégation en attente de prérequis — ATTENDS. Ne relance pas ; l'ordre F37 n'est pas encore ouvert."
+            }
+            ResumeWaitReason::AucunLevierApresAnnulation => {
+                "Consigne : délégation annulée au greffe — ATTENDS. N'exécute pas l'instruction d'origine ; aucune suite ne viendra de cette délégation. Attends un mandat explicite."
+            }
+            ResumeWaitReason::MandatExpliciteApresTerminaison => {
+                "Consigne : délégation terminée au greffe — ATTENDS. N'exécute pas l'instruction d'origine ; attends un mandat explicite."
+            }
+            ResumeWaitReason::MandatExpliciteApresSolde => {
+                "Consigne : délégation soldée par clôture au greffe — ATTENDS. N'exécute pas l'instruction d'origine ; attends un mandat explicite."
+            }
+            ResumeWaitReason::SuiteDuGreffe => {
+                "Consigne : objectif en attente au greffe (état attesté ci-dessus) — ATTENDS. Ne relance pas l'instruction ; attends la suite du greffe."
+            }
+        },
         ResumeStance::Absent => {
             "Consigne : aucune mission attestée au greffe — ATTENDS un mandat explicite. Ne reprends aucune mission inventée."
         }
@@ -286,8 +338,44 @@ fn resume_mission_actionable(
     ) && matches!(delegation, EtatDelegation::Creee)
 }
 
-fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, String> {
+/// Classe le couple (objectif, délégation) en motif d'attente, ou `None` si
+/// actionnable / hors surface d'attente.
+///
+/// Matchs **exhaustifs** sur `EtatObjectif` et `EtatDelegation` : une variante
+/// neuve casse la compilation ici — pas de liste `matches!` muette.
+fn resume_wait_reason(
+    objective: &maicie::domain::EtatObjectif,
+    delegation: &maicie::domain::EtatDelegation,
+) -> Option<ResumeWaitReason> {
     use maicie::domain::{EtatDelegation, EtatObjectif};
+    if resume_mission_actionable(objective, delegation) {
+        return None;
+    }
+    // Priorité clos : même si la délégation est Annulee/Terminee, le message
+    // « mission close » prime (mandat explicite).
+    Some(match objective {
+        EtatObjectif::Clos => ResumeWaitReason::MandatExpliciteApresClos,
+        EtatObjectif::AEvaluer | EtatObjectif::Synthetise => match delegation {
+            EtatDelegation::Annulee => ResumeWaitReason::AucunLevierApresAnnulation,
+            EtatDelegation::EnAttentePrerequis => ResumeWaitReason::ClotureDesPrerequis,
+            EtatDelegation::Terminee => ResumeWaitReason::MandatExpliciteApresTerminaison,
+            EtatDelegation::SoldeeParCloture => ResumeWaitReason::MandatExpliciteApresSolde,
+            // Levier : évaluation / synthèse d'objectif encore en cours.
+            EtatDelegation::Creee | EtatDelegation::AEvaluer => ResumeWaitReason::SuiteDuGreffe,
+        },
+        EtatObjectif::Ouvert | EtatObjectif::EnCoordination => match delegation {
+            EtatDelegation::EnAttentePrerequis => ResumeWaitReason::ClotureDesPrerequis,
+            EtatDelegation::Annulee => ResumeWaitReason::AucunLevierApresAnnulation,
+            EtatDelegation::Terminee => ResumeWaitReason::MandatExpliciteApresTerminaison,
+            EtatDelegation::SoldeeParCloture => ResumeWaitReason::MandatExpliciteApresSolde,
+            EtatDelegation::AEvaluer => ResumeWaitReason::SuiteDuGreffe,
+            // Actionnable déjà exclu ci-dessus ; rester exhaustif pour le compilateur.
+            EtatDelegation::Creee => ResumeWaitReason::SuiteDuGreffe,
+        },
+    })
+}
+
+fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, String> {
     let config = home.join(".config/maicie/config.json");
     if !config.is_file() {
         return Err(format!(
@@ -322,26 +410,13 @@ fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, Stri
         })
         .max_by_key(|(item, delegation)| ranking(item, delegation));
     let candidate = actionable.or_else(|| {
-        // Mission close / livrée / gelée / à évaluer / en attente de
-        // prérequis : la surface pour dire ATTENDS, plutôt que de laisser
-        // croire qu'il n'y a rien (Absent) ou qu'il faut relancer.
+        // Surface d'attente : tout couple que `resume_wait_reason` classifie
+        // (exhaustif côté états — pas une liste littérale à maintenir).
         for_agent
             .iter()
             .copied()
             .filter(|(item, delegation)| {
-                item.objective.etat == EtatObjectif::Clos
-                    || matches!(
-                        item.objective.etat,
-                        EtatObjectif::AEvaluer | EtatObjectif::Synthetise
-                    )
-                    || matches!(
-                        delegation.etat,
-                        EtatDelegation::EnAttentePrerequis
-                            | EtatDelegation::AEvaluer
-                            | EtatDelegation::Terminee
-                            | EtatDelegation::Annulee
-                            | EtatDelegation::SoldeeParCloture
-                    )
+                resume_wait_reason(&item.objective.etat, &delegation.etat).is_some()
             })
             .max_by_key(|(item, delegation)| ranking(item, delegation))
     });
@@ -368,7 +443,9 @@ fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, Stri
     if resume_mission_actionable(&item.objective.etat, &delegation.etat) {
         Ok(ResumeStance::Actionable(mission))
     } else {
-        Ok(ResumeStance::Waiting(mission))
+        let reason = resume_wait_reason(&item.objective.etat, &delegation.etat)
+            .expect("candidat d'attente sans motif — bug de filtre");
+        Ok(ResumeStance::Waiting { mission, reason })
     }
 }
 
@@ -4065,6 +4142,48 @@ mod prompt_tests {
         waiting
     }
 
+    /// Forge durable un état de délégation (oracle carte — pas le chemin store).
+    fn force_delegation_etat(
+        database: &std::path::Path,
+        delegation_id: uuid::Uuid,
+        etat: maicie::domain::EtatDelegation,
+    ) {
+        use maicie::domain::EtatDelegation;
+        let connection = rusqlite::Connection::open(database).unwrap();
+        let payload: Vec<u8> = connection
+            .query_row(
+                "SELECT payload_json FROM delegations WHERE id = ?1",
+                [delegation_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut delegation: maicie::domain::Delegation =
+            serde_json::from_slice(&payload).unwrap();
+        match etat {
+            EtatDelegation::Annulee => delegation.annuler().unwrap(),
+            EtatDelegation::AEvaluer => delegation.transition(EtatDelegation::AEvaluer).unwrap(),
+            other => {
+                // Terminee / Soldee / etc. : forge pour l'oracle carte uniquement.
+                delegation.etat = other;
+            }
+        }
+        let forged = serde_json::to_vec(&delegation).unwrap();
+        connection
+            .execute(
+                "UPDATE delegations SET state = ?1, payload_json = ?2 WHERE id = ?3",
+                rusqlite::params![etat.as_sql(), forged, delegation_id.to_string()],
+            )
+            .unwrap();
+    }
+
+    fn force_delegation_annulee(database: &std::path::Path, delegation_id: uuid::Uuid) {
+        force_delegation_etat(
+            database,
+            delegation_id,
+            maicie::domain::EtatDelegation::Annulee,
+        );
+    }
+
     #[test]
     fn prompt_mcp_produit_exactement_la_fixture_reduite_versionnee() {
         assert_eq!(
@@ -4290,6 +4409,108 @@ mod prompt_tests {
         assert!(
             context.contains(&format!("objectif_id={}", mission.objective_id)),
             "{context}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Propriété : un message d'attente n'est licite que si un mécanisme
+    /// attesté peut le lever.
+    ///
+    /// Couple (Annulee, objectif≠clos) : aucun levier — ni clôture, ni reprise.
+    /// La carte ne doit donc pas promettre « attends la suite du greffe ».
+    /// (Ne pas regrouper avec Terminee : échec ≠ terminaison réussie.)
+    #[test]
+    fn carte_de_reprise_annulee_hors_clos_ne_promet_pas_de_suite() {
+        let root = resume_root("annulee-hors-clos");
+        let home = root.join("home");
+        let worktree = root.join("worktree");
+        let database = root.join("maicie.sqlite3");
+        write_maicie_config(&home, &database);
+        let mission = create_active_mission(&database, "agent-annule");
+        force_delegation_annulee(&database, mission.delegation_id);
+        init_worktree(&worktree);
+
+        let context = managed_resume_context(
+            &home,
+            &worktree,
+            "agent-annule",
+            "fixture",
+            "acp",
+            "fixture-digest",
+        );
+        assert!(
+            context.contains("délégation=annulee") || context.contains("annulée"),
+            "doit attester Annulee: {context}"
+        );
+        assert!(
+            !context.contains("objectif=clos"),
+            "oracle hors clos — l'objectif doit rester ouvert: {context}"
+        );
+        assert!(
+            !context.contains("suite du greffe"),
+            "Annulee hors clos ne doit jamais promettre une suite: {context}"
+        );
+        assert!(
+            !context.contains("attente greffe"),
+            "Annulee n'est pas une attente de suite greffe: {context}"
+        );
+        assert!(
+            context.contains("aucune suite") || context.contains("mandat explicite"),
+            "doit dire qu'aucune suite ne viendra / attendre un mandat: {context}"
+        );
+        assert!(
+            !context.contains("reprends la mission"),
+            "Annulee ne doit jamais relancer: {context}"
+        );
+        assert!(
+            context.contains(&format!("objectif_id={}", mission.objective_id)),
+            "{context}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Contrôle positif de la propriété : quand un levier existe réellement
+    /// (délégation `AEvaluer` sur objectif ouvert), le message « suite du
+    /// greffe » DOIT s'afficher. Sans ce contrôle, l'oracle Annulee ne
+    /// mesurerait que l'absence du libellé.
+    #[test]
+    fn carte_de_reprise_a_evaluer_avec_levier_affiche_suite_du_greffe() {
+        let root = resume_root("a-evaluer-levier");
+        let home = root.join("home");
+        let worktree = root.join("worktree");
+        let database = root.join("maicie.sqlite3");
+        write_maicie_config(&home, &database);
+        let mission = create_active_mission(&database, "agent-evaluer");
+        force_delegation_etat(
+            &database,
+            mission.delegation_id,
+            maicie::domain::EtatDelegation::AEvaluer,
+        );
+        init_worktree(&worktree);
+
+        let context = managed_resume_context(
+            &home,
+            &worktree,
+            "agent-evaluer",
+            "fixture",
+            "acp",
+            "fixture-digest",
+        );
+        assert!(
+            context.contains("délégation=a_evaluer"),
+            "doit attester AEvaluer: {context}"
+        );
+        assert!(
+            !context.contains("objectif=clos"),
+            "levier hors clos: {context}"
+        );
+        assert!(
+            context.contains("suite du greffe"),
+            "contrôle positif — levier réel doit afficher la suite: {context}"
+        );
+        assert!(
+            !context.contains("reprends la mission"),
+            "AEvaluer ne doit pas relancer: {context}"
         );
         fs::remove_dir_all(root).unwrap();
     }
