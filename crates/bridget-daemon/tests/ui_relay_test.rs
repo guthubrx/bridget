@@ -966,3 +966,75 @@ fn snapshot_sans_agent_omet_les_pairs_et_watch_agent_les_projette() {
     drop(daemon);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn watch_pousse_thread_message_sortant_apres_ouverture() {
+    // Témoin du chemin vivant : après l'ouverture du watch, un sortant
+    // référent→humain écrit au ledger doit arriver en SSE thread_message
+    // SANS reconnexion ni second snapshot. Meurt si push_live_thread_messages
+    // est retiré ou vidé.
+    // Nom court : sous macOS le chemin de la socket Unix est sévèrement borné ;
+    // « thread-live » faisait « daemon non prêt » sans rapport avec le code testé.
+    let root = root("tlive");
+    let daemon = DaemonProcess::start(&root);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let mut referent = LiveAgent::connect(&socket, "agent-referent");
+    // Présence humaine : le Send sortant vers humain doit être accepté au ledger.
+    let _humain = LiveAgent::connect(&socket, "humain");
+
+    let config = UiRelayConfig {
+        daemon_socket: socket,
+        maicie_config: write_maicie_config(&root),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-live".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let mut events = request(address, "/v1/watch?token=jeton-live&agent=agent-referent");
+    let subscription_id = match referent.read() {
+        DaemonToWrapper::Subscribe {
+            subscription_id, ..
+        } => subscription_id,
+        response => panic!("Subscribe attendu, reçu {response:?}"),
+    };
+    referent.send(&WrapperToDaemon::Subscribed { subscription_id });
+
+    let opened = read_until(&mut events, "event: snapshot");
+    assert!(opened.contains("event: snapshot"), "{opened}");
+    assert!(
+        !opened.contains("live-sortant-apres-ouverture"),
+        "le corps live ne doit pas être dans le snapshot initial: {opened}"
+    );
+
+    let mut outbound = BridgetMessage::new(
+        "agent-referent",
+        "humain",
+        "réponse vivante live-sortant-apres-ouverture",
+    );
+    outbound.id = "live-sortant-apres-ouverture".to_string();
+    referent.send(&WrapperToDaemon::Send(outbound));
+    assert!(matches!(referent.read(), DaemonToWrapper::Ack { .. }));
+
+    let live = read_until(&mut events, "live-sortant-apres-ouverture");
+    assert!(
+        live.contains("event: thread_message"),
+        "le chemin vivant doit pousser thread_message, reçu: {live}"
+    );
+    assert!(
+        live.contains("\"role\":\"agent\""),
+        "le sortant doit porter le rôle agent: {live}"
+    );
+    assert!(
+        live.contains("live-sortant-apres-ouverture"),
+        "le corps sortant doit apparaître sans recharger: {live}"
+    );
+    assert!(
+        !live.contains("\"state\":\"reconnecting\""),
+        "une reconnexion ne compte pas comme chemin vivant: {live}"
+    );
+
+    drop(daemon);
+    std::fs::remove_dir_all(root).unwrap();
+}
