@@ -9735,7 +9735,7 @@ mod presence_tests {
     /// ORACLE — à la purge de présence, une remise `dispatching` devient
     /// `orphaned` (visible), pas un `outcome_unknown` muet.
     ///
-    /// Lot A : le retain lit `link_seen`. Stalifier seulement `last_seen`
+    /// Lot A : le retain lit `link_seen`. Stalifier seulement `capacity_seen`
     /// laisserait le lien frais → présence non purgée → faux vert / faux rouge.
     #[test]
     fn purge_presence_orpheline_les_remises_dispatching() {
@@ -9748,7 +9748,7 @@ mod presence_tests {
             .checked_sub(PRESENCE_RETENTION + Duration::from_secs(1))
             .expect("horloge");
         let presence = state.presences.get_mut("instance-1").unwrap();
-        presence.last_seen = stale;
+        presence.capacity_seen = stale;
         presence.link_seen = stale;
 
         let key = IdempotencyKey::new(
@@ -9841,12 +9841,13 @@ mod presence_tests {
                 agent_type: "claude".to_string(),
                 host: "macbook".to_string(),
                 transport: "acp".to_string(),
+                channel: None,
                 mode: Some(PresenceMode::Acp),
                 location: None,
                 journal_available: true,
                 os: "macOS".to_string(),
                 state: "connected".to_string(),
-                last_seen: Instant::now(),
+                capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
                 model: None,
@@ -9870,7 +9871,7 @@ mod presence_tests {
             .checked_sub(PRESENCE_RETENTION + Duration::from_secs(1))
             .expect("horloge");
         let presence = state.presences.get_mut("instance-1").unwrap();
-        presence.last_seen = stale;
+        presence.capacity_seen = stale;
         presence.link_seen = stale;
 
         let key = IdempotencyKey::new(
@@ -9978,7 +9979,7 @@ mod presence_tests {
             .checked_sub(PRESENCE_RETENTION + Duration::from_secs(1))
             .expect("horloge");
         let presence = state.presences.get_mut("instance-1").unwrap();
-        presence.last_seen = stale;
+        presence.capacity_seen = stale;
         presence.link_seen = stale;
         let _ = state.agent_infos();
         assert_eq!(
@@ -10008,12 +10009,13 @@ mod presence_tests {
                 agent_type: "claude".to_string(),
                 host: "macbook".to_string(),
                 transport: "acp".to_string(),
+                channel: None,
                 mode: Some(PresenceMode::Acp),
                 location: None,
                 journal_available: true,
                 os: "macOS".to_string(),
                 state: "connected".to_string(),
-                last_seen: Instant::now(),
+                capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
                 model: None,
