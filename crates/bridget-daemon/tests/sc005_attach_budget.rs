@@ -3,7 +3,7 @@ use bridget_daemon::daemon::{self, DaemonConfig};
 use bridget_daemon::registry::AgentRegistry;
 use bridget_daemon::wrapper::launch_acp_with;
 use bridget_transport::journal::{AppendLatencyProbe, current_host_date};
-use bridget_transport::protocol::{AttachWindow, ConnectionRole, decode, encode};
+use bridget_transport::protocol::{AgentInfo, AttachWindow, ConnectionRole, decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -17,7 +17,11 @@ use std::time::{Duration, Instant};
 
 const WARMUP_TURNS: usize = 100;
 const MEASURED_TURNS: usize = 1_000;
-const EVENTS_PER_TURN: usize = 2;
+/// Bornes échantillonnées par `AppendLatencyProbe` (`turn_start` | `turn_end`
+/// uniquement — `is_turn_boundary`). Distinct du cardinal journal/attach.
+const SAMPLED_BOUNDARIES_PER_TURN: usize = 2;
+/// Événements journal/attach par tour ACP après L4 : start + reasoning + end.
+const JOURNAL_EVENTS_PER_TURN: usize = 3;
 const GLOBAL_TIMEOUT: Duration = Duration::from_secs(60);
 const SC001_TURNS: usize = 600;
 const SC001_CADENCE: Duration = Duration::from_millis(100);
@@ -73,30 +77,56 @@ fn write_message(writer: &mut BufWriter<UnixStream>, message: &WrapperToDaemon) 
     writer.flush().expect("flush socket");
 }
 
-fn read_message(reader: &mut BufReader<UnixStream>) -> DaemonToWrapper {
+fn read_message(reader: &mut impl BufRead) -> DaemonToWrapper {
     let mut line = String::new();
     reader.read_line(&mut line).expect("lecture socket");
     assert!(!line.is_empty(), "EOF daemon inattendu");
     decode(line.trim()).expect("frame daemon valide")
 }
 
-fn wait_for_agent(socket: &Path, name: &str, deadline: Instant) {
-    wait_until(deadline, "équipier ACP non enregistré", || {
-        let Ok(stream) = UnixStream::connect(socket) else {
-            return false;
-        };
-        let Ok(reader_stream) = stream.try_clone() else {
-            return false;
-        };
-        let mut writer = BufWriter::new(stream);
-        let mut reader = BufReader::new(reader_stream);
-        write_message(&mut writer, &WrapperToDaemon::ListAgents);
-        matches!(
-            read_message(&mut reader),
-            DaemonToWrapper::AgentList { agents }
-                if agents.iter().any(|agent| agent.name == name)
-        )
-    });
+fn query_agent_list(socket: &Path) -> Option<Vec<AgentInfo>> {
+    let stream = UnixStream::connect(socket).ok()?;
+    let reader_stream = stream.try_clone().ok()?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(reader_stream);
+    write_message(&mut writer, &WrapperToDaemon::ListAgents);
+    match read_message(&mut reader) {
+        DaemonToWrapper::AgentList { agents } => Some(agents),
+        other => panic!("ListAgents inattendu: {other:?}"),
+    }
+}
+
+fn agent_state(socket: &Path, name: &str) -> Option<String> {
+    query_agent_list(socket)?
+        .into_iter()
+        .find(|agent| agent.name == name)
+        .map(|agent| agent.state)
+}
+
+fn agent_ready_for_send(socket: &Path, name: &str) -> bool {
+    query_agent_list(socket).into_iter().flatten().any(|agent| {
+        agent.name == name && agent.state == "connected" && !agent.connection_id.is_empty()
+    })
+}
+
+fn wait_for_agent_ready_for_send(socket: &Path, name: &str, deadline: Instant) {
+    wait_until(
+        deadline,
+        &format!("équipier {name} présent mais pas prêt pour Send (attendu connected + route)"),
+        || agent_ready_for_send(socket, name),
+    );
+}
+
+fn expect_send_ack(reader: &mut impl BufRead, socket: &Path, agent: &str, turn: &str) {
+    match read_message(reader) {
+        DaemonToWrapper::Ack { .. } => {}
+        other => {
+            // Trame d'abord : si ListAgents échoue, le non-Ack reste lisible.
+            let frame = format!("{other:?}");
+            let state = agent_state(socket, agent);
+            panic!("Send {turn} (agent={state:?}): accusé Ack attendu, reçu {frame}");
+        }
+    }
 }
 
 struct AttachViewConsumer {
@@ -121,12 +151,12 @@ fn connect_attach(socket: &Path, agent: &str) -> AttachViewConsumer {
             role: ConnectionRole::Attach,
         },
     );
-    assert!(matches!(
-        read_message(&mut reader),
+    match read_message(&mut reader) {
         DaemonToWrapper::RoleAccepted {
-            role: ConnectionRole::Attach
-        }
-    ));
+            role: ConnectionRole::Attach,
+        } => {}
+        other => panic!("RoleHandshake attach inattendu: {other:?}"),
+    }
     write_message(
         &mut writer,
         &WrapperToDaemon::Subscribe {
@@ -234,10 +264,10 @@ fn connect_sender(socket: &Path) -> (BufWriter<UnixStream>, BufReader<UnixStream
             journal_available: None,
         },
     );
-    assert!(matches!(
-        read_message(&mut reader),
-        DaemonToWrapper::Registered { name } if name == "bench-sender"
-    ));
+    match read_message(&mut reader) {
+        DaemonToWrapper::Registered { name } if name == "bench-sender" => {}
+        other => panic!("Register bench-sender inattendu: {other:?}"),
+    }
     (writer, reader)
 }
 
@@ -342,7 +372,7 @@ impl BenchHarness {
             .map_err(|error| error.to_string());
             let _ = wrapper_done_tx.send(result);
         });
-        wait_for_agent(&socket, "codex-bench", deadline);
+        wait_for_agent_ready_for_send(&socket, "codex-bench", deadline);
         let (sender, sender_reader) = connect_sender(&socket);
         let views = (0..view_count)
             .map(|_| connect_attach(&socket, "codex-bench"))
@@ -352,6 +382,7 @@ impl BenchHarness {
                 view.caught_up.load(Ordering::SeqCst) >= 1
             });
         }
+        wait_for_agent_ready_for_send(&socket, "codex-bench", deadline);
         Self {
             root,
             socket,
@@ -373,10 +404,12 @@ impl BenchHarness {
             format!("tour-déterministe-{turn}"),
         );
         write_message(&mut self.sender, &WrapperToDaemon::Send(message));
-        assert!(matches!(
-            read_message(&mut self.sender_reader),
-            DaemonToWrapper::Ack { .. }
-        ));
+        expect_send_ack(
+            &mut self.sender_reader,
+            &self.socket,
+            "codex-bench",
+            &format!("tour {turn}"),
+        );
     }
 
     fn wait_for_appends(&self, expected: usize, deadline: Instant) {
@@ -392,7 +425,7 @@ impl BenchHarness {
     }
 
     fn finish(mut self, deadline: Instant) {
-        let expected_view = self.historical_events + self.planned_turns * EVENTS_PER_TURN;
+        let expected_view = self.historical_events + self.planned_turns * JOURNAL_EVENTS_PER_TURN;
         for view in &self.views {
             wait_until(deadline, "vue attach en retard en fin de campagne", || {
                 view.final_fragments.load(Ordering::SeqCst) >= expected_view
@@ -404,10 +437,12 @@ impl BenchHarness {
             "tour-final-hors-mesure".to_string(),
         );
         write_message(&mut self.sender, &WrapperToDaemon::Send(final_message));
-        assert!(matches!(
-            read_message(&mut self.sender_reader),
-            DaemonToWrapper::Ack { .. }
-        ));
+        expect_send_ack(
+            &mut self.sender_reader,
+            &self.socket,
+            "codex-bench",
+            "tour final",
+        );
         let result = self
             .wrapper_done
             .recv_timeout(Duration::from_secs(5))
@@ -450,19 +485,19 @@ fn run_interleaved_campaign() -> (Duration, usize, Duration, usize) {
             baseline.send_turn(turn);
         }
         let expected = if turn < WARMUP_TURNS {
-            (turn + 1) * EVENTS_PER_TURN
+            (turn + 1) * SAMPLED_BOUNDARIES_PER_TURN
         } else {
-            (turn + 1 - WARMUP_TURNS) * EVENTS_PER_TURN
+            (turn + 1 - WARMUP_TURNS) * SAMPLED_BOUNDARIES_PER_TURN
         };
         baseline.wait_for_appends(expected, deadline);
         observed.wait_for_appends(expected, deadline);
         if turn + 1 == WARMUP_TURNS {
-            baseline.take_samples(WARMUP_TURNS * EVENTS_PER_TURN);
-            observed.take_samples(WARMUP_TURNS * EVENTS_PER_TURN);
+            baseline.take_samples(WARMUP_TURNS * SAMPLED_BOUNDARIES_PER_TURN);
+            observed.take_samples(WARMUP_TURNS * SAMPLED_BOUNDARIES_PER_TURN);
         }
     }
-    let baseline_samples = baseline.take_samples(MEASURED_TURNS * EVENTS_PER_TURN);
-    let observed_samples = observed.take_samples(MEASURED_TURNS * EVENTS_PER_TURN);
+    let baseline_samples = baseline.take_samples(MEASURED_TURNS * SAMPLED_BOUNDARIES_PER_TURN);
+    let observed_samples = observed.take_samples(MEASURED_TURNS * SAMPLED_BOUNDARIES_PER_TURN);
     let result = (
         percentile_95(&baseline_samples),
         baseline_samples.len(),
@@ -482,8 +517,8 @@ fn sc005_deux_vues_reelles_ne_degradent_pas_le_p95_d_append_de_plus_de_cinq_pour
     let mut deltas = Vec::with_capacity(SC005_INTERNAL_PAIRS);
     for _ in 0..SC005_INTERNAL_PAIRS {
         let (baseline, baseline_count, with_views, observed_count) = run_interleaved_campaign();
-        assert_eq!(baseline_count, MEASURED_TURNS * EVENTS_PER_TURN);
-        assert_eq!(observed_count, MEASURED_TURNS * EVENTS_PER_TURN);
+        assert_eq!(baseline_count, MEASURED_TURNS * SAMPLED_BOUNDARIES_PER_TURN);
+        assert_eq!(observed_count, MEASURED_TURNS * SAMPLED_BOUNDARIES_PER_TURN);
         baselines.push(baseline);
         observed.push(with_views);
         deltas.push(with_views.as_nanos() as i128 - baseline.as_nanos() as i128);
@@ -581,16 +616,17 @@ fn run_sc001_campaign(index: usize) -> Sc001Campaign {
         harness.send_turn(turn);
     }
 
-    let expected_events = SC001_TURNS * EVENTS_PER_TURN;
-    harness.wait_for_appends(expected_events, deadline);
+    let expected_samples = SC001_TURNS * SAMPLED_BOUNDARIES_PER_TURN;
+    let expected_journal = SC001_TURNS * JOURNAL_EVENTS_PER_TURN;
+    harness.wait_for_appends(expected_samples, deadline);
     for view in &harness.views {
         wait_until(deadline, "rendu attach absent après append", || {
-            view.final_fragments.load(Ordering::SeqCst) >= expected_events
+            view.final_fragments.load(Ordering::SeqCst) >= expected_journal
         });
     }
 
     let samples = harness.probe.take_samples();
-    assert_eq!(samples.len(), expected_events, "append incomplet");
+    assert_eq!(samples.len(), expected_samples, "append incomplet");
     let first_view = &harness.views[0];
     let rendered = first_view
         .rendered_at
@@ -609,7 +645,7 @@ fn run_sc001_campaign(index: usize) -> Sc001Campaign {
         })
         .collect::<Vec<_>>();
     drop(rendered);
-    assert_eq!(latencies.len(), expected_events);
+    assert_eq!(latencies.len(), expected_samples);
     let p95 = percentile_95(&latencies);
     let max = latencies.iter().copied().max().unwrap_or_default();
     harness.finish(deadline);
@@ -737,13 +773,17 @@ fn sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon() {
 
     harness.send_turn(0);
     wait_until(deadline, "suivi live absent après rotation", || {
-        final_fragments.load(Ordering::SeqCst) >= 3
+        final_fragments.load(Ordering::SeqCst) >= 1 + JOURNAL_EVENTS_PER_TURN
     });
     let seqs = final_sequences
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .clone();
-    assert_eq!(seqs, vec![5, 6, 7], "continuité rejeu→suivi");
+    assert_eq!(
+        seqs,
+        vec![5, 6, 7, 8],
+        "continuité rejeu→suivi (hist + start+reasoning+end)"
+    );
     let current_file = harness
         .root
         .join("home/.cache/bridget/sessions/codex-bench")
@@ -753,4 +793,32 @@ fn sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon() {
         "rotation vers le fichier courant absente"
     );
     harness.finish(deadline);
+}
+
+/// Contrôle d'instrument : un non-Ack doit apparaître dans le message de panique,
+/// pas seulement « matches! a échoué ».
+#[test]
+fn sc005_diagnostic_non_ack_affiche_la_trame() {
+    let frame = encode(&DaemonToWrapper::Nack {
+        id: "probe-id".to_string(),
+        reason: "cible introuvable".to_string(),
+    })
+    .expect("Nack sérialisable");
+    let mut reader = BufReader::new(std::io::Cursor::new(format!("{frame}\n")));
+    let socket = PathBuf::from("/tmp/bridget-sc005-diagnostic-absent.sock");
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        expect_send_ack(&mut reader, &socket, "codex-bench", "diagnostic");
+    }));
+    let message = caught.expect_err("le non-Ack doit paniquer");
+    let text = message
+        .downcast_ref::<String>()
+        .map(|s| s.as_str())
+        .or_else(|| message.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(
+        text.contains("accusé Ack attendu")
+            && text.contains("Nack")
+            && text.contains("cible introuvable"),
+        "diagnostic muet ou incomplet: {text:?}"
+    );
 }

@@ -97,14 +97,14 @@ transmis des chemins illisibles entre deux machines en servant d'intermédiaire.
 **Fichier** : `crates/bridget-transport/src/acp.rs` · **Contrat** : C3
 **Référence MIT** : `~/11.Repositories/t3code/packages/effect-acp`
 
-- [ ] T4.1 **Lire la référence avant d'inventer.**
-- [ ] T4.2 `acp.rs:1500` rejette tout sauf `agent_message_chunk` — **cesser
+- [x] T4.1 **Lire la référence avant d'inventer.**
+- [x] T4.2 `acp.rs:1500` rejette tout sauf `agent_message_chunk` — **cesser
       d'écarter** `agent_thought_chunk`.
-- [ ] T4.3 Brancher `tool_call` et `tool_call_update` → acte `tool`.
-- [ ] T4.4 Oracle : `agent_thought_chunk` reçu → `reasoning.available: true`.
-- [ ] T4.5 Oracle : aucun chunk de pensée → `available: false`.
+- [x] T4.3 Brancher `tool_call` et `tool_call_update` → acte `tool`.
+- [x] T4.4 Oracle : `agent_thought_chunk` reçu → `reasoning.available: true`.
+- [x] T4.5 Oracle : aucun chunk de pensée → `available: false`.
       *Cas documenté : chez Gemini il n'est **jamais** émis.*
-- [ ] T4.6 Mutant : rétablir le filtre → **nommer le test mort**.
+- [x] T4.6 Mutant : rétablir le filtre → **nommer le test mort**.
 
 ## L5 — Page : liste et fil *(AC2, AC9)*
 

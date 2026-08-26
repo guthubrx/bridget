@@ -19,6 +19,8 @@ const MATRIX_VERSION: &str = "fr-008-v1";
 const REDUCED_PROMPT: &str = include_str!("fixtures/prompts/v1-after.txt");
 const MATRIX_RUNS_PER_MODE: usize = 3;
 const MATRIX_EXPECTED_TURNS: usize = 4;
+/// turn_start + update(text) + reasoning(terminal) + turn_end — L4 C3.
+const MATRIX_EVENTS_PER_TURN: usize = 4;
 const MATRIX_TIMEOUT: Duration = Duration::from_secs(10);
 // Seul QUEUE-SLOW doit franchir T/3 et prouver la relance différée. Sous
 // contention, appliquer le même délai court aux tours nominaux injectait un
@@ -1163,6 +1165,10 @@ fn normalized_entry(bytes: &[u8]) -> String {
             payload["body"].as_str().unwrap()
         ),
         "update" => format!("update|{}", payload["text"].as_str().unwrap_or_default()),
+        "reasoning" => format!(
+            "reasoning|available={}",
+            payload["available"].as_bool().unwrap_or(false)
+        ),
         "turn_end" => format!(
             "turn_end|{}|routed={}",
             payload["stop_reason"].as_str().unwrap_or_default(),
@@ -1182,7 +1188,9 @@ fn collect_journal(socket: &Path, agent: &str) -> Vec<String> {
     let mut complete = BTreeMap::new();
     let mut caught_up = false;
     let deadline = Instant::now() + MATRIX_TIMEOUT;
-    while (!caught_up || complete.len() < MATRIX_EXPECTED_TURNS * 3) && Instant::now() < deadline {
+    while (!caught_up || complete.len() < MATRIX_EXPECTED_TURNS * MATRIX_EVENTS_PER_TURN)
+        && Instant::now() < deadline
+    {
         match attach.recv() {
             DaemonToWrapper::Subscribed { .. } => {}
             DaemonToWrapper::JournalFragment {
@@ -1222,7 +1230,7 @@ fn collect_journal(socket: &Path, agent: &str) -> Vec<String> {
                 .flatten()
         })
         .collect::<BTreeSet<_>>();
-    let entries = complete
+    let business: Vec<Vec<u8>> = complete
         .into_values()
         .filter(|bytes| {
             let value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
@@ -1230,20 +1238,51 @@ fn collect_journal(socket: &Path, agent: &str) -> Vec<String> {
                 .as_str()
                 .is_some_and(|message_id| bootstrap_message_ids.contains(message_id))
         })
-        .map(|bytes| normalized_entry(&bytes))
-        .collect::<Vec<_>>();
+        .collect();
     assert_eq!(
-        entries.len(),
-        MATRIX_EXPECTED_TURNS * 3,
-        "la fixture doit produire trois événements par tour métier, hors carte de reprise"
+        business.len(),
+        MATRIX_EXPECTED_TURNS * MATRIX_EVENTS_PER_TURN,
+        "la fixture doit produire {MATRIX_EVENTS_PER_TURN} événements par tour métier (start+text+reasoning+end), hors carte de reprise"
     );
-    entries
+    // Preuve d'unicité : exactement un event=reasoning par message_id, available=false
+    // (fixture parity sans thought_chunk — cas Gemini).
+    let mut reasoning_per_message = BTreeMap::<String, usize>::new();
+    for bytes in &business {
+        let value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        if value["event"] == "reasoning" {
+            let message_id = value["message_id"]
+                .as_str()
+                .expect("reasoning sans message_id")
+                .to_string();
+            *reasoning_per_message.entry(message_id).or_default() += 1;
+            assert_eq!(
+                value["payload"],
+                serde_json::json!({ "available": false }),
+                "reasoning terminal sans pensée = available:false, sans summary/raw"
+            );
+        }
+    }
+    assert_eq!(
+        reasoning_per_message.len(),
+        MATRIX_EXPECTED_TURNS,
+        "un message_id métier sans reasoning terminal: {reasoning_per_message:?}"
+    );
+    assert!(
+        reasoning_per_message.values().all(|count| *count == 1),
+        "doublon event=reasoning sur un tour: {reasoning_per_message:?}"
+    );
+    business
+        .iter()
+        .map(|bytes| normalized_entry(bytes))
+        .collect()
 }
 
 fn run_corpus(socket: &Path, agent: &str, run: usize, proxy: &CutProxy) -> ModeObservables {
     let mut peer = Peer::register(socket, &format!("parity-sender-{run}"));
     // Quickstart 007 §1 : l'équipier est visible en ACP, prêt à recevoir.
-    let initial_agent = wait_agent(&mut peer, agent);
+    // Attendre connected : la carte de reprise peut encore tourner (busy) —
+    // L4 ajoute un event=reasoning qui allonge cette fenêtre.
+    let initial_agent = wait_agent_state(&mut peer, agent, "connected");
     assert_eq!(initial_agent.transport, "acp");
     assert_eq!(initial_agent.state, "connected");
 
