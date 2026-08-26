@@ -385,6 +385,9 @@ impl JournalWriter {
         message_id: Option<&str>,
         payload: Value,
     ) -> Result<(), String> {
+        // Contrat d'écriture : un kind d'update hors vocabulaire est refusé ici,
+        // point unique traversé par ACP, Claude et Codex — jamais silencieux.
+        crate::act_kind::validate_journal_write(event, &payload)?;
         if let Some(error) = self
             .failure
             .lock()
@@ -488,6 +491,9 @@ impl SessionJournal {
         message_id: Option<&str>,
         payload: Value,
     ) -> std::io::Result<u64> {
+        crate::act_kind::validate_journal_write(event, &payload).map_err(|detail| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, detail)
+        })?;
         let sequence = self.next_seq;
         let entry = JournalEntry::new(
             sequence,
@@ -1078,6 +1084,78 @@ mod tests {
         let event = valid_events(&path).pop().unwrap();
         assert!(event.get("message_id").is_none());
         assert_eq!(event["payload"], json!({"reason":"global"}));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_journal_writer_refuse_un_kind_hors_vocabulaire() {
+        let root = root("act-kind-contract");
+        let writer = JournalWriter::start(
+            &root,
+            "codex-1",
+            "session-1",
+            Arc::new(Mutex::new(AcpEventQueue::default())),
+        )
+        .unwrap();
+        writer
+            .enqueue("update", Some("m1"), json!({"kind":"tool","text":"Read"}))
+            .expect("écriture tool valide doit passer d'abord");
+        let rejected = writer.enqueue(
+            "update",
+            Some("m1"),
+            json!({"kind":"intent","text":"fantôme"}),
+        );
+        assert!(
+            rejected
+                .as_ref()
+                .is_err_and(|detail| detail.contains("hors vocabulaire")),
+            "TEMOIN: écriture hors vocabulaire doit être refusée, got {rejected:?}"
+        );
+        writer.stop();
+        let path = std::fs::read_dir(root.join("codex-1"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let entries = valid_events(&path);
+        assert_eq!(entries.len(), 1, "le kind refusé ne doit jamais atteindre le JSONL");
+        assert_eq!(entries[0]["payload"]["kind"], "tool");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_session_journal_append_at_refuse_un_kind_hors_vocabulaire() {
+        // Bouche le trou « mutant append_at-retirée » : enqueue seul ne suffit
+        // pas — append_at est aussi un point d'entrée public.
+        let root = root("act-kind-append-at");
+        let mut journal = SessionJournal::new(&root, "codex-1", "session-1").unwrap();
+        journal
+            .append("update", Some("m1"), json!({"kind":"tool","text":"Read"}))
+            .expect("écriture tool valide doit passer d'abord");
+        let rejected = journal.append(
+            "update",
+            Some("m1"),
+            json!({"kind":"intent","text":"fantôme"}),
+        );
+        assert!(
+            rejected.as_ref().is_err_and(|err| {
+                err.kind() == std::io::ErrorKind::InvalidInput
+                    && err.to_string().contains("hors vocabulaire")
+            }),
+            "TEMOIN append_at: hors vocabulaire doit être refusé, got {rejected:?}"
+        );
+        let path = std::fs::read_dir(root.join("codex-1"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let entries = valid_events(&path);
+        assert_eq!(entries.len(), 1, "le kind refusé ne doit jamais atteindre le JSONL");
+        assert_eq!(entries[0]["payload"]["kind"], "tool");
         fs::remove_dir_all(root).unwrap();
     }
 

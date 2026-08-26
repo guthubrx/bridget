@@ -5869,6 +5869,36 @@ mod reconnect_tests {
     }
 
     #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_relay_live_update_sans_kind_est_refuse_sans_interblocage() {
+        // Gate daemon : un update relay sans payload.kind doit échouer
+        // explicitement (Err), jamais interbloquer via panic+barrière worker.
+        let journal_root = relay_root("kind-required");
+        let journal_events = Arc::new(Mutex::new(bridget_transport::AcpEventQueue::default()));
+        let writer = JournalWriter::start_with_live_feed(
+            &journal_root,
+            "agent-kind",
+            "session-kind",
+            journal_events,
+            None,
+        )
+        .unwrap();
+        let rejected = writer.enqueue(
+            "update",
+            None,
+            serde_json::json!({"content":"live"}),
+        );
+        assert!(
+            rejected
+                .as_ref()
+                .is_err_and(|detail| detail.contains("sans payload.kind")),
+            "refus explicite attendu, got {rejected:?}"
+        );
+        writer.stop();
+        let _ = std::fs::remove_dir_all(journal_root);
+    }
+
+    #[test]
     fn bascule_snapshot_vers_live_preserve_la_continuite_sans_doublon() {
         let journal_root = relay_root("bascule-live");
         let root = journal_root.join("agent-live");
@@ -5905,7 +5935,11 @@ mod reconnect_tests {
         });
 
         writer
-            .enqueue("update", None, serde_json::json!({"content":"live"}))
+            .enqueue(
+                "update",
+                None,
+                serde_json::json!({"kind":"text","content":"live"}),
+            )
             .unwrap();
         wait_for(|| {
             events.lock().unwrap().iter().any(|message| {
@@ -5995,10 +6029,18 @@ mod reconnect_tests {
         arm.store(true, Ordering::SeqCst);
         barrier.wait();
         writer
-            .enqueue("update", None, serde_json::json!({"content":"deux"}))
+            .enqueue(
+                "update",
+                None,
+                serde_json::json!({"kind":"text","content":"deux"}),
+            )
             .unwrap();
         writer
-            .enqueue("update", None, serde_json::json!({"content":"trois"}))
+            .enqueue(
+                "update",
+                None,
+                serde_json::json!({"kind":"text","content":"trois"}),
+            )
             .unwrap();
         writer.stop();
         barrier.wait();

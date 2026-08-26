@@ -126,6 +126,11 @@ Attaché à un message d'agent.
 
 **`kind` — ensemble fermé côté PAGE (projection)** : les kinds que les
 pilotes ÉCRIVENT réellement dans `payload.kind`, plus les synonymes legacy.
+Source de vérité unique : `bridget_transport::JournalUpdateKind` (écritures
+validées dans `JournalWriter::enqueue` / `SessionJournal::append_at`). Un
+`update` hors vocabulaire est **refusé** (erreur explicite), jamais accepté
+en silence. Témoins : `TEMOIN_ecriture_*`, `TEMOIN_journal_writer_*`,
+`TEMOIN_vocabulaire_vue_et_ecriture_ne_divergent_pas`.
 
 | kind journal | producteur | note |
 |---|---|---|
@@ -133,8 +138,8 @@ pilotes ÉCRIVENT réellement dans `payload.kind`, plus les synonymes legacy.
 | `file` | Codex `CodexActKind::File` | producteur réel, 0 émission mesurée |
 | `plan` | Codex `CodexActKind::Plan` | producteur réel, 0 émission mesurée |
 | `approval` | Codex `CodexActKind::Approval` + event `permission` | mesuré |
-| `tool` | ACP `tool_call_journal_payload` (C3, depuis 78d57dc) | |
-| `tool_call` | forme LEGACY Cursor encore dominante dans les journaux | projeté en `tool` |
+| `tool` | ACP / Claude (`JournalUpdateKind::Tool`) | canonique depuis 78d57dc |
+| `tool_call` | `JournalUpdateKind::ToolCallLegacy` | héritage borné ; projeté en `tool` ; sortie quand daemons+fixtures+greffe = 0 |
 
 **Retirés de la projection** (aucun `payload.kind` journal) :
 
@@ -146,6 +151,8 @@ pilotes ÉCRIVENT réellement dans `payload.kind`, plus les synonymes legacy.
 La page rend l'ancien `intent` en **blanc** s'il réapparaissait ; tout le
 reste des actes en **gris**. Un filtre qui ne matche rien rend une projection
 **vide** sans erreur — d'où le témoin `TEMOIN_vue_affiche_acte_present_au_journal`.
+L'écriture hors vocabulaire, elle, ne peut plus être silencieuse : la garde
+d'écriture refuse avant le JSONL.
 
 **Correspondance des sources** — voir `spec.md` §4.4 :
 

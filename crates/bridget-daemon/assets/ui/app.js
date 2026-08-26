@@ -798,6 +798,120 @@
         );
       });
 
+      // Charge 3 : la divergence filtre runtime ↔ vocabulaire doit tuer pour
+      // N'IMPORTE QUEL kind, pas seulement tool_call (témoin dédié ci-dessus).
+      function actPayloadForKind(kind) {
+        if (kind === "tool_call") {
+          return {
+            kind,
+            title: `acte-${kind}`,
+            tool: `acte-${kind}`,
+            summary: "détail",
+          };
+        }
+        if (kind === "tool") {
+          return { kind, text: `acte-${kind}`, tool: `acte-${kind}`, detail: "détail" };
+        }
+        return { kind, text: `acte-${kind}`, detail: "détail" };
+      }
+
+      function timelineEventsForActKind(kind) {
+        return [
+          {
+            kind: "record",
+            agent: "cursor4",
+            at: 1,
+            record: {
+              seq: 1,
+              ts: "2026-08-26T18:00:00Z",
+              session_id: `s-${kind}`,
+              message_id: `m-${kind}`,
+              event: "turn_start",
+              payload: {},
+            },
+          },
+          {
+            kind: "record",
+            agent: "cursor4",
+            at: 2,
+            record: {
+              seq: 2,
+              ts: "2026-08-26T18:00:01Z",
+              session_id: `s-${kind}`,
+              message_id: `m-${kind}`,
+              event: "update",
+              payload: actPayloadForKind(kind),
+            },
+          },
+          {
+            kind: "record",
+            agent: "cursor4",
+            at: 3,
+            record: {
+              seq: 3,
+              ts: "2026-08-26T18:00:02Z",
+              session_id: `s-${kind}`,
+              message_id: `m-${kind}`,
+              event: "turn_end",
+              payload: {},
+            },
+          },
+        ];
+      }
+
+      test("TEMOIN_vue_projette_chaque_kind_du_vocabulaire", () => {
+        const kinds = [...api.JOURNAL_ACT_KINDS];
+        assert.ok(kinds.length >= 1, "JOURNAL_ACT_KINDS ne doit pas être vide");
+        for (const kind of kinds) {
+          const timeline = api.projectTimeline(timelineEventsForActKind(kind));
+          const work = timeline.find((entry) => entry.kind === "work");
+          assert.ok(work, `kind ${kind}: une entrée work est attendue`);
+          assert.equal(
+            work.acts.length,
+            1,
+            `kind ${kind}: l'acte présent au journal doit être projeté (défaut JOURNAL_ACT_KINDS)`,
+          );
+          const expectedDisplay = kind === "tool_call" ? "tool" : kind;
+          assert.equal(work.acts[0].kind, expectedDisplay, `affichage de ${kind}`);
+          assert.equal(work.acts[0].text, `acte-${kind}`);
+        }
+      });
+
+      test("mutant_filtre_runtime_reduit_tue_TEMOIN_vue_projette_chaque_kind", () => {
+        // Mutant REAL_ACT_KINDS : filtre runtime ≠ JOURNAL_ACT_KINDS.
+        // Pour chaque kind retiré du filtre, la projection de CE kind devient vide
+        // alors que le défaut (JOURNAL_ACT_KINDS) reste vert — le témoin meurt.
+        for (const dropped of [...api.JOURNAL_ACT_KINDS]) {
+          const events = timelineEventsForActKind(dropped);
+          const healthy = api.projectTimeline(events);
+          assert.equal(
+            healthy.find((entry) => entry.kind === "work")?.acts?.length,
+            1,
+            `contrôle positif d'abord pour ${dropped}`,
+          );
+          const reduced = new Set(
+            [...api.JOURNAL_ACT_KINDS].filter((kind) => kind !== dropped),
+          );
+          const broken = api.projectTimeline(events, { actKinds: reduced });
+          const brokenActs = broken.find((entry) => entry.kind === "work")?.acts || [];
+          assert.equal(
+            brokenActs.length,
+            0,
+            `mutant sans ${dropped} doit rendre une projection d'actes vide`,
+          );
+          assert.throws(
+            () => {
+              if (brokenActs.length === 0) {
+                throw new Error("TEMOIN_vue_projette_chaque_kind_du_vocabulaire");
+              }
+            },
+            (error) =>
+              String(error && error.message) ===
+              "TEMOIN_vue_projette_chaque_kind_du_vocabulaire",
+          );
+        }
+      });
+
       test("corps_entrant_et_reponse_agent_deviennent_deux_bulles_exactes", () => {
         const events = [
           {
@@ -2366,8 +2480,15 @@
     );
   }
 
-  // Ensemble fermé des payload.kind d'ACTES journalisés (pas le catalogue C3 aspiratif).
-  // Voir commentaire dans projectTimeline pour l'instruction producteur par producteur.
+  // Ensemble fermé des payload.kind d'ACTES journalisés.
+  // Source de vérité écriture : bridget_transport::JournalUpdateKind::ACTS.
+  // Un oracle Rust (TEMOIN_vocabulaire_vue_et_ecriture_ne_divergent_pas) meurt
+  // si cette liste diverge de l'enum. Ne pas ajouter un kind ici sans l'enum.
+  //
+  // tool_call = héritage pré-78d57dc. Accepté tant que journaux/fixtures legacy
+  // l'écrivent ; projeté en `tool`. Disparition : quand (1) daemons post-78d57dc,
+  // (2) attach/fixtures n'émettent plus tool_call, (3) greffe mesure 0 nouveau
+  // tool_call — alors retirer ici ET JournalUpdateKind::ToolCallLegacy.
   const JOURNAL_ACT_KINDS = new Set([
     "command",
     "file",
@@ -2393,23 +2514,13 @@
     );
     const turns = new Map();
     const projected = [];
-    // Vocabulaire d'actes = kinds que les PILOTES ÉCRIVENT dans payload.kind.
-    // Mesure 2026-08-26 (journaux du jour, après correctifs des deux pilotes) :
-    //   text · tool_call · command · approval — rien d'autre.
-    // Producteurs source :
-    //   command / file / plan / approval ← CodexActKind (codex_app_server.rs)
-    //   tool ← ACP tool_call_journal_payload (C3, depuis 78d57dc)
-    //   tool_call ← forme LEGACY encore dominante chez Cursor tant que le
-    //     daemon vivant n'a pas repris le binaire post-78d57dc ; fixtures attach.
+    // Vocabulaire d'actes = JournalUpdateKind::ACTS (contrat écriture).
+    // Mesure 2026-08-26 : text · tool_call · command · approval au journal ;
+    // tool (ACP/Claude) depuis 78d57dc ; file/plan producteurs Codex sans émission.
+    // tool_call legacy : voir JOURNAL_ACT_KINDS (conditions de disparition).
     // Retirés — aucun producteur de payload.kind journal :
-    //   intent — le contrat C3 le mappait depuis agentMessage/delta, mais les
-    //     pilotes écrivent kind:text (traité à part ci-dessous).
-    //   peer — les échanges sont des entrées timeline `peer_exchange` (relais),
-    //     jamais un update.payload.kind.
-    // file / plan : producteur Codex réel, mais 0 occurrence dans les journaux
-    //   relec* mesurés (aucune méthode item/fileChange ni item/plan émise —
-    //   seulement commandExecution + approval). Conservés pour ne pas
-    //   recréer le trou le jour où Codex les émet.
+    //   intent — aspirait agentMessage/delta ; les pilotes écrivent kind:text.
+    //   peer — entrées timeline peer_exchange, jamais update.payload.kind.
     const actKinds = options.actKinds instanceof Set ? options.actKinds : JOURNAL_ACT_KINDS;
 
     function turnFor(record, at) {

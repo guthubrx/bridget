@@ -662,8 +662,9 @@ fn spawn_worker(
                     message_id: message.id.clone(),
                 },
             );
-            let _ = record(
+            record_or_terminal(
                 &journal,
+                &events,
                 "turn_start",
                 Some(&message.id),
                 json!({ "body": message.body }),
@@ -676,8 +677,9 @@ fn spawn_worker(
                             message_id: message.id.clone(),
                         },
                     );
-                    let _ = record(
+                    record_or_terminal(
                         &journal,
+                        &events,
                         "prompt_dispatched",
                         Some(&message.id),
                         json!({
@@ -732,7 +734,7 @@ fn spawn_worker(
                 if message.reply {
                     payload["routed_to"] = json!(&message.from);
                 }
-                let _ = record(&journal, "turn_end", Some(&message.id), payload);
+                record_or_terminal(&journal, &events, "turn_end", Some(&message.id), payload);
             }
             push_internal(&events, event);
             busy.store(false, Ordering::SeqCst);
@@ -819,8 +821,9 @@ fn spawn_reader(
                     }
                 };
                 if let Some(message_id) = message_id {
-                    let _ = record(
+                    record_or_terminal(
                         &journal,
+                        &events,
                         "update",
                         Some(&message_id),
                         json!({ "kind": "text", "content": delta }),
@@ -846,7 +849,7 @@ fn spawn_reader(
                 // name + input complet (mesure /tmp/flux-outil.jsonl L19).
                 // Pas de tool_result : un Read de fichier peut saturer le
                 // journal ; le fil garde nom + arguments, pas le rendu.
-                record_tool_uses_from_assistant(&journal, &queue, &value);
+                record_tool_uses_from_assistant(&journal, &events, &queue, &value);
                 let assistant_text = value
                     .pointer("/message/content")
                     .and_then(Value::as_array)
@@ -883,8 +886,9 @@ fn spawn_reader(
                         }
                     };
                     if let Some(message_id) = message_id {
-                        let _ = record(
+                        record_or_terminal(
                             &journal,
+                            &events,
                             "update",
                             Some(&message_id),
                             json!({ "kind": "text", "content": assistant_text }),
@@ -953,8 +957,9 @@ fn spawn_reader(
                 };
                 if let Some((message_id, result)) = pending_result_update {
                     // (B) Réponse finale absente des deltas → journaliser `result`.
-                    let _ = record(
+                    record_or_terminal(
                         &journal,
+                        &events,
                         "update",
                         Some(&message_id),
                         json!({ "kind": "text", "content": result }),
@@ -970,7 +975,7 @@ fn spawn_reader(
                     detail: "événement Claude rate_limit_event incomplet".to_string(),
                 })
             } else if let Some(served) = served_model_from_claude(&value) {
-                maybe_record_mismatch(&journal, pinned_model.as_deref(), &served);
+                maybe_record_mismatch(&journal, &events, pinned_model.as_deref(), &served);
                 ManagedEventKind::ModelObserved { model: served }
             } else if let Some(usage) = usage_event(&value) {
                 usage
@@ -1024,12 +1029,18 @@ fn served_model_from_claude(value: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-fn maybe_record_mismatch(journal: &Journal, pinned: Option<&str>, served: &str) {
+fn maybe_record_mismatch(
+    journal: &Journal,
+    events: &Arc<Mutex<VecDeque<ManagedEvent>>>,
+    pinned: Option<&str>,
+    served: &str,
+) {
     let Some(pinned) = pinned.filter(|pinned| *pinned != served) else {
         return;
     };
-    let _ = record(
+    record_or_terminal(
         journal,
+        events,
         "model_mismatch",
         None,
         json!({ "pinned": pinned, "served": served }),
@@ -1094,6 +1105,7 @@ const TOOL_INPUT_DETAIL_MAX: usize = 512;
 /// Vocabulaire imposé : `kind=tool` (pas `tool_call`).
 fn record_tool_uses_from_assistant(
     journal: &Journal,
+    events: &Arc<Mutex<VecDeque<ManagedEvent>>>,
     queue: &Arc<(Mutex<QueueState>, Condvar)>,
     value: &Value,
 ) {
@@ -1121,8 +1133,9 @@ fn record_tool_uses_from_assistant(
         };
         let input = block.get("input").cloned().unwrap_or(Value::Null);
         let detail = compact_tool_input(&input);
-        let _ = record(
+        record_or_terminal(
             journal,
+            events,
             "update",
             Some(&message_id),
             json!({
@@ -1160,6 +1173,20 @@ fn record(
         .map_or(Ok(()), |journal| {
             journal.enqueue(event, message_id, payload)
         })
+}
+
+/// Miroir ACP `record_or_terminal` : un échec d'enqueue (dont kind hors
+/// vocabulaire) devient `JournalFailed` — visible, jamais avalé en silence.
+fn record_or_terminal(
+    journal: &Journal,
+    events: &Arc<Mutex<VecDeque<ManagedEvent>>>,
+    event: &str,
+    message_id: Option<&str>,
+    payload: Value,
+) {
+    if let Err(detail) = record(journal, event, message_id, payload) {
+        push_internal(events, ManagedEventKind::JournalFailed { detail });
+    }
 }
 
 fn push_internal(events: &Arc<Mutex<VecDeque<ManagedEvent>>>, kind: ManagedEventKind) {
@@ -1222,6 +1249,119 @@ mod tests {
         message.id = id.to_string();
         message.reply = true;
         message
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_claude_refus_update_hors_vocabulaire_emet_JournalFailed() {
+        // Preuve d'abord : écriture valide passe sans JournalFailed.
+        let root = std::env::temp_dir().join(format!(
+            "bridget-claude-act-kind-{}-{}",
+            std::process::id(),
+            FIXTURE_SEQ.fetch_add(1, AtomicOrdering::SeqCst)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let journal = Arc::new(Mutex::new(Some(
+            JournalWriter::start(
+                &root,
+                "claude-1",
+                "session-1",
+                Arc::new(Mutex::new(crate::acp::AcpEventQueue::default())),
+            )
+            .unwrap(),
+        )));
+        record_or_terminal(
+            &journal,
+            &events,
+            "update",
+            Some("m1"),
+            json!({"kind":"tool","text":"Read"}),
+        );
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "écriture tool valide ne doit pas émettre JournalFailed"
+        );
+        record_or_terminal(
+            &journal,
+            &events,
+            "update",
+            Some("m1"),
+            json!({"kind":"intent","text":"fantôme"}),
+        );
+        let drained: Vec<_> = events.lock().unwrap().drain(..).collect();
+        assert!(
+            drained.iter().any(|event| matches!(
+                &event.kind,
+                ManagedEventKind::JournalFailed { detail }
+                    if detail.contains("hors vocabulaire")
+            )),
+            "refus hors vocabulaire doit être visible via JournalFailed, got {drained:?}"
+        );
+        if let Some(writer) = journal.lock().unwrap().take() {
+            writer.stop();
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mutant_avale_err_record_tue_TEMOIN_claude_JournalFailed() {
+        fn broken_swallow(
+            journal: &Journal,
+            _events: &Arc<Mutex<VecDeque<ManagedEvent>>>,
+            event: &str,
+            message_id: Option<&str>,
+            payload: Value,
+        ) {
+            let _ = record(journal, event, message_id, payload);
+        }
+        let root = std::env::temp_dir().join(format!(
+            "bridget-claude-act-kind-mutant-{}-{}",
+            std::process::id(),
+            FIXTURE_SEQ.fetch_add(1, AtomicOrdering::SeqCst)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let journal = Arc::new(Mutex::new(Some(
+            JournalWriter::start(
+                &root,
+                "claude-1",
+                "session-1",
+                Arc::new(Mutex::new(crate::acp::AcpEventQueue::default())),
+            )
+            .unwrap(),
+        )));
+        broken_swallow(
+            &journal,
+            &events,
+            "update",
+            Some("m1"),
+            json!({"kind":"intent"}),
+        );
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "le mutant avale l'erreur"
+        );
+        record_or_terminal(
+            &journal,
+            &events,
+            "update",
+            Some("m1"),
+            json!({"kind":"intent"}),
+        );
+        assert!(
+            events.lock().unwrap().iter().any(|event| matches!(
+                &event.kind,
+                ManagedEventKind::JournalFailed { detail }
+                    if detail.contains("hors vocabulaire")
+            )),
+            "TEMOIN_claude_JournalFailed doit mourir si Err est avalée"
+        );
+        if let Some(writer) = journal.lock().unwrap().take() {
+            writer.stop();
+        }
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

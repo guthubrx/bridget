@@ -3,6 +3,7 @@
 //! Définit les messages JSON qui circulent sur la socket locale.
 
 pub mod acp;
+pub mod act_kind;
 pub mod claude_provider_session;
 pub mod claude_stream_json;
 pub mod codex_app_server;
@@ -12,6 +13,8 @@ pub mod managed_session;
 pub mod protocol;
 pub mod tmux;
 pub mod transport;
+
+pub use act_kind::{JournalUpdateKind, parse_update_kind, validate_journal_write};
 
 pub use acp::{AcpEvent, AcpEventQueue, AcpOptions, AcpTransport, TurnState};
 pub use claude_provider_session::{
