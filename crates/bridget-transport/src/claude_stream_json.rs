@@ -608,6 +608,12 @@ fn spawn_reader(
             // Une fixture assistant-puis-deltas testerait un fantôme de
             // protocole, pas un trou du pilote.
             if kind == "assistant" {
+                // TOOL : le content_block_start arrive tôt avec name mais
+                // input={}. On journalise ici le bloc assistant qui porte
+                // name + input complet (mesure /tmp/flux-outil.jsonl L19).
+                // Pas de tool_result : un Read de fichier peut saturer le
+                // journal ; le fil garde nom + arguments, pas le rendu.
+                record_tool_uses_from_assistant(&journal, &queue, &value);
                 let assistant_text = value
                     .pointer("/message/content")
                     .and_then(Value::as_array)
@@ -846,6 +852,68 @@ fn usage_event(value: &Value) -> Option<ManagedEventKind> {
     })
 }
 
+
+/// Plafond du champ `detail` (input sérialisé). Au-delà : troncature + «…».
+/// Choix étroit : garder le journal lisible si un outil reçoit un gros blob.
+const TOOL_INPUT_DETAIL_MAX: usize = 512;
+
+/// Journalise chaque bloc `tool_use` d'un message assistant.
+/// Vocabulaire imposé : `kind=tool` (pas `tool_call`).
+fn record_tool_uses_from_assistant(
+    journal: &Journal,
+    queue: &Arc<(Mutex<QueueState>, Condvar)>,
+    value: &Value,
+) {
+    let Some(blocks) = value.pointer("/message/content").and_then(Value::as_array) else {
+        return;
+    };
+    let message_id = {
+        let state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        state.active.as_ref().map(|active| active.message_id.clone())
+    };
+    let Some(message_id) = message_id else {
+        return;
+    };
+    for block in blocks {
+        if block.get("type").and_then(Value::as_str) != Some("tool_use") {
+            continue;
+        }
+        let Some(name) = block
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        else {
+            continue;
+        };
+        let input = block.get("input").cloned().unwrap_or(Value::Null);
+        let detail = compact_tool_input(&input);
+        let _ = record(
+            journal,
+            "update",
+            Some(&message_id),
+            json!({
+                "kind": "tool",
+                "text": name,
+                "tool": name,
+                "detail": detail,
+            }),
+        );
+    }
+}
+
+fn compact_tool_input(input: &Value) -> String {
+    let raw = match input {
+        Value::Null => String::new(),
+        other => other.to_string(),
+    };
+    if raw.chars().count() <= TOOL_INPUT_DETAIL_MAX {
+        return raw;
+    }
+    let truncated: String = raw.chars().take(TOOL_INPUT_DETAIL_MAX).collect();
+    format!("{truncated}…")
+}
+
 fn record(
     journal: &Journal,
     event: &str,
@@ -1050,6 +1118,50 @@ mod tests {
         );
     }
 
+
+    /// (TOOL) Appel d'outil Claude → update kind=tool avec NOM + CONTENU input.
+    /// Source : message assistant (input complet), pas content_block_start (input {}).
+    /// Mutant : retirer record_tool_uses_from_assistant, ou vider text/detail → meurt.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_TOOL_claude_stream_json_retranscrit_tool_use_nom_et_contenu() {
+        let events = journal_fixture_tool_use();
+        let tools: Vec<_> = events
+            .iter()
+            .filter(|event| {
+                event["event"] == "update" && event["payload"]["kind"] == "tool"
+            })
+            .collect();
+        assert_eq!(
+            tools.len(),
+            1,
+            "un seul acte tool attendu, reçu {tools:?} via {events:?}"
+        );
+        assert_eq!(
+            tools[0]["payload"]["text"].as_str(),
+            Some("Read"),
+            "nom d'outil en dur, payload={}",
+            tools[0]["payload"]
+        );
+        assert_eq!(
+            tools[0]["payload"]["tool"].as_str(),
+            Some("Read"),
+            "champ tool en dur, payload={}",
+            tools[0]["payload"]
+        );
+        assert_eq!(
+            tools[0]["payload"]["detail"].as_str(),
+            Some(r#"{"file_path":"/tmp/demo.toml","limit":1}"#),
+            "input complet en dur (pas une présence vide), payload={}",
+            tools[0]["payload"]
+        );
+        assert_eq!(
+            tools[0]["message_id"].as_str(),
+            Some("claude-abc-1"),
+            "même message_id, reçu {tools:?}"
+        );
+    }
+
     fn journal_fixture_deltas() -> Vec<Value> {
         journal_fixture(concat!(
             "while IFS= read -r line; do ",
@@ -1067,6 +1179,17 @@ mod tests {
             "done"
         ))
     }
+
+    fn journal_fixture_tool_use() -> Vec<Value> {
+        // Forme mesurée L19 de /tmp/flux-outil.jsonl : assistant + tool_use + input.
+        journal_fixture(concat!(
+            "while IFS= read -r line; do ",
+            "printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_demo\",\"name\":\"Read\",\"input\":{\"file_path\":\"/tmp/demo.toml\",\"limit\":1}}]}}'; ",
+            "printf '%s\\n' '{\"type\":\"result\",\"is_error\":false,\"terminal_reason\":\"completed\",\"stop_reason\":\"end_turn\",\"result\":\"ok\"}'; ",
+            "done"
+        ))
+    }
+
 
     fn journal_fixture(provider_script: &str) -> Vec<Value> {
         // Compteur atomique : sous parallelisme, SystemTime::nanos peut
