@@ -8910,7 +8910,7 @@ mod presence_tests {
         // n'autorise jamais une nouvelle résolution pour cette clé connue.
         {
             let mut state = shared.lock().unwrap();
-            state.router.rename("conn-1", "agent-renommé").unwrap();
+            state.router.rename("conn-1", "agent-renomme").unwrap();
         }
         let replay = handle_wrapper_message(
             "client-a",
