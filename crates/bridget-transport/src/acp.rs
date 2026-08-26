@@ -2721,11 +2721,30 @@ sleep 2
             }
         }
         assert!(transport.cancel_delivery("active", "annulation daemon"));
-        thread::sleep(CANCEL_GRACE + Duration::from_millis(100));
+        let deadline = Instant::now() + CANCEL_GRACE + Duration::from_secs(1);
+        let mut active_rejected = false;
+        let mut queued_rejected = false;
+        loop {
+            for event in transport.drain_events() {
+                active_rejected |= matches!(
+                    event,
+                    AcpEvent::DeliveryRejected { ref message_id, .. } if message_id == "active"
+                );
+                queued_rejected |= matches!(
+                    event,
+                    AcpEvent::DeliveryRejected { ref message_id, .. } if message_id == "queued"
+                );
+            }
+            if active_rejected && queued_rejected {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "l'arrêt ACP n'a pas publié tous ses rejets (active={active_rejected}, queued={queued_rejected})"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
         assert!(!transport.is_alive());
-        let events = transport.drain_events();
-        assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, .. } if message_id == "active")));
-        assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, .. } if message_id == "queued")));
     }
 
     #[test]
