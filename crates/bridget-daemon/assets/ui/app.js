@@ -171,6 +171,22 @@
         assert.equal(next.agents[0].name, "rc1");
       });
 
+      test("rattrapage_groupe_preserve_ordre_et_saisie", () => {
+        const before = api.createUiState({
+          selectedAgent: "cursor3",
+          draft: api.createDraft("saisie intacte", 6, 6, true),
+        });
+        const events = [
+          { kind: "record", agent: "cursor3", at: 2, record: { seq: 2 } },
+          { kind: "record", agent: "cursor3", at: 1, record: { seq: 1 } },
+        ];
+        const next = api.appendTimelineBatch(before, events);
+
+        assert.deepEqual(next.timelines.cursor3, events);
+        assert.deepEqual(next.draft, before.draft);
+        assert.deepEqual(next.viewport, before.viewport);
+      });
+
       test("snapshot_cible_chaque_agent_et_refuse_les_traces_non_calculees", async () => {
         const counts = new Map([["rc1", 19], ["jc1", 30], ["rc5", 3]]);
         const calls = [];
@@ -222,6 +238,10 @@
         assert.equal(
           api.agentResourceUrl("/v1/watch", "jeton +", "jc1"),
           "/v1/watch?token=jeton+%2B&agent=jc1",
+        );
+        assert.equal(
+          api.agentResourceUrl("/v1/watch", "jeton +", "jc1", 0),
+          "/v1/watch?token=jeton+%2B&agent=jc1&from_seq=0",
         );
         assert.deepEqual(api.peerExchangeProjection(scoped.get("rc1"), "jc1"), {
           state: "unscoped",
@@ -388,6 +408,116 @@
         assert.equal(work.durationMs, 5000);
       });
 
+      test("corps_entrant_et_reponse_agent_deviennent_deux_bulles_exactes", () => {
+        const events = [
+          {
+            kind: "record",
+            agent: "cartae0",
+            at: Date.parse("2026-08-26T00:16:05Z") / 1000,
+            record: {
+              seq: 1,
+              ts: "2026-08-26T00:16:05Z",
+              session_id: "session-l7",
+              message_id: "message-l7",
+              event: "turn_start",
+              payload: { body: "Lis ce message dans le fil." },
+            },
+          },
+          {
+            kind: "record",
+            agent: "cartae0",
+            at: Date.parse("2026-08-26T00:16:06Z") / 1000,
+            record: {
+              seq: 2,
+              ts: "2026-08-26T00:16:06Z",
+              session_id: "session-l7",
+              message_id: "message-l7",
+              event: "prompt_dispatched",
+              payload: { from: "bridget", body: "Lis ce message dans le fil." },
+            },
+          },
+          {
+            kind: "record",
+            agent: "cartae0",
+            at: Date.parse("2026-08-26T00:16:08Z") / 1000,
+            record: {
+              seq: 3,
+              ts: "2026-08-26T00:16:08Z",
+              session_id: "session-l7",
+              message_id: "message-l7",
+              event: "update",
+              payload: { kind: "text", content: "Le contenu est maintenant " },
+            },
+          },
+          {
+            kind: "record",
+            agent: "cartae0",
+            at: Date.parse("2026-08-26T00:16:10Z") / 1000,
+            record: {
+              seq: 4,
+              ts: "2026-08-26T00:16:10Z",
+              session_id: "session-l7",
+              message_id: "message-l7",
+              event: "update",
+              payload: { kind: "text", content: "lisible." },
+            },
+          },
+        ];
+
+        assert.deepEqual(
+          api.projectTimeline(events)
+            .filter((entry) => entry.kind === "message")
+            .map(({ role, text, at }) => ({ role, text, at })),
+          [
+            {
+              role: "user",
+              text: "Lis ce message dans le fil.",
+              at: Date.parse("2026-08-26T00:16:05Z") / 1000,
+            },
+            {
+              role: "agent",
+              text: "Le contenu est maintenant lisible.",
+              at: Date.parse("2026-08-26T00:16:08Z") / 1000,
+            },
+          ],
+        );
+      });
+
+      test("depli_echange_resout_les_corps_exacts_sans_exposer_les_identifiants", () => {
+        const bodies = new Map();
+        api.rememberJournalMessage(bodies, {
+          ts: "2026-08-26T01:31:29Z",
+          message_id: "mcp-68888-6a8e41ee-c1",
+          event: "turn_start",
+          payload: { from: "bridget", body: "TON VERDICT EST LA PIÈCE DU GREFFE." },
+        });
+        api.rememberJournalMessage(bodies, {
+          ts: "2026-08-26T01:32:10Z",
+          message_id: "mcp-2017281-6a8e167d-16",
+          event: "prompt_dispatched",
+          payload: { from: "jc2", body: "La tête amendée est prête." },
+        });
+
+        const texts = api.peerExchangeTexts({
+          delivery_ids: ["mcp-68888-6a8e41ee-c1", "mcp-2017281-6a8e167d-16"],
+        }, bodies);
+        assert.deepEqual(texts, [
+          "TON VERDICT EST LA PIÈCE DU GREFFE.",
+          "La tête amendée est prête.",
+        ]);
+        assert.doesNotMatch(texts.join("\n"), /mcp-/);
+      });
+
+      test("horodatage_utc_devient_heure_et_jour_locaux_cest", () => {
+        const beforeMidnight = Date.parse("2026-08-25T21:59:00Z") / 1000;
+        const afterMidnight = Date.parse("2026-08-25T22:01:00Z") / 1000;
+        const measured = Date.parse("2026-08-26T00:16:05Z") / 1000;
+
+        assert.equal(api.formatLocalTime(measured, "Europe/Paris"), "02:16");
+        assert.equal(api.localDayKey(beforeMidnight, "Europe/Paris"), "2026-08-25");
+        assert.equal(api.localDayKey(afterMidnight, "Europe/Paris"), "2026-08-26");
+      });
+
       test("fragment_jsonl_incomplet_attend_sa_borne_finale", () => {
         const record = { v: 1, seq: 9, ts: "2026-08-25T20:00:00Z", session_id: "s", event: "update", message_id: "m", payload: { kind: "text", content: "é" } };
         const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
@@ -414,6 +544,7 @@
   "use strict";
 
   const BOTTOM_THRESHOLD_PX = 2;
+  const LOCAL_FORMATTERS = new Map();
 
   function createDraft(value = "", selectionStart = 0, selectionEnd = 0, focused = false) {
     return {
@@ -494,9 +625,88 @@
     return 0;
   }
 
-  function agentResourceUrl(path, token, agent = null) {
+  function localFormatters(timeZone) {
+    const cacheKey = timeZone || "browser-local";
+    if (LOCAL_FORMATTERS.has(cacheKey)) return LOCAL_FORMATTERS.get(cacheKey);
+    const zone = timeZone ? { timeZone } : {};
+    const formatters = {
+      time: new Intl.DateTimeFormat("fr-FR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        ...zone,
+      }),
+      day: new Intl.DateTimeFormat("fr-FR", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        ...zone,
+      }),
+    };
+    LOCAL_FORMATTERS.set(cacheKey, formatters);
+    return formatters;
+  }
+
+  function formatLocalTime(at, timeZone) {
+    const date = new Date((at || 0) * 1000);
+    return Number.isNaN(date.getTime())
+      ? "heure inconnue"
+      : localFormatters(timeZone).time.format(date);
+  }
+
+  function localDayKey(at, timeZone) {
+    const date = new Date((at || 0) * 1000);
+    if (Number.isNaN(date.getTime())) return "unknown";
+    const parts = Object.fromEntries(
+      localFormatters(timeZone).day
+        .formatToParts(date)
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, part.value]),
+    );
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  }
+
+  function journalMessageFact(record) {
+    if (!record || !["turn_start", "prompt_dispatched"].includes(record.event)) {
+      return null;
+    }
+    const payload = record.payload && typeof record.payload === "object" ? record.payload : {};
+    const id = text(record.message_id);
+    const body = text(payload.body);
+    if (!id || !body) return null;
+    return {
+      id,
+      text: body,
+      from: text(payload.from),
+      at: epochSeconds(record.ts),
+    };
+  }
+
+  function rememberJournalMessage(messages, record) {
+    const fact = journalMessageFact(record);
+    if (!fact) return null;
+    const previous = messages.get(fact.id);
+    const merged = {
+      id: fact.id,
+      text: fact.text || (previous && previous.text) || "",
+      from: fact.from || (previous && previous.from) || "",
+      at: (previous && previous.at) || fact.at,
+    };
+    messages.set(fact.id, merged);
+    return merged;
+  }
+
+  function peerExchangeTexts(exchange, messages) {
+    return (exchange && Array.isArray(exchange.delivery_ids) ? exchange.delivery_ids : [])
+      .map((id) => messages.get(id))
+      .filter(Boolean)
+      .map((message) => message.text)
+      .filter(Boolean);
+  }
+
+  function agentResourceUrl(path, token, agent = null, fromSeq = null) {
     const query = new URLSearchParams({ token });
     if (agent) query.set("agent", agent);
+    if (Number.isInteger(fromSeq) && fromSeq >= 0) query.set("from_seq", String(fromSeq));
     return `${path}?${query.toString()}`;
   }
 
@@ -583,6 +793,26 @@
     const agent = event.agent || state.selectedAgent || "inconnu";
     const timelines = { ...state.timelines };
     timelines[agent] = [...(timelines[agent] || []), event];
+    return {
+      ...state,
+      timelines,
+      draft: preserveDraft(state.draft),
+      viewport: { ...state.viewport },
+    };
+  }
+
+  function appendTimelineBatch(state, events) {
+    if (!Array.isArray(events) || events.length === 0) return state;
+    const timelines = { ...state.timelines };
+    const grouped = new Map();
+    events.forEach((event) => {
+      const agent = event.agent || state.selectedAgent || "inconnu";
+      if (!grouped.has(agent)) grouped.set(agent, []);
+      grouped.get(agent).push(event);
+    });
+    grouped.forEach((batch, agent) => {
+      timelines[agent] = [...(timelines[agent] || []), ...batch];
+    });
     return {
       ...state,
       timelines,
@@ -774,6 +1004,11 @@
     const ordered = (Array.isArray(events) ? events : [])
       .map((event, index) => ({ ...event, __order: index }))
       .sort((left, right) => (left.at || 0) - (right.at || 0) || left.__order - right.__order);
+    const optimisticDeliveries = new Set(
+      ordered
+        .filter((entry) => entry.kind === "message" && entry.deliveryId)
+        .map((entry) => entry.deliveryId),
+    );
     const turns = new Map();
     const projected = [];
     const actKinds = new Set([
@@ -796,6 +1031,9 @@
           endAt: null,
           textParts: [],
           textAt: null,
+          promptText: "",
+          promptFrom: "",
+          promptAt: null,
           acts: [],
           reasoning: null,
           terminal: false,
@@ -815,6 +1053,15 @@
       turn.agent = entry.agent || turn.agent;
       if (record.event === "turn_start") {
         turn.startAt = entry.at || epochSeconds(record.ts);
+        turn.promptText = text(payload.body, turn.promptText);
+        turn.promptFrom = text(payload.from, turn.promptFrom);
+        turn.promptAt ||= entry.at || epochSeconds(record.ts);
+        return;
+      }
+      if (record.event === "prompt_dispatched") {
+        turn.promptText = text(payload.body, turn.promptText);
+        turn.promptFrom = text(payload.from, turn.promptFrom);
+        turn.promptAt ||= entry.at || epochSeconds(record.ts);
         return;
       }
       if (record.event === "update") {
@@ -822,7 +1069,7 @@
           const content = text(payload.content, text(payload.text));
           if (content) {
             turn.textParts.push(content);
-            turn.textAt = entry.at;
+            turn.textAt ||= entry.at;
           }
         } else if (actKinds.has(payload.kind)) {
           turn.acts.push({
@@ -871,6 +1118,19 @@
     });
 
     turns.forEach((turn) => {
+      if (
+        turn.promptText &&
+        !optimisticDeliveries.has(turn.key)
+      ) {
+        projected.push({
+          kind: "message",
+          role: "user",
+          agent: turn.agent,
+          text: turn.promptText,
+          at: turn.promptAt || turn.startAt,
+          messageId: turn.key,
+        });
+      }
       if (turn.textParts.length > 0) {
         projected.push({
           kind: "message",
@@ -954,14 +1214,16 @@
     const token = params.get("token") || "";
     const requestedAgent = params.get("agent");
     const fragmentBuffers = new Map();
+    const journalBodies = new Map();
+    const historyLoads = new Map();
+    const exchangeLoads = new Map();
+    const historyStates = new Map();
+    const historyConnections = new Map();
+    const expandedPeers = new Set();
     const seenPeers = new Set();
     const seenRecords = new Set();
     const drafts = new Map();
     const readThrough = new Map();
-    const timeFormatter = new Intl.DateTimeFormat("fr-FR", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
     const dateFormatter = new Intl.DateTimeFormat("fr-FR", {
       weekday: "long",
       day: "numeric",
@@ -970,6 +1232,7 @@
     let state = createUiState({ selectedAgent: requestedAgent });
     let source = null;
     let sourceGeneration = 0;
+    let replayingJournal = true;
     let restoredTimer = null;
 
     const make = (tag, className, value) => {
@@ -980,13 +1243,11 @@
     };
 
     const timestamp = (at) => {
-      const date = new Date((at || 0) * 1000);
-      return Number.isNaN(date.getTime()) ? "heure inconnue" : timeFormatter.format(date);
+      return formatLocalTime(at);
     };
 
     const dayKey = (at) => {
-      const date = new Date((at || 0) * 1000);
-      return Number.isNaN(date.getTime()) ? "unknown" : date.toISOString().slice(0, 10);
+      return localDayKey(at);
     };
 
     const dayLabel = (at) => {
@@ -1121,12 +1382,126 @@
       return wrapper;
     };
 
+    const rememberEventBody = (event) => {
+      if (event.kind !== "record") return null;
+      return rememberJournalMessage(journalBodies, event.record);
+    };
+
+    const loadJournalBodies = (agent, refresh = false) => {
+      if (!agent || !token || typeof windowRef.EventSource !== "function") {
+        return Promise.resolve("unavailable");
+      }
+      if (refresh && historyStates.get(agent) !== "loading") {
+        historyLoads.delete(agent);
+        historyStates.delete(agent);
+      }
+      if (historyLoads.has(agent)) return historyLoads.get(agent);
+      historyStates.set(agent, "loading");
+      const buffers = new Map();
+      const load = new Promise((resolve) => {
+        let finished = false;
+        let timeoutId = null;
+        const history = new windowRef.EventSource(
+          agentResourceUrl("/v1/journal", token, agent, 0),
+        );
+        historyConnections.set(agent, history);
+        const finish = (status) => {
+          if (finished) return;
+          finished = true;
+          historyStates.set(agent, status);
+          historyConnections.delete(agent);
+          history.close();
+          if (timeoutId !== null) windowRef.clearTimeout(timeoutId);
+          resolve(status);
+        };
+        timeoutId = windowRef.setTimeout(() => finish("partial"), 5000);
+        history.addEventListener("journal", (message) => {
+          try {
+            const payload = JSON.parse(message.data);
+            journalEnvelopeToEvents(payload, agent, buffers).forEach(rememberEventBody);
+            if (payload.event && payload.event.type === "SnapshotCaughtUp") {
+              finish("ready");
+            }
+          } catch (_error) {
+            finish("unavailable");
+          }
+        });
+        history.onerror = () => finish("unavailable");
+      });
+      historyLoads.set(agent, load);
+      return load;
+    };
+
+    const exchangeAgents = (exchange) => [...new Set([
+      exchange.agent || state.selectedAgent,
+      exchange.peer,
+    ].filter(Boolean))];
+
+    const loadExchangeBodies = (exchange) => {
+      const key = peerExchangeKey(exchange.agent || state.selectedAgent, exchange);
+      const expected = Array.isArray(exchange.delivery_ids) ? exchange.delivery_ids.length : 0;
+      if (peerExchangeTexts(exchange, journalBodies).length >= expected) {
+        return Promise.resolve(["ready"]);
+      }
+      if (exchangeLoads.has(key)) return exchangeLoads.get(key);
+      const load = Promise.all(
+        exchangeAgents(exchange).map((agent) => loadJournalBodies(agent, true)),
+      ).then((statuses) => {
+        if (peerExchangeTexts(exchange, journalBodies).length < expected) {
+          exchangeLoads.delete(key);
+        }
+        return statuses;
+      });
+      exchangeLoads.set(key, load);
+      return load;
+    };
+
+    const exchangeBodyState = (exchange) => {
+      const expected = Array.isArray(exchange.delivery_ids) ? exchange.delivery_ids.length : 0;
+      if (peerExchangeTexts(exchange, journalBodies).length >= expected) return "ready";
+      const states = exchangeAgents(exchange).map((agent) => historyStates.get(agent));
+      if (states.some((status) => status === "loading")) return "loading";
+      if (states.some(Boolean)) return "partial";
+      return "idle";
+    };
+
+    const renderExchangeBodies = (container, exchange) => {
+      const texts = peerExchangeTexts(exchange, journalBodies);
+      const expected = Array.isArray(exchange.delivery_ids) ? exchange.delivery_ids.length : 0;
+      const children = [];
+      if (texts.length > 0) {
+        const list = make("ol", "trace-messages");
+        texts.forEach((body) => list.append(make("li", "", body)));
+        children.push(list);
+      }
+      if (texts.length < expected) {
+        const pending = exchangeBodyState(exchange) === "idle" || exchangeBodyState(exchange) === "loading";
+        const missing = expected - texts.length;
+        children.push(make(
+          "p",
+          "trace-message-state",
+          pending
+            ? "Chargement des messages…"
+            : `Contenu indisponible pour ${missing} message${missing > 1 ? "s" : ""}.`,
+        ));
+      }
+      if (children.length === 0) {
+        children.push(make("p", "trace-message-state", "Contenu indisponible."));
+      }
+      container.replaceChildren(...children);
+    };
+
     const openDetails = (exchange) => {
       nodes.detailTitle.textContent = peerLabel(exchange);
-      const list = make("ol");
-      (exchange.delivery_ids || []).forEach((id) => list.append(make("li", "", id)));
-      nodes.detailContent.replaceChildren(list);
+      const key = peerExchangeKey(exchange.agent || state.selectedAgent, exchange);
+      nodes.detailPanel.dataset.exchangeKey = key;
+      renderExchangeBodies(nodes.detailContent, exchange);
       nodes.detailPanel.hidden = false;
+      void loadExchangeBodies(exchange).then(() => {
+        if (nodes.detailPanel.dataset.exchangeKey === key) {
+          renderExchangeBodies(nodes.detailContent, exchange);
+        }
+      });
     };
 
     const renderPeer = (entry) => {
@@ -1137,17 +1512,29 @@
       peer.addEventListener("click", () => selectAgent(entry.peer));
       const action = make("button", "trace-action", peerLabel(entry));
       action.type = "button";
-      const detail = make("p", "trace-detail");
-      detail.hidden = true;
+      const traceTime = make("span", "trace-time", timestamp(entry.at));
+      const detail = make("div", "trace-detail");
+      const key = peerExchangeKey(entry.agent || state.selectedAgent, entry);
+      detail.hidden = !expandedPeers.has(key);
+      if (!detail.hidden) renderExchangeBodies(detail, entry);
       action.addEventListener("click", () => {
         if (entry.count <= 3) {
-          detail.textContent = (entry.delivery_ids || []).join(" · ") || "Détail indisponible";
-          detail.hidden = !detail.hidden;
+          if (expandedPeers.has(key)) {
+            expandedPeers.delete(key);
+            detail.hidden = true;
+            return;
+          }
+          expandedPeers.add(key);
+          detail.hidden = false;
+          renderExchangeBodies(detail, entry);
+          void loadExchangeBodies(entry).then(() => {
+            if (expandedPeers.has(key)) renderThread(0);
+          });
         } else {
           openDetails(entry);
         }
       });
-      line.append(peer, action);
+      line.append(peer, action, traceTime);
       wrapper.append(line, detail);
       return wrapper;
     };
@@ -1281,6 +1668,12 @@
       source = null;
     };
 
+    const closeAll = () => {
+      closeWatch();
+      historyConnections.forEach((history) => history.close());
+      historyConnections.clear();
+    };
+
     const requestScopedSnapshot = (agent, generation) => {
       void fetchScopedSnapshot((url) => windowRef.fetch(url), token, agent)
         .then((scoped) => {
@@ -1302,9 +1695,10 @@
       closeWatch();
       if (!agent || !token || typeof windowRef.EventSource !== "function") return;
       const generation = sourceGeneration;
+      replayingJournal = true;
       updateRelay("reconnecting");
       source = new windowRef.EventSource(
-        agentResourceUrl("/v1/watch", token, agent),
+        agentResourceUrl("/v1/watch", token, agent, 0),
       );
       requestScopedSnapshot(agent, generation);
       source.onopen = () => {
@@ -1327,15 +1721,21 @@
       source.addEventListener("journal", (message) => {
         if (generation !== sourceGeneration) return;
         try {
-          journalEnvelopeToEvents(JSON.parse(message.data), agent, fragmentBuffers)
-            .forEach((event) => {
-              if (event.kind === "record") {
-                const key = `${agent}:${text(event.record.session_id)}:${String(event.record.seq)}`;
-                if (seenRecords.has(key)) return;
-                seenRecords.add(key);
-              }
-              applyIncoming(event);
+          const envelope = JSON.parse(message.data);
+          const caughtUp = envelope.event && envelope.event.type === "SnapshotCaughtUp";
+          const accepted = journalEnvelopeToEvents(envelope, agent, fragmentBuffers)
+            .filter((event) => {
+              if (event.kind !== "record") return true;
+              rememberEventBody(event);
+              const key = `${agent}:${text(event.record.session_id)}:${String(event.record.seq)}`;
+              if (seenRecords.has(key)) return false;
+              seenRecords.add(key);
+              return true;
             });
+          state = appendTimelineBatch(state, accepted);
+          if (replayingJournal && !caughtUp) return;
+          replayingJournal = false;
+          renderThread(caughtUp ? 0 : accepted.length);
         } catch (_error) {
           applyIncoming({
             kind: "system",
@@ -1503,7 +1903,7 @@
     if (!token) {
       nodes.sourceState.textContent = "Jeton UI absent : aucune donnée demandée.";
       nodes.sourceState.dataset.state = "error";
-      return { close: closeWatch };
+      return { close: closeAll };
     }
 
     if (requestedAgent) {
@@ -1523,7 +1923,7 @@
         });
     }
 
-    return { close: closeWatch };
+    return { close: closeAll };
   }
 
   return Object.freeze({
@@ -1535,6 +1935,7 @@
     updateComposition,
     endComposition,
     applyWatchEvent,
+    appendTimelineBatch,
     explicitSend,
     shouldSubmitKey,
     completeExplicitSend,
@@ -1550,6 +1951,11 @@
     peerExchangeKey,
     normalizeAgentRow,
     normalizeAgents,
+    formatLocalTime,
+    localDayKey,
+    journalMessageFact,
+    rememberJournalMessage,
+    peerExchangeTexts,
     journalEnvelopeToEvents,
     projectTimeline,
     peerLabel,

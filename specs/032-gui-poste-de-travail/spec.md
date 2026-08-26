@@ -49,7 +49,10 @@ Le relais est en lecture seule (39 occurrences de la contrainte).
 
 - **Un agent à la fois.**
 - Bulles : agent à gauche, utilisateur à droite.
-- Séparateurs de date centrés.
+- Chaque message entrant riche est rendu en bulle à droite, y compris quand
+  l'émetteur est un autre agent ; la réponse de l'agent courant reste à gauche.
+- Chaque bulle porte l'heure locale dérivée du `ts` d'émission.
+- Séparateurs de date locale centrés, y compris au passage de minuit local.
 - **Événements système en gris, centrés, dans le fil** : mission déléguée,
   verdict rendu, refus de contrainte, agent arrêté.
 
@@ -64,7 +67,9 @@ Trois formes, qui distinguent **la direction** :
 | `<N> messages avec <agent>` | échange, **avec le nombre** |
 | `Message à <agent>` | envoyé |
 
-**Ni le contenu, ni rien** : qui, dans quel sens, combien.
+La ligne reste un résumé : qui, dans quel sens, combien, et l'heure locale.
+Son dépli rend les **textes des messages**, jamais leurs identifiants de
+livraison.
 Le marqueur apparaît **à sa place chronologique** — donc on voit qu'un agent a
 consulté quelqu'un **avant** de répondre.
 
@@ -275,6 +280,14 @@ locale. Aucune étape de compilation, aucune installation.
 - [ ] **AC13** — aucune approbation de profil ou de routine n'est possible
       depuis l'interface ; une demande d'approbation est **affichée** sans être
       **validable**.
+- [x] **AC14** — chaque bulle et chaque trace porte son heure locale, le fil
+      sépare les journées locales, et l'ordre reste fondé sur le `ts`
+      d'émission même pendant le rattrapage d'historique.
+- [x] **AC15** — le dépli d'une trace rend les corps correspondant à ses
+      `delivery_ids`, dans leur ordre, sans afficher aucun identifiant.
+- [x] **AC16** — le fil rend le texte exact de chaque message entrant en bulle
+      à droite et le texte exact de la réponse de l'agent courant en bulle à
+      gauche ; une trace inter-agents ne remplace jamais ces corps.
 
 ## 8ter. Référence de lecture
 
