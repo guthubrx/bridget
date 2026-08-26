@@ -596,6 +596,17 @@ fn spawn_reader(
             }
             // (B) Repli : message `assistant` complet si aucun delta n'a été
             // journalisé (stdout sans include-partial, ou forme agrégée seule).
+            //
+            // Anti-doublon assistant↔deltas — écarté par écrit, pas par garde
+            // supplémentaire : `ensure_stream_arguments` impose
+            // `--include-partial-messages`. Sous ce contrat CLI/SDK, les
+            // `stream_event` (deltas) arrivent pendant la génération, PUIS le
+            // message `assistant` agrégé, PUIS `result`. L'ordre inverse
+            // (assistant puis deltas) n'est pas produit ; la garde
+            // `text_updates == 0` couvre donc le seul ordre réel
+            // (deltas→assistant→result, ou assistant→result sans partial).
+            // Une fixture assistant-puis-deltas testerait un fantôme de
+            // protocole, pas un trou du pilote.
             if kind == "assistant" {
                 let assistant_text = value
                     .pointer("/message/content")
