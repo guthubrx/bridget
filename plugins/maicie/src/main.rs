@@ -3657,6 +3657,7 @@ mod tests {
             status_capture_budget_ms: None,
             catalogue_path: None,
             coordination_policies: None,
+            review_project: None,
             profiles: profiles.clone(),
         };
 
