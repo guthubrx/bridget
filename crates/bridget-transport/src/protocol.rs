@@ -575,6 +575,9 @@ pub enum AttachWindow {
     Today,
     Seq(u64),
     Date(String),
+    /// Les `n` dernières séquences présentes dans le journal (tous fichiers).
+    /// Résolue en `Seq(from)` inclusif au moment de l'abonnement.
+    Tail(u64),
 }
 
 /// Refus explicitement typés du plan de contrôle attach.
