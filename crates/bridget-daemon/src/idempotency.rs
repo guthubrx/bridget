@@ -1868,39 +1868,70 @@ mod tests {
     const NOW: i64 = 1_000_000;
     const HORIZON: i64 = 3600;
 
-    struct TraceSansEnveloppe;
+    /// Un seul logger global (contrainte `log`) ; les tests qui lisent la trace
+    /// prennent `TEST_LOG_LOCK` pour ne pas se marcher dessus.
+    static TEST_LOG_LOCK: Mutex<()> = Mutex::new(());
+    static TEST_WARN_LOGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-    static TRACE_SANS_ENVELOPPE: TraceSansEnveloppe = TraceSansEnveloppe;
-    static TRACES_SANS_ENVELOPPE: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    static INIT_TRACE_SANS_ENVELOPPE: Once = Once::new();
+    struct TempDbGuard(std::path::PathBuf);
 
-    impl log::Log for TraceSansEnveloppe {
-        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
-            metadata.level() <= log::Level::Warn
+    impl TempDbGuard {
+        fn new(name_prefix: &str) -> Self {
+            Self(std::env::temp_dir().join(format!(
+                "{name_prefix}-{}.db",
+                uuid::Uuid::new_v4()
+            )))
         }
 
-        fn log(&self, record: &log::Record<'_>) {
-            if self.enabled(record.metadata()) {
-                let message = record.args().to_string();
-                if message.contains("corrélation in_reply_to impossible") {
-                    TRACES_SANS_ENVELOPPE.lock().unwrap().push(message);
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDbGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn init_test_warn_logger() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            struct CapturingLogger;
+            impl log::Log for CapturingLogger {
+                fn enabled(&self, metadata: &log::Metadata) -> bool {
+                    metadata.level() <= log::Level::Warn
                 }
+                fn log(&self, record: &log::Record) {
+                    if record.level() <= log::Level::Warn {
+                        TEST_WARN_LOGS
+                            .lock()
+                            .expect("TEST_WARN_LOGS")
+                            .push(record.args().to_string());
+                    }
+                }
+                fn flush(&self) {}
             }
-        }
-
-        fn flush(&self) {}
+            static LOGGER: CapturingLogger = CapturingLogger;
+            log::set_logger(&LOGGER).expect("logger de test installable");
+            log::set_max_level(log::LevelFilter::Warn);
+        });
     }
 
     fn commencer_capture_trace_sans_enveloppe() {
-        INIT_TRACE_SANS_ENVELOPPE.call_once(|| {
-            log::set_logger(&TRACE_SANS_ENVELOPPE).expect("logger de test installable");
-            log::set_max_level(log::LevelFilter::Warn);
-        });
-        TRACES_SANS_ENVELOPPE.lock().unwrap().clear();
+        init_test_warn_logger();
+        let _guard = TEST_LOG_LOCK.lock().expect("TEST_LOG_LOCK");
+        TEST_WARN_LOGS.lock().expect("TEST_WARN_LOGS").clear();
     }
 
     fn traces_sans_enveloppe() -> Vec<String> {
-        TRACES_SANS_ENVELOPPE.lock().unwrap().clone()
+        TEST_WARN_LOGS
+            .lock()
+            .expect("TEST_WARN_LOGS")
+            .iter()
+            .filter(|line| line.contains("corrélation in_reply_to impossible"))
+            .cloned()
+            .collect()
     }
 
     fn key() -> IdempotencyKey {
@@ -2219,37 +2250,6 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
-    /// Capture des `warn!` pour les oracles qui exigent qu'un écart soit DIT.
-    /// Un seul logger global (contrainte `log`) ; les tests qui lisent la
-    /// trace prennent `TEST_LOG_LOCK` pour ne pas se marcher dessus.
-    static TEST_LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    static TEST_WARN_LOGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-
-    fn ensure_warn_log_capture() {
-        use std::sync::Once;
-        static INIT: Once = Once::new();
-        INIT.call_once(|| {
-            struct CapturingLogger;
-            impl log::Log for CapturingLogger {
-                fn enabled(&self, metadata: &log::Metadata) -> bool {
-                    metadata.level() <= log::Level::Warn
-                }
-                fn log(&self, record: &log::Record) {
-                    if record.level() <= log::Level::Warn {
-                        TEST_WARN_LOGS
-                            .lock()
-                            .expect("TEST_WARN_LOGS")
-                            .push(record.args().to_string());
-                    }
-                }
-                fn flush(&self) {}
-            }
-            static LOGGER: CapturingLogger = CapturingLogger;
-            let _ = log::set_logger(&LOGGER);
-            log::set_max_level(log::LevelFilter::Warn);
-        });
-    }
-
     /// ORACLE — migration v4 face à des enfants sans parent (FK OFF hors daemon).
     /// Meurt si l'INSERT SELECT échoue au démarrage : flotte bloquée.
     /// Meurt aussi si l'écart est silencieux (mutant : DELETE sans `warn!`).
@@ -2257,16 +2257,13 @@ mod tests {
     /// sur la copie prod du jour — ne pas lire cet oracle comme un incident.
     #[test]
     fn migration_v4_nettoie_les_enfants_sans_parent_sans_bloquer_le_daemon() {
-        ensure_warn_log_capture();
+        init_test_warn_logger();
         let _log_guard = TEST_LOG_LOCK.lock().expect("TEST_LOG_LOCK");
         TEST_WARN_LOGS.lock().expect("TEST_WARN_LOGS").clear();
 
-        let path = std::env::temp_dir().join(format!(
-            "bridget-idempotency-v4-fk-orphan-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let db = TempDbGuard::new("bridget-idempotency-v4-fk-orphan");
         {
-            let legacy = Connection::open(&path).unwrap();
+            let legacy = Connection::open(db.path()).unwrap();
             // Comme le CLI SQLite : FK OFF par défaut → orphelin de schéma possible.
             legacy.pragma_update(None, "foreign_keys", false).unwrap();
             legacy
@@ -2337,7 +2334,7 @@ mod tests {
         }
 
         // Ne doit PAS paniquer / échouer : c'est le démarrage du daemon.
-        let store = IdempotencyStore::open(&path).expect(
+        let store = IdempotencyStore::open(db.path()).expect(
             "v4 ne doit pas bloquer le démarrage sur un enfant sans parent",
         );
         let has_v4: bool = store
@@ -2380,7 +2377,6 @@ mod tests {
         );
 
         drop(store);
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
