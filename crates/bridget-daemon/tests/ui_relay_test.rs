@@ -973,7 +973,9 @@ fn watch_pousse_thread_message_sortant_apres_ouverture() {
     // référent→humain écrit au ledger doit arriver en SSE thread_message
     // SANS reconnexion ni second snapshot. Meurt si push_live_thread_messages
     // est retiré ou vidé.
-    let root = root("thread-live");
+    // Nom court : sous macOS le chemin de la socket Unix est sévèrement borné ;
+    // « thread-live » faisait « daemon non prêt » sans rapport avec le code testé.
+    let root = root("tlive");
     let daemon = DaemonProcess::start(&root);
     let socket = root.join(".cache/bridget/bridget.sock");
     let mut referent = LiveAgent::connect(&socket, "agent-referent");
