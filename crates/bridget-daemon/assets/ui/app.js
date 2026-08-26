@@ -2366,8 +2366,15 @@
     );
   }
 
-  // Ensemble fermé des payload.kind d'ACTES journalisés (pas le catalogue C3 aspiratif).
-  // Voir commentaire dans projectTimeline pour l'instruction producteur par producteur.
+  // Ensemble fermé des payload.kind d'ACTES journalisés.
+  // Source de vérité écriture : bridget_transport::JournalUpdateKind::ACTS.
+  // Un oracle Rust (TEMOIN_vocabulaire_vue_et_ecriture_ne_divergent_pas) meurt
+  // si cette liste diverge de l'enum. Ne pas ajouter un kind ici sans l'enum.
+  //
+  // tool_call = héritage pré-78d57dc. Accepté tant que journaux/fixtures legacy
+  // l'écrivent ; projeté en `tool`. Disparition : quand (1) daemons post-78d57dc,
+  // (2) attach/fixtures n'émettent plus tool_call, (3) greffe mesure 0 nouveau
+  // tool_call — alors retirer ici ET JournalUpdateKind::ToolCallLegacy.
   const JOURNAL_ACT_KINDS = new Set([
     "command",
     "file",
@@ -2393,23 +2400,13 @@
     );
     const turns = new Map();
     const projected = [];
-    // Vocabulaire d'actes = kinds que les PILOTES ÉCRIVENT dans payload.kind.
-    // Mesure 2026-08-26 (journaux du jour, après correctifs des deux pilotes) :
-    //   text · tool_call · command · approval — rien d'autre.
-    // Producteurs source :
-    //   command / file / plan / approval ← CodexActKind (codex_app_server.rs)
-    //   tool ← ACP tool_call_journal_payload (C3, depuis 78d57dc)
-    //   tool_call ← forme LEGACY encore dominante chez Cursor tant que le
-    //     daemon vivant n'a pas repris le binaire post-78d57dc ; fixtures attach.
+    // Vocabulaire d'actes = JournalUpdateKind::ACTS (contrat écriture).
+    // Mesure 2026-08-26 : text · tool_call · command · approval au journal ;
+    // tool (ACP/Claude) depuis 78d57dc ; file/plan producteurs Codex sans émission.
+    // tool_call legacy : voir JOURNAL_ACT_KINDS (conditions de disparition).
     // Retirés — aucun producteur de payload.kind journal :
-    //   intent — le contrat C3 le mappait depuis agentMessage/delta, mais les
-    //     pilotes écrivent kind:text (traité à part ci-dessous).
-    //   peer — les échanges sont des entrées timeline `peer_exchange` (relais),
-    //     jamais un update.payload.kind.
-    // file / plan : producteur Codex réel, mais 0 occurrence dans les journaux
-    //   relec* mesurés (aucune méthode item/fileChange ni item/plan émise —
-    //   seulement commandExecution + approval). Conservés pour ne pas
-    //   recréer le trou le jour où Codex les émet.
+    //   intent — aspirait agentMessage/delta ; les pilotes écrivent kind:text.
+    //   peer — entrées timeline peer_exchange, jamais update.payload.kind.
     const actKinds = options.actKinds instanceof Set ? options.actKinds : JOURNAL_ACT_KINDS;
 
     function turnFor(record, at) {

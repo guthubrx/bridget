@@ -100,13 +100,17 @@ enum CodexActKind {
 }
 
 impl CodexActKind {
-    fn as_str(self) -> &'static str {
+    fn as_update_kind(self) -> crate::JournalUpdateKind {
         match self {
-            Self::Command => "command",
-            Self::File => "file",
-            Self::Plan => "plan",
-            Self::Approval => "approval",
+            Self::Command => crate::JournalUpdateKind::Command,
+            Self::File => crate::JournalUpdateKind::File,
+            Self::Plan => crate::JournalUpdateKind::Plan,
+            Self::Approval => crate::JournalUpdateKind::Approval,
         }
+    }
+
+    fn as_str(self) -> &'static str {
+        self.as_update_kind().as_str()
     }
 }
 

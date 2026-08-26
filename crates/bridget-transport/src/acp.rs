@@ -1630,8 +1630,9 @@ fn tool_call_journal_payload(value: &Value, tool_titles: &mut HashMap<String, St
         .or_else(|| content.get("text"))
         .and_then(Value::as_str)
         .unwrap_or("");
-    // C3 : kind fermé `tool` (alignement L3). Champs legacy conservés pour
+    // C3 : kind fermé `tool` (JournalUpdateKind::Tool). Champs legacy conservés pour
     // corrélation toolCallId / attach tant que ce dernier n'est pas porté.
+    // Ne pas réécrire `tool_call` ici — c'est l'héritage borné (ToolCallLegacy).
     let mut payload = serde_json::Map::from_iter([
         ("kind".to_string(), Value::String("tool".to_string())),
         ("text".to_string(), Value::String(tool.to_string())),
