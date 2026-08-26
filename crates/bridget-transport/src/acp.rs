@@ -1141,8 +1141,7 @@ fn spawn_reader(
                             .lock()
                             .unwrap_or_else(|err| err.into_inner())
                             .push_source(event, raw_line.clone());
-                    } else if let Some(thought) =
-                        update_thought_text(&value, session_id.as_deref())
+                    } else if let Some(thought) = update_thought_text(&value, session_id.as_deref())
                     {
                         // Variante standard SessionUpdate (effect-acp) : on
                         // accumule pour la ligne terminale event=reasoning.
@@ -1594,9 +1593,7 @@ fn reasoning_journal_payload_from_raw(raw: &str) -> Value {
 }
 
 fn take_reasoning_journal_payload(reasoning_raw: &Arc<Mutex<String>>) -> Value {
-    let mut raw = reasoning_raw
-        .lock()
-        .unwrap_or_else(|err| err.into_inner());
+    let mut raw = reasoning_raw.lock().unwrap_or_else(|err| err.into_inner());
     let payload = reasoning_journal_payload_from_raw(&raw);
     raw.clear();
     payload
@@ -2638,15 +2635,18 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
                     }
                 })));
                 for summary in ["analyse", "terminé"] {
-                    assert!(events.contains(&json!({
-                        "v": 1, "session_id": "fixture-session", "event": "update",
-                        "message_id": "journal-message",
-                        "payload": {
-                            "kind":"tool", "text":"Read src/main.rs", "detail":summary,
-                            "tool_call_id":"tool-1", "tool":"Read src/main.rs",
-                            "title":"Read src/main.rs", "summary":summary
-                        }
-                    })), "la mise à jour ACP {summary} doit porter le titre corrélé");
+                    assert!(
+                        events.contains(&json!({
+                            "v": 1, "session_id": "fixture-session", "event": "update",
+                            "message_id": "journal-message",
+                            "payload": {
+                                "kind":"tool", "text":"Read src/main.rs", "detail":summary,
+                                "tool_call_id":"tool-1", "tool":"Read src/main.rs",
+                                "title":"Read src/main.rs", "summary":summary
+                            }
+                        })),
+                        "la mise à jour ACP {summary} doit porter le titre corrélé"
+                    );
                 }
                 assert!(events.contains(&json!({
                     "v": 1, "session_id": "fixture-session", "event": "permission",
@@ -2660,11 +2660,14 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
                         "decision":{"outcome":"selected","option_id":"allow-1"}
                     }
                 })));
-                assert!(events.contains(&json!({
-                    "v": 1, "session_id": "fixture-session", "event": "reasoning",
-                    "message_id": "journal-message",
-                    "payload": {"available": false}
-                })), "sans thought_chunk : ligne terminale available:false");
+                assert!(
+                    events.contains(&json!({
+                        "v": 1, "session_id": "fixture-session", "event": "reasoning",
+                        "message_id": "journal-message",
+                        "payload": {"available": false}
+                    })),
+                    "sans thought_chunk : ligne terminale available:false"
+                );
                 let reasoning_lines: Vec<_> = events
                     .iter()
                     .filter(|event| event["event"] == "reasoning")

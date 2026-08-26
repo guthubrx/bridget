@@ -3,7 +3,7 @@ use bridget_daemon::daemon::{self, DaemonConfig};
 use bridget_daemon::registry::AgentRegistry;
 use bridget_daemon::wrapper::launch_acp_with;
 use bridget_transport::journal::{AppendLatencyProbe, current_host_date};
-use bridget_transport::protocol::{AttachWindow, ConnectionRole, decode, encode};
+use bridget_transport::protocol::{AgentInfo, AttachWindow, ConnectionRole, decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -84,23 +84,47 @@ fn read_message(reader: &mut BufReader<UnixStream>) -> DaemonToWrapper {
     decode(line.trim()).expect("frame daemon valide")
 }
 
-fn wait_for_agent(socket: &Path, name: &str, deadline: Instant) {
-    wait_until(deadline, "équipier ACP non enregistré", || {
-        let Ok(stream) = UnixStream::connect(socket) else {
-            return false;
-        };
-        let Ok(reader_stream) = stream.try_clone() else {
-            return false;
-        };
-        let mut writer = BufWriter::new(stream);
-        let mut reader = BufReader::new(reader_stream);
-        write_message(&mut writer, &WrapperToDaemon::ListAgents);
-        matches!(
-            read_message(&mut reader),
-            DaemonToWrapper::AgentList { agents }
-                if agents.iter().any(|agent| agent.name == name)
-        )
-    });
+fn query_agent_list(socket: &Path) -> Vec<AgentInfo> {
+    let stream = UnixStream::connect(socket).expect("connexion ListAgents");
+    let reader_stream = stream.try_clone().expect("clone ListAgents");
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(reader_stream);
+    write_message(&mut writer, &WrapperToDaemon::ListAgents);
+    match read_message(&mut reader) {
+        DaemonToWrapper::AgentList { agents } => agents,
+        other => panic!("ListAgents inattendu: {other:?}"),
+    }
+}
+
+fn agent_state(socket: &Path, name: &str) -> Option<String> {
+    query_agent_list(socket)
+        .into_iter()
+        .find(|agent| agent.name == name)
+        .map(|agent| agent.state)
+}
+
+fn agent_ready_for_send(socket: &Path, name: &str) -> bool {
+    query_agent_list(socket).into_iter().any(|agent| {
+        agent.name == name && agent.state == "connected" && !agent.connection_id.is_empty()
+    })
+}
+
+fn wait_for_agent_ready_for_send(socket: &Path, name: &str, deadline: Instant) {
+    wait_until(
+        deadline,
+        &format!("équipier {name} présent mais pas prêt pour Send (attendu connected + route)"),
+        || agent_ready_for_send(socket, name),
+    );
+}
+
+fn expect_send_ack(reader: &mut BufReader<UnixStream>, socket: &Path, agent: &str, turn: &str) {
+    match read_message(reader) {
+        DaemonToWrapper::Ack { .. } => {}
+        other => panic!(
+            "Send {turn} (agent={:?}): accusé Ack attendu, reçu {other:?}",
+            agent_state(socket, agent)
+        ),
+    }
 }
 
 struct AttachViewConsumer {
@@ -125,12 +149,12 @@ fn connect_attach(socket: &Path, agent: &str) -> AttachViewConsumer {
             role: ConnectionRole::Attach,
         },
     );
-    assert!(matches!(
-        read_message(&mut reader),
+    match read_message(&mut reader) {
         DaemonToWrapper::RoleAccepted {
-            role: ConnectionRole::Attach
-        }
-    ));
+            role: ConnectionRole::Attach,
+        } => {}
+        other => panic!("RoleHandshake attach inattendu: {other:?}"),
+    }
     write_message(
         &mut writer,
         &WrapperToDaemon::Subscribe {
@@ -237,10 +261,10 @@ fn connect_sender(socket: &Path) -> (BufWriter<UnixStream>, BufReader<UnixStream
             journal_available: None,
         },
     );
-    assert!(matches!(
-        read_message(&mut reader),
-        DaemonToWrapper::Registered { name } if name == "bench-sender"
-    ));
+    match read_message(&mut reader) {
+        DaemonToWrapper::Registered { name } if name == "bench-sender" => {}
+        other => panic!("Register bench-sender inattendu: {other:?}"),
+    }
     (writer, reader)
 }
 
@@ -345,7 +369,7 @@ impl BenchHarness {
             .map_err(|error| error.to_string());
             let _ = wrapper_done_tx.send(result);
         });
-        wait_for_agent(&socket, "codex-bench", deadline);
+        wait_for_agent_ready_for_send(&socket, "codex-bench", deadline);
         let (sender, sender_reader) = connect_sender(&socket);
         let views = (0..view_count)
             .map(|_| connect_attach(&socket, "codex-bench"))
@@ -355,6 +379,7 @@ impl BenchHarness {
                 view.caught_up.load(Ordering::SeqCst) >= 1
             });
         }
+        wait_for_agent_ready_for_send(&socket, "codex-bench", deadline);
         Self {
             root,
             socket,
@@ -376,10 +401,12 @@ impl BenchHarness {
             format!("tour-déterministe-{turn}"),
         );
         write_message(&mut self.sender, &WrapperToDaemon::Send(message));
-        assert!(matches!(
-            read_message(&mut self.sender_reader),
-            DaemonToWrapper::Ack { .. }
-        ));
+        expect_send_ack(
+            &mut self.sender_reader,
+            &self.socket,
+            "codex-bench",
+            &format!("tour {turn}"),
+        );
     }
 
     fn wait_for_appends(&self, expected: usize, deadline: Instant) {
@@ -407,10 +434,12 @@ impl BenchHarness {
             "tour-final-hors-mesure".to_string(),
         );
         write_message(&mut self.sender, &WrapperToDaemon::Send(final_message));
-        assert!(matches!(
-            read_message(&mut self.sender_reader),
-            DaemonToWrapper::Ack { .. }
-        ));
+        expect_send_ack(
+            &mut self.sender_reader,
+            &self.socket,
+            "codex-bench",
+            "tour final",
+        );
         let result = self
             .wrapper_done
             .recv_timeout(Duration::from_secs(5))
