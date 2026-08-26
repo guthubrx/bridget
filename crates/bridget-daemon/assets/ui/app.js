@@ -1097,7 +1097,7 @@
         assert.equal(opened.fromSeq, null);
         assert.equal(opened.url, "/v1/watch?token=jeton&agent=bridget");
         assert.ok(!opened.url.includes("from_seq="));
-        assert.equal(api.olderJournalPageFromSeq(71, 50), 21);
+        assert.equal(api.olderJournalPageFromSeq(91, 20), 71);
       });
 
       // L9 charge 5 — Number() sur to_seq/through_seq via le runtime productif.
@@ -1724,9 +1724,9 @@
     return Number.isFinite(value) ? value : null;
   }
 
-  function olderJournalPageFromSeq(currentFromSeq, pageSize = 50) {
+  function olderJournalPageFromSeq(currentFromSeq, pageSize = 20) {
     if (!Number.isFinite(currentFromSeq)) return 0;
-    const size = Number.isFinite(pageSize) && pageSize > 0 ? Math.trunc(pageSize) : 50;
+    const size = Number.isFinite(pageSize) && pageSize > 0 ? Math.trunc(pageSize) : 20;
     return Math.max(0, Math.trunc(currentFromSeq) - size);
   }
 
@@ -2916,6 +2916,22 @@
             at: Date.now() / 1000,
             text: "Message utilisateur illisible.",
           });
+        }
+      });
+      source.addEventListener("journal_page", (message) => {
+        if (opened.generation !== sourceGeneration) return;
+        try {
+          const payload = JSON.parse(message.data);
+          if (payload && payload.has_more) {
+            applyIncoming({
+              kind: "system",
+              agent,
+              at: 0,
+              text: "Il reste des messages plus anciens.",
+            });
+          }
+        } catch (_error) {
+          /* page metadata illisible : ne pas bloquer le fil */
         }
       });
       source.addEventListener("relay_state", (message) => {

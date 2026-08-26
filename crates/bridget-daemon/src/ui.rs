@@ -9,6 +9,7 @@ use bridget_transport::protocol::{
     AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
     LedgerMessage, LedgerScope, PresenceMode, decode, encode,
 };
+use bridget_transport::journal::valid_events;
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use maicie::ui_projection::{
     UiMissionProjectionV1, read_ui_mission_projection_v1, retain_living_objectives,
@@ -36,11 +37,13 @@ const UI_RECONNECT_DELAY: Duration = Duration::from_millis(100);
 /// jamais au journal ; sans ce rythme le fil reste figé après l'ouverture.
 const UI_THREAD_LEDGER_POLL: Duration = Duration::from_millis(400);
 const UI_SENDER: &str = "humain";
-/// Ouverture page : dernières séquences seulement — pas le journal entier.
-const UI_JOURNAL_OPEN_TAIL_SEQUENCES: u64 = 30;
-/// Remontée manuelle possible : pages de séquences via `from_seq` existant.
-#[cfg_attr(not(test), allow(dead_code))]
-const UI_JOURNAL_OLDER_PAGE_SEQUENCES: u64 = 50;
+/// Ouverture page : derniers enregistrements complets (fragments d'un même seq à bord).
+const UI_JOURNAL_OPEN_COMPLETE_RECORDS: usize = 10;
+/// Remontée manuelle : pages d'enregistrements complets via `from_seq`.
+const UI_JOURNAL_OLDER_PAGE_RECORDS: usize = 20;
+/// Plafond dur de fragments SSE rejoués avant CaughtUp — un enregistrement
+/// pathologique ne doit pas renvoyer le mégaoctet.
+const UI_JOURNAL_MAX_REPLAY_FRAGMENTS: usize = 150;
 /// Port loopback par défaut : stable d'un lancement à l'autre, sans option CLI.
 pub const DEFAULT_UI_PORT: u16 = 17888;
 const UI_ENDPOINT_STATE_VERSION: u8 = 1;
@@ -584,6 +587,20 @@ struct UiJournalEventV1<'a> {
     event: &'a DaemonToWrapper,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+struct UiJournalPageV1 {
+    version: u8,
+    kind: &'static str,
+    has_more: bool,
+    from_seq: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UiJournalPage {
+    has_more: bool,
+    from_seq: u64,
+}
+
 fn serve_connection(
     stream: &mut TcpStream,
     config: &UiRelayConfig,
@@ -646,8 +663,8 @@ fn serve_connection(
                 .get("agent")
                 .ok_or_else(|| UiError::Protocol("paramètre agent absent".to_string()))?;
             validate_agent(agent)?;
-            let window = parse_journal_attach_window(&request.query)?;
-            stream_sse_journal(stream, &config.daemon_socket, agent, window, None)
+            let (window, page) = resolve_ui_journal_window(agent, &request.query)?;
+            stream_sse_journal(stream, &config.daemon_socket, agent, window, page, None)
         }
         ("GET", "/v1/watch") => {
             let agent = request
@@ -655,11 +672,11 @@ fn serve_connection(
                 .get("agent")
                 .ok_or_else(|| UiError::Protocol("paramètre agent absent".to_string()))?;
             validate_agent(agent)?;
-            let window = parse_journal_attach_window(&request.query)?;
+            let (window, page) = resolve_ui_journal_window(agent, &request.query)?;
             // La vue combinée est la porte d'entrée de la future page : elle
             // raccorde Attach avant de capturer l'instantané, donc aucun delta
             // journal ne peut se glisser silencieusement entre les deux.
-            stream_sse_journal(stream, &config.daemon_socket, agent, window, Some(config))
+            stream_sse_journal(stream, &config.daemon_socket, agent, window, page, Some(config))
         }
         _ => write_text(stream, 404, "ressource UI inconnue"),
     }
@@ -860,24 +877,96 @@ fn now_secs() -> i64 {
         .min(i64::MAX as u64) as i64
 }
 
-/// Fenêtre d'ouverture page / journal : Tail(30) sauf reprise explicite via from_seq.
-/// Un mutant qui retire l'appel depuis serve_connection doit tuer
-/// `chemin_productif_ouverture_journal_emprunte_tail`.
-fn parse_journal_attach_window(
+/// Fenêtre d'ouverture : Seq(from) calculé **dans le relais** sur les jsonl
+/// de l'agent — jamais Tail/Today sur le fil Attach (daemon live inchangé).
+/// Un mutant qui remet Seq(0) ou Tail ici doit tuer
+/// `chemin_productif_ouverture_journal_emprunte_fenetre_relais`.
+fn resolve_ui_journal_window(
+    agent: &str,
     query: &HashMap<String, String>,
-) -> Result<AttachWindow, UiError> {
+) -> Result<(AttachWindow, UiJournalPage), UiError> {
+    resolve_ui_journal_window_in(agent_journal_dir(agent), query)
+}
+
+fn agent_journal_dir(agent: &str) -> PathBuf {
+    let root = std::env::var("HOME")
+        .map(|home| PathBuf::from(home).join(".cache").join("bridget").join("sessions"))
+        .unwrap_or_else(|_| PathBuf::from("/tmp/bridget/sessions"));
+    root.join(agent)
+}
+
+fn complete_record_seqs(journal_dir: &Path) -> Vec<u64> {
+    let mut seqs = std::fs::read_dir(journal_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .flat_map(|path| valid_events(&path))
+        .filter_map(|value| value.get("seq").and_then(|seq| seq.as_u64()))
+        .collect::<Vec<_>>();
+    seqs.sort_unstable();
+    seqs.dedup();
+    seqs
+}
+
+fn open_window_from_complete_records(seqs: &[u64], count: usize) -> (u64, bool) {
+    if seqs.is_empty() {
+        return (0, false);
+    }
+    if seqs.len() <= count {
+        return (seqs[0], false);
+    }
+    (seqs[seqs.len() - count], true)
+}
+
+fn older_page_from_complete_records(seqs: &[u64], current_from: u64, page: usize) -> u64 {
+    let older: Vec<u64> = seqs
+        .iter()
+        .copied()
+        .filter(|seq| *seq < current_from)
+        .collect();
+    open_window_from_complete_records(&older, page).0
+}
+
+fn resolve_ui_journal_window_in(
+    journal_dir: PathBuf,
+    query: &HashMap<String, String>,
+) -> Result<(AttachWindow, UiJournalPage), UiError> {
+    let seqs = complete_record_seqs(&journal_dir);
     match query.get("from_seq") {
-        Some(value) => Ok(AttachWindow::Seq(value.parse().map_err(|_| {
-            UiError::Protocol("from_seq doit être un entier non signé".to_string())
-        })?)),
-        None => Ok(AttachWindow::Tail(UI_JOURNAL_OPEN_TAIL_SEQUENCES)),
+        Some(value) => {
+            let from_seq = value.parse().map_err(|_| {
+                UiError::Protocol("from_seq doit être un entier non signé".to_string())
+            })?;
+            let first = seqs.first().copied().unwrap_or(0);
+            Ok((
+                AttachWindow::Seq(from_seq),
+                UiJournalPage {
+                    has_more: from_seq > first,
+                    from_seq,
+                },
+            ))
+        }
+        None => {
+            let (from_seq, has_more) =
+                open_window_from_complete_records(&seqs, UI_JOURNAL_OPEN_COMPLETE_RECORDS);
+            Ok((
+                AttachWindow::Seq(from_seq),
+                UiJournalPage {
+                    has_more,
+                    from_seq,
+                },
+            ))
+        }
     }
 }
 
-/// Remontée manuelle : page précédente de `UI_JOURNAL_OLDER_PAGE_SEQUENCES`.
+/// Remontée manuelle : page précédente de `UI_JOURNAL_OLDER_PAGE_RECORDS`.
 #[cfg_attr(not(test), allow(dead_code))]
 fn older_journal_page_from_seq(current_from_seq: u64) -> u64 {
-    current_from_seq.saturating_sub(UI_JOURNAL_OLDER_PAGE_SEQUENCES)
+    current_from_seq.saturating_sub(UI_JOURNAL_OLDER_PAGE_RECORDS as u64)
 }
 
 fn read_snapshot(
@@ -1193,6 +1282,7 @@ fn stream_sse_journal(
     socket_path: &Path,
     agent: &str,
     window: AttachWindow,
+    page: UiJournalPage,
     snapshot_config: Option<&UiRelayConfig>,
 ) -> Result<(), UiError> {
     write!(
@@ -1222,6 +1312,16 @@ fn stream_sse_journal(
     }
     write_sse(
         http,
+        "journal_page",
+        &UiJournalPageV1 {
+            version: UI_VERSION,
+            kind: "journal_page",
+            has_more: page.has_more,
+            from_seq: page.from_seq,
+        },
+    )?;
+    write_sse(
+        http,
         "journal",
         &UiJournalEventV1 {
             version: UI_VERSION,
@@ -1240,6 +1340,9 @@ fn stream_sse_journal(
         .unwrap_or_else(Instant::now);
     let mut last_seq = None;
     let mut events = 0_usize;
+    let mut replay_caught_up = false;
+    let mut replay_fragments = 0_usize;
+    let mut page_has_more = page.has_more;
     while events < MAX_UI_SSE_EVENTS {
         let event = match read_daemon(&mut session.reader) {
             Ok(event) => event,
@@ -1309,6 +1412,31 @@ fn stream_sse_journal(
             Err(error) => return Err(error),
         };
         last_seq = event_resume_seq(&event).or(last_seq);
+        let is_replay_fragment =
+            !replay_caught_up && matches!(event, DaemonToWrapper::JournalFragment { .. });
+        if is_replay_fragment {
+            replay_fragments += 1;
+            if replay_fragments > UI_JOURNAL_MAX_REPLAY_FRAGMENTS {
+                page_has_more = true;
+                events += 1;
+                continue;
+            }
+        }
+        if matches!(event, DaemonToWrapper::SnapshotCaughtUp { .. }) {
+            replay_caught_up = true;
+            if page_has_more && !page.has_more {
+                write_sse(
+                    http,
+                    "journal_page",
+                    &UiJournalPageV1 {
+                        version: UI_VERSION,
+                        kind: "journal_page",
+                        has_more: true,
+                        from_seq: page.from_seq,
+                    },
+                )?;
+            }
+        }
         write_sse(
             http,
             "journal",
@@ -2152,58 +2280,104 @@ mod tests {
         );
     }
 
-    /// Garde anti-feuille : ouverture journal/watch sans from_seq doit Tail(30),
-    /// pas Seq(0) ni Today. Retirer l'appel parse_journal_attach_window tue ce témoin.
+    /// Garde anti-feuille : ouverture sans from_seq = Seq des 10 derniers
+    /// enregistrements complets, calculé dans le relais — jamais Seq(0)/Today/Tail filaire.
     #[test]
-    fn chemin_productif_ouverture_journal_emprunte_tail() {
+    fn chemin_productif_ouverture_journal_emprunte_fenetre_relais() {
         let source = include_str!("ui.rs");
-        let parse_body = function_body(source, "fn parse_journal_attach_window(");
+        let resolve_body = function_body(source, "fn resolve_ui_journal_window(");
         assert!(
-            parse_body.contains("AttachWindow::Tail(UI_JOURNAL_OPEN_TAIL_SEQUENCES)"),
-            "sans from_seq, l'ouverture doit emprunter Tail(30)"
+            resolve_body.contains("resolve_ui_journal_window_in("),
+            "resolve_ui_journal_window doit déléguer au calcul relais"
+        );
+        let inner = function_body(source, "fn resolve_ui_journal_window_in(");
+        assert!(
+            inner.contains("AttachWindow::Seq(from_seq)"),
+            "le relais doit envoyer Seq, compris du daemon live"
         );
         assert!(
-            !parse_body.contains("AttachWindow::Today"),
+            !inner.contains("AttachWindow::Tail("),
+            "Tail ne doit pas partir sur le fil Attach"
+        );
+        assert!(
+            !inner.contains("AttachWindow::Today"),
             "Today n'est plus le défaut d'ouverture page"
         );
         assert!(
-            !parse_body.contains("AttachWindow::Seq(0)"),
+            !inner.contains("AttachWindow::Seq(0)"),
             "Seq(0) ne doit pas être le défaut d'ouverture"
         );
         let serve_body = function_body(source, "fn serve_connection(");
         assert!(
-            serve_body.contains("parse_journal_attach_window("),
-            "serve_connection doit appeler parse_journal_attach_window"
+            serve_body.contains("resolve_ui_journal_window("),
+            "serve_connection doit appeler resolve_ui_journal_window"
         );
         assert!(
-            serve_body.matches("parse_journal_attach_window(").count() >= 2,
-            "/v1/journal et /v1/watch doivent tous deux emprunter parse_journal_attach_window"
+            serve_body.matches("resolve_ui_journal_window(").count() >= 2,
+            "/v1/journal et /v1/watch doivent emprunter le calcul relais"
         );
-        assert_eq!(UI_JOURNAL_OPEN_TAIL_SEQUENCES, 30);
+        assert_eq!(UI_JOURNAL_OPEN_COMPLETE_RECORDS, 10);
+        assert_eq!(UI_JOURNAL_MAX_REPLAY_FRAGMENTS, 150);
+        let stream_body = function_body(source, "fn stream_sse_journal(");
+        assert!(
+            stream_body.contains("UI_JOURNAL_MAX_REPLAY_FRAGMENTS"),
+            "le rejeu SSE doit borner les fragments"
+        );
+        assert!(
+            stream_body.contains("\"journal_page\""),
+            "has_more doit être émis sur le chemin SSE réel"
+        );
     }
 
-    /// Remontée : une page de 50 sous le from_seq d'ouverture donne l'ancien.
+    /// Remontée : 20 enregistrements complets sous la fenêtre d'ouverture.
     #[test]
-    fn remontee_from_seq_donne_l_ancien_par_pages_de_cinquante() {
-        let open_from = 71_u64; // Tail(30) si last=100
-        let older = older_journal_page_from_seq(open_from);
-        assert_eq!(older, 21);
-        assert!(
-            older < open_from,
-            "la page précédente doit démarrer avant la fenêtre d'ouverture"
+    fn remontee_from_seq_donne_l_ancien_par_pages_de_vingt() {
+        let seqs: Vec<u64> = (1..=100).collect();
+        let (open_from, has_more) =
+            open_window_from_complete_records(&seqs, UI_JOURNAL_OPEN_COMPLETE_RECORDS);
+        assert_eq!(open_from, 91);
+        assert!(has_more, "il doit rester de l'ancien sous les 10 derniers");
+        let older = older_page_from_complete_records(
+            &seqs,
+            open_from,
+            UI_JOURNAL_OLDER_PAGE_RECORDS,
         );
-        assert_eq!(UI_JOURNAL_OLDER_PAGE_SEQUENCES, 50);
-        assert_eq!(older_journal_page_from_seq(40), 0);
+        assert_eq!(older, 71);
+        assert!(older < open_from);
+        assert_eq!(UI_JOURNAL_OLDER_PAGE_RECORDS, 20);
+        assert_eq!(older_journal_page_from_seq(91), 71);
         let mut query = HashMap::new();
         query.insert("from_seq".to_string(), older.to_string());
-        assert_eq!(
-            parse_journal_attach_window(&query).unwrap(),
-            AttachWindow::Seq(21)
-        );
-        assert_eq!(
-            parse_journal_attach_window(&HashMap::new()).unwrap(),
-            AttachWindow::Tail(30)
-        );
+        let dir = PathBuf::from("/tmp/bridget-ui-journal-absent");
+        let (window, page) = resolve_ui_journal_window_in(dir, &query).unwrap();
+        assert_eq!(window, AttachWindow::Seq(71));
+        assert!(page.has_more);
+    }
+
+    #[test]
+    fn ouverture_sans_from_seq_prend_dix_enregistrements_complets() {
+        let root = PathBuf::from(format!(
+            "/tmp/bridget-ui-journal-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let mut lines = String::new();
+        for seq in 1..=40 {
+            lines.push_str(&format!("{{\"v\":1,\"seq\":{seq}}}\n"));
+        }
+        std::fs::write(root.join("2026-08-26.jsonl"), lines).unwrap();
+        let (window, page) =
+            resolve_ui_journal_window_in(root.clone(), &HashMap::new()).unwrap();
+        assert_eq!(window, AttachWindow::Seq(31));
+        assert!(page.has_more);
+        assert_eq!(page.from_seq, 31);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Garde anti-feuille : retirer l'appel à `retain_living_objectives` dans
