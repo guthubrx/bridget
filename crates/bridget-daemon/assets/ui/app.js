@@ -374,7 +374,7 @@
         assert.match(files, /injecté · en vol/);
       });
 
-      test("fil_humain_referent_apparait_dans_le_timeline_depuis_thread_messages", () => {
+      test("fil_humain_referent_entrant_apparait_dans_le_timeline", () => {
         let state = api.createUiState({ selectedAgent: "bridget", agents: [{ name: "bridget" }] });
         state = api.applyWatchEvent(state, {
           kind: "message",
@@ -385,6 +385,16 @@
           messageId: "h1",
           deliveryId: "h1",
         });
+        const timeline = api.projectTimeline(state.timelines.bridget);
+        const messages = timeline.filter((entry) => entry.kind === "message");
+        assert.equal(messages.length, 1);
+        assert.equal(messages[0].role, "user");
+        assert.equal(messages[0].text, "les echanges dans l interface, oui je veux");
+        assert.equal(messages[0].at, 100);
+      });
+
+      test("fil_humain_referent_sortant_apparait_dans_le_timeline", () => {
+        let state = api.createUiState({ selectedAgent: "bridget", agents: [{ name: "bridget" }] });
         state = api.applyWatchEvent(state, {
           kind: "message",
           role: "agent",
@@ -396,13 +406,10 @@
         });
         const timeline = api.projectTimeline(state.timelines.bridget);
         const messages = timeline.filter((entry) => entry.kind === "message");
-        assert.equal(messages.length, 2);
-        assert.equal(messages[0].role, "user");
-        assert.equal(messages[0].text, "les echanges dans l interface, oui je veux");
-        assert.equal(messages[0].at, 100);
-        assert.equal(messages[1].role, "agent");
-        assert.equal(messages[1].text, "projection ledger vers le fil");
-        assert.equal(messages[1].at, 110);
+        assert.equal(messages.length, 1);
+        assert.equal(messages[0].role, "agent");
+        assert.equal(messages[0].text, "projection ledger vers le fil");
+        assert.equal(messages[0].at, 110);
       });
 
       test("fil_humain_referent_absent_sans_thread_messages", () => {

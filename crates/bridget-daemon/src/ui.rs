@@ -623,7 +623,8 @@ fn read_snapshot(
     let peer_exchanges = focus_agent.map(|agent| aggregate_peer_exchanges(agent, &facts.messages));
     // Chemin productif du fil humain↔référent : mêmes messages ledger que
     // peer_exchanges, mais SANS exclure UI_SENDER — le journal d'agent ne porte
-    // pas les sorties vers l'utilisateur.
+    // pas les sorties vers l'utilisateur (DETTE : asymétrie journal, voir
+    // human_referent_thread_messages). peer_exchange reste agent↔agent.
     let thread_messages =
         focus_agent.map(|agent| human_referent_thread_messages(agent, &facts.messages));
     let missions = read_ui_mission_projection_v1(&config.maicie_config)
@@ -750,7 +751,20 @@ fn peer_direction<'a>(
 
 /// Messages ledger entre l'utilisateur (`humain`) et l'agent focal — dans l'ordre
 /// d'émission, avec corps. C'est le chemin que `/v1/snapshot` et le SSE empruntent
-/// pour le fil ; un mutant qui vide cette fonction doit tuer le témoin nommé.
+/// pour le fil ; un mutant qui coupe cet appel dans `read_snapshot` doit tuer le
+/// témoin `chemin_productif_snapshot_emprunte_human_referent_thread_messages`.
+///
+/// # Dette — journal asymétrique (non corrigée ici)
+///
+/// Le journal d'agent n'enregistre que les livraisons *entrantes*
+/// (`record_interactive_turn` sur `Deliver`). Un message référent→humain apparaît
+/// au ledger mais **pas** comme événement propre dans le journal. Ce lot projette
+/// donc le fil depuis le ledger (les deux sens). Quiconque s'appuiera demain sur
+/// le journal seul pour « la conversation utilisateur » retombera dans le piège
+/// d'un fil à sens unique. Corriger la journalisation du sortant est un autre lot.
+///
+/// `peer_direction` continue d'exclure `UI_SENDER` : `peer_exchange` reste
+/// agent↔agent (spec 032) ; ce canal est une projection distincte.
 fn human_referent_thread_messages(
     focus_agent: &str,
     messages: &[LedgerMessage],
@@ -1504,31 +1518,58 @@ mod tests {
         assert_eq!(encoded["delivery_ids"], serde_json::json!(["premier"]));
     }
 
+    /// Propriété entrante seule : humain→référent doit porter corps, rôle, horodatage.
     #[test]
-    fn fil_humain_referent_porte_corps_ordre_et_roles() {
+    fn fil_humain_referent_entrant_porte_corps() {
         let messages = human_referent_thread_messages(
             "bridget",
             &[
                 ledger_message("agent-pair", 5, "rc1", "bridget"),
                 ledger_message("h1", 10, "humain", "bridget"),
-                ledger_message("b1", 20, "bridget", "humain"),
                 ledger_message("other", 30, "bridget", "rc1"),
             ],
         );
-        // Témoin de présence : le corps utilisateur DOIT apparaître (pas un booléen).
-        assert_eq!(messages.len(), 2);
+        assert_eq!(messages.len(), 1, "un seul entrant attendu");
         assert_eq!(messages[0].delivery_id, "h1");
         assert_eq!(messages[0].role, UiThreadRoleV1::User);
         assert_eq!(messages[0].at, 10);
         assert_eq!(messages[0].text, "humain vers bridget");
+    }
+
+    /// Propriété sortante seule : référent→humain doit porter corps, rôle, horodatage.
+    /// Distincte de l'entrante — si le sortant retombe, ce témoin meurt sans l'autre.
+    #[test]
+    fn fil_humain_referent_sortant_porte_corps() {
+        let messages = human_referent_thread_messages(
+            "bridget",
+            &[
+                ledger_message("agent-pair", 5, "rc1", "bridget"),
+                ledger_message("b1", 20, "bridget", "humain"),
+                ledger_message("other", 30, "bridget", "rc1"),
+            ],
+        );
+        assert_eq!(messages.len(), 1, "un seul sortant attendu");
+        assert_eq!(messages[0].delivery_id, "b1");
+        assert_eq!(messages[0].role, UiThreadRoleV1::Agent);
+        assert_eq!(messages[0].at, 20);
+        assert_eq!(messages[0].text, "bridget vers humain");
+    }
+
+    /// Les deux sens ensemble : ordre chronologique (entrant puis sortant).
+    #[test]
+    fn fil_humain_referent_ordonne_entrant_puis_sortant() {
+        let messages = human_referent_thread_messages(
+            "bridget",
+            &[
+                ledger_message("b1", 20, "bridget", "humain"),
+                ledger_message("h1", 10, "humain", "bridget"),
+            ],
+        );
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].delivery_id, "h1");
+        assert_eq!(messages[0].role, UiThreadRoleV1::User);
         assert_eq!(messages[1].delivery_id, "b1");
         assert_eq!(messages[1].role, UiThreadRoleV1::Agent);
-        assert_eq!(messages[1].at, 20);
-        assert_eq!(messages[1].text, "bridget vers humain");
-        assert!(
-            messages[0].text.contains("humain vers bridget"),
-            "le fil doit porter le texte utilisateur, pas seulement un identifiant"
-        );
     }
 
     #[test]
@@ -1548,8 +1589,8 @@ mod tests {
 
     #[test]
     fn chemin_productif_snapshot_emprunte_human_referent_thread_messages() {
-        // Garde anti-feuille : le témoin de présence ne vaut que si read_snapshot
-        // et write_snapshot_sse empruntent réellement ce chemin (page affichée).
+        // Garde anti-feuille : les témoins entrant/sortant ne valent que si
+        // read_snapshot et write_snapshot_sse empruntent réellement ce chemin.
         let source = include_str!("ui.rs");
         let read_body = function_body(source, "fn read_snapshot(");
         assert!(
