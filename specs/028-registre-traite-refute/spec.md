@@ -1,6 +1,6 @@
 # Spec 028 — Registre : fermé ≠ réfuté (et list lisible)
 
-**Statut** : en cours  
+**Statut** : livré (tip d5d4b26, base a9353c1)  
 **Branche** : `session-028-registre-ferme-refute`  
 **Base** : `a9353c11291829ce762365b9d2af3cb267d73567`  
 **Migration SQLite** : aucune (journal catalogue + projection).
