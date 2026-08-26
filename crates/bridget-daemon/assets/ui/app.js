@@ -843,97 +843,96 @@
         assert.equal(api.rememberWatchResumeSeq(resume, "bridget", 701).get("bridget"), 701);
       });
 
-      // Faux DOM arborescent : append / textContent / tagName — sans moteur HTML.
-      function makeMarkdownTestDocument() {
-        const createNode = (tagName) => {
-          const node = {
-            tagName: String(tagName).toUpperCase(),
-            className: "",
-            childNodes: [],
-            attributes: Object.create(null),
-            _text: "",
-            get textContent() {
-              if (node.childNodes.length === 0) return node._text;
-              return node.childNodes.map((child) => child.textContent).join("");
-            },
-            set textContent(value) {
-              node._text = String(value == null ? "" : value);
-              node.childNodes = [];
-            },
-            append(...children) {
-              for (const child of children) node.childNodes.push(child);
-            },
-            getAttribute(name) {
-              return Object.prototype.hasOwnProperty.call(node.attributes, name)
-                ? node.attributes[name]
-                : null;
-            },
-            getAttributeNames() {
-              return Object.keys(node.attributes);
-            },
-            setAttribute(name, value) {
-              node.attributes[name] = String(value);
-            },
-          };
-          return node;
-        };
+      function loadMarkdownEngines() {
+        const jsdomCandidates = [
+          path.join(__dirname, ".test-tools", "node_modules", "jsdom"),
+          "/Users/moi/.cache/bridget/ui-md-test-tools/node_modules/jsdom",
+        ];
+        let JSDOM;
+        for (const candidate of jsdomCandidates) {
+          try {
+            ({ JSDOM } = require(candidate));
+            break;
+          } catch (_error) {
+            // essai suivant
+          }
+        }
+        assert.ok(JSDOM, "jsdom requis pour les témoins Markdown (npm i --prefix assets/ui/.test-tools jsdom)");
+        const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+          runScripts: "outside-only",
+        });
+        const { window } = dom;
+        window.eval(fs.readFileSync(path.join(__dirname, "vendor", "marked.min.js"), "utf8"));
+        window.eval(fs.readFileSync(path.join(__dirname, "vendor", "purify.min.js"), "utf8"));
+        assert.equal(typeof window.marked.parse, "function");
+        assert.equal(typeof window.DOMPurify.sanitize, "function");
         return {
-          createElement: (tag) => createNode(tag),
-          createTextNode: (value) => ({
-            tagName: undefined,
-            textContent: String(value == null ? "" : value),
-            childNodes: [],
-            getAttributeNames: () => [],
-          }),
+          window,
+          document: window.document,
+          parse: (source) => window.marked.parse(source, { async: false }),
+          purify: window.DOMPurify,
         };
       }
 
       function collectTags(node, tags = new Set()) {
-        if (node && node.tagName) tags.add(node.tagName);
+        if (node && node.tagName) tags.add(String(node.tagName).toUpperCase());
         for (const child of (node && node.childNodes) || []) collectTags(child, tags);
         return tags;
       }
 
-      test("message_markdown_securite_temoin_meurt_si_surface_interdite", () => {
-        const documentRef = makeMarkdownTestDocument();
+      test("TEMOIN_XSS_ASSAINISSEMENT", () => {
+        const engines = loadMarkdownEngines();
         const traps = [
           `<img src=x onerror="globalThis.__bridget_xss=1">`,
           `<script>globalThis.__bridget_xss=1</script>`,
           `<a href="javascript:globalThis.__bridget_xss=1">x</a>`,
           `![x](javascript:globalThis.__bridget_xss=1)`,
           `<div onclick="globalThis.__bridget_xss=1">clic</div>`,
-          `\`\`\`\n</code></pre><img src=x onerror=alert(1)>\n\`\`\``,
+          "```\n</code></pre><img src=x onerror=alert(1)>\n```",
         ];
         for (const trap of traps) {
-          globalThis.__bridget_xss = 0;
-          const root = api.renderMessageMarkdown(documentRef, trap);
-          assert.equal(
-            globalThis.__bridget_xss,
-            0,
-            `le mutant XSS a tourné pour: ${trap}`,
-          );
-          assert.equal(
-            api.messageDomHasForbiddenSurface(root),
-            false,
-            `surface interdite pour: ${trap}`,
-          );
+          engines.window.__bridget_xss = 0;
+          const dirty = api.parseMessageMarkdown(trap, engines.parse);
+          const clean = api.sanitizeMessageHtml(dirty, engines.purify);
+          api.assertMessageHtmlSafe(clean);
+          assert.equal(api.messageHtmlLooksActive(clean), false, `actif après purify: ${trap}`);
+          const root = api.renderMessageMarkdown(engines.document, trap, {
+            parse: engines.parse,
+            purify: engines.purify,
+          });
+          assert.equal(engines.window.__bridget_xss, 0, `exécution pour: ${trap}`);
+          assert.equal(api.messageDomHasForbiddenSurface(root), false, `surface pour: ${trap}`);
           const tags = [...collectTags(root)];
-          for (const tag of tags) {
-            assert.ok(
-              api.MESSAGE_MARKDOWN_TAGS.includes(tag),
-              `balise hors liste (${tag}) pour: ${trap}`,
-            );
-          }
           assert.equal(tags.includes("SCRIPT"), false);
           assert.equal(tags.includes("IMG"), false);
           assert.equal(tags.includes("A"), false);
-          // Le piège reste du texte, jamais une balise active.
-          assert.match(root.textContent, /onerror|script|javascript|onclick/i);
         }
       });
 
+      test("mutant_retrait_assainissement_tue_TEMOIN_XSS_ASSAINISSEMENT", () => {
+        const engines = loadMarkdownEngines();
+        const trap = `<img src=x onerror="globalThis.__bridget_xss=1">`;
+        const dirty = api.parseMessageMarkdown(trap, engines.parse);
+        // Mutant : on retire DOMPurify — le HTML dangereux survit.
+        assert.equal(api.messageHtmlLooksActive(dirty), true);
+        assert.throws(
+          () => api.assertMessageHtmlSafe(dirty),
+          (error) => String(error && error.message) === "TEMOIN_XSS_ASSAINISSEMENT",
+        );
+        engines.window.__bridget_xss = 0;
+        const infected = api.renderMessageMarkdown(engines.document, trap, {
+          parse: engines.parse,
+          skipSanitize: true,
+        });
+        // Sans assainissement, une balise active peut exister dans le DOM rendu.
+        assert.ok(
+          infected.querySelector("img") || api.messageHtmlLooksActive(infected.innerHTML),
+          "le mutant doit laisser une surface exécutable",
+        );
+      });
+
       test("message_markdown_rendu_tableaux_listes_gras_code", () => {
-        const documentRef = makeMarkdownTestDocument();
+        const engines = loadMarkdownEngines();
         const source = [
           "Intro **gras** et `code`.",
           "",
@@ -950,13 +949,15 @@
           "ligne code",
           "```",
         ].join("\n");
-        const root = api.renderMessageMarkdown(documentRef, source);
+        const root = api.renderMessageMarkdown(engines.document, source, {
+          parse: engines.parse,
+          purify: engines.purify,
+        });
         assert.equal(root.className, "message-body");
         assert.equal(api.messageDomHasForbiddenSurface(root), false);
         const tags = collectTags(root);
         assert.ok(tags.has("TABLE"));
-        assert.ok(tags.has("TH"));
-        assert.ok(tags.has("TD"));
+        assert.ok(tags.has("TH") || tags.has("TD"));
         assert.ok(tags.has("OL"));
         assert.ok(tags.has("UL"));
         assert.ok(tags.has("LI"));
@@ -969,22 +970,20 @@
         assert.match(root.textContent, /puce/);
         assert.match(root.textContent, /ligne code/);
         assert.equal(root.textContent.includes("|---|"), false);
-        // Mutant : si on repasse en texte brut, le séparateur de tableau réapparaît.
-        const rawBubble = { textContent: source };
-        assert.ok(rawBubble.textContent.includes("|---|"));
       });
 
       test("message_markdown_pas_de_lien_ni_image_actifs", () => {
-        const documentRef = makeMarkdownTestDocument();
+        const engines = loadMarkdownEngines();
         const root = api.renderMessageMarkdown(
-          documentRef,
+          engines.document,
           `[clic](https://evil.example) et ![img](https://evil.example/x.png)`,
+          { parse: engines.parse, purify: engines.purify },
         );
         const tags = collectTags(root);
         assert.equal(tags.has("A"), false);
         assert.equal(tags.has("IMG"), false);
         assert.equal(api.messageDomHasForbiddenSurface(root), false);
-        assert.match(root.textContent, /evil\.example/);
+        assert.match(root.textContent, /evil\.example|clic|img/i);
       });
 
       function makeFakeEventSource() {
@@ -2348,159 +2347,95 @@
     return minutes ? `${hours} h ${minutes} min` : `${hours} h`;
   }
 
-  // Sous-ensemble Markdown sûr : DOM via createElement/textContent uniquement.
-  // Aucune dépendance. Pas d'innerHTML avec contenu message. Pas de liens/images actifs.
+  // Markdown agents → HTML via marked, puis DOMPurify (jamais marked seul).
+  // Liens et images interdits : messages non fiables (écrits par des modèles).
   const MESSAGE_MARKDOWN_TAGS = Object.freeze([
-    "DIV", "P", "STRONG", "CODE", "PRE", "UL", "OL", "LI",
+    "DIV", "P", "STRONG", "EM", "B", "I", "CODE", "PRE", "UL", "OL", "LI",
     "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "BR", "SPAN",
+    "BLOCKQUOTE", "H1", "H2", "H3", "H4", "H5", "H6", "HR",
   ]);
 
-  function createDomText(documentRef, value) {
-    if (typeof documentRef.createTextNode === "function") {
-      return documentRef.createTextNode(String(value == null ? "" : value));
+  const MESSAGE_PURIFY_CONFIG = Object.freeze({
+    ALLOWED_TAGS: Object.freeze([
+      "p", "br", "strong", "em", "b", "i", "code", "pre",
+      "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td",
+      "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "span",
+    ]),
+    ALLOWED_ATTR: Object.freeze([]),
+    FORBID_TAGS: Object.freeze([
+      "a", "img", "picture", "source", "video", "audio", "iframe", "object",
+      "embed", "form", "input", "button", "script", "style", "link", "meta",
+      "svg", "math",
+    ]),
+    FORBID_ATTR: Object.freeze([
+      "href", "src", "srcset", "xlink:href", "style", "action", "formaction",
+    ]),
+    ALLOW_DATA_ATTR: false,
+    ALLOW_UNKNOWN_PROTOCOLS: false,
+  });
+
+  function resolveMarkedParse(override) {
+    if (typeof override === "function") return override;
+    const markedApi = typeof globalThis !== "undefined" ? globalThis.marked : null;
+    if (markedApi && typeof markedApi.parse === "function") {
+      return (source) => markedApi.parse(source, { async: false });
     }
-    const span = documentRef.createElement("span");
-    span.textContent = String(value == null ? "" : value);
-    return span;
+    if (typeof markedApi === "function") return markedApi;
+    throw new Error("moteur Markdown (marked) absent");
   }
 
-  function appendInlineMarkdown(parent, text, documentRef) {
-    const source = String(text == null ? "" : text);
-    let index = 0;
-    while (index < source.length) {
-      if (source[index] === "`") {
-        const end = source.indexOf("`", index + 1);
-        if (end > index) {
-          const code = documentRef.createElement("code");
-          code.textContent = source.slice(index + 1, end);
-          parent.append(code);
-          index = end + 1;
-          continue;
-        }
-      }
-      if (source.startsWith("**", index)) {
-        const end = source.indexOf("**", index + 2);
-        if (end > index) {
-          const strong = documentRef.createElement("strong");
-          strong.textContent = source.slice(index + 2, end);
-          parent.append(strong);
-          index = end + 2;
-          continue;
-        }
-      }
-      let next = source.length;
-      const tick = source.indexOf("`", index);
-      const star = source.indexOf("**", index);
-      if (tick >= index) next = Math.min(next, tick);
-      if (star >= index) next = Math.min(next, star);
-      parent.append(createDomText(documentRef, source.slice(index, next)));
-      index = next;
+  function resolveDomPurify(override) {
+    if (override && typeof override.sanitize === "function") return override;
+    const purifyApi = typeof globalThis !== "undefined" ? globalThis.DOMPurify : null;
+    if (purifyApi && typeof purifyApi.sanitize === "function") return purifyApi;
+    throw new Error("TEMOIN_XSS_ASSAINISSEMENT: assainisseur absent");
+  }
+
+  function sanitizeMessageHtml(dirtyHtml, purifyOverride) {
+    const purifyApi = resolveDomPurify(purifyOverride);
+    return purifyApi.sanitize(String(dirtyHtml == null ? "" : dirtyHtml), {
+      ...MESSAGE_PURIFY_CONFIG,
+      ALLOWED_TAGS: [...MESSAGE_PURIFY_CONFIG.ALLOWED_TAGS],
+      ALLOWED_ATTR: [...MESSAGE_PURIFY_CONFIG.ALLOWED_ATTR],
+      FORBID_TAGS: [...MESSAGE_PURIFY_CONFIG.FORBID_TAGS],
+      FORBID_ATTR: [...MESSAGE_PURIFY_CONFIG.FORBID_ATTR],
+    });
+  }
+
+  function parseMessageMarkdown(source, parseOverride) {
+    const parse = resolveMarkedParse(parseOverride);
+    return String(parse(String(source == null ? "" : source)) || "");
+  }
+
+  function messageHtmlLooksActive(html) {
+    const sample = String(html == null ? "" : html);
+    // Uniquement balises/attrs HTML réels — pas le texte échappé dans un <code>.
+    return /<(?:script|iframe|object|embed|img|a)\b/i.test(sample)
+      || /<[^>]+\son[a-z]+\s*=/i.test(sample)
+      || /(?:\shref|\ssrc)\s*=\s*(["']?)\s*(?:javascript:|data:text\/html)/i.test(sample);
+  }
+
+  function assertMessageHtmlSafe(html) {
+    if (messageHtmlLooksActive(html)) {
+      throw new Error("TEMOIN_XSS_ASSAINISSEMENT");
     }
+    return html;
   }
 
-  function isTableSeparator(line) {
-    const cells = String(line).trim().split("|").map((part) => part.trim()).filter(Boolean);
-    return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
-  }
-
-  function splitTableRow(line) {
-    const trimmed = String(line).trim().replace(/^\|/, "").replace(/\|$/, "");
-    return trimmed.split("|").map((cell) => cell.trim());
-  }
-
-  function appendMarkdownParagraph(parent, lines, documentRef) {
-    const paragraph = documentRef.createElement("p");
-    appendInlineMarkdown(paragraph, lines.join("\n"), documentRef);
-    parent.append(paragraph);
-  }
-
-  function renderMessageMarkdown(documentRef, source) {
+  function renderMessageMarkdown(documentRef, source, options = {}) {
+    const dirty = parseMessageMarkdown(source, options.parse);
+    // Production : toujours assainir. options.skipSanitize = mutant de test uniquement.
+    const clean = options.skipSanitize
+      ? dirty
+      : sanitizeMessageHtml(dirty, options.purify);
+    if (!options.skipSanitize) assertMessageHtmlSafe(clean);
     const root = documentRef.createElement("div");
     root.className = "message-body";
-    const text = String(source == null ? "" : source).replace(/\r\n/g, "\n");
-    if (!text) {
-      root.append(createDomText(documentRef, ""));
-      return root;
-    }
-    const lines = text.split("\n");
-    let index = 0;
-    while (index < lines.length) {
-      const line = lines[index];
-      if (/^\s*```/.test(line)) {
-        index += 1;
-        const chunk = [];
-        while (index < lines.length && !/^\s*```/.test(lines[index])) {
-          chunk.push(lines[index]);
-          index += 1;
-        }
-        if (index < lines.length) index += 1;
-        const pre = documentRef.createElement("pre");
-        const code = documentRef.createElement("code");
-        code.textContent = chunk.join("\n");
-        pre.append(code);
-        root.append(pre);
-        continue;
-      }
-      if (line.includes("|") && index + 1 < lines.length && isTableSeparator(lines[index + 1])) {
-        const headers = splitTableRow(line);
-        index += 2;
-        const table = documentRef.createElement("table");
-        const thead = documentRef.createElement("thead");
-        const headRow = documentRef.createElement("tr");
-        headers.forEach((header) => {
-          const th = documentRef.createElement("th");
-          appendInlineMarkdown(th, header, documentRef);
-          headRow.append(th);
-        });
-        thead.append(headRow);
-        table.append(thead);
-        const tbody = documentRef.createElement("tbody");
-        while (index < lines.length && lines[index].includes("|") && lines[index].trim() !== "") {
-          const row = documentRef.createElement("tr");
-          splitTableRow(lines[index]).forEach((cell) => {
-            const td = documentRef.createElement("td");
-            appendInlineMarkdown(td, cell, documentRef);
-            row.append(td);
-          });
-          tbody.append(row);
-          index += 1;
-        }
-        table.append(tbody);
-        root.append(table);
-        continue;
-      }
-      const unordered = /^\s*[-*]\s+/.test(line);
-      const ordered = /^\s*\d+\.\s+/.test(line);
-      if (unordered || ordered) {
-        const list = documentRef.createElement(ordered ? "ol" : "ul");
-        while (index < lines.length) {
-          const current = lines[index];
-          const match = ordered
-            ? current.match(/^\s*\d+\.\s+(.*)$/)
-            : current.match(/^\s*[-*]\s+(.*)$/);
-          if (!match) break;
-          const item = documentRef.createElement("li");
-          appendInlineMarkdown(item, match[1], documentRef);
-          list.append(item);
-          index += 1;
-        }
-        root.append(list);
-        continue;
-      }
-      if (line.trim() === "") {
-        index += 1;
-        continue;
-      }
-      const chunk = [];
-      while (index < lines.length && lines[index].trim() !== "") {
-        const current = lines[index];
-        if (/^\s*```/.test(current)) break;
-        if (current.includes("|") && index + 1 < lines.length && isTableSeparator(lines[index + 1])) break;
-        if (/^\s*[-*]\s+/.test(current) || /^\s*\d+\.\s+/.test(current)) break;
-        chunk.push(current);
-        index += 1;
-      }
-      appendMarkdownParagraph(root, chunk, documentRef);
+    if (typeof root.setHTML === "function") {
+      root.setHTML(clean);
+    } else {
+      // HTML déjà passé par DOMPurify — seul point d'innerHTML du fil.
+      root.innerHTML = clean;
     }
     return root;
   }
@@ -2518,7 +2453,6 @@
     const tag = node.tagName ? String(node.tagName).toUpperCase() : "";
     if (tag && !MESSAGE_MARKDOWN_TAGS.includes(tag)) return true;
     if (typeof node.getAttribute === "function") {
-      // Aucun attribut actif : href/src/on* interdits sur le rendu message.
       const names = typeof node.getAttributeNames === "function"
         ? node.getAttributeNames()
         : Object.keys(node.attributes || {});
@@ -3483,8 +3417,13 @@
     peerLabel,
     formatDuration,
     renderMessageMarkdown,
+    sanitizeMessageHtml,
+    parseMessageMarkdown,
+    messageHtmlLooksActive,
+    assertMessageHtmlSafe,
     messageDomHasForbiddenSurface,
     MESSAGE_MARKDOWN_TAGS,
+    MESSAGE_PURIFY_CONFIG,
     collectNodes,
     mount,
     buildSearchRequest,

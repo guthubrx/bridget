@@ -42,6 +42,8 @@ const UI_ENDPOINT_STATE_VERSION: u8 = 1;
 const UI_INDEX: &[u8] = include_bytes!("../assets/ui/index.html");
 const UI_SCRIPT: &[u8] = include_bytes!("../assets/ui/app.js");
 const UI_THEME: &[u8] = include_bytes!("../assets/ui/theme.css");
+const UI_MARKED: &[u8] = include_bytes!("../assets/ui/vendor/marked.min.js");
+const UI_PURIFY: &[u8] = include_bytes!("../assets/ui/vendor/purify.min.js");
 
 #[derive(Debug, Clone)]
 pub struct UiRelayConfig {
@@ -603,6 +605,22 @@ fn serve_connection(
             }
             "/theme.css" => {
                 return write_asset(stream, 200, "text/css; charset=utf-8", UI_THEME);
+            }
+            "/vendor/marked.min.js" => {
+                return write_asset(
+                    stream,
+                    200,
+                    "application/javascript; charset=utf-8",
+                    UI_MARKED,
+                );
+            }
+            "/vendor/purify.min.js" => {
+                return write_asset(
+                    stream,
+                    200,
+                    "application/javascript; charset=utf-8",
+                    UI_PURIFY,
+                );
             }
             _ => {}
         }
@@ -1791,6 +1809,8 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(response.contains("/app.js"), "{response}");
         assert!(response.contains("/theme.css"), "{response}");
+        assert!(response.contains("/vendor/marked.min.js"), "{response}");
+        assert!(response.contains("/vendor/purify.min.js"), "{response}");
         assert!(
             !response.contains("bridget.sock"),
             "Mutation : une page qui recevrait la socket Unix contournerait le relais; {response}"
