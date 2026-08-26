@@ -114,37 +114,56 @@ Attaché à un message d'agent.
   "version": 1,
   "duration_ms": 2820000,
   "acts": [
-    { "at": ..., "kind": "intent",  "text": "Je vais comparer..." },
     { "at": ..., "kind": "command", "text": "cargo test -p maicie", "detail": "313 passés" },
     { "at": ..., "kind": "file",    "text": "ui.rs" },
-    { "at": ..., "kind": "tool",    "text": "..." },
+    { "at": ..., "kind": "tool",    "text": "Read src/main.rs" },
     { "at": ..., "kind": "plan",    "text": "..." },
-    { "at": ..., "kind": "peer",    "peer": "rc1", "direction": "both", "count": 2 }
+    { "at": ..., "kind": "approval", "text": "..." }
   ],
   "reasoning": { "available": true, "summary": "...", "raw": "..." }
 }
 ```
 
-**`kind` — ensemble fermé** : `intent` · `command` · `file` · `tool` · `plan` ·
-`peer` · `approval`.
-La page rend `intent` en **blanc**, tout le reste en **gris**.
+**`kind` — ensemble fermé côté PAGE (projection)** : les kinds que les
+pilotes ÉCRIVENT réellement dans `payload.kind`, plus les synonymes legacy.
+
+| kind journal | producteur | note |
+|---|---|---|
+| `command` | Codex `CodexActKind::Command` | mesuré (relec*) |
+| `file` | Codex `CodexActKind::File` | producteur réel, 0 émission mesurée |
+| `plan` | Codex `CodexActKind::Plan` | producteur réel, 0 émission mesurée |
+| `approval` | Codex `CodexActKind::Approval` + event `permission` | mesuré |
+| `tool` | ACP `tool_call_journal_payload` (C3, depuis 78d57dc) | |
+| `tool_call` | forme LEGACY Cursor encore dominante dans les journaux | projeté en `tool` |
+
+**Retirés de la projection** (aucun `payload.kind` journal) :
+
+- `intent` — le tableau ci-dessous le mappait depuis `agentMessage/delta`,
+  mais les pilotes écrivent `kind:text` (bulle de réponse, pas un acte).
+- `peer` — les échanges sont des entrées timeline `peer_exchange` (relais),
+  jamais un `update.payload.kind`.
+
+La page rend l'ancien `intent` en **blanc** s'il réapparaissait ; tout le
+reste des actes en **gris**. Un filtre qui ne matche rien rend une projection
+**vide** sans erreur — d'où le témoin `TEMOIN_vue_affiche_acte_present_au_journal`.
+
+**Correspondance des sources** — voir `spec.md` §4.4 :
+
+| `kind` | Codex | Cursor (ACP) |
+|---|---|---|
+| *(texte, pas acte)* | `item/agentMessage/delta` → `kind:text` | `agent_message_chunk` → `kind:text` |
+| `command` | `item/commandExecution/outputDelta` | — |
+| `file` | `item/fileChange/patchUpdated` | — |
+| `tool` / `tool_call` | — | `tool_call` / `tool_call_update` |
+| `plan` | `item/plan/delta` | — |
+| `approval` | `item/*/requestApproval` | event `permission` |
+| `reasoning` | `item/reasoning/*` | `agent_thought_chunk` |
 
 **`reasoning.available: false`** → la page affiche **« raisonnement non
 fourni »**, **jamais un vide**.
 
 > Un vide se lirait « il n'a pas réfléchi ». Cas mesuré : chez Gemini le flux
 > de pensée **n'est jamais émis** ; chez Claude un défaut amont le supprime.
-
-**Correspondance des sources** — voir `spec.md` §4.4 :
-
-| `kind` | Codex | Cursor (ACP) |
-|---|---|---|
-| `intent` | `item/agentMessage/delta` | `agent_message_chunk` |
-| `command` | `item/commandExecution/outputDelta` | `tool_call` |
-| `file` | `item/fileChange/patchUpdated` | `tool_call_update` |
-| `plan` | `item/plan/delta` | — |
-| `approval` | `item/*/requestApproval` | — |
-| `reasoning` | `item/reasoning/*` | `agent_thought_chunk` |
 
 ## C4 — Ligne d'agent *(lot L5)*
 

@@ -89,7 +89,12 @@ type ActiveTurnDetail = Arc<Mutex<Option<CodexTurnDetail>>>;
 #[derive(Debug, Clone, Copy)]
 enum CodexActKind {
     Command,
+    // Producteur réel (`item/fileChange/patchUpdated` → record_active_act), mais
+    // 0 occurrence dans les journaux relec* du 2026-08-26 : Codex n'a pas émis
+    // cette méthode sur les tours mesurés (seulement commandExecution + approval).
+    // Conservé : la vue doit l'afficher le jour où l'événement apparaît.
     File,
+    // Idem pour `item/plan/delta` — producteur présent, zéro émission mesurée.
     Plan,
     Approval,
 }
