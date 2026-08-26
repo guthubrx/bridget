@@ -778,6 +778,19 @@ pub fn resolve_window(
             files,
             from_seq: Some(*seq),
         }),
+        AttachWindow::Tail(count) => {
+            let count = (*count).max(1);
+            let last = last_sequence_in_files(&files);
+            let from_seq = if last == 0 {
+                0
+            } else {
+                last.saturating_sub(count.saturating_sub(1))
+            };
+            Ok(ResolvedJournalWindow {
+                files,
+                from_seq: Some(from_seq),
+            })
+        }
         AttachWindow::Today => Ok(ResolvedJournalWindow {
             files: files
                 .into_iter()
@@ -841,13 +854,21 @@ fn days_in_month(year: i32, month: u8) -> u8 {
 }
 
 fn last_sequence(directory: &Path) -> u64 {
-    fs::read_dir(directory)
+    let files = fs::read_dir(directory)
         .ok()
         .into_iter()
         .flatten()
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-        .flat_map(|entry| valid_events(&entry.path()))
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    last_sequence_in_files(&files)
+}
+
+fn last_sequence_in_files(files: &[PathBuf]) -> u64 {
+    files
+        .iter()
+        .flat_map(|path| valid_events(path))
         .filter_map(|value| value.get("seq").and_then(Value::as_u64))
         .max()
         .unwrap_or(0)
@@ -1334,38 +1355,56 @@ mod tests {
         );
         fs::remove_dir_all(partial_root).unwrap();
 
-        let root = root("empty-window");
-        create_private_dir(&root).unwrap();
+        let empty_root = root("empty-window");
+        create_private_dir(&empty_root).unwrap();
         assert!(
-            resolve_window(&root, &AttachWindow::Today, "2026-08-22")
+            resolve_window(&empty_root, &AttachWindow::Today, "2026-08-22")
                 .unwrap()
                 .files
                 .is_empty()
         );
         assert_eq!(
             resolve_window(
-                &root,
+                &empty_root,
                 &AttachWindow::Date("2026-08-23".to_string()),
                 "2026-08-22"
             ),
             Err(JournalWindowError::FutureDate)
         );
         assert_eq!(
-            resolve_window(&root, &AttachWindow::Date("bad".to_string()), "2026-08-22"),
+            resolve_window(&empty_root, &AttachWindow::Date("bad".to_string()), "2026-08-22"),
             Err(JournalWindowError::InvalidDate)
         );
         assert_eq!(
             resolve_window(
-                &root,
+                &empty_root,
                 &AttachWindow::Date("2026-08-21".to_string()),
                 "2026-08-22"
             ),
             Err(JournalWindowError::DateOutsideRetention)
         );
+        fs::remove_dir_all(&empty_root).unwrap();
+
+        let tail_root = root("tail-window");
+        create_private_dir(&tail_root).unwrap();
+        let mut lines = String::new();
+        for seq in 1..=100 {
+            lines.push_str(&format!("{{\"v\":1,\"seq\":{seq}}}\n"));
+        }
+        fs::write(tail_root.join("2026-08-22.jsonl"), lines).unwrap();
+        let tail = resolve_window(&tail_root, &AttachWindow::Tail(30), "2026-08-22").unwrap();
+        assert_eq!(tail.from_seq, Some(71));
+        let older = resolve_window(&tail_root, &AttachWindow::Seq(21), "2026-08-22").unwrap();
+        assert_eq!(older.from_seq, Some(21));
+        assert!(
+            older.from_seq.unwrap() < tail.from_seq.unwrap(),
+            "from_seq plus bas doit donner l'ancien au-delà du Tail"
+        );
+        fs::remove_dir_all(tail_root).unwrap();
+
         assert!(!is_date("2026-02-31"));
         assert!(is_date("2024-02-29"));
         assert!(!is_date("2026-02-29"));
         assert!(!is_date("2026-04-31"));
-        fs::remove_dir_all(root).unwrap();
     }
 }

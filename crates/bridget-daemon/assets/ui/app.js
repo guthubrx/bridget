@@ -1080,6 +1080,26 @@
         ]);
       });
 
+      // Ouverture sans reprise : ne jamais forcer from_seq=0 (Tail serveur).
+      test("ouverture_watch_sans_reprise_n_envoie_pas_from_seq_zero", () => {
+        const FakeES = makeFakeEventSource();
+        const runtime = api.createWatchRuntime({
+          token: "jeton",
+          resumeSeq: new Map(),
+          buffers: new Map(),
+          attestedGaps: new Set(),
+          seenRecords: new Set(),
+          EventSource: FakeES,
+          setTimeout: () => 1,
+          clearTimeout: () => {},
+        });
+        const opened = runtime.open("bridget");
+        assert.equal(opened.fromSeq, null);
+        assert.equal(opened.url, "/v1/watch?token=jeton&agent=bridget");
+        assert.ok(!opened.url.includes("from_seq="));
+        assert.equal(api.olderJournalPageFromSeq(71, 50), 21);
+      });
+
       // L9 charge 5 — Number() sur to_seq/through_seq via le runtime productif.
       // Meurt si advanceWatchResumeFromEnvelope (appelé par ingestJournal) omet Number().
       test("avancement_curseur_convertit_to_seq_et_through_seq", () => {
@@ -1700,7 +1720,14 @@
     const value = resumeSeq && typeof resumeSeq.get === "function"
       ? resumeSeq.get(agent)
       : undefined;
-    return Number.isFinite(value) ? value : 0;
+    // Pas de reprise connue → omettre from_seq (Tail serveur), jamais forcer 0.
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function olderJournalPageFromSeq(currentFromSeq, pageSize = 50) {
+    if (!Number.isFinite(currentFromSeq)) return 0;
+    const size = Number.isFinite(pageSize) && pageSize > 0 ? Math.trunc(pageSize) : 50;
+    return Math.max(0, Math.trunc(currentFromSeq) - size);
   }
 
   function buildWatchUrl(token, agent, resumeSeq) {
@@ -2477,7 +2504,7 @@
         let finished = false;
         let timeoutId = null;
         const history = new windowRef.EventSource(
-          agentResourceUrl("/v1/journal", token, agent, 0),
+          agentResourceUrl("/v1/journal", token, agent),
         );
         historyConnections.set(agent, history);
         const finish = (status) => {
@@ -3141,6 +3168,7 @@
     processWatchJournalEnvelope,
     createWatchRuntime,
     resolveWatchFromSeq,
+    olderJournalPageFromSeq,
     buildWatchUrl,
     connectWatchSource,
     watchReconnectDelayMs,

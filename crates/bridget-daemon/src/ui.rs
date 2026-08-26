@@ -36,6 +36,11 @@ const UI_RECONNECT_DELAY: Duration = Duration::from_millis(100);
 /// jamais au journal ; sans ce rythme le fil reste figé après l'ouverture.
 const UI_THREAD_LEDGER_POLL: Duration = Duration::from_millis(400);
 const UI_SENDER: &str = "humain";
+/// Ouverture page : dernières séquences seulement — pas le journal entier.
+const UI_JOURNAL_OPEN_TAIL_SEQUENCES: u64 = 30;
+/// Remontée manuelle possible : pages de séquences via `from_seq` existant.
+#[cfg_attr(not(test), allow(dead_code))]
+const UI_JOURNAL_OLDER_PAGE_SEQUENCES: u64 = 50;
 /// Port loopback par défaut : stable d'un lancement à l'autre, sans option CLI.
 pub const DEFAULT_UI_PORT: u16 = 17888;
 const UI_ENDPOINT_STATE_VERSION: u8 = 1;
@@ -641,12 +646,7 @@ fn serve_connection(
                 .get("agent")
                 .ok_or_else(|| UiError::Protocol("paramètre agent absent".to_string()))?;
             validate_agent(agent)?;
-            let window = match request.query.get("from_seq") {
-                Some(value) => AttachWindow::Seq(value.parse().map_err(|_| {
-                    UiError::Protocol("from_seq doit être un entier non signé".to_string())
-                })?),
-                None => AttachWindow::Today,
-            };
+            let window = parse_journal_attach_window(&request.query)?;
             stream_sse_journal(stream, &config.daemon_socket, agent, window, None)
         }
         ("GET", "/v1/watch") => {
@@ -655,12 +655,7 @@ fn serve_connection(
                 .get("agent")
                 .ok_or_else(|| UiError::Protocol("paramètre agent absent".to_string()))?;
             validate_agent(agent)?;
-            let window = match request.query.get("from_seq") {
-                Some(value) => AttachWindow::Seq(value.parse().map_err(|_| {
-                    UiError::Protocol("from_seq doit être un entier non signé".to_string())
-                })?),
-                None => AttachWindow::Today,
-            };
+            let window = parse_journal_attach_window(&request.query)?;
             // La vue combinée est la porte d'entrée de la future page : elle
             // raccorde Attach avant de capturer l'instantané, donc aucun delta
             // journal ne peut se glisser silencieusement entre les deux.
@@ -863,6 +858,26 @@ fn now_secs() -> i64 {
         .unwrap_or_default()
         .as_secs()
         .min(i64::MAX as u64) as i64
+}
+
+/// Fenêtre d'ouverture page / journal : Tail(30) sauf reprise explicite via from_seq.
+/// Un mutant qui retire l'appel depuis serve_connection doit tuer
+/// `chemin_productif_ouverture_journal_emprunte_tail`.
+fn parse_journal_attach_window(
+    query: &HashMap<String, String>,
+) -> Result<AttachWindow, UiError> {
+    match query.get("from_seq") {
+        Some(value) => Ok(AttachWindow::Seq(value.parse().map_err(|_| {
+            UiError::Protocol("from_seq doit être un entier non signé".to_string())
+        })?)),
+        None => Ok(AttachWindow::Tail(UI_JOURNAL_OPEN_TAIL_SEQUENCES)),
+    }
+}
+
+/// Remontée manuelle : page précédente de `UI_JOURNAL_OLDER_PAGE_SEQUENCES`.
+#[cfg_attr(not(test), allow(dead_code))]
+fn older_journal_page_from_seq(current_from_seq: u64) -> u64 {
+    current_from_seq.saturating_sub(UI_JOURNAL_OLDER_PAGE_SEQUENCES)
 }
 
 fn read_snapshot(
@@ -2134,6 +2149,60 @@ mod tests {
         assert!(
             watch_body.contains("push_live_thread_messages("),
             "le watch doit appeler push_live_thread_messages (chemin vivant)"
+        );
+    }
+
+    /// Garde anti-feuille : ouverture journal/watch sans from_seq doit Tail(30),
+    /// pas Seq(0) ni Today. Retirer l'appel parse_journal_attach_window tue ce témoin.
+    #[test]
+    fn chemin_productif_ouverture_journal_emprunte_tail() {
+        let source = include_str!("ui.rs");
+        let parse_body = function_body(source, "fn parse_journal_attach_window(");
+        assert!(
+            parse_body.contains("AttachWindow::Tail(UI_JOURNAL_OPEN_TAIL_SEQUENCES)"),
+            "sans from_seq, l'ouverture doit emprunter Tail(30)"
+        );
+        assert!(
+            !parse_body.contains("AttachWindow::Today"),
+            "Today n'est plus le défaut d'ouverture page"
+        );
+        assert!(
+            !parse_body.contains("AttachWindow::Seq(0)"),
+            "Seq(0) ne doit pas être le défaut d'ouverture"
+        );
+        let serve_body = function_body(source, "fn serve_connection(");
+        assert!(
+            serve_body.contains("parse_journal_attach_window("),
+            "serve_connection doit appeler parse_journal_attach_window"
+        );
+        assert!(
+            serve_body.matches("parse_journal_attach_window(").count() >= 2,
+            "/v1/journal et /v1/watch doivent tous deux emprunter parse_journal_attach_window"
+        );
+        assert_eq!(UI_JOURNAL_OPEN_TAIL_SEQUENCES, 30);
+    }
+
+    /// Remontée : une page de 50 sous le from_seq d'ouverture donne l'ancien.
+    #[test]
+    fn remontee_from_seq_donne_l_ancien_par_pages_de_cinquante() {
+        let open_from = 71_u64; // Tail(30) si last=100
+        let older = older_journal_page_from_seq(open_from);
+        assert_eq!(older, 21);
+        assert!(
+            older < open_from,
+            "la page précédente doit démarrer avant la fenêtre d'ouverture"
+        );
+        assert_eq!(UI_JOURNAL_OLDER_PAGE_SEQUENCES, 50);
+        assert_eq!(older_journal_page_from_seq(40), 0);
+        let mut query = HashMap::new();
+        query.insert("from_seq".to_string(), older.to_string());
+        assert_eq!(
+            parse_journal_attach_window(&query).unwrap(),
+            AttachWindow::Seq(21)
+        );
+        assert_eq!(
+            parse_journal_attach_window(&HashMap::new()).unwrap(),
+            AttachWindow::Tail(30)
         );
     }
 
