@@ -143,6 +143,7 @@ fn register(
                 name: Some(name.to_string()),
                 host: None,
                 transport: Some("unix".to_string()),
+                channel: None.into(),
                 mode: None,
                 location: None,
                 os: None,

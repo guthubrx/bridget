@@ -8,7 +8,7 @@ use bridget_transport::protocol::{
     PresenceMode, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal, SpawnRefusal,
     StopOutcome, decode, encode,
 };
-use bridget_transport::{DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
+use bridget_transport::{ChannelReport, DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -140,7 +140,10 @@ struct Presence {
     name: String,
     agent_type: String,
     host: String,
+    /// Protocole d'agent réellement parlé.
     transport: String,
+    /// Canal de connexion au daemon, absent s'il n'a pas été attesté.
+    channel: Option<String>,
     /// Mode de présence attesté à l'enregistrement. Les présences historiques
     /// restent `None` : ne jamais le déduire du transport ou du type d'agent.
     mode: Option<PresenceMode>,
@@ -1906,6 +1909,7 @@ impl DaemonState {
                     connection_id: agent.connection_id.clone(),
                     host: presence.host.clone(),
                     transport: presence.transport.clone(),
+                    channel: presence.channel.clone(),
                     mode: presence.mode,
                     location: presence.location.clone(),
                     os: presence.os.clone(),
@@ -1954,13 +1958,14 @@ impl DaemonState {
             let (transport, mode) = managed_definition
                 .as_ref()
                 .map(definition_presence_fields)
-                .unwrap_or_else(|| ("unix".to_string(), None));
+                .unwrap_or_else(|| ("unknown".to_string(), None));
             agents.push(bridget_transport::protocol::AgentInfo {
                 name: record.lease.name.clone(),
                 agent_type: record.agent_type.clone(),
                 connection_id: String::new(),
                 host: "local".to_string(),
                 transport,
+                channel: None,
                 mode,
                 location: None,
                 os: std::env::consts::OS.to_string(),
@@ -1986,6 +1991,7 @@ impl DaemonState {
                 connection_id: String::new(),
                 host: presence.host.clone(),
                 transport: presence.transport.clone(),
+                channel: presence.channel.clone(),
                 mode: presence.mode,
                 location: presence.location.clone(),
                 os: presence.os.clone(),
@@ -3185,6 +3191,18 @@ fn definition_presence_fields(
     )
 }
 
+/// Valeurs historiques qui décrivent un tuyau plutôt qu'un protocole
+/// d'agent. Elles ne doivent jamais réapparaître dans `AgentInfo.transport`.
+fn legacy_non_protocol_transport(value: &str) -> bool {
+    matches!(value, "unix" | "ssh" | "ssh-unix" | "stdio")
+}
+
+fn non_empty_registration_value(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 /// Définition figée d'un géré déjà connu. L'instance courante est la clé
 /// nominale ; une ré-inscription (reprise, wrapper antérieur) peut arriver
 /// avec un autre identifiant tout en portant le même nom de lease.
@@ -3211,12 +3229,13 @@ fn managed_definition_for_register(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn handle_register(
+fn handle_register_with_channel(
     conn_id: &str,
     agent_type: String,
     name: Option<String>,
     host: Option<String>,
     transport: Option<String>,
+    channel: ChannelReport,
     mode: Option<PresenceMode>,
     location: Option<String>,
     os: Option<String>,
@@ -3388,14 +3407,39 @@ fn handle_register(
                     .map(|presence| presence.os.clone())
                     .or(os)
                     .unwrap_or_else(|| "inconnu".to_string());
-                let transport = managed_transport.unwrap_or_else(|| {
-                    previous
-                        .as_ref()
-                        .filter(|presence| presence.mode.is_some())
-                        .map(|presence| presence.transport.clone())
-                        .or(transport)
+                let reported_transport = non_empty_registration_value(transport);
+                let channel = match channel {
+                    ChannelReport::Known(value) => non_empty_registration_value(Some(value)),
+                    ChannelReport::Unknown => None,
+                    ChannelReport::Omitted => match mode {
+                        Some(PresenceMode::Tmux) => {
+                            reported_transport.clone().filter(|value| value != "tmux")
+                        }
+                        _ => reported_transport
+                            .clone()
+                            .filter(|value| legacy_non_protocol_transport(value)),
+                    }
+                    .or_else(|| {
+                        previous
+                            .as_ref()
+                            .and_then(|presence| presence.channel.clone())
+                    }),
+                };
+                let transport = managed_transport.unwrap_or_else(|| match mode {
+                    Some(PresenceMode::Tmux) => "tmux".to_string(),
+                    Some(PresenceMode::Acp) => reported_transport
+                        .clone()
+                        .filter(|value| !legacy_non_protocol_transport(value))
                         .or_else(|| previous.as_ref().map(|presence| presence.transport.clone()))
-                        .unwrap_or_else(|| "unix".to_string())
+                        .unwrap_or_else(|| "acp".to_string()),
+                    Some(PresenceMode::Cli) => reported_transport
+                        .filter(|value| !legacy_non_protocol_transport(value))
+                        .or_else(|| previous.as_ref().map(|presence| presence.transport.clone()))
+                        .unwrap_or_else(|| "cli".to_string()),
+                    _ => reported_transport
+                        .filter(|value| !legacy_non_protocol_transport(value))
+                        .or_else(|| previous.as_ref().map(|presence| presence.transport.clone()))
+                        .unwrap_or_else(|| "unknown".to_string()),
                 });
                 let agent_type = previous
                     .as_ref()
@@ -3455,6 +3499,7 @@ fn handle_register(
                         agent_type,
                         host,
                         transport,
+                        channel,
                         mode,
                         location,
                         journal_available,
@@ -3492,6 +3537,42 @@ fn handle_register(
             }
         }
     }
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+/// Simule les enregistrements antérieurs à FR-2407, donc sans canal explicite.
+fn handle_register(
+    conn_id: &str,
+    agent_type: String,
+    name: Option<String>,
+    host: Option<String>,
+    transport: Option<String>,
+    mode: Option<PresenceMode>,
+    location: Option<String>,
+    os: Option<String>,
+    instance_id: Option<String>,
+    domain: Option<String>,
+    turn_in_progress: bool,
+    journal_available: Option<bool>,
+    state: &mut DaemonState,
+) -> DaemonToWrapper {
+    handle_register_with_channel(
+        conn_id,
+        agent_type,
+        name,
+        host,
+        transport,
+        ChannelReport::Omitted,
+        mode,
+        location,
+        os,
+        instance_id,
+        domain,
+        turn_in_progress,
+        journal_available,
+        state,
+    )
 }
 
 /// Longueur maximale acceptée pour un identifiant de modèle ou un niveau
@@ -5839,6 +5920,7 @@ fn handle_wrapper_message(
             name,
             host,
             transport,
+            channel,
             mode,
             location,
             os,
@@ -5858,12 +5940,13 @@ fn handle_wrapper_message(
                 });
             }
             let managed_instance = instance_id.clone();
-            let response = handle_register(
+            let response = handle_register_with_channel(
                 conn_id,
                 agent_type,
                 name,
                 host,
                 transport,
+                channel,
                 mode,
                 location,
                 os,
@@ -6427,6 +6510,7 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
         name: Some(format!("status-{}", std::process::id())),
         host: None,
         transport: None,
+        channel: ChannelReport::Unknown,
         mode: Some(PresenceMode::Cli),
         location: None,
         os: None,
@@ -6703,8 +6787,9 @@ mod presence_tests {
                 name: "agent-distant-1".to_string(),
                 agent_type: "codex".to_string(),
                 host: "projet-a".to_string(),
-                transport: "ssh-unix".to_string(),
-                mode: None,
+                transport: "tmux".to_string(),
+                channel: Some("ssh-unix".to_string()),
+                mode: Some(PresenceMode::Tmux),
                 location: None,
                 journal_available: false,
                 os: "Linux".to_string(),
@@ -6784,6 +6869,7 @@ mod presence_tests {
                 agent_type: "claude".to_string(),
                 host: "macbook".to_string(),
                 transport: "acp".to_string(),
+                channel: Some("unix".to_string()),
                 mode: Some(PresenceMode::Acp),
                 location: None,
                 journal_available: true,
@@ -6802,6 +6888,73 @@ mod presence_tests {
             },
         );
         (state, config)
+    }
+
+    #[test]
+    fn spec_024_trame_tmux_federee_historique_separe_protocole_et_canal() {
+        let (mut state, config) = state_with_registered_agent("g11-tmux-federe");
+        state.router.unregister_by_conn("conn-1");
+        state.conn_instances.clear();
+        state.presences.clear();
+
+        let response = handle_register_with_channel(
+            "conn-cartae",
+            "codex".to_string(),
+            Some("cartae-agent".to_string()),
+            Some("cartae".to_string()),
+            Some("ssh-unix".to_string()),
+            ChannelReport::Omitted,
+            Some(PresenceMode::Tmux),
+            Some("bridget:2.1".to_string()),
+            Some("Linux".to_string()),
+            Some("instance-cartae".to_string()),
+            Some("bridget".to_string()),
+            false,
+            Some(true),
+            &mut state,
+        );
+        assert!(matches!(response, DaemonToWrapper::Registered { .. }));
+
+        let info = state.agent_infos().pop().expect("agent fédéré visible");
+        assert_eq!(info.transport, "tmux");
+        assert_eq!(info.channel.as_deref(), Some("ssh-unix"));
+        assert_eq!(info.mode, Some(PresenceMode::Tmux));
+        assert_eq!(info.location.as_deref(), Some("bridget:2.1"));
+
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn spec_024_protocole_et_canal_explicites_restent_independants() {
+        let (mut state, config) = state_with_registered_agent("g11-explicite");
+        state.router.unregister_by_conn("conn-1");
+        state.conn_instances.clear();
+        state.presences.clear();
+
+        let response = handle_register_with_channel(
+            "conn-natif",
+            "fixture".to_string(),
+            Some("natif-distant".to_string()),
+            Some("cartae".to_string()),
+            Some("codex_app_server".to_string()),
+            Some("ssh-unix".to_string()).into(),
+            Some(PresenceMode::Cli),
+            None,
+            Some("Linux".to_string()),
+            Some("instance-native".to_string()),
+            Some("bridget".to_string()),
+            false,
+            Some(true),
+            &mut state,
+        );
+        assert!(matches!(response, DaemonToWrapper::Registered { .. }));
+
+        let info = state.agent_infos().pop().expect("agent natif visible");
+        assert_eq!(info.transport, "codex_app_server");
+        assert_eq!(info.channel.as_deref(), Some("ssh-unix"));
+        assert_eq!(info.agent_type, "fixture");
+
+        let _ = std::fs::remove_file(config.db_path);
     }
 
     fn recovery_fixture_state(root: &std::path::Path) -> (DaemonState, DaemonConfig) {
@@ -7409,6 +7562,7 @@ mod presence_tests {
                     name: Some("alpha".to_string()),
                     host: Some("local".to_string()),
                     transport: Some("tmux".to_string()),
+                    channel: Some("unix".to_string()).into(),
                     mode: Some(PresenceMode::Tmux),
                     location: Some("fixture:0.1".to_string()),
                     os: Some("test".to_string()),
@@ -7429,6 +7583,7 @@ mod presence_tests {
                     name: Some("alpha".to_string()),
                     host: Some("local".to_string()),
                     transport: Some("acp".to_string()),
+                    channel: Some("unix".to_string()).into(),
                     mode: Some(PresenceMode::Acp),
                     location: None,
                     os: Some("test".to_string()),
@@ -8065,6 +8220,7 @@ mod presence_tests {
                     name: Some("maicie".to_string()),
                     host: None,
                     transport: None,
+                    channel: None.into(),
                     mode: None,
                     location: None,
                     os: None,
@@ -8602,6 +8758,7 @@ mod presence_tests {
                     name: Some("historique-012".to_string()),
                     host: None,
                     transport: None,
+                    channel: None.into(),
                     mode: None,
                     location: None,
                     os: None,
@@ -9969,6 +10126,7 @@ mod presence_tests {
         let agent = state.agent_infos().pop().expect("géré visible");
         assert_eq!(agent.name, "coder-terra");
         assert_eq!(agent.transport, "acp");
+        assert_eq!(agent.channel.as_deref(), Some("unix"));
         assert_eq!(agent.mode, Some(PresenceMode::Acp));
         assert_eq!(agent.model.as_deref(), Some("gpt-5.6-terra"));
         assert_eq!(agent.effort.as_deref(), Some("high"));
@@ -10233,7 +10391,8 @@ mod presence_tests {
         ));
 
         let agent = state.agent_infos().pop().expect("Claude inscrit");
-        assert_eq!(agent.transport, "unix");
+        assert_eq!(agent.transport, "acp");
+        assert_eq!(agent.channel.as_deref(), Some("unix"));
         assert_eq!(agent.mode, Some(PresenceMode::Acp));
         assert_eq!(agent.domain.as_deref(), Some("bridget"));
 

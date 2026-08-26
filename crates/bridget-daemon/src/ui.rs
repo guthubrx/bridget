@@ -9,7 +9,7 @@ use bridget_transport::protocol::{
     AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
     LedgerMessage, LedgerScope, PresenceMode, decode, encode,
 };
-use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
+use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use maicie::ui_projection::{UiMissionProjectionV1, read_ui_mission_projection_v1};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -79,9 +79,9 @@ impl From<std::io::Error> for UiError {
     }
 }
 
-#[derive(Default)]
 struct UiRelayRuntime {
     human_presence: Mutex<Option<UiHumanPresence>>,
+    human_presence_channel: Option<String>,
 }
 
 struct UiHumanPresence {
@@ -89,6 +89,13 @@ struct UiHumanPresence {
 }
 
 impl UiRelayRuntime {
+    fn new(human_presence_channel: Option<String>) -> Self {
+        Self {
+            human_presence: Mutex::new(None),
+            human_presence_channel,
+        }
+    }
+
     fn ensure_human_presence(&self, socket_path: &Path) -> Result<(), UiError> {
         let mut presence = self
             .human_presence
@@ -100,12 +107,18 @@ impl UiRelayRuntime {
         {
             return Ok(());
         }
-        *presence = Some(open_human_presence(socket_path)?);
+        *presence = Some(open_human_presence(
+            socket_path,
+            self.human_presence_channel.as_deref(),
+        )?);
         Ok(())
     }
 }
 
-fn open_human_presence(socket_path: &Path) -> Result<UiHumanPresence, UiError> {
+fn open_human_presence(
+    socket_path: &Path,
+    attested_channel: Option<&str>,
+) -> Result<UiHumanPresence, UiError> {
     let stream = UnixStream::connect(socket_path)?;
     let read_stream = stream.try_clone()?;
     let writer = Arc::new(Mutex::new(BufWriter::new(stream)));
@@ -120,7 +133,8 @@ fn open_human_presence(socket_path: &Path) -> Result<UiHumanPresence, UiError> {
                 agent_type: "ui".to_string(),
                 name: Some(UI_SENDER.to_string()),
                 host: Some("localhost".to_string()),
-                transport: Some("unix".to_string()),
+                transport: None,
+                channel: ChannelReport::reported(attested_channel.map(str::to_owned)),
                 mode: Some(PresenceMode::Cli),
                 location: None,
                 os: Some(std::env::consts::OS.to_string()),
@@ -189,6 +203,13 @@ pub struct UiRelay {
 
 impl UiRelay {
     pub fn bind(config: UiRelayConfig) -> Result<Self, UiError> {
+        Self::bind_with_attested_channel(config, None)
+    }
+
+    fn bind_with_attested_channel(
+        config: UiRelayConfig,
+        attested_channel: Option<String>,
+    ) -> Result<Self, UiError> {
         if !config.bind.ip().is_loopback() {
             return Err(UiError::Configuration(
                 "le relais UI doit écouter exclusivement sur la boucle locale".to_string(),
@@ -201,7 +222,7 @@ impl UiRelay {
         Ok(Self {
             listener,
             config,
-            runtime: Arc::new(UiRelayRuntime::default()),
+            runtime: Arc::new(UiRelayRuntime::new(attested_channel)),
         })
     }
 
@@ -247,7 +268,10 @@ impl UiRelay {
 /// Lance `bridget ui`. Le terminal garde le jeton ; aucun secret ne part
 /// dans le HTML ou dans une configuration persistée.
 pub fn run(daemon_socket: PathBuf, maicie_config: PathBuf) -> Result<(), UiError> {
-    let relay = UiRelay::bind(UiRelayConfig::loopback(daemon_socket, maicie_config))?;
+    let relay = UiRelay::bind_with_attested_channel(
+        UiRelayConfig::loopback(daemon_socket, maicie_config),
+        crate::connection_channel::attested_connection_channel(),
+    )?;
     println!("Bridget UI (lecture et envoi) : {}", relay.url()?);
     relay.serve()
 }
@@ -1184,6 +1208,7 @@ fn status_text(status: u16) -> &'static str {
 mod tests {
     use super::*;
     use std::net::TcpStream;
+    use std::os::unix::net::UnixListener;
     use std::time::Duration;
 
     fn agent_info(name: &str, state: &str) -> bridget_transport::protocol::AgentInfo {
@@ -1210,6 +1235,79 @@ mod tests {
             body: format!("{sender} vers {target}"),
             delivery_status: None,
         }
+    }
+
+    fn capture_ui_registration_channel(
+        attested_channel: Option<&str>,
+    ) -> (Option<String>, ChannelReport) {
+        let socket_path = std::env::temp_dir().join(format!(
+            "bridget-ui-register-{}.sock",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let (registration_sender, registration_receiver) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let registration: WrapperToDaemon = decode(line.trim()).unwrap();
+            let registration = match registration {
+                WrapperToDaemon::Register {
+                    transport, channel, ..
+                } => (transport, channel),
+                message => panic!("Register UI attendu, reçu {message:?}"),
+            };
+            registration_sender.send(registration).unwrap();
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::Registered {
+                    name: UI_SENDER.to_string(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::JournalReady
+            ));
+        });
+
+        let presence = open_human_presence(&socket_path, attested_channel).unwrap();
+        server.join().unwrap();
+        let registration = registration_receiver.recv().unwrap();
+        drop(presence);
+        std::fs::remove_file(socket_path).unwrap();
+        registration
+    }
+
+    #[test]
+    fn spec_024_presence_ui_locale_annonce_unix_dans_la_trame_reelle() {
+        assert_eq!(
+            capture_ui_registration_channel(Some("unix")),
+            (None, Some("unix".to_string()).into())
+        );
+    }
+
+    #[test]
+    fn spec_024_presence_ui_federee_conserve_ssh_unix_dans_la_trame_reelle() {
+        assert_eq!(
+            capture_ui_registration_channel(Some("ssh-unix")),
+            (None, Some("ssh-unix".to_string()).into())
+        );
+    }
+
+    #[test]
+    fn spec_024_presence_ui_sans_attestation_reste_inconnue_dans_la_trame_reelle() {
+        assert_eq!(
+            capture_ui_registration_channel(None),
+            (None, ChannelReport::Unknown)
+        );
     }
 
     #[test]

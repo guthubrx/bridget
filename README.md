@@ -18,10 +18,10 @@ connexion coupée, empêcher deux agents de boucler indéfiniment.
 ```console
 $ /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget who
 Agents connectés :
-  NOM      TYPE    HÔTE         OS     TRANSPORT  DOMAINE    MODÈLE         EFFORT  ÉTAT
-  agent-1  claude  poste-local  macOS  unix       bridget    claude-opus-5  high    connected
-  agent-2  codex   poste-local  macOS  unix       projet-b   gpt-5.6-terra  xhigh   dnd
-  distant  claude  serveur      Linux  ssh        projet-b   claude-opus-5  high    connected
+  NOM      TYPE    HÔTE         OS     TRANSPORT  CANAL     DOMAINE    MODÈLE         EFFORT  ÉTAT
+  agent-1  claude  poste-local  macOS  tmux       unix      bridget    claude-opus-5  high    connected
+  agent-2  codex   poste-local  macOS  tmux       unix      projet-b   gpt-5.6-terra  xhigh   dnd
+  distant  claude  serveur      Linux  tmux       ssh-unix  projet-b   claude-opus-5  high    connected
 
 $ /Users/moi/Nextcloud/10.Scripts/bridget/.worktrees/015-guichet-maicie/target/release/bridget send --to distant --reply "Peux-tu relire crates/bridget-core ?"
 OK: envoyé à « distant » (id=fa09fa7800694, hops=4) [réponse attendue]
@@ -468,11 +468,23 @@ manuel, sinon pour diagnostiquer.
 
 | Variable | Effet |
 |---|---|
-| `BRIDGET_TRANSPORT` | nom du transport annoncé dans l'annuaire (défaut : `unix`, ou la valeur lue dans `~/.config/bridget/federation.env`) |
+| `BRIDGET_CHANNEL` | attestation explicite du canal de connexion, séparée du protocole ; sans attestation, le canal reste inconnu |
+| `BRIDGET_TRANSPORT` | alias historique de `BRIDGET_CHANNEL`, conservé pour un déploiement progressif |
 | `BRIDGET_AGENT_NAME` | nom de l'agent, exporté par le wrapper vers le processus agent |
 | `BRIDGET_AGENT_NAME_FILE` | fichier portant le nom courant ; c'est lui qui fait foi après un `rename` |
 | `HOSTNAME` | hôte annoncé, à défaut la sortie de `hostname` |
 | `RUST_LOG=debug` | journalisation détaillée, notamment la source de chaque observation de modèle |
+
+L'installateur fédéré écrit aussi `channel=` (et l'alias historique
+`transport=`) dans `~/.config/bridget/federation.env`. Si l'environnement du
+processus et ce fichier annoncent deux canaux différents, Bridget publie un
+canal inconnu : aucun des deux faits potentiellement périmés ne gagne par
+simple ordre de lecture.
+
+Sur le fil, un producteur récent annonce explicitement l'inconnu avec
+`channel: null`. Une trame historique qui omet entièrement la clé reste
+distincte : lors d'une reconnexion progressive, elle conserve la dernière
+attestation connue au lieu de l'effacer.
 
 Fichiers, tous sous `~/.cache/bridget/` :
 
@@ -566,10 +578,10 @@ tenus à jour quand l'humain en change en cours de session. Le type d'agent
 détermine à qui confier quoi.
 
 ```text
-  NOM      TYPE    HÔTE         OS     TRANSPORT  MODÈLE         EFFORT  ÉTAT
-  agent-1  claude  poste-local  macOS  unix       claude-opus-5  high    connected
-  agent-2  codex   poste-local  macOS  unix       gpt-5.6-terra  xhigh   connected
-  distant  claude  serveur      Linux  ssh        —              —       unreachable
+  NOM      TYPE    HÔTE         OS     TRANSPORT  CANAL     MODÈLE         EFFORT  ÉTAT
+  agent-1  claude  poste-local  macOS  tmux       unix      claude-opus-5  high    connected
+  agent-2  codex   poste-local  macOS  tmux       unix      gpt-5.6-terra  xhigh   connected
+  distant  claude  serveur      Linux  tmux       ssh-unix  —              —       unreachable
 ```
 
 Un tiret cadratin signale une valeur jamais observée — Bridget n'invente jamais
@@ -700,8 +712,10 @@ connexion stable, ce délai est remis à son minimum. L'agent est réinscrit aut
 même nom dès que le socket SSH réapparaît, y compris s'il a été renommé entre-temps
 par `bridget rename`.
 
-`bridget who` affiche aussi l'hôte d'exécution, l'OS, le transport et l'état de présence dans des
-colonnes alignées. L'OS est détecté par le wrapper (`macOS`, `Linux`, etc.) afin d'aiguiller une
+`bridget who` affiche aussi l'hôte d'exécution, l'OS, le protocole d'agent dans `TRANSPORT`, le
+chemin réseau dans `CANAL` et l'état de présence dans des colonnes alignées. Un agent tmux fédéré
+reste ainsi `TRANSPORT=tmux` tout en portant `CANAL=ssh-unix`. L'OS est détecté par le wrapper
+(`macOS`, `Linux`, etc.) afin d'aiguiller une
 demande vers les outils réellement disponibles. Après une coupure, une instance distante reste
 visible comme `unreachable` pendant cinq minutes, ce qui permet de distinguer une perte de réseau
 d'un arrêt volontaire de l'agent.

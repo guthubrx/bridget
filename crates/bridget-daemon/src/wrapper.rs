@@ -8,7 +8,7 @@ use bridget_transport::journal::{
 };
 use bridget_transport::protocol::{PresenceMode, decode, encode};
 use bridget_transport::{
-    AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ClaudeStreamJsonOptions,
+    AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ChannelReport, ClaudeStreamJsonOptions,
     ClaudeStreamJsonTransport, CodexAppServerOptions, CodexAppServerTransport, DaemonToWrapper,
     MAX_ATTACH_FRAGMENT_BYTES, MAX_ATTACH_SERIALIZED_FRAME_BYTES, ManagedEvent, ManagedEventKind,
     ManagedSession, ManagedSessionDescriptor, ManagedTerminal, TmuxTransport, Transport,
@@ -799,25 +799,10 @@ fn host_name() -> String {
         .unwrap_or_else(|| "inconnu".to_string())
 }
 
-fn transport_name() -> String {
-    if let Ok(transport) = std::env::var("BRIDGET_TRANSPORT")
-        && !transport.trim().is_empty()
-    {
-        return transport;
-    }
-    let config_path = std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
-        .join(".config/bridget/federation.env");
-    std::fs::read_to_string(config_path)
-        .ok()
-        .and_then(|config| {
-            config
-                .lines()
-                .find_map(|line| line.strip_prefix("transport=").map(str::to_owned))
-        })
-        .filter(|transport| !transport.trim().is_empty())
-        .unwrap_or_else(|| "unix".to_string())
+const INTERACTIVE_AGENT_PROTOCOL: &str = "tmux";
+
+fn connection_channel() -> Option<String> {
+    crate::connection_channel::attested_connection_channel()
 }
 
 /// Domaine de travail dérivé du répertoire courant.
@@ -1254,7 +1239,8 @@ fn connect_and_register(
     agent_type: &str,
     name: Option<&str>,
     host: &str,
-    transport: &str,
+    protocol: &str,
+    channel: Option<&str>,
     mode: PresenceMode,
     location: Option<&str>,
     os: &str,
@@ -1267,7 +1253,8 @@ fn connect_and_register(
         agent_type,
         name,
         host,
-        transport,
+        protocol,
+        channel,
         mode,
         location,
         os,
@@ -1283,7 +1270,8 @@ fn connect_and_register_at(
     agent_type: &str,
     name: Option<&str>,
     host: &str,
-    transport: &str,
+    protocol: &str,
+    channel: Option<&str>,
     mode: PresenceMode,
     location: Option<&str>,
     os: &str,
@@ -1307,7 +1295,8 @@ fn connect_and_register_at(
         agent_type: agent_type.to_string(),
         name: name.map(str::to_owned),
         host: Some(host.to_string()),
-        transport: Some(transport.to_string()),
+        transport: Some(protocol.to_string()),
+        channel: ChannelReport::reported(channel.map(str::to_owned)),
         mode: Some(mode),
         location: location.map(str::to_owned),
         os: Some(os.to_string()),
@@ -1354,7 +1343,7 @@ pub fn launch(
     };
 
     let host = host_name();
-    let transport = transport_name();
+    let channel = connection_channel();
     let os = operating_system();
     let instance_id = uuid::Uuid::new_v4().to_string();
     let (pane_id, tmux_location) = match get_current_tmux_context() {
@@ -1375,7 +1364,8 @@ pub fn launch(
         agent_type,
         effective_name.as_deref(),
         &host,
-        &transport,
+        INTERACTIVE_AGENT_PROTOCOL,
+        channel.as_deref(),
         PresenceMode::Tmux,
         tmux_location.as_deref(),
         &os,
@@ -1559,7 +1549,7 @@ pub fn launch(
     let agent_type_for_thread = agent_type.to_string();
     let mut my_name_for_thread = my_name.clone();
     let host_for_thread = host.clone();
-    let transport_for_thread = transport.clone();
+    let channel_for_thread = channel.clone();
     let os_for_thread = os.clone();
     let instance_id_for_thread = instance_id.clone();
     let tmux_location_for_thread = tmux_location.clone();
@@ -1730,7 +1720,8 @@ pub fn launch(
                         &agent_type_for_thread,
                         Some(&wanted_name),
                         &host_for_thread,
-                        &transport_for_thread,
+                        INTERACTIVE_AGENT_PROTOCOL,
+                        channel_for_thread.as_deref(),
                         PresenceMode::Tmux,
                         tmux_location_for_thread.as_deref(),
                         &os_for_thread,
@@ -1909,7 +1900,8 @@ pub fn launch(
                             &agent_type_for_thread,
                             Some(&wanted_name),
                             &host_for_thread,
-                            &transport_for_thread,
+                            INTERACTIVE_AGENT_PROTOCOL,
+                            channel_for_thread.as_deref(),
                             PresenceMode::Tmux,
                             tmux_location_for_thread.as_deref(),
                             &os_for_thread,
@@ -3002,12 +2994,14 @@ fn launch_acp_with_status(
         _ => unreachable!("protocole validé avant le lancement"),
     };
     let descriptor = transport.descriptor();
+    let channel = connection_channel();
     let (mut reader, initial_writer, mut my_name) = match connect_and_register_at(
         socket,
         agent_type,
         effective_name.as_deref(),
         &host,
-        &descriptor.transport,
+        &definition.protocol,
+        channel.as_deref(),
         descriptor.mode,
         descriptor.location.as_deref(),
         &os,
@@ -3093,9 +3087,11 @@ fn launch_acp_with_status(
                     &writer,
                     transport.as_ref(),
                     &descriptor,
+                    &definition.protocol,
                     agent_type,
                     &name_state_path,
                     &host,
+                    channel.as_deref(),
                     &os,
                     &instance_id,
                     &my_name,
@@ -3210,9 +3206,11 @@ fn launch_acp_with_status(
                     &writer,
                     transport.as_ref(),
                     &descriptor,
+                    &definition.protocol,
                     agent_type,
                     &name_state_path,
                     &host,
+                    channel.as_deref(),
                     &os,
                     &instance_id,
                     &my_name,
@@ -3534,9 +3532,11 @@ fn reconnect_managed_session(
     writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
     transport: &dyn ManagedSession,
     descriptor: &ManagedSessionDescriptor,
+    protocol: &str,
     agent_type: &str,
     name_state_path: &std::path::Path,
     host: &str,
+    channel: Option<&str>,
     os: &str,
     instance_id: &str,
     fallback_name: &str,
@@ -3552,7 +3552,8 @@ fn reconnect_managed_session(
             agent_type,
             Some(&wanted_name),
             host,
-            &descriptor.transport,
+            protocol,
+            channel,
             descriptor.mode,
             descriptor.location.as_deref(),
             os,
@@ -4481,6 +4482,88 @@ fn journal_failure_requires_shutdown(events: &[ManagedEvent]) -> bool {
 #[cfg(test)]
 mod reconnect_tests {
     use super::*;
+
+    #[test]
+    fn spec_024_canal_federe_prefere_la_nouvelle_cle_et_lit_l_alias() {
+        assert_eq!(
+            crate::connection_channel::attested_channel_from_sources(
+                None,
+                None,
+                Some("transport=ssh-unix\n")
+            ),
+            Some("ssh-unix".to_string())
+        );
+        assert_eq!(
+            crate::connection_channel::attested_channel_from_sources(
+                None,
+                None,
+                Some("transport=ancien\nchannel=ssh-unix\n")
+            ),
+            Some("ssh-unix".to_string())
+        );
+        assert_eq!(
+            crate::connection_channel::attested_channel_from_sources(
+                None,
+                None,
+                Some("channel=   \ntransport=unix\n")
+            ),
+            Some("unix".to_string())
+        );
+    }
+
+    #[test]
+    fn spec_024_enregistrement_tmux_ecrit_protocole_et_canal_separes() {
+        let socket = std::env::temp_dir().join(format!(
+            "bridget-g11-register-{}.sock",
+            uuid::Uuid::new_v4()
+        ));
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode(line.trim()).unwrap(),
+                WrapperToDaemon::Register {
+                    transport: Some(protocol),
+                    channel: ChannelReport::Known(channel),
+                    mode: Some(PresenceMode::Tmux),
+                    ..
+                } if protocol == "tmux" && channel == "ssh-unix"
+            ));
+            let mut writer = BufWriter::new(stream);
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::Registered {
+                    name: "cartae-agent".to_string()
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+        });
+
+        let (_, _, name) = connect_and_register_at(
+            &socket,
+            "codex",
+            Some("cartae-agent"),
+            "cartae",
+            INTERACTIVE_AGENT_PROTOCOL,
+            Some("ssh-unix"),
+            PresenceMode::Tmux,
+            Some("bridget:2.1"),
+            "Linux",
+            "instance-cartae",
+            Some("bridget"),
+            false,
+        )
+        .unwrap();
+        assert_eq!(name, "cartae-agent");
+        server.join().unwrap();
+        let _ = std::fs::remove_file(socket);
+    }
 
     #[test]
     fn contexte_tmux_exige_pane_et_localisation() {

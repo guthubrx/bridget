@@ -523,15 +523,17 @@ ont été créés directement dans ce fichier le 24/08.
       `objective_costs` `store.rs:7376` **[mesuré]**
 - [x] G10 pont Zed REFUSÉ sous toutes ses formes (4 formes + @version +
       chemin --equipier), DEPRECATIONS daté, ACP générique préservé
-- [ ] G11 nommer le protocole — 🔄 EN COURS, session **024** chez `jc2`
-      (ouverte 2026-08-25 13:45). **[mesuré]** la colonne TRANSPORT mélange
-      deux natures sur 36 agents : 12 `ssh-unix` + 3 `unix` (transports
-      réseau), 9 `acp` (nom de famille), 8 `codex_app_server` et 3
-      `claude_stream_json` (vrais protocoles). Les **12 en `ssh-unix` sont
-      exactement les 12 agents de cartae** : la fédération écrase le nom du
-      protocole par celui du tunnel. Propriété visée : la colonne nomme le
-      protocole réellement parlé, indépendamment du chemin de connexion —
-      **sans perdre** l'information « agent distant ».
+- [x] G11 nommer le protocole — ✅ FAIT, session **024** chez `jc2`.
+      **[mesuré]** la colonne mélangeait deux natures sur 36 agents : les 12
+      `ssh-unix` étaient exactement les agents Cartae fédérés. La lecture du
+      chemin réel a corrigé une hypothèse initiale : ces agents sont
+      interactifs `mode=tmux` et parlent actuellement le chemin tmux, pas
+      `codex_app_server`. `TRANSPORT` nomme désormais le protocole (`tmux`,
+      `acp`, `codex_app_server`, `claude_stream_json`) et `CANAL` conserve
+      séparément `unix` ou `ssh-unix`. ACP est confirmé comme protocole exact,
+      pas comme simple nom de famille. Compatibilité assurée pour les trames et
+      clés de fédération historiques ; 935 passés / 3 rouges de référence / 16
+      ignorés sur la suite workspace Linux.
 
 **Bloc J — outillage d'agents (rattrapage T3 Code)**
 - [x] J1 capacités déclarées par pilote et modèle (L1 : refus typé avant

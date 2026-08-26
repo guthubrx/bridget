@@ -127,6 +127,7 @@ fn sender(socket: &Path) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
             name: Some("sender-native".to_string()),
             host: None,
             transport: Some("unix".to_string()),
+            channel: None.into(),
             mode: Some(bridget_transport::protocol::PresenceMode::Cli),
             location: None,
             os: None,
