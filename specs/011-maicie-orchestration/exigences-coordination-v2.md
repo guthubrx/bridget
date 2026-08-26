@@ -390,8 +390,24 @@ ont été créés directement dans ce fichier le 24/08.
       snapshot)
 - [x] 9 agrégateur local — première version : /v1/snapshot fusionne
       annuaire+ledger+projection Maicie (un read-model)
-- [ ] 10 client GUI complet (grokbot×Cursor) — 🔄 première tranche livrée
-      (page locale 3 zones + tunnel lecture seule) ; le client riche reste
+- [ ] 10 client GUI complet (grokbot×Cursor) — 🔄 **sur `main` depuis le
+      25/08 23h43** (`2330dfde`, SPEC 032 composition A = page `ac5ea45` +
+      relais `47e238d`). Liste d'agents, fil, **saisie qui envoie** (`POST
+      /v1/send`), trace inter-agents, thème sombre servi depuis
+      `assets/ui/`. Mesuré sous Chromium sur l'arbre `8a65a4a3` : 18 agents,
+      envoi **et réponse** visibles, AC1 et AC10 verts, 0 erreur console.
+      Preuve du merge : `HEAD:crates` = `a750730199…` = `8a65a4a3:crates`,
+      **arbre identique**, pas une reconstitution.
+      **Raisonnement et actes Codex** : sur `main` depuis le 26/08 01h50
+      (`c024fc50`, L3 `58f33449`). `item/reasoning/*` → `reasoning`, actes
+      `command`/`file`/`plan`/`approval` — approbations **affichables, jamais
+      validables** (ADR 011). Mutant vérifié *et* fonction neutralisée prouvée
+      **atteinte par le dispatch productif** — le témoin ne garde pas du vide.
+      Preuve du merge : `HEAD:crates` = `0ed3ac41…` = `58f33449:crates`.
+      **Reste** : L4 ACP (raisonnement Cursor) en amendement — rustfmt, et un
+      échec de **mise en place** du banc SC-005 mesuré 1 fois sur 7, distinct
+      du seuil et du délai ; AC11 réel, Safari/WebKit et trackpad **non
+      mesurés**, faute de pilote de navigateur sur le bras Linux.
 - [ ] 11 affinements attach (séparateur de génération, titres enrichis) — ⬜
 
 **C. Micro-tâches** — ✅ SOLDÉ (nuit du 23/08)
