@@ -375,7 +375,13 @@
       });
 
       test("fil_humain_referent_entrant_apparait_dans_le_timeline", () => {
-        let state = api.createUiState({ selectedAgent: "bridget", agents: [{ name: "bridget" }] });
+        const empty = api.createUiState({ selectedAgent: "bridget", agents: [{ name: "bridget" }] });
+        assert.equal(
+          api.projectTimeline(empty.timelines.bridget || []).filter((entry) => entry.kind === "message").length,
+          0,
+          "sans thread_message, aucune bulle inventée",
+        );
+        let state = empty;
         state = api.applyWatchEvent(state, {
           kind: "message",
           role: "user",
@@ -394,7 +400,13 @@
       });
 
       test("fil_humain_referent_sortant_apparait_dans_le_timeline", () => {
-        let state = api.createUiState({ selectedAgent: "bridget", agents: [{ name: "bridget" }] });
+        const empty = api.createUiState({ selectedAgent: "bridget", agents: [{ name: "bridget" }] });
+        assert.equal(
+          api.projectTimeline(empty.timelines.bridget || []).filter((entry) => entry.kind === "message").length,
+          0,
+          "sans thread_message, aucune bulle inventée",
+        );
+        let state = empty;
         state = api.applyWatchEvent(state, {
           kind: "message",
           role: "agent",
@@ -410,16 +422,6 @@
         assert.equal(messages[0].role, "agent");
         assert.equal(messages[0].text, "projection ledger vers le fil");
         assert.equal(messages[0].at, 110);
-      });
-
-      test("fil_humain_referent_absent_sans_thread_messages", () => {
-        const state = api.createUiState({ selectedAgent: "bridget", agents: [{ name: "bridget" }] });
-        const timeline = api.projectTimeline(state.timelines.bridget || []);
-        assert.equal(
-          timeline.filter((entry) => entry.kind === "message").length,
-          0,
-          "un fil vide ne doit pas inventer de bulle utilisateur",
-        );
       });
 
       test("contrat_c3_assemble_actes_raisonnement_et_reponse", () => {

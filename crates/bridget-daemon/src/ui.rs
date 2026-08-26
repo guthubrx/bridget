@@ -12,16 +12,16 @@ use bridget_transport::protocol::{
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use maicie::ui_projection::{UiMissionProjectionV1, read_ui_mission_projection_v1};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const UI_VERSION: u8 = 1;
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
@@ -30,6 +30,9 @@ const MAX_UI_AGENT_NAME_BYTES: usize = 100;
 const MAX_UI_SSE_EVENTS: usize = 20_000;
 const MAX_UI_RECONNECT_ATTEMPTS: usize = 50;
 const UI_RECONNECT_DELAY: Duration = Duration::from_millis(100);
+/// Relecture ledger pendant un watch : le sortant référent→humain n'apparaît
+/// jamais au journal ; sans ce rythme le fil reste figé après l'ouverture.
+const UI_THREAD_LEDGER_POLL: Duration = Duration::from_millis(400);
 const UI_SENDER: &str = "humain";
 const UI_INDEX: &[u8] = include_bytes!("../assets/ui/index.html");
 const UI_SCRIPT: &[u8] = include_bytes!("../assets/ui/app.js");
@@ -797,6 +800,52 @@ fn human_referent_thread_messages(
         .collect()
 }
 
+/// Chemin vivant du fil : relecture ledger pendant un `/v1/watch` ouvert.
+/// Émet seulement les `delivery_id` encore inconnus. Un mutant qui vide cette
+/// fonction doit tuer `watch_pousse_thread_message_sortant_apres_ouverture`.
+fn push_live_thread_messages(
+    http: &mut TcpStream,
+    socket_path: &Path,
+    focus_agent: &str,
+    seen: &mut HashSet<String>,
+) -> Result<(), UiError> {
+    let messages = read_ledger_messages(socket_path)?;
+    for message in human_referent_thread_messages(focus_agent, &messages) {
+        if seen.insert(message.delivery_id.clone()) {
+            write_sse(http, "thread_message", &message)?;
+        }
+    }
+    Ok(())
+}
+
+fn seed_thread_message_ids(snapshot: &UiSnapshotV1, seen: &mut HashSet<String>) {
+    if let Some(messages) = &snapshot.thread_messages {
+        for message in messages {
+            seen.insert(message.delivery_id.clone());
+        }
+    }
+}
+
+fn read_ledger_messages(socket_path: &Path) -> Result<Vec<LedgerMessage>, UiError> {
+    let stream = UnixStream::connect(socket_path)?;
+    let read_stream = stream.try_clone()?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::LedgerProjection {
+            scope: LedgerScope::Both,
+            limit: 200,
+        },
+    )?;
+    match read_daemon(&mut reader)? {
+        DaemonToWrapper::LedgerProjection { messages, .. } => Ok(messages),
+        response => Err(UiError::Protocol(format!(
+            "LedgerProjection attendu, reçu {response:?}"
+        ))),
+    }
+}
+
 fn recovery_losses_path_for_socket(socket_path: &Path) -> PathBuf {
     crate::recovery_trace::report_path(&crate::desired_state::path_for_daemon_db(
         &socket_path.with_extension("db"),
@@ -867,6 +916,10 @@ fn read_bridget_snapshot(socket_path: &Path) -> Result<BridgetSnapshotFacts, UiE
 /// ouvert avant le premier événement SSE : le client reçoit donc exactement
 /// le rejeu/cursor, puis `SnapshotCaughtUp`, puis le live déjà garanti par
 /// Bridget, sans seconde source de journal.
+///
+/// En parallèle, quand `snapshot_config` est fourni (`/v1/watch`), une relecture
+/// périodique du ledger pousse les `thread_message` nouveaux — le journal seul
+/// ne porte pas le sortant vers l'utilisateur.
 fn stream_sse_journal(
     http: &mut TcpStream,
     socket_path: &Path,
@@ -894,8 +947,10 @@ fn stream_sse_journal(
     if snapshot_config.is_some() {
         write_relay_state(http, "connected", now_secs())?;
     }
-    if let Some(snapshot) = initial_snapshot {
-        write_snapshot_sse(http, &snapshot)?;
+    let mut seen_thread_ids = HashSet::new();
+    if let Some(snapshot) = &initial_snapshot {
+        seed_thread_message_ids(snapshot, &mut seen_thread_ids);
+        write_snapshot_sse(http, snapshot)?;
     }
     write_sse(
         http,
@@ -906,11 +961,36 @@ fn stream_sse_journal(
         },
     )?;
 
+    if snapshot_config.is_some() {
+        let _ = session
+            .reader
+            .get_ref()
+            .set_read_timeout(Some(UI_THREAD_LEDGER_POLL));
+    }
+    let mut last_thread_poll = Instant::now()
+        .checked_sub(UI_THREAD_LEDGER_POLL)
+        .unwrap_or_else(Instant::now);
     let mut last_seq = None;
     let mut events = 0_usize;
     while events < MAX_UI_SSE_EVENTS {
         let event = match read_daemon(&mut session.reader) {
             Ok(event) => event,
+            Err(UiError::Io(error))
+                if snapshot_config.is_some()
+                    && matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+            {
+                if let Some(config) = snapshot_config {
+                    // Chemin vivant productif — ne pas retirer sans tuer le témoin live.
+                    let _ = push_live_thread_messages(
+                        http,
+                        &config.daemon_socket,
+                        agent,
+                        &mut seen_thread_ids,
+                    );
+                    last_thread_poll = Instant::now();
+                }
+                continue;
+            }
             Err(error) if snapshot_config.is_some() => {
                 let reconnecting_since = now_secs();
                 write_relay_state(http, "reconnecting", reconnecting_since)?;
@@ -937,8 +1017,9 @@ fn stream_sse_journal(
                     .map(|config| read_snapshot(config, Some(agent)))
                     .transpose()?;
                 write_relay_state(http, "connected", now_secs())?;
-                if let Some(snapshot) = restored_snapshot {
-                    write_snapshot_sse(http, &snapshot)?;
+                if let Some(snapshot) = &restored_snapshot {
+                    seed_thread_message_ids(snapshot, &mut seen_thread_ids);
+                    write_snapshot_sse(http, snapshot)?;
                 }
                 write_sse(
                     http,
@@ -948,6 +1029,13 @@ fn stream_sse_journal(
                         event: &session.subscribed,
                     },
                 )?;
+                let _ = session
+                    .reader
+                    .get_ref()
+                    .set_read_timeout(Some(UI_THREAD_LEDGER_POLL));
+                last_thread_poll = Instant::now()
+                    .checked_sub(UI_THREAD_LEDGER_POLL)
+                    .unwrap_or_else(Instant::now);
                 continue;
             }
             Err(error) => return Err(error),
@@ -962,6 +1050,17 @@ fn stream_sse_journal(
             },
         )?;
         events += 1;
+        if let Some(config) = snapshot_config {
+            if last_thread_poll.elapsed() >= UI_THREAD_LEDGER_POLL {
+                let _ = push_live_thread_messages(
+                    http,
+                    &config.daemon_socket,
+                    agent,
+                    &mut seen_thread_ids,
+                );
+                last_thread_poll = Instant::now();
+            }
+        }
         if matches!(event, DaemonToWrapper::End { .. }) {
             if snapshot_config.is_some() {
                 write_relay_state(http, "lost", now_secs())?;
@@ -1518,9 +1617,20 @@ mod tests {
         assert_eq!(encoded["delivery_ids"], serde_json::json!(["premier"]));
     }
 
-    /// Propriété entrante seule : humain→référent doit porter corps, rôle, horodatage.
+    /// Propriété entrante : présence + contenu, et absence si seuls des pairs.
     #[test]
     fn fil_humain_referent_entrant_porte_corps() {
+        assert!(
+            human_referent_thread_messages(
+                "bridget",
+                &[
+                    ledger_message("agent-pair", 5, "rc1", "bridget"),
+                    ledger_message("other", 30, "bridget", "rc1"),
+                ],
+            )
+            .is_empty(),
+            "sans entrant humain, aucune bulle"
+        );
         let messages = human_referent_thread_messages(
             "bridget",
             &[
@@ -1536,10 +1646,21 @@ mod tests {
         assert_eq!(messages[0].text, "humain vers bridget");
     }
 
-    /// Propriété sortante seule : référent→humain doit porter corps, rôle, horodatage.
+    /// Propriété sortante : présence + contenu, et absence si seuls des pairs.
     /// Distincte de l'entrante — si le sortant retombe, ce témoin meurt sans l'autre.
     #[test]
     fn fil_humain_referent_sortant_porte_corps() {
+        assert!(
+            human_referent_thread_messages(
+                "bridget",
+                &[
+                    ledger_message("agent-pair", 5, "rc1", "bridget"),
+                    ledger_message("other", 30, "bridget", "rc1"),
+                ],
+            )
+            .is_empty(),
+            "sans sortant vers humain, aucune bulle"
+        );
         let messages = human_referent_thread_messages(
             "bridget",
             &[
@@ -1573,24 +1694,8 @@ mod tests {
     }
 
     #[test]
-    fn fil_humain_referent_reste_vide_sans_echange_utilisateur() {
-        let messages = human_referent_thread_messages(
-            "bridget",
-            &[
-                ledger_message("a", 1, "rc1", "bridget"),
-                ledger_message("b", 2, "bridget", "jc2"),
-            ],
-        );
-        assert!(
-            messages.is_empty(),
-            "aucune bulle utilisateur ne doit apparaître sans échange humain"
-        );
-    }
-
-    #[test]
     fn chemin_productif_snapshot_emprunte_human_referent_thread_messages() {
-        // Garde anti-feuille : les témoins entrant/sortant ne valent que si
-        // read_snapshot et write_snapshot_sse empruntent réellement ce chemin.
+        // Garde anti-feuille : snapshot + SSE initial + chemin vivant du watch.
         let source = include_str!("ui.rs");
         let read_body = function_body(source, "fn read_snapshot(");
         assert!(
@@ -1605,6 +1710,11 @@ mod tests {
         assert!(
             sse_body.contains("\"thread_message\""),
             "write_snapshot_sse doit émettre l'événement SSE thread_message"
+        );
+        let watch_body = function_body(source, "fn stream_sse_journal(");
+        assert!(
+            watch_body.contains("push_live_thread_messages("),
+            "le watch doit appeler push_live_thread_messages (chemin vivant)"
         );
     }
 
