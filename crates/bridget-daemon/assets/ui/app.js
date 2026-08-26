@@ -841,6 +841,33 @@
         ]);
       });
 
+      // L9 charge 5 — Number() sur to_seq/through_seq via le runtime productif.
+      // Meurt si advanceWatchResumeFromEnvelope (appelé par ingestJournal) omet Number().
+      test("avancement_curseur_convertit_to_seq_et_through_seq", () => {
+        const FakeES = makeFakeEventSource();
+        const resume = new Map([["a", 0]]);
+        const runtime = api.createWatchRuntime({
+          token: "t",
+          resumeSeq: resume,
+          buffers: new Map(),
+          attestedGaps: new Set(),
+          seenRecords: new Set(),
+          EventSource: FakeES,
+          setTimeout: () => 1,
+          clearTimeout: () => {},
+        });
+        runtime.open("a");
+        const es = FakeES.instances[0];
+        es.emitJournal({
+          event: { type: "Gap", from_seq: "2", to_seq: "238" },
+        });
+        assert.equal(runtime.getResume("a"), 239);
+        es.emitJournal({
+          event: { type: "SnapshotCaughtUp", through_seq: "621" },
+        });
+        assert.equal(runtime.getResume("a"), 622);
+      });
+
       // L9-3 — End sur le runtime : hors fil + streamEnded coupe la reconnexion.
       test("fin_et_erreur_lecture_n_ecrivent_plus_dans_le_fil", () => {
         const FakeES = makeFakeEventSource();
