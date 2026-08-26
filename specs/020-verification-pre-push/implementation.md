@@ -5,10 +5,10 @@
 - **Spec** : 020-verification-pre-push
 - **Branche** : session-20-verification-pre-push
 - **Démarré** : 2026-08-25
-- **Terminé** : en cours
+- **Terminé** : 2026-08-26
 - **Base historique** : b6eea777facf929d99a9c4f9ae75fb50e06dc2fd
 - **Base de jury des amendements** : 7024df31de5b23bfeca27eb5588a5465a872a8b8
-- **Base de livraison** : à inscrire après le rebase final tardif
+- **Base de livraison** : 2b89f4794961a494200a3714e8bf0d86caeebbef
 
 ## Progression
 
@@ -67,8 +67,10 @@ Portabilité vérifiée avec un `TMPDIR` absolu contenant des espaces :
 ### T008 — Validation finale sans activation
 
 - **Statut** : complété
-- **Commit d'implémentation** :
-  `ef845ab2ffe159d5ce2a8c6df917834a2df9769a`
+- **Commit historique avant rebase** :
+  `ef845ab2ffe159d5ce2a8c6df917834a2df9769a`.
+- **Commit d'implémentation après rebase** :
+  `fd7acd781aef1e60f6996ac20c5e8354cb091186`.
 - **Banc ciblé** : 7 passés / 0 rouge / 0 ignoré.
 - **Syntaxe Bash** : valide sur les deux scripts.
 - **Diff** : aucun espace ou marqueur invalide.
@@ -112,6 +114,34 @@ Portabilité vérifiée avec un `TMPDIR` absolu contenant des espaces :
 - **Cas limites rejoués après l'indexation** : distant vide et suppression
   acceptés ; tag annoté menant à un commit interdit, entrée mal formée et
   création concurrente refusés avec leur diagnostic exact.
+
+### Validation après rebase tardif
+
+- **Commit d'amendement de code et témoins** :
+  `10e2ea13cf81b7f48f67cbc671d7faa5323c502c`.
+- **Compilation préalable** : `cargo test --workspace --no-run` vert sur la
+  base nue et sur la composition avant tout comptage.
+- **Univers listé** : 1 019 tests sur chaque objet, répartis dans 57 binaires
+  de test et 4 groupes de doc-tests.
+- **Base nue** : 998 passés / 3 rouges / 18 ignorés.
+- **Composition séquentielle** : 998 passés / 3 rouges / 18 ignorés.
+- **Résumés exclus** : deux sorties imbriquées de 1 test passé et 114 filtrés
+  chacune ; les compter aurait produit le faux total de 1 000 passés.
+- **Rouges communs, reproduits isolément à 0/1 sur les deux objets** :
+  `attach::tests::raw_mode_restaure_le_terminal_apres_eof_du_pseudo_tty`
+  (`tcgetattr` EIO),
+  `attach::tests::reconnexion_socket_reprend_exactement_a_last_seq_plus_un`
+  (`unwrap_err` sur `Ok`) et
+  `lifecycle::tests::matrice_sc003_couvre_les_onze_familles_sans_residu_operationnel`
+  (`cursor` présent dans `known_types`). Aucun fichier Rust n'appartient au
+  diff de la session 020.
+- **Mesure écartée** : un premier tir parallèle de la composition donnait
+  997/4/18 avec `receipt_store::tests::missing_sentinel_or_recreated_directory_is_fail_closed_after_initialization`
+  en `InstanceAlreadyOpen`. Le test est ensuite vert isolément sur base et
+  composition (1/0/0), puis absent du tir séquentiel ; ce tir concurrent n'est
+  pas compté.
+- **Gates** : `cargo fmt --all --check`, syntaxe Bash et `git diff --check`
+  verts. ShellCheck est absent de la machine.
 
 ## REX
 

@@ -18,7 +18,8 @@ filtre générique de co-autorat. Toute indétermination ferme la transaction.
   `b6eea777facf929d99a9c4f9ae75fb50e06dc2fd`.
 - Base de jury gelée pour reproduire les charges :
   `7024df31de5b23bfeca27eb5588a5465a872a8b8`.
-- Base de livraison : tête de `origin/main` relue lors du rebase final tardif.
+- Base de livraison relue lors du rebase final tardif :
+  `2b89f4794961a494200a3714e8bf0d86caeebbef`.
 
 ## Décisions de conception
 
