@@ -1945,3 +1945,261 @@ fn daemon_process_nettoie_apres_une_panique_injectee() {
     assert_daemon_count_for_home(&root, 0);
     let _ = fs::remove_dir_all(root);
 }
+
+
+const ABANDON_CAUSE_HARDCODED: &str =
+    "abandon relance fournisseur après 2 tentatives (processus fournisseur terminé)";
+
+fn provider_pids_in_group(pgid: u32) -> Vec<u32> {
+    process_group_members(pgid)
+        .into_iter()
+        .filter_map(|(pid, command)| {
+            let is_wrapper = command.contains("managed-wrapper");
+            let is_provider = command.contains("parity-acp")
+                || command.contains("python")
+                || command.contains("npx")
+                || command.contains("npm");
+            if !is_wrapper && is_provider {
+                Some(pid)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn wrapper_pid_in_group(pgid: u32) -> Option<u32> {
+    process_group_members(pgid)
+        .into_iter()
+        .find_map(|(pid, command)| command.contains("managed-wrapper").then_some(pid))
+}
+
+fn kill_provider_sigterm(pgid: u32) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let providers = provider_pids_in_group(pgid);
+        if let Some(pid) = providers.into_iter().next() {
+            assert_eq!(
+                unsafe { libc::kill(pid as i32, libc::SIGTERM) },
+                0,
+                "SIGTERM fournisseur {pid}"
+            );
+            return pid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "aucun PID fournisseur dans le groupe {pgid}: {:?}",
+            process_group_members(pgid)
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// Oracle : MEURT si un agent persistant joignable avant le kill ne revient pas
+/// sans redémarrage du daemon. Prouve d'abord la joignabilité (sinon projection vide).
+#[test]
+fn TEMOIN_persistant_tue_redevient_joignable_sans_redemarrer_le_daemon() {
+    let _serial = MANAGED_BENCH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = test_root("persist-relaunch");
+    write_fixture(&root);
+    // Borne courte pour le test, backoff minimal.
+    let mut daemon = {
+        let binary = env!("CARGO_BIN_EXE_bridget");
+        let mut process = DaemonProcess {
+            child: None,
+            socket: root.join(".cache/bridget/bridget.sock"),
+        };
+        let mut command = Command::new(binary);
+        command
+            .arg("daemon")
+            .env_clear()
+            .env("HOME", &root)
+            .env("PATH", FROZEN_PATH)
+            .env("USER", "parity-test")
+            .env("LANG", "C")
+            .env("TMPDIR", "/tmp/bt")
+            .env("BRIDGET_PROVIDER_RELAUNCH_MAX", "5")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        process.child = Some(command.spawn().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if UnixStream::connect(&process.socket).is_ok() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            UnixStream::connect(&process.socket).is_ok(),
+            "daemon relance non prêt"
+        );
+        process
+    };
+
+    let name = "essai-persist-relaunch".to_string();
+    let mut control = Peer::register(&daemon.socket, "persist-orderer");
+    spawn_managed(&mut control, &root, &name, "persist-relaunch-1", true);
+    wait_named_agents(&daemon.socket, &[name.clone()], &[]);
+
+    // Preuve de joignabilité AVANT le kill — sinon l'oracle passe sur une projection vide.
+    let mut sender = Peer::register(&daemon.socket, "persist-sender");
+    let before = send_tracked(&mut sender, &name, "AVANT-KILL");
+    assert_eq!(
+        receive_replies(&mut sender, &[before]),
+        vec!["fixture-response-1"],
+        "joignable avant kill"
+    );
+
+    let pgids = marker_pgids(&root, &[name.clone()]);
+    assert_eq!(pgids.len(), 1);
+    let wrapper_before = wrapper_pid_in_group(pgids[0]).expect("wrapper avant kill");
+    let killed = kill_provider_sigterm(pgids[0]);
+    assert_ne!(killed, wrapper_before, "on tue le fournisseur, pas le wrapper");
+
+    // Le wrapper doit survivre (propriété nommée par Maicie).
+    let survive_deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < survive_deadline {
+        if unsafe { libc::kill(wrapper_before as i32, 0) } != 0 {
+            panic!("wrapper {wrapper_before} mort avec le fournisseur {killed}");
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    wait_named_agents(&daemon.socket, &[name.clone()], &[]);
+    let after = send_tracked(&mut sender, &name, "APRES-KILL");
+    assert_eq!(
+        receive_replies(&mut sender, &[after]),
+        vec!["fixture-response-1"],
+        "joignable après kill sans redémarrage daemon"
+    );
+    assert_eq!(
+        unsafe { libc::kill(wrapper_before as i32, 0) },
+        0,
+        "même wrapper encore vivant après reprise"
+    );
+
+    stop_managed(&mut control, &name, 1);
+    daemon.stop();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Oracle : MEURT si l'abandon après N tentatives n'est pas nommé en dur.
+#[test]
+fn TEMOIN_abandon_apres_N_tentatives_est_nomme() {
+    let _serial = MANAGED_BENCH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = test_root("persist-abandon");
+    let adapter = write_fixture(&root);
+    let mut daemon = {
+        let binary = env!("CARGO_BIN_EXE_bridget");
+        let mut process = DaemonProcess {
+            child: None,
+            socket: root.join(".cache/bridget/bridget.sock"),
+        };
+        let mut command = Command::new(binary);
+        command
+            .arg("daemon")
+            .env_clear()
+            .env("HOME", &root)
+            .env("PATH", FROZEN_PATH)
+            .env("USER", "parity-test")
+            .env("LANG", "C")
+            .env("TMPDIR", "/tmp/bt")
+            .env("BRIDGET_PROVIDER_RELAUNCH_MAX", "2")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        process.child = Some(command.spawn().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if UnixStream::connect(&process.socket).is_ok() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        process
+    };
+
+    let name = "essai-persist-abandon".to_string();
+    let mut control = Peer::register(&daemon.socket, "abandon-orderer");
+    spawn_managed(&mut control, &root, &name, "persist-abandon-1", true);
+    wait_named_agents(&daemon.socket, &[name.clone()], &[]);
+
+    let mut sender = Peer::register(&daemon.socket, "abandon-sender");
+    let before = send_tracked(&mut sender, &name, "AVANT-ABANDON");
+    assert_eq!(
+        receive_replies(&mut sender, &[before]),
+        vec!["fixture-response-1"]
+    );
+
+    let pgids = marker_pgids(&root, &[name.clone()]);
+    // Remplacer le fournisseur par un binaire qui refuse de démarrer.
+    fs::write(&adapter, "#!/bin/sh\necho refuse-auth >&2\nexit 1\n").unwrap();
+    fs::set_permissions(&adapter, fs::Permissions::from_mode(0o700)).unwrap();
+    let _ = kill_provider_sigterm(pgids[0]);
+
+    // Attendre la disparition de l'agent (wrapper abandonne et quitte).
+    let gone_deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let mut observer = Peer::register(&daemon.socket, "abandon-observer");
+        observer.send(&WrapperToDaemon::ListAgents);
+        let agents = match observer.recv() {
+            DaemonToWrapper::AgentList { agents } => agents,
+            other => panic!("liste inattendue: {other:?}"),
+        };
+        if agents.iter().all(|agent| agent.name != name) {
+            break;
+        }
+        assert!(
+            Instant::now() < gone_deadline,
+            "agent encore présent après abandon attendu: {agents:?}"
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    // Cause nommée EN DUR dans stderr géré.
+    let stderr_root = root.join(".cache/bridget/managed-stderr");
+    let mut found = false;
+    let scan_deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < scan_deadline && !found {
+        if stderr_root.exists() {
+            for entry in walkdir_files(&stderr_root) {
+                if let Ok(content) = fs::read_to_string(&entry) {
+                    if content.contains(ABANDON_CAUSE_HARDCODED) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        found,
+        "cause d'abandon absente des stderr gérés; attendu en dur: {ABANDON_CAUSE_HARDCODED}"
+    );
+
+    daemon.stop();
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn walkdir_files(root: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files
+}

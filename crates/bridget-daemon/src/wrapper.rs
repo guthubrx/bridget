@@ -2848,6 +2848,96 @@ fn launch_acp(
 
 /// Point d'entrée du wrapper supervisé. Le FD `managed-status` est fermé
 /// uniquement après Register, transport ACP, journal et relais initialisés.
+
+fn spawn_managed_session_transport(
+    definition: &crate::registry::AgentDefinition,
+    native_args: &[String],
+    mcp_environment: &[(OsString, OsString)],
+    mcp_servers: Vec<serde_json::Value>,
+    inherit_stderr: bool,
+    home: &Path,
+    agent_name: Option<String>,
+) -> Result<Box<dyn ManagedSession>, Box<dyn std::error::Error>> {
+    match definition.protocol.as_str() {
+        "acp" => {
+            let options = AcpOptions {
+                command: definition.command.clone(),
+                args: native_args.to_vec(),
+                queue_capacity: definition.queue_capacity,
+                permissions: definition.permissions.clone(),
+                notify_timeout_secs: definition.notify_timeout_secs,
+            };
+            if inherit_stderr {
+                Ok(Box::new(
+                    AcpTransport::spawn_inheriting_stderr_with_environment_and_mcp(
+                        options,
+                        mcp_environment,
+                        mcp_servers,
+                    )?,
+                ))
+            } else {
+                Ok(Box::new(AcpTransport::spawn_with_environment_and_mcp(
+                    options,
+                    mcp_environment,
+                    mcp_servers,
+                )?))
+            }
+        }
+        "claude_stream_json" => {
+            let options = ClaudeStreamJsonOptions {
+                command: definition.command.clone(),
+                args: native_args.to_vec(),
+                queue_capacity: definition.queue_capacity,
+                notify_timeout_secs: definition.notify_timeout_secs,
+                // Même arbre que le journal d'agent : survit à la mort du
+                // managed-wrapper et au redémarrage du daemon (lot cursor2).
+                session_store_root: Some(home.join(".cache/bridget/sessions")),
+                agent_name,
+            };
+            let environment = string_environment(mcp_environment);
+            if inherit_stderr {
+                Ok(Box::new(
+                    ClaudeStreamJsonTransport::spawn_inheriting_stderr_with_environment(
+                        options,
+                        &environment,
+                    )?,
+                ))
+            } else {
+                Ok(Box::new(ClaudeStreamJsonTransport::spawn_with_environment(
+                    options,
+                    &environment,
+                    false,
+                )?))
+            }
+        }
+        "codex_app_server" => {
+            let options = CodexAppServerOptions {
+                command: definition.command.clone(),
+                args: native_args.to_vec(),
+                queue_capacity: definition.queue_capacity,
+                notify_timeout_secs: definition.notify_timeout_secs,
+                model: codex_model_from_args(&definition.args),
+            };
+            let environment = string_environment(mcp_environment);
+            if inherit_stderr {
+                Ok(Box::new(
+                    CodexAppServerTransport::spawn_inheriting_stderr_with_environment(
+                        options,
+                        &environment,
+                    )?,
+                ))
+            } else {
+                Ok(Box::new(CodexAppServerTransport::spawn_with_environment(
+                    options,
+                    &environment,
+                    false,
+                )?))
+            }
+        }
+        other => Err(format!("protocole géré inconnu: {other}").into()),
+    }
+}
+
 pub fn launch_managed_acp(
     agent_type: &str,
     explicit_name: &str,
@@ -2981,7 +3071,7 @@ fn launch_acp_with_status(
     )?;
     let mcp_environment =
         managed_adapter_environment(&instance_id, explicit_name, Some(&name_state_path));
-    let mcp_servers = definition
+    let mcp_servers: Vec<serde_json::Value> = definition
         .mcp
         .acp_session
         .then(mcp_server_entry)
@@ -2996,84 +3086,16 @@ fn launch_acp_with_status(
         &instance_id,
         socket,
     )?;
-    let mut transport: Box<dyn ManagedSession> = match definition.protocol.as_str() {
-        "acp" => {
-            let options = AcpOptions {
-                command: definition.command.clone(),
-                args: native_args,
-                queue_capacity: definition.queue_capacity,
-                permissions: definition.permissions.clone(),
-                notify_timeout_secs: definition.notify_timeout_secs,
-            };
-            if managed_reporter.is_some() {
-                Box::new(
-                    AcpTransport::spawn_inheriting_stderr_with_environment_and_mcp(
-                        options,
-                        &mcp_environment,
-                        mcp_servers,
-                    )?,
-                )
-            } else {
-                Box::new(AcpTransport::spawn_with_environment_and_mcp(
-                    options,
-                    &mcp_environment,
-                    mcp_servers,
-                )?)
-            }
-        }
-        "claude_stream_json" => {
-            let options = ClaudeStreamJsonOptions {
-                command: definition.command.clone(),
-                args: native_args,
-                queue_capacity: definition.queue_capacity,
-                notify_timeout_secs: definition.notify_timeout_secs,
-                // Même arbre que le journal d'agent : survit à la mort du
-                // managed-wrapper et au redémarrage du daemon.
-                session_store_root: Some(home.join(".cache/bridget/sessions")),
-                agent_name: effective_name.clone(),
-            };
-            let environment = string_environment(&mcp_environment);
-            if managed_reporter.is_some() {
-                Box::new(
-                    ClaudeStreamJsonTransport::spawn_inheriting_stderr_with_environment(
-                        options,
-                        &environment,
-                    )?,
-                )
-            } else {
-                Box::new(ClaudeStreamJsonTransport::spawn_with_environment(
-                    options,
-                    &environment,
-                    false,
-                )?)
-            }
-        }
-        "codex_app_server" => {
-            let options = CodexAppServerOptions {
-                command: definition.command.clone(),
-                args: native_args,
-                queue_capacity: definition.queue_capacity,
-                notify_timeout_secs: definition.notify_timeout_secs,
-                model: codex_model_from_args(&definition.args),
-            };
-            let environment = string_environment(&mcp_environment);
-            if managed_reporter.is_some() {
-                Box::new(
-                    CodexAppServerTransport::spawn_inheriting_stderr_with_environment(
-                        options,
-                        &environment,
-                    )?,
-                )
-            } else {
-                Box::new(CodexAppServerTransport::spawn_with_environment(
-                    options,
-                    &environment,
-                    false,
-                )?)
-            }
-        }
-        _ => unreachable!("protocole validé avant le lancement"),
-    };
+    let inherit_stderr = managed_reporter.is_some();
+    let mut transport: Box<dyn ManagedSession> = spawn_managed_session_transport(
+        definition,
+        &native_args,
+        &mcp_environment,
+        mcp_servers.clone(),
+        inherit_stderr,
+        home,
+        effective_name.clone(),
+    )?;
     let descriptor = transport.descriptor();
     let channel = connection_channel();
     let (mut reader, initial_writer, mut my_name) = match connect_and_register_at(
@@ -3150,8 +3172,16 @@ fn launch_acp_with_status(
     // `busy` laisse `last_seen` geler ; le retain daemon (300 s) jette alors la
     // présence alors que le nom reste au routeur — fantôme unix/connected.
     let mut last_heartbeat = Instant::now();
+    let mut last_provider_spawn = Instant::now();
+    let mut consecutive_fast_failures = 0_u32;
 
     loop {
+        if transport.is_alive()
+            && consecutive_fast_failures > 0
+            && last_provider_spawn.elapsed() >= Duration::from_secs(30)
+        {
+            consecutive_fast_failures = 0;
+        }
         let events = transport.drain_events();
         let journal_failed =
             forward_managed_events(&writer, &my_name, events, &mut idempotent_deliveries);
@@ -3305,7 +3335,132 @@ fn launch_acp_with_status(
             }
         }
         if !transport.is_alive() {
-            break;
+            let persistent_relaunch = std::env::var_os("BRIDGET_MANAGED_PERSISTENT").is_some();
+            if !persistent_relaunch {
+                break;
+            }
+            let _ = forward_managed_events(
+                &writer,
+                &my_name,
+                transport.drain_events(),
+                &mut idempotent_deliveries,
+            );
+            transport.stop();
+            let max_relaunch: u32 = std::env::var("BRIDGET_PROVIDER_RELAUNCH_MAX")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(5);
+            // Compteur de morts consécutives : ne se remet à zéro qu'après une
+            // période stable sous fournisseur vivant (voir bas de boucle).
+            consecutive_fast_failures = consecutive_fast_failures.saturating_add(1);
+            if consecutive_fast_failures > max_relaunch {
+                let cause = format!(
+                    "abandon relance fournisseur après {max_relaunch} tentatives (processus fournisseur terminé)"
+                );
+                eprintln!("[bridget] {cause}");
+                warn!("{cause}");
+                break;
+            }
+            let backoff_secs = 1u64 << (consecutive_fast_failures - 1).min(4);
+            eprintln!(
+                "[bridget] fournisseur mort — relance {consecutive_fast_failures}/{max_relaunch} dans {backoff_secs}s"
+            );
+            let backoff_deadline = Instant::now() + Duration::from_secs(backoff_secs);
+            let mut abandon_for_disconnect = false;
+            while Instant::now() < backoff_deadline {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => {}
+                    Ok(_) => {
+                        if matches!(decode(line.trim()), Ok(DaemonToWrapper::Disconnect)) {
+                            abandon_for_disconnect = true;
+                            break;
+                        }
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    Err(_) => {}
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            if abandon_for_disconnect {
+                break;
+            }
+            match spawn_managed_session_transport(
+                definition,
+                &native_args,
+                &mcp_environment,
+                mcp_servers.clone(),
+                inherit_stderr,
+                home,
+                Some(my_name.clone()),
+            ) {
+                Ok(new_transport) => {
+                    transport = new_transport;
+                    let adapter_pid = transport.process_id();
+                    match crate::managed_process::process_birth(adapter_pid) {
+                        Ok(birth) => {
+                            if let Err(error) = crate::mcp_identity::write_marker(
+                                &marker_directory,
+                                adapter_pid,
+                                birth,
+                                &instance_id,
+                                &name_state_path,
+                            ) {
+                                warn!("marqueur fournisseur après relance impossible: {error}");
+                            }
+                        }
+                        Err(error) => {
+                            warn!("naissance fournisseur après relance illisible: {error}");
+                        }
+                    }
+                    let live_feed = JournalLiveFeed::default();
+                    if let Err(error) = transport.activate_journal(
+                        &home.join(".cache/bridget/sessions"),
+                        &my_name,
+                        Some(live_feed.clone()),
+                    ) {
+                        warn!("journal après relance impossible: {error}");
+                    }
+                    relay.shutdown();
+                    let relay_writer = writer.clone();
+                    relay = AttachRelayWorker::start(
+                        home.join(".cache/bridget/sessions").join(&my_name),
+                        live_feed,
+                        Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
+                    );
+                    if let Some(definition_digest) = frozen_definition_digest {
+                        let worktree = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                        let resume = managed_resume_context(
+                            home,
+                            &worktree,
+                            &my_name,
+                            agent_type,
+                            &definition.protocol,
+                            definition_digest,
+                        );
+                        let resume_message =
+                            bridget_core::BridgetMessage::new("bridget-reprise", &my_name, resume);
+                        if let Err(error) = transport.deliver(&resume_message) {
+                            warn!("réinjection carte de reprise après relance impossible: {error}");
+                        }
+                    }
+                    last_provider_spawn = Instant::now();
+                    last_heartbeat = Instant::now();
+                    eprintln!(
+                        "[bridget] fournisseur relancé (tentative {consecutive_fast_failures}/{max_relaunch})"
+                    );
+                    continue;
+                }
+                Err(error) => {
+                    warn!("relance fournisseur échouée: {error}");
+                    continue;
+                }
+            }
         }
     }
     relay.shutdown();

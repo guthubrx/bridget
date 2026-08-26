@@ -206,7 +206,16 @@ fn prepare_spawn_parts(
     if !cwd.is_dir() {
         return Err(SpawnRefusal::CwdGone);
     }
-    let env = build_environment(definition, source)?;
+    let mut env = build_environment(definition, source)?;
+    if lease.persistent {
+        env.insert(
+            "BRIDGET_MANAGED_PERSISTENT".to_string(),
+            OsString::from("1"),
+        );
+    }
+    if let Ok(max) = std::env::var("BRIDGET_PROVIDER_RELAUNCH_MAX") {
+        env.insert("BRIDGET_PROVIDER_RELAUNCH_MAX".to_string(), OsString::from(max));
+    }
     if !command_exists(&definition.command, &env) {
         return Err(SpawnRefusal::CommandMissing {
             command: definition.command.clone(),
