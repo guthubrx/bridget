@@ -374,6 +374,47 @@
         assert.match(files, /injecté · en vol/);
       });
 
+      test("fil_humain_referent_apparait_dans_le_timeline_depuis_thread_messages", () => {
+        let state = api.createUiState({ selectedAgent: "bridget", agents: [{ name: "bridget" }] });
+        state = api.applyWatchEvent(state, {
+          kind: "message",
+          role: "user",
+          agent: "bridget",
+          text: "les echanges dans l interface, oui je veux",
+          at: 100,
+          messageId: "h1",
+          deliveryId: "h1",
+        });
+        state = api.applyWatchEvent(state, {
+          kind: "message",
+          role: "agent",
+          agent: "bridget",
+          text: "projection ledger vers le fil",
+          at: 110,
+          messageId: "b1",
+          deliveryId: "b1",
+        });
+        const timeline = api.projectTimeline(state.timelines.bridget);
+        const messages = timeline.filter((entry) => entry.kind === "message");
+        assert.equal(messages.length, 2);
+        assert.equal(messages[0].role, "user");
+        assert.equal(messages[0].text, "les echanges dans l interface, oui je veux");
+        assert.equal(messages[0].at, 100);
+        assert.equal(messages[1].role, "agent");
+        assert.equal(messages[1].text, "projection ledger vers le fil");
+        assert.equal(messages[1].at, 110);
+      });
+
+      test("fil_humain_referent_absent_sans_thread_messages", () => {
+        const state = api.createUiState({ selectedAgent: "bridget", agents: [{ name: "bridget" }] });
+        const timeline = api.projectTimeline(state.timelines.bridget || []);
+        assert.equal(
+          timeline.filter((entry) => entry.kind === "message").length,
+          0,
+          "un fil vide ne doit pas inventer de bulle utilisateur",
+        );
+      });
+
       test("contrat_c3_assemble_actes_raisonnement_et_reponse", () => {
         const records = [
           { v: 1, seq: 1, ts: "2026-08-25T20:00:00Z", session_id: "s1", event: "turn_start", message_id: "m1", payload: {} },
@@ -1798,6 +1839,11 @@
         .filter((entry) => entry.kind === "message" && entry.deliveryId)
         .map((entry) => entry.deliveryId),
     );
+    const knownMessageIds = new Set(
+      ordered
+        .filter((entry) => entry.kind === "message")
+        .flatMap((entry) => [entry.deliveryId, entry.messageId].filter(Boolean)),
+    );
     const turns = new Map();
     const projected = [];
     const actKinds = new Set([
@@ -1909,7 +1955,8 @@
     turns.forEach((turn) => {
       if (
         turn.promptText &&
-        !optimisticDeliveries.has(turn.key)
+        !optimisticDeliveries.has(turn.key) &&
+        !knownMessageIds.has(turn.key)
       ) {
         projected.push({
           kind: "message",
@@ -2010,6 +2057,7 @@
     const historyConnections = new Map();
     const expandedPeers = new Set();
     const seenPeers = new Set();
+    const seenThreadMessages = new Set();
     const seenRecords = new Set();
     const attestedGaps = new Set();
     const watchResumeSeq = new Map();
@@ -2417,6 +2465,33 @@
       return through && (agent.last_message_at || 0) <= through ? { ...agent, unread: 0 } : agent;
     });
 
+    const ingestThreadMessage = (payload, agentName) => {
+      const deliveryId = text(payload && payload.delivery_id);
+      if (!deliveryId) return false;
+      const key = `${agentName}:${deliveryId}`;
+      if (seenThreadMessages.has(key)) return false;
+      seenThreadMessages.add(key);
+      const role = payload.role === "user" ? "user" : "agent";
+      const body = text(payload.text);
+      if (!body) return false;
+      journalBodies.set(deliveryId, {
+        id: deliveryId,
+        text: body,
+        from: role === "user" ? "humain" : agentName,
+        at: epochSeconds(payload.at) || 0,
+      });
+      state = applyWatchEvent(state, {
+        kind: "message",
+        role,
+        agent: agentName,
+        text: body,
+        at: epochSeconds(payload.at) || Date.now() / 1000,
+        messageId: deliveryId,
+        deliveryId,
+      });
+      return true;
+    };
+
     const applySnapshotPayload = (snapshot, watchedAgent) => {
       const previousSelected = state.selectedAgent;
       state = applyReconnectSnapshot(state, snapshot);
@@ -2438,6 +2513,15 @@
           agent: watchedAgent,
         });
       });
+      if (
+        watchedAgent
+        && Object.hasOwn(snapshot, "thread_messages")
+        && Array.isArray(snapshot.thread_messages)
+      ) {
+        snapshot.thread_messages.forEach((message) => {
+          ingestThreadMessage(message, watchedAgent);
+        });
+      }
       if (peerProjection.state === "not_computed") {
         nodes.sourceState.textContent = `Traces inter-agents non calculées pour ${watchedAgent}.`;
         nodes.sourceState.dataset.state = "error";
@@ -2555,6 +2639,22 @@
             agent,
             at: Date.now() / 1000,
             text: "Trace inter-agents illisible.",
+          });
+        }
+      });
+      source.addEventListener("thread_message", (message) => {
+        if (opened.generation !== sourceGeneration) return;
+        try {
+          const payload = JSON.parse(message.data);
+          if (ingestThreadMessage(payload, agent)) {
+            renderThread(1);
+          }
+        } catch (_error) {
+          applyIncoming({
+            kind: "system",
+            agent,
+            at: Date.now() / 1000,
+            text: "Message utilisateur illisible.",
           });
         }
       });

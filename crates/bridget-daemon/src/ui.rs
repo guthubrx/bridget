@@ -282,10 +282,31 @@ struct UiSnapshotV1 {
     agents: Vec<UiAgentRowV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     peer_exchanges: Option<Vec<UiPeerExchangeV1>>,
+    /// Bulles utilisateur↔agent focal — corps issus du ledger (pas du journal).
+    /// Absentes hors focus ; présentes (éventuellement vides) dès qu'un agent est ciblé.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread_messages: Option<Vec<UiThreadMessageV1>>,
     open_requests: Vec<bridget_transport::protocol::RequestInfo>,
     missions: UiMissionProjectionV1,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     recovery_losses: Vec<UiRecoveryLossV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum UiThreadRoleV1 {
+    User,
+    Agent,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct UiThreadMessageV1 {
+    version: u8,
+    kind: &'static str,
+    at: i64,
+    role: UiThreadRoleV1,
+    text: String,
+    delivery_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -600,6 +621,11 @@ fn read_snapshot(
     let facts = read_bridget_snapshot(&config.daemon_socket)?;
     let agents = compose_agent_rows(facts.agents, &facts.messages);
     let peer_exchanges = focus_agent.map(|agent| aggregate_peer_exchanges(agent, &facts.messages));
+    // Chemin productif du fil humain↔référent : mêmes messages ledger que
+    // peer_exchanges, mais SANS exclure UI_SENDER — le journal d'agent ne porte
+    // pas les sorties vers l'utilisateur.
+    let thread_messages =
+        focus_agent.map(|agent| human_referent_thread_messages(agent, &facts.messages));
     let missions = read_ui_mission_projection_v1(&config.maicie_config)
         .map_err(|error| UiError::Configuration(error.to_string()))?;
     let recovery_losses = read_recovery_losses(&config.daemon_socket);
@@ -607,6 +633,7 @@ fn read_snapshot(
         version: UI_VERSION,
         agents,
         peer_exchanges,
+        thread_messages,
         open_requests: facts.open_requests,
         missions,
         recovery_losses,
@@ -719,6 +746,41 @@ fn peer_direction<'a>(
         return Some((&message.sender, UiPeerDirectionV1::In));
     }
     None
+}
+
+/// Messages ledger entre l'utilisateur (`humain`) et l'agent focal — dans l'ordre
+/// d'émission, avec corps. C'est le chemin que `/v1/snapshot` et le SSE empruntent
+/// pour le fil ; un mutant qui vide cette fonction doit tuer le témoin nommé.
+fn human_referent_thread_messages(
+    focus_agent: &str,
+    messages: &[LedgerMessage],
+) -> Vec<UiThreadMessageV1> {
+    let mut selected = messages
+        .iter()
+        .filter(|message| {
+            (message.sender == UI_SENDER && message.target == focus_agent)
+                || (message.sender == focus_agent && message.target == UI_SENDER)
+        })
+        .collect::<Vec<_>>();
+    selected.sort_by(|left, right| (left.ts, &left.id).cmp(&(right.ts, &right.id)));
+    selected
+        .into_iter()
+        .map(|message| {
+            let role = if message.sender == UI_SENDER {
+                UiThreadRoleV1::User
+            } else {
+                UiThreadRoleV1::Agent
+            };
+            UiThreadMessageV1 {
+                version: UI_VERSION,
+                kind: "thread_message",
+                at: message.ts,
+                role,
+                text: message.body.clone(),
+                delivery_id: message.id.clone(),
+            }
+        })
+        .collect()
 }
 
 fn recovery_losses_path_for_socket(socket_path: &Path) -> PathBuf {
@@ -985,6 +1047,11 @@ fn write_snapshot_sse(http: &mut TcpStream, snapshot: &UiSnapshotV1) -> Result<(
     if let Some(exchanges) = &snapshot.peer_exchanges {
         for exchange in exchanges {
             write_sse(http, "peer_exchange", exchange)?;
+        }
+    }
+    if let Some(messages) = &snapshot.thread_messages {
+        for message in messages {
+            write_sse(http, "thread_message", message)?;
         }
     }
     Ok(())
@@ -1435,5 +1502,80 @@ mod tests {
         let encoded = serde_json::to_value(&exchanges[0]).unwrap();
         assert_eq!(encoded["count"], 1);
         assert_eq!(encoded["delivery_ids"], serde_json::json!(["premier"]));
+    }
+
+    #[test]
+    fn fil_humain_referent_porte_corps_ordre_et_roles() {
+        let messages = human_referent_thread_messages(
+            "bridget",
+            &[
+                ledger_message("agent-pair", 5, "rc1", "bridget"),
+                ledger_message("h1", 10, "humain", "bridget"),
+                ledger_message("b1", 20, "bridget", "humain"),
+                ledger_message("other", 30, "bridget", "rc1"),
+            ],
+        );
+        // Témoin de présence : le corps utilisateur DOIT apparaître (pas un booléen).
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].delivery_id, "h1");
+        assert_eq!(messages[0].role, UiThreadRoleV1::User);
+        assert_eq!(messages[0].at, 10);
+        assert_eq!(messages[0].text, "humain vers bridget");
+        assert_eq!(messages[1].delivery_id, "b1");
+        assert_eq!(messages[1].role, UiThreadRoleV1::Agent);
+        assert_eq!(messages[1].at, 20);
+        assert_eq!(messages[1].text, "bridget vers humain");
+        assert!(
+            messages[0].text.contains("humain vers bridget"),
+            "le fil doit porter le texte utilisateur, pas seulement un identifiant"
+        );
+    }
+
+    #[test]
+    fn fil_humain_referent_reste_vide_sans_echange_utilisateur() {
+        let messages = human_referent_thread_messages(
+            "bridget",
+            &[
+                ledger_message("a", 1, "rc1", "bridget"),
+                ledger_message("b", 2, "bridget", "jc2"),
+            ],
+        );
+        assert!(
+            messages.is_empty(),
+            "aucune bulle utilisateur ne doit apparaître sans échange humain"
+        );
+    }
+
+    #[test]
+    fn chemin_productif_snapshot_emprunte_human_referent_thread_messages() {
+        // Garde anti-feuille : le témoin de présence ne vaut que si read_snapshot
+        // et write_snapshot_sse empruntent réellement ce chemin (page affichée).
+        let source = include_str!("ui.rs");
+        let read_body = function_body(source, "fn read_snapshot(");
+        assert!(
+            read_body.contains("human_referent_thread_messages("),
+            "read_snapshot doit appeler human_referent_thread_messages"
+        );
+        assert!(
+            read_body.contains("thread_messages"),
+            "le snapshot doit exposer thread_messages au client"
+        );
+        let sse_body = function_body(source, "fn write_snapshot_sse(");
+        assert!(
+            sse_body.contains("\"thread_message\""),
+            "write_snapshot_sse doit émettre l'événement SSE thread_message"
+        );
+    }
+
+    fn function_body<'a>(source: &'a str, signature: &str) -> &'a str {
+        let start = source
+            .find(signature)
+            .unwrap_or_else(|| panic!("signature absente: {signature}"));
+        let after = start + signature.len();
+        let end = source[after..]
+            .find("\nfn ")
+            .map(|offset| after + offset)
+            .unwrap_or(source.len());
+        &source[start..end]
     }
 }
