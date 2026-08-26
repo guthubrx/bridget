@@ -1813,14 +1813,34 @@ fn compare_open_constats(left: &OpenConstatView, right: &OpenConstatView) -> Ord
         .then_with(|| left.id.cmp(&right.id))
 }
 
-/// Rend la vue humaine d'autorité (SC-1704) : constats ouverts + pied.
-pub fn render_registre_list(view: &RegistreView) -> String {
-    render_registre_list_with_attente(view, false)
+/// Sections optionnelles de `registre list`.
+/// Défaut : ouverts seuls + pied (les trois comptes). `--fermes` / `--refutes`
+/// / `--attente` déplient le corps correspondant — jamais une réécriture.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RegistreListSections {
+    pub fermes: bool,
+    pub refutes: bool,
+    pub attente: bool,
 }
 
-/// Même vue, avec la section des entrées encore en attente de qualification
-/// (id, provenance, texte verbatim). Drapeau CLI `--attente`.
+/// Rend la vue humaine d'autorité (SC-1704) : ouverts par défaut + pied.
+pub fn render_registre_list(view: &RegistreView) -> String {
+    render_registre_list_sections(view, RegistreListSections::default())
+}
+
+/// Compat : même rendu que `--attente` seul.
 pub fn render_registre_list_with_attente(view: &RegistreView, show_attente: bool) -> String {
+    render_registre_list_sections(
+        view,
+        RegistreListSections {
+            attente: show_attente,
+            ..RegistreListSections::default()
+        },
+    )
+}
+
+/// Vue filtrable : ouverts toujours ; fermés / réfutés / attente sur drapeau.
+pub fn render_registre_list_sections(view: &RegistreView, sections: RegistreListSections) -> String {
     let mut out = String::new();
     out.push_str("registre list\n");
     if view.ouverts.is_empty() {
@@ -1854,47 +1874,51 @@ pub fn render_registre_list_with_attente(view: &RegistreView, show_attente: bool
             ));
         }
     }
-    out.push_str("--- traités (ce fut vrai, ce ne l'est plus) ---\n");
-    if view.traites.is_empty() {
-        out.push_str("(aucun constat traité)\n");
-    } else {
-        for item in &view.traites {
-            let recurrence = item
-                .recurrence_of
-                .as_deref()
-                .map(|id| format!(" recurrence_of={id}"))
-                .unwrap_or_default();
-            out.push_str(&format!(
-                "- [TRAITÉ] {id} {observed} raison={raison} ref={reference}{recurrence}\n  {text}\n",
-                id = item.id,
-                observed = item.observed_at,
-                raison = item.raison.as_deref().unwrap_or("-"),
-                reference = item.reference.as_deref().unwrap_or("-"),
-                text = item.text,
-            ));
+    if sections.fermes {
+        out.push_str("--- fermés (ce fut vrai, ce ne l'est plus) ---\n");
+        if view.traites.is_empty() {
+            out.push_str("(aucun constat fermé)\n");
+        } else {
+            for item in &view.traites {
+                let recurrence = item
+                    .recurrence_of
+                    .as_deref()
+                    .map(|id| format!(" recurrence_of={id}"))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "- [FERMÉ] {id} {observed} raison={raison} ref={reference}{recurrence}\n  {text}\n",
+                    id = item.id,
+                    observed = item.observed_at,
+                    raison = item.raison.as_deref().unwrap_or("-"),
+                    reference = item.reference.as_deref().unwrap_or("-"),
+                    text = item.text,
+                ));
+            }
         }
     }
-    out.push_str("--- réfutés (ce ne fut jamais vrai) ---\n");
-    if view.refutes.is_empty() {
-        out.push_str("(aucun constat réfuté)\n");
-    } else {
-        for item in &view.refutes {
-            let recurrence = item
-                .recurrence_of
-                .as_deref()
-                .map(|id| format!(" recurrence_of={id}"))
-                .unwrap_or_default();
-            out.push_str(&format!(
-                "- [RÉFUTÉ] {id} {observed} raison={raison} ref={reference}{recurrence}\n  {text}\n",
-                id = item.id,
-                observed = item.observed_at,
-                raison = item.raison.as_deref().unwrap_or("-"),
-                reference = item.reference.as_deref().unwrap_or("-"),
-                text = item.text,
-            ));
+    if sections.refutes {
+        out.push_str("--- réfutés (ce ne fut jamais vrai) ---\n");
+        if view.refutes.is_empty() {
+            out.push_str("(aucun constat réfuté)\n");
+        } else {
+            for item in &view.refutes {
+                let recurrence = item
+                    .recurrence_of
+                    .as_deref()
+                    .map(|id| format!(" recurrence_of={id}"))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "- [RÉFUTÉ] {id} {observed} raison={raison} ref={reference}{recurrence}\n  {text}\n",
+                    id = item.id,
+                    observed = item.observed_at,
+                    raison = item.raison.as_deref().unwrap_or("-"),
+                    reference = item.reference.as_deref().unwrap_or("-"),
+                    text = item.text,
+                ));
+            }
         }
     }
-    if show_attente {
+    if sections.attente {
         out.push_str("--- en attente de qualification ---\n");
         if view.attente.is_empty() {
             out.push_str("(aucune entrée en attente)\n");
@@ -1909,8 +1933,9 @@ pub fn render_registre_list_with_attente(view: &RegistreView, show_attente: bool
             }
         }
     }
+    // Pied : les trois états toujours, même si le corps est filtré.
     out.push_str(&format!(
-        "pied: {n} OUVERTS dont {m} récurrents, {k} gates ratés, {p} en attente ; {t} TRAITÉS, {r} RÉFUTÉS, {q} REQUALIFIÉS\n",
+        "pied: {n} OUVERTS dont {m} récurrents, {k} gates ratés, {p} en attente ; {t} FERMÉS, {r} RÉFUTÉS, {q} REQUALIFIÉS\n",
         n = view.footer.ouverts,
         m = view.footer.recurrents,
         k = view.footer.gates_rates,
@@ -2519,13 +2544,199 @@ mod tests {
         assert_eq!(vt.footer.refutes, 0);
         assert_eq!(vr.footer.traites, 0);
         assert_eq!(vr.footer.refutes, 1);
-        let rt = render_registre_list(&vt);
-        let rr = render_registre_list(&vr);
-        assert!(rt.contains("[TRAITÉ]"));
+        let sections = RegistreListSections {
+            fermes: true,
+            refutes: true,
+            attente: false,
+        };
+        let rt = render_registre_list_sections(&vt, sections);
+        let rr = render_registre_list_sections(&vr, sections);
+        assert!(rt.contains("[FERMÉ]"));
         assert!(!rt.contains("[RÉFUTÉ]"));
         assert!(rr.contains("[RÉFUTÉ]"));
-        assert!(!rr.contains("[TRAITÉ] c-charge"));
+        assert!(!rr.contains("[FERMÉ] c-charge"));
         assert_ne!(rt, rr);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn add_avec_texte(id: &str, text: &str) -> AddEntry {
+        AddEntry {
+            v: 1,
+            kind: AddKind::Add,
+            id: id.into(),
+            date: "2026-08-26T18:00:00+02:00".into(),
+            mission_source: MissionSource {
+                kind: MissionSourceKind::Review,
+                id: "rev-temoin".into(),
+                failed: None,
+            },
+            severity: Severity::Major,
+            recurrence_of: None,
+            text: text.into(),
+        }
+    }
+
+    /// (A) Ouvert → corps + pied exacts. Mutant text:"" ou id autre → A seul meurt.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_A_registre_ouvert_apparait_avec_contenu_exact() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-temoin-a-ouvert-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut journal = CatalogueJournal::open(root.join("c.jsonl")).unwrap();
+        journal
+            .append_add(add_avec_texte("temoin-ouvert-1", "TEXTE OUVERT EXACT"))
+            .unwrap();
+        let view = project_registre(&journal.read_entries().unwrap());
+        let rendered = render_registre_list(&view);
+        assert!(
+            rendered.contains("temoin-ouvert-1"),
+            "id ouvert en dur absent: {rendered}"
+        );
+        assert!(
+            rendered.contains("TEXTE OUVERT EXACT"),
+            "texte exact absent: {rendered}"
+        );
+        assert!(
+            rendered.contains("[OUVERT]"),
+            "badge OUVERT absent: {rendered}"
+        );
+        assert!(
+            rendered.contains("pied: 1 OUVERTS") && rendered.contains("0 FERMÉS, 0 RÉFUTÉS"),
+            "pied ouvert exact attendu, reçu: {rendered}"
+        );
+        assert!(
+            !rendered.contains("--- fermés") && !rendered.contains("--- réfutés"),
+            "défaut list = ouverts seuls, sections fermées absentes: {rendered}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// (B) Fermé quitte les ouverts ; prouve d'abord l'existence ; un autre ouvert reste.
+    /// Mutant sans transition → encore dans ouverts. Mutant qui vide toute la vue → compagnon absent.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_B_registre_ferme_quitte_les_ouverts_sans_vider_la_vue() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-temoin-b-ferme-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut journal = CatalogueJournal::open(root.join("c.jsonl")).unwrap();
+        journal
+            .append_add(add_avec_texte("temoin-a-fermer", "CHARGE A FERMER"))
+            .unwrap();
+        journal
+            .append_add(add_avec_texte("temoin-reste-ouvert", "CHARGE QUI RESTE"))
+            .unwrap();
+        let avant = project_registre(&journal.read_entries().unwrap());
+        let ids_avant: Vec<&str> = avant.ouverts.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids_avant,
+            vec!["temoin-a-fermer", "temoin-reste-ouvert"],
+            "précondition : les deux ouverts existent avant fermeture, reçu {ids_avant:?}"
+        );
+        assert_eq!(avant.footer.ouverts, 2);
+        assert_eq!(avant.footer.traites, 0);
+        journal
+            .close_constat_attested(
+                "temoin-a-fermer",
+                RaisonFermeture::CorrigeParLot,
+                "sha:a9353c1",
+                "2026-08-26T20:00:00Z",
+            )
+            .unwrap();
+        let apres = project_registre(&journal.read_entries().unwrap());
+        let ids_apres: Vec<&str> = apres.ouverts.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids_apres,
+            vec!["temoin-reste-ouvert"],
+            "fermé hors ouverts + compagnon toujours là, reçu {ids_apres:?}"
+        );
+        assert_eq!(apres.footer.ouverts, 1);
+        assert_eq!(apres.footer.traites, 1);
+        assert_eq!(apres.footer.refutes, 0);
+        let rendered = render_registre_list_sections(
+            &apres,
+            RegistreListSections {
+                fermes: true,
+                refutes: false,
+                attente: false,
+            },
+        );
+        assert!(
+            rendered.contains("[FERMÉ] temoin-a-fermer")
+                && rendered.contains("raison=corrige_par_lot")
+                && rendered.contains("ref=sha:a9353c1"),
+            "fermeture avec motif+réf en dur, reçu: {rendered}"
+        );
+        assert!(
+            rendered.contains("temoin-reste-ouvert"),
+            "compagnon ouvert encore visible: {rendered}"
+        );
+        // Append-only : le fichier contient encore l'add d'origine + transition.
+        let raw = fs::read_to_string(root.join("c.jsonl")).unwrap();
+        assert!(
+            raw.lines().count() >= 3,
+            "append-only : add+add+transition, lignes={}",
+            raw.lines().count()
+        );
+        assert!(
+            raw.contains("\"kind\":\"add\"") && raw.contains("\"kind\":\"transition\""),
+            "pas de réécriture destructive: {raw}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// (C) Réfuté ≠ fermé. Mutant qui appelle close au lieu de refute → C meurt (FERMÉS=1).
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_C_registre_refute_distinct_du_ferme() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-temoin-c-refute-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut journal = CatalogueJournal::open(root.join("c.jsonl")).unwrap();
+        journal
+            .append_add(add_avec_texte("temoin-a-refuter", "FAUSSE ALERTE"))
+            .unwrap();
+        journal
+            .refute_constat_attested(
+                "temoin-a-refuter",
+                RaisonRefutation::ChargeFausseMesuree,
+                "mesure:4/4",
+                "2026-08-26T20:05:00Z",
+            )
+            .unwrap();
+        let view = project_registre(&journal.read_entries().unwrap());
+        assert_eq!(view.footer.ouverts, 0);
+        assert_eq!(view.footer.traites, 0);
+        assert_eq!(view.footer.refutes, 1);
+        let rendered = render_registre_list_sections(
+            &view,
+            RegistreListSections {
+                fermes: true,
+                refutes: true,
+                attente: false,
+            },
+        );
+        assert!(
+            rendered.contains("[RÉFUTÉ] temoin-a-refuter")
+                && rendered.contains("raison=charge_fausse_mesuree")
+                && rendered.contains("ref=mesure:4/4"),
+            "réfutation exacte, reçu: {rendered}"
+        );
+        assert!(
+            !rendered.contains("[FERMÉ] temoin-a-refuter"),
+            "ne doit pas se lire comme fermé: {rendered}"
+        );
+        assert!(
+            rendered.contains("0 FERMÉS, 1 RÉFUTÉS"),
+            "pied trois états, reçu: {rendered}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }

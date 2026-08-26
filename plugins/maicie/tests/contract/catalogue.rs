@@ -345,7 +345,7 @@ fn sc1704_vue_identiques_sur_ordres_physiques_permutés() {
     let left = render_registre_list(&project_registre(&order_one));
     let right = render_registre_list(&project_registre(&order_two));
     assert_eq!(left, right);
-    assert!(left.contains("pied: 2 OUVERTS dont 0 récurrents, 0 gates ratés, 1 en attente ; 0 TRAITÉS, 0 RÉFUTÉS, 0 REQUALIFIÉS"));
+    assert!(left.contains("pied: 2 OUVERTS dont 0 récurrents, 0 gates ratés, 1 en attente ; 0 FERMÉS, 0 RÉFUTÉS, 0 REQUALIFIÉS"));
 }
 
 #[test]

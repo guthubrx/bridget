@@ -813,6 +813,10 @@ struct RegistreArgs {
 enum RegistreAction {
     /// Vue humaine d'autorité : projection pure, aucune écriture.
     List {
+        /// Déplie le corps des constats fermés (traités).
+        fermes: bool,
+        /// Déplie le corps des constats réfutés.
+        refutes: bool,
         /// Affiche aussi les entrées encore en attente de qualification.
         attente: bool,
     },
@@ -1597,6 +1601,8 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
     let mut source_kind = None;
     let mut source_id = None;
     let mut date = None;
+    let mut fermes = false;
+    let mut refutes = false;
     let mut attente = false;
     let mut source_failed = false;
     let mut fait = None;
@@ -1660,6 +1666,18 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             "--vers" => {
                 set_once_string(&mut vers, next_value(tail, &mut index, "--vers")?, "vers")?
             }
+            "--fermes" => {
+                if fermes {
+                    return Err(CliError::Usage("option --fermes dupliquée"));
+                }
+                fermes = true;
+            }
+            "--refutes" => {
+                if refutes {
+                    return Err(CliError::Usage("option --refutes dupliquée"));
+                }
+                refutes = true;
+            }
             "--attente" => {
                 if attente {
                     return Err(CliError::Usage("option --attente dupliquée"));
@@ -1686,13 +1704,17 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
                 || text.is_some()
             {
                 return Err(CliError::Usage(
-                    "registre list n'accepte que --config et --attente",
+                    "registre list n'accepte que --config, --fermes, --refutes et --attente",
                 ));
             }
-            RegistreAction::List { attente }
+            RegistreAction::List {
+                fermes,
+                refutes,
+                attente,
+            }
         }
         "add" => {
-            if depuis.is_some() || attente || pending_id.is_some() || fait.is_some() {
+            if depuis.is_some() || attente || fermes || refutes || pending_id.is_some() || fait.is_some() {
                 return Err(CliError::Usage("options incompatibles avec registre add"));
             }
             RegistreAction::Add {
@@ -1700,7 +1722,7 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             }
         }
         "migrer" => {
-            if line.is_some() || attente || pending_id.is_some() || fait.is_some() {
+            if line.is_some() || attente || fermes || refutes || pending_id.is_some() || fait.is_some() {
                 return Err(CliError::Usage(
                     "options incompatibles avec registre migrer",
                 ));
@@ -1852,13 +1874,24 @@ fn run_registre(arguments: RegistreArgs, migrate: bool) -> Result<String, CliErr
     // en boucle résidente. Une clôture durable manquée est rattrapée ici.
     reconcile_catalogue_from_store(&store, &mut journal).map_err(CliError::CatalogueReconcile)?;
     match arguments.action {
-        RegistreAction::List { attente } => {
+        RegistreAction::List {
+            fermes,
+            refutes,
+            attente,
+        } => {
             let parsed = journal.read_journal().map_err(CliError::Catalogue)?;
             if let Some(warning) = parsed.torn_tail_warning {
                 eprintln!("avertissement: {warning}");
             }
             let view = catalogue::project_registre(&parsed.entries);
-            let mut rendered = catalogue::render_registre_list_with_attente(&view, attente);
+            let mut rendered = catalogue::render_registre_list_sections(
+                &view,
+                catalogue::RegistreListSections {
+                    fermes,
+                    refutes,
+                    attente,
+                },
+            );
             let costs = store.all_mission_costs().map_err(CliError::Store)?;
             rendered.push_str(&render_mission_costs_section(&costs));
             Ok(rendered)
@@ -3454,7 +3487,11 @@ mod tests {
         assert!(matches!(
             list,
             Command::Registre(RegistreArgs {
-                action: RegistreAction::List { attente: false },
+                action: RegistreAction::List {
+                    fermes: false,
+                    refutes: false,
+                    attente: false
+                },
                 ..
             })
         ));
@@ -3502,7 +3539,11 @@ mod tests {
         assert!(matches!(
             attente,
             Command::Registre(RegistreArgs {
-                action: RegistreAction::List { attente: true },
+                action: RegistreAction::List {
+                    fermes: false,
+                    refutes: false,
+                    attente: true
+                },
                 ..
             })
         ));
