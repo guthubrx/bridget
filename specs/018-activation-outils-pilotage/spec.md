@@ -5,10 +5,10 @@
 
 Spec: 018-activation-outils-pilotage
 Titre: Activation gouvernée des outils de pilotage
-Statut: In Progress — reprise après verdict STOP
+Statut: Prête en contre-relecture
 Priorité: P1
-Tâches: 8/12 (67%)
-Tests: 10/13 (77%)
+Tâches: 12/12 (100%)
+Tests: 13/13 (100%)
 
 Résumé:
 - Contexte: `bridget-idle` a été activé par un lien vers un worktree avant son jury et son merge ; sa suppression aurait cassé l'outil actif.
@@ -16,7 +16,7 @@ Résumé:
 - Exécution: matérialiser une version explicitement activée et identifiable, indépendante de tout espace de travail.
 - Risque principal: reproduire un « canary clandestin » propre et versionné mais encore non jugé.
 - Mitigation: refuser l'activation avant tout effet si la provenance Git ou l'état local ne satisfait pas le contrat.
-- Validation: cinq refus discriminants, deux installations sûres, une activation idempotente et une exécution après suppression de la source.
+- Validation: refus discriminants, représentation et modes exacts, activation attestée, unités exactement idempotentes et survie sans source.
 - Dépendances: SPEC-011
 
 Fichiers:
@@ -28,7 +28,7 @@ Fichiers:
 
 **Feature Branch**: `session-18-activation-outils-pilotage`
 **Created**: 2026-08-25
-**Status**: In Progress — reprise après verdict STOP
+**Status**: Prête en contre-relecture
 **Priority**: P1
 **Dependencies**: SPEC-011
 

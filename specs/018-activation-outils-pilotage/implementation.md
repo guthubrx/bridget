@@ -5,14 +5,14 @@
 - **Spec** : 018-activation-outils-pilotage
 - **Branche** : `session-18-activation-outils-pilotage`
 - **Démarré** : 2026-08-25
-- **Terminé** : 2026-08-25
+- **Terminé** : 2026-08-26
 
 ## Progression
 
 ### Tâche T001 : Spécification, contrat et décision
 
 - **Statut** : ✅ Complété
-- **Commit** : `853206922f2d021d3985fc547a592701820ce952`
+- **Commit rebasé** : `7070636aa4821e532d54a117ccd5c36e317a100b`
 - **Fichiers créés** : spec, checklist, recherche, contrat, plan, quickstart,
   tâches, journal et ADR de la session 018
 - **Tests exécutés** :
@@ -25,7 +25,7 @@
 ### Tâches T002 à T006 : Oracles, politique commune et deux installateurs
 
 - **Statut** : ✅ Complété
-- **Commit** : `da7a497312d6eff871771bfc0386edd6b74b39a3`
+- **Commit rebasé** : `495e142e2dd60c05fab51e14a2733881722bb6c2`
 - **Contrôle positif TDD** : avant l'implémentation, le nouveau harnais a
   échoué sur le worktree lié avec `baseline_rc=1` ; l'ancien installateur avait
   posé le lien interdit.
@@ -119,10 +119,76 @@
 ## Reprise après verdict STOP — 2026-08-26
 
 - **Base rebasée** : `7024df31de5b23bfeca27eb5588a5465a872a8b8`.
-- **Statut** : en cours.
-- **Charges reproduites à venir** : identité et mode d'une release existante,
-  destination liée à un répertoire, configuration de ronde divergente dont
-  l'échec était neutralisé.
+- **Commit de formalisation** : `496542d14fc974dbbbb96df564318e6ac62c1b61`.
+- **Commit productif** : `ea6f49c7925788bd2fddb2076d3b049c56cd5096`.
+- **Statut** : complété, prêt en contre-relecture.
+
+### Reproduction avant correction
+
+- `release_lien` : une release remplacée par un lien vers le dépôt, mêmes
+  octets, était annoncée `déjà en place`.
+- `release_mode` : une release passée de `0555` à `0755` était annoncée
+  `déjà en place`.
+- `force_remplace_entree_exacte` : `mv -f` déposait le lien préparé dans le
+  répertoire visé par l'ancienne entrée et la cible active restait inchangée.
+- `configuration_divergente_refusee_sans_faux_succes` : une configuration B
+  terminait à zéro et annonçait la ronde prête tandis que service et timer
+  conservaient A.
+
+### Correction
+
+- Une release et sa preuve existantes doivent être des fichiers réguliers non
+  liens, aux modes exacts `0555` et `0444`, avant la comparaison des octets.
+- `os.replace` remplace atomiquement l'entrée active exacte sur le même système
+  de fichiers, y compris un lien vers répertoire. La cible textuelle réellement
+  obtenue est relue avant le message `posé`.
+- Chaque unité est d'abord matérialisée séparément. Un rejeu ne réussit que si
+  représentation, mode et contenu sont exacts ; sinon il refuse sans
+  `--force`. Sous `--force`, le remplacement est explicite et attesté.
+- Les trois `|| true` placés sur les appels à `write_unit` ont été supprimés.
+
+### Vérifications de reprise
+
+Univers shell listé :
+
+1. `scripts/test-018-pilotage-install.sh` — **1 passé, 0 échec, 0 ignoré** ;
+2. `scripts/test-bridget-idle.sh` — **1 passé, 0 échec, 0 ignoré** ;
+3. `scripts/test-bridget-ronde.sh` — **1 passé, 0 échec, 0 ignoré**.
+
+Le harnais 018 couvre les deux refus B1, le remplacement exact B2, le refus M1,
+le remplacement explicite de B par `--force`, l'idempotence nominale et
+l'exécution des deux commandes après suppression du dépôt source.
+
+- Syntaxe : six fichiers Bash passés, zéro échec, zéro ignoré.
+- `git diff --check` : vert.
+- Preuve Cargo conservée de la contre-revue, non rejouée conformément au
+  mandat : `cargo test --workspace --no-run` vert sur base et composition ;
+  univers 1014, base et composition **993 passés, 3 échecs connus, 18 ignorés**.
+  Le diff de reprise ne touche ni Rust ni manifeste Cargo.
+- Mutant sans contrôle de représentation :
+  `release_lien` meurt sur l'absence du contenu
+  `attendu=fichier_regulier_non_lien`.
+- Mutant sans contrôle du mode : `release_mode` meurt en acceptant `0755`.
+- Mutant restaurant `mv -f` : `force_remplace_entree_exacte` meurt sur la
+  cible demeurée dans l'ancien répertoire.
+- Mutant restaurant l'avalement d'échec :
+  `configuration_divergente_refusee_sans_faux_succes` meurt sur le succès
+  interdit et l'annonce mensongère.
+
+### Minimalisme et responsabilité future
+
+- Complexité O(1), sans boucle ni nouvelle dépendance : Python était déjà le
+  runtime obligatoire des deux outils et `os.replace` porte l'invariant exact
+  qui manquait à `mv` sur macOS/Linux.
+- Les helpers de mode et de remplacement servent à la fois les releases et les
+  unités ; ils portent une règle de compatibilité ou d'atomicité, pas une couche
+  abstraite supplémentaire.
+- Potentiel minimalisme : environ **0 ligne productive supprimable à
+  comportement constant** ; retirer une garde, l'attestation ou la propagation
+  d'échec ressuscite un témoin nommé.
+- La correction réduit la charge future : chaque succès correspond désormais
+  à un état relu, et non à l'intention d'une commande système.
+
 - **Non visité** : macOS/launchd réel, activation systemd réelle sans saut,
   concurrence entre installateurs et falsification volontaire de références
   Git.

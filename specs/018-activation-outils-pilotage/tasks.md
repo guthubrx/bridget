@@ -25,19 +25,19 @@
 
 ## Phase 6 — Levée du verdict STOP
 
-- [ ] T009 Reproduire séparément la release liée, le mode `0755`, le lien actif
+- [x] T009 Reproduire séparément la release liée, le mode `0755`, le lien actif
   vers répertoire et le faux succès d'une configuration de ronde divergente.
-- [ ] T010 Valider la représentation et le mode des releases, remplacer
+- [x] T010 Valider la représentation et le mode des releases, remplacer
   l'entrée active exacte et attester la cible réellement obtenue.
-- [ ] T011 Rendre le rejeu des unités exactement idempotent et supprimer tout
+- [x] T011 Rendre le rejeu des unités exactement idempotent et supprimer tout
   avalement d'échec par `|| true`.
-- [ ] T012 Rejouer les gates, tuer les mutants ciblés, documenter le non-visité
+- [x] T012 Rejouer les gates, tuer les mutants ciblés, documenter le non-visité
   puis livrer une tête rebasée sur `7024df31`.
 
 ## Dépendances
 
 ```text
-T001 → T002 → T003 → T004 → T005 → T006 → T007 → T008
+T001 → T002 → T003 → T004 → T005 → T006 → T007 → T008 → T009 → T010 → T011 → T012
 ```
 
 La politique et les deux installateurs touchent la même frontière ; aucune
