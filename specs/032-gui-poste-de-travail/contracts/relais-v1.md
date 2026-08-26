@@ -87,10 +87,20 @@ aucun échange`). `/v1/watch` exige déjà `agent` et pousse la même projection
 | `at` | **place chronologique** dans le fil — décisif : on doit voir qu'un agent a consulté quelqu'un **avant** de répondre |
 | `direction` | `in` → « Message de X » · `out` → « Message à X » · `both` → « N messages avec X » |
 | `count` | **toujours présent**, y compris à 1 |
-| `delivery_ids` | permet le dépli sans nouvelle requête |
+| `delivery_ids` | clés de corrélation vers les corps déjà publiés par `/v1/journal` |
 
 **Le relais ne formule pas la phrase.** Il donne direction et nombre ; la page
 écrit « 2 messages avec jc6 ».
+
+**Contenu du dépli** : la page indexe les `turn_start` et
+`prompt_dispatched` du journal par `message_id`, puis résout les
+`delivery_ids` dans leur ordre. Le dépli rend les **textes**, jamais les
+identifiants. Pour un échange sortant ou bidirectionnel, la page lit aussi le
+journal du pair : le corps est journalisé chez le destinataire, sans nouvelle
+forme réseau ni enrichissement du relais. Les lectures utilisent `from_seq=0`
+pour traverser les rotations de date déjà prises en charge par le journal.
+Si une ancienne clé n'existe dans aucun des deux journaux, la page rend
+« Contenu indisponible » ; elle ne remplace jamais le corps absent par la clé.
 
 **Seuil de dépli** : `count <= 3` → sur place ; sinon panneau latéral.
 **Paramétrable côté page**, valeur provisoire.

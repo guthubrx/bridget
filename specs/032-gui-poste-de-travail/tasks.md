@@ -153,7 +153,28 @@ transmis des chemins illisibles entre deux machines en servant d'intermédiaire.
       installation.
 - [ ] T6.11 Vocabulaire : **« injecté » / « en vol »**, jamais « reçu ».
 
-## Composition — après les six lots
+## L7 — Page : contenu et chronologie lisibles *(AC14, AC15, AC16)*
+
+**Fichiers** : `crates/bridget-daemon/assets/ui/` · **Contrats** : C2,
+`/v1/journal` existant
+
+- [x] T7.1 Indexer les corps `turn_start` et `prompt_dispatched` par
+      `message_id`, depuis `from_seq=0` pour traverser minuit, sans modifier le
+      relais Rust.
+- [x] T7.2 Projeter chaque message entrant riche en bulle à droite, qu'il
+      vienne de l'utilisateur ou d'un autre agent, et la réponse de l'agent
+      courant en bulle à gauche, avec leur texte exact.
+- [x] T7.3 Résoudre chaque `delivery_id` d'une trace depuis les journaux des
+      deux participants ; le dépli rend les textes disponibles, ou un état
+      d'indisponibilité explicite, jamais les identifiants.
+- [x] T7.4 Afficher l'heure locale sur chaque bulle et chaque trace ; grouper
+      par journée locale tout en triant sur le `ts` d'émission.
+- [x] T7.5 Oracle de présence sur les textes exacts avant l'oracle d'absence
+      des identifiants ; mutant nommé et lecture réelle dans un navigateur.
+- [x] T7.6 Écrire explicitement les limites du lot : aucune nouvelle donnée,
+      aucune route, aucun changement d'authentification ou de relais Rust.
+
+## Composition — après les sept lots
 
 - [ ] TC.1 Assembler et mesurer **chaque tête isolée ET la composition**.
       *Le 25/08, un lot vert en aval masquait le défaut d'un lot
@@ -171,6 +192,7 @@ transmis des chemins illisibles entre deux machines en servant d'intermédiaire.
 | L3 | `jc6` | distante | `relec7` | locale |
 | L4 | `cursor3` | locale | `relec8` | locale |
 | L5 → L6 | `jc1` | distante | `cursor4` | locale |
+| L7 | `cartae0` | locale | — | — |
 | Composition | `rc5` | distante | — | — |
 
 **Auteurs et relecteurs sur des machines différentes quand c'est possible** :
