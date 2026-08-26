@@ -37,13 +37,15 @@ const UI_RECONNECT_DELAY: Duration = Duration::from_millis(100);
 /// jamais au journal ; sans ce rythme le fil reste figé après l'ouverture.
 const UI_THREAD_LEDGER_POLL: Duration = Duration::from_millis(400);
 const UI_SENDER: &str = "humain";
-/// Ouverture page : derniers enregistrements complets (fragments d'un même seq à bord).
-const UI_JOURNAL_OPEN_COMPLETE_RECORDS: usize = 10;
-/// Remontée manuelle : pages d'enregistrements complets via `from_seq`.
-const UI_JOURNAL_OLDER_PAGE_RECORDS: usize = 20;
-/// Plafond dur de fragments SSE rejoués avant CaughtUp — un enregistrement
-/// pathologique ne doit pas renvoyer le mégaoctet.
-const UI_JOURNAL_MAX_REPLAY_FRAGMENTS: usize = 150;
+/// Ouverture : derniers **tours projetés** (même `message_id` que `projectTimeline`
+/// dans la page). Pas des séquences brutes — sinon on coupe un échange à l'écran
+/// (réponse sans question). Chiffres T3 : 10 / 20.
+const UI_JOURNAL_OPEN_TURNS: usize = 10;
+const UI_JOURNAL_OLDER_PAGE_TURNS: usize = 20;
+/// Plafond dur de fragments SSE avant CaughtUp. Mesure 2026-08-26 : p50 ≈ 200
+/// records/tour (cursor4/6), un tour max > 700 ; 150 coupait toujours au milieu.
+/// 500 ≈ 2 tours médians, cible ~100 Ko utiles sans renvoyer le mégaoctet.
+const UI_JOURNAL_MAX_REPLAY_FRAGMENTS: usize = 500;
 /// Port loopback par défaut : stable d'un lancement à l'autre, sans option CLI.
 pub const DEFAULT_UI_PORT: u16 = 17888;
 const UI_ENDPOINT_STATE_VERSION: u8 = 1;
@@ -879,6 +881,7 @@ fn now_secs() -> i64 {
 
 /// Fenêtre d'ouverture : Seq(from) calculé **dans le relais** sur les jsonl
 /// de l'agent — jamais Tail/Today sur le fil Attach (daemon live inchangé).
+/// Unité = tour projeté (`message_id`), aligné sur `projectTimeline` de la page.
 /// Un mutant qui remet Seq(0) ou Tail ici doit tuer
 /// `chemin_productif_ouverture_journal_emprunte_fenetre_relais`.
 fn resolve_ui_journal_window(
@@ -895,63 +898,128 @@ fn agent_journal_dir(agent: &str) -> PathBuf {
     root.join(agent)
 }
 
-fn complete_record_seqs(journal_dir: &Path) -> Vec<u64> {
-    let mut seqs = std::fs::read_dir(journal_dir)
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectedTurn {
+    first_seq: u64,
+    last_seq: u64,
+    record_count: usize,
+}
+
+/// Tours dans l'ordre d'apparition — clé = `message_id` (comme `recordKey` page).
+fn projected_turns(journal_dir: &Path) -> Vec<ProjectedTurn> {
+    let mut order: Vec<String> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut turns: Vec<ProjectedTurn> = Vec::new();
+    let mut files = std::fs::read_dir(journal_dir)
         .ok()
         .into_iter()
         .flatten()
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
-        .flat_map(|path| valid_events(&path))
-        .filter_map(|value| value.get("seq").and_then(|seq| seq.as_u64()))
         .collect::<Vec<_>>();
-    seqs.sort_unstable();
-    seqs.dedup();
-    seqs
+    files.sort();
+    for path in files {
+        for value in valid_events(&path) {
+            let Some(seq) = value.get("seq").and_then(|s| s.as_u64()) else {
+                continue;
+            };
+            let key = value
+                .get("message_id")
+                .and_then(|m| m.as_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    let session = value
+                        .get("session_id")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("session");
+                    format!("{session}:{seq}")
+                });
+            if let Some(&idx) = index.get(&key) {
+                let turn = &mut turns[idx];
+                turn.last_seq = turn.last_seq.max(seq);
+                turn.first_seq = turn.first_seq.min(seq);
+                turn.record_count += 1;
+            } else {
+                index.insert(key.clone(), turns.len());
+                order.push(key);
+                turns.push(ProjectedTurn {
+                    first_seq: seq,
+                    last_seq: seq,
+                    record_count: 1,
+                });
+            }
+        }
+    }
+    let _ = order;
+    turns
 }
 
-fn open_window_from_complete_records(seqs: &[u64], count: usize) -> (u64, bool) {
-    if seqs.is_empty() {
+/// Sélectionne les `max_turns` plus récents **entiers**, sans couper un
+/// `message_id`, sous le plafond de fragments. Le tour le plus récent est
+/// toujours pris même s'il dépasse le plafond seul (has_more alors vrai).
+fn select_recent_turns(
+    turns: &[ProjectedTurn],
+    max_turns: usize,
+    max_records: usize,
+) -> (u64, bool) {
+    if turns.is_empty() {
         return (0, false);
     }
-    if seqs.len() <= count {
-        return (seqs[0], false);
+    let mut selected: Vec<&ProjectedTurn> = Vec::new();
+    let mut records = 0_usize;
+    for turn in turns.iter().rev() {
+        if selected.len() >= max_turns {
+            break;
+        }
+        if !selected.is_empty() && records + turn.record_count > max_records {
+            break;
+        }
+        selected.push(turn);
+        records += turn.record_count;
     }
-    (seqs[seqs.len() - count], true)
+    selected.reverse();
+    let from_seq = selected.first().map(|t| t.first_seq).unwrap_or(0);
+    let has_more = selected.len() < turns.len();
+    (from_seq, has_more)
 }
 
-fn older_page_from_complete_records(seqs: &[u64], current_from: u64, page: usize) -> u64 {
-    let older: Vec<u64> = seqs
+fn older_page_from_turns(
+    turns: &[ProjectedTurn],
+    current_from: u64,
+    page_turns: usize,
+    max_records: usize,
+) -> (u64, bool) {
+    let older: Vec<ProjectedTurn> = turns
         .iter()
-        .copied()
-        .filter(|seq| *seq < current_from)
+        .filter(|turn| turn.first_seq < current_from)
+        .cloned()
         .collect();
-    open_window_from_complete_records(&older, page).0
+    select_recent_turns(&older, page_turns, max_records)
 }
 
 fn resolve_ui_journal_window_in(
     journal_dir: PathBuf,
     query: &HashMap<String, String>,
 ) -> Result<(AttachWindow, UiJournalPage), UiError> {
-    let seqs = complete_record_seqs(&journal_dir);
+    let turns = projected_turns(&journal_dir);
     match query.get("from_seq") {
         Some(value) => {
             let from_seq = value.parse().map_err(|_| {
                 UiError::Protocol("from_seq doit être un entier non signé".to_string())
             })?;
-            let first = seqs.first().copied().unwrap_or(0);
+            let has_more = turns.iter().any(|turn| turn.first_seq < from_seq);
             Ok((
                 AttachWindow::Seq(from_seq),
                 UiJournalPage {
-                    has_more: from_seq > first,
+                    has_more,
                     from_seq,
                 },
             ))
         }
         None => {
             let (from_seq, has_more) =
-                open_window_from_complete_records(&seqs, UI_JOURNAL_OPEN_COMPLETE_RECORDS);
+                select_recent_turns(&turns, UI_JOURNAL_OPEN_TURNS, UI_JOURNAL_MAX_REPLAY_FRAGMENTS);
             Ok((
                 AttachWindow::Seq(from_seq),
                 UiJournalPage {
@@ -963,10 +1031,10 @@ fn resolve_ui_journal_window_in(
     }
 }
 
-/// Remontée manuelle : page précédente de `UI_JOURNAL_OLDER_PAGE_RECORDS`.
+/// Remontée manuelle indicative (pages de tours, pas de séquences brutes).
 #[cfg_attr(not(test), allow(dead_code))]
 fn older_journal_page_from_seq(current_from_seq: u64) -> u64 {
-    current_from_seq.saturating_sub(UI_JOURNAL_OLDER_PAGE_RECORDS as u64)
+    current_from_seq.saturating_sub(UI_JOURNAL_OLDER_PAGE_TURNS as u64)
 }
 
 fn read_snapshot(
@@ -2316,8 +2384,9 @@ mod tests {
             serve_body.matches("resolve_ui_journal_window(").count() >= 2,
             "/v1/journal et /v1/watch doivent emprunter le calcul relais"
         );
-        assert_eq!(UI_JOURNAL_OPEN_COMPLETE_RECORDS, 10);
-        assert_eq!(UI_JOURNAL_MAX_REPLAY_FRAGMENTS, 150);
+        assert_eq!(UI_JOURNAL_OPEN_TURNS, 10);
+        assert_eq!(UI_JOURNAL_OLDER_PAGE_TURNS, 20);
+        assert_eq!(UI_JOURNAL_MAX_REPLAY_FRAGMENTS, 500);
         let stream_body = function_body(source, "fn stream_sse_journal(");
         assert!(
             stream_body.contains("UI_JOURNAL_MAX_REPLAY_FRAGMENTS"),
@@ -2327,37 +2396,43 @@ mod tests {
             stream_body.contains("\"journal_page\""),
             "has_more doit être émis sur le chemin SSE réel"
         );
+        let resolve_src = function_body(source, "fn projected_turns(");
+        assert!(
+            resolve_src.contains("message_id"),
+            "le tour projeté doit suivre message_id comme la page"
+        );
     }
 
-    /// Remontée : 20 enregistrements complets sous la fenêtre d'ouverture.
+    /// Remontée : 20 tours sous la fenêtre d'ouverture, sans couper un message_id.
     #[test]
     fn remontee_from_seq_donne_l_ancien_par_pages_de_vingt() {
-        let seqs: Vec<u64> = (1..=100).collect();
+        let turns: Vec<ProjectedTurn> = (1..=100)
+            .map(|n| ProjectedTurn {
+                first_seq: n * 10,
+                last_seq: n * 10 + 2,
+                record_count: 3,
+            })
+            .collect();
         let (open_from, has_more) =
-            open_window_from_complete_records(&seqs, UI_JOURNAL_OPEN_COMPLETE_RECORDS);
-        assert_eq!(open_from, 91);
-        assert!(has_more, "il doit rester de l'ancien sous les 10 derniers");
-        let older = older_page_from_complete_records(
-            &seqs,
+            select_recent_turns(&turns, UI_JOURNAL_OPEN_TURNS, UI_JOURNAL_MAX_REPLAY_FRAGMENTS);
+        assert_eq!(open_from, 910);
+        assert!(has_more);
+        let (older, older_more) = older_page_from_turns(
+            &turns,
             open_from,
-            UI_JOURNAL_OLDER_PAGE_RECORDS,
+            UI_JOURNAL_OLDER_PAGE_TURNS,
+            UI_JOURNAL_MAX_REPLAY_FRAGMENTS,
         );
-        assert_eq!(older, 71);
+        assert_eq!(older, 710);
         assert!(older < open_from);
-        assert_eq!(UI_JOURNAL_OLDER_PAGE_RECORDS, 20);
-        assert_eq!(older_journal_page_from_seq(91), 71);
-        let mut query = HashMap::new();
-        query.insert("from_seq".to_string(), older.to_string());
-        let dir = PathBuf::from("/tmp/bridget-ui-journal-absent");
-        let (window, page) = resolve_ui_journal_window_in(dir, &query).unwrap();
-        assert_eq!(window, AttachWindow::Seq(71));
-        assert!(page.has_more);
+        assert!(older_more);
+        assert_eq!(UI_JOURNAL_OLDER_PAGE_TURNS, 20);
     }
 
     #[test]
-    fn ouverture_sans_from_seq_prend_dix_enregistrements_complets() {
+    fn ouverture_sans_from_seq_prend_dix_tours_projetes() {
         let root = PathBuf::from(format!(
-            "/tmp/bridget-ui-journal-{}",
+            "/tmp/bridget-ui-journal-turns-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&root);
@@ -2368,16 +2443,47 @@ mod tests {
             std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
         let mut lines = String::new();
-        for seq in 1..=40 {
-            lines.push_str(&format!("{{\"v\":1,\"seq\":{seq}}}\n"));
+        let mut seq = 1_u64;
+        for turn in 1..=15 {
+            // deux records par tour (même message_id) — ne pas couper au milieu
+            for event in ["turn_start", "turn_end"] {
+                lines.push_str(&format!(
+                    "{{\"v\":1,\"seq\":{seq},\"message_id\":\"m{turn}\",\"event\":\"{event}\",\"session_id\":\"s\"}}\n"
+                ));
+                seq += 1;
+            }
         }
         std::fs::write(root.join("2026-08-26.jsonl"), lines).unwrap();
         let (window, page) =
             resolve_ui_journal_window_in(root.clone(), &HashMap::new()).unwrap();
-        assert_eq!(window, AttachWindow::Seq(31));
+        // 15 tours × 2 = 30 seqs ; 10 derniers tours → from_seq = seq du turn 6 start = 11
+        assert_eq!(window, AttachWindow::Seq(11));
         assert!(page.has_more);
-        assert_eq!(page.from_seq, 31);
+        assert_eq!(page.from_seq, 11);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn plafond_ne_coupe_pas_un_tour_en_plein_milieu() {
+        // Un tour de 600 records puis 9 petits : sous plafond 500 on prend
+        // seulement le tour récent entier (600), has_more vrai.
+        let mut turns = Vec::new();
+        for n in 1..=9 {
+            turns.push(ProjectedTurn {
+                first_seq: n,
+                last_seq: n,
+                record_count: 1,
+            });
+        }
+        turns.push(ProjectedTurn {
+            first_seq: 100,
+            last_seq: 699,
+            record_count: 600,
+        });
+        let (from_seq, has_more) = select_recent_turns(&turns, 10, 500);
+        assert_eq!(from_seq, 100);
+        assert!(has_more);
+        assert_ne!(from_seq, 400, "ne doit pas démarrer au milieu du gros tour");
     }
 
     /// Garde anti-feuille : retirer l'appel à `retain_living_objectives` dans
