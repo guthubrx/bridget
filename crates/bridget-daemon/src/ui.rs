@@ -1687,23 +1687,14 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Temporaire préexistant (plantage) aux droits ouverts : le démarrage doit
-    /// réussir et livrer un final 0600 — pas une impasse, pas un final lisible.
-    /// Meurt si create+truncate hérite des droits, ou si l'exclusif refuse sans nettoyer.
     #[cfg(unix)]
-    #[test]
-    fn temporaire_preexistant_a_droits_ouverts_demarre_avec_final_protege() {
+    fn seed_stale_open_tmp(path: &Path) -> PathBuf {
         use std::io::Write;
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-        let path = std::env::temp_dir().join(format!(
-            "bridget-ui-endpoint-stale-tmp-{}.json",
-            uuid::Uuid::new_v4().simple()
-        ));
         let tmp = path.with_extension("json.tmp");
-        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(&tmp);
-
         {
             let mut stale = std::fs::OpenOptions::new()
                 .write(true)
@@ -1716,22 +1707,61 @@ mod tests {
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o666)).unwrap();
         let stale_mode = std::fs::metadata(&tmp).unwrap().permissions().mode() & 0o777;
         assert_eq!(stale_mode, 0o666, "précondition: temporaire ouvert {stale_mode:#o}");
+        tmp
+    }
+
+    /// Garde 1 — démarrage malgré un résidu. Meurt si exclusif sans purge.
+    #[cfg(unix)]
+    #[test]
+    fn temporaire_preexistant_ne_bloque_pas_le_demarrage() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-ui-endpoint-stale-boot-{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let tmp = seed_stale_open_tmp(&path);
 
         let created = load_or_create_ui_endpoint(&path, DEFAULT_UI_PORT)
             .expect("un résidu temporaire ne doit pas bloquer le démarrage");
         assert_eq!(created.port, DEFAULT_UI_PORT);
         assert_eq!(created.token.len(), 32);
         assert!(path.exists(), "le final doit être livré");
+
+        let _ = std::fs::remove_file(&tmp);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Garde 2 — final protégé. Meurt si create+truncate hérite des droits ouverts.
+    /// Si le démarrage échoue : INAPPLICABLE — on échoue explicitement (pas un vert
+    /// par abstention). La garde 1 juge la panne ; ici on refuse de se dire satisfait.
+    #[cfg(unix)]
+    #[test]
+    fn temporaire_preexistant_livre_un_final_protege() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "bridget-ui-endpoint-stale-mode-{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let tmp = seed_stale_open_tmp(&path);
+
+        let created = match load_or_create_ui_endpoint(&path, DEFAULT_UI_PORT) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                let _ = std::fs::remove_file(&tmp);
+                let _ = std::fs::remove_file(&path);
+                panic!(
+                    "INAPPLICABLE — pas de final à juger ({error}) ; \
+                     ce n'est pas un succès du témoin mode (abstention = oracle vacant)"
+                );
+            }
+        };
+        assert!(path.exists());
         let final_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(
             final_mode, 0o600,
             "final ne doit pas hériter des droits ouverts du temporaire: {final_mode:#o}"
         );
-        assert!(
-            !tmp.exists(),
-            "le temporaire ne doit plus rester après rename"
-        );
-
+        assert!(!tmp.exists(), "le temporaire ne doit plus rester après rename");
         let reloaded = load_or_create_ui_endpoint(&path, DEFAULT_UI_PORT).unwrap();
         assert_eq!(reloaded.token, created.token);
 
