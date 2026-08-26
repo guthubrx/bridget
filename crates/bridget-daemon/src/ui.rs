@@ -85,9 +85,11 @@ fn write_ui_endpoint_state(path: &Path, endpoint: &UiEndpoint) -> Result<(), UiE
     let body = serde_json::to_vec_pretty(&payload).map_err(|error| {
         UiError::Configuration(format!("sérialisation de l'endpoint UI: {error}"))
     })?;
-    // Création EXCLUSIVE en 0o600 : si un temporaire préexiste (plantage),
-    // on refuse — create+truncate hériterait de droits ouverts au rename.
+    // Résidu de plantage : un temporaire jamais renommé n'a jamais été validé.
+    // On le retire, puis création EXCLUSIVE en 0o600 (pas create+truncate qui
+    // hériterait de droits ouverts si le fichier existait encore).
     let tmp = path.with_extension("json.tmp");
+    let _ = std::fs::remove_file(&tmp);
     {
         #[cfg(unix)]
         {
@@ -102,7 +104,7 @@ fn write_ui_endpoint_state(path: &Path, endpoint: &UiEndpoint) -> Result<(), UiE
                 Ok(file) => file,
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     return Err(UiError::Configuration(format!(
-                        "fichier temporaire d'endpoint UI déjà présent ({}) — supprimez-le puis relancez ; aucun écrasement d'un temporaire aux droits inconnus",
+                        "fichier temporaire d'endpoint UI déjà présent ({}) — impossible de le recréer en exclusif",
                         tmp.display()
                     )));
                 }
@@ -113,9 +115,10 @@ fn write_ui_endpoint_state(path: &Path, endpoint: &UiEndpoint) -> Result<(), UiE
         }
         #[cfg(not(unix))]
         {
+            let _ = std::fs::remove_file(&tmp);
             if tmp.exists() {
                 return Err(UiError::Configuration(format!(
-                    "fichier temporaire d'endpoint UI déjà présent ({}) — supprimez-le puis relancez ; aucun écrasement d'un temporaire aux droits inconnus",
+                    "fichier temporaire d'endpoint UI déjà présent ({}) — impossible de le recréer en exclusif",
                     tmp.display()
                 )));
             }
@@ -1681,11 +1684,12 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Meurt si create+truncate réouvre un temporaire aux droits ouverts puis le
-    /// renomme en final lisible par tous.
+    /// Temporaire préexistant (plantage) aux droits ouverts : le démarrage doit
+    /// réussir et livrer un final 0600 — pas une impasse, pas un final lisible.
+    /// Meurt si create+truncate hérite des droits, ou si l'exclusif refuse sans nettoyer.
     #[cfg(unix)]
     #[test]
-    fn temporaire_preexistant_a_droits_ouverts_est_refuse_sans_livrer_un_final_lisible() {
+    fn temporaire_preexistant_a_droits_ouverts_demarre_avec_final_protege() {
         use std::io::Write;
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
@@ -1710,26 +1714,23 @@ mod tests {
         let stale_mode = std::fs::metadata(&tmp).unwrap().permissions().mode() & 0o777;
         assert_eq!(stale_mode, 0o666, "précondition: temporaire ouvert {stale_mode:#o}");
 
-        let error = match load_or_create_ui_endpoint(&path, DEFAULT_UI_PORT) {
-            Ok(_) => panic!("un temporaire préexistant doit être refusé, pas écrasé"),
-            Err(err) => err,
-        };
-        let message = error.to_string();
-        assert!(
-            message.contains("temporaire") && message.contains("déjà présent"),
-            "{message}"
+        let created = load_or_create_ui_endpoint(&path, DEFAULT_UI_PORT)
+            .expect("un résidu temporaire ne doit pas bloquer le démarrage");
+        assert_eq!(created.port, DEFAULT_UI_PORT);
+        assert_eq!(created.token.len(), 32);
+        assert!(path.exists(), "le final doit être livré");
+        let final_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            final_mode, 0o600,
+            "final ne doit pas hériter des droits ouverts du temporaire: {final_mode:#o}"
         );
         assert!(
-            !path.exists(),
-            "aucun final ne doit être livré depuis un temporaire aux droits ouverts"
+            !tmp.exists(),
+            "le temporaire ne doit plus rester après rename"
         );
-        if path.exists() {
-            let final_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(
-                final_mode, 0o600,
-                "si un final existait, il ne doit pas être lisible par tous: {final_mode:#o}"
-            );
-        }
+
+        let reloaded = load_or_create_ui_endpoint(&path, DEFAULT_UI_PORT).unwrap();
+        assert_eq!(reloaded.token, created.token);
 
         let _ = std::fs::remove_file(&tmp);
         let _ = std::fs::remove_file(&path);
