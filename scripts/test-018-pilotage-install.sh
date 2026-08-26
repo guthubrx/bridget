@@ -266,6 +266,33 @@ mode_release="$(readlink "${mode_release_home}/.local/bin/bridget-idle")"
 chmod 0755 "$mode_release"
 expect_refusal release_mode 'mode release invalide' "$repo" idle "$mode_release_home"
 
+# Les feuilles exactes ne suffisent pas si le répertoire SHA se résout dans le
+# dépôt : un succès doit alors survivre au déplacement réel de cette source.
+canonical_release_home="${fixture_root}/home-release-canonique"
+run_installer "$repo" idle "$canonical_release_home" >/dev/null
+canonical_release="$(readlink "${canonical_release_home}/.local/bin/bridget-idle")"
+canonical_release_dir="$(dirname "$canonical_release")"
+borrowed_release_dir="${repo}/.git/borrowed-release"
+mv "$canonical_release_dir" "$borrowed_release_dir"
+ln -s "$borrowed_release_dir" "$canonical_release_dir"
+set +e
+canonical_output="$(run_installer "$repo" idle "$canonical_release_home" 2>&1)"
+canonical_rc=$?
+set -e
+if [[ "$canonical_rc" -eq 0 ]]; then
+  [[ "$repo" == "${fixture_root}/repo" ]] || fail "independance_reelle: dépôt de fixture inattendu"
+  moved_repo="${fixture_root}/repo-deplace"
+  mv "$repo" "$moved_repo"
+  set +e
+  HOME="$canonical_release_home" "${canonical_release_home}/.local/bin/bridget-idle" --help >/dev/null 2>&1
+  survival_rc=$?
+  set -e
+  fail "independance_reelle: chemin dans le dépôt accepté, exécution après déplacement rc=${survival_rc}"
+fi
+grep -Fq 'release résolue dans le dépôt source' <<<"$canonical_output" \
+  || fail "independance_reelle: motif canonique absent ($canonical_output)"
+echo 'independance_reelle_chemin_canonique: OK'
+
 # 10. --force remplace l'entrée exacte même si elle est un lien vers répertoire,
 # puis la cible réellement obtenue est relue.
 directory_link_home="${fixture_root}/home-directory-link"

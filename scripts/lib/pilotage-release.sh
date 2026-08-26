@@ -55,6 +55,15 @@ os.replace(sys.argv[1], sys.argv[2])
 PY
 }
 
+pilotage_canonical_path() {
+  python3 - "$1" <<'PY'
+import os
+import sys
+
+print(os.path.realpath(sys.argv[1]))
+PY
+}
+
 # Contrat : le caller fournit la racine, le chemin Git, le nom public et le
 # drapeau --force. Succès = artefact exact + preuve + lien actif ; refus Git =
 # zéro effet. Les seules écritures sont sous ~/.local/{share,bin} après toutes
@@ -64,7 +73,7 @@ pilotage_install_release() {
   local source_relative="$2"
   local command_name="$3"
   local force="$4"
-  local branch head remote_head status
+  local branch head remote_head status root_canonical release_canonical
   local installed_command release_base release_dir release_command origin_file
   local prepare_dir prepared_command prepared_origin artifact_hash
   local bin_dir link_prepare prepared_link
@@ -129,6 +138,21 @@ pilotage_install_release() {
     pilotage_refuse "outil absent du commit admis: ${source_relative}"
     return 1
   fi
+
+  root_canonical="$(pilotage_canonical_path "$root_dir")" || {
+    pilotage_refuse "chemin canonique du dépôt illisible: $root_dir"
+    return 1
+  }
+  release_canonical="$(pilotage_canonical_path "$release_dir")" || {
+    pilotage_refuse "chemin canonique de release illisible: $release_dir"
+    return 1
+  }
+  case "$release_canonical" in
+    "$root_canonical"|"$root_canonical"/*)
+      pilotage_refuse "release résolue dans le dépôt source: $release_canonical"
+      return 1
+      ;;
+  esac
 
   mkdir -p "$release_base"
   prepare_dir="$(mktemp -d "${release_base}/.prepare-${command_name}.XXXXXX")"
