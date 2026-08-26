@@ -11,7 +11,7 @@
 #
 # Preuves :
 #   Mac — idempotence ici + pose bac à sable (2026-08-24).
-#   Linux cartae.app — daemon systemd, spawn/stop, dépôt guichet queued +
+#   Linux (hôte distant) — daemon systemd, spawn/stop, dépôt guichet queued +
 #     relève Maicie sans panne (--verify-guichet, 2026-08-24).
 #   Windows — différé (refus nommé).
 #

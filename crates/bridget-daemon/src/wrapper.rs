@@ -4537,7 +4537,7 @@ mod reconnect_tests {
                 writer,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
-                    name: "cartae-agent".to_string()
+                    name: "lab-agent".to_string()
                 })
                 .unwrap()
             )
@@ -4548,19 +4548,19 @@ mod reconnect_tests {
         let (_, _, name) = connect_and_register_at(
             &socket,
             "codex",
-            Some("cartae-agent"),
-            "cartae",
+            Some("lab-agent"),
+            "lab-host",
             INTERACTIVE_AGENT_PROTOCOL,
             Some("ssh-unix"),
             PresenceMode::Tmux,
             Some("bridget:2.1"),
             "Linux",
-            "instance-cartae",
+            "instance-lab",
             Some("bridget"),
             false,
         )
         .unwrap();
-        assert_eq!(name, "cartae-agent");
+        assert_eq!(name, "lab-agent");
         server.join().unwrap();
         let _ = std::fs::remove_file(socket);
     }

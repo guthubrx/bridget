@@ -164,7 +164,7 @@
           },
         });
         const next = api.applyReconnectSnapshot(state, {
-          agents: [{ name: "rc1", state: "busy", host: "cartae", unread: 2 }],
+          agents: [{ name: "rc1", state: "busy", host: "lab-host", unread: 2 }],
         });
         assert.deepEqual(next.draft, state.draft);
         assert.deepEqual(next.viewport, state.viewport);
