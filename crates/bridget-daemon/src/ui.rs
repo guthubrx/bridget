@@ -1062,12 +1062,12 @@ fn read_snapshot(
     let facts = read_bridget_snapshot(&config.daemon_socket)?;
     let agents = compose_agent_rows(facts.agents, &facts.messages);
     let peer_exchanges = focus_agent.map(|agent| aggregate_peer_exchanges(agent, &facts.messages));
-    // Chemin productif du fil humain↔référent : mêmes messages ledger que
-    // peer_exchanges, mais SANS exclure UI_SENDER — le journal d'agent ne porte
-    // pas les sorties vers l'utilisateur (DETTE : asymétrie journal, voir
-    // human_referent_thread_messages). peer_exchange reste agent↔agent.
+    // Chemin productif du fil humain↔référent : lecture ledger filtrée sur le
+    // couple AVANT toute borne (pas les 200 globaux de peer_exchanges). Le
+    // journal d'agent ne porte pas les sorties vers l'utilisateur (DETTE :
+    // asymétrie journal). peer_exchange reste agent↔agent.
     let thread_messages =
-        focus_agent.map(|agent| human_referent_thread_messages(agent, &facts.messages));
+        focus_agent.map(|agent| load_human_referent_thread(&config.daemon_socket, agent));
     // Chemin productif missions page : filtre vivants — un mutant qui retire
     // cet appel dans read_snapshot doit tuer le témoin
     // `chemin_productif_snapshot_emprunte_retain_living_objectives`.
@@ -1195,10 +1195,42 @@ fn peer_direction<'a>(
     None
 }
 
+/// Plafond du fil humain↔agent : borne CE fil seulement. Le trafic entre agents
+/// n'entre pas dans le compte — filtrer avant de borner.
+const UI_THREAD_MESSAGE_LIMIT: usize = 500;
+
+/// Charge le fil humain↔agent depuis le ledger en filtrant le couple d'abord.
+/// C'est le chemin que `/v1/snapshot` et le watch empruntent ; un mutant qui
+/// reviendrait à `recent_messages` global puis filtre doit tuer
+/// `TEMOIN_fil_humain_survit_au_trafic_agent`.
+fn load_human_referent_thread(socket_path: &Path, focus_agent: &str) -> Vec<UiThreadMessageV1> {
+    let db_path = ledger_db_path_for_socket(socket_path);
+    let Ok(store) = crate::store::Store::open(&db_path) else {
+        return Vec::new();
+    };
+    let Ok(entries) =
+        store.conversation_messages(UI_SENDER, focus_agent, UI_THREAD_MESSAGE_LIMIT)
+    else {
+        return Vec::new();
+    };
+    let messages = entries
+        .into_iter()
+        .map(|entry| LedgerMessage {
+            id: entry.id,
+            ts: entry.ts,
+            sender: entry.sender,
+            target: entry.target,
+            body: entry.body,
+            delivery_status: None,
+        })
+        .collect::<Vec<_>>();
+    human_referent_thread_messages(focus_agent, &messages)
+}
+
 /// Messages ledger entre l'utilisateur (`humain`) et l'agent focal — dans l'ordre
-/// d'émission, avec corps. C'est le chemin que `/v1/snapshot` et le SSE empruntent
-/// pour le fil ; un mutant qui coupe cet appel dans `read_snapshot` doit tuer le
-/// témoin `chemin_productif_snapshot_emprunte_human_referent_thread_messages`.
+/// d'émission, avec corps. Projection pure sur un jeu déjà filtré (ou de test).
+/// Un mutant qui coupe `load_human_referent_thread` dans `read_snapshot` doit
+/// tuer `chemin_productif_snapshot_emprunte_human_referent_thread_messages`.
 ///
 /// # Dette — journal asymétrique (non corrigée ici)
 ///
@@ -1252,8 +1284,7 @@ fn push_live_thread_messages(
     focus_agent: &str,
     seen: &mut HashSet<String>,
 ) -> Result<(), UiError> {
-    let messages = read_ledger_messages(socket_path)?;
-    for message in human_referent_thread_messages(focus_agent, &messages) {
+    for message in load_human_referent_thread(socket_path, focus_agent) {
         if seen.insert(message.delivery_id.clone()) {
             write_sse(http, "thread_message", &message)?;
         }
@@ -1266,26 +1297,6 @@ fn seed_thread_message_ids(snapshot: &UiSnapshotV1, seen: &mut HashSet<String>) 
         for message in messages {
             seen.insert(message.delivery_id.clone());
         }
-    }
-}
-
-fn read_ledger_messages(socket_path: &Path) -> Result<Vec<LedgerMessage>, UiError> {
-    let stream = UnixStream::connect(socket_path)?;
-    let read_stream = stream.try_clone()?;
-    let mut writer = BufWriter::new(stream);
-    let mut reader = BufReader::new(read_stream);
-    send_daemon(
-        &mut writer,
-        &WrapperToDaemon::LedgerProjection {
-            scope: LedgerScope::Both,
-            limit: 200,
-        },
-    )?;
-    match read_daemon(&mut reader)? {
-        DaemonToWrapper::LedgerProjection { messages, .. } => Ok(messages),
-        response => Err(UiError::Protocol(format!(
-            "LedgerProjection attendu, reçu {response:?}"
-        ))),
     }
 }
 
@@ -2346,15 +2357,26 @@ mod tests {
     #[test]
     fn chemin_productif_snapshot_emprunte_human_referent_thread_messages() {
         // Garde anti-feuille : snapshot + SSE initial + chemin vivant du watch.
+        // Le snapshot doit passer par load_human_referent_thread (filtre-avant-borne),
+        // pas par les 200 messages globaux de peer_exchanges.
         let source = include_str!("ui.rs");
         let read_body = function_body(source, "fn read_snapshot(");
         assert!(
-            read_body.contains("human_referent_thread_messages("),
-            "read_snapshot doit appeler human_referent_thread_messages"
+            read_body.contains("load_human_referent_thread("),
+            "read_snapshot doit appeler load_human_referent_thread (filtre avant borne)"
         );
         assert!(
             read_body.contains("thread_messages"),
             "le snapshot doit exposer thread_messages au client"
+        );
+        let load_body = function_body(source, "fn load_human_referent_thread(");
+        assert!(
+            load_body.contains("conversation_messages("),
+            "load_human_referent_thread doit lire via conversation_messages"
+        );
+        assert!(
+            load_body.contains("human_referent_thread_messages("),
+            "load_human_referent_thread doit projeter via human_referent_thread_messages"
         );
         let sse_body = function_body(source, "fn write_snapshot_sse(");
         assert!(
@@ -2366,6 +2388,97 @@ mod tests {
             watch_body.contains("push_live_thread_messages("),
             "le watch doit appeler push_live_thread_messages (chemin vivant)"
         );
+        let live_body = function_body(source, "fn push_live_thread_messages(");
+        assert!(
+            live_body.contains("load_human_referent_thread("),
+            "le chemin vivant doit aussi filtrer avant de borner"
+        );
+    }
+
+    /// Témoin du défaut mesuré : des échanges humains noyés sous >200 messages
+    /// agent↔agent plus récents. Meurt si on borne le ledger global puis filtre.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_fil_humain_survit_au_trafic_agent() {
+        let dir = std::env::temp_dir().join(format!(
+            "bridget-fil-volume-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("bridget.db");
+        let socket_path = dir.join("bridget.sock");
+        // ledger_db_path_for_socket = socket.with_extension("db") → bridget.db
+        let store = crate::store::Store::open(&db_path).unwrap();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        // Quelques échanges humains, ANCIENS.
+        conn.execute_batch(
+            "INSERT INTO ledger (id, ts, sender, target, body, conversation_key) VALUES
+              ('h1', 10, 'humain', 'bridget', 'salut referent', 'humain|bridget'),
+              ('b1', 20, 'bridget', 'humain', 'bonjour utilisateur', 'bridget|humain'),
+              ('h2', 30, 'humain', 'bridget', 'tu as vu mon fil', 'humain|bridget');",
+        )
+        .unwrap();
+        // 300 messages agent↔agent PLUS RÉCENTS — saturent une borne globale 200.
+        let mut insert = conn
+            .prepare(
+                "INSERT INTO ledger (id, ts, sender, target, body, conversation_key)
+                 VALUES (?1, ?2, 'rc1', 'rc2', 'trafic', 'rc1|rc2')",
+            )
+            .unwrap();
+        for i in 0..300 {
+            insert
+                .execute(rusqlite::params![format!("pair-{i}"), 100 + i])
+                .unwrap();
+        }
+        drop(insert);
+        drop(conn);
+        drop(store);
+
+        // Mutant documenté : borne globale 200 puis filtre → fil vide.
+        let store = crate::store::Store::open(&db_path).unwrap();
+        let global = store.recent_messages(200).unwrap();
+        let mutant = human_referent_thread_messages(
+            "bridget",
+            &global
+                .iter()
+                .map(|entry| LedgerMessage {
+                    id: entry.id.clone(),
+                    ts: entry.ts,
+                    sender: entry.sender.clone(),
+                    target: entry.target.clone(),
+                    body: entry.body.clone(),
+                    delivery_status: None,
+                })
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            mutant.is_empty(),
+            "précondition du défaut : borne globale puis filtre vide le fil"
+        );
+
+        // Chemin productif : filtre-avant-borne.
+        let messages = load_human_referent_thread(&socket_path, "bridget");
+        assert_eq!(
+            messages.len(),
+            3,
+            "le fil doit survivre au trafic agent: {:?}",
+            messages
+                .iter()
+                .map(|m| m.delivery_id.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(messages[0].delivery_id, "h1");
+        assert_eq!(messages[0].role, UiThreadRoleV1::User);
+        assert_eq!(messages[1].delivery_id, "b1");
+        assert_eq!(messages[1].role, UiThreadRoleV1::Agent);
+        assert_eq!(messages[2].delivery_id, "h2");
+        assert_eq!(messages[2].text, "tu as vu mon fil");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Garde anti-feuille : ouverture sans from_seq = Seq des 10 derniers
