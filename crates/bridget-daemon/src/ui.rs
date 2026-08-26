@@ -1731,7 +1731,8 @@ mod tests {
     }
 
     /// Garde 2 — final protégé. Meurt si create+truncate hérite des droits ouverts.
-    /// Si le démarrage échoue, ce témoin s'abstient : c'est la garde 1 qui juge.
+    /// Si le démarrage échoue : INAPPLICABLE — on échoue explicitement (pas un vert
+    /// par abstention). La garde 1 juge la panne ; ici on refuse de se dire satisfait.
     #[cfg(unix)]
     #[test]
     fn temporaire_preexistant_livre_un_final_protege() {
@@ -1745,10 +1746,13 @@ mod tests {
 
         let created = match load_or_create_ui_endpoint(&path, DEFAULT_UI_PORT) {
             Ok(endpoint) => endpoint,
-            Err(_) => {
+            Err(error) => {
                 let _ = std::fs::remove_file(&tmp);
                 let _ = std::fs::remove_file(&path);
-                return;
+                panic!(
+                    "INAPPLICABLE — pas de final à juger ({error}) ; \
+                     ce n'est pas un succès du témoin mode (abstention = oracle vacant)"
+                );
             }
         };
         assert!(path.exists());
