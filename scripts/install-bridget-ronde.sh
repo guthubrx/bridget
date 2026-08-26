@@ -6,8 +6,11 @@ usage() {
   cat <<'EOF'
 Usage: install-bridget-ronde.sh --config CHEMIN_ABSOLU [options]
 
-Pose la commande versionnée et, sauf --skip-activate, une unité périodique.
+Active une release admise et, sauf --skip-activate, une unité périodique.
 Cette unité archive des rapports locaux ; elle n'envoie rien et ne décide rien.
+
+Lancer depuis le checkout principal, branche main propre, après
+`git fetch origin`, le jury et le merge.
 
 Options:
   --config CHEMIN_ABSOLU       configuration Maicie (obligatoire)
@@ -39,40 +42,58 @@ done
 [[ "$interval" =~ ^[0-9]+$ && "$interval" -ge 60 ]] || { echo "--interval-seconds doit être un entier >= 60" >&2; exit 2; }
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source_command="${root_dir}/scripts/bridget-ronde.py"
-installed_command="${HOME}/.local/bin/bridget-ronde"
-[[ -f "$source_command" ]] || { echo "commande source absente: $source_command" >&2; exit 1; }
+# La politique doit s'exécuter avant toute création de rapport ou d'unité :
+# un refus n'a ainsi aucun effet et ne peut jamais être annoncé « prêt ».
+# shellcheck source=scripts/lib/pilotage-release.sh
+source "${root_dir}/scripts/lib/pilotage-release.sh"
+pilotage_install_release "$root_dir" "scripts/bridget-ronde.py" "bridget-ronde" "$force"
+installed_command="$PILOTAGE_INSTALLED_COMMAND"
 
 write_unit() {
-  local path="$1" label="$2"
-  if [[ -e "$path" && "$force" != 1 ]]; then
-    echo "déjà en place: $label ($path)" >&2
+  local path="$1" label="$2" directory prepared expected_hash actual_mode actual_hash
+  directory="$(dirname "$path")"
+  mkdir -p "$directory"
+  prepared="$(mktemp "${directory}/.prepare-$(basename "$path").XXXXXX")"
+  cat >"$prepared"
+  chmod 0644 "$prepared"
+  expected_hash="$(pilotage_release_hash "$prepared")"
+
+  if [[ -e "$path" || -L "$path" ]]; then
+    actual_mode="$(pilotage_file_mode "$path" 2>/dev/null || true)"
+    if [[ -f "$path" && ! -L "$path" && "$actual_mode" == 644 ]] \
+      && cmp -s "$path" "$prepared"; then
+      rm "$prepared"
+      echo "déjà en place: $label ($path)" >&2
+      return 0
+    fi
+    if [[ "$force" != 1 ]]; then
+      rm "$prepared"
+      pilotage_refuse "configuration différente: $label ($path); utiliser --force pour remplacer"
+      return 1
+    fi
+  fi
+
+  if ! pilotage_replace_entry "$prepared" "$path"; then
+    rm -f "$prepared"
+    pilotage_refuse "écriture atomique impossible: $label ($path)"
     return 1
   fi
-  mkdir -p "$(dirname "$path")"
-  cat >"$path"
-  chmod 0644 "$path"
+  actual_mode="$(pilotage_file_mode "$path" 2>/dev/null || true)"
+  actual_hash="$(pilotage_release_hash "$path" 2>/dev/null || true)"
+  if [[ ! -f "$path" || -L "$path" || "$actual_mode" != 644 || "$actual_hash" != "$expected_hash" ]]; then
+    pilotage_refuse "attestation unité invalide: $label ($path)"
+    return 1
+  fi
   echo "posé: $label ($path)" >&2
 }
 
-mkdir -p "${HOME}/.local/bin" "$report_dir"
+mkdir -p "$report_dir"
 chmod 0700 "$report_dir"
-# Lien, pas copie : une copie ~/.local/bin échappe à la revue et au jury
-# (constat 2026-08-25 — mêmes outils de pilotage que bridget-idle).
-if [[ -L "$installed_command" && "$(readlink "$installed_command")" == "$source_command" ]]; then
-  echo "déjà en place: commande ($installed_command -> $source_command)" >&2
-elif [[ ! -e "$installed_command" || "$force" == 1 ]]; then
-  rm -f "$installed_command"
-  ln -sfn "$source_command" "$installed_command"
-  echo "posé: commande ($installed_command -> $source_command)" >&2
-else
-  echo "déjà en place: commande ($installed_command) (passer --force pour symlink versionné)" >&2
-fi
 
 case "$(uname -s)" in
   Darwin)
     unit="${HOME}/Library/LaunchAgents/com.bridget.ronde.plist"
-    write_unit "$unit" "unité launchd ronde" <<EOF || true
+    write_unit "$unit" "unité launchd ronde" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -100,7 +121,7 @@ EOF
   Linux)
     service="${HOME}/.config/systemd/user/bridget-ronde.service"
     timer="${HOME}/.config/systemd/user/bridget-ronde.timer"
-    write_unit "$service" "unité systemd ronde" <<EOF || true
+    write_unit "$service" "unité systemd ronde" <<EOF
 [Unit]
 Description=Bridget ronde (lecture seule)
 
@@ -110,7 +131,7 @@ ExecStart=/usr/bin/env python3 ${installed_command} --config ${config} --report-
 Environment=HOME=${HOME}
 Environment=PATH=${HOME}/.local/bin:/usr/bin:/bin
 EOF
-    write_unit "$timer" "timer systemd ronde" <<EOF || true
+    write_unit "$timer" "timer systemd ronde" <<EOF
 [Unit]
 Description=Timer Bridget ronde (lecture seule)
 
