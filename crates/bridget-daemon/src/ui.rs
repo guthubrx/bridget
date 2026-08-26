@@ -10,7 +10,9 @@ use bridget_transport::protocol::{
     LedgerMessage, LedgerScope, PresenceMode, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
-use maicie::ui_projection::{UiMissionProjectionV1, read_ui_mission_projection_v1};
+use maicie::ui_projection::{
+    UiMissionProjectionV1, read_ui_mission_projection_v1, retain_living_objectives,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -876,8 +878,10 @@ fn read_snapshot(
     // human_referent_thread_messages). peer_exchange reste agent↔agent.
     let thread_messages =
         focus_agent.map(|agent| human_referent_thread_messages(agent, &facts.messages));
-    let missions = read_ui_mission_projection_v1(&config.maicie_config)
-        .map_err(|error| UiError::Configuration(error.to_string()))?;
+    let missions = retain_living_objectives(
+        read_ui_mission_projection_v1(&config.maicie_config)
+            .map_err(|error| UiError::Configuration(error.to_string()))?,
+    );
     let recovery_losses = read_recovery_losses(&config.daemon_socket);
     Ok(UiSnapshotV1 {
         version: UI_VERSION,
