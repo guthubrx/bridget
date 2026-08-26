@@ -225,6 +225,14 @@ impl CodexAppServerTransport {
         let alive = Arc::new(AtomicBool::new(true));
         let next_id = Arc::new(AtomicU64::new(1));
         let journal = Arc::new(Mutex::new(None));
+        let queue = Arc::new((
+            Mutex::new(QueueState {
+                messages: VecDeque::new(),
+                active: None,
+                closed: false,
+            }),
+            Condvar::new(),
+        ));
         let pending_request = Arc::new(Mutex::new(None));
         let reader_handle = spawn_reader(
             stdout,
@@ -324,14 +332,6 @@ impl CodexAppServerTransport {
             }
         };
         let child = Arc::new(Mutex::new(child));
-        let queue = Arc::new((
-            Mutex::new(QueueState {
-                messages: VecDeque::new(),
-                active: None,
-                closed: false,
-            }),
-            Condvar::new(),
-        ));
         let busy = Arc::new(AtomicBool::new(false));
         let worker_handle = spawn_worker(Worker {
             queue: queue.clone(),
