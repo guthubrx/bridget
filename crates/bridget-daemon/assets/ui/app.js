@@ -678,8 +678,45 @@
         };
       }
 
-      // L9 tampon — sonde 4 : fantôme d'un agent ne doit pas plafonner un autre.
-      // Meurt si open() omet buffers.clear() (pollution inter-agents réelle).
+      // L9 tampon — deux propriétés distinctes, deux témoins (pas deux noms pour une garde).
+      // État initial déclaré : curseur BAS. Meurt si open() omet buffers.clear().
+
+      // Face idle même agent : rattrapage ultérieur reste coincé sur le fantôme.
+      test("vidage_tampon_connexion_empeche_gel_idle_meme_agent", () => {
+        const FakeES = makeFakeEventSource();
+        const resume = new Map([["agent", 0]]);
+        const buffers = new Map();
+        const runtime = api.createWatchRuntime({
+          token: "tok",
+          resumeSeq: resume,
+          buffers,
+          attestedGaps: new Set(),
+          seenRecords: new Set(),
+          EventSource: FakeES,
+          setTimeout: () => 1,
+          clearTimeout: () => {},
+        });
+        runtime.open("agent");
+        FakeES.instances[0].emitJournal(fragmentParts(50, "FANTOME").nonFinal);
+        FakeES.instances[0].emitJournal({
+          event: { type: "SnapshotCaughtUp", through_seq: 50 },
+        });
+        assert.equal(runtime.getResume("agent"), 50);
+        assert.ok(buffers.size > 0);
+
+        runtime.open("agent");
+        assert.equal(buffers.size, 0, "reconnexion doit vider le fantôme");
+        FakeES.instances[1].emitJournal({
+          event: { type: "SnapshotCaughtUp", through_seq: 800 },
+        });
+        assert.equal(
+          runtime.getResume("agent"),
+          801,
+          "sans fantôme, CaughtUp 800 porte le curseur (bas) à 801",
+        );
+      });
+
+      // Face inter-agents : fantôme d'un agent ne doit pas plafonner un autre.
       test("vidage_tampon_connexion_empeche_fantome_inter_agents", () => {
         const FakeES = makeFakeEventSource();
         const resume = new Map([["agentB", 0]]);
