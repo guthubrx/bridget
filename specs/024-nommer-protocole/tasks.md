@@ -1,6 +1,6 @@
 # Tasks 024 — Nommer le protocole réel sans perdre le canal
 
-**Base de composition** : `2330dfde7f9de8f663f84397b554f91d834096a2`.
+**Base de composition finale** : `2c5271f680cbd282660f82f5783f74a5338b0c5b`.
 
 - [x] **T2401 [FR-2401/FR-2409] Inventorier les valeurs et leurs écrivains.**
   Mesurer la flotte, lire `transport_name`, le Register, la projection et
@@ -42,3 +42,8 @@
 - [x] **T2410 [FR-2411] Fermer la divergence et les mutants.** Deux sources
   discordantes donnent l'inconnu ; les mutants fédéré, défaut `unix`, repli
   historique et priorité arbitraire font mourir leurs oracles nommés.
+
+- [x] **T2411 [FR-2412] Distinguer omission et inconnu à la reconnexion.**
+  Modéliser les trois états sans changer leur JSON, conserver le canal sous
+  omission historique, l'effacer sous `null` moderne et tuer le mutant qui
+  confond les deux sur l'assertion `AgentInfo`.

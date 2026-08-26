@@ -317,6 +317,11 @@ environment and this file advertise different channels, Bridget publishes an
 unknown channel: neither potentially stale fact wins merely because of read
 order.
 
+On the wire, a recent producer explicitly reports an unknown channel as
+`channel: null`. A historical frame that omits the key entirely remains
+distinct: during a rolling reconnect it preserves the last known attestation
+instead of clearing it.
+
 Files, all under `~/.cache/bridget/`:
 
 | Path | Contents |

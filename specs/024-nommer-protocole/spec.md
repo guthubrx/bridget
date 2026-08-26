@@ -7,8 +7,8 @@ Spec: 024-nommer-protocole
 Titre: Nommer le protocole réel sans perdre le canal
 Statut: Complete
 Priorité: P1
-Tâches: 10/10 (100%)
-Tests: 16/16 (100%)
+Tâches: 11/11 (100%)
+Tests: 20/20 (100%)
 
 Résumé:
 - Contexte: La projection `TRANSPORT` mélange protocole d'agent et canal réseau.
@@ -83,6 +83,7 @@ conserve l'indication de fédération déjà annoncée.
 1. **Given** une ancienne trame tmux distante, **When** elle est enregistrée, **Then** le protocole devient `tmux` et le canal reste `ssh-unix`.
 2. **Given** un ancien client qui lit `AgentInfo`, **When** le daemon ajoute `channel`, **Then** les champs historiques restent inchangés.
 3. **Given** une présence UI locale, fédérée ou sans attestation, **When** elle s'enregistre, **Then** son canal vaut respectivement `unix`, `ssh-unix` ou reste absent dans la trame et dans `AgentInfo`.
+4. **Given** un canal déjà attesté, **When** un client moderne annonce explicitement l'inconnu, **Then** le canal est effacé ; une trame historique qui omet réellement le champ conserve en revanche la dernière attestation.
 
 ## Requirements
 
@@ -99,6 +100,7 @@ conserve l'indication de fédération déjà annoncée.
 - **FR-2409**: Le protocole NE DOIT PAS être déduit du seul `agent_type`.
 - **FR-2410**: Tout `Register` productif DOIT publier un canal attesté ou aucun canal ; le type local de la socket NE DOIT PAS devenir une preuve réseau.
 - **FR-2411**: Deux sources d'attestation divergentes DOIVENT produire un canal inconnu, jamais une priorité accidentelle.
+- **FR-2412**: Le fil DOIT distinguer une omission historique d'un inconnu explicitement mesuré ; le premier peut conserver une attestation antérieure, le second DOIT l'effacer.
 
 ### Non-Functional Requirements
 

@@ -211,7 +211,7 @@ fn send_ledger_both(
         name: Some(format!("cli-reprise-{}", std::process::id())),
         host: None,
         transport: None,
-        channel: None,
+        channel: bridget_transport::ChannelReport::Unknown,
         mode: Some(PresenceMode::Cli),
         location: None,
         os: None,

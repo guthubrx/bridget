@@ -46,6 +46,68 @@ impl PresenceMode {
     }
 }
 
+/// Déclaration filaire du canal de connexion.
+///
+/// Ces trois états ne sont pas interchangeables : un ancien producteur peut
+/// omettre le champ sans invalider le dernier fait connu, tandis qu'un
+/// producteur récent doit pouvoir déclarer explicitement que le canal est
+/// inconnu. Sur le fil, ils deviennent respectivement une clé absente,
+/// `channel: null` et `channel: "…"`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ChannelReport {
+    #[default]
+    Omitted,
+    Unknown,
+    Known(String),
+}
+
+impl ChannelReport {
+    pub const fn unknown() -> Self {
+        Self::Unknown
+    }
+
+    pub fn reported(value: Option<String>) -> Self {
+        match value {
+            Some(value) => Self::Known(value),
+            None => Self::Unknown,
+        }
+    }
+
+    pub const fn is_omitted(&self) -> bool {
+        matches!(self, Self::Omitted)
+    }
+
+    pub fn as_deref(&self) -> Option<&str> {
+        match self {
+            Self::Known(value) => Some(value),
+            Self::Omitted | Self::Unknown => None,
+        }
+    }
+}
+
+impl From<Option<String>> for ChannelReport {
+    fn from(value: Option<String>) -> Self {
+        Self::reported(value)
+    }
+}
+
+fn serialize_channel_report<S>(report: &ChannelReport, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match report {
+        ChannelReport::Known(value) => serializer.serialize_str(value),
+        ChannelReport::Unknown | ChannelReport::Omitted => serializer.serialize_none(),
+    }
+}
+
+fn deserialize_channel_report<'de, D>(deserializer: D) -> Result<ChannelReport, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(ChannelReport::reported)
+}
+
 /// Version actuellement publiée du contrat idempotent local.
 pub const CLIENT_CONTRACT_VERSION: u16 = 1;
 /// Version du contrat de service du guichet Maicie.
@@ -788,9 +850,15 @@ pub enum WrapperToDaemon {
         #[serde(default)]
         transport: Option<String>,
         /// Canal de connexion au daemon (`unix`, `ssh-unix`, ...), distinct
-        /// du protocole d'agent porté par la présence.
-        #[serde(default)]
-        channel: Option<String>,
+        /// du protocole d'agent porté par la présence. Une omission historique
+        /// conserve le dernier fait connu ; `null` l'efface explicitement.
+        #[serde(
+            default,
+            skip_serializing_if = "ChannelReport::is_omitted",
+            serialize_with = "serialize_channel_report",
+            deserialize_with = "deserialize_channel_report"
+        )]
+        channel: ChannelReport,
         /// Mode d'attelage réellement emprunté. Son absence représente un
         /// enregistrement historique, jamais un mode à deviner.
         #[serde(default)]
@@ -1798,7 +1866,7 @@ mod tests {
             name: None,
             host: Some("test-host".to_string()),
             transport: Some("unix".to_string()),
-            channel: Some("unix".to_string()),
+            channel: ChannelReport::Known("unix".to_string()),
             mode: Some(PresenceMode::Acp),
             location: None,
             os: Some("Linux".to_string()),
@@ -1850,12 +1918,50 @@ mod tests {
         assert!(matches!(
             decoded,
             WrapperToDaemon::Register {
-                channel: None,
+                channel: ChannelReport::Omitted,
                 mode: None,
                 location: None,
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn spec_024_register_distingue_omission_inconnu_et_attestation() {
+        let omitted_json = r#"{"type":"Register","agent_type":"ui","name":"humain"}"#;
+        let omitted: WrapperToDaemon = decode(omitted_json).unwrap();
+        assert!(matches!(
+            &omitted,
+            WrapperToDaemon::Register {
+                channel: ChannelReport::Omitted,
+                ..
+            }
+        ));
+        assert!(!encode(&omitted).unwrap().contains("\"channel\""));
+
+        let unknown_json =
+            r#"{"type":"Register","agent_type":"ui","name":"humain","channel":null}"#;
+        let unknown: WrapperToDaemon = decode(unknown_json).unwrap();
+        assert!(matches!(
+            &unknown,
+            WrapperToDaemon::Register {
+                channel: ChannelReport::Unknown,
+                ..
+            }
+        ));
+        assert!(encode(&unknown).unwrap().contains("\"channel\":null"));
+
+        let known_json =
+            r#"{"type":"Register","agent_type":"ui","name":"humain","channel":"ssh-unix"}"#;
+        let known: WrapperToDaemon = decode(known_json).unwrap();
+        assert!(matches!(
+            &known,
+            WrapperToDaemon::Register {
+                channel: ChannelReport::Known(value),
+                ..
+            } if value == "ssh-unix"
+        ));
+        assert!(encode(&known).unwrap().contains("\"channel\":\"ssh-unix\""));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use bridget_core::BridgetMessage;
 use bridget_daemon::ui::{UiRelay, UiRelayConfig};
 use bridget_transport::protocol::{LedgerScope, PresenceMode, decode, encode};
-use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
+use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::os::unix::net::UnixStream;
@@ -123,6 +123,10 @@ struct LiveAgent {
 
 impl LiveAgent {
     fn connect(socket: &Path, name: &str) -> Self {
+        Self::connect_with_channel_report(socket, name, ChannelReport::Unknown)
+    }
+
+    fn connect_with_channel_report(socket: &Path, name: &str, channel: ChannelReport) -> Self {
         let stream = UnixStream::connect(socket).unwrap();
         let read_stream = stream.try_clone().unwrap();
         let mut agent = Self {
@@ -133,8 +137,8 @@ impl LiveAgent {
             agent_type: "ui-test".to_string(),
             name: Some(name.to_string()),
             host: Some("test".to_string()),
-            transport: Some("unix".to_string()),
-            channel: None,
+            transport: Some("cli".to_string()),
+            channel,
             mode: Some(PresenceMode::Cli),
             location: None,
             os: Some("test".to_string()),
@@ -146,6 +150,26 @@ impl LiveAgent {
         assert!(matches!(agent.read(), DaemonToWrapper::Registered { .. }));
         agent.send(&WrapperToDaemon::JournalReady);
         agent
+    }
+
+    fn unregister_with_barrier(&mut self) {
+        self.send(&WrapperToDaemon::Unregister);
+        self.send(&WrapperToDaemon::ListAgents);
+        assert!(matches!(self.read(), DaemonToWrapper::AgentList { .. }));
+    }
+
+    fn listed_channel(&mut self, name: &str) -> Option<String> {
+        self.send(&WrapperToDaemon::ListAgents);
+        let agents = match self.read() {
+            DaemonToWrapper::AgentList { agents } => agents,
+            response => panic!("AgentList attendu, reçu {response:?}"),
+        };
+        agents
+            .iter()
+            .find(|agent| agent.name == name)
+            .unwrap_or_else(|| panic!("présence {name} absente"))
+            .channel
+            .clone()
     }
 
     fn send(&mut self, message: &WrapperToDaemon) {
@@ -217,6 +241,15 @@ fn observe_ui_presence_channel(
     environment_channel: Option<&str>,
     federation_config: Option<&str>,
 ) -> Option<String> {
+    observe_ui_presence_channel_after(label, environment_channel, federation_config, None)
+}
+
+fn observe_ui_presence_channel_after(
+    label: &str,
+    environment_channel: Option<&str>,
+    federation_config: Option<&str>,
+    previous_channel: Option<&str>,
+) -> Option<String> {
     let root = root(label);
     if let Some(config) = federation_config {
         let config_directory = root.join(".config/bridget");
@@ -225,6 +258,14 @@ fn observe_ui_presence_channel(
     }
     let daemon = DaemonProcess::start(&root);
     let socket = root.join(".cache/bridget/bridget.sock");
+    if let Some(previous_channel) = previous_channel {
+        let mut previous = LiveAgent::connect_with_channel_report(
+            &socket,
+            "humain",
+            ChannelReport::Known(previous_channel.to_string()),
+        );
+        previous.unregister_with_barrier();
+    }
     let mut recipient = LiveAgent::connect(&socket, "destinataire-canal-ui");
     let ui = UiProcess::start(&root, environment_channel);
     let response = read_response(request_http(
@@ -251,6 +292,27 @@ fn observe_ui_presence_channel(
     let channel = human.channel.clone();
     drop(ui);
     drop(recipient);
+    drop(daemon);
+    std::fs::remove_dir_all(root).unwrap();
+    channel
+}
+
+fn observe_reconnection_channel(label: &str, report: ChannelReport) -> Option<String> {
+    let root = root(label);
+    let daemon = DaemonProcess::start(&root);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let mut initial = LiveAgent::connect_with_channel_report(
+        &socket,
+        "humain-transition",
+        ChannelReport::Known("unix".to_string()),
+    );
+    initial.unregister_with_barrier();
+    drop(initial);
+
+    let mut reconnected =
+        LiveAgent::connect_with_channel_report(&socket, "humain-transition", report);
+    let channel = reconnected.listed_channel("humain-transition");
+    drop(reconnected);
     drop(daemon);
     std::fs::remove_dir_all(root).unwrap();
     channel
@@ -328,6 +390,22 @@ fn spec_024_ui_locale_attestee_projette_unix_dans_agent_info() {
 }
 
 #[test]
+fn spec_024_reconnexion_inconnue_explicite_efface_le_canal_precedent() {
+    assert_eq!(
+        observe_reconnection_channel("transition-inconnue", ChannelReport::Unknown),
+        None
+    );
+}
+
+#[test]
+fn spec_024_reconnexion_historique_omise_conserve_le_canal_precedent() {
+    assert_eq!(
+        observe_reconnection_channel("transition-omise", ChannelReport::Omitted).as_deref(),
+        Some("unix")
+    );
+}
+
+#[test]
 fn spec_024_ui_federee_projette_ssh_unix_dans_agent_info() {
     assert_eq!(
         observe_ui_presence_channel(
@@ -351,10 +429,11 @@ fn spec_024_ui_sans_attestation_reste_inconnue_dans_agent_info() {
 #[test]
 fn spec_024_ui_aux_attestations_divergentes_reste_inconnue_dans_agent_info() {
     assert_eq!(
-        observe_ui_presence_channel(
+        observe_ui_presence_channel_after(
             "canal-divergent",
             Some("unix"),
-            Some("channel=ssh-unix\ntransport=ssh-unix\n")
+            Some("channel=ssh-unix\ntransport=ssh-unix\n"),
+            Some("unix")
         ),
         None
     );

@@ -8,7 +8,7 @@ use bridget_transport::protocol::{
     PresenceMode, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal, SpawnRefusal,
     StopOutcome, decode, encode,
 };
-use bridget_transport::{DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
+use bridget_transport::{ChannelReport, DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -3235,7 +3235,7 @@ fn handle_register_with_channel(
     name: Option<String>,
     host: Option<String>,
     transport: Option<String>,
-    channel: Option<String>,
+    channel: ChannelReport,
     mode: Option<PresenceMode>,
     location: Option<String>,
     os: Option<String>,
@@ -3408,21 +3408,23 @@ fn handle_register_with_channel(
                     .or(os)
                     .unwrap_or_else(|| "inconnu".to_string());
                 let reported_transport = non_empty_registration_value(transport);
-                let reported_channel = non_empty_registration_value(channel);
-                let channel = reported_channel
-                    .or_else(|| match mode {
+                let channel = match channel {
+                    ChannelReport::Known(value) => non_empty_registration_value(Some(value)),
+                    ChannelReport::Unknown => None,
+                    ChannelReport::Omitted => match mode {
                         Some(PresenceMode::Tmux) => {
                             reported_transport.clone().filter(|value| value != "tmux")
                         }
                         _ => reported_transport
                             .clone()
                             .filter(|value| legacy_non_protocol_transport(value)),
-                    })
+                    }
                     .or_else(|| {
                         previous
                             .as_ref()
                             .and_then(|presence| presence.channel.clone())
-                    });
+                    }),
+                };
                 let transport = managed_transport.unwrap_or_else(|| match mode {
                     Some(PresenceMode::Tmux) => "tmux".to_string(),
                     Some(PresenceMode::Acp) => reported_transport
@@ -3561,7 +3563,7 @@ fn handle_register(
         name,
         host,
         transport,
-        None,
+        ChannelReport::Omitted,
         mode,
         location,
         os,
@@ -6508,7 +6510,7 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
         name: Some(format!("status-{}", std::process::id())),
         host: None,
         transport: None,
-        channel: None,
+        channel: ChannelReport::Unknown,
         mode: Some(PresenceMode::Cli),
         location: None,
         os: None,
@@ -6901,7 +6903,7 @@ mod presence_tests {
             Some("cartae-agent".to_string()),
             Some("cartae".to_string()),
             Some("ssh-unix".to_string()),
-            None,
+            ChannelReport::Omitted,
             Some(PresenceMode::Tmux),
             Some("bridget:2.1".to_string()),
             Some("Linux".to_string()),
@@ -6935,7 +6937,7 @@ mod presence_tests {
             Some("natif-distant".to_string()),
             Some("cartae".to_string()),
             Some("codex_app_server".to_string()),
-            Some("ssh-unix".to_string()),
+            Some("ssh-unix".to_string()).into(),
             Some(PresenceMode::Cli),
             None,
             Some("Linux".to_string()),
@@ -7560,7 +7562,7 @@ mod presence_tests {
                     name: Some("alpha".to_string()),
                     host: Some("local".to_string()),
                     transport: Some("tmux".to_string()),
-                    channel: Some("unix".to_string()),
+                    channel: Some("unix".to_string()).into(),
                     mode: Some(PresenceMode::Tmux),
                     location: Some("fixture:0.1".to_string()),
                     os: Some("test".to_string()),
@@ -7581,7 +7583,7 @@ mod presence_tests {
                     name: Some("alpha".to_string()),
                     host: Some("local".to_string()),
                     transport: Some("acp".to_string()),
-                    channel: Some("unix".to_string()),
+                    channel: Some("unix".to_string()).into(),
                     mode: Some(PresenceMode::Acp),
                     location: None,
                     os: Some("test".to_string()),
@@ -8218,7 +8220,7 @@ mod presence_tests {
                     name: Some("maicie".to_string()),
                     host: None,
                     transport: None,
-                    channel: None,
+                    channel: None.into(),
                     mode: None,
                     location: None,
                     os: None,
@@ -8756,7 +8758,7 @@ mod presence_tests {
                     name: Some("historique-012".to_string()),
                     host: None,
                     transport: None,
-                    channel: None,
+                    channel: None.into(),
                     mode: None,
                     location: None,
                     os: None,

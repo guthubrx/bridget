@@ -481,6 +481,11 @@ processus et ce fichier annoncent deux canaux différents, Bridget publie un
 canal inconnu : aucun des deux faits potentiellement périmés ne gagne par
 simple ordre de lecture.
 
+Sur le fil, un producteur récent annonce explicitement l'inconnu avec
+`channel: null`. Une trame historique qui omet entièrement la clé reste
+distincte : lors d'une reconnexion progressive, elle conserve la dernière
+attestation connue au lieu de l'effacer.
+
 Fichiers, tous sous `~/.cache/bridget/` :
 
 | Chemin | Contenu |

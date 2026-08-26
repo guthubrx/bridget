@@ -2223,7 +2223,7 @@ fn list_attachable_agents(socket_path: &Path) -> Vec<String> {
         name: Some(probe_name),
         host: None,
         transport: None,
-        channel: None,
+        channel: bridget_transport::ChannelReport::Unknown,
         mode: Some(PresenceMode::Cli),
         location: None,
         os: None,

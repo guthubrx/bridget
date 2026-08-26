@@ -19,8 +19,9 @@ ACP est bien le protocole exact exposé par `cursor-agent acp`.
 
 ## Modèle et compatibilité
 
-- `WrapperToDaemon::Register.channel` et `AgentInfo.channel` sont additifs et
-  optionnels.
+- La clé JSON `WrapperToDaemon::Register.channel` et `AgentInfo.channel` sont
+  additives et optionnelles. Le type interne `ChannelReport` distingue clé
+  omise, `null` explicite et chaîne attestée.
 - Une trame historique `mode=tmux, transport=ssh-unix` devient
   `transport=tmux, channel=ssh-unix` dans la présence.
 - La définition figée reste l'autorité pour tout agent géré.
@@ -173,3 +174,67 @@ ignoré est `sc001_append_vers_rendu_attach_reel_reste_sous_les_seuils_locaux`,
 par attribut source explicite de mesure locale ; le cas SC-005 litigieux a bien
 été exécuté et a passé cinq fois. Ce N ne suffit pas à qualifier le banc de
 stable.
+
+## Amendement de transition sur main 2c5271f
+
+La publication correcte ne suffisait pas lors d'une reconnexion. Une présence
+connue sous `channel=unix`, puis réinscrite avec `channel=null`, récupérait
+encore `previous.channel`. La cause était le modèle `Option<String>` : il
+confondait la clé absente d'une ancienne trame avec l'inconnu explicitement
+mesuré par un client récent.
+
+`ChannelReport` porte désormais trois états sans modifier leur représentation
+JSON :
+
+- `Omitted` omet la clé et conserve le fait précédent ;
+- `Unknown` écrit `channel:null` et efface le fait précédent ;
+- `Known(value)` écrit la chaîne et remplace le fait précédent.
+
+Tous les constructeurs productifs modernes déclarent explicitement
+`Unknown` ou `Known`. Le repli depuis l'ancien champ réseau `transport` ne
+s'applique plus qu'à `Omitted`.
+
+Les oracles exécutés sur le vrai daemon attestent :
+
+1. `unix` puis `null` donne un `AgentInfo` sans canal ;
+2. `unix` puis une clé réellement omise conserve `unix` ;
+3. un vrai sous-processus `bridget ui` recevant des attestations environnement
+   et fichier divergentes efface le canal `unix` antérieur ;
+4. le codec distingue et reproduit omission, `null` et chaîne.
+
+Le mutant qui traite de nouveau `Unknown` comme `Omitted` meurt dans
+`spec_024_reconnexion_inconnue_explicite_efface_le_canal_precedent`, sur
+l'assertion finale `AgentInfo` avec `Some("unix")` observé contre `None`
+attendu. La mise en place reste verte ; le fichier productif est restauré au
+même SHA-256 avant et après le mutant.
+
+Dette explicitement laissée hors périmètre : la présence UI est projetée avec
+`AgentInfo.transport=cli`. Cette approximation est préexistante et visible
+dans `who` et `agents --json`; la modifier ici changerait le contrat public.
+Le chemin de normalisation concerné est `crates/bridget-daemon/src/daemon.rs`
+autour de la branche `PresenceMode::Cli`.
+
+Fermeture finale sur la même closure
+`bridget-transport + maicie + bridget-daemon`, avec targets séparés et
+`--no-run` vert des deux côtés avant inventaire :
+
+- base `2c5271f` : 963 tests listés,
+  **942 passés / 3 échoués / 18 ignorés** ;
+- tête amendée : 982 tests listés,
+  **961 passés / 3 échoués / 18 ignorés** ;
+- `ui_relay_test` exact : **17 passés / 0 échoué / 0 ignoré** ;
+- famille Rust `spec_024_*` : **19 passés / 0 échoué**, plus le test shell de
+  fédération vert, soit 20 oracles G11.
+
+Les deux côtés rendent uniquement les trois références Linux : `attach`
+raw-mode (`tcgetattr` EIO), `attach` reconnexion (course `BrokenPipe`) et
+`lifecycle::matrice_sc003` (fixture `known_types`). Le rouge supplémentaire
+`wrapper_interactif_avec_journal_actif_est_attachable`, vu sous charge par un
+relecteur sur la base puis vert isolément des deux côtés, ne réapparaît pas
+dans cette exécution séquentielle et reste imputé hors lot.
+
+Restent non mesurés après cet amendement : un vrai tunnel SSH inter-hôtes,
+un croisement effectif ancien/nouveau processus, macOS et le comportement
+d'un ancien daemon recevant `channel:null` (il le traite encore comme
+l'ancienne absence). Aucun redémarrage ni migration de la flotte vivante n'a
+été effectué.

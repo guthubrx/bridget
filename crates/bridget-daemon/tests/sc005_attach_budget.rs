@@ -224,7 +224,7 @@ fn connect_sender(socket: &Path) -> (BufWriter<UnixStream>, BufReader<UnixStream
             name: Some("bench-sender".to_string()),
             host: Some("test-host".to_string()),
             transport: Some("unix".to_string()),
-            channel: None,
+            channel: None.into(),
             mode: Some(bridget_transport::protocol::PresenceMode::Cli),
             location: None,
             os: Some("test".to_string()),

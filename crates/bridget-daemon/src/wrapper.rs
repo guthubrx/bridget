@@ -8,7 +8,7 @@ use bridget_transport::journal::{
 };
 use bridget_transport::protocol::{PresenceMode, decode, encode};
 use bridget_transport::{
-    AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ClaudeStreamJsonOptions,
+    AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ChannelReport, ClaudeStreamJsonOptions,
     ClaudeStreamJsonTransport, CodexAppServerOptions, CodexAppServerTransport, DaemonToWrapper,
     MAX_ATTACH_FRAGMENT_BYTES, MAX_ATTACH_SERIALIZED_FRAME_BYTES, ManagedEvent, ManagedEventKind,
     ManagedSession, ManagedSessionDescriptor, ManagedTerminal, TmuxTransport, Transport,
@@ -1296,7 +1296,7 @@ fn connect_and_register_at(
         name: name.map(str::to_owned),
         host: Some(host.to_string()),
         transport: Some(protocol.to_string()),
-        channel: channel.map(str::to_owned),
+        channel: ChannelReport::reported(channel.map(str::to_owned)),
         mode: Some(mode),
         location: location.map(str::to_owned),
         os: Some(os.to_string()),
@@ -4527,7 +4527,7 @@ mod reconnect_tests {
                 decode(line.trim()).unwrap(),
                 WrapperToDaemon::Register {
                     transport: Some(protocol),
-                    channel: Some(channel),
+                    channel: ChannelReport::Known(channel),
                     mode: Some(PresenceMode::Tmux),
                     ..
                 } if protocol == "tmux" && channel == "ssh-unix"

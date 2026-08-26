@@ -20,8 +20,8 @@ pub use managed_session::{
     ManagedSessionDescriptor, ManagedTerminal,
 };
 pub use protocol::{
-    AdapterCapabilities, AttachRefusal, AttachWindow, ConnectionRole, DaemonToWrapper,
-    LedgerDeliveryStatus, LedgerMessage, MAX_ATTACH_FRAGMENT_BYTES,
+    AdapterCapabilities, AttachRefusal, AttachWindow, ChannelReport, ConnectionRole,
+    DaemonToWrapper, LedgerDeliveryStatus, LedgerMessage, MAX_ATTACH_FRAGMENT_BYTES,
     MAX_ATTACH_SERIALIZED_FRAME_BYTES, ModelCapabilities, ResolvedAgentDefinition,
     ResolvedMcpDefinition, SpawnRefusal, StopOutcome, WrapperToDaemon,
 };

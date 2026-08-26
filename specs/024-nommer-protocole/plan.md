@@ -21,11 +21,13 @@ migration effective hors tmux.
 
 ## D-2403 — Compatibilité filaire progressive
 
-`WrapperToDaemon::Register` reçoit un champ optionnel `channel`. L'ancien
-champ `transport` reste accepté. Pour une ancienne trame tmux, sa valeur est
-reclassée comme canal et le protocole devient `tmux`. Pour un géré, la
-définition reste prioritaire. `AgentInfoWire.channel` a une valeur par défaut
-absente afin qu'un client récent lise un ancien daemon.
+`WrapperToDaemon::Register` reçoit un champ filaire optionnel `channel`.
+`ChannelReport` conserve trois états : clé omise par un producteur historique,
+`null` explicitement mesuré par un producteur récent, et chaîne attestée.
+L'ancien champ `transport` reste accepté. Pour une ancienne trame tmux, sa
+valeur est reclassée comme canal et le protocole devient `tmux`. Pour un géré,
+la définition reste prioritaire. `AgentInfoWire.channel` a une valeur par
+défaut absente afin qu'un client récent lise un ancien daemon.
 
 ## D-2404 — Corriger l'écrivain, garder les alias
 
@@ -52,6 +54,16 @@ continue de voir `ssh-unix`.
 
 Les tests couvrent aussi le rendu des deux colonnes et la préférence de la
 nouvelle clé de configuration sur l'alias historique.
+
+## D-2406 — Une transition, trois faits
+
+- canal connu : remplace la valeur précédente ;
+- inconnu explicite (`channel: null`) : efface la valeur précédente ;
+- omission historique : conserve la valeur précédente et autorise encore la
+  requalification de l'ancien champ `transport`.
+
+Tous les producteurs modernes écrivent une valeur ou `null`. Seules les
+trames réellement anciennes emploient l'omission.
 
 ## Fichiers pressentis
 

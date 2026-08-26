@@ -9,7 +9,7 @@ use bridget_transport::protocol::{
     AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
     LedgerMessage, LedgerScope, PresenceMode, decode, encode,
 };
-use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
+use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use maicie::ui_projection::{UiMissionProjectionV1, read_ui_mission_projection_v1};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -134,7 +134,7 @@ fn open_human_presence(
                 name: Some(UI_SENDER.to_string()),
                 host: Some("localhost".to_string()),
                 transport: None,
-                channel: attested_channel.map(str::to_owned),
+                channel: ChannelReport::reported(attested_channel.map(str::to_owned)),
                 mode: Some(PresenceMode::Cli),
                 location: None,
                 os: Some(std::env::consts::OS.to_string()),
@@ -1239,7 +1239,7 @@ mod tests {
 
     fn capture_ui_registration_channel(
         attested_channel: Option<&str>,
-    ) -> (Option<String>, Option<String>) {
+    ) -> (Option<String>, ChannelReport) {
         let socket_path = std::env::temp_dir().join(format!(
             "bridget-ui-register-{}.sock",
             uuid::Uuid::new_v4().simple()
@@ -1290,7 +1290,7 @@ mod tests {
     fn spec_024_presence_ui_locale_annonce_unix_dans_la_trame_reelle() {
         assert_eq!(
             capture_ui_registration_channel(Some("unix")),
-            (None, Some("unix".to_string()))
+            (None, Some("unix".to_string()).into())
         );
     }
 
@@ -1298,13 +1298,16 @@ mod tests {
     fn spec_024_presence_ui_federee_conserve_ssh_unix_dans_la_trame_reelle() {
         assert_eq!(
             capture_ui_registration_channel(Some("ssh-unix")),
-            (None, Some("ssh-unix".to_string()))
+            (None, Some("ssh-unix".to_string()).into())
         );
     }
 
     #[test]
     fn spec_024_presence_ui_sans_attestation_reste_inconnue_dans_la_trame_reelle() {
-        assert_eq!(capture_ui_registration_channel(None), (None, None));
+        assert_eq!(
+            capture_ui_registration_channel(None),
+            (None, ChannelReport::Unknown)
+        );
     }
 
     #[test]
