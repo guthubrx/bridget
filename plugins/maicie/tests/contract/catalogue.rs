@@ -140,6 +140,90 @@ fn chemin_hors_catalogue_symlink_et_tasks_md_sont_refuses() {
 }
 
 #[test]
+fn jury_controle_positif_de_l_instrument() {
+    let fixture = Fixture::new("jury-ctrl");
+    let dedans = fixture.path("catalogue.jsonl");
+    fs::write(&dedans, "").unwrap();
+    assert!(
+        validate_catalogue_path(&dedans, Some(&fixture.root)).is_ok(),
+        "l'instrument refuse le cas légitime : un vert ailleurs ne prouverait rien"
+    );
+}
+
+#[test]
+fn jury_chemin_interne_a_parent_inexistant_reste_accepte() {
+    let fixture = Fixture::new("jury-acreer");
+    let candidate = fixture.root.join("dossier-a-creer").join("catalogue.jsonl");
+    let result = validate_catalogue_path(&candidate, Some(&fixture.root));
+    assert!(
+        result.is_ok(),
+        "chemin interne refusé car son parent n'existe pas encore : root={:?} candidat={:?} verdict={:?}",
+        fixture.root,
+        candidate,
+        result
+    );
+}
+
+#[test]
+fn jury_evasion_par_parent_inexistant_est_refusee() {
+    let fixture = Fixture::new("jury-evasion");
+    let evasion = fixture
+        .root
+        .join("inexistant")
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("etc")
+        .join("maicie-jury-canari.jsonl");
+    let result = validate_catalogue_path(&evasion, Some(&fixture.root));
+    assert!(
+        result.is_err(),
+        "évasion de racine acceptée : root={:?} candidat={:?}",
+        fixture.root,
+        evasion
+    );
+}
+
+#[test]
+fn jury_racine_symlinkee_reproduit_le_cas_macos_sur_linux() {
+    let fixture = Fixture::new("jury-racine-liee");
+    let real_root = fixture.path("projet-reel");
+    fs::create_dir(&real_root).unwrap();
+    let linked_root = fixture.path("projet-lie");
+    std::os::unix::fs::symlink(&real_root, &linked_root).unwrap();
+    let candidate = linked_root.join("dossier-a-creer/catalogue.jsonl");
+
+    let result = validate_catalogue_path(&candidate, Some(&linked_root));
+
+    assert!(
+        result.is_ok(),
+        "un chemin interne doit rester accepté sous une racine symlinkée : {result:?}"
+    );
+}
+
+#[test]
+fn jury_lien_existant_est_resolu_avant_le_reliquat_manquant() {
+    let fixture = Fixture::new("jury-lien-existant");
+    let project_root = fixture.path("projet");
+    fs::create_dir(&project_root).unwrap();
+    let outside = fixture.path("hors-projet");
+    let outside_child = outside.join("enfant");
+    fs::create_dir_all(&outside_child).unwrap();
+    let link = project_root.join("lien");
+    std::os::unix::fs::symlink(&outside_child, &link).unwrap();
+    let candidate = link.join("..").join("catalogue.jsonl");
+
+    let result = validate_catalogue_path(&candidate, Some(&project_root));
+
+    assert!(
+        result.is_err(),
+        "un lien existant suivi de '..' ne doit pas être normalisé dans la racine"
+    );
+}
+
+#[test]
 fn sc1708_replay_identique_et_divergent() {
     let fixture = Fixture::new("idem");
     let path = fixture.path("catalogue.jsonl");

@@ -811,32 +811,15 @@ pub fn validate_catalogue_path(
             .map_err(|source| CatalogueError::PathRefuse {
                 reason: format!("racine projet illisible: {source}"),
             })?;
-        let candidate = if path.exists() {
-            path.canonicalize()
-                .map_err(|source| CatalogueError::PathRefuse {
-                    reason: format!("chemin illisible: {source}"),
-                })?
-        } else {
-            let parent = path.parent().unwrap_or_else(|| Path::new("."));
-            let file_name = path.file_name().ok_or_else(|| CatalogueError::PathRefuse {
+        if !path.exists() && path.file_name().is_none() {
+            return Err(CatalogueError::PathRefuse {
                 reason: "chemin sans nom de fichier".into(),
+            });
+        }
+        let candidate =
+            canonicalize_with_missing_tail(path).map_err(|source| CatalogueError::PathRefuse {
+                reason: format!("chemin illisible: {source}"),
             })?;
-            let parent = if parent.as_os_str().is_empty() {
-                Path::new(".")
-            } else {
-                parent
-            };
-            if parent.exists() {
-                parent
-                    .canonicalize()
-                    .map_err(|source| CatalogueError::PathRefuse {
-                        reason: format!("parent illisible: {source}"),
-                    })?
-                    .join(file_name)
-            } else {
-                path.to_path_buf()
-            }
-        };
         if !candidate.starts_with(&root) {
             return Err(CatalogueError::PathRefuse {
                 reason: "chemin hors du projet hôte déclaré".into(),
@@ -853,6 +836,44 @@ pub fn validate_catalogue_path(
         }
     }
     Ok(())
+}
+
+/// Canonicalise le plus proche ancêtre existant puis normalise le reliquat.
+///
+/// Cette construction évite de comparer une racine résolue à un candidat brut
+/// quand une écriture doit encore créer son arborescence.
+fn canonicalize_with_missing_tail(path: &Path) -> io::Result<PathBuf> {
+    if path.exists() {
+        return path.canonicalize();
+    }
+    let existing = path
+        .ancestors()
+        .find(|ancestor| !ancestor.as_os_str().is_empty() && ancestor.exists());
+    let (existing, missing_tail) = match existing {
+        Some(existing) => {
+            let tail = path.strip_prefix(existing).map_err(io::Error::other)?;
+            (existing, tail)
+        }
+        None => (Path::new("."), path),
+    };
+    let canonical = existing.canonicalize()?;
+    Ok(normalize_lexically(&canonical.join(missing_tail)))
+}
+
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            std::path::Component::RootDir => normalized.push(component.as_os_str()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::Normal(segment) => normalized.push(segment),
+        }
+    }
+    normalized
 }
 
 fn refuse_if_symlink(path: &Path) -> Result<(), CatalogueError> {

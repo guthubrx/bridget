@@ -16,6 +16,7 @@ const CONFIG_VERSION: u32 = 1;
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_SOCKET_PATH_BYTES: usize = 103;
 const MAX_DATABASE_PATH_BYTES: usize = 1024;
+const MAX_REPOSITORY_PATH_BYTES: usize = 1024;
 pub(crate) const MAX_TIMEOUT_SECS: u64 = 7 * 24 * 60 * 60;
 const MAX_PROFILES: usize = 128;
 const MAX_TAGS_PER_PROFILE: usize = 64;
@@ -50,7 +51,73 @@ pub struct MaicieConfig {
     /// aucune relève ou réassignation n'est alors activée implicitement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coordination_policies: Option<CoordinationPoliciesConfig>,
+    /// Projet dont les lots peuvent être mesurés. Son absence devient un
+    /// refus métier au guichet ; le chargement n'invente aucun projet actif.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_project: Option<ReviewProjectConfig>,
     pub profiles: Vec<ProfileConfig>,
+}
+
+/// Configuration fermée du dépôt de revue. La carte de criticité n'est jamais
+/// configurable : elle est élue depuis les faits mesurés par F38.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewProjectConfig {
+    pub project_id: String,
+    pub repository_root: PathBuf,
+    pub referent_id: String,
+}
+
+impl ReviewProjectConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_slug("review_project.project_id", &self.project_id)?;
+        validate_absolute_path("review_project.repository_root", &self.repository_root)?;
+        let root_len = self.repository_root.as_os_str().as_encoded_bytes().len();
+        if root_len > MAX_REPOSITORY_PATH_BYTES {
+            return Err(ConfigError::validation(
+                "review_project.repository_root",
+                format!(
+                    "la racine du depot fait {root_len} octets, maximum {MAX_REPOSITORY_PATH_BYTES}"
+                ),
+            ));
+        }
+        let relative = self
+            .repository_root
+            .as_os_str()
+            .as_encoded_bytes()
+            .strip_prefix(b"/")
+            .unwrap_or_default();
+        if !relative.is_empty()
+            && relative
+                .split(|byte| *byte == b'/')
+                .any(|component| component.is_empty() || component == b"." || component == b"..")
+        {
+            return Err(ConfigError::validation(
+                "review_project.repository_root",
+                "une racine lexicalement normalisee est obligatoire",
+            ));
+        }
+        validate_text(
+            "review_project.referent_id",
+            &self.referent_id,
+            MAX_SHORT_TEXT_BYTES,
+        )?;
+        if self.referent_id.trim() != self.referent_id
+            || self.referent_id.chars().any(char::is_control)
+        {
+            return Err(ConfigError::validation(
+                "review_project.referent_id",
+                "une identite exacte sans espace peripherique ni controle est requise",
+            ));
+        }
+        if self.referent_id == crate::MAICIE_IDENTITY {
+            return Err(ConfigError::validation(
+                "review_project.referent_id",
+                "Maicie ne peut pas etre son propre referent",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Les politiques sont déclarées par classe puis figées avec la délégation.
@@ -321,6 +388,9 @@ impl MaicieConfig {
         }
         if let Some(policies) = &self.coordination_policies {
             policies.validate()?;
+        }
+        if let Some(review_project) = &self.review_project {
+            review_project.validate()?;
         }
         validate_profiles(&self.profiles)
     }
