@@ -182,6 +182,18 @@ fn recovery_trace_scope(
     if daemon::daemon_store_is_local(daemon_host, daemon_db_path, local_host, local_db_path) {
         return Ok(());
     }
+    // Deux refus DIFFERENTS, et le lecteur doit savoir lequel il tient : une
+    // machine qu'on n'a pas su nommer ne se corrige pas comme deux machines
+    // distinctes. Confondre les deux, c'est envoyer chercher au mauvais endroit.
+    let atteste = |host: Option<&str>| host.is_some_and(bridget_core::host_is_attested);
+    if !atteste(daemon_host) || !bridget_core::host_is_attested(local_host) {
+        return Err(format!(
+            "trace de reprise non lisible d'ici : machine non attestée — locale « {} », daemon « {} ». \
+             Une machine indéterminée n'est pas une machine, et deux indéterminées ne sont pas la même.",
+            local_host,
+            daemon_host.unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE)
+        ));
+    }
     Err(format!(
         "trace de reprise non lisible d'ici : la base locale ({} sur {}) n'est pas celle du daemon ({} sur {})",
         local_db_path.display(),
@@ -1225,8 +1237,11 @@ mod tests {
         let error = snapshot
             .recovery_losses
             .expect_err("sans base attestée, la trace locale ne doit pas être lue");
+        // Daemon injoignable : rien n'est attesté. Le motif rendu doit être
+        // celui de l'INDÉTERMINATION, pas celui de deux machines différentes —
+        // les deux n'appellent pas le même geste de la part d'un opérateur.
         assert!(
-            error.contains("n'est pas celle du daemon"),
+            error.contains("machine non attestée"),
             "le refus doit dire pourquoi: {error}"
         );
     }
@@ -1392,6 +1407,21 @@ mod tests {
         assert!(
             inconnu.contains(crate::build_info::MACHINE_NON_ATTESTEE),
             "{inconnu}"
+        );
+
+        // DEUX HÔTES INDÉTERMINÉS, MÊME CHEMIN — le cas de rc7. Refusé, et le
+        // motif doit dire POURQUOI : machine non attestée, pas « deux machines
+        // différentes ». Les deux refus n'appellent pas le même geste.
+        let repli = recovery_trace_scope(
+            Some(bridget_core::HOTE_NON_ATTESTE),
+            Some("/home/moi/.cache/bridget/bridget.db"),
+            bridget_core::HOTE_NON_ATTESTE,
+            &chemin,
+        )
+        .expect_err("deux machines indéterminées ne sont pas la même machine");
+        assert!(
+            repli.contains("machine non attestée"),
+            "le motif doit nommer l'indétermination, pas une différence : {repli}"
         );
     }
 }

@@ -7510,7 +7510,17 @@ pub(crate) fn daemon_store_is_local(
     //
     // Source UNIQUE : `get_status` et la carte de reprise passent tous deux ici,
     // pour que deux vues du même système ne puissent pas diverger.
-    daemon_host.is_some_and(|host| host == local_host)
+    // UNE ABSENCE N'EST PAS UNE IDENTITE, ET DEUX ABSENCES NE SONT PAS EGALES.
+    // `local_host` retombe sur une sentinelle quand la machine ne peut pas etre
+    // determinee. Deux machines DIFFERENTES qui echouent toutes deux a se nommer
+    // rendent alors la MEME chaine — et avec le chemin de base standard,
+    // identique partout, l egalite les declarerait locales l une pour l autre.
+    // C'est la charge « meme chemin n'est pas meme machine » qui revient par la
+    // porte du repli : on ferme ici les hotes INDETERMINES, pas seulement les
+    // hotes DIFFERENTS.
+    bridget_core::host_is_attested(local_host)
+        && daemon_host
+            .is_some_and(|host| bridget_core::host_is_attested(host) && host == local_host)
         && daemon_db_path.is_some_and(|path| std::path::Path::new(path) == local_db_path)
 }
 
@@ -7565,6 +7575,32 @@ mod attribution_tests {
             !daemon_store_is_local(Some("cartae"), Some("/autre/bridget.db"), "cartae", chemin),
             "un autre chemin sur la même machine n'est pas cette base"
         );
+
+        // DEUX HOTES INDETERMINES, MEME CHEMIN — signale par rc7. Les deux
+        // cotes rendent la sentinelle de repli ; l'egalite ne prouve alors rien
+        // du tout, et le cas courant est justement le meme chemin partout.
+        assert!(
+            !daemon_store_is_local(
+                Some(bridget_core::HOTE_NON_ATTESTE),
+                Some("/home/moi/.cache/bridget/bridget.db"),
+                bridget_core::HOTE_NON_ATTESTE,
+                chemin
+            ),
+            "deux machines indeterminees ne sont pas la meme machine"
+        );
+        // Et le cas mixte : un cote atteste, l'autre non.
+        assert!(!daemon_store_is_local(
+            Some(bridget_core::HOTE_NON_ATTESTE),
+            Some("/home/moi/.cache/bridget/bridget.db"),
+            "cartae",
+            chemin
+        ));
+        assert!(!daemon_store_is_local(
+            Some("cartae"),
+            Some("/home/moi/.cache/bridget/bridget.db"),
+            bridget_core::HOTE_NON_ATTESTE,
+            chemin
+        ));
 
         // Daemon antérieur : rien d'attesté, donc rien à compter.
         assert!(!daemon_store_is_local(None, None, "cartae", chemin));
