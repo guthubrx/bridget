@@ -455,7 +455,7 @@ fn unquote_runtime_value(value: &str) -> String {
 fn valid_capability_value(value: &str) -> bool {
     !value.is_empty()
         && value.chars().count() <= MAX_CAPABILITY_VALUE_CHARS
-        && !value.chars().any(char::is_control)
+        && !value.chars().any(bridget_core::is_disallowed_control)
 }
 
 fn command_basename(command: &str) -> &str {
@@ -1535,5 +1535,32 @@ mod tests {
             );
             assert_ne!(definition.protocol, "acp");
         }
+    }
+
+    /// Contrôle positif Cc d'abord. Puis chaîne portant un vrai bidi.
+    /// Preuve que le test meurt sans la garde Cf : U+202E n'est pas `is_control`.
+    #[test]
+    fn oracle_capability_refuse_une_valeur_bidi_reelle() {
+        assert!(
+            !valid_capability_value("model\u{0007}x"),
+            "PROMESSE — un Cc (BEL) DOIT être refusé"
+        );
+        assert!(
+            valid_capability_value("gpt-5.6-terra"),
+            "PROMESSE — une valeur légitime DOIT passer"
+        );
+        let bidi = "model\u{202e}ledom";
+        assert!(
+            !bidi.chars().any(char::is_control),
+            "preuve d'aveuglement Cc : sans is_format_character cette chaîne passerait"
+        );
+        assert!(
+            !valid_capability_value(bidi),
+            "oracle — une capacité portant U+202E DOIT être refusée"
+        );
+        assert!(
+            !valid_capability_value("claude\u{2066}opus"),
+            "oracle — isolat U+2066 (Trojan Source) DOIT être refusé"
+        );
     }
 }

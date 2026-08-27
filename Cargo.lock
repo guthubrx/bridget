@@ -446,6 +446,7 @@ name = "maicie"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "bridget-core",
  "bridget-transport",
  "libc",
  "rusqlite",

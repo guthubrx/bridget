@@ -103,7 +103,7 @@ impl ReviewProjectConfig {
             MAX_SHORT_TEXT_BYTES,
         )?;
         if self.referent_id.trim() != self.referent_id
-            || self.referent_id.chars().any(char::is_control)
+            || self.referent_id.chars().any(bridget_core::is_disallowed_control)
         {
             return Err(ConfigError::validation(
                 "review_project.referent_id",
@@ -446,7 +446,7 @@ fn validate_profiles(profiles: &[ProfileConfig]) -> Result<(), ConfigError> {
             agent_name,
             MAX_SHORT_TEXT_BYTES,
         )?;
-        if agent_name.chars().any(char::is_control) {
+        if agent_name.chars().any(bridget_core::is_disallowed_control) {
             return Err(ConfigError::validation(
                 format!("{field}.agent_name"),
                 "le nom d'agent ne peut contenir de caractere de controle",
@@ -504,7 +504,7 @@ fn validate_slug(field: &str, value: &str) -> Result<(), ConfigError> {
 
 fn validate_reference(field: &str, value: &str) -> Result<(), ConfigError> {
     validate_text(field, value, MAX_REFERENCE_BYTES)?;
-    if value.chars().any(char::is_control) {
+    if value.chars().any(bridget_core::is_disallowed_control) {
         return Err(ConfigError::validation(
             field,
             "une reference ne peut contenir de caractere de controle",
@@ -527,7 +527,7 @@ fn validate_unique_values(
     let mut unique = HashSet::with_capacity(values.len());
     for value in values {
         validate_text(field, value, MAX_SHORT_TEXT_BYTES)?;
-        if value.chars().any(char::is_control) {
+        if value.chars().any(bridget_core::is_disallowed_control) {
             return Err(ConfigError::validation(
                 field,
                 "les caracteres de controle sont interdits",
@@ -609,5 +609,34 @@ impl std::error::Error for ConfigError {
             Self::Parse { source, .. } => Some(source),
             Self::Validation { .. } => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Contrôle positif Cc sur agent_name ; puis bidi réel via validate_reference.
+    #[test]
+    fn oracle_config_refuse_bidi_dans_reference_et_prouve_aveuglement_cc() {
+        assert!(
+            validate_reference("profiles[0].personality_ref", "profiles/\u{0007}.md").is_err(),
+            "PROMESSE — un Cc DOIT être refusé"
+        );
+        assert!(
+            validate_reference("profiles[0].personality_ref", "profiles/coder.md").is_ok(),
+            "PROMESSE — une référence légitime DOIT passer"
+        );
+        let bidi = "profiles/cod\u{202e}er.md";
+        assert!(
+            !bidi.chars().any(char::is_control),
+            "preuve d'aveuglement Cc : sans is_format_character cette chaîne passerait"
+        );
+        let err = validate_reference("profiles[0].personality_ref", bidi)
+            .expect_err("oracle — référence bidi DOIT être refusée");
+        assert!(
+            matches!(err, ConfigError::Validation { .. }),
+            "refus de validation attendu, reçu: {err}"
+        );
     }
 }
