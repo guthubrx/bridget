@@ -17,15 +17,21 @@ La ronde expose aussi les références distantes locales non fusionnées. Cette
 vue Git est bornée, sans fetch et sans écriture dans le dépôt observé. La
 greffe ne portant aucun verdict structuré exploitable, le blocage métier reste
 explicitement indéterminé au lieu d'être déduit de messages libres.
+
+Pour les pilotes tmux locaux, la ronde distingue également l'injection Bridget
+de son acceptation par le client natif. Une trace absente, vide ou ambiguë est
+rendue inobservable avec son cardinal ; elle ne devient jamais un succès vide.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import math
 import os
 import shutil
+import socket
 import sqlite3
 import subprocess
 import tempfile
@@ -50,6 +56,10 @@ BRANCH_DELIVERY_LIMIT = "une ref distante ne prouve pas une livraison"
 
 
 DEFAULT_JOURNAL_ROOT = str(Path.home() / ".cache/bridget/sessions")
+DEFAULT_CODEX_TRACE_ROOT = str(Path.home() / ".codex/sessions")
+DEFAULT_CLAUDE_TRACE_ROOT = str(Path.home() / ".claude/projects")
+DEFAULT_INTAKE_AFTER_SECS = 60
+DEFAULT_TMUX_TIMEOUT_SECS = 2.0
 # Ces producteurs ferment aussi bien les succès que les rejets. Les wrappers
 # interactifs (`unix` / `ssh-unix`) ne consignent aujourd'hui que l'ouverture ;
 # une ouverture chez eux n'est donc pas une preuve suffisante d'activité.
@@ -69,6 +79,9 @@ TIMEOUT_TERMINAL_MARKERS = (
     "échéance Claude dépassée",
     "timeout ACP",
 )
+CODEX_TURN_START_EVENTS = frozenset({"task_started"})
+CODEX_TURN_END_EVENTS = frozenset({"task_complete", "turn_aborted"})
+CLAUDE_TURN_END_REASONS = frozenset({"end_turn", "stop_sequence"})
 
 
 def bounded_detail(value: Any) -> str:
@@ -85,9 +98,7 @@ def inert_text(value: Any) -> str:
         codepoint = ord(character)
         if unicodedata.category(character).startswith("C"):
             rendered.append(
-                f"\\u{codepoint:04x}"
-                if codepoint <= 0xFFFF
-                else f"\\U{codepoint:08x}"
+                f"\\u{codepoint:04x}" if codepoint <= 0xFFFF else f"\\U{codepoint:08x}"
             )
         elif character.isspace():
             rendered.append(" ")
@@ -103,9 +114,15 @@ def args() -> argparse.Namespace:
             "(libres / muets / occupés / bloqués / indéterminés / morts)"
         )
     )
-    parser.add_argument("--config", default=str(Path.home() / ".config/maicie/config.json"))
-    parser.add_argument("--bridget-bin", default=os.environ.get("BRIDGET_BIN", "bridget"))
-    parser.add_argument("--bridget-db", default=os.environ.get("BRIDGET_DB", DEFAULT_BRIDGET_DB))
+    parser.add_argument(
+        "--config", default=str(Path.home() / ".config/maicie/config.json")
+    )
+    parser.add_argument(
+        "--bridget-bin", default=os.environ.get("BRIDGET_BIN", "bridget")
+    )
+    parser.add_argument(
+        "--bridget-db", default=os.environ.get("BRIDGET_DB", DEFAULT_BRIDGET_DB)
+    )
     parser.add_argument(
         "--journal-root",
         type=Path,
@@ -123,6 +140,32 @@ def args() -> argparse.Namespace:
     )
     parser.add_argument("--now", type=int, help="horodatage injecté pour le harnais")
     parser.add_argument("--silent-after-secs", type=int, default=1800)
+    parser.add_argument(
+        "--intake-after-secs",
+        type=int,
+        default=DEFAULT_INTAKE_AFTER_SECS,
+        help="délai avant MANDAT_NON_SOUMIS (défaut: 60 secondes)",
+    )
+    parser.add_argument(
+        "--local-host",
+        default=os.environ.get("BRIDGET_LOCAL_HOST", socket.gethostname()),
+        help="hôte dont les traces locales peuvent être lues",
+    )
+    parser.add_argument(
+        "--codex-trace-root",
+        type=Path,
+        default=Path(os.environ.get("CODEX_TRACE_ROOT", DEFAULT_CODEX_TRACE_ROOT)),
+    )
+    parser.add_argument(
+        "--claude-trace-root",
+        type=Path,
+        default=Path(os.environ.get("CLAUDE_TRACE_ROOT", DEFAULT_CLAUDE_TRACE_ROOT)),
+    )
+    parser.add_argument("--tmux-bin", default=os.environ.get("TMUX_BIN", "tmux"))
+    parser.add_argument(
+        "--intake-traces-json",
+        help="fixture {agent: chemin trace native} (harnais)",
+    )
     parser.add_argument("--exclude", default=DEFAULT_EXCLUDE)
     parser.add_argument("--json", action="store_true")
     parser.add_argument(
@@ -140,6 +183,8 @@ def args() -> argparse.Namespace:
     value = parser.parse_args()
     if value.silent_after_secs < 0:
         parser.error("--silent-after-secs doit être positif ou nul")
+    if value.intake_after_secs <= 0:
+        parser.error("--intake-after-secs doit être strictement positif")
     if not math.isfinite(value.git_timeout_secs) or value.git_timeout_secs <= 0:
         parser.error("--git-timeout-secs doit être strictement positif")
     if value.now is not None and value.now < 0:
@@ -153,14 +198,19 @@ def run_json(command: list[str]) -> tuple[Any | None, str | None]:
     except OSError as error:
         return None, str(error)
     if result.returncode:
-        return None, ((result.stderr or result.stdout).strip().replace("\n", " ")[:240] or f"sortie {result.returncode}")
+        return None, (
+            (result.stderr or result.stdout).strip().replace("\n", " ")[:240]
+            or f"sortie {result.returncode}"
+        )
     try:
         return json.loads(result.stdout), None
     except json.JSONDecodeError as error:
         return None, f"JSON invalide: {error.msg}"
 
 
-def read_occupied_from_maicie_copy(config_path: str) -> tuple[set[str] | None, str | None]:
+def read_occupied_from_maicie_copy(
+    config_path: str,
+) -> tuple[set[str] | None, str | None]:
     """Participants en coordination, lus sur une COPIE de la base (jamais la prod)."""
     try:
         with open(config_path, encoding="utf-8") as stream:
@@ -181,7 +231,14 @@ def read_occupied_from_maicie_copy(config_path: str) -> tuple[set[str] | None, s
                 ).fetchall()
             finally:
                 connection.close()
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, sqlite3.Error) as error:
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        sqlite3.Error,
+    ) as error:
         return None, str(error)
     occupied: set[str] = set()
     for (payload,) in rows:
@@ -266,9 +323,7 @@ def read_turn_observations(
                 path for path in directory.iterdir() if path.suffix == ".jsonl"
             )
         except OSError as error:
-            observations[agent] = unknown(
-                f"journal-illisible:{inert_text(str(error))}"
-            )
+            observations[agent] = unknown(f"journal-illisible:{inert_text(str(error))}")
             continue
         if not paths:
             observations[agent] = unknown("journal-vide")
@@ -416,7 +471,9 @@ def read_turn_observations(
                                 elif current.get("state") == "open":
                                     current["seq"] = seq
                                     current["ts"] = (
-                                        timestamp if isinstance(timestamp, str) else None
+                                        timestamp
+                                        if isinstance(timestamp, str)
+                                        else None
                                     )
                     if failure:
                         break
@@ -429,6 +486,569 @@ def read_turn_observations(
             if failure
             else (current if current is not None else unknown("borne-tour-absente"))
         )
+    return observations
+
+
+def _epoch_from_iso8601(value: Any) -> float | None:
+    if not isinstance(value, str) or not value:
+        return None
+    rendered = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.datetime.fromisoformat(rendered)
+        if parsed.tzinfo is None:
+            return None
+        return parsed.timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _same_host(left: Any, right: str) -> bool:
+    if not isinstance(left, str) or not left.strip() or not right.strip():
+        return False
+    left_name = left.strip().casefold()
+    right_name = right.strip().casefold()
+    return (
+        left_name == right_name
+        or left_name.split(".", 1)[0] == right_name.split(".", 1)[0]
+    )
+
+
+def _contains_identifier(value: Any, identifier: str) -> bool:
+    if isinstance(value, str):
+        return identifier in value
+    if isinstance(value, list):
+        return any(_contains_identifier(item, identifier) for item in value)
+    if isinstance(value, dict):
+        return any(_contains_identifier(item, identifier) for item in value.values())
+    return False
+
+
+def _claude_user_is_prompt(record: dict[str, Any]) -> bool:
+    if record.get("type") != "user" or record.get("isSidechain") is True:
+        return False
+    message = record.get("message")
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return False
+    content = message.get("content")
+    if isinstance(content, str):
+        return True
+    if not isinstance(content, list) or not content:
+        return False
+    kinds = {
+        item.get("type")
+        for item in content
+        if isinstance(item, dict) and isinstance(item.get("type"), str)
+    }
+    return bool(kinds) and "tool_result" not in kinds
+
+
+def _unavailable_intake(
+    source: str, reason: str, *, records_read: int = 0
+) -> dict[str, Any]:
+    return {
+        "state": "PRISE_INOBSERVABLE",
+        "source": source,
+        "source_state": "unavailable",
+        "reason": reason,
+        "records_read": records_read,
+        "acceptance_records_read": 0,
+        "matching_acceptances": 0,
+        "steering_records_read": 0,
+        "matching_steering_records": 0,
+        "client_state_at_injection": "unknown",
+    }
+
+
+def read_native_intake_trace(
+    path: Path,
+    *,
+    provider: str,
+    message_id: str,
+    injected_epoch: float,
+) -> dict[str, Any]:
+    """Lit une trace native complète sans jamais projeter son contenu."""
+    source = f"{provider}-native"
+    try:
+        if path.is_symlink() or not path.is_file():
+            return _unavailable_intake(source, "trace-absente")
+    except OSError as error:
+        return _unavailable_intake(
+            source, f"trace-inaccessible:{inert_text(str(error))}"
+        )
+
+    records_read = 0
+    acceptance_records = 0
+    matching_acceptances = 0
+    steering_records = 0
+    matching_steering_records = 0
+    accepted_at: float | None = None
+    format_seen = False
+    earliest_epoch: float | None = None
+    client_active = False
+    try:
+        with path.open(encoding="utf-8") as stream:
+            for line_number, line in enumerate(stream, start=1):
+                if not line.endswith("\n"):
+                    return _unavailable_intake(
+                        source,
+                        f"trace-ligne-partielle:{line_number}",
+                        records_read=records_read,
+                    )
+                try:
+                    record = json.loads(line)
+                except (json.JSONDecodeError, RecursionError):
+                    return _unavailable_intake(
+                        source,
+                        f"trace-json-invalide:{line_number}",
+                        records_read=records_read,
+                    )
+                if not isinstance(record, dict):
+                    return _unavailable_intake(
+                        source,
+                        f"trace-enregistrement-invalide:{line_number}",
+                        records_read=records_read,
+                    )
+                records_read += 1
+
+                event_epoch = _epoch_from_iso8601(record.get("timestamp"))
+                if event_epoch is not None:
+                    earliest_epoch = (
+                        event_epoch
+                        if earliest_epoch is None
+                        else min(earliest_epoch, event_epoch)
+                    )
+
+                candidate = False
+                contains_message = False
+                if provider == "codex":
+                    payload = record.get("payload")
+                    if record.get("type") == "session_meta" and isinstance(
+                        payload, dict
+                    ):
+                        format_seen = True
+                    if record.get("type") == "event_msg" and isinstance(payload, dict):
+                        event_kind = payload.get("type")
+                        if event_kind in (
+                            CODEX_TURN_START_EVENTS | CODEX_TURN_END_EVENTS
+                        ):
+                            if event_epoch is None:
+                                return _unavailable_intake(
+                                    source,
+                                    f"borne-client-horodatage-invalide:{line_number}",
+                                    records_read=records_read,
+                                )
+                            if event_epoch <= injected_epoch:
+                                client_active = event_kind in CODEX_TURN_START_EVENTS
+                    if (
+                        record.get("type") == "response_item"
+                        and isinstance(payload, dict)
+                        and payload.get("type") == "message"
+                        and payload.get("role") == "user"
+                    ):
+                        candidate = True
+                        contains_message = _contains_identifier(
+                            payload.get("content"), message_id
+                        )
+                elif provider == "claude":
+                    if isinstance(record.get("sessionId"), str) or isinstance(
+                        record.get("session_id"), str
+                    ):
+                        format_seen = True
+                    if _claude_user_is_prompt(record):
+                        candidate = True
+                        contains_message = _contains_identifier(
+                            record.get("message"), message_id
+                        )
+                        if event_epoch is None:
+                            return _unavailable_intake(
+                                source,
+                                f"borne-client-horodatage-invalide:{line_number}",
+                                records_read=records_read,
+                            )
+                        if event_epoch <= injected_epoch:
+                            client_active = True
+                    elif (
+                        record.get("type") == "queue-operation"
+                        and record.get("operation") == "remove"
+                    ):
+                        candidate = True
+                        contains_message = _contains_identifier(
+                            record.get("content"), message_id
+                        )
+                    elif (
+                        record.get("type") == "queue-operation"
+                        and record.get("operation") == "enqueue"
+                    ):
+                        steering_records += 1
+                        if _contains_identifier(record.get("content"), message_id):
+                            if event_epoch is None:
+                                return _unavailable_intake(
+                                    source,
+                                    f"steering-horodatage-invalide:{line_number}",
+                                    records_read=records_read,
+                                )
+                            if event_epoch >= injected_epoch:
+                                matching_steering_records += 1
+                    elif (
+                        record.get("type") == "assistant"
+                        and record.get("isSidechain") is not True
+                        and isinstance(record.get("message"), dict)
+                        and record["message"].get("stop_reason")
+                        in CLAUDE_TURN_END_REASONS
+                    ):
+                        if event_epoch is None:
+                            return _unavailable_intake(
+                                source,
+                                f"borne-client-horodatage-invalide:{line_number}",
+                                records_read=records_read,
+                            )
+                        if event_epoch <= injected_epoch:
+                            client_active = False
+                else:
+                    return _unavailable_intake(source, "client-non-supporte")
+
+                if not candidate:
+                    continue
+                acceptance_records += 1
+                if not contains_message:
+                    continue
+                if event_epoch is None:
+                    return _unavailable_intake(
+                        source,
+                        f"acceptation-horodatage-invalide:{line_number}",
+                        records_read=records_read,
+                    )
+                if event_epoch < injected_epoch:
+                    continue
+                matching_acceptances += 1
+                accepted_at = (
+                    event_epoch
+                    if accepted_at is None
+                    else min(accepted_at, event_epoch)
+                )
+    except (OSError, UnicodeError, RecursionError) as error:
+        return _unavailable_intake(
+            source,
+            f"trace-illisible:{inert_text(str(error))}",
+            records_read=records_read,
+        )
+
+    if records_read == 0:
+        return _unavailable_intake(source, "trace-vide")
+    if not format_seen:
+        return _unavailable_intake(
+            source, "trace-format-inconnu", records_read=records_read
+        )
+    if (
+        not matching_acceptances
+        and not matching_steering_records
+        and (earliest_epoch is None or earliest_epoch > injected_epoch)
+    ):
+        return _unavailable_intake(
+            source, "trace-sans-couverture-injection", records_read=records_read
+        )
+    return {
+        "state": "PRISE_ACCEPTEE" if matching_acceptances else "PRISE_EN_ATTENTE",
+        "source": source,
+        "source_state": "available",
+        "records_read": records_read,
+        "acceptance_records_read": acceptance_records,
+        "matching_acceptances": matching_acceptances,
+        "steering_records_read": steering_records,
+        "matching_steering_records": matching_steering_records,
+        "client_state_at_injection": "active" if client_active else "idle",
+        "accepted_at_epoch": accepted_at,
+    }
+
+
+def _tmux_pane_value(
+    tmux_bin: str, location: str, expression: str
+) -> tuple[str | None, str | None]:
+    try:
+        result = subprocess.run(
+            [tmux_bin, "display-message", "-p", "-t", location, expression],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=DEFAULT_TMUX_TIMEOUT_SECS,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "tmux-delai-depasse"
+    except OSError as error:
+        return None, f"tmux-inaccessible:{inert_text(str(error))}"
+    if result.returncode:
+        detail = (result.stderr or result.stdout).strip().replace("\n", " ")
+        return None, f"tmux-echec:{inert_text(detail)[:120]}"
+    value = result.stdout.rstrip("\n")
+    if not value or "\n" in value:
+        return None, "tmux-valeur-invalide"
+    return value, None
+
+
+def _tmux_pane_context(
+    tmux_bin: str, location: Any
+) -> tuple[int | None, Path | None, str | None]:
+    if not isinstance(location, str) or not location:
+        return None, None, "localisation-tmux-absente"
+    pid_raw, error = _tmux_pane_value(tmux_bin, location, "#{pane_pid}")
+    if error:
+        return None, None, error
+    cwd_raw, error = _tmux_pane_value(tmux_bin, location, "#{pane_current_path}")
+    if error:
+        return None, None, error
+    try:
+        pid = int(pid_raw or "")
+    except ValueError:
+        return None, None, "tmux-pid-invalide"
+    cwd = Path(cwd_raw or "")
+    if pid <= 0 or not cwd.is_absolute():
+        return None, None, "tmux-contexte-invalide"
+    return pid, cwd, None
+
+
+def _proc_descendants(
+    proc_root: Path, root_pid: int
+) -> tuple[set[int] | None, str | None]:
+    pending = [root_pid]
+    seen: set[int] = set()
+    while pending:
+        pid = pending.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        if len(seen) > 4096:
+            return None, "arbre-processus-trop-grand"
+        children_path = proc_root / str(pid) / "task" / str(pid) / "children"
+        try:
+            children = children_path.read_text(encoding="ascii").split()
+        except OSError:
+            if pid == root_pid:
+                return None, "processus-pane-absent"
+            continue
+        try:
+            pending.extend(int(child) for child in children)
+        except ValueError:
+            return None, "arbre-processus-invalide"
+    return seen, None
+
+
+def _path_within(path: Path, root: Path) -> bool:
+    try:
+        return os.path.commonpath((str(path), str(root))) == str(root)
+    except ValueError:
+        return False
+
+
+def _codex_trace_role(path: Path) -> str:
+    try:
+        with path.open(encoding="utf-8") as stream:
+            first = stream.readline()
+        if not first.endswith("\n"):
+            return False
+        record = json.loads(first)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "unknown"
+    if not isinstance(record, dict) or record.get("type") != "session_meta":
+        return "unknown"
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
+        return "unknown"
+    thread_source = payload.get("thread_source")
+    if thread_source == "user":
+        return "primary"
+    if thread_source == "subagent":
+        return "subagent"
+    return "unknown"
+
+
+def discover_codex_trace(
+    pane_pid: int, trace_root: Path, *, proc_root: Path = Path("/proc")
+) -> tuple[Path | None, str | None]:
+    try:
+        canonical_root = trace_root.resolve(strict=True)
+    except OSError:
+        return None, "racine-trace-codex-absente"
+    descendants, error = _proc_descendants(proc_root, pane_pid)
+    if error:
+        return None, error
+    assert descendants is not None
+    candidates: set[Path] = set()
+    for pid in descendants:
+        descriptor_root = proc_root / str(pid) / "fd"
+        try:
+            descriptors = list(descriptor_root.iterdir())
+        except OSError:
+            continue
+        for descriptor in descriptors:
+            try:
+                target = descriptor.readlink()
+            except OSError:
+                continue
+            if not target.is_absolute():
+                continue
+            if not _path_within(target, canonical_root):
+                continue
+            if target.name.startswith("rollout-") and target.suffix == ".jsonl":
+                candidates.add(target)
+    if not candidates:
+        return None, "trace-codex-active-absente"
+    roles = {path: _codex_trace_role(path) for path in candidates}
+    unknown = {path for path, role in roles.items() if role == "unknown"}
+    if unknown:
+        return None, f"traces-codex-role-inconnu:{len(unknown)}"
+    primary = {path for path, role in roles.items() if role == "primary"}
+    if len(primary) == 1:
+        return next(iter(primary)), None
+    if not primary:
+        return None, f"trace-codex-principale-absente:{len(candidates)}"
+    return None, f"traces-codex-principales-ambigues:{len(primary)}"
+
+
+def _claude_trace_matches_cwd(path: Path, cwd: Path) -> bool | None:
+    try:
+        with path.open(encoding="utf-8") as stream:
+            for _, line in zip(range(128), stream):
+                if not line.endswith("\n"):
+                    return None
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    return None
+                if isinstance(record, dict) and isinstance(record.get("cwd"), str):
+                    return Path(record["cwd"]) == cwd
+    except (OSError, UnicodeError):
+        return None
+    return None
+
+
+def discover_claude_trace(
+    cwd: Path, trace_root: Path
+) -> tuple[Path | None, str | None]:
+    project_directory = trace_root / str(cwd).replace("/", "-")
+    try:
+        if project_directory.is_symlink() or not project_directory.is_dir():
+            return None, "projet-trace-claude-absent"
+        candidates = [
+            path
+            for path in project_directory.iterdir()
+            if path.suffix == ".jsonl" and path.is_file() and not path.is_symlink()
+        ]
+    except OSError:
+        return None, "projet-trace-claude-inaccessible"
+    states = {path: _claude_trace_matches_cwd(path, cwd) for path in candidates}
+    unknown = {path for path, matches in states.items() if matches is None}
+    if unknown:
+        return None, f"traces-claude-indeterminables:{len(unknown)}"
+    matching = {path for path, matches in states.items() if matches}
+    if not matching:
+        return None, "trace-claude-active-absente"
+    if len(matching) != 1:
+        return None, f"traces-claude-actives-ambigues:{len(matching)}"
+    return next(iter(matching)), None
+
+
+def read_intake_observations(
+    agents: list[dict[str, Any]],
+    active_names: set[str],
+    turn_observations: dict[str, dict[str, Any]],
+    *,
+    now: int,
+    intake_after_secs: int,
+    local_host: str,
+    codex_trace_root: Path,
+    claude_trace_root: Path,
+    tmux_bin: str,
+    trace_paths: dict[str, Path] | None = None,
+    proc_root: Path = Path("/proc"),
+) -> dict[str, dict[str, Any]]:
+    """Normalise la prise client des tours interactifs ouverts et locaux."""
+    by_name = {
+        agent.get("name"): agent
+        for agent in agents
+        if isinstance(agent.get("name"), str)
+    }
+    observations: dict[str, dict[str, Any]] = {}
+    for name in sorted(active_names):
+        agent = by_name.get(name)
+        turn = turn_observations.get(name)
+        if not isinstance(agent, dict) or not isinstance(turn, dict):
+            continue
+        if agent.get("transport") != "tmux" or turn.get("state") != "open":
+            continue
+        provider = agent.get("agent_type")
+        source = f"{provider}-native" if isinstance(provider, str) else "inconnu"
+        message_id = turn.get("message_id")
+        injected_epoch = _epoch_from_iso8601(turn.get("ts"))
+        if not isinstance(message_id, str) or not message_id:
+            observations[name] = _unavailable_intake(
+                source, "injection-sans-identifiant"
+            )
+            continue
+        if injected_epoch is None:
+            observations[name] = _unavailable_intake(
+                source, "injection-horodatage-invalide"
+            )
+            continue
+        age_secs = max(0, int(now - injected_epoch))
+        if not _same_host(agent.get("host"), local_host):
+            observation = _unavailable_intake(source, "source-distante")
+            observation["age_secs"] = age_secs
+            observations[name] = observation
+            continue
+        if provider not in {"codex", "claude"}:
+            observation = _unavailable_intake(source, "client-non-supporte")
+            observation["age_secs"] = age_secs
+            observations[name] = observation
+            continue
+
+        trace_path: Path | None = None
+        discovery_error: str | None = None
+        if trace_paths is not None:
+            trace_path = trace_paths.get(name)
+            if trace_path is None:
+                discovery_error = "trace-non-declaree"
+        else:
+            pane_pid, pane_cwd, discovery_error = _tmux_pane_context(
+                tmux_bin, agent.get("location")
+            )
+            if discovery_error is None:
+                assert pane_pid is not None and pane_cwd is not None
+                if provider == "codex":
+                    trace_path, discovery_error = discover_codex_trace(
+                        pane_pid, codex_trace_root, proc_root=proc_root
+                    )
+                else:
+                    trace_path, discovery_error = discover_claude_trace(
+                        pane_cwd, claude_trace_root
+                    )
+        if discovery_error or trace_path is None:
+            observation = _unavailable_intake(
+                source, discovery_error or "trace-active-absente"
+            )
+            observation["age_secs"] = age_secs
+            observations[name] = observation
+            continue
+
+        observation = read_native_intake_trace(
+            trace_path,
+            provider=provider,
+            message_id=message_id,
+            injected_epoch=injected_epoch,
+        )
+        observation["age_secs"] = age_secs
+        if observation["source_state"] == "available":
+            if observation["matching_acceptances"]:
+                observation["state"] = "PRISE_ACCEPTEE"
+            elif (
+                observation["client_state_at_injection"] == "active"
+                or observation["matching_steering_records"]
+            ):
+                observation["state"] = "REMISE_PENDANT_TOUR_ACTIF"
+            elif age_secs >= intake_after_secs:
+                observation["state"] = "MANDAT_NON_SOUMIS"
+            else:
+                observation["state"] = "PRISE_EN_ATTENTE"
+        observations[name] = observation
     return observations
 
 
@@ -731,6 +1351,37 @@ def domain_in_fleet_scope(domain: Any) -> bool:
     return False
 
 
+def _public_intake_observation(
+    name: str, observation: dict[str, Any]
+) -> dict[str, Any]:
+    rendered = {
+        "name": name,
+        "state": observation.get("state", "PRISE_INOBSERVABLE"),
+        "source": observation.get("source", "inconnu"),
+        "source_state": observation.get("source_state", "unavailable"),
+        "records_read": observation.get("records_read", 0),
+        "acceptance_records_read": observation.get("acceptance_records_read", 0),
+        "matching_acceptances": observation.get("matching_acceptances", 0),
+        "steering_records_read": observation.get("steering_records_read", 0),
+        "matching_steering_records": observation.get("matching_steering_records", 0),
+        "client_state_at_injection": observation.get(
+            "client_state_at_injection", "unknown"
+        ),
+        "age_secs": observation.get("age_secs"),
+    }
+    reason = observation.get("reason")
+    if isinstance(reason, str):
+        rendered["reason"] = reason
+    accepted_at = observation.get("accepted_at_epoch")
+    if isinstance(accepted_at, (int, float)):
+        rendered["accepted_at"] = (
+            datetime.datetime.fromtimestamp(accepted_at, datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+    return rendered
+
+
 def classify(
     agents: list[dict[str, Any]],
     occupied: set[str],
@@ -739,6 +1390,8 @@ def classify(
     silent_after_secs: int,
     backlog_ages: dict[str, int] | None = None,
     turn_observations: dict[str, dict[str, Any]] | None = None,
+    intake_observations: dict[str, dict[str, Any]] | None = None,
+    intake_after_secs: int = DEFAULT_INTAKE_AFTER_SECS,
 ) -> dict[str, Any]:
     """Partition complète des agents vus par le daemon + morts hors daemon.
 
@@ -746,7 +1399,9 @@ def classify(
     sans recouvrement. Les morts = occupied − daemon (hors partition daemon).
 
     Pour une mission ouverte, une borne terminale sans reprise donne BLOQUÉS ;
-    une borne ouverte donne OCCUPÉS. L'âge d'une remise n'est jamais un verdict.
+    une borne ouverte donne OCCUPÉS. La prise interactive est observée même si
+    la copie Maicie locale ne connaît aucune mission : l'âge d'une remise n'est
+    jamais un verdict, mais une injection locale non acceptée reste actionnable.
     """
     by_name: dict[str, dict[str, Any]] = {}
     for agent in agents:
@@ -760,19 +1415,70 @@ def classify(
     daemon_names = set(by_name)
     backlog_ages = backlog_ages or {}
     turn_observations = turn_observations or {}
+    intake_observations = intake_observations or {}
     libres: list[tuple[str, int]] = []
     muets: list[tuple[str, int]] = []
     occupes: list[str] = []
     bloques: list[dict[str, Any]] = []
+    mandats_non_soumis: list[dict[str, Any]] = []
+    remises_pendant_tour_actif: list[dict[str, Any]] = []
+    prises_inobservables: list[dict[str, Any]] = []
     indetermines: list[tuple[str, str]] = []
 
     for name, agent in sorted(by_name.items()):
         age = backlog_ages.get(name)
+        observation = turn_observations.get(name)
+        turn_state = observation.get("state") if isinstance(observation, dict) else None
+        transport = agent.get("transport")
+
+        # La greffe Maicie peut vivre sur une autre machine. Une preuve de
+        # non-soumission ne dépend donc pas de l'appartenance à `occupied` :
+        # elle décrit la frontière client de la dernière injection ouverte.
+        if turn_state == "open" and transport not in COMPLETE_TURN_BOUNDARY_TRANSPORTS:
+            intake = intake_observations.get(name)
+            if not isinstance(intake, dict) and name in occupied:
+                intake = _unavailable_intake("inconnu", "observation-prise-absente")
+            if isinstance(intake, dict):
+                intake_state = intake.get("state")
+                public = _public_intake_observation(name, intake)
+                if intake_state == "PRISE_ACCEPTEE":
+                    if name in occupied:
+                        occupes.append(name)
+                        continue
+                    # Une entrée acceptée n'est pas à elle seule une mission :
+                    # sans greffe locale, conserver la classification daemon.
+                elif intake_state == "MANDAT_NON_SOUMIS":
+                    mandats_non_soumis.append(public)
+                    continue
+                elif intake_state == "REMISE_PENDANT_TOUR_ACTIF":
+                    remises_pendant_tour_actif.append(public)
+                    continue
+                elif intake_state == "PRISE_INOBSERVABLE":
+                    prises_inobservables.append(public)
+                    continue
+                elif intake_state == "PRISE_EN_ATTENTE":
+                    indetermines.append(
+                        (
+                            name,
+                            "prise-en-attente:"
+                            f"{public.get('age_secs', 'inconnu')}s/"
+                            f"source={public['source']}/"
+                            f"records={public['records_read']}",
+                        )
+                    )
+                    continue
+                else:
+                    fallback = _unavailable_intake(
+                        str(public.get("source") or "inconnu"),
+                        "etat-prise-inconnu",
+                        records_read=int(public.get("records_read") or 0),
+                    )
+                    prises_inobservables.append(
+                        _public_intake_observation(name, fallback)
+                    )
+                    continue
+
         if name in occupied:
-            observation = turn_observations.get(name)
-            turn_state = (
-                observation.get("state") if isinstance(observation, dict) else None
-            )
             if turn_state == "ended":
                 if agent.get("state") == "busy":
                     indetermines.append(
@@ -856,19 +1562,38 @@ def classify(
         "muets": muets,
         "occupes": occupes,
         "bloques": bloques,
+        "mandats_non_soumis": mandats_non_soumis,
+        "remises_pendant_tour_actif": remises_pendant_tour_actif,
+        "prises_inobservables": prises_inobservables,
         "indetermines": indetermines,
         "morts": morts,
         "maicie_occupied_count": len(occupied),
+        "intake_after_secs": intake_after_secs,
+        "intake_observations": [
+            _public_intake_observation(name, observation)
+            for name, observation in sorted(intake_observations.items())
+        ],
     }
 
 
-def partition_oracle(result: dict[str, Any], daemon_names: set[str]) -> tuple[bool, str]:
+def partition_oracle(
+    result: dict[str, Any], daemon_names: set[str]
+) -> tuple[bool, str]:
     """L'oracle voit l'omission : somme des catégories daemon == |daemon|, sans recouvrement."""
     buckets = {
         "libres": {name for name, _ in result["libres"]},
         "muets": {name for name, _ in result["muets"]},
         "occupes": set(result["occupes"]),
         "bloques": {item["name"] for item in result.get("bloques", [])},
+        "mandats_non_soumis": {
+            item["name"] for item in result.get("mandats_non_soumis", [])
+        },
+        "remises_pendant_tour_actif": {
+            item["name"] for item in result.get("remises_pendant_tour_actif", [])
+        },
+        "prises_inobservables": {
+            item["name"] for item in result.get("prises_inobservables", [])
+        },
         "indetermines": {name for name, _ in result["indetermines"]},
     }
     covered: set[str] = set()
@@ -916,7 +1641,9 @@ def classify_legacy(
         if not isinstance(last_seen, int):
             last_seen = 0
         if name not in occupied:
-            (muets if last_seen > silent_after_secs else libres).append((name, last_seen))
+            (muets if last_seen > silent_after_secs else libres).append(
+                (name, last_seen)
+            )
     presents = {a["name"] for a in agents if isinstance(a.get("name"), str)}
     # Ancien affichage : OCCUPES = tout le greffe (recouvre MORTS) ; pas d'indéterminés.
     return {
@@ -938,6 +1665,13 @@ def format_text(result: dict[str, Any], *, maicie_error: str | None) -> str:
             f"MAICIE INDISPONIBLE ({inert_text(maicie_error)[:60]}) — "
             "vue agents seule, missions inconnues"
         )
+    intake = result.get("intake_observations", [])
+    lines.append(
+        "OBSERVATION PRISE (locale seulement) : "
+        f"éligibles={len(intake)}; "
+        f"sources-disponibles={sum(item.get('source_state') == 'available' for item in intake)}; "
+        f"records-lus={sum(int(item.get('records_read') or 0) for item in intake)}"
+    )
     lines.append(
         "LIBRES (vivants, sans mission) : "
         + (", ".join(inert_text(name) for name, _ in result["libres"]) or "aucun")
@@ -946,8 +1680,7 @@ def format_text(result: dict[str, Any], *, maicie_error: str | None) -> str:
         "MUETS (>30 min sans signal)    : "
         + (
             ", ".join(
-                f"{inert_text(name)} {secs // 60}min"
-                for name, secs in result["muets"]
+                f"{inert_text(name)} {secs // 60}min" for name, secs in result["muets"]
             )
             or "aucun"
         )
@@ -955,6 +1688,65 @@ def format_text(result: dict[str, Any], *, maicie_error: str | None) -> str:
     lines.append(
         "OCCUPES                        : "
         + (", ".join(inert_text(name) for name in result["occupes"]) or "aucun")
+    )
+    accepted = [
+        item
+        for item in result.get("intake_observations", [])
+        if item.get("state") == "PRISE_ACCEPTEE"
+    ]
+    lines.append(
+        "PRISES ACCEPTEES (preuve client) : "
+        + (
+            ", ".join(
+                f"{inert_text(item['name'])} "
+                f"(source={inert_text(item['source'])}; "
+                f"records={item['records_read']}; "
+                f"acceptations={item['matching_acceptances']})"
+                for item in accepted
+            )
+            or "aucun"
+        )
+    )
+    lines.append(
+        f"MANDATS NON SOUMIS (>={result.get('intake_after_secs', DEFAULT_INTAKE_AFTER_SECS)} s)    : "
+        + (
+            ", ".join(
+                f"{inert_text(item['name'])} "
+                f"(age={item.get('age_secs', 'inconnu')}s; "
+                f"source={inert_text(item['source'])}; "
+                f"records={item['records_read']}; "
+                f"acceptations={item['matching_acceptances']})"
+                for item in result.get("mandats_non_soumis", [])
+            )
+            or "aucun"
+        )
+    )
+    lines.append(
+        "REMISES PENDANT TOUR ACTIF    : "
+        + (
+            ", ".join(
+                f"{inert_text(item['name'])} "
+                f"(source={inert_text(item['source'])}; "
+                f"records={item['records_read']}; "
+                f"steering={item['matching_steering_records']}; "
+                f"acceptations={item['matching_acceptances']})"
+                for item in result.get("remises_pendant_tour_actif", [])
+            )
+            or "aucun"
+        )
+    )
+    lines.append(
+        "PRISES INOBSERVABLES           : "
+        + (
+            ", ".join(
+                f"{inert_text(item['name'])} "
+                f"(source={inert_text(item['source'])}; "
+                f"records={item['records_read']}; "
+                f"motif={inert_text(item.get('reason'))})"
+                for item in result.get("prises_inobservables", [])
+            )
+            or "aucun"
+        )
     )
     # Énoncé volontairement littéral : l'âge est celui de la plus vieille
     # remise encore en file, PAS « bloqué depuis ». Un agent qui repart après
@@ -1005,6 +1797,7 @@ def main() -> int:
     exclude = {item.strip() for item in options.exclude.split(",") if item.strip()}
     maicie_error: str | None = None
     backlog_error: str | None = None
+    trace_paths: dict[str, Path] | None = None
 
     if options.agents_json:
         agents = json.loads(Path(options.agents_json).read_text(encoding="utf-8"))
@@ -1019,7 +1812,9 @@ def main() -> int:
             return 1
 
     if options.occupied_json:
-        occupied = set(json.loads(Path(options.occupied_json).read_text(encoding="utf-8")))
+        occupied = set(
+            json.loads(Path(options.occupied_json).read_text(encoding="utf-8"))
+        )
     else:
         occupied, maicie_error = read_occupied_from_maicie_copy(options.config)
         if occupied is None:
@@ -1037,6 +1832,28 @@ def main() -> int:
             backlog_error = backlog_error or "indisponible"
             backlog_ages = {}
 
+    if options.intake_traces_json:
+        try:
+            raw_trace_paths = json.loads(
+                Path(options.intake_traces_json).read_text(encoding="utf-8")
+            )
+            if not isinstance(raw_trace_paths, dict):
+                raise ValueError("la table de traces doit être un objet")
+            trace_paths = {}
+            for name, raw_path in raw_trace_paths.items():
+                if not isinstance(name, str) or not isinstance(raw_path, str):
+                    raise ValueError("nom ou chemin de trace invalide")
+                path = Path(raw_path)
+                if not path.is_absolute():
+                    raise ValueError("les chemins de trace doivent être absolus")
+                trace_paths[name] = path
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+            print(
+                f"table de traces de prise invalide: {inert_text(str(error))}",
+                flush=True,
+            )
+            return 1
+
     try:
         branch_backlog, branch_error = read_branch_backlog(
             options.git_repo,
@@ -1051,8 +1868,19 @@ def main() -> int:
     assert isinstance(agents, list)
     typed_agents = [a for a in agents if isinstance(a, dict)]
     daemon_names = {a["name"] for a in typed_agents if isinstance(a.get("name"), str)}
-    turn_observations = read_turn_observations(
-        options.journal_root, occupied & daemon_names
+    turn_observations = read_turn_observations(options.journal_root, daemon_names)
+    stamp = int(time.time()) if options.now is None else options.now
+    intake_observations = read_intake_observations(
+        typed_agents,
+        daemon_names,
+        turn_observations,
+        now=stamp,
+        intake_after_secs=options.intake_after_secs,
+        local_host=options.local_host,
+        codex_trace_root=options.codex_trace_root,
+        claude_trace_root=options.claude_trace_root,
+        tmux_bin=options.tmux_bin,
+        trace_paths=trace_paths,
     )
     result = classify(
         typed_agents,
@@ -1061,6 +1889,8 @@ def main() -> int:
         silent_after_secs=options.silent_after_secs,
         backlog_ages=backlog_ages,
         turn_observations=turn_observations,
+        intake_observations=intake_observations,
+        intake_after_secs=options.intake_after_secs,
     )
     ok, detail = partition_oracle(result, daemon_names)
     if not ok:
@@ -1074,15 +1904,37 @@ def main() -> int:
             "muets": [{"name": n, "last_seen_secs": s} for n, s in result["muets"]],
             "occupes": result["occupes"],
             "bloques": result["bloques"],
-            "indetermines": [{"name": n, "reason": r} for n, r in result["indetermines"]],
+            "mandats_non_soumis": result["mandats_non_soumis"],
+            "remises_pendant_tour_actif": result["remises_pendant_tour_actif"],
+            "prises_inobservables": result["prises_inobservables"],
+            "indetermines": [
+                {"name": n, "reason": r} for n, r in result["indetermines"]
+            ],
             "morts": result["morts"],
             "daemon_count": result["daemon_count"],
             "blocked_signal": "dernier-tour-termine-sans-reprise",
+            "intake": {
+                "scope": "local-only",
+                "local_host": options.local_host,
+                "threshold_secs": options.intake_after_secs,
+                "eligible_count": len(result["intake_observations"]),
+                "available_count": sum(
+                    item["source_state"] == "available"
+                    for item in result["intake_observations"]
+                ),
+                "records_read": sum(
+                    item["records_read"] for item in result["intake_observations"]
+                ),
+                "observations": result["intake_observations"],
+            },
             "partition": detail,
             "maicie": (
                 {"state": "unavailable", "reason": maicie_error}
                 if maicie_error
-                else {"state": "available", "occupied_count": result["maicie_occupied_count"]}
+                else {
+                    "state": "available",
+                    "occupied_count": result["maicie_occupied_count"],
+                }
             ),
             "backlog": (
                 {"state": "unavailable", "reason": backlog_error}
@@ -1107,8 +1959,7 @@ def main() -> int:
         if backlog_error:
             text = (
                 f"BACKLOG INDISPONIBLE ({inert_text(backlog_error)[:60]}) — "
-                "âge des remises inconnu\n"
-                + text
+                "âge des remises inconnu\n" + text
             )
         text += "\n" + format_branch_backlog(branch_backlog, branch_error=branch_error)
         print(text)

@@ -43,6 +43,14 @@ agents = [
     {"name": "timeout-sans-kind", "state": "connected", "domain": "bridget", "transport": "codex_app_server", "last_seen_secs": 2},
     {"name": "unsafe-stop", "state": "connected", "domain": "bridget", "transport": "acp", "last_seen_secs": 2},
     {"name": "unsafe-error", "state": "connected", "domain": "bridget", "transport": "acp", "last_seen_secs": 2},
+    {"name": "codex-pasted", "agent_type": "codex", "host": "fixture-host", "state": "connected", "domain": "bridget", "transport": "tmux", "location": "codex-pasted:1.1", "last_seen_secs": 2},
+    {"name": "codex-visible", "agent_type": "codex", "host": "fixture-host", "state": "connected", "domain": "bridget", "transport": "tmux", "location": "codex-visible:1.1", "last_seen_secs": 2},
+    {"name": "codex-consumed", "agent_type": "codex", "host": "fixture-host", "state": "connected", "domain": "bridget", "transport": "tmux", "location": "codex-consumed:1.1", "last_seen_secs": 2},
+    {"name": "claude-enqueued", "agent_type": "claude", "host": "fixture-host", "state": "connected", "domain": "bridget", "transport": "tmux", "location": "claude-enqueued:1.1", "last_seen_secs": 2},
+    {"name": "claude-consumed", "agent_type": "claude", "host": "fixture-host", "state": "connected", "domain": "bridget", "transport": "tmux", "location": "claude-consumed:1.1", "last_seen_secs": 2},
+    {"name": "remote-pasted", "agent_type": "codex", "host": "autre-hote", "state": "connected", "domain": "bridget", "transport": "tmux", "location": "remote-pasted:1.1", "last_seen_secs": 2},
+    {"name": "cartae0", "agent_type": "codex", "host": "fixture-host", "state": "connected", "domain": "bridget", "transport": "tmux", "location": "cartae0:1.1", "last_seen_secs": 2},
+    {"name": "rc7", "agent_type": "codex", "host": "fixture-host", "state": "connected", "domain": "bridget", "transport": "tmux", "location": "rc7:1.1", "last_seen_secs": 2},
 ]
 occupied = {
     "bob",
@@ -60,6 +68,11 @@ occupied = {
     "timeout-sans-kind",
     "unsafe-stop",
     "unsafe-error",
+    "codex-pasted",
+    "codex-consumed",
+    "claude-enqueued",
+    "claude-consumed",
+    "remote-pasted",
 }
 exclude = {"bridget", "fable", "poucave", "sol", "maicie"}
 daemon = {a["name"] for a in agents}
@@ -188,6 +201,86 @@ write_journal(
         ),
     ],
 )
+write_journal(
+    "codex-pasted",
+    [
+        {
+            **boundary(1, "turn_start", "mcp-49971-6a900824-a6"),
+            "ts": "2026-08-27T09:49:24Z",
+            "payload": {"body": "[Pasted Content 4925 chars]"},
+        }
+    ],
+)
+write_journal(
+    "codex-consumed",
+    [
+        {
+            **boundary(1, "turn_start", "mcp-codex-consumed"),
+            "ts": "2026-08-27T09:49:24Z",
+            "payload": {"body": "mandat codex sain"},
+        }
+    ],
+)
+write_journal(
+    "codex-visible",
+    [
+        {
+            **boundary(1, "turn_start", "mcp-codex-visible"),
+            "ts": "2026-08-27T09:49:24Z",
+            "payload": {"body": "mandat visible en texte normal"},
+        }
+    ],
+)
+write_journal(
+    "claude-enqueued",
+    [
+        {
+            **boundary(1, "turn_start", "mcp-claude-enqueued"),
+            "ts": "2026-08-27T10:07:09Z",
+            "payload": {"body": "mandat Claude seulement en file"},
+        }
+    ],
+)
+write_journal(
+    "claude-consumed",
+    [
+        {
+            **boundary(1, "turn_start", "mcp-claude-consumed"),
+            "ts": "2026-08-27T10:07:09Z",
+            "payload": {"body": "mandat Claude pris"},
+        }
+    ],
+)
+write_journal(
+    "cartae0",
+    [
+        {
+            **boundary(1, "turn_start", "mcp-cartae0-steering"),
+            "ts": "2026-08-27T10:04:24Z",
+            "payload": {"body": "remise pendant un tour Codex déjà actif"},
+        }
+    ],
+)
+write_journal(
+    "rc7",
+    [
+        {
+            **boundary(1, "turn_start", "mcp-rc7-idle"),
+            "ts": "2026-08-27T10:40:17Z",
+            "payload": {"body": "mandat remis après la fin du tour"},
+        }
+    ],
+)
+write_journal(
+    "remote-pasted",
+    [
+        {
+            **boundary(1, "turn_start", "mcp-remote-pasted"),
+            "ts": "2026-08-27T09:49:24Z",
+            "payload": {"body": "mandat distant"},
+        }
+    ],
+)
 for unsafe_agent, detail_key in (("unsafe-stop", "stop_reason"), ("unsafe-error", "reason")):
     path = journal_root / unsafe_agent / "2026-08-25.jsonl"
     terminal = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
@@ -195,7 +288,7 @@ for unsafe_agent, detail_key in (("unsafe-stop", "stop_reason"), ("unsafe-error"
         raise SystemExit(f"CONTROLE POSITIF RATE: détail dangereux absent de {unsafe_agent}")
 print("controle_positif_details_dangereux_presents: OK")
 
-turns = mod.read_turn_observations(journal_root, occupied)
+turns = mod.read_turn_observations(journal_root, daemon)
 if turns["healthy-consumer"]["state"] != "open":
     raise SystemExit(f"tour sain non ouvert: {turns['healthy-consumer']}")
 if turns["frozen-consumer"]["state"] != "ended":
@@ -218,6 +311,453 @@ if turns["corrupt-journal"]["state"] != "unknown" or not turns["corrupt-journal"
 if turns["missing-journal"]["state"] != "unknown" or "absent" not in turns["missing-journal"]["reason"]:
     raise SystemExit(f"journal absent conclu à tort: {turns['missing-journal']}")
 print("lecture_bornes_tour_et_incertitudes: OK")
+
+# Prise réelle : le journal atteste l'injection, les traces natives attestent
+# (ou n'attestent pas) la consommation. Le contenu sentinelle ne doit jamais
+# apparaître dans la projection opérateur.
+trace_root = fixture / "intake-traces"
+trace_root.mkdir()
+secret_content = "SECRET-CONTENU-NE-DOIT-PAS-ETRE-PROJETE"
+
+
+def write_trace(name, records):
+    path = trace_root / f"{name}.jsonl"
+    with path.open("w", encoding="utf-8") as stream:
+        for record in records:
+            stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+    return path
+
+
+codex_pasted_trace = write_trace(
+    "codex-pasted",
+    [
+        {
+            "timestamp": "2026-08-25T13:13:16.390Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "session-pasted",
+                "cwd": "/fixture/codex-pasted",
+                "thread_source": "user",
+            },
+        },
+        {
+            "timestamp": "2026-08-27T09:48:59.841Z",
+            "type": "event_msg",
+            "payload": {"type": "task_complete", "turn_id": "ancien-tour"},
+        },
+        {
+            "timestamp": "2026-08-27T09:48:59.900Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": secret_content}],
+            },
+        },
+    ],
+)
+codex_consumed_trace = write_trace(
+    "codex-consumed",
+    [
+        {
+            "timestamp": "2026-08-25T13:13:16.390Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "session-consumed",
+                "cwd": "/fixture/codex-consumed",
+                "thread_source": "user",
+            },
+        },
+        {
+            "timestamp": "2026-08-27T10:01:24.444Z",
+            "type": "event_msg",
+            "payload": {"type": "task_started", "turn_id": "tour-consumed"},
+        },
+        {
+            "timestamp": "2026-08-27T10:01:24.857Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": f"{secret_content} id=mcp-codex-consumed",
+                    }
+                ],
+            },
+        },
+    ],
+)
+claude_enqueued_trace = write_trace(
+    "claude-enqueued",
+    [
+        {"type": "mode", "sessionId": "claude-enqueued"},
+        {
+            "timestamp": "2026-08-27T10:07:10.100Z",
+            "type": "user",
+            "sessionId": "claude-enqueued",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "content": "id=mcp-claude-enqueued",
+                    }
+                ],
+            },
+        },
+        {
+            "timestamp": "2026-08-27T10:07:10.670Z",
+            "type": "queue-operation",
+            "operation": "enqueue",
+            "sessionId": "claude-enqueued",
+            "content": "id=mcp-claude-enqueued",
+        },
+    ],
+)
+cartae0_steering_trace = write_trace(
+    "cartae0-steering",
+    [
+        {
+            "timestamp": "2026-08-27T07:58:08Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "session-cartae0",
+                "cwd": "/fixture/cartae0",
+                "thread_source": "user",
+            },
+        },
+        {
+            "timestamp": "2026-08-27T10:03:53.760Z",
+            "type": "event_msg",
+            "payload": {"type": "task_started", "turn_id": "tour-actif"},
+        },
+    ],
+)
+rc7_idle_trace = write_trace(
+    "rc7-idle",
+    [
+        {
+            "timestamp": "2026-08-27T09:00:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "session-rc7",
+                "cwd": "/fixture/rc7",
+                "thread_source": "user",
+            },
+        },
+        {
+            "timestamp": "2026-08-27T10:39:00Z",
+            "type": "event_msg",
+            "payload": {"type": "task_started", "turn_id": "tour-termine"},
+        },
+        {
+            "timestamp": "2026-08-27T10:39:46.868Z",
+            "type": "event_msg",
+            "payload": {"type": "task_complete", "turn_id": "tour-termine"},
+        },
+    ],
+)
+claude_consumed_trace = write_trace(
+    "claude-consumed",
+    [
+        {"type": "mode", "sessionId": "claude-consumed"},
+        {
+            "timestamp": "2026-08-27T10:07:10.670Z",
+            "type": "queue-operation",
+            "operation": "enqueue",
+            "sessionId": "claude-consumed",
+            "content": "id=mcp-claude-consumed",
+        },
+        {
+            "timestamp": "2026-08-27T10:08:00.083Z",
+            "type": "queue-operation",
+            "operation": "remove",
+            "sessionId": "claude-consumed",
+            "content": f"{secret_content} id=mcp-claude-consumed",
+        },
+    ],
+)
+claude_direct_trace = write_trace(
+    "claude-direct",
+    [
+        {"type": "mode", "sessionId": "claude-direct"},
+        {
+            "timestamp": "2026-08-27T10:07:11.553Z",
+            "type": "user",
+            "sessionId": "claude-direct",
+            "message": {"role": "user", "content": "id=mcp-claude-direct"},
+        },
+    ],
+)
+
+trace_paths = {
+    "codex-pasted": codex_pasted_trace,
+    "codex-visible": codex_pasted_trace,
+    "codex-consumed": codex_consumed_trace,
+    "claude-enqueued": claude_enqueued_trace,
+    "claude-consumed": claude_consumed_trace,
+    "remote-pasted": codex_consumed_trace,
+    "cartae0": cartae0_steering_trace,
+    "rc7": rc7_idle_trace,
+}
+specimen_now = int(mod._epoch_from_iso8601("2026-08-27T10:01:25Z"))
+specimen = mod.read_intake_observations(
+    agents,
+    {"codex-pasted", "codex-visible", "codex-consumed"},
+    turns,
+    now=specimen_now,
+    intake_after_secs=60,
+    local_host="fixture-host",
+    codex_trace_root=trace_root,
+    claude_trace_root=trace_root,
+    tmux_bin="tmux-inutilise",
+    trace_paths=trace_paths,
+)
+if specimen["codex-pasted"]["state"] != "MANDAT_NON_SOUMIS":
+    raise SystemExit(f"specimen collé non détecté: {specimen['codex-pasted']}")
+if specimen["codex-pasted"]["age_secs"] != 721:
+    raise SystemExit(f"âge du specimen 720,857 s perdu: {specimen['codex-pasted']}")
+if specimen["codex-pasted"]["records_read"] != 3 or specimen["codex-pasted"]["matching_acceptances"] != 0:
+    raise SystemExit(f"instrument muet ou acceptation inventée: {specimen['codex-pasted']}")
+print("prise_specimen_720s_non_soumise: OK")
+if specimen["codex-visible"]["state"] != "MANDAT_NON_SOUMIS":
+    raise SystemExit(f"contenu sans marqueur visuel non détecté: {specimen['codex-visible']}")
+print("prise_sans_marqueur_visuel_non_soumise: OK")
+if specimen["codex-consumed"]["state"] != "PRISE_ACCEPTEE":
+    raise SystemExit(f"prise Codex saine accusée à tort: {specimen['codex-consumed']}")
+if specimen["codex-consumed"]["matching_acceptances"] != 1:
+    raise SystemExit(f"cardinal Codex sain inattendu: {specimen['codex-consumed']}")
+print("prise_saine_interdit_faux_positif: OK")
+
+intake_now = int(mod._epoch_from_iso8601("2026-08-27T10:44:20Z"))
+intakes = mod.read_intake_observations(
+    agents,
+    daemon,
+    turns,
+    now=intake_now,
+    intake_after_secs=60,
+    local_host="fixture-host",
+    codex_trace_root=trace_root,
+    claude_trace_root=trace_root,
+    tmux_bin="tmux-inutilise",
+    trace_paths=trace_paths,
+)
+if intakes["claude-enqueued"]["state"] != "REMISE_PENDANT_TOUR_ACTIF":
+    raise SystemExit(f"enqueue Claude non nommé comme steering: {intakes['claude-enqueued']}")
+if intakes["claude-consumed"]["state"] != "PRISE_ACCEPTEE":
+    raise SystemExit(f"remove Claude non reconnu: {intakes['claude-consumed']}")
+direct = mod.read_native_intake_trace(
+    claude_direct_trace,
+    provider="claude",
+    message_id="mcp-claude-direct",
+    injected_epoch=mod._epoch_from_iso8601("2026-08-27T10:07:09Z"),
+)
+if direct["state"] != "PRISE_ACCEPTEE" or direct["matching_acceptances"] != 1:
+    raise SystemExit(f"entrée Claude directe non reconnue: {direct}")
+print("prise_claude_enqueue_remove_et_direct_discrimines: OK")
+
+if intakes["cartae0"]["state"] != "REMISE_PENDANT_TOUR_ACTIF":
+    raise SystemExit(f"steering réel cartae0 accusé comme mandat non soumis: {intakes['cartae0']}")
+if intakes["cartae0"]["client_state_at_injection"] != "active":
+    raise SystemExit(f"tour actif cartae0 non attesté: {intakes['cartae0']}")
+if intakes["rc7"]["state"] != "MANDAT_NON_SOUMIS":
+    raise SystemExit(f"contrôle idle rc7 masqué par la correction steering: {intakes['rc7']}")
+if intakes["rc7"]["client_state_at_injection"] != "idle":
+    raise SystemExit(f"repos rc7 non attesté: {intakes['rc7']}")
+print("steering_cartae0_nomme_et_controle_idle_rc7_conserve: OK")
+
+for unavailable in ("remote-pasted",):
+    if intakes[unavailable]["state"] != "PRISE_INOBSERVABLE":
+        raise SystemExit(f"source indisponible déclarée saine pour {unavailable}: {intakes[unavailable]}")
+    if intakes[unavailable]["records_read"] != 0:
+        raise SystemExit(f"cardinal indisponible non nul pour {unavailable}: {intakes[unavailable]}")
+empty_trace = write_trace("empty", [])
+empty = mod.read_native_intake_trace(
+    empty_trace,
+    provider="codex",
+    message_id="mcp-vide",
+    injected_epoch=0,
+)
+if empty["state"] != "PRISE_INOBSERVABLE" or empty["reason"] != "trace-vide":
+    raise SystemExit(f"trace vide déclarée saine: {empty}")
+print("prise_inobservable_cardinal_non_muet: OK")
+
+valid_meta = json.dumps(
+    {
+        "timestamp": "2026-08-27T10:00:00Z",
+        "type": "session_meta",
+        "payload": {"thread_source": "user"},
+    }
+)
+invalid_trace = trace_root / "invalid.jsonl"
+invalid_trace.write_text(valid_meta + "\n{json-invalide}\n", encoding="utf-8")
+partial_trace = trace_root / "partial.jsonl"
+partial_trace.write_text(valid_meta + "\n{\"type\":\"event_msg\"}", encoding="utf-8")
+unknown_trace = write_trace(
+    "unknown-format",
+    [{"timestamp": "2026-08-27T10:00:00Z", "type": "format-inconnu"}],
+)
+for path, reason_prefix, cardinal in (
+    (invalid_trace, "trace-json-invalide:", 1),
+    (partial_trace, "trace-ligne-partielle:", 1),
+    (unknown_trace, "trace-format-inconnu", 1),
+):
+    unavailable = mod.read_native_intake_trace(
+        path,
+        provider="codex",
+        message_id="mcp-inexistant",
+        injected_epoch=0,
+    )
+    if (
+        unavailable["state"] != "PRISE_INOBSERVABLE"
+        or not unavailable["reason"].startswith(reason_prefix)
+        or unavailable["records_read"] != cardinal
+    ):
+        raise SystemExit(f"source native invalide déclarée saine: {unavailable}")
+print("prise_inobservable_sources_invalides: OK")
+
+public_intakes = [
+    mod._public_intake_observation(name, observation)
+    for name, observation in intakes.items()
+]
+if secret_content in json.dumps(public_intakes, ensure_ascii=False):
+    raise SystemExit("le contenu conversationnel a fuité dans la projection de prise")
+print("contenu_trace_non_projete: OK")
+
+# Découverte Codex par l'arbre de processus : présence positive avant les cas
+# d'absence/ambiguïté. Le faux /proc ne lance aucun processus.
+fake_proc = fixture / "proc"
+for pid in (700, 701):
+    (fake_proc / str(pid) / "task" / str(pid)).mkdir(parents=True)
+    (fake_proc / str(pid) / "fd").mkdir()
+(fake_proc / "700" / "task" / "700" / "children").write_text("701\n", encoding="ascii")
+(fake_proc / "701" / "task" / "701" / "children").write_text("\n", encoding="ascii")
+codex_discovery_trace = trace_root / "rollout-fixture.jsonl"
+codex_discovery_trace.write_bytes(codex_consumed_trace.read_bytes())
+(fake_proc / "701" / "fd" / "9").symlink_to(codex_discovery_trace)
+codex_subagent_trace = trace_root / "rollout-subagent.jsonl"
+codex_subagent_trace.write_text(
+    json.dumps(
+        {
+            "timestamp": "2026-08-27T10:01:24.444Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "subagent",
+                "cwd": "/fixture/codex-consumed",
+                "thread_source": "subagent",
+            },
+        }
+    )
+    + "\n",
+    encoding="utf-8",
+)
+(fake_proc / "701" / "fd" / "10").symlink_to(codex_subagent_trace)
+discovered, discovery_error = mod.discover_codex_trace(700, trace_root, proc_root=fake_proc)
+if discovery_error or discovered != codex_discovery_trace:
+    raise SystemExit(f"trace Codex active non découverte: path={discovered} error={discovery_error}")
+print("decouverte_trace_codex_par_processus: OK")
+
+codex_unknown_trace = trace_root / "rollout-role-unknown.jsonl"
+codex_unknown_trace.write_text(
+    json.dumps(
+        {
+            "timestamp": "2026-08-27T10:01:24.444Z",
+            "type": "session_meta",
+            "payload": {"id": "unknown", "cwd": "/fixture/codex-consumed"},
+        }
+    )
+    + "\n",
+    encoding="utf-8",
+)
+unknown_descriptor = fake_proc / "701" / "fd" / "11"
+unknown_descriptor.symlink_to(codex_unknown_trace)
+unknown_path, unknown_error = mod.discover_codex_trace(
+    700, trace_root, proc_root=fake_proc
+)
+if unknown_path is not None or unknown_error != "traces-codex-role-inconnu:1":
+    raise SystemExit(
+        f"trace Codex de rôle inconnu ignorée à tort: path={unknown_path} error={unknown_error}"
+    )
+unknown_descriptor.unlink()
+
+for pid in (702,):
+    (fake_proc / str(pid) / "task" / str(pid)).mkdir(parents=True)
+    (fake_proc / str(pid) / "fd").mkdir()
+(fake_proc / "702" / "task" / "702" / "children").write_text("\n", encoding="ascii")
+(fake_proc / "702" / "fd" / "9").symlink_to(codex_subagent_trace)
+subagent_only, subagent_error = mod.discover_codex_trace(
+    702, trace_root, proc_root=fake_proc
+)
+if subagent_only is not None or not (subagent_error or "").startswith(
+    "trace-codex-principale-absente:"
+):
+    raise SystemExit(
+        f"trace de sous-agent prise pour la principale: path={subagent_only} error={subagent_error}"
+    )
+
+codex_second_primary = trace_root / "rollout-second-primary.jsonl"
+codex_second_primary.write_text(
+    json.dumps(
+        {
+            "timestamp": "2026-08-27T10:01:24.444Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "second-primary",
+                "cwd": "/fixture/codex-consumed",
+                "thread_source": "user",
+            },
+        }
+    )
+    + "\n",
+    encoding="utf-8",
+)
+(fake_proc / "701" / "fd" / "11").symlink_to(codex_second_primary)
+ambiguous, ambiguous_error = mod.discover_codex_trace(
+    700, trace_root, proc_root=fake_proc
+)
+if ambiguous is not None or ambiguous_error != "traces-codex-principales-ambigues:2":
+    raise SystemExit(
+        f"deux traces Codex principales conclues à tort: path={ambiguous} error={ambiguous_error}"
+    )
+print("decouverte_codex_refuse_sous_agent_et_ambiguite: OK")
+
+fake_claude_root = fixture / "claude-projects"
+fake_claude_cwd = pathlib.Path("/fixture/claude-project")
+fake_claude_project = fake_claude_root / str(fake_claude_cwd).replace("/", "-")
+fake_claude_project.mkdir(parents=True)
+fake_claude_trace = fake_claude_project / "session.jsonl"
+fake_claude_trace.write_text(
+    json.dumps(
+        {
+            "timestamp": "2026-08-27T10:07:11.553Z",
+            "type": "user",
+            "sessionId": "session",
+            "cwd": str(fake_claude_cwd),
+            "message": {"role": "user", "content": "fixture"},
+        }
+    )
+    + "\n",
+    encoding="utf-8",
+)
+discovered, discovery_error = mod.discover_claude_trace(fake_claude_cwd, fake_claude_root)
+if discovery_error or discovered != fake_claude_trace:
+    raise SystemExit(f"trace Claude active non découverte: path={discovered} error={discovery_error}")
+fake_claude_unknown = fake_claude_project / "unknown.jsonl"
+fake_claude_unknown.write_text("{json-invalide}\n", encoding="utf-8")
+unknown_claude, unknown_claude_error = mod.discover_claude_trace(
+    fake_claude_cwd, fake_claude_root
+)
+if (
+    unknown_claude is not None
+    or unknown_claude_error != "traces-claude-indeterminables:1"
+):
+    raise SystemExit(
+        f"trace Claude indéterminable ignorée à tort: path={unknown_claude} error={unknown_claude_error}"
+    )
+fake_claude_unknown.unlink()
+print("decouverte_trace_claude_par_projet: OK")
 
 # --- Contrôle positif omission (ancienne logique) ---
 legacy = mod.classify_legacy(agents, occupied, exclude=exclude, silent_after_secs=1800)
@@ -254,6 +794,14 @@ backlog = {
     "timeout-sans-kind": 44 * 60,
     "unsafe-stop": 44 * 60,
     "unsafe-error": 44 * 60,
+    "codex-pasted": 44 * 60,
+    "codex-visible": 44 * 60,
+    "codex-consumed": 44 * 60,
+    "claude-enqueued": 44 * 60,
+    "claude-consumed": 44 * 60,
+    "remote-pasted": 44 * 60,
+    "cartae0": 44 * 60,
+    "rc7": 44 * 60,
 }
 fixed = mod.classify(
     agents,
@@ -262,6 +810,8 @@ fixed = mod.classify(
     silent_after_secs=1800,
     backlog_ages=backlog,
     turn_observations=turns,
+    intake_observations=intakes,
+    intake_after_secs=60,
 )
 ok_fixed, detail_fixed = mod.partition_oracle(fixed, daemon)
 if not ok_fixed:
@@ -289,14 +839,54 @@ if "busy-without-journal" not in fixed["occupes"]:
     raise SystemExit(f"état busy positif perdu: {fixed['occupes']}")
 if "acp-anomaly-live" not in fixed["occupes"]:
     raise SystemExit(f"anomalie ACP non terminale sortie des OCCUPES: {fixed['occupes']}")
+if "codex-consumed" not in fixed["occupes"] or "claude-consumed" not in fixed["occupes"]:
+    raise SystemExit(f"prises attestées absentes des OCCUPES: {fixed['occupes']}")
+non_soumis = {item["name"]: item for item in fixed["mandats_non_soumis"]}
+if set(non_soumis) != {"codex-pasted", "codex-visible", "rc7"}:
+    raise SystemExit(f"MANDAT_NON_SOUMIS inattendus: {non_soumis}")
+if "codex-visible" in occupied:
+    raise SystemExit("le contrôle sans greffe locale appartient encore à Maicie")
+if "codex-visible" not in non_soumis:
+    raise SystemExit("une copie Maicie locale vide masque le mandat non soumis")
+print("prise_independante_de_la_copie_maicie_locale: OK")
+if non_soumis["codex-pasted"]["records_read"] != 3:
+    raise SystemExit(f"cardinal du specimen perdu: {non_soumis['codex-pasted']}")
+inobservables = {item["name"]: item for item in fixed["prises_inobservables"]}
+if not {"ssh-open-only", "remote-pasted"}.issubset(inobservables):
+    raise SystemExit(f"PRISE_INOBSERVABLE incomplète: {inobservables}")
+if any(inobservables[name]["records_read"] != 0 for name in ("ssh-open-only", "remote-pasted")):
+    raise SystemExit(f"source muette rendue avec cardinal non nul: {inobservables}")
+print("categories_prise_partitionnees_deux_sens: OK")
+if set(inobservables) & set(bloques):
+    raise SystemExit(
+        f"prise inobservable confondue avec un blocage: inobservables={inobservables} bloques={bloques}"
+    )
+for name in ("ssh-open-only", "remote-pasted"):
+    if (
+        inobservables[name]["state"] != "PRISE_INOBSERVABLE"
+        or inobservables[name]["source_state"] != "unavailable"
+        or inobservables[name]["records_read"] != 0
+    ):
+        raise SystemExit(f"zéro sur zéro examiné présenté comme succès: {inobservables[name]}")
+print("prise_inobservable_distincte_de_tout_bloque: OK")
+steering = {
+    item["name"]: item for item in fixed["remises_pendant_tour_actif"]
+}
+if set(steering) != {"cartae0", "claude-enqueued"}:
+    raise SystemExit(f"remises pendant tour actif inattendues: {steering}")
+if "cartae0" in non_soumis or "rc7" in steering:
+    raise SystemExit(
+        f"populations idle et steering confondues: steering={steering} non_soumis={non_soumis}"
+    )
+print("populations_idle_et_steering_disjointes: OK")
 ind_fixed = {name: reason for name, reason in fixed["indetermines"]}
 for uncertain in ("corrupt-journal", "missing-journal", "ambiguous-error"):
     if uncertain not in ind_fixed or "activite-tour=" not in ind_fixed[uncertain]:
         raise SystemExit(f"incertitude de journal non nommée pour {uncertain}: {ind_fixed}")
 if "contradictory-consumer" not in ind_fixed or "contradiction-state-busy" not in ind_fixed["contradictory-consumer"]:
     raise SystemExit(f"contradiction de sources conclue à tort: {ind_fixed}")
-if "ssh-open-only" not in ind_fixed or "source-sans-borne-terminale:ssh-unix" not in ind_fixed["ssh-open-only"]:
-    raise SystemExit(f"source interactive incomplète conclue à tort: {ind_fixed}")
+if "ssh-open-only" in ind_fixed:
+    raise SystemExit(f"prise inobservable noyée dans INDETERMINES: {ind_fixed}")
 if bloques["frozen-consumer"]["condition"] != "dernier-tour-termine-sans-reprise":
     raise SystemExit(f"condition terminale absente: {bloques['frozen-consumer']}")
 for unsafe_agent in ("unsafe-stop", "unsafe-error"):
@@ -312,6 +902,8 @@ no_backlog = mod.classify(
     silent_after_secs=1800,
     backlog_ages={},
     turn_observations=turns,
+    intake_observations=intakes,
+    intake_after_secs=60,
 )
 if "frozen-consumer" not in {item["name"] for item in no_backlog["bloques"]}:
     raise SystemExit("sans backlog, la fin sans reprise doit rester visible")
@@ -584,22 +1176,33 @@ print("backlog_branches_depot_invalide_indisponible: OK")
 agents_path = fixture / "agents.json"
 occupied_path = fixture / "occupied.json"
 backlog_path = fixture / "backlog.json"
+intake_traces_path = fixture / "intake-traces.json"
 agents_path.write_text(json.dumps(agents), encoding="utf-8")
 occupied_path.write_text(json.dumps(sorted(occupied)), encoding="utf-8")
 backlog_path.write_text(json.dumps(backlog), encoding="utf-8")
-print(f"FIXTURES {agents_path} {occupied_path} {backlog_path} {journal_root}")
+intake_traces_path.write_text(
+    json.dumps({name: str(path) for name, path in trace_paths.items()}),
+    encoding="utf-8",
+)
+print(f"FIXTURES {agents_path} {occupied_path} {backlog_path} {journal_root} {intake_traces_path}")
 PY
 
 agents_json="${fixture_root}/agents.json"
 occupied_json="${fixture_root}/occupied.json"
 backlog_json="${fixture_root}/backlog.json"
+intake_traces_json="${fixture_root}/intake-traces.json"
 journal_root="${fixture_root}/journals"
 git_repo="${fixture_root}/repository"
-out="$("$system_python" "$idle" --agents-json "$agents_json" --occupied-json "$occupied_json" --backlog-json "$backlog_json" --journal-root "$journal_root" --git-repo "$git_repo" --now 2000000000)"
+out="$("$system_python" "$idle" --agents-json "$agents_json" --occupied-json "$occupied_json" --backlog-json "$backlog_json" --intake-traces-json "$intake_traces_json" --local-host fixture-host --journal-root "$journal_root" --git-repo "$git_repo" --now 2000000000)"
 grep -q 'BLOQUES' <<<"$out"
 grep -q 'frozen-consumer' <<<"$out"
 grep -q 'dernier-tour-termine-sans-reprise' <<<"$out"
 grep -q 'cursor10-like' <<<"$out"
+grep -q 'MANDATS NON SOUMIS' <<<"$out"
+grep -q 'codex-pasted' <<<"$out"
+grep -q 'PRISES INOBSERVABLES' <<<"$out"
+grep -q 'REMISES PENDANT TOUR ACTIF' <<<"$out"
+grep -q 'records-lus=' <<<"$out"
 grep -q 'BACKLOG BRANCHES INDISPONIBLE (greffe sans etat exploitable)' <<<"$out"
 grep -q 'origin/pending-lot' <<<"$out"
 if grep -q 'origin/merged-lot' <<<"$out"; then
@@ -621,20 +1224,20 @@ for escaped in (r"\u001b", r"\u000d", r"\u202e"):
         raise SystemExit(f"détail neutralisé absent du rendu texte: {escaped}")
 print("rendu_texte_details_inertes: OK")
 PY
-slow_out="$("$system_python" "$idle" --agents-json "$agents_json" --occupied-json "$occupied_json" --backlog-json "$backlog_json" --journal-root "$journal_root" --git-repo "$git_repo" --git-bin "${fixture_root}/git-slow" --git-timeout-secs 0.05 --now 2000000000)"
+slow_out="$("$system_python" "$idle" --agents-json "$agents_json" --occupied-json "$occupied_json" --backlog-json "$backlog_json" --intake-traces-json "$intake_traces_json" --local-host fixture-host --journal-root "$journal_root" --git-repo "$git_repo" --git-bin "${fixture_root}/git-slow" --git-timeout-secs 0.05 --now 2000000000)"
 grep -q 'BACKLOG BRANCHES INDISPONIBLE (delai Git depasse)' <<<"$slow_out"
 if grep -q 'origin/pending-lot' <<<"$slow_out"; then
   echo 'backlog_branches_timeout_cli: liste partielle visible' >&2
   exit 1
 fi
 echo 'cli_timeout_sans_liste_partielle: OK'
-json_out="$("$system_python" "$idle" --agents-json "$agents_json" --occupied-json "$occupied_json" --backlog-json "$backlog_json" --journal-root "$journal_root" --git-repo "$git_repo" --now 2000000000 --json)"
+json_out="$("$system_python" "$idle" --agents-json "$agents_json" --occupied-json "$occupied_json" --backlog-json "$backlog_json" --intake-traces-json "$intake_traces_json" --local-host fixture-host --journal-root "$journal_root" --git-repo "$git_repo" --now 2000000000 --json)"
 "$system_python" - "$json_out" <<'PY'
 import json, sys
 
 raw = sys.argv[1]
 data = json.loads(raw)
-assert data["daemon_count"] == 20
+assert data["daemon_count"] == 28
 assert any(item["name"] == "frozen-consumer" and item["condition"] == "dernier-tour-termine-sans-reprise" for item in data["bloques"])
 assert any(item["name"] == "timeout-sans-kind" and item["condition"] == "dernier-tour-termine-sans-reprise" for item in data["bloques"])
 assert "timeout-sans-kind" not in data["occupes"]
@@ -642,8 +1245,26 @@ assert not any(item["name"] == "healthy-consumer" for item in data["bloques"])
 assert "healthy-consumer" in data["occupes"]
 assert "acp-anomaly-live" in data["occupes"]
 assert any(item["name"] == "missing-journal" and "journal-absent" in item["reason"] for item in data["indetermines"])
-assert any(item["name"] == "ssh-open-only" and "source-sans-borne-terminale:ssh-unix" in item["reason"] for item in data["indetermines"])
+assert not any(item["name"] == "ssh-open-only" for item in data["indetermines"])
 assert any(item["name"] == "ambiguous-error" and "error-terminalite-non-attestee" in item["reason"] for item in data["indetermines"])
+assert {item["name"] for item in data["mandats_non_soumis"]} == {
+    "codex-pasted",
+    "codex-visible",
+    "rc7",
+}
+assert {item["name"] for item in data["remises_pendant_tour_actif"]} == {
+    "cartae0",
+    "claude-enqueued",
+}
+assert {"ssh-open-only", "remote-pasted"}.issubset(
+    {item["name"] for item in data["prises_inobservables"]}
+)
+assert "codex-consumed" in data["occupes"]
+assert "claude-consumed" in data["occupes"]
+assert data["intake"]["eligible_count"] == 8
+assert data["intake"]["available_count"] == 7
+assert data["intake"]["records_read"] > 0
+assert "SECRET-CONTENU-NE-DOIT-PAS-ETRE-PROJETE" not in raw
 unsafe_detail = "provider\x1b[2J\refface\u202ele diagnostic"
 unsafe = {item["name"]: item for item in data["bloques"] if item["name"].startswith("unsafe-")}
 assert unsafe["unsafe-stop"]["terminal_kind"] == "turn_completed"
