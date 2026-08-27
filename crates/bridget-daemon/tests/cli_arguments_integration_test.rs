@@ -17,15 +17,21 @@ fn fixture_root(label: &str) -> PathBuf {
 }
 
 fn run_cli(home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_bridget"))
+    run_cli_as(home, args, Some("probe"))
+}
+
+fn run_cli_as(home: &Path, args: &[&str], agent_name: Option<&str>) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
+    command
         .args(args)
         .env_clear()
         .env("HOME", home)
         .env("PATH", std::env::var("PATH").unwrap_or_default())
-        .env("BRIDGET_AGENT_NAME", "probe")
-        .stdin(Stdio::null())
-        .output()
-        .expect("exécuter le vrai binaire bridget")
+        .stdin(Stdio::null());
+    if let Some(agent_name) = agent_name {
+        command.env("BRIDGET_AGENT_NAME", agent_name);
+    }
+    command.output().expect("exécuter le vrai binaire bridget")
 }
 
 fn short_message_fixture_root() -> PathBuf {
@@ -36,16 +42,19 @@ fn short_message_fixture_root() -> PathBuf {
     ))
 }
 
+#[derive(Debug)]
+struct CapturedMessage {
+    serialized_message: Option<String>,
+    connection_accepted: bool,
+}
+
 fn capture_one_message(
     listener: UnixListener,
     stop: mpsc::Receiver<()>,
-) -> thread::JoinHandle<Option<String>> {
+) -> thread::JoinHandle<CapturedMessage> {
     thread::spawn(move || {
         listener.set_nonblocking(true).unwrap();
         loop {
-            if stop.try_recv().is_ok() {
-                return None;
-            }
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     stream
@@ -53,17 +62,73 @@ fn capture_one_message(
                         .unwrap();
                     let mut reader = BufReader::new(stream.try_clone().unwrap());
                     let mut register = String::new();
-                    reader.read_line(&mut register).unwrap();
-                    assert!(register.contains("\"type\":\"Register\""));
+                    match reader.read_line(&mut register) {
+                        Ok(0) => {
+                            return CapturedMessage {
+                                serialized_message: None,
+                                connection_accepted: true,
+                            };
+                        }
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                            ) =>
+                        {
+                            return CapturedMessage {
+                                serialized_message: None,
+                                connection_accepted: true,
+                            };
+                        }
+                        Ok(_) => {}
+                        Err(error) => panic!("lire le Register CLI: {error}"),
+                    }
+                    if !register.contains("\"type\":\"Register\"") {
+                        return CapturedMessage {
+                            serialized_message: None,
+                            connection_accepted: true,
+                        };
+                    }
                     writeln!(stream, "{{\"type\":\"Registered\",\"name\":\"probe\"}}").unwrap();
                     stream.flush().unwrap();
                     let mut message = String::new();
-                    reader.read_line(&mut message).unwrap();
+                    match reader.read_line(&mut message) {
+                        Ok(0) => {
+                            return CapturedMessage {
+                                serialized_message: None,
+                                connection_accepted: true,
+                            };
+                        }
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                            ) =>
+                        {
+                            return CapturedMessage {
+                                serialized_message: None,
+                                connection_accepted: true,
+                            };
+                        }
+                        Ok(_) => {}
+                        Err(error) => panic!("lire le Send CLI: {error}"),
+                    }
                     writeln!(stream, "{{\"type\":\"Ack\",\"id\":\"probe-ack\"}}").unwrap();
                     stream.flush().unwrap();
-                    return Some(message);
+                    return CapturedMessage {
+                        serialized_message: Some(message),
+                        connection_accepted: true,
+                    };
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    // Accepter d'abord : une connexion déjà dans la file doit
+                    // rester observable même si le client vient de sortir.
+                    if stop.try_recv().is_ok() {
+                        return CapturedMessage {
+                            serialized_message: None,
+                            connection_accepted: false,
+                        };
+                    }
                     thread::sleep(Duration::from_millis(1));
                 }
                 Err(error) => panic!("accepter la connexion CLI: {error}"),
@@ -73,21 +138,51 @@ fn capture_one_message(
 }
 
 fn run_message_cli(args: &[&str]) -> (Output, Option<String>, bool, bool) {
+    run_message_cli_as(args, Some("probe"), Some("destinataire"))
+}
+
+fn run_message_cli_as(
+    args: &[&str],
+    agent_name: Option<&str>,
+    previous_sender: Option<&str>,
+) -> (Output, Option<String>, bool, bool) {
+    let (output, captured, pid_exists, database_exists) =
+        run_message_cli_observed(args, agent_name, previous_sender);
+    (
+        output,
+        captured.serialized_message,
+        pid_exists,
+        database_exists,
+    )
+}
+
+fn run_message_cli_observed(
+    args: &[&str],
+    agent_name: Option<&str>,
+    previous_sender: Option<&str>,
+) -> (Output, CapturedMessage, bool, bool) {
     let root = short_message_fixture_root();
     let cache = root.join(".cache/bridget");
     fs::create_dir_all(&cache).unwrap();
-    fs::write(cache.join("last-sender-probe"), "destinataire\n").unwrap();
+    if let Some(previous_sender) = previous_sender {
+        let agent_name = agent_name.unwrap_or("human");
+        fs::write(
+            cache.join(format!("last-sender-{agent_name}")),
+            format!("{previous_sender}\n"),
+        )
+        .unwrap();
+    }
     let listener = UnixListener::bind(cache.join("bridget.sock")).unwrap();
     let (stop_tx, stop_rx) = mpsc::channel();
     let capture = capture_one_message(listener, stop_rx);
 
-    let output = run_cli(&root, args);
+    let output = run_cli_as(&root, args, agent_name);
     let _ = stop_tx.send(());
-    let serialized_message = capture.join().unwrap();
+    let captured = capture.join().unwrap();
     let pid_exists = cache.join("bridget.pid").exists();
     let database_exists = cache.join("bridget.db").exists();
     fs::remove_dir_all(&root).unwrap();
-    (output, serialized_message, pid_exists, database_exists)
+    (output, captured, pid_exists, database_exists)
 }
 
 fn assert_command_value_rejected(command: &str, option: &str, invalid_value: Option<&str>) {
@@ -146,6 +241,32 @@ fn assert_missing_message_option_value_rejected(args: &[&str], option: &str) {
         stderr.contains("requiert une valeur"),
         "cause absente de {stderr}"
     );
+    assert!(!pid_exists, "la validation ne doit pas créer le PID file");
+    assert!(!database_exists, "la validation ne doit pas créer la base");
+}
+
+fn assert_reply_contract_rejected(
+    args: &[&str],
+    agent_name: Option<&str>,
+    previous_sender: Option<&str>,
+    option: &str,
+) {
+    let (output, captured, pid_exists, database_exists) =
+        run_message_cli_observed(args, agent_name, previous_sender);
+
+    assert!(
+        !captured.connection_accepted,
+        "{args:?}: la contradiction a ouvert une connexion: {captured:?}"
+    );
+    assert!(
+        captured.serialized_message.is_none(),
+        "{args:?}: la contradiction a laissé partir {:?}",
+        captured.serialized_message
+    );
+    assert_eq!(output.status.code(), Some(2), "sortie réelle: {output:?}");
+    assert!(output.stdout.is_empty(), "stdout inattendu: {output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(option), "option absente de {stderr}");
     assert!(!pid_exists, "la validation ne doit pas créer le PID file");
     assert!(!database_exists, "la validation ne doit pas créer la base");
 }
@@ -219,6 +340,58 @@ fn reply_refuse_les_valeurs_invalides_sans_dernier_expediteur() {
 }
 
 #[test]
+fn send_et_reply_refusent_timeout_sans_reply_avant_connexion() {
+    for (args, previous_sender) in [
+        (
+            vec!["send", "--to", "destinataire", "--timeout", "30", "message"],
+            Some("destinataire"),
+        ),
+        (
+            vec!["reply", "--timeout", "30", "message"],
+            Some("destinataire"),
+        ),
+    ] {
+        assert_reply_contract_rejected(&args, Some("probe"), previous_sender, "--timeout");
+    }
+}
+
+#[test]
+fn send_et_reply_refusent_reply_humain_avant_connexion() {
+    for (args, previous_sender) in [
+        (
+            vec![
+                "send",
+                "--to",
+                "destinataire",
+                "--reply",
+                "--timeout",
+                "30",
+                "message",
+            ],
+            Some("destinataire"),
+        ),
+        (
+            vec![
+                "send",
+                "--to",
+                "destinataire",
+                "--from",
+                "human",
+                "--reply",
+                "message",
+            ],
+            Some("destinataire"),
+        ),
+        (
+            vec!["reply", "--reply", "--timeout", "30", "message"],
+            Some("destinataire"),
+        ),
+    ] {
+        assert_reply_contract_rejected(&args, None, previous_sender, "--reply");
+    }
+}
+
+#[test]
 fn send_et_reply_conservent_les_valeurs_numeriques_valides() {
     for args in [
         vec![
@@ -246,6 +419,7 @@ fn send_et_reply_conservent_les_valeurs_numeriques_valides() {
         assert!(output.status.success(), "sortie réelle: {output:?}");
         let message: serde_json::Value =
             serde_json::from_str(message.as_deref().expect("message sérialisé")).unwrap();
+        assert_eq!(message["reply"], true);
         assert_eq!(message["reply_timeout"], 9);
         assert_eq!(message["hops"], 2);
         assert!(!pid_exists, "la commande ne doit pas créer le PID file");
@@ -335,6 +509,20 @@ fn send_nomme_les_options_de_texte_privees_de_valeur() {
         &["send", "--to", "destinataire", "message", "--from"],
         "--from",
     );
+}
+
+#[test]
+fn message_humain_sans_demande_suivie_reste_envoye() {
+    let (output, message, pid_exists, database_exists) =
+        run_message_cli_as(&["send", "--to", "destinataire", "message"], None, None);
+    assert!(output.status.success(), "sortie réelle: {output:?}");
+    let message: serde_json::Value =
+        serde_json::from_str(message.as_deref().expect("message sérialisé")).unwrap();
+    assert_eq!(message["from"], "human");
+    assert_eq!(message["reply"], false);
+    assert!(message["reply_timeout"].is_null());
+    assert!(!pid_exists, "la commande ne doit pas créer le PID file");
+    assert!(!database_exists, "la commande ne doit pas créer la base");
 }
 
 #[test]
