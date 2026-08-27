@@ -24,7 +24,7 @@ une réécriture. `app::reconcile_catalogue_from_store` pousse déjà store → 
 ## Critères d'acceptation
 
 1. Gestes CLI `registre fermer|refuter|requalifier` avec raisons typées + `--ref` obligatoire.
-2. `registre list` : **ouverts par défaut** ; `--fermes` / `--refutes` / `--attente` déplient le corps ; pied O/F/R/Q.
-3. Oracles TEMOIN_A (ouvert), TEMOIN_B (fermé quitte les ouverts sans vider la vue), TEMOIN_C (réfuté ≠ fermé) — attentes en dur.
+2. `registre list` : **ouverts par défaut** ; `--fermes` / `--refutes` **restreignent** le corps à cet état (raison typée + réf) — pas un élargissement sous les ouverts ; `--attente` seul déplie ; pied O/F/R/Q toujours.
+3. Oracles TEMOIN_A (ouvert), TEMOIN_B (fermé quitte le défaut, visible dans `--fermes` sans ouverts), TEMOIN_C (réfuté ≠ fermé), TEMOIN_D (fermé apparaît dans la vue des fermés, après preuve défaut non vide) — attentes en dur.
 4. Fermeture/réfutation sans preuve refusée ; réfutation refuse `sha:` seul.
 5. Suite maicie : comptes passed/failed annoncés ; taux concurrence mesuré (base comprise).
