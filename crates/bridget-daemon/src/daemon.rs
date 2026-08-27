@@ -7,9 +7,9 @@ use bridget_transport::greffe_authorization::{
 };
 use bridget_transport::protocol::{
     AttachRefusal, CLIENT_CONTRACT_VERSION, COORDINATION_EVENTS_VERSION,
-    COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole, IdempotencyIssue,
-    PresenceMode, REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION, ServiceCapability,
-    ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
+    COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole, DiskSpaceFact,
+    IdempotencyIssue, PresenceMode, REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION,
+    ServiceCapability, ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
@@ -409,6 +409,9 @@ struct Presence {
     /// Une échéance plutôt qu'un booléen : l'expiration devient une simple
     /// comparaison à la lecture, sans tâche de fond pour balayer les statuts.
     dnd_until: Option<Instant>,
+    /// Relevé local transmis par le wrapper juste après Register. Ce fait est
+    /// affiché uniquement : il ne pilote aucune politique du daemon.
+    disk_space: Option<DiskSpaceFact>,
 }
 
 impl Presence {
@@ -2307,6 +2310,7 @@ impl DaemonState {
                         presence.model.as_deref(),
                         presence.served_model.as_deref(),
                     ),
+                    disk_space: presence.disk_space.clone(),
                 })
             })
             .collect();
@@ -2348,6 +2352,7 @@ impl DaemonState {
                 effort,
                 rate_limits: Vec::new(),
                 model_mismatch: None,
+                disk_space: None,
             });
         }
         let listed_names: std::collections::HashSet<String> =
@@ -2378,6 +2383,7 @@ impl DaemonState {
                     presence.model.as_deref(),
                     presence.served_model.as_deref(),
                 ),
+                disk_space: presence.disk_space.clone(),
             });
         }
         agents.sort_by(|left, right| left.name.cmp(&right.name));
@@ -3923,6 +3929,9 @@ fn handle_register_with_channel(
                 let served_model = previous
                     .as_ref()
                     .and_then(|presence| presence.served_model.clone());
+                let disk_space = previous
+                    .as_ref()
+                    .and_then(|presence| presence.disk_space.clone());
                 // Une reconnexion par un binaire antérieur au champ conserve
                 // l'observation déjà attestée ; une présence historique sans
                 // valeur reste volontairement inconnue.
@@ -4069,6 +4078,7 @@ fn handle_register_with_channel(
                         domain: derived_domain.clone(),
                         derived_domain,
                         dnd_until,
+                        disk_space,
                     },
                 );
                 schedule_idempotent_delivery_recovery(state, conn_id, &instance_id);
@@ -5430,6 +5440,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::End { .. }
                 | WrapperToDaemon::AttachRejected { .. }
                 | WrapperToDaemon::Register { .. }
+                | WrapperToDaemon::DiskSpace { .. }
                 | WrapperToDaemon::JournalReady
                 | WrapperToDaemon::Unregister
                 | WrapperToDaemon::Rename { .. }
@@ -5537,6 +5548,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::End { .. }
                 | WrapperToDaemon::AttachRejected { .. }
                 | WrapperToDaemon::Register { .. }
+                | WrapperToDaemon::DiskSpace { .. }
                 | WrapperToDaemon::JournalReady
                 | WrapperToDaemon::Unregister
                 | WrapperToDaemon::Rename { .. }
@@ -6828,6 +6840,28 @@ fn handle_wrapper_message(
             Some(response)
         }
 
+        WrapperToDaemon::DiskSpace { fact } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
+                warn!(
+                    "relevé d'espace disque ignoré avant l'enregistrement: {}",
+                    conn_id
+                );
+                return None;
+            };
+            let Some(presence) = st.presences.get_mut(&instance_id) else {
+                warn!(
+                    "relevé d'espace disque ignoré sans présence: {}",
+                    instance_id
+                );
+                return None;
+            };
+            // Fait d'inventaire seulement : surtout ne pas toucher aux
+            // horloges ou à l'état, qui gouvernent la disponibilité.
+            presence.disk_space = Some(fact);
+            None
+        }
+
         WrapperToDaemon::JournalReady => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
@@ -7361,17 +7395,17 @@ pub fn get_status(config: &DaemonConfig) -> Result<DaemonStatus, String> {
         Some(identity) => identity,
         // La socket a disparu ou refuse la connexion : aucun daemon n'est
         // observable. C'est distinct d'un pair qui a accepté puis s'est tu.
-        None => return Ok(DaemonStatus::default()),
+        None => return Ok(daemon_absent_status()),
     };
 
     let stream = match UnixStream::connect(&config.socket_path) {
         Ok(s) => s,
-        Err(_) => return Ok(DaemonStatus::default()),
+        Err(_) => return Ok(daemon_inventory_unavailable(&identity)),
     };
 
     let read_stream = match stream.try_clone() {
         Ok(s) => s,
-        Err(_) => return Ok(DaemonStatus::default()),
+        Err(_) => return Ok(daemon_inventory_unavailable(&identity)),
     };
 
     let mut writer = BufWriter::new(stream);
@@ -7394,45 +7428,48 @@ pub fn get_status(config: &DaemonConfig) -> Result<DaemonStatus, String> {
     };
     let reg_json = match encode(&reg) {
         Ok(j) => j,
-        Err(_) => return Ok(DaemonStatus::default()),
+        Err(_) => return Ok(daemon_inventory_unavailable(&identity)),
     };
     if writeln!(writer, "{}", reg_json).is_err() {
-        return Ok(DaemonStatus::default());
+        return Ok(daemon_inventory_unavailable(&identity));
     }
     if writer.flush().is_err() {
-        return Ok(DaemonStatus::default());
+        return Ok(daemon_inventory_unavailable(&identity));
     }
 
     // Lire Registered
     let mut line = String::new();
     if reader.read_line(&mut line).is_err() {
-        return Ok(DaemonStatus::default());
+        return Ok(daemon_inventory_unavailable(&identity));
     }
 
     // Demander la liste des agents
     let list_req = WrapperToDaemon::ListAgents;
     let list_json = match encode(&list_req) {
         Ok(j) => j,
-        Err(_) => return Ok(DaemonStatus::default()),
+        Err(_) => return Ok(daemon_inventory_unavailable(&identity)),
     };
     if writeln!(writer, "{}", list_json).is_err() {
-        return Ok(DaemonStatus::default());
+        return Ok(daemon_inventory_unavailable(&identity));
     }
     if writer.flush().is_err() {
-        return Ok(DaemonStatus::default());
+        return Ok(daemon_inventory_unavailable(&identity));
     }
 
     // Lire AgentList
     let mut resp_line = String::new();
     if reader.read_line(&mut resp_line).is_err() {
-        return Ok(DaemonStatus::default());
+        return Ok(daemon_inventory_unavailable(&identity));
     }
-    let agents = match decode::<DaemonToWrapper>(resp_line.trim()) {
-        Ok(DaemonToWrapper::AgentList { agents }) => agents
-            .into_iter()
-            .filter(|agent| agent.agent_type != "status-probe")
-            .collect(),
-        _ => vec![],
+    let (agents, agents_inventory_available) = match decode::<DaemonToWrapper>(resp_line.trim()) {
+        Ok(DaemonToWrapper::AgentList { agents }) => (
+            agents
+                .into_iter()
+                .filter(|agent| agent.agent_type != "status-probe")
+                .collect(),
+            true,
+        ),
+        _ => (vec![], false),
     };
 
     // Compter les messages en base — mais SEULEMENT si la base locale est
@@ -7456,6 +7493,7 @@ pub fn get_status(config: &DaemonConfig) -> Result<DaemonStatus, String> {
     Ok(DaemonStatus {
         running: true,
         agents,
+        agents_inventory_available,
         message_count,
         build_id: Some(identity.build_id),
         daemon_host,
@@ -8072,6 +8110,7 @@ fn legacy_identity_report(line: &str) -> bool {
 pub struct DaemonStatus {
     pub running: bool,
     pub agents: Vec<bridget_transport::protocol::AgentInfo>,
+    pub agents_inventory_available: bool,
     /// `None` quand la base locale n'est PAS celle du daemon interrogé : on ne
     /// rend alors aucun chiffre plutôt qu'un chiffre pris ailleurs.
     pub message_count: Option<usize>,
@@ -8079,6 +8118,207 @@ pub struct DaemonStatus {
     /// Machine et base attestées par le daemon lui-même.
     pub daemon_host: Option<String>,
     pub daemon_db_path: Option<String>,
+}
+
+/// Absence déterminée : aucune socket ne répond, donc l'inventaire vide est
+/// une connaissance complète, pas une défaillance de collecte.
+fn daemon_absent_status() -> DaemonStatus {
+    DaemonStatus {
+        agents_inventory_available: true,
+        ..DaemonStatus::default()
+    }
+}
+
+/// Une identité valide a attesté le daemon, puis la collecte a échoué. Ne pas
+/// rabattre cette incertitude vers une absence : un appelant doit pouvoir
+/// distinguer « aucun agent » de « agents inconnus ».
+fn daemon_inventory_unavailable(identity: &DaemonIdentity) -> DaemonStatus {
+    DaemonStatus {
+        running: true,
+        agents_inventory_available: false,
+        message_count: None,
+        build_id: Some(identity.build_id.clone()),
+        daemon_host: identity.host.clone(),
+        daemon_db_path: identity.db_path.clone(),
+        ..DaemonStatus::default()
+    }
+}
+
+#[cfg(test)]
+mod inventory_provenance_tests {
+    use super::{
+        CLIENT_CONTRACT_VERSION, ConnectionRole, DaemonConfig, DaemonToWrapper, WrapperToDaemon,
+        encode, get_status,
+    };
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::thread;
+
+    /// Sert l'aller-retour d'identité complet qu'emprunte réellement
+    /// `get_status`, puis rend la connexion au scénario qui suit. Sans cette
+    /// négociation, un EOF ici ne prouverait que l'échec de la sonde préalable.
+    fn serve_daemon_identity(mut stream: UnixStream) -> UnixStream {
+        let read_stream = stream.try_clone().expect("cloner la connexion d'identité");
+        let mut reader = BufReader::new(read_stream);
+        let mut line = String::new();
+
+        assert!(reader.read_line(&mut line).expect("lire le rôle") > 0);
+        assert!(matches!(
+            super::decode(line.trim()).expect("décoder le rôle"),
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Client
+            }
+        ));
+        writeln!(
+            stream,
+            "{}",
+            encode(&DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            })
+            .expect("encoder l'acceptation")
+        )
+        .expect("répondre au rôle");
+        stream.flush().expect("flush du rôle");
+
+        line.clear();
+        assert!(reader.read_line(&mut line).expect("lire l'accueil") > 0);
+        assert!(matches!(
+            super::decode(line.trim()).expect("décoder l'accueil"),
+            WrapperToDaemon::ClientHello { .. }
+        ));
+        writeln!(
+            stream,
+            "{}",
+            encode(&DaemonToWrapper::ClientWelcome {
+                version: CLIENT_CONTRACT_VERSION,
+                build_id: "fixture-status".to_string(),
+                horizon_secs: 60,
+                issued_at_tolerance_secs: 5,
+                capabilities: vec![],
+            })
+            .expect("encoder l'accueil")
+        )
+        .expect("répondre à l'accueil");
+        stream.flush().expect("flush de l'accueil");
+
+        line.clear();
+        assert!(reader.read_line(&mut line).expect("lire la demande") > 0);
+        assert!(matches!(
+            super::decode(line.trim()).expect("décoder la demande"),
+            WrapperToDaemon::DaemonIdentityRequest
+        ));
+        writeln!(
+            stream,
+            "{}",
+            encode(&DaemonToWrapper::DaemonIdentityReport {
+                host: "fixture-host".to_string(),
+                db_path: "/fixture/status.db".to_string(),
+                instance_id: "fixture-instance".to_string(),
+            })
+            .expect("encoder le rapport")
+        )
+        .expect("répondre au rapport");
+        stream.flush().expect("flush du rapport");
+        stream
+    }
+
+    #[test]
+    fn socket_absente_donne_un_inventaire_vide_disponible() {
+        let mut config = DaemonConfig::default();
+        config.socket_path = std::env::temp_dir().join(format!(
+            "bridget-no-such-socket-{}.sock",
+            uuid::Uuid::new_v4()
+        ));
+        let status = get_status(&config).expect("l'absence déterminée est un statut");
+        assert!(!status.running);
+        assert!(status.agents_inventory_available);
+        assert!(status.agents.is_empty());
+    }
+
+    #[test]
+    fn eof_apres_identite_et_register_garde_un_inventaire_indisponible() {
+        let path = std::env::temp_dir().join(format!("bridget-eof-{}.sock", uuid::Uuid::new_v4()));
+        let listener = UnixListener::bind(&path).unwrap();
+        let thread_path = path.clone();
+        let handle = thread::spawn(move || {
+            let (first, _) = listener.accept().unwrap();
+            drop(serve_daemon_identity(first));
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            assert!(matches!(
+                super::decode(line.trim()).expect("décoder Register"),
+                WrapperToDaemon::Register { .. }
+            ));
+            writeln!(stream, "{{}}").unwrap();
+            stream.flush().unwrap();
+            let mut list_line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut list_line)
+                .unwrap();
+            assert!(matches!(
+                super::decode(list_line.trim()).expect("décoder ListAgents"),
+                WrapperToDaemon::ListAgents
+            ));
+        });
+        let mut config = DaemonConfig::default();
+        config.socket_path = path.clone();
+        let status = get_status(&config).expect("le daemon a été attesté");
+        handle.join().unwrap();
+        let _ = std::fs::remove_file(thread_path);
+        assert!(status.running);
+        assert!(!status.agents_inventory_available);
+    }
+
+    #[test]
+    fn agent_list_vide_confirme_inventaire_disponible() {
+        let path =
+            std::env::temp_dir().join(format!("bridget-agent-list-{}.sock", uuid::Uuid::new_v4()));
+        let listener = UnixListener::bind(&path).unwrap();
+        let thread_path = path.clone();
+        let handle = thread::spawn(move || {
+            let (first, _) = listener.accept().unwrap();
+            drop(serve_daemon_identity(first));
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            assert!(matches!(
+                super::decode(line.trim()).expect("décoder Register"),
+                WrapperToDaemon::Register { .. }
+            ));
+            writeln!(stream, "{{}}").unwrap();
+            stream.flush().unwrap();
+            let mut list_line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut list_line)
+                .unwrap();
+            assert!(matches!(
+                super::decode(list_line.trim()).expect("décoder ListAgents"),
+                WrapperToDaemon::ListAgents
+            ));
+            writeln!(
+                stream,
+                "{}",
+                encode(&DaemonToWrapper::AgentList { agents: vec![] }).unwrap()
+            )
+            .unwrap();
+            stream.flush().unwrap();
+        });
+        let mut config = DaemonConfig::default();
+        config.socket_path = path.clone();
+        let status = get_status(&config).expect("la liste vide est un statut");
+        handle.join().unwrap();
+        let _ = std::fs::remove_file(thread_path);
+        assert_eq!(
+            (status.running, status.agents_inventory_available),
+            (true, true)
+        );
+        assert!(status.agents.is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -8342,6 +8582,7 @@ mod presence_tests {
                 derived_domain: Some("projet-a".to_string()),
                 domain: Some("projet-a".to_string()),
                 dnd_until: None,
+                disk_space: None,
             },
         );
         state.router.unregister_by_conn("conn-1");
@@ -8424,6 +8665,7 @@ mod presence_tests {
                 derived_domain: None,
                 domain: None,
                 dnd_until: None,
+                disk_space: None,
             },
         );
         (state, config)
@@ -8608,6 +8850,39 @@ mod presence_tests {
             "trame reçue par la cible: {delivered:?}"
         );
         assert_sender_last_seen(&mut shared.lock().unwrap(), false);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn relevé_disque_post_enregistrement_est_projete_sans_changer_la_presence() {
+        let (state, config) = state_with_registered_agent("releve-disque");
+        let shared = Arc::new(Mutex::new(state));
+        let fact = DiskSpaceFact {
+            volume: "/".to_string(),
+            free_bytes: 47_300_000_000,
+            observed_at_unix: 1_788_000_000,
+        };
+
+        assert!(
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::DiskSpace { fact: fact.clone() },
+                &shared,
+            )
+            .is_none()
+        );
+
+        let mut state = shared.lock().unwrap();
+        let presence = state.presences.get("instance-1").unwrap();
+        assert_eq!(
+            presence.state, "connected",
+            "le relevé ne pilote pas l'état"
+        );
+        assert_eq!(presence.disk_space, Some(fact.clone()));
+        let agents = state.agent_infos();
+        assert_eq!(agents[0].disk_space, Some(fact));
+        drop(state);
+        drop(shared);
         let _ = std::fs::remove_file(config.db_path);
     }
 
@@ -11686,6 +11961,7 @@ mod presence_tests {
                 derived_domain: None,
                 domain: None,
                 dnd_until: None,
+                disk_space: None,
             },
         );
         let (writer_stream, mut peer) = UnixStream::pair().unwrap();
@@ -11858,6 +12134,7 @@ mod presence_tests {
                 derived_domain: None,
                 domain: None,
                 dnd_until: None,
+                disk_space: None,
             },
         );
         let (writer_stream, mut peer) = UnixStream::pair().unwrap();

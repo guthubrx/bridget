@@ -1133,6 +1133,7 @@ mod tests {
             binary_cli: Some(PathBuf::from("/resolved/bin/bridget")),
             status: Ok(DaemonStatus {
                 running: true,
+                agents_inventory_available: true,
                 agents: vec![AgentInfo {
                     name: "coderBridget".to_string(),
                     agent_type: "codex".to_string(),
@@ -1151,6 +1152,7 @@ mod tests {
                     effort: None,
                     rate_limits: Default::default(),
                     model_mismatch: None,
+                    disk_space: None,
                 }],
                 message_count: Some(3),
                 build_id: Some("abc123".to_string()),
@@ -1266,6 +1268,7 @@ mod tests {
         snapshot.status = Ok(DaemonStatus {
             running: false,
             agents: vec![],
+            agents_inventory_available: false,
             message_count: None,
             build_id: None,
             daemon_host: None,
