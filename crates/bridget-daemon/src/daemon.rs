@@ -177,6 +177,30 @@ fn unix_timestamp() -> i64 {
 // Constante pour la période de grâce des timeouts (M-004)
 const TIMEOUT_GRACE_PERIOD: u64 = 30; // secondes
 
+/// Vrai si un tour `busy` a dépassé notify_timeout + grâce et doit redevenir
+/// mandatable. Sans `busy_since`, on retombe sur `capacity_seen` (Register
+/// historique / upgrade à chaud).
+fn busy_turn_is_stale(presence: &Presence, ttl_secs: u64) -> bool {
+    if presence.state != "busy" {
+        return false;
+    }
+    let elapsed = presence
+        .busy_since
+        .unwrap_or(presence.capacity_seen)
+        .elapsed();
+    elapsed >= Duration::from_secs(ttl_secs)
+}
+
+/// Mutant : ne libère jamais un busy périmé. Prouve que l'oracle d'arrivée
+/// du mandat échoue si on retire le remède.
+#[cfg(test)]
+fn busy_turn_is_stale_mutant_never(_presence: &Presence, _ttl_secs: u64) -> bool {
+    false
+}
+
+#[cfg(test)]
+fn release_stale_busy_turns_mutant_noop(_state: &mut DaemonState) {}
+
 #[derive(Clone)]
 struct Presence {
     name: String,
@@ -196,6 +220,10 @@ struct Presence {
     journal_available: bool,
     os: String,
     state: String,
+    /// Instant où le tour `busy` a commencé (`TurnState true` / Register
+    /// `turn_in_progress`). Absent hors busy. Sert à libérer un tour qui
+    /// n'aboutit jamais : sans cela Maicie refuse tout mandat (connected|dnd).
+    busy_since: Option<Instant>,
     /// Dernière attestation de CAPACITÉ (register, tour, runtime…) — pas le
     /// heartbeat. C'est ce que `last_seen_secs` expose à who / bridget-idle.
     capacity_seen: Instant,
@@ -1983,12 +2011,50 @@ impl DaemonState {
             .presences
             .get_mut(instance_id)
             .ok_or_else(|| "présence de l'équipier introuvable".to_string())?;
-        presence.state = if in_progress { "busy" } else { "connected" }.to_string();
+        if in_progress {
+            presence.state = "busy".to_string();
+            presence.busy_since = Some(Instant::now());
+        } else {
+            presence.state = "connected".to_string();
+            presence.busy_since = None;
+        }
         presence.touch_capacity();
         Ok(())
     }
 
+    /// Libère les tours `busy` plus vieux que notify_timeout + grâce.
+    /// Sans TurnState false (tour non abouti), l'agent resterait non mandatable
+    /// indéfiniment : Maicie n'envoie qu'aux connected|dnd.
+    fn release_stale_busy_turns(&mut self) {
+        let busy_ids: Vec<(String, String)> = self
+            .presences
+            .iter()
+            .filter(|(_, presence)| presence.state == "busy")
+            .map(|(id, presence)| (id.clone(), presence.agent_type.clone()))
+            .collect();
+        let mut stale = Vec::new();
+        for (id, agent_type) in busy_ids {
+            let ttl =
+                live_notify_timeout_secs(&self.registry, &agent_type) + TIMEOUT_GRACE_PERIOD;
+            if let Some(presence) = self.presences.get(&id) {
+                if busy_turn_is_stale(presence, ttl) {
+                    stale.push(id);
+                }
+            }
+        }
+        for id in stale {
+            if let Some(presence) = self.presences.get_mut(&id) {
+                presence.state = "connected".to_string();
+                presence.busy_since = None;
+                presence.touch_capacity();
+            }
+        }
+    }
+
     fn agent_infos(&mut self) -> Vec<bridget_transport::protocol::AgentInfo> {
+        // Avant le retain : un busy périmé redevient connected (mandatable)
+        // sans attendre un TurnState false qui peut ne jamais venir.
+        self.release_stale_busy_turns();
         // Lot B (déjà sur main) : exemption `connected` levée — retain =
         // horloge lien seule via `presence_within_retention`.
         // Ce lot (purge/orphan) : capturer les IDs purgés pour orpheliner les
@@ -3633,6 +3699,11 @@ fn handle_register_with_channel(
                             "connected"
                         }
                         .to_string(),
+                        busy_since: if turn_in_progress {
+                            Some(Instant::now())
+                        } else {
+                            None
+                        },
                         capacity_seen: Instant::now(),
                         link_seen: Instant::now(),
                         reconnect_count,
@@ -7073,6 +7144,7 @@ mod presence_tests {
                 journal_available: false,
                 os: "Linux".to_string(),
                 state: "connected".to_string(),
+                busy_since: None,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -7154,6 +7226,7 @@ mod presence_tests {
                 journal_available: true,
                 os: "macOS".to_string(),
                 state: "connected".to_string(),
+                busy_since: None,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -10102,6 +10175,7 @@ mod presence_tests {
                 journal_available: true,
                 os: "macOS".to_string(),
                 state: "connected".to_string(),
+                busy_since: None,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -10270,6 +10344,7 @@ mod presence_tests {
                 journal_available: true,
                 os: "macOS".to_string(),
                 state: "connected".to_string(),
+                busy_since: None,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -10551,6 +10626,114 @@ mod presence_tests {
                 .any(|a| a.name == "agent-2" && a.state == "busy"),
             "busy jury ne doit pas être purgé: {infos:?}"
         );
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    /// ORACLE — tour non abouti : busy périmé → connected, puis le mandat
+    /// ARRIVE sur le socket (effet, pas seule présence). Mutant never-release
+    /// prouve l'échec sans remède. Attentes écrites en dur.
+    #[test]
+    fn tour_non_abouti_redevient_mandatable_et_le_mandat_parvient() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::net::UnixStream;
+
+        let (mut state, config) = state_with_registered_agent("busy-tour-non-abouti");
+        state.set_turn_state("conn-1", true).unwrap();
+        assert_eq!(
+            state.presences.get("instance-1").unwrap().state,
+            "busy",
+            "précondition : tour non abouti laisse busy"
+        );
+
+        let ttl = live_notify_timeout_secs(&state.registry, "claude") + TIMEOUT_GRACE_PERIOD;
+        let aged = Instant::now()
+            .checked_sub(Duration::from_secs(ttl + 1))
+            .expect("horloge busy_since");
+        {
+            let presence = state.presences.get_mut("instance-1").unwrap();
+            presence.busy_since = Some(aged);
+            assert!(
+                !busy_turn_is_stale_mutant_never(presence, ttl),
+                "mutant never-release garderait le verrou"
+            );
+            assert!(
+                busy_turn_is_stale(presence, ttl),
+                "busy_since au-delà du TTL doit être périmé"
+            );
+        }
+
+        // Même règle que plugins/maicie/src/main.rs:722 — écrite en dur ici.
+        {
+            let state_str = state.presences.get("instance-1").unwrap().state.as_str();
+            let maicie_accepterait = state_str == "connected" || state_str == "dnd";
+            assert!(
+                !maicie_accepterait,
+                "avant libération Maicie ne mandate pas un busy"
+            );
+        }
+
+        let (writer_stream, peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        state.connections.insert(
+            "conn-1".to_string(),
+            Arc::new(Mutex::new(BufWriter::new(writer_stream))),
+        );
+
+        // Chemin réel : who / Maicie passent par agent_infos → release.
+        let infos = state.agent_infos();
+        let agent = infos
+            .iter()
+            .find(|agent| agent.name == "agent-2")
+            .expect("agent visible après libération");
+        assert_eq!(
+            agent.state, "connected",
+            "attente en dur : busy périmé → connected, reçu={}",
+            agent.state
+        );
+        let maicie_accepterait = agent.state == "connected" || agent.state == "dnd";
+        assert!(
+            maicie_accepterait,
+            "après libération Maicie doit pouvoir mandater"
+        );
+
+        const MANDAT_BODY: &str = "MANDAT-BUSY-RECOVERY-ORACLE-98beefe0";
+        let writer = state
+            .connections
+            .get("conn-1")
+            .expect("socket wrapper")
+            .clone();
+        deliver_to_agent(&writer, "agent-2", MANDAT_BODY).expect("livraison mandat");
+
+        let mut line = String::new();
+        BufReader::new(peer)
+            .read_line(&mut line)
+            .expect("lecture socket après mandat");
+        assert!(
+            line.contains(MANDAT_BODY),
+            "oracle d'EFFET : le mandat doit ARRIVER; reçu={line}"
+        );
+
+        // Sans remède (mutant noop) le busy resterait → non mandatable.
+        state.set_turn_state("conn-1", true).unwrap();
+        {
+            let presence = state.presences.get_mut("instance-1").unwrap();
+            presence.busy_since = Some(aged);
+        }
+        release_stale_busy_turns_mutant_noop(&mut state);
+        assert_eq!(
+            state.presences.get("instance-1").unwrap().state,
+            "busy",
+            "mutant noop : busy doit rester pour prouver l'échec sans remède"
+        );
+        {
+            let state_str = state.presences.get("instance-1").unwrap().state.as_str();
+            let maicie_accepterait = state_str == "connected" || state_str == "dnd";
+            assert!(
+                !maicie_accepterait,
+                "mutant : Maicie refuserait encore le mandat"
+            );
+        }
+
         let _ = std::fs::remove_file(&config.db_path);
     }
 
