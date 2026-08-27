@@ -114,7 +114,7 @@ fn managed_resume_context(
             "Identité figée : nom={agent}; type={agent_type}; protocole={protocol}; definition_digest={definition_digest}."
         ),
     ];
-    let resume_stance = match managed_resume_mission(home, worktree, &agent) {
+    let resume_stance = match managed_resume_mission(home, &agent) {
         Ok(stance) => {
             match &stance {
                 ResumeStance::Actionable(mission) => lines.extend([
@@ -460,11 +460,7 @@ fn resume_wait_reason(
     })
 }
 
-fn managed_resume_mission(
-    home: &Path,
-    worktree: &Path,
-    agent: &str,
-) -> Result<ResumeStance, String> {
+fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, String> {
     let config = home.join(".config/maicie/config.json");
     if !config.is_file() {
         return Err(format!(
@@ -472,6 +468,10 @@ fn managed_resume_mission(
             config.display()
         ));
     }
+    let review_repository = maicie::config::MaicieConfig::load(&config)
+        .map_err(|error| error.to_string())?
+        .review_project
+        .map(|project| project.repository_root);
     let projection = maicie::ui_projection::read_ui_mission_projection_v1(&config)
         .map_err(|error| error.to_string())?;
     let ranking = |item: &maicie::ui_projection::UiObjectiveProjection,
@@ -529,7 +529,7 @@ fn managed_resume_mission(
             .unwrap_or_else(|| "inconnue".to_string()),
         instruction: delegation.instruction.clone(),
         review_continuity: observe_delegation_review(
-            Some(worktree),
+            review_repository.as_deref(),
             delegation,
             item.review_verdicts
                 .iter()

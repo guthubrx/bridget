@@ -5,14 +5,15 @@ use bridget_transport::greffe_authorization::{
 };
 use bridget_transport::protocol::{
     GuichetDelegateMutationStatus, GuichetDurationClass, GuichetRegistreAddStatus,
-    GuichetReplyPayload, ServiceRequestOperation, ServiceRequestPayload, ServiceSuiteDeclaration,
-    decode, encode,
+    GuichetReplyPayload, ReviewTarget, ServiceRequestOperation, ServiceRequestPayload,
+    ServiceSuiteDeclaration, decode, encode,
 };
 use maicie::app::process_guichet_claim_with_central_service;
 use maicie::bridget_client::{BridgetClientLimits, GuichetClaim};
 use maicie::config::MaicieConfig;
 use maicie::domain::EtatObjectif;
 use maicie::store::MaicieStore;
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -106,22 +107,16 @@ fn run_effect_oracle(root: &Path) {
     let server_socket = socket.clone();
     let server = thread::spawn(move || serve_agent_list_once(&server_socket, ready_tx));
     ready_rx.recv().unwrap();
-    let delegate = authorized_claim(
+    let review_target = ReviewTarget {
+        target_ref: "origin/session-047-verdict-tete-reecrite".to_string(),
+        expected_head: "a".repeat(40),
+    };
+    let delegate = authorized_review_delegate_claim(
         &gate,
         &issuer_scope,
         "request-delegate-central",
         now,
-        GreffeMutationAction::Delegate,
-        ServiceRequestOperation::Delegate,
-        ServiceRequestPayload::Delegate {
-            goal: "prouver le chemin fédéré central".to_string(),
-            explicit_target: Some("prospective".to_string()),
-            required_tags: Vec::new(),
-            duration: GuichetDurationClass::Courte,
-            suite: ServiceSuiteDeclaration::Aucune,
-            depends_on: Vec::new(),
-            references: Vec::new(),
-        },
+        &review_target,
     );
     let delegated = process_guichet_claim_with_central_service(
         &mut store,
@@ -137,6 +132,14 @@ fn run_effect_oracle(root: &Path) {
     assert!(delegated.refusal_reason.is_none());
     let objective_id = delegated.objective_id.expect("objectif durable absent");
     let delegation_id = delegated.delegation_id.expect("délégation durable absente");
+    let durable_review_target = store
+        .objective_snapshots(Some(objective_id))
+        .unwrap()
+        .remove(0)
+        .delegations
+        .remove(0)
+        .review_target;
+    assert_eq!(durable_review_target, Some(review_target));
     match decode::<WrapperToDaemon>(std::str::from_utf8(&delegated.reply_bytes).unwrap()).unwrap() {
         WrapperToDaemon::GuichetReply {
             payload:
@@ -312,6 +315,82 @@ fn authorized_claim(
             canonical_instance_id: Some(INSTANCE_ID),
             declared_from: Some(PRINCIPAL),
             action,
+            issuer_scope,
+            request_id,
+            request_issued_at: issued_at,
+            canonical_request: &canonical_request,
+            observed_at: issued_at,
+        })
+        .unwrap();
+    GuichetClaim {
+        issuer_scope: issuer_scope.to_string(),
+        request_id: request_id.to_string(),
+        canonical_request,
+        authorization_attestation: Some(authorization_attestation),
+        claimed_at: issued_at,
+        claim_generation: 1,
+        claim_token: format!("claim-{request_id}"),
+        claim_lease_expires_at: issued_at + 30,
+        expires_at: issued_at + 60,
+    }
+}
+
+#[derive(Serialize)]
+struct ReviewDelegatePayload<'a> {
+    goal: &'static str,
+    explicit_target: &'static str,
+    required_tags: [&'static str; 1],
+    duration: GuichetDurationClass,
+    review_target: &'a ReviewTarget,
+    suite: ServiceSuiteDeclaration,
+}
+
+#[derive(Serialize)]
+struct ReviewServiceRequest<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    v: u8,
+    issuer_scope: &'a str,
+    request_id: &'a str,
+    issued_at: i64,
+    from: &'static str,
+    to: &'static str,
+    operation: &'static str,
+    payload: ReviewDelegatePayload<'a>,
+}
+
+fn authorized_review_delegate_claim(
+    gate: &GreffeAuthorizationGate,
+    issuer_scope: &str,
+    request_id: &str,
+    issued_at: i64,
+    review_target: &ReviewTarget,
+) -> GuichetClaim {
+    let canonical_request = serde_json::to_vec(&ReviewServiceRequest {
+        kind: "service_request",
+        v: 2,
+        issuer_scope,
+        request_id,
+        issued_at,
+        from: PRINCIPAL,
+        to: "maicie",
+        operation: "delegate",
+        payload: ReviewDelegatePayload {
+            goal: "prouver le chemin fédéré central",
+            explicit_target: "prospective",
+            required_tags: ["review"],
+            duration: GuichetDurationClass::Courte,
+            review_target,
+            suite: ServiceSuiteDeclaration::Aucune,
+        },
+    })
+    .unwrap();
+    let authorization_attestation = gate
+        .authorize_deposit(GreffeDepositAuthorization {
+            canonical_name: Some(PRINCIPAL),
+            canonical_instance_id: Some(INSTANCE_ID),
+            declared_from: Some(PRINCIPAL),
+            action: GreffeMutationAction::Delegate,
             issuer_scope,
             request_id,
             request_issued_at: issued_at,
