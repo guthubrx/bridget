@@ -61,3 +61,19 @@
   `afceb013b052e9c2275c32c2b1fccb8aa1c54e17ee991561a20f9b5dc7f1a414`.
 - Carte de reprise existante après sélection de la racine configurée :
   1 passé / 0 échec.
+
+## Compatibilité mesurée sur le binaire contractuel
+
+- Binaire réel construit depuis
+  `bc745335530985ce305e82fea4007071c752d5b0`, daemon lancé dans un `HOME`
+  isolé.
+- Trame v2 portant `review_target` : refus public
+  `canonical_bytes_mismatch`, zéro ligne dans `guichet_requests` avant comme
+  après.
+- Contrôle v2 sans champ nouveau : refus public `unsupported_version`, zéro
+  ligne avant comme après.
+- Le contrôle d'octets canoniques de l'ancien daemon observe donc la perte du
+  champ inconnu avant le contrôle de version. Exiger `unsupported_version`
+  avec le fait nouveau est impossible sans modifier l'ancien binaire ou
+  cacher la cible dans un champ historique. La propriété utile tient : refus
+  explicite et fail-closed avant toute écriture SQLite.
