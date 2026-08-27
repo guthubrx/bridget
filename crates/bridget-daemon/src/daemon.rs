@@ -8121,6 +8121,19 @@ pub struct DaemonStatus {
 }
 
 #[cfg(test)]
+mod inventory_provenance_tests {
+    use super::{get_status, DaemonConfig};
+    #[test]
+    fn socket_absente_inventaire_indisponible() {
+        let mut config = DaemonConfig::default();
+        config.socket_path = std::env::temp_dir().join("bridget-no-such-socket");
+        let status = get_status(&config);
+        assert!(!status.running);
+        assert!(!status.agents_inventory_available);
+    }
+}
+
+#[cfg(test)]
 mod signal_disposition_tests {
     use super::install_daemon_signal_handlers;
     use std::process::{Command, Stdio};

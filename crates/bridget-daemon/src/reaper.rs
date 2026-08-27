@@ -1443,6 +1443,21 @@ mod tests {
     }
 
     #[test]
+    fn agent_connecte_avec_tiret_est_protege() {
+        let root = PathBuf::from(format!("/tmp/bridget-reaper-tiret-{}", uuid::Uuid::new_v4()));
+        let target = root.join("jc2-review-attribution");
+        fs::create_dir_all(&target).unwrap();
+        let mut world = world_at(1_700_000_000);
+        world.agent_inventory_available = true;
+        world.agents.push(AgentPresence { name: "jc2-review".into(), state: "connected".into(), mode: None, location: None, last_seen_secs: 0 });
+        scan_explicit_temp_root(&mut world, &root, 1_700_000_000).unwrap();
+        let dir = world.temp_dirs.iter().find(|entry| entry.path == target).unwrap();
+        assert_eq!(dir.agent_name.as_deref(), Some("jc2-review"));
+        assert_eq!(classify_temp_dir(dir, &[], &world).verdict, Verdict::Protege);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn double_observation_marks_stable() {
         let mut world = world_at(1_700_000_600);
         world.min_age_secs = 60;
