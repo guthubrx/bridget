@@ -8,6 +8,7 @@ pub mod claude_provider_session;
 pub mod claude_stream_json;
 pub mod codex_app_server;
 pub mod fsutil;
+pub mod greffe_authorization;
 pub mod journal;
 pub mod managed_session;
 pub mod protocol;
