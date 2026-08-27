@@ -84,6 +84,14 @@ pub struct PolicyRegenerationReport {
     pub unapproved_principals: Vec<String>,
 }
 
+/// État relu au chemin final lorsqu'une erreur survient après le renommage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostRenamePolicyState {
+    PlannedPolicyPresent,
+    DifferentValidPolicyPresent,
+    UnreadableOrInvalid,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyRefreshError {
     PolicyUnavailable,
@@ -131,6 +139,10 @@ pub enum PolicyRefreshError {
         principal: String,
     },
     GenerationExhausted,
+    WriteOutcomeIndeterminate {
+        observed: PostRenamePolicyState,
+        message: String,
+    },
     Io(String),
 }
 
@@ -196,6 +208,10 @@ impl fmt::Display for PolicyRefreshError {
                 "les instances de {principal:?} ne portent pas le même droit"
             ),
             Self::GenerationExhausted => write!(formatter, "génération de politique épuisée"),
+            Self::WriteOutcomeIndeterminate { observed, message } => write!(
+                formatter,
+                "issue d'écriture indéterminée après renommage ({observed:?}) : {message}"
+            ),
             Self::Io(message) => write!(formatter, "stockage de politique impossible : {message}"),
         }
     }
@@ -242,7 +258,7 @@ fn refresh_policy_observed(
     policy_path: &Path,
     inventories: &[MarkerInventory],
     now: i64,
-    observer: impl FnMut(AtomicWritePhase) -> io::Result<()>,
+    mut observer: impl FnMut(AtomicWritePhase) -> io::Result<()>,
 ) -> Result<PolicyRegenerationReport, PolicyRefreshError> {
     let _lock = PolicyRefreshLock::acquire(policy_path)?;
     let policy = load_refreshable_policy(policy_path)?;
@@ -253,8 +269,26 @@ fn refresh_policy_observed(
     let mut bytes = serde_json::to_vec_pretty(&next)
         .map_err(|error| PolicyRefreshError::Io(error.to_string()))?;
     bytes.push(b'\n');
-    write_private_file_atomic_observed(policy_path, &bytes, observer)
-        .map_err(|error| PolicyRefreshError::Io(error.to_string()))?;
+    let mut renamed = false;
+    if let Err(error) = write_private_file_atomic_observed(policy_path, &bytes, |phase| {
+        if phase == AtomicWritePhase::AfterRename {
+            renamed = true;
+        }
+        observer(phase)
+    }) {
+        if !renamed {
+            return Err(PolicyRefreshError::Io(error.to_string()));
+        }
+        let observed = match load_refreshable_policy(policy_path) {
+            Ok(current) if current == next => PostRenamePolicyState::PlannedPolicyPresent,
+            Ok(_) => PostRenamePolicyState::DifferentValidPolicyPresent,
+            Err(_) => PostRenamePolicyState::UnreadableOrInvalid,
+        };
+        return Err(PolicyRefreshError::WriteOutcomeIndeterminate {
+            observed,
+            message: error.to_string(),
+        });
+    }
     report.applied = true;
     Ok(report)
 }
@@ -1000,6 +1034,53 @@ mod tests {
         );
         let rewritten: serde_json::Value =
             serde_json::from_slice(&fs::read(&fixture.policy).unwrap()).unwrap();
+        assert_eq!(rewritten["generation"], 8);
+    }
+
+    #[test]
+    fn erreur_avant_renommage_garde_l_original_et_apres_rend_l_issue_indeterminee() {
+        let before = Fixture::new("failure-before-rename");
+        let original = fs::read(&before.policy).unwrap();
+        let before_error = refresh_policy_observed(
+            &before.policy,
+            &[before.inventory("instance-nouvelle")],
+            NOW,
+            |phase| {
+                if phase == AtomicWritePhase::BeforeRename {
+                    return Err(io::Error::other("échec injecté avant renommage"));
+                }
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            before_error,
+            PolicyRefreshError::Io("échec injecté avant renommage".to_string())
+        );
+        assert_eq!(fs::read(&before.policy).unwrap(), original);
+
+        let after = Fixture::new("failure-after-rename");
+        let after_error = refresh_policy_observed(
+            &after.policy,
+            &[after.inventory("instance-nouvelle")],
+            NOW,
+            |phase| {
+                if phase == AtomicWritePhase::AfterRename {
+                    return Err(io::Error::other("échec injecté après renommage"));
+                }
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            after_error,
+            PolicyRefreshError::WriteOutcomeIndeterminate {
+                observed: PostRenamePolicyState::PlannedPolicyPresent,
+                message: "échec injecté après renommage".to_string(),
+            }
+        );
+        let rewritten: serde_json::Value =
+            serde_json::from_slice(&fs::read(&after.policy).unwrap()).unwrap();
         assert_eq!(rewritten["generation"], 8);
     }
 

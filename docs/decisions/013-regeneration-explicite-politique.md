@@ -30,7 +30,10 @@ Un principal observé mais non approuvé n'est jamais ajouté.
 
 La politique est relue sous verrou, sa génération croît seulement lors d'une
 modification, puis elle est remplacée atomiquement en mode 0600. La
-prévisualisation est le comportement par défaut.
+prévisualisation est le comportement par défaut. Une erreur antérieure au
+renommage conserve l'original. Après le renommage, l'outil relit et valide le
+chemin final puis rend une issue indéterminée : il ne promet pas un retour
+arrière que la primitive ne peut garantir.
 
 ## Conséquences positives
 

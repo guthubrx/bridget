@@ -158,6 +158,9 @@ figure dans la liste des entrées mortes.
 - La génération vaut la valeur maximale : refus plutôt que retour à zéro.
 - L'outil est relancé sans changement d'instance : aucune réécriture et aucune
   génération artificielle.
+- Une erreur survient avant le renommage : l'original reste octet-identique.
+  Une erreur survient après : l'outil relit et valide le chemin final, puis rend
+  une issue indéterminée distincte au lieu d'affirmer un échec ou un succès.
 
 ## Requirements
 
@@ -190,8 +193,11 @@ figure dans la liste des entrées mortes.
   exécution sans changement NE DOIT PAS réécrire le fichier.
 - **FR-011**: La réécriture DOIT être sérialisée entre processus, atomique,
   synchronisée sur disque et produire un fichier régulier en mode `0600`.
-- **FR-012**: Toute erreur de lecture, validation, sérialisation, verrouillage ou
-  écriture DOIT laisser la politique originale inchangée.
+- **FR-012**: Toute erreur antérieure au renommage DOIT laisser la politique
+  originale inchangée. Toute erreur postérieure DOIT provoquer une relecture et
+  une validation du chemin final, puis rendre une issue explicitement
+  indéterminée et distincte d'un échec propre ; aucun retour arrière fictif ne
+  doit être annoncé.
 - **FR-013**: Le mode par défaut DOIT être une prévisualisation ; une option
   explicite est nécessaire pour appliquer la réécriture.
 - **FR-014**: Le rapport DOIT nommer les principaux renouvelés, inchangés,

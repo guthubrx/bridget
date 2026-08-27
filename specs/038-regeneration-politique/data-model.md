@@ -52,4 +52,11 @@ politique N + inventaires complets + aucun changement
 
 politique N + source absente/incomplète/vide/ambiguë
     -> erreur, politique N octet-identique
+
+politique N + erreur avant renommage
+    -> échec propre, politique N octet-identique
+
+politique N + erreur après renommage
+    -> relecture et validation du chemin final
+    -> issue indéterminée avec état observé, sans retour arrière affirmé
 ```

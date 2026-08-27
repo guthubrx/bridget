@@ -68,6 +68,11 @@ politique sous verrou, calcule la génération suivante sans saturation, puis
 écrit par fichier temporaire synchronisé et renommage atomique. Le répertoire
 est synchronisé avant succès.
 
+Une erreur avant le renommage est un échec propre : l'original est encore au
+chemin final. Une erreur après le renommage ne permet plus de promettre cet
+état. L'outil relit et valide alors le fichier final, expose l'état observé et
+rend une issue indéterminée distincte ; il ne simule aucun retour arrière.
+
 Le mode par défaut calcule le rapport sans écrire. `--apply` est nécessaire.
 Sans modification utile, le fichier et la génération restent inchangés.
 
@@ -94,7 +99,9 @@ la procédure de compilation et l'usage via SSH sont documentés.
    `dead_principals`.
 5. Principal non approuvé : rapporté mais jamais ajouté.
 6. Remplacement atomique : l'observateur avant renommage voit encore la
-   politique originale ; après succès il voit seulement la nouvelle.
+   politique originale ; après succès il voit seulement la nouvelle. Une erreur
+   injectée après renommage relit la politique planifiée mais rend une issue
+   indéterminée, tandis qu'une erreur injectée avant conserve l'original.
 7. Contrôle positif : le binaire régénère une fixture, puis la garde réelle
    accepte une mutation durable avec la nouvelle instance et refuse l'ancienne.
 8. Mutant post-correctif : neutraliser l'incrément de génération fait mourir
