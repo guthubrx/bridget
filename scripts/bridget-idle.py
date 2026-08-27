@@ -53,12 +53,22 @@ DEFAULT_JOURNAL_ROOT = str(Path.home() / ".cache/bridget/sessions")
 # Ces producteurs ferment aussi bien les succès que les rejets. Les wrappers
 # interactifs (`unix` / `ssh-unix`) ne consignent aujourd'hui que l'ouverture ;
 # une ouverture chez eux n'est donc pas une preuve suffisante d'activité.
-COMPLETE_TURN_BOUNDARY_TRANSPORTS = frozenset({"codex_app_server", "acp"})
+COMPLETE_TURN_BOUNDARY_TRANSPORTS = frozenset(
+    {"codex_app_server", "acp", "claude_stream_json"}
+)
 TURN_CONTINUATION_EVENTS = frozenset(
     {"prompt_dispatched", "provider_request", "update", "permission"}
 )
 TURN_COMPLETED_KIND = "turn_completed"
 TURN_FAILED_KIND = "turn_failed"
+# Raisons d'échéance connues : même sans terminal_kind (journaux antérieurs
+# au lot bornes, ou binaire non relancé), un tour tué ne doit plus passer
+# pour un travail en cours.
+TIMEOUT_TERMINAL_MARKERS = (
+    "échéance Codex dépassée",
+    "échéance Claude dépassée",
+    "timeout ACP",
+)
 
 
 def bounded_detail(value: Any) -> str:
@@ -341,7 +351,15 @@ def read_turn_observations(
                                 payload = event.get("payload")
                                 payload = payload if isinstance(payload, dict) else {}
                                 terminal_kind = payload.get("terminal_kind")
-                                if terminal_kind == TURN_FAILED_KIND:
+                                reason_text = str(payload.get("reason") or "")
+                                timeout_terminal = any(
+                                    marker in reason_text
+                                    for marker in TIMEOUT_TERMINAL_MARKERS
+                                )
+                                if (
+                                    terminal_kind == TURN_FAILED_KIND
+                                    or timeout_terminal
+                                ):
                                     current = {
                                         "state": "ended",
                                         "message_id": message_id,

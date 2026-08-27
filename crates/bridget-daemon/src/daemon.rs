@@ -43,7 +43,7 @@ use crate::{
         REASON_ABSENT_FROM_FLEET, REASON_FROZEN_DEFINITION, REASON_NON_PERSISTENT, REASON_QUOTA,
         REASON_RECOVERY_FAILED, RecoveryLossEntry,
     },
-    registry::AgentRegistry,
+    registry::{AgentRegistry, DEFAULT_NOTIFY_TIMEOUT_SECS},
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use uuid::Uuid;
@@ -4149,6 +4149,25 @@ fn unix_now_secs() -> i64 {
         .min(i64::MAX as u64) as i64
 }
 
+/// Échéance de tour lue à CHAUD : `agents.json` courant, sinon registre en
+/// mémoire, sinon défaut. Contourne la définition figée au spawn — sans
+/// exiger de relancer les agents déjà connectés.
+fn live_notify_timeout_secs(fallback: &AgentRegistry, agent_type: &str) -> u64 {
+    let from = |registry: &AgentRegistry| -> u64 {
+        if agent_type.is_empty() {
+            return DEFAULT_NOTIFY_TIMEOUT_SECS;
+        }
+        registry
+            .get(agent_type)
+            .map(|definition| definition.notify_timeout_secs)
+            .unwrap_or(DEFAULT_NOTIFY_TIMEOUT_SECS)
+    };
+    match AgentRegistry::load() {
+        Ok(live) => from(&live),
+        Err(_) => from(fallback),
+    }
+}
+
 fn next_delivery_generation() -> u64 {
     loop {
         let generation = (Uuid::new_v4().as_u128() as u64) & i64::MAX as u64;
@@ -6228,17 +6247,28 @@ fn handle_wrapper_message(
             st.envelope_guard
                 .mark_relayed(&prepared.message_guard_id, &bridge_msg.to);
 
-            // Le daemon est l'autorité de l'échéance : le wrapper ACP
-            // reçoit sa valeur absolue pour purger un tour devenu trop
-            // tardif juste avant `session/prompt`.
+            // Le daemon est l'autorité de l'échéance de TOUR (pas seulement
+            // reply=yes) : relire la valeur courante et la pousser en absolu.
+            // Sans cela, worker.notify_timeout figé au spawn ignore agents.json.
             let mut delivered_message = bridge_msg.clone();
-            if delivered_message.reply {
+            {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs();
-                delivered_message.deadline_at =
-                    Some(now.saturating_add(delivered_message.reply_timeout.unwrap_or(60)));
+                if delivered_message.reply {
+                    delivered_message.deadline_at =
+                        Some(now.saturating_add(delivered_message.reply_timeout.unwrap_or(60)));
+                } else if delivered_message.deadline_at.is_none() {
+                    let agent_type = st
+                        .conn_instances
+                        .get(&target_conn)
+                        .and_then(|instance_id| st.presences.get(instance_id))
+                        .map(|presence| presence.agent_type.as_str())
+                        .unwrap_or("");
+                    let timeout_secs = live_notify_timeout_secs(&st.registry, agent_type);
+                    delivered_message.deadline_at = Some(now.saturating_add(timeout_secs));
+                }
             }
             // Push vers le destinataire
             let dtw = DaemonToWrapper::Deliver(delivered_message);

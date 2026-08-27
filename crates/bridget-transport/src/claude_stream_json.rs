@@ -8,7 +8,7 @@ use crate::claude_provider_session::{
     ProviderSessionStore, classify_resume_failure, prepare_launch_args, session_id_from_system_init,
     strip_resume_arg,
 };
-use crate::journal::{JournalFailureSink, JournalLiveFeed, JournalWriter};
+use crate::journal::{JournalFailureSink, JournalLiveFeed, JournalWriter, with_turn_failed_kind};
 use crate::managed_session::{
     ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource, ManagedSession,
     ManagedSessionDescriptor, ManagedTerminal,
@@ -735,6 +735,17 @@ fn spawn_worker(
                     payload["routed_to"] = json!(&message.from);
                 }
                 record_or_terminal(&journal, &events, "turn_end", Some(&message.id), payload);
+            } else if let ManagedEventKind::DeliveryRejected { reason, .. } = &event {
+                // Même borne que ACP/Codex : une échéance DOIT écrire error
+                // avec terminal_kind=turn_failed, sinon bridget-idle classe
+                // encore OCCUPE un mort des mains.
+                record_or_terminal(
+                    &journal,
+                    &events,
+                    "error",
+                    Some(&message.id),
+                    with_turn_failed_kind(json!({ "reason": reason })),
+                );
             }
             push_internal(&events, event);
             busy.store(false, Ordering::SeqCst);

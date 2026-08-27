@@ -2800,6 +2800,12 @@ mod tests {
             errors[0]["payload"]
         );
         assert_eq!(
+            errors[0]["payload"]["terminal_kind"].as_str(),
+            Some(crate::journal::TURN_FAILED_KIND),
+            "échéance DOIT porter terminal_kind=turn_failed sinon la ronde classe OCCUPE; reçu {}",
+            errors[0]["payload"]
+        );
+        assert_eq!(
             errors[0]["message_id"].as_str(),
             Some("codex-echeance-1"),
             "même message_id, reçu {errors:?}"

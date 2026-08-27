@@ -40,6 +40,7 @@ agents = [
     {"name": "ssh-open-only", "state": "connected", "domain": "bridget", "transport": "ssh-unix", "last_seen_secs": 2},
     {"name": "acp-anomaly-live", "state": "connected", "domain": "bridget", "transport": "acp", "last_seen_secs": 2},
     {"name": "ambiguous-error", "state": "connected", "domain": "bridget", "transport": "acp", "last_seen_secs": 2},
+    {"name": "timeout-sans-kind", "state": "connected", "domain": "bridget", "transport": "codex_app_server", "last_seen_secs": 2},
     {"name": "unsafe-stop", "state": "connected", "domain": "bridget", "transport": "acp", "last_seen_secs": 2},
     {"name": "unsafe-error", "state": "connected", "domain": "bridget", "transport": "acp", "last_seen_secs": 2},
 ]
@@ -56,6 +57,7 @@ occupied = {
     "ssh-open-only",
     "acp-anomaly-live",
     "ambiguous-error",
+    "timeout-sans-kind",
     "unsafe-stop",
     "unsafe-error",
 }
@@ -150,6 +152,20 @@ write_journal(
         boundary(2, "error", "message-ambiguous", {"reason": "ancien terminal ou anomalie"}),
     ],
 )
+# Tour tué par échéance SANS terminal_kind (journaux pré-bornes / binaire non
+# relancé) : doit quand même sortir des OCCUPES — sinon la ronde ment.
+write_journal(
+    "timeout-sans-kind",
+    [
+        boundary(1, "turn_start", "timeout-tour"),
+        boundary(
+            2,
+            "error",
+            "timeout-tour",
+            {"reason": "échéance Codex dépassée"},
+        ),
+    ],
+)
 unsafe_detail = "provider\x1b[2J\refface\u202ele diagnostic"
 if not all(control in unsafe_detail for control in ("\x1b", "\r", "\u202e")):
     raise SystemExit("CONTROLE POSITIF RATE: les contrôles dangereux manquent à la fixture")
@@ -190,6 +206,10 @@ if turns["acp-anomaly-live"]["state"] != "open":
     raise SystemExit(f"une error ACP non terminale a fermé le tour: {turns['acp-anomaly-live']}")
 if turns["ambiguous-error"]["state"] != "unknown" or turns["ambiguous-error"].get("reason") != "error-terminalite-non-attestee":
     raise SystemExit(f"une ancienne error ambiguë a produit une certitude: {turns['ambiguous-error']}")
+if turns["timeout-sans-kind"]["state"] != "ended":
+    raise SystemExit(
+        f"échéance sans terminal_kind doit quand même fermer le tour: {turns['timeout-sans-kind']}"
+    )
 for unsafe_agent, terminal_kind in (("unsafe-stop", "turn_completed"), ("unsafe-error", "turn_failed")):
     if turns[unsafe_agent].get("state") != "ended" or turns[unsafe_agent].get("terminal_kind") != terminal_kind:
         raise SystemExit(f"code terminal fermé absent pour {unsafe_agent}: {turns[unsafe_agent]}")
@@ -231,6 +251,7 @@ backlog = {
     "ssh-open-only": 65 * 60,
     "acp-anomaly-live": 65 * 60,
     "ambiguous-error": 44 * 60,
+    "timeout-sans-kind": 44 * 60,
     "unsafe-stop": 44 * 60,
     "unsafe-error": 44 * 60,
 }
@@ -250,6 +271,10 @@ print(f"partition_correctif: OK ({detail_fixed})")
 bloques = {item["name"]: item for item in fixed["bloques"]}
 if "frozen-consumer" not in bloques:
     raise SystemExit(f"figé absente de BLOQUES: {bloques}")
+if "timeout-sans-kind" not in bloques:
+    raise SystemExit(f"échéance sans kind absente de BLOQUES: {bloques}")
+if "timeout-sans-kind" in fixed["occupes"]:
+    raise SystemExit("échéance sans kind ne doit pas rester OCCUPE")
 if "healthy-consumer" in bloques:
     raise SystemExit(f"consommateur sain à tort BLOQUE: {bloques}")
 if "freshly-finished" not in bloques:
@@ -609,8 +634,10 @@ import json, sys
 
 raw = sys.argv[1]
 data = json.loads(raw)
-assert data["daemon_count"] == 19
+assert data["daemon_count"] == 20
 assert any(item["name"] == "frozen-consumer" and item["condition"] == "dernier-tour-termine-sans-reprise" for item in data["bloques"])
+assert any(item["name"] == "timeout-sans-kind" and item["condition"] == "dernier-tour-termine-sans-reprise" for item in data["bloques"])
+assert "timeout-sans-kind" not in data["occupes"]
 assert not any(item["name"] == "healthy-consumer" for item in data["bloques"])
 assert "healthy-consumer" in data["occupes"]
 assert "acp-anomaly-live" in data["occupes"]
