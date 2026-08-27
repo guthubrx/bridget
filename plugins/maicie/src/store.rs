@@ -2913,7 +2913,7 @@ impl MaicieStore {
         reason: &str,
         now: i64,
         costs: Option<Vec<CoutMissionAgent>>,
-        mut observer: F,
+        observer: F,
     ) -> Result<DecisionCoordination, StoreError>
     where
         F: FnMut(ObjectiveClosureCommitPhase) -> Result<(), StoreError>,

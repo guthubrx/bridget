@@ -164,6 +164,18 @@ pub fn process_guichet_claim(
             .map_err(guichet_store_error)?;
         return Ok(guichet_process_result(stored, Some(reason)));
     }
+    if matches!(
+        &canonical.request,
+        RequeteGuichet::RegistreAdd(_) | RequeteGuichet::ObjectiveClose(_)
+    ) {
+        // Point de branchement sûr : ces mutations ne deviennent applicatives
+        // qu'une fois leur effet entier placé derrière la garde centrale.
+        let reason = MotifRefusGreffe::OperationNonDisponible;
+        let stored = store
+            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+            .map_err(guichet_store_error)?;
+        return Ok(guichet_process_result(stored, Some(reason)));
+    }
     let stored = match &canonical.request {
         RequeteGuichet::DeliveryReport(report) => {
             store.graft_delivery_report(claim, &canonical, report, response_message_id, now)
@@ -179,7 +191,11 @@ pub fn process_guichet_claim(
         RequeteGuichet::DeadlineQuestion { .. } => {
             process_deadline_question_canonical(store, claim, &canonical, response_message_id, now)
         }
-        RequeteGuichet::Delegate(_) => unreachable!("delegate traité avant les greffes métier"),
+        RequeteGuichet::Delegate(_)
+        | RequeteGuichet::RegistreAdd(_)
+        | RequeteGuichet::ObjectiveClose(_) => {
+            unreachable!("mutation traitée avant les greffes métier")
+        }
     };
     match stored {
         Ok(stored) => Ok(guichet_process_result(stored, None)),
