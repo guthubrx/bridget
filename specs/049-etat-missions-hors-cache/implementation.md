@@ -43,6 +43,20 @@ protocole SQLite complet. Le refus est exclu : il couperait le greffe avant sa
 migration. L'installation conserve donc toute configuration explicite et
 avertit lorsqu'elle désigne le cache.
 
+## Pièce ajoutée pendant la contre-revue
+
+Une mesure du référent a établi que le chemin cible contient déjà l'ancienne
+base : 526 objectifs, schéma 19, figée à 16 h 16 et sans descripteur ouvert. La
+base sous cache est l'autorité vivante : 543 objectifs et schéma 20. La
+différence d'identifiants est orientée sans ambiguïté : zéro objectif existe
+seulement dans l'ancienne, 17 existent seulement dans la vivante.
+
+Ce fait ne change pas le code du lot. Il interdit en revanche à la future
+migration de considérer l'existence de
+`/home/moi/.local/state/maicie/maicie.sqlite3` comme un succès. La spécification
+exige désormais les comptes, les versions de schéma et la comparaison des
+identifiants des deux côtés avant tout choix de source.
+
 ## Oracle rouge
 
 L'univers session 049 a été listé avant le tir : cinq scénarios nommés.

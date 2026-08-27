@@ -15,3 +15,5 @@
 - [x] T008 Comparer base et tête, exécuter les gates statiques et documenter les
   non-mesures.
 - [x] T009 Committer, pousser, faire relire et rendre le matériel.
+- [x] T010 Graver la coexistence des deux bases et les contrôles minimaux de la
+  future migration sans déplacer la base vivante.

@@ -30,6 +30,12 @@ réécrit pas le JSON, ne déplace aucun fichier et ne change pas le code retour
 La lecture a lieu après le préflight afin qu'un JSON invalide reste attribué au
 gate de configuration plutôt qu'au diagnostic de stockage.
 
+La future migration ne pourra pas prendre le chemin cible comme preuve
+d'autorité : une ancienne base y coexiste déjà avec la base vivante. Son
+préflight devra comparer les schémas, les nombres d'objectifs et leurs
+identifiants avant puis après l'arrêt de l'écrivain. La session 049 documente
+la garde mais n'exécute aucune de ces étapes.
+
 ## Oracles et mutant
 
 Le banc existant de l'installateur est étendu avec trois issues distinctes :

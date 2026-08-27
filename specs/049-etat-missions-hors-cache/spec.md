@@ -19,6 +19,29 @@ règle tmpfiles mesurée ne nettoie ce cache. Le risque est qu'un opérateur
 libère légitimement un répertoire présenté comme destructible et supprime le
 greffe.
 
+## Piège mesuré pour la migration future
+
+Le chemin durable attendu existe déjà sur la machine, car il hébergeait le
+greffe avant la bascule. Les deux bases ne sont toutefois pas interchangeables
+au 27 août 2026 :
+
+| Emplacement | Objectifs | Schéma | État mesuré |
+|---|---:|---:|---|
+| `/home/moi/.local/state/maicie/maicie.sqlite3` | 526 | 19 | figée à 16 h 16, zéro descripteur ouvert |
+| `/home/moi/.cache/bridget/maicie-state/maicie.sqlite3` | 543 | 20 | vivante |
+
+La comparaison des identifiants rend zéro objectif propre à l'ancienne base et
+17 objectifs supplémentaires dans la base vivante. La présence d'un fichier au
+bon chemin ne prouve donc ni qu'il est courant, ni qu'une migration est déjà
+faite. Restaurer l'ancienne base ferait perdre 17 objectifs et ramènerait le
+schéma de 20 à 19.
+
+Toute migration ultérieure doit identifier la source vivante avant le geste et
+mesurer au minimum la version de schéma et le nombre d'objectifs des deux côtés.
+Elle doit comparer les identifiants, arrêter l'écrivain vivant, puis vérifier de
+nouveau ces faits avant de remplacer ou mettre en quarantaine la destination.
+Le simple test « le fichier cible existe » est explicitement insuffisant.
+
 L'inventaire montre que le défaut ne vient pas de Maicie : `database_path` est
 un champ obligatoire de sa configuration et ne possède aucune valeur implicite
 Rust. Le générateur fautif est `scripts/install-k1.sh`, qui écrit une
@@ -78,6 +101,10 @@ artefacts, une vérification, la mise à jour atomique de la configuration, un
 redémarrage et une voie de retour. Ce lot n'a pas l'autorité de couper les
 agents connectés.
 
+La coexistence mesurée renforce ce refus : une destination préexistante au bon
+nom contient ici un état ancien. Un déplacement automatique fondé sur
+l'existence ou l'absence du fichier ne peut pas choisir la source autoritaire.
+
 ### Refus — rejeté
 
 Refuser une configuration de cache rendrait immédiatement indisponible le
@@ -105,6 +132,8 @@ laisse la migration vivante à une opération distincte autorisée par l'humain.
   avertissement.
 - **FR-4907** : le chemin du catalogue, du socket Bridget et des journaux de
   service reste inchangé ; ils ne contiennent pas la base des missions.
+- **FR-4908** : la documentation de migration nomme la coexistence possible de
+  deux bases et interdit d'assimiler présence à destination et autorité.
 
 ## Critères de succès
 
@@ -124,6 +153,7 @@ laisse la migration vivante à une opération distincte autorisée par l'humain.
 - Arrêter les services ou déplacer la base vivante.
 - Modifier la configuration vivante de cette machine.
 - Migrer, copier, ouvrir en écriture ou supprimer un fichier SQLite existant.
+- Choisir, fusionner ou remplacer l'une des deux bases actuellement présentes.
 - Déplacer le catalogue de constats, le socket ou les journaux actuellement
   placés dans le cache.
 - Refuser au runtime toute configuration explicite contenant un composant de
