@@ -508,9 +508,8 @@ impl SessionJournal {
         message_id: Option<&str>,
         payload: Value,
     ) -> std::io::Result<u64> {
-        crate::act_kind::validate_journal_write(event, &payload).map_err(|detail| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, detail)
-        })?;
+        crate::act_kind::validate_journal_write(event, &payload)
+            .map_err(|detail| std::io::Error::new(std::io::ErrorKind::InvalidInput, detail))?;
         let sequence = self.next_seq;
         let entry = JournalEntry::new(
             sequence,
@@ -525,7 +524,28 @@ impl SessionJournal {
         Ok(sequence)
     }
 
+    /// Chemin test-only qui pose une entrée **sans** passer par `enqueue` /
+    /// `append_at` — simule un futur `WriterCommand::Entry` rendu accessible.
+    #[cfg(test)]
+    pub(crate) fn append_entry_bypassing_public_guards_for_test(
+        &mut self,
+        event: &str,
+        message_id: Option<&str>,
+        payload: Value,
+    ) -> std::io::Result<JournalLiveEvent> {
+        let (_, timestamp) = now_date_and_timestamp();
+        let entry = JournalEntry::new(0, &timestamp, "", event, message_id, payload);
+        self.append_entry(entry)
+    }
+
     fn append_entry(&mut self, mut entry: JournalEntry) -> std::io::Result<JournalLiveEvent> {
+        // Dette 1 — défense en profondeur : le thread writer n'a que ce point
+        // avant le disque. enqueue filtre déjà, mais WriterCommand::Entry est
+        // aujourd'hui privé ; un lot qui l'exposerait ouvrirait le trou sans
+        // qu'aucun test enqueue ne bronche (motif
+        // validation-sur-le-chemin-officiel-ne-protege-rien).
+        crate::act_kind::validate_journal_write(&entry.event, &entry.payload)
+            .map_err(|detail| std::io::Error::new(std::io::ErrorKind::InvalidInput, detail))?;
         let (date, timestamp) = now_date_and_timestamp();
         entry.seq = self.next_seq;
         entry.ts = timestamp;
@@ -1137,7 +1157,11 @@ mod tests {
             .unwrap()
             .path();
         let entries = valid_events(&path);
-        assert_eq!(entries.len(), 1, "le kind refusé ne doit jamais atteindre le JSONL");
+        assert_eq!(
+            entries.len(),
+            1,
+            "le kind refusé ne doit jamais atteindre le JSONL"
+        );
         assert_eq!(entries[0]["payload"]["kind"], "tool");
         fs::remove_dir_all(root).unwrap();
     }
@@ -1171,8 +1195,98 @@ mod tests {
             .unwrap()
             .path();
         let entries = valid_events(&path);
-        assert_eq!(entries.len(), 1, "le kind refusé ne doit jamais atteindre le JSONL");
+        assert_eq!(
+            entries.len(),
+            1,
+            "le kind refusé ne doit jamais atteindre le JSONL"
+        );
         assert_eq!(entries[0]["payload"]["kind"], "tool");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_append_entry_refuse_meme_si_enqueue_contourne() {
+        // Dette 1 : garde sur le chemin writer. Preuve d'abord qu'un cas valide
+        // passe — sinon l'oracle d'absence tourne sur une projection vide.
+        let root = root("act-kind-append-entry");
+        let mut journal = SessionJournal::new(&root, "codex-1", "session-1").unwrap();
+        journal
+            .append_entry_bypassing_public_guards_for_test(
+                "update",
+                Some("m1"),
+                json!({"kind":"tool","text":"Read"}),
+            )
+            .expect("append_entry tool valide doit passer d'abord");
+        let rejected = journal.append_entry_bypassing_public_guards_for_test(
+            "update",
+            Some("m1"),
+            json!({"kind":"intent","text":"fantôme"}),
+        );
+        assert!(
+            rejected.as_ref().is_err_and(|err| {
+                err.kind() == std::io::ErrorKind::InvalidInput
+                    && err.to_string().contains("hors vocabulaire")
+            }),
+            "TEMOIN append_entry: hors vocabulaire doit être refusé même hors enqueue, got {rejected:?}"
+        );
+        let path = std::fs::read_dir(root.join("codex-1"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let entries = valid_events(&path);
+        assert_eq!(
+            entries.len(),
+            1,
+            "le kind refusé ne doit jamais atteindre le JSONL"
+        );
+        assert_eq!(entries[0]["payload"]["kind"], "tool");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mutant_retire_garde_append_entry_tue_TEMOIN_append_entry() {
+        // Simule le trou d'avant la dette 1 : append_entry écrit sans valider.
+        fn broken_append_entry_no_guard(
+            journal: &mut SessionJournal,
+            event: &str,
+            message_id: Option<&str>,
+            payload: Value,
+        ) -> std::io::Result<JournalLiveEvent> {
+            let (_, timestamp) = now_date_and_timestamp();
+            let mut entry = JournalEntry::new(0, &timestamp, "", event, message_id, payload);
+            let (date, timestamp) = now_date_and_timestamp();
+            entry.seq = journal.next_seq;
+            entry.ts = timestamp;
+            entry.session_id.clone_from(&journal.session_id);
+            let seq = entry.seq;
+            let bytes = journal.append_entry_at(&date, entry)?;
+            journal.next_seq = journal.next_seq.saturating_add(1);
+            Ok(JournalLiveEvent { seq, bytes })
+        }
+        let root = root("act-kind-append-entry-mutant");
+        let mut journal = SessionJournal::new(&root, "codex-1", "session-1").unwrap();
+        broken_append_entry_no_guard(
+            &mut journal,
+            "update",
+            Some("m1"),
+            json!({"kind":"intent","text":"fantôme"}),
+        )
+        .expect("le mutant laisse passer");
+        let healthy = journal.append_entry_bypassing_public_guards_for_test(
+            "update",
+            Some("m2"),
+            json!({"kind":"intent","text":"fantôme"}),
+        );
+        assert!(
+            healthy
+                .as_ref()
+                .is_err_and(|err| err.to_string().contains("hors vocabulaire")),
+            "TEMOIN_append_entry doit mourir si la garde writer est retirée: {healthy:?}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1467,7 +1581,11 @@ mod tests {
             Err(JournalWindowError::FutureDate)
         );
         assert_eq!(
-            resolve_window(&empty_root, &AttachWindow::Date("bad".to_string()), "2026-08-22"),
+            resolve_window(
+                &empty_root,
+                &AttachWindow::Date("bad".to_string()),
+                "2026-08-22"
+            ),
             Err(JournalWindowError::InvalidDate)
         );
         assert_eq!(
