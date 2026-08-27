@@ -2,7 +2,7 @@
 
 **Branche** : `session-037-refus-ecriture-federee`
 **Base mesurée** : `90802b0377741b509f3743c5675544315b6f0f29`
-**Statut** : implémentée et vérifiée
+**Statut** : implémentée et vérifiée ; garantie bornée par M1
 **Contrat consommé** : `DaemonIdentityRequest` /
 `DaemonIdentityReport { host, db_path }`, `bridget_core::local_host()` et
 `bridget_core::host_is_attested()`.
@@ -29,7 +29,7 @@ pas de ce défaut. `preflight` est une lecture seule.
 ## Propriété
 
 Avant toute ouverture ou écriture de SQLite Maicie dans le chemin commun,
-Maicie demande l’identité du daemon sur **la connexion effectivement utilisée**
+Maicie demande l’identité du daemon sur une **connexion Client préliminaire**
 et compare son hôte attesté à l’hôte local attesté. Le prédicat local exige les
 deux attestations et leur égalité d’hôte.
 
@@ -44,6 +44,45 @@ Le refus est produit avant `open_maicie_store`, avant toute réconciliation et
 avant toute création d’objectif, délégation, outbox ou écriture de clôture. Il
 dit que le registre appartient au daemon joint et demande d’exécuter la
 commande sur sa machine ou d’utiliser l’opération fédérée autorisée.
+
+## Limite résiduelle M1 — attestation préliminaire remplaçable
+
+La garde n’atteste pas les connexions qui produisent les effets ultérieurs :
+elle ferme sa connexion préliminaire avant `open_maicie_store`, tandis que les
+clients d’effet ne peuvent être créés qu’après l’ouverture du store, car ils
+consomment `store.issuer_scope()`. Entre les deux, le listener de la socket peut
+être remplacé. Le nouveau daemon peut alors exécuter les échanges de guichet,
+coordination, annuaire et remise alors que SQLite a déjà été ouvert localement.
+
+Cette session garantit donc seulement le refus avant SQLite d’un daemon déjà
+fédéré **au moment de l’attestation préliminaire**. Elle ne garantit pas que le
+daemon attesté est celui des effets. Le témoin dynamique de revue le démontre :
+un daemon local est attesté, le socket Unix est remplacé avant l’effet par un
+daemon distant, la commande réussit et crée SQLite. Son résultat brut sur la
+tête de cette session est `FAILED. 0 passed; 1 failed; 0 ignored; 5 filtered
+out` ; ce n’est pas une garantie que cette session prétend lever.
+
+La fenêtre concerne les six ouvertures d’effet inventoriées, puis l’ouverture
+supplémentaire de l’annuaire :
+
+- `plugins/maicie/src/reconcile.rs:468` ;
+- `plugins/maicie/src/reconcile.rs:601` ;
+- `plugins/maicie/src/reconcile.rs:745` ;
+- `plugins/maicie/src/reconcile.rs:1065` ;
+- `plugins/maicie/src/greffe_service.rs:154` ;
+- `plugins/maicie/src/greffe_service.rs:360` ;
+- l’annuaire appelé depuis `plugins/maicie/src/main.rs`, dont
+  `BridgetClient::list_agents` rouvre une connexion à
+  `plugins/maicie/src/bridget_client.rs:744-745`.
+
+Un lot distinct doit introduire une identité qui change à chaque démarrage du
+daemon, l’attester sur chaque connexion d’effet et faire exiger cette
+provenance par les signatures de réconciliation et de greffe. `BUILD_ID` ne
+convient pas : il désigne le commit compilé et deux instances successives du
+même binaire partagent sa valeur. Le témoin de remplacement local-vers-local
+(même hôte, binaire et chemin de base, daemon redémarré) est l’oracle de levée
+de cette limite ; il doit échouer sur cette session et réussir uniquement avec
+ce lot distinct.
 
 L’opérateur reçoit un refus explicite dans les trois cas non attestés : daemon
 muet ou antérieur, `ClientRejected` et réponse de protocole invalide. Ces cas
@@ -101,6 +140,10 @@ de l’intégration, elle reste bloquée plutôt que d’inventer une heuristiqu
    déplacer la garde après l’ouverture SQLite fait échouer l’oracle fédéré ;
    le contrôle positif local continue d’empêcher une implémentation qui
    refuserait tout.
+6. **Limite M1 documentée** : l’oracle permanent de remplacement de socket,
+   d’abord local puis distant, reste rouge sur cette session car la provenance
+   n’est pas liée structurellement aux connexions d’effet. Il appartient au lot
+   d’identité d’instance et ne peut pas valider cette garantie partielle.
 
 Chaque attente du harnais est bornée et signale explicitement son dépassement.
 L’univers des tests est listé avant exécution, puis le nombre de résultats doit
