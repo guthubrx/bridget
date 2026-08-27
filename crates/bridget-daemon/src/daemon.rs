@@ -191,16 +191,6 @@ fn busy_turn_is_stale(presence: &Presence, ttl_secs: u64) -> bool {
     elapsed >= Duration::from_secs(ttl_secs)
 }
 
-/// Mutant : ne libère jamais un busy périmé. Prouve que l'oracle d'arrivée
-/// du mandat échoue si on retire le remède.
-#[cfg(test)]
-fn busy_turn_is_stale_mutant_never(_presence: &Presence, _ttl_secs: u64) -> bool {
-    false
-}
-
-#[cfg(test)]
-fn release_stale_busy_turns_mutant_noop(_state: &mut DaemonState) {}
-
 #[derive(Clone)]
 struct Presence {
     name: String,
@@ -2034,8 +2024,8 @@ impl DaemonState {
             .collect();
         let mut stale = Vec::new();
         for (id, agent_type) in busy_ids {
-            let ttl =
-                live_notify_timeout_secs(&self.registry, &agent_type) + TIMEOUT_GRACE_PERIOD;
+            let ttl = live_notify_timeout_secs(&self.registry, &agent_type)
+                .saturating_add(TIMEOUT_GRACE_PERIOD);
             if let Some(presence) = self.presences.get(&id) {
                 if busy_turn_is_stale(presence, ttl) {
                     stale.push(id);
@@ -10629,112 +10619,181 @@ mod presence_tests {
         let _ = std::fs::remove_file(&config.db_path);
     }
 
-    /// ORACLE — tour non abouti : busy périmé → connected, puis le mandat
-    /// ARRIVE sur le socket (effet, pas seule présence). Mutant never-release
-    /// prouve l'échec sans remède. Attentes écrites en dur.
+    /// ORACLE — le vrai CLI Maicie sélectionne le busy libéré via ListAgents,
+    /// délègue, envoie idempotemment, puis le mandat arrive au wrapper.
     #[test]
     fn tour_non_abouti_redevient_mandatable_et_le_mandat_parvient() {
-        use std::io::{BufRead, BufReader};
-        use std::os::unix::net::UnixStream;
-
         let (mut state, config) = state_with_registered_agent("busy-tour-non-abouti");
         state.set_turn_state("conn-1", true).unwrap();
-        assert_eq!(
-            state.presences.get("instance-1").unwrap().state,
-            "busy",
-            "précondition : tour non abouti laisse busy"
-        );
-
-        let ttl = live_notify_timeout_secs(&state.registry, "claude") + TIMEOUT_GRACE_PERIOD;
+        let ttl = live_notify_timeout_secs(&state.registry, "claude")
+            .saturating_add(TIMEOUT_GRACE_PERIOD);
         let aged = Instant::now()
-            .checked_sub(Duration::from_secs(ttl + 1))
+            .checked_sub(Duration::from_secs(ttl.saturating_add(1)))
             .expect("horloge busy_since");
-        {
-            let presence = state.presences.get_mut("instance-1").unwrap();
-            presence.busy_since = Some(aged);
-            assert!(
-                !busy_turn_is_stale_mutant_never(presence, ttl),
-                "mutant never-release garderait le verrou"
-            );
-            assert!(
-                busy_turn_is_stale(presence, ttl),
-                "busy_since au-delà du TTL doit être périmé"
-            );
-        }
-
-        // Même règle que plugins/maicie/src/main.rs:722 — écrite en dur ici.
-        {
-            let state_str = state.presences.get("instance-1").unwrap().state.as_str();
-            let maicie_accepterait = state_str == "connected" || state_str == "dnd";
-            assert!(
-                !maicie_accepterait,
-                "avant libération Maicie ne mandate pas un busy"
-            );
-        }
+        state.presences.get_mut("instance-1").unwrap().busy_since = Some(aged);
 
         let (writer_stream, peer) = UnixStream::pair().unwrap();
-        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
         state.connections.insert(
             "conn-1".to_string(),
             Arc::new(Mutex::new(BufWriter::new(writer_stream))),
         );
+        assert_eq!(state.next_conn_id(), "conn-1");
+        let shared = Arc::new(Mutex::new(state));
+        let listener = UnixListener::bind(&config.socket_path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = Arc::clone(&stop);
+        let server_state = Arc::clone(&shared);
+        let server = thread::spawn(move || {
+            let mut connections = Vec::new();
+            while !server_stop.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let connection_state = Arc::clone(&server_state);
+                        connections.push(thread::spawn(move || {
+                            let _ = handle_connection(stream, connection_state);
+                        }));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("accept Maicie: {error}"),
+                }
+            }
+            for connection in connections {
+                connection.join().unwrap();
+            }
+        });
 
-        // Chemin réel : who / Maicie passent par agent_infos → release.
-        let infos = state.agent_infos();
-        let agent = infos
-            .iter()
-            .find(|agent| agent.name == "agent-2")
-            .expect("agent visible après libération");
-        assert_eq!(
-            agent.state, "connected",
-            "attente en dur : busy périmé → connected, reçu={}",
-            agent.state
-        );
-        let maicie_accepterait = agent.state == "connected" || agent.state == "dnd";
-        assert!(
-            maicie_accepterait,
-            "après libération Maicie doit pouvoir mandater"
-        );
+        let root = std::env::temp_dir().join(format!(
+            "maicie-busy-oracle-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let maicie_config = root.join("maicie.json");
+        std::fs::write(
+            &maicie_config,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "bridget_socket": config.socket_path,
+                "database_path": root.join("maicie.sqlite3"),
+                "durations": {"short_secs": 30, "normal_secs": 60, "long_secs": 90},
+                "profiles": [{
+                    "id": "agent-2",
+                    "display_name": "Agent 2",
+                    "tags": [],
+                    "personality_ref": "profiles/agent-2.md",
+                    "tools": ["bridget_send"],
+                    "spawn_order_ref": "agents/agent-2"
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
 
         const MANDAT_BODY: &str = "MANDAT-BUSY-RECOVERY-ORACLE-98beefe0";
-        let writer = state
-            .connections
-            .get("conn-1")
-            .expect("socket wrapper")
-            .clone();
-        deliver_to_agent(&writer, "agent-2", MANDAT_BODY).expect("livraison mandat");
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let output = Command::new("cargo")
+            .current_dir(workspace)
+            .args([
+                "run", "--quiet", "-p", "maicie", "--", "delegate", "--config",
+            ])
+            .arg(&maicie_config)
+            .args([
+                "--goal",
+                MANDAT_BODY,
+                "--suite",
+                "aucune",
+                "--to",
+                "agent-2",
+                "--duration",
+                "courte",
+                "--idempotency-key",
+                "busy-recovery-integrated-oracle",
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        stop.store(true, Ordering::SeqCst);
+        server.join().unwrap();
 
         let mut line = String::new();
-        BufReader::new(peer)
-            .read_line(&mut line)
-            .expect("lecture socket après mandat");
+        let arrival = BufReader::new(peer).read_line(&mut line);
         assert!(
-            line.contains(MANDAT_BODY),
-            "oracle d'EFFET : le mandat doit ARRIVER; reçu={line}"
+            arrival.is_ok() && line.contains(MANDAT_BODY),
+            "mandat absent après sélection Maicie réelle; lecture={arrival:?}; stdout={}; stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.status.success(),
+            "Maicie a échoué après livraison: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
 
-        // Sans remède (mutant noop) le busy resterait → non mandatable.
-        state.set_turn_state("conn-1", true).unwrap();
-        {
-            let presence = state.presences.get_mut("instance-1").unwrap();
-            presence.busy_since = Some(aged);
-        }
-        release_stale_busy_turns_mutant_noop(&mut state);
-        assert_eq!(
-            state.presences.get("instance-1").unwrap().state,
-            "busy",
-            "mutant noop : busy doit rester pour prouver l'échec sans remède"
-        );
-        {
-            let state_str = state.presences.get("instance-1").unwrap().state.as_str();
-            let maicie_accepterait = state_str == "connected" || state_str == "dnd";
-            assert!(
-                !maicie_accepterait,
-                "mutant : Maicie refuserait encore le mandat"
-            );
-        }
-
+        let _ = std::fs::remove_file(&config.socket_path);
         let _ = std::fs::remove_file(&config.db_path);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    const MAX_NOTIFY_TIMEOUT_CHILD_ENV: &str = "BRIDGET_MAX_NOTIFY_TIMEOUT_CHILD";
+
+    /// Frontière du registre : `u64::MAX` ne doit jamais faire paniquer
+    /// `agent_infos` lors du calcul notify_timeout + grâce.
+    #[test]
+    fn notify_timeout_max_ne_panique_pas_dans_agent_infos() {
+        if std::env::var(MAX_NOTIFY_TIMEOUT_CHILD_ENV).ok().as_deref() == Some("1") {
+            let (mut state, config) = state_with_registered_agent("max-notify-timeout-child");
+            state.set_turn_state("conn-1", true).unwrap();
+            let infos = state.agent_infos();
+            assert_eq!(infos[0].state, "busy");
+            let _ = std::fs::remove_file(config.db_path);
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "bridget-max-notify-timeout-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let registry_dir = root.join(".config/bridget");
+        std::fs::create_dir_all(&registry_dir).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let registry_path = registry_dir.join("agents.json");
+        std::fs::write(
+            &registry_path,
+            serde_json::to_vec(&serde_json::json!({
+                "agents": {
+                    "claude": {
+                        "command": "/bin/true",
+                        "protocol": "acp",
+                        "forbidden_env": [],
+                        "pass_env": [],
+                        "notify_timeout_secs": u64::MAX
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&registry_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("daemon::presence_tests::notify_timeout_max_ne_panique_pas_dans_agent_infos")
+            .arg("--nocapture")
+            .env("HOME", &root)
+            .env(MAX_NOTIFY_TIMEOUT_CHILD_ENV, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "agent_infos a paniqué à u64::MAX: stdout={}; stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// ORACLE lot B — contrôle positif : capacité/lien frais → survit
