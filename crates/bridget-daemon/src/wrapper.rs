@@ -51,6 +51,10 @@ const RUNTIME_PATH_REFRESH: Duration = Duration::from_secs(60);
 const ATTACH_RELAY_COMMAND_CAPACITY: usize = 8;
 const ATTACH_RELAY_READ_BYTES: usize = 128 * 1024;
 const ATTACH_RELAY_IDLE_WAIT: Duration = Duration::from_millis(10);
+/// Plafond de `AttachRelayWorker::shutdown` : un join sans borne laisse le
+/// wrapper (et donc tout le binaire de test) coincé si le worker est bloqué
+/// dans un hook ou un wait non coopératif.
+const ATTACH_RELAY_SHUTDOWN_BOUND: Duration = Duration::from_secs(2);
 
 /// Contexte reconstruit à chaque naissance d'un équipier géré. Il n'est jamais
 /// persisté : le greffe Maicie et Git restent les seules autorités.
@@ -2565,6 +2569,9 @@ impl AttachRelayWorker {
                         if live_fanout.pending_fragment.is_none()
                             && live_fanout.pending_events.is_empty()
                         {
+                            if worker_stopped.load(Ordering::SeqCst) {
+                                break;
+                            }
                             (hooks.before_live_read)();
                             let batch = feed.after(live_fanout.cursor);
                             if let Some((from_seq, to_seq)) = batch.gap {
@@ -2705,8 +2712,26 @@ impl AttachRelayWorker {
         // Le Stop n'emprunte jamais une file : le worker observe ce drapeau
         // avant chaque commande, même sous une rafale de souscriptions.
         self.wake.1.notify_all();
-        if let Some(worker) = self.worker.take() {
+        let Some(worker) = self.worker.take() else {
+            return;
+        };
+        let (done_tx, done_rx) = mpsc::channel();
+        // Join dans un fil annexe : si le worker est coincé (hook de test,
+        // wait non coopératif), on rend la main à l'appelant dans la borne
+        // plutôt que de retenir le process entier.
+        thread::spawn(move || {
             let _ = worker.join();
+            let _ = done_tx.send(());
+        });
+        match done_rx.recv_timeout(ATTACH_RELAY_SHUTDOWN_BOUND) {
+            Ok(()) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                warn!(
+                    "AttachRelayWorker::shutdown: worker encore bloqué après {:?}",
+                    ATTACH_RELAY_SHUTDOWN_BOUND
+                );
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {}
         }
     }
 }
@@ -6450,6 +6475,49 @@ mod reconnect_tests {
             "le Stop ne doit pas attendre la file saturée"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Oracle : si le worker est coincé dans un hook non coopératif,
+    /// `shutdown` DOIT quand même rendre la main dans `ATTACH_RELAY_SHUTDOWN_BOUND`.
+    #[test]
+    fn shutdown_rend_la_main_dans_sa_borne_si_le_hook_commande_bloque() {
+        let root = relay_root("stop-borne-hook");
+        std::fs::create_dir_all(&root).unwrap();
+        let entered = Arc::new(AtomicBool::new(false));
+        let flag = entered.clone();
+        let hooks = AttachRelayHooks {
+            before_command: Arc::new(move || {
+                flag.store(true, Ordering::SeqCst);
+                loop {
+                    thread::park();
+                }
+            }),
+            ..AttachRelayHooks::default()
+        };
+        let (_, emitter) = relay_emitter();
+        let mut worker = AttachRelayWorker::start_with(
+            root.clone(),
+            "2026-08-22".to_string(),
+            2,
+            emitter,
+            hooks,
+        );
+        let enter_deadline = Instant::now() + Duration::from_secs(2);
+        while !entered.load(Ordering::SeqCst) {
+            assert!(
+                Instant::now() < enter_deadline,
+                "le hook before_command n'a jamais été atteint — projection vide"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let started = Instant::now();
+        worker.shutdown();
+        assert!(
+            started.elapsed() <= ATTACH_RELAY_SHUTDOWN_BOUND + Duration::from_millis(250),
+            "shutdown n'a pas rendu la main dans sa borne ({:?})",
+            ATTACH_RELAY_SHUTDOWN_BOUND
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
