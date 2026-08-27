@@ -514,7 +514,19 @@ fn desired_state_path(config: &DaemonConfig) -> PathBuf {
 }
 
 /// État partagé du daemon.
+#[cfg(test)]
+struct FixtureRoot(std::path::PathBuf);
+
+#[cfg(test)]
+impl Drop for FixtureRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 struct DaemonState {
+    #[cfg(test)]
+    fixture_root: Option<FixtureRoot>,
     /// Machine, base et identité **de ce daemon**, retenues une fois au
     /// démarrage.
     ///
@@ -1963,6 +1975,8 @@ impl DaemonState {
         let registry = AgentRegistry::load()?;
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
         Ok(DaemonState {
+            #[cfg(test)]
+            fixture_root: None,
             host: crate::build_info::local_host(),
             db_path: config.db_path.clone(),
             instance_id: Uuid::new_v4().to_string(),
@@ -8422,6 +8436,7 @@ mod presence_tests {
             unsafe { std::env::remove_var("HOME") };
         }
         let mut state = state_result.unwrap();
+        state.fixture_root = Some(FixtureRoot(registry_home));
         state
             .router
             .register(Some("agent-2"), &bridget_core::AgentType::Claude, "conn-1")
