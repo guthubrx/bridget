@@ -277,6 +277,9 @@ pub enum TransitionTrigger {
     Refuted,
     /// Vrai, sévérité/portée changée — reste ouvert.
     Requalified,
+    /// Transition erronée annulée par amendement — revient à ouvert.
+    /// L'historique (fermeture + rectification) reste lisible.
+    Rectified,
 }
 
 /// Raisons fermées de fermeture (traité).
@@ -369,6 +372,41 @@ impl RaisonRequalification {
     }
 }
 
+/// Raisons fermées de rectification (amende une transition erronée).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RaisonRectification {
+    /// Fermeture (`remedied_attested`) posée par erreur.
+    FermetureErronee,
+    /// Réfutation posée par erreur.
+    RefutationErronee,
+}
+
+impl RaisonRectification {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FermetureErronee => "fermeture_erronee",
+            Self::RefutationErronee => "refutation_erronee",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "fermeture_erronee" => Some(Self::FermetureErronee),
+            "refutation_erronee" => Some(Self::RefutationErronee),
+            _ => None,
+        }
+    }
+
+    /// Trigger de livraison que cette raison est autorisée à amender.
+    pub const fn amends(self) -> TransitionTrigger {
+        match self {
+            Self::FermetureErronee => TransitionTrigger::RemediedAttested,
+            Self::RefutationErronee => TransitionTrigger::Refuted,
+        }
+    }
+}
+
 /// Entrée historique incomplète, hors liste ouverte, comptée dans P.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -417,7 +455,8 @@ impl CatalogueEntry {
                 ),
                 TransitionTrigger::RemediedAttested
                 | TransitionTrigger::Refuted
-                | TransitionTrigger::Requalified => format!(
+                | TransitionTrigger::Requalified
+                | TransitionTrigger::Rectified => format!(
                     "transition:{}:{:?}:{}:{}",
                     entry.constat_id,
                     entry.trigger,
@@ -601,7 +640,7 @@ pub enum DerivedState {
 }
 
 /// Ligne ouverte de la vue `registre list`.
-/// Constat ouvert (éventuellement requalifié).
+/// Constat ouvert (éventuellement requalifié / rectifié).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenConstatView {
     pub id: String,
@@ -614,6 +653,9 @@ pub struct OpenConstatView {
     pub mission_source: MissionSource,
     /// True si une requalification a ajusté la sévérité ou la nature.
     pub requalifie: bool,
+    /// True si une rectification a amendé une transition erronée —
+    /// l'entrée ne se lit pas comme jamais touchée.
+    pub rectifie: bool,
 }
 
 /// Entrée encore en attente de qualification humaine.
@@ -643,7 +685,24 @@ pub struct ClosedConstatView {
     pub recurrence_of: Option<String>,
 }
 
-/// Pied : dû / règles / résultats séparés + T/R/Q.
+/// Historique d'une fermeture erronée puis rectifiée — consultable sans
+/// confondre avec un dû jamais touché ni une fermeture juste.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RectifiedConstatView {
+    pub id: String,
+    pub text: String,
+    /// Polarité de la transition fautive (traité / réfuté).
+    pub closed_kind: ClosedKind,
+    pub closed_at: String,
+    pub closed_raison: Option<String>,
+    pub closed_reference: Option<String>,
+    pub rectified_at: String,
+    pub rectifie_raison: Option<String>,
+    pub rectifie_reference: Option<String>,
+    pub recurrence_of: Option<String>,
+}
+
+/// Pied : dû / règles / résultats séparés + T/R/Q + rectifications.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegistreFooter {
     /// Ouverts de nature `constat` — le dû fermable.
@@ -656,6 +715,8 @@ pub struct RegistreFooter {
     pub traites: usize,
     pub refutes: usize,
     pub requalifies: usize,
+    /// Nombre d'événements de rectification (historique).
+    pub rectifies: usize,
 }
 
 /// Vue pure du registre.
@@ -665,6 +726,8 @@ pub struct RegistreView {
     pub attente: Vec<PendingView>,
     pub traites: Vec<ClosedConstatView>,
     pub refutes: Vec<ClosedConstatView>,
+    /// Historique des rectifications (fermeture fautive + amendement).
+    pub rectifies: Vec<RectifiedConstatView>,
     pub footer: RegistreFooter,
 }
 
@@ -976,12 +1039,7 @@ impl CatalogueJournal {
             return Err(CatalogueError::Format("constat_id vide".into()));
         }
         let existing = self.read_entries()?;
-        let already_delivered = existing.iter().any(|prev| match prev {
-            CatalogueEntry::Transition(t) => {
-                t.constat_id == constat_id && t.to == ConstatState::Delivered
-            }
-            _ => false,
-        });
+        let already_delivered = is_currently_delivered(constat_id, &existing);
         if already_delivered {
             return Err(CatalogueError::TransitionInvalide(format!(
                 "constat {constat_id} déjà delivered : requalification refusée"
@@ -1028,6 +1086,80 @@ impl CatalogueJournal {
             nature_to,
         };
         self.append_entry_with_existing(CatalogueEntry::Transition(entry), &existing)
+    }
+
+    /// Amende une transition erronée : `delivered → open`, append-only.
+    ///
+    /// Refuse de défaire une clôture `objective_closed` (fermeture juste
+    /// attestée par le greffe). L'historique (fermeture + rectification)
+    /// reste dans le journal — l'entrée ne se lit plus comme intacte.
+    pub fn rectify_constat_attested(
+        &mut self,
+        constat_id: &str,
+        raison: RaisonRectification,
+        reference: &str,
+        observed_at: &str,
+    ) -> Result<AppendOutcome, CatalogueError> {
+        crate::preuve::parse_reference_fermeture(reference).map_err(|error| {
+            CatalogueError::TransitionInvalide(format!("rectification refusée : {error}"))
+        })?;
+        if constat_id.trim().is_empty() {
+            return Err(CatalogueError::Format("constat_id vide".into()));
+        }
+        let entry = TransitionEntry {
+            v: CATALOGUE_VERSION,
+            kind: TransitionKind::Transition,
+            constat_id: constat_id.to_string(),
+            from: ConstatState::Delivered,
+            to: ConstatState::Open,
+            objective_id: String::new(),
+            observed_at: observed_at.to_string(),
+            trigger: TransitionTrigger::Rectified,
+            raison: Some(raison.as_str().to_string()),
+            reference: Some(reference.trim().to_string()),
+            severity_from: None,
+            severity_to: None,
+            nature_from: None,
+            nature_to: None,
+        };
+        validate_transition_shape(&entry)?;
+        let existing = self.read_entries()?;
+        let has_add = existing.iter().any(|line| match line {
+            CatalogueEntry::Add(add) => add.id == constat_id,
+            _ => false,
+        });
+        if !has_add {
+            return Err(CatalogueError::ReferenceInconnue {
+                field: "constat_id",
+                id: constat_id.to_string(),
+            });
+        }
+        let Some(current) = current_delivery_trigger(constat_id, &existing) else {
+            return Err(CatalogueError::TransitionInvalide(format!(
+                "rectification refusée : {constat_id} n'est pas delivered"
+            )));
+        };
+        if current == TransitionTrigger::ObjectiveClosed {
+            return Err(CatalogueError::TransitionInvalide(format!(
+                "rectification refusée : {constat_id} clos par objective_closed — fermeture juste intacte"
+            )));
+        }
+        if current != raison.amends() {
+            return Err(CatalogueError::TransitionInvalide(format!(
+                "rectification refusée : raison {} n'amende pas un {:?}",
+                raison.as_str(),
+                current
+            )));
+        }
+        let wrapped = CatalogueEntry::Transition(entry);
+        let key = wrapped.identity_key();
+        let line = canonical_line(&wrapped)?;
+        for previous in &existing {
+            if previous.identity_key() == key && canonical_line(previous)? == line {
+                return Ok(AppendOutcome::IdempotentNoop);
+            }
+        }
+        self.append_entry_with_existing(wrapped, &existing)
     }
 
     fn settle_delivered(
@@ -1085,12 +1217,7 @@ impl CatalogueJournal {
                 nature.as_str()
             )));
         }
-        let already_delivered = existing.iter().any(|prev| match prev {
-            CatalogueEntry::Transition(t) => {
-                t.constat_id == constat_id && t.to == ConstatState::Delivered
-            }
-            _ => false,
-        });
+        let already_delivered = is_currently_delivered(constat_id, &existing);
         let wrapped = CatalogueEntry::Transition(entry);
         let key = wrapped.identity_key();
         let line = canonical_line(&wrapped)?;
@@ -1635,6 +1762,45 @@ fn validate_transition_shape(entry: &TransitionEntry) -> Result<(), CatalogueErr
                 })?;
             }
         }
+        TransitionTrigger::Rectified => {
+            if !entry.objective_id.is_empty() {
+                return Err(CatalogueError::TransitionInvalide(
+                    "objective_id doit être vide pour rectification".into(),
+                ));
+            }
+            if entry.from != ConstatState::Delivered || entry.to != ConstatState::Open {
+                return Err(CatalogueError::TransitionInvalide(
+                    "rectification : delivered→open obligatoire".into(),
+                ));
+            }
+            let Some(raison) = entry.raison.as_deref() else {
+                return Err(CatalogueError::TransitionInvalide(
+                    "raison de rectification obligatoire".into(),
+                ));
+            };
+            if RaisonRectification::parse(raison).is_none() {
+                return Err(CatalogueError::TransitionInvalide(format!(
+                    "raison de rectification inconnue '{raison}'"
+                )));
+            }
+            let Some(reference) = entry.reference.as_deref() else {
+                return Err(CatalogueError::TransitionInvalide(
+                    "référence obligatoire pour rectification".into(),
+                ));
+            };
+            crate::preuve::parse_reference_fermeture(reference).map_err(|error| {
+                CatalogueError::TransitionInvalide(format!("rectification refusée : {error}"))
+            })?;
+            if entry.severity_from.is_some()
+                || entry.severity_to.is_some()
+                || entry.nature_from.is_some()
+                || entry.nature_to.is_some()
+            {
+                return Err(CatalogueError::TransitionInvalide(
+                    "sévérité/nature interdites pour rectification".into(),
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -1843,6 +2009,8 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
     let mut severity_override: BTreeMap<String, Severity> = BTreeMap::new();
     let mut nature_override: BTreeMap<String, EntryNature> = BTreeMap::new();
     let mut requalifie_ids: BTreeSet<String> = BTreeSet::new();
+    let mut rectifie_ids: BTreeSet<String> = BTreeSet::new();
+    let mut rectifies: Vec<RectifiedConstatView> = Vec::new();
     let mut adds: BTreeMap<String, &AddEntry> = BTreeMap::new();
     let mut pendings: BTreeMap<String, &PendingQualificationEntry> = BTreeMap::new();
 
@@ -1864,9 +2032,31 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
                 TransitionTrigger::ObjectiveClosed
                 | TransitionTrigger::RemediedAttested
                 | TransitionTrigger::Refuted => {
-                    delivered_by
-                        .entry(transition.constat_id.clone())
-                        .or_insert(transition);
+                    // Dernière livraison gagne (après une rectification, une
+                    // nouvelle fermeture reprend l'autorité).
+                    delivered_by.insert(transition.constat_id.clone(), transition);
+                }
+                TransitionTrigger::Rectified => {
+                    if let Some(prev) = delivered_by.remove(&transition.constat_id) {
+                        let add = adds.get(&transition.constat_id);
+                        let closed_kind = match prev.trigger {
+                            TransitionTrigger::Refuted => ClosedKind::Refute,
+                            _ => ClosedKind::Traite,
+                        };
+                        rectifies.push(RectifiedConstatView {
+                            id: transition.constat_id.clone(),
+                            text: add.map(|a| a.text.clone()).unwrap_or_default(),
+                            closed_kind,
+                            closed_at: prev.observed_at.clone(),
+                            closed_raison: prev.raison.clone(),
+                            closed_reference: prev.reference.clone(),
+                            rectified_at: transition.observed_at.clone(),
+                            rectifie_raison: transition.raison.clone(),
+                            rectifie_reference: transition.reference.clone(),
+                            recurrence_of: add.and_then(|a| a.recurrence_of.clone()),
+                        });
+                    }
+                    rectifie_ids.insert(transition.constat_id.clone());
                 }
             },
             CatalogueEntry::PendingQualification(pending) => {
@@ -1880,6 +2070,7 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
         .filter(|add| !delivered_by.contains_key(&add.id))
         .map(|add| {
             let requalifie = requalifie_ids.contains(&add.id);
+            let rectifie = rectifie_ids.contains(&add.id);
             let severity = severity_override
                 .get(&add.id)
                 .copied()
@@ -1898,6 +2089,7 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
                 text: add.text.clone(),
                 mission_source: add.mission_source.clone(),
                 requalifie,
+                rectifie,
             }
         })
         .collect();
@@ -1930,6 +2122,11 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
     }
     traites.sort_by(|a, b| a.observed_at.cmp(&b.observed_at).then_with(|| a.id.cmp(&b.id)));
     refutes.sort_by(|a, b| a.observed_at.cmp(&b.observed_at).then_with(|| a.id.cmp(&b.id)));
+    rectifies.sort_by(|a, b| {
+        a.rectified_at
+            .cmp(&b.rectified_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
 
     let mut attente: Vec<PendingView> = pendings
         .values()
@@ -1977,12 +2174,14 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
         traites: traites.len(),
         refutes: refutes.len(),
         requalifies,
+        rectifies: rectifies.len(),
     };
     RegistreView {
         ouverts,
         attente,
         traites,
         refutes,
+        rectifies,
         footer,
     }
 }
@@ -2006,6 +2205,38 @@ fn resolve_open_nature(constat_id: &str, entries: &[CatalogueEntry]) -> Option<E
         }
     }
     nature
+}
+
+/// Dernier trigger de livraison encore actif (`None` = ouvert).
+fn current_delivery_trigger(
+    constat_id: &str,
+    entries: &[CatalogueEntry],
+) -> Option<TransitionTrigger> {
+    let mut current = None;
+    for entry in entries {
+        let CatalogueEntry::Transition(transition) = entry else {
+            continue;
+        };
+        if transition.constat_id != constat_id {
+            continue;
+        }
+        match transition.trigger {
+            TransitionTrigger::ObjectiveClosed
+            | TransitionTrigger::RemediedAttested
+            | TransitionTrigger::Refuted => {
+                current = Some(transition.trigger);
+            }
+            TransitionTrigger::Rectified => {
+                current = None;
+            }
+            TransitionTrigger::Requalified => {}
+        }
+    }
+    current
+}
+
+fn is_currently_delivered(constat_id: &str, entries: &[CatalogueEntry]) -> bool {
+    current_delivery_trigger(constat_id, entries).is_some()
 }
 
 fn resolve_open_severity(constat_id: &str, entries: &[CatalogueEntry]) -> Option<Severity> {
@@ -2046,14 +2277,16 @@ fn compare_open_constats(left: &OpenConstatView, right: &OpenConstatView) -> Ord
 
 /// Sections de `registre list`.
 /// Défaut : ouverts seuls + pied (les trois comptes).
-/// `--fermes` / `--refutes` **restreignent** le corps à cet état (raison + réf) —
-/// ils n'ajoutent pas une section sous le mur des ouverts. `--attente` seul
-/// reste un dépliage additif sur la vue des ouverts.
+/// `--fermes` / `--refutes` / `--rectifies` **restreignent** le corps à cet
+/// état — ils n'ajoutent pas une section sous le mur des ouverts. `--attente`
+/// seul reste un dépliage additif sur la vue des ouverts.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RegistreListSections {
     pub fermes: bool,
     pub refutes: bool,
     pub attente: bool,
+    /// Historique des fermetures erronées puis amendées.
+    pub rectifies: bool,
 }
 
 /// Rend la vue humaine d'autorité (SC-1704) : ouverts par défaut + pied.
@@ -2072,20 +2305,24 @@ pub fn render_registre_list_with_attente(view: &RegistreView, show_attente: bool
     )
 }
 
-/// Vue filtrable : ouverts par défaut ; `--fermes` / `--refutes` remplacent le
-/// corps (pas un élargissement). Pied toujours à trois comptes.
+/// Vue filtrable : ouverts par défaut ; `--fermes` / `--refutes` / `--rectifies`
+/// remplacent le corps (pas un élargissement). Pied toujours à trois comptes.
 pub fn render_registre_list_sections(view: &RegistreView, sections: RegistreListSections) -> String {
     let mut out = String::new();
     out.push_str("registre list\n");
-    // Restriction : dès qu'on demande fermés ou réfutés, les ouverts quittent
-    // le corps — sinon 185 ouverts noient les 40 fermés et la relecture ment.
-    let show_ouverts = !sections.fermes && !sections.refutes;
+    // Restriction : dès qu'on demande un état spécialisé, les ouverts quittent
+    // le corps — sinon 185 ouverts noient la relecture.
+    let show_ouverts = !sections.fermes && !sections.refutes && !sections.rectifies;
     if show_ouverts {
         if view.ouverts.is_empty() {
             out.push_str("(aucun constat ouvert)\n");
         } else {
             for item in &view.ouverts {
-                let badge = if item.requalifie {
+                // Trois situations distinctes : jamais touchée / requalifiée /
+                // fermée à tort puis rouverte.
+                let badge = if item.rectifie {
+                    "[RECTIFIÉ]"
+                } else if item.requalifie {
                     "[REQUALIFIÉ]"
                 } else {
                     "[OUVERT]"
@@ -2158,6 +2395,37 @@ pub fn render_registre_list_sections(view: &RegistreView, sections: RegistreList
             }
         }
     }
+    if sections.rectifies {
+        out.push_str(
+            "--- rectifiés (fermés à tort puis rouverts — historique des deux transitions) ---\n",
+        );
+        if view.rectifies.is_empty() {
+            out.push_str("(aucune rectification)\n");
+        } else {
+            for item in &view.rectifies {
+                let recurrence = item
+                    .recurrence_of
+                    .as_deref()
+                    .map(|id| format!(" recurrence_of={id}"))
+                    .unwrap_or_default();
+                let closed_label = match item.closed_kind {
+                    ClosedKind::Traite => "fermeture",
+                    ClosedKind::Refute => "réfutation",
+                };
+                out.push_str(&format!(
+                    "- [RECTIFIÉ] {id}{recurrence}\n  fautive={closed_label} {closed_at} raison={closed_raison} ref={closed_ref}\n  amendement={rect_at} raison={rect_raison} ref={rect_ref}\n  {text}\n",
+                    id = item.id,
+                    closed_at = item.closed_at,
+                    closed_raison = item.closed_raison.as_deref().unwrap_or("-"),
+                    closed_ref = item.closed_reference.as_deref().unwrap_or("-"),
+                    rect_at = item.rectified_at,
+                    rect_raison = item.rectifie_raison.as_deref().unwrap_or("-"),
+                    rect_ref = item.rectifie_reference.as_deref().unwrap_or("-"),
+                    text = item.text,
+                ));
+            }
+        }
+    }
     if sections.attente {
         out.push_str("--- en attente de qualification ---\n");
         if view.attente.is_empty() {
@@ -2175,7 +2443,7 @@ pub fn render_registre_list_sections(view: &RegistreView, sections: RegistreList
     }
     // Pied : les trois états toujours, même si le corps est filtré.
     out.push_str(&format!(
-        "pied: {n} DÛ dont {m} récurrents, {k} gates ratés ; {nr} RÈGLES ; {ns} RÉSULTATS ; {p} en attente ; {t} FERMÉS, {r} RÉFUTÉS, {q} REQUALIFIÉS\n",
+        "pied: {n} DÛ dont {m} récurrents, {k} gates ratés ; {nr} RÈGLES ; {ns} RÉSULTATS ; {p} en attente ; {t} FERMÉS, {r} RÉFUTÉS, {q} REQUALIFIÉS, {x} RECTIFIÉS\n",
         n = view.footer.ouverts,
         m = view.footer.recurrents,
         k = view.footer.gates_rates,
@@ -2185,6 +2453,7 @@ pub fn render_registre_list_sections(view: &RegistreView, sections: RegistreList
         t = view.footer.traites,
         r = view.footer.refutes,
         q = view.footer.requalifies,
+        x = view.footer.rectifies,
     ));
     out
 }
@@ -2792,6 +3061,7 @@ mod tests {
             fermes: true,
             refutes: true,
             attente: false,
+            rectifies: false,
         };
         let rt = render_registre_list_sections(&vt, sections);
         let rr = render_registre_list_sections(&vr, sections);
@@ -2927,7 +3197,8 @@ mod tests {
                 fermes: true,
                 refutes: false,
                 attente: false,
-            },
+            rectifies: false,
+        },
         );
         assert!(
             rendered.contains("[FERMÉ] temoin-a-fermer")
@@ -3015,7 +3286,8 @@ mod tests {
                 fermes: true,
                 refutes: false,
                 attente: false,
-            },
+            rectifies: false,
+        },
         );
         assert!(
             fermes.contains("--- fermés")
@@ -3068,7 +3340,8 @@ mod tests {
                 fermes: false,
                 refutes: true,
                 attente: false,
-            },
+            rectifies: false,
+        },
         );
         assert!(
             rendered.contains("[RÉFUTÉ] temoin-a-refuter")
@@ -3180,5 +3453,211 @@ mod tests {
             rendered.contains("pied: 0 DÛ") && rendered.contains("1 RÈGLES"),
             "pied scindé, reçu: {rendered}"
         );
+    }
+
+    /// Contrôle positif d'abord : fermeture juste intacte ; rectification
+    /// refuse de la défaire (objective_closed). Puis la transition erronée
+    /// (fixture réelle un-zero) DOIT pouvoir être rectifiée — append-only,
+    /// badge RECTIFIÉ, pas « jamais touchée ».
+    #[test]
+    fn oracle_une_transition_erronee_peut_etre_rectifiee() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-rectif-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("catalogue.jsonl");
+        let mut journal = CatalogueJournal::open(&path).unwrap();
+
+        // (1) Transition légitime : constat fermé par greffe — reste intacte.
+        let mut juste = sample_add("c-fermeture-juste", Severity::Major, "2026-08-27T01:00:00Z");
+        juste.nature = EntryNature::Constat;
+        journal.append_add(juste).unwrap();
+        let link = ArbitrationLink {
+            constat_id: "c-fermeture-juste".into(),
+            objective_id: "obj-juste".into(),
+        };
+        let closure = AttestedClosure {
+            objective_id: "obj-juste".into(),
+            observed_at: "2026-08-27T01:01:00Z".into(),
+        };
+        assert_eq!(
+            journal
+                .append_delivered_for_attested_closure(&link, &closure)
+                .unwrap(),
+            AppendOutcome::Appended,
+            "PROMESSE — une fermeture juste DOIT pouvoir être posée"
+        );
+        let err_juste = journal
+            .rectify_constat_attested(
+                "c-fermeture-juste",
+                RaisonRectification::FermetureErronee,
+                "mesure:1/1 greffe intact",
+                "2026-08-27T01:02:00Z",
+            )
+            .expect_err("PROMESSE — la rectification NE DOIT PAS défaire une fermeture juste");
+        assert!(
+            err_juste.to_string().contains("objective_closed")
+                || err_juste.to_string().contains("fermeture juste"),
+            "refus fermeture juste, reçu: {err_juste}"
+        );
+        let view_juste = project_registre(&journal.read_entries().unwrap());
+        assert_eq!(
+            view_juste.footer.traites, 1,
+            "PROMESSE — transition légitime reste delivered"
+        );
+        assert!(
+            !view_juste
+                .ouverts
+                .iter()
+                .any(|o| o.id == "c-fermeture-juste"),
+            "fermeture juste ne revient pas aux ouverts"
+        );
+
+        // (2) Fixture réelle : fermeture erronée de la règle permanente.
+        let mut regle = sample_add(
+            "regle/un-zero-doit-prouver-que-son-univers-n-est-pas-vide",
+            Severity::Blocker,
+            "2026-08-25T13:14:29.267957+02:00",
+        );
+        // Comme au journal de prod avant reclassement : nature=constat par défaut.
+        regle.nature = EntryNature::Constat;
+        regle.mission_source = MissionSource {
+            kind: MissionSourceKind::Review,
+            id: "relec6".into(),
+            failed: None,
+        };
+        regle.text = "REGLE — un zero doit prouver que son univers n est pas vide".into();
+        journal.append_add(regle).unwrap();
+        assert_eq!(
+            journal
+                .close_constat_attested(
+                    "regle/un-zero-doit-prouver-que-son-univers-n-est-pas-vide",
+                    RaisonFermeture::CorrigeEnProduction,
+                    "sha:475ef10",
+                    "2026-08-27T01:30:00Z",
+                )
+                .unwrap(),
+            AppendOutcome::Appended,
+            "fixture : la fermeture erronée a été acceptée (nature encore constat)"
+        );
+
+        // Sans rectification, requalifier est refusé (déjà delivered).
+        let err_req = journal
+            .requalify_constat(
+                "regle/un-zero-doit-prouver-que-son-univers-n-est-pas-vide",
+                None,
+                Some((EntryNature::Constat, EntryNature::Regle)),
+                RaisonRequalification::NatureReclassee,
+                None,
+                "2026-08-27T01:31:00Z",
+            )
+            .expect_err("sans rectification, requalifier refuse le delivered");
+        assert!(
+            err_req.to_string().contains("delivered"),
+            "motif delivered attendu, reçu: {err_req}"
+        );
+
+        // (3) Assertion principale : la transition erronée PEUT être rectifiée.
+        assert_eq!(
+            journal
+                .rectify_constat_attested(
+                    "regle/un-zero-doit-prouver-que-son-univers-n-est-pas-vide",
+                    RaisonRectification::FermetureErronee,
+                    "mesure:1/1 fermeture erronee d une regle permanente",
+                    "2026-08-27T01:32:00Z",
+                )
+                .unwrap(),
+            AppendOutcome::Appended,
+            "PROMESSE — une transition erronée DOIT pouvoir être rectifiée"
+        );
+
+        let entries = journal.read_entries().unwrap();
+        let view = project_registre(&entries);
+        let ouvert = view
+            .ouverts
+            .iter()
+            .find(|o| o.id == "regle/un-zero-doit-prouver-que-son-univers-n-est-pas-vide")
+            .expect("après rectification, la règle revient aux ouverts");
+        assert!(
+            ouvert.rectifie,
+            "PROMESSE — une entrée rectifiée NE se lit PAS comme jamais touchée"
+        );
+        assert_eq!(
+            view.footer.traites, 1,
+            "la fermeture juste compagnon reste comptée fermée"
+        );
+        assert_eq!(
+            view.footer.rectifies, 1,
+            "historique de rectification compté au pied"
+        );
+
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.contains("\"trigger\":\"remedied_attested\"")
+                && raw.contains("\"trigger\":\"rectified\""),
+            "append-only : fermeture ET rectification coexistent, reçu: {raw}"
+        );
+
+        // Trois situations distinctes pour un lecteur futur.
+        let mut intact = sample_add("c-jamais-ferme", Severity::Minor, "2026-08-27T01:00:00Z");
+        intact.nature = EntryNature::Constat;
+        journal.append_add(intact).unwrap();
+        let entries = journal.read_entries().unwrap();
+        let view = project_registre(&entries);
+        let rendered = render_registre_list(&view);
+        assert!(
+            rendered.contains("[OUVERT]")
+                && rendered.contains("c-jamais-ferme")
+                && rendered.contains("[RECTIFIÉ]")
+                && rendered.contains("regle/un-zero-doit-prouver-que-son-univers-n-est-pas-vide"),
+            "défaut : jamais touchée ≠ rectifiée, reçu: {rendered}"
+        );
+        let fermes = render_registre_list_sections(
+            &view,
+            RegistreListSections {
+                fermes: true,
+                ..RegistreListSections::default()
+            },
+        );
+        assert!(
+            fermes.contains("[FERMÉ] c-fermeture-juste")
+                && !fermes.contains("regle/un-zero-doit-prouver"),
+            "--fermes : fermeture juste visible, rectifiée absente (rouverte), reçu: {fermes}"
+        );
+        let hist = render_registre_list_sections(
+            &view,
+            RegistreListSections {
+                rectifies: true,
+                ..RegistreListSections::default()
+            },
+        );
+        assert!(
+            hist.contains("[RECTIFIÉ]")
+                && hist.contains("fautive=fermeture")
+                && hist.contains("raison=corrige_en_production")
+                && hist.contains("ref=sha:475ef10")
+                && hist.contains("raison=fermeture_erronee")
+                && hist.contains("mesure:1/1 fermeture erronee d une regle permanente")
+                && !hist.contains("[OUVERT]"),
+            "--rectifies : les DEUX transitions consultables, reçu: {hist}"
+        );
+
+        // Une entrée jamais delivered ne se « rectifie » pas.
+        let err_open = journal
+            .rectify_constat_attested(
+                "c-jamais-ferme",
+                RaisonRectification::FermetureErronee,
+                "mesure:1/1",
+                "2026-08-27T01:33:00Z",
+            )
+            .expect_err("rectifier un ouvert doit échouer");
+        assert!(
+            err_open.to_string().contains("n'est pas delivered"),
+            "refus ouvert, reçu: {err_open}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

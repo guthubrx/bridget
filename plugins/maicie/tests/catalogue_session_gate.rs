@@ -366,6 +366,10 @@ fn gate_session_017_cinq_promesses() {
         "PROMESSE(5) VUE — MUTATION: footer requalifies inventé"
     );
     assert_eq!(
+        view.footer.rectifies, independent.rectifies,
+        "PROMESSE(5) VUE — MUTATION: footer rectifies inventé"
+    );
+    assert_eq!(
         view.ouverts
             .iter()
             .filter(|item| item.nature == maicie::catalogue::EntryNature::Constat)
@@ -472,8 +476,11 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
                         nature_override.insert(transition.constat_id.clone(), nature);
                     }
                 }
+                TransitionTrigger::Rectified => {
+                    delivered.remove(&transition.constat_id);
+                }
                 other => {
-                    delivered.entry(transition.constat_id.clone()).or_insert(other);
+                    delivered.insert(transition.constat_id.clone(), other);
                 }
             },
             CatalogueEntry::PendingQualification(pending) => {
@@ -514,6 +521,7 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
         .count();
     let mut traites = 0usize;
     let mut refutes = 0usize;
+    let mut rectifies = 0usize;
     for (id, trigger) in &delivered {
         if !adds.contains_key(id) {
             continue;
@@ -521,6 +529,13 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
         match trigger {
             TransitionTrigger::Refuted => refutes += 1,
             _ => traites += 1,
+        }
+    }
+    for entry in entries {
+        if let CatalogueEntry::Transition(t) = entry {
+            if t.trigger == TransitionTrigger::Rectified && adds.contains_key(&t.constat_id) {
+                rectifies += 1;
+            }
         }
     }
     let requalifies = ouverts
@@ -537,6 +552,7 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
         traites,
         refutes,
         requalifies,
+        rectifies,
     }
 }
 
@@ -550,4 +566,5 @@ struct AuthorityCounts {
     traites: usize,
     refutes: usize,
     requalifies: usize,
+    rectifies: usize,
 }
