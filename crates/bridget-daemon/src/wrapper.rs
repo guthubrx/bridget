@@ -6,7 +6,7 @@ use bridget_transport::journal::{
     IncrementalJournalReader, JournalLiveFeed, JournalReadItem, JournalSourceIdentity,
     JournalWindowError, JournalWriter, current_host_date, resolve_window,
 };
-use bridget_transport::protocol::{PresenceMode, decode, encode};
+use bridget_transport::protocol::{DiskSpaceFact, PresenceMode, decode, encode};
 use bridget_transport::{
     AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ChannelReport, ClaudeStreamJsonOptions,
     ClaudeStreamJsonTransport, CodexAppServerOptions, CodexAppServerTransport, DaemonToWrapper,
@@ -1477,9 +1477,45 @@ fn connect_and_register_at(
     let mut line = String::new();
     reader.read_line(&mut line).map_err(|e| e.to_string())?;
     match decode(line.trim()).map_err(|e| e.to_string())? {
-        DaemonToWrapper::Registered { name } => Ok((reader, writer, name)),
+        DaemonToWrapper::Registered { name } => {
+            send_disk_space_fact(&mut writer);
+            Ok((reader, writer, name))
+        }
         DaemonToWrapper::Nack { reason, .. } => Err(format!("enregistrement refusé: {}", reason)),
         other => Err(format!("réponse inattendue: {:?}", other)),
+    }
+}
+
+/// Relève locale, après Register, pour que le daemon voie le disque de la
+/// machine qui exécute réellement l'agent. Le fait reste strictement
+/// informatif : une erreur de relevé ne bloque jamais le lancement.
+fn send_disk_space_fact(writer: &mut BufWriter<UnixStream>) {
+    let Some(free_bytes) = crate::disk_hygiene::free_bytes_for(Path::new("/")) else {
+        warn!("relevé d'espace disque indisponible après l'enregistrement");
+        return;
+    };
+    let observed_at_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or_default();
+    let message = WrapperToDaemon::DiskSpace {
+        fact: DiskSpaceFact {
+            volume: "/".to_string(),
+            free_bytes,
+            observed_at_unix,
+        },
+    };
+    let encoded = match encode(&message) {
+        Ok(encoded) => encoded,
+        Err(error) => {
+            warn!("impossible d'encoder le relevé d'espace disque: {error}");
+            return;
+        }
+    };
+    if let Err(error) = writeln!(writer, "{encoded}").and_then(|_| writer.flush()) {
+        // Les daemons plus anciens ignorent la variante au fil : leur réponse
+        // ne doit pas empêcher un wrapper déjà enregistré de travailler.
+        warn!("impossible d'envoyer le relevé d'espace disque: {error}");
     }
 }
 
@@ -5285,6 +5321,16 @@ mod reconnect_tests {
             )
             .unwrap();
             writer.flush().unwrap();
+
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode(line.trim()).unwrap(),
+                WrapperToDaemon::DiskSpace { fact }
+                    if fact.volume == "/"
+                        && fact.free_bytes > 0
+                        && fact.observed_at_unix > 0
+            ));
         });
 
         let (_, _, name) = connect_and_register_at(

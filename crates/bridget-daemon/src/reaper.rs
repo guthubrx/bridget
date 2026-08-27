@@ -100,6 +100,9 @@ pub struct TempDirSnapshot {
     pub path: PathBuf,
     pub age_secs: u64,
     pub prefix_kind: String,
+    /// Nom d'agent extrait du répertoire lorsque son propriétaire peut être
+    /// rapproché de l'inventaire. Absent pour les anciens préfixes harnais.
+    pub agent_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +125,9 @@ pub struct WorldView {
     pub double_observation_secs: u64,
     /// Toujours `false` tant que le signal n'existe pas chez Bridget.
     pub background_liveness_available: bool,
+    /// L'inventaire daemon a-t-il pu être consulté ? Sans lui, l'absence d'un
+    /// agent n'est pas une preuve d'abandon et reste fail-closed.
+    pub agent_inventory_available: bool,
 }
 
 impl WorldView {
@@ -131,6 +137,7 @@ impl WorldView {
             min_age_secs: DEFAULT_MIN_AGE_SECS,
             double_observation_secs: DEFAULT_DOUBLE_OBSERVATION_SECS,
             background_liveness_available: false,
+            agent_inventory_available: true,
             ..Self::default()
         }
     }
@@ -386,10 +393,10 @@ pub fn classify_temp_dir(
     let identity = format!("temp-dir:{}", path);
     let fingerprint = format!("C:{}", path);
 
-    let mut criteria_met = vec![format!("P3_prefixe_harnais={}", dir.prefix_kind)];
+    let mut criteria_met = vec![format!("P3_racine_observee={}", dir.prefix_kind)];
     let mut criteria_missing = Vec::new();
     let mut guards = Vec::new();
-    let uncertainty = Vec::new();
+    let mut uncertainty = Vec::new();
 
     if dir.age_secs >= world.min_age_secs {
         criteria_met.push(format!("P1_age_secs>={}", world.min_age_secs));
@@ -414,7 +421,38 @@ pub fn classify_temp_dir(
         ));
     }
 
-    let would = format!("rmdir/rm best-effort {path} (JAMAIS exécuté en phase observer)");
+    if let Some(agent_name) = dir.agent_name.as_deref() {
+        match world.agents.iter().find(|agent| agent.name == agent_name) {
+            Some(agent) if matches!(agent.state.as_str(), "connected" | "busy" | "dnd") => {
+                // Une présence active suffit, même lorsqu'aucun processus ne
+                // référence le répertoire à l'instant de la photographie.
+                guards.push(format!("G_agent_actif={} état={}", agent.name, agent.state));
+                criteria_missing.push("P4_agent_absent_ou_arrête".into());
+            }
+            Some(agent) if matches!(agent.state.as_str(), "stopped" | "unreachable") => {
+                criteria_met.push(format!(
+                    "P4_agent_absent_ou_arrête={} état={}",
+                    agent.name, agent.state
+                ));
+            }
+            Some(agent) => {
+                criteria_missing.push("P4_agent_absent_ou_arrête".into());
+                uncertainty.push(format!(
+                    "état_agent_non_classable={} état={}",
+                    agent.name, agent.state
+                ));
+            }
+            None if world.agent_inventory_available => {
+                criteria_met.push(format!("P4_agent_absent_du_daemon={agent_name}"));
+            }
+            None => {
+                criteria_missing.push("P4_agent_absent_ou_arrête".into());
+                uncertainty.push(format!("inventaire_agent_indisponible pour {agent_name}"));
+            }
+        }
+    }
+
+    let would = format!("candidat à revue {path} (JAMAIS exécuté en phase observer)");
 
     finalize_report(FinalizeInput {
         class: TargetClass::TempDir,
@@ -425,7 +463,7 @@ pub fn classify_temp_dir(
         cmdline: None,
         path: Some(path),
         age_secs: Some(dir.age_secs),
-        agent_name: None,
+        agent_name: dir.agent_name.clone(),
         criteria_met,
         criteria_missing,
         guards,
@@ -632,6 +670,9 @@ pub fn render_human(report: &ReaperReport) -> String {
         if let Some(path) = &t.path {
             out.push_str(&format!("  path={path}\n"));
         }
+        if let Some(agent_name) = &t.agent_name {
+            out.push_str(&format!("  agent={agent_name}\n"));
+        }
         if let Some(cmd) = &t.cmdline {
             out.push_str(&format!("  cmdline={cmd}\n"));
         }
@@ -726,9 +767,15 @@ pub fn observe_live(
     world.min_age_secs = min_age_secs;
     world.prior_hits = load_prior_hits(state_dir);
     world.processes = scan_processes()?;
-    world.agents = scan_agents()?;
+    match scan_agents()? {
+        Some(agents) => {
+            world.agent_inventory_available = true;
+            world.agents = agents;
+        }
+        None => world.agent_inventory_available = false,
+    }
     world.open_request_participants = scan_open_request_participants_best_effort();
-    world.temp_dirs = scan_temp_dirs(tmp_dir, now)?;
+    scan_explicit_temp_root(&mut world, tmp_dir, now)?;
 
     // Enrichir les daemons avec leur HOME via lsof (best-effort).
     let mut enriched = Vec::new();
@@ -795,29 +842,34 @@ fn scan_processes() -> io::Result<Vec<ProcessSnapshot>> {
     Ok(out)
 }
 
-fn scan_agents() -> io::Result<Vec<AgentPresence>> {
+fn scan_agents() -> io::Result<Option<Vec<AgentPresence>>> {
     let config = crate::daemon::DaemonConfig::default();
     agents_from_status(crate::daemon::get_status(&config))
 }
 
 fn agents_from_status(
     status: Result<crate::daemon::DaemonStatus, String>,
-) -> io::Result<Vec<AgentPresence>> {
+) -> io::Result<Option<Vec<AgentPresence>>> {
     let status = status.map_err(io::Error::other)?;
     if !status.running {
-        return Ok(Vec::new());
+        return Ok(Some(Vec::new()));
     }
-    Ok(status
-        .agents
-        .into_iter()
-        .map(|a| AgentPresence {
-            name: a.name,
-            state: a.state,
-            mode: a.mode.map(|m| m.as_str().to_string()),
-            location: a.location,
-            last_seen_secs: a.last_seen_secs,
-        })
-        .collect())
+    if !status.agents_inventory_available {
+        return Ok(None);
+    }
+    Ok(Some(
+        status
+            .agents
+            .into_iter()
+            .map(|a| AgentPresence {
+                name: a.name,
+                state: a.state,
+                mode: a.mode.map(|m| m.as_str().to_string()),
+                location: a.location,
+                last_seen_secs: a.last_seen_secs,
+            })
+            .collect(),
+    ))
 }
 
 fn scan_open_request_participants_best_effort() -> Vec<String> {
@@ -827,7 +879,16 @@ fn scan_open_request_participants_best_effort() -> Vec<String> {
     Vec::new()
 }
 
-fn scan_temp_dirs(tmp: &Path, now_unix: u64) -> io::Result<Vec<TempDirSnapshot>> {
+fn scan_explicit_temp_root(world: &mut WorldView, tmp: &Path, now_unix: u64) -> io::Result<()> {
+    world.temp_dirs = scan_temp_dirs(tmp, now_unix, &world.agents)?;
+    Ok(())
+}
+
+fn scan_temp_dirs(
+    tmp: &Path,
+    now_unix: u64,
+    known_agents: &[AgentPresence],
+) -> io::Result<Vec<TempDirSnapshot>> {
     let entries = match fs::read_dir(tmp) {
         Ok(e) => e,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -840,12 +901,17 @@ fn scan_temp_dirs(tmp: &Path, now_unix: u64) -> io::Result<Vec<TempDirSnapshot>>
             Some(n) => n,
             None => continue,
         };
-        let Some(kind) = harness_temp_prefix(name) else {
-            continue;
-        };
         let meta = match entry.metadata() {
             Ok(m) => m,
             Err(_) => continue,
+        };
+        let (kind, agent_name) = match harness_temp_prefix(name) {
+            Some(kind) => (kind.to_string(), None),
+            None if meta.is_dir() => match agent_name_from_temp_dir(name, known_agents) {
+                Some(agent_name) => ("agent".to_string(), Some(agent_name)),
+                None => continue,
+            },
+            None => continue,
         };
         if !meta.is_dir() {
             // Les .sock / .pid isolés : on les signale aussi comme artefacts
@@ -860,7 +926,8 @@ fn scan_temp_dirs(tmp: &Path, now_unix: u64) -> io::Result<Vec<TempDirSnapshot>>
         out.push(TempDirSnapshot {
             path,
             age_secs: age,
-            prefix_kind: kind.into(),
+            prefix_kind: kind,
+            agent_name,
         });
     }
     Ok(out)
@@ -942,6 +1009,34 @@ fn harness_temp_prefix(name: &str) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// Extrait le préfixe d'un répertoire de travail d'agent (`jc2-attribution`,
+/// `gregen.abc`). Cette reconnaissance classe seulement : elle n'autorise
+/// jamais une suppression et une identité inconnue reste visible au rapport.
+fn agent_name_from_temp_dir(name: &str, known_agents: &[AgentPresence]) -> Option<String> {
+    if let Some(agent_name) = known_agents
+        .iter()
+        .map(|agent| agent.name.as_str())
+        .filter(|agent_name| {
+            name.strip_prefix(agent_name)
+                .is_some_and(|suffix| suffix.starts_with('-') || suffix.starts_with('.'))
+        })
+        .max_by_key(|agent_name| agent_name.len())
+    {
+        return Some(agent_name.to_string());
+    }
+    let separator = name.find(|character| matches!(character, '-' | '.'))?;
+    let candidate = &name[..separator];
+    if candidate.is_empty()
+        || candidate.len() > 64
+        || !candidate
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        return None;
+    }
+    Some(candidate.to_string())
 }
 
 fn process_mentions_path(command: &str, path: &Path) -> bool {
@@ -1029,9 +1124,27 @@ mod tests {
                 .contains("identité du daemon indisponible")
         );
 
-        let absent = agents_from_status(Ok(crate::daemon::DaemonStatus::default()))
-            .expect("un daemon réellement absent reste observable");
+        let absent = agents_from_status(Ok(crate::daemon::DaemonStatus {
+            agents_inventory_available: true,
+            ..crate::daemon::DaemonStatus::default()
+        }))
+        .expect("un daemon réellement absent reste observable")
+        .expect("l'absence déterminée donne un inventaire connu");
         assert!(absent.is_empty());
+    }
+
+    #[test]
+    fn daemon_present_mais_inventaire_indisponible_reste_incertain() {
+        let inventory = agents_from_status(Ok(crate::daemon::DaemonStatus {
+            running: true,
+            agents_inventory_available: false,
+            ..crate::daemon::DaemonStatus::default()
+        }))
+        .expect("le statut attesté reste lisible");
+        assert!(
+            inventory.is_none(),
+            "un daemon présent mais muet ne doit pas devenir un annuaire vide"
+        );
     }
 
     #[test]
@@ -1236,6 +1349,7 @@ mod tests {
             path: PathBuf::from("/tmp/bg-999-aa"),
             age_secs: 7200,
             prefix_kind: "bg".into(),
+            agent_name: None,
         };
         let report = classify_temp_dir(&dir, &[111], &world);
         assert_eq!(report.verdict, Verdict::Protege);
@@ -1249,10 +1363,116 @@ mod tests {
             path: PathBuf::from("/tmp/mg1504-1-1"),
             age_secs: 7200,
             prefix_kind: "mg1504".into(),
+            agent_name: None,
         };
         let report = classify_temp_dir(&dir, &[], &world);
         assert_eq!(report.verdict, Verdict::Eligible);
-        assert!(report.would_have_done.contains("rmdir"));
+        assert!(report.would_have_done.contains("candidat à revue"));
+        assert!(report.would_have_done.contains("JAMAIS exécuté"));
+    }
+
+    #[test]
+    fn repertoire_agent_absent_et_ancien_est_candidat_a_revue() {
+        let mut world = world_at(1_700_000_000);
+        world.min_age_secs = 60;
+        let dir = TempDirSnapshot {
+            path: PathBuf::from("/tmp/ancien-attribution"),
+            age_secs: 7200,
+            prefix_kind: "agent".into(),
+            agent_name: Some("ancien".into()),
+        };
+
+        let report = classify_temp_dir(&dir, &[], &world);
+        assert_eq!(report.verdict, Verdict::Eligible);
+        assert_eq!(report.agent_name.as_deref(), Some("ancien"));
+        assert!(
+            report
+                .criteria_met
+                .iter()
+                .any(|criterion| criterion == "P4_agent_absent_du_daemon=ancien")
+        );
+        assert!(report.would_have_done.contains("candidat à revue"));
+    }
+
+    #[test]
+    fn repertoire_agent_connecte_est_protege_meme_sans_descripteur_ouvert() {
+        let mut world = world_at(1_700_000_000);
+        world.min_age_secs = 60;
+        world.agents.push(AgentPresence {
+            name: "jc2".into(),
+            state: "connected".into(),
+            mode: None,
+            location: None,
+            last_seen_secs: 0,
+        });
+        let dir = TempDirSnapshot {
+            path: PathBuf::from("/tmp/jc2-attribution"),
+            age_secs: 7200,
+            prefix_kind: "agent".into(),
+            agent_name: Some("jc2".into()),
+        };
+
+        let report = classify_temp_dir(&dir, &[], &world);
+        assert_eq!(report.verdict, Verdict::Protege);
+        assert!(
+            report
+                .guards_triggered
+                .iter()
+                .any(|guard| guard == "G_agent_actif=jc2 état=connected"),
+            "un arbre au repos reste protégé tant que l'agent est connecté"
+        );
+    }
+
+    #[test]
+    fn racine_explicite_hors_temp_par_defaut_est_observee() {
+        let root = PathBuf::from(format!(
+            "/tmp/bridget-reaper-racine-explicite-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let target = root.join("jc6-revue");
+        fs::create_dir_all(&target).unwrap();
+
+        let scanned = scan_temp_dirs(&root, 1_700_000_000, &[]).unwrap();
+        assert!(
+            scanned.iter().any(|entry| {
+                entry.path == target && entry.agent_name.as_deref() == Some("jc6")
+            }),
+            "la racine passée explicitement doit être lue par le scanner, sans recours à TMPDIR"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn raccord_productif_lit_la_racine_fournie_et_protege_un_nom_avec_tiret() {
+        let root = PathBuf::from(format!(
+            "/tmp/bridget-reaper-raccord-productif-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let target = root.join("jc2-review-attribution");
+        fs::create_dir_all(&target).unwrap();
+        let state_dir = root.join("state");
+        fs::create_dir_all(&state_dir).unwrap();
+        let report = observe_live(&state_dir, &root, 60).unwrap();
+        assert!(report.targets.iter().any(|entry| {
+            entry.path.as_deref() == Some(target.to_str().unwrap())
+        }));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn agent_connecte_avec_tiret_est_protege() {
+        let root = PathBuf::from(format!("/tmp/bridget-reaper-tiret-{}", uuid::Uuid::new_v4()));
+        let target = root.join("jc2-review-attribution");
+        fs::create_dir_all(&target).unwrap();
+        let mut world = world_at(1_700_000_000);
+        world.agent_inventory_available = true;
+        world.agents.push(AgentPresence { name: "jc2-review".into(), state: "connected".into(), mode: None, location: None, last_seen_secs: 0 });
+        scan_explicit_temp_root(&mut world, &root, 1_700_000_000).unwrap();
+        let dir = world.temp_dirs.iter().find(|entry| entry.path == target).unwrap();
+        assert_eq!(dir.agent_name.as_deref(), Some("jc2-review"));
+        assert_eq!(classify_temp_dir(dir, &[], &world).verdict, Verdict::Protege);
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
