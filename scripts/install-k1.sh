@@ -96,9 +96,22 @@ SHARE_DIR="${HOME}/.local/share/bridget/agents"
 LAUNCHD_DIR="${HOME}/Library/LaunchAgents"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 
+# XDG Base Directory 0.8 réserve cette racine aux états qui doivent survivre
+# aux redémarrages. Une valeur relative est invalide et doit être ignorée.
+STATE_HOME="${HOME}/.local/state"
+IGNORED_XDG_STATE_HOME=""
+if [[ -n "${XDG_STATE_HOME:-}" ]]; then
+  if [[ "$XDG_STATE_HOME" == /* ]]; then
+    STATE_HOME="$XDG_STATE_HOME"
+  else
+    IGNORED_XDG_STATE_HOME="$XDG_STATE_HOME"
+  fi
+fi
+
 BRIDGET_SOCKET="${CACHE_DIR}/bridget.sock"
-# Répertoire privé 0700 exigé par MaicieStore (pas ~/.cache/bridget partagé).
-MAICIE_STATE_DIR="${CACHE_DIR}/maicie-state"
+# Répertoire privé 0700 exigé par MaicieStore. La base des missions est un état
+# durable ; elle ne partage pas la racine des artefacts remplaçables.
+MAICIE_STATE_DIR="${STATE_HOME}/maicie"
 MAICIE_DB_PATH="${MAICIE_STATE_DIR}/maicie.sqlite3"
 DEFAULT_CATALOGUE_PATH="${CACHE_DIR}/catalogue.jsonl"
 CATALOGUE_PATH="${CATALOGUE_PATH:-$DEFAULT_CATALOGUE_PATH}"
@@ -133,6 +146,7 @@ SKIPPED=0
 TOUCHED=0
 
 log() { echo "install-k1: $*"; }
+warn() { echo "install-k1: AVERTISSEMENT: $*" >&2; }
 die() { echo "install-k1: ERREUR: $*" >&2; exit 1; }
 
 cleanup_maicie_stage() {
@@ -318,6 +332,43 @@ preflight_staged_maicie_activation() {
     die "gate Maicie refusé avant publication: binaire=$MAICIE_CANDIDATE_SOURCE config=$MAICIE_STAGED_CONFIG : $report$remedy"
   fi
   log "gate Maicie accepté sur la paire stagée: binaire=$MAICIE_CANDIDATE_SOURCE config=$MAICIE_STAGED_CONFIG $report"
+}
+
+# Une configuration existante reste propriété de l'utilisateur. Le diagnostic
+# rend visible une base durable rangée sous un cache sans la déplacer ni
+# modifier les octets qui viennent d'être préflightés.
+warn_if_maicie_database_is_cached() {
+  local database_path
+  [[ "$MAICIE_CONFIG_NEEDS_PUBLISH" == "0" ]] || return 0
+  if ! database_path="$(python3 - \
+    "$MAICIE_STAGED_CONFIG" "$HOME" "${XDG_CACHE_HOME:-}" <<'PY'
+import json
+import os
+import sys
+
+config_path, home, xdg_cache_home = sys.argv[1:]
+with open(config_path, encoding="utf-8") as stream:
+    database_path = json.load(stream)["database_path"]
+
+database_real = os.path.realpath(database_path)
+cache_roots = [os.path.realpath(os.path.join(home, ".cache"))]
+if xdg_cache_home and os.path.isabs(xdg_cache_home):
+    cache_roots.append(os.path.realpath(xdg_cache_home))
+
+for cache_root in cache_roots:
+    try:
+        if os.path.commonpath((database_real, cache_root)) == cache_root:
+            print(database_path)
+            break
+    except ValueError:
+        continue
+PY
+  )"; then
+    die "diagnostic du chemin database_path impossible ($MAICIE_STAGED_CONFIG)"
+  fi
+  if [[ -n "$database_path" ]]; then
+    warn "base Maicie durable située sous un cache: source=$database_path ; configuration préservée ; migration NON effectuée ; cible recommandée après arrêt coordonné=$MAICIE_DB_PATH"
+  fi
 }
 
 atomic_publish_file() {
@@ -819,6 +870,9 @@ EOF
 
 main() {
   log "plateforme=${PLATFORM} backend=${SERVICE_BACKEND}"
+  if [[ -n "$IGNORED_XDG_STATE_HOME" ]]; then
+    warn "XDG_STATE_HOME relatif ignoré ($IGNORED_XDG_STATE_HOME) ; repli=$STATE_HOME"
+  fi
   ensure_dirs
   build_release_if_needed
 
@@ -827,6 +881,7 @@ main() {
   fi
   stage_maicie_activation
   preflight_staged_maicie_activation
+  warn_if_maicie_database_is_cached
   quiesce_maicie_releve
   publish_staged_maicie_activation
   preflight_published_maicie_activation
