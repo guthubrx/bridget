@@ -4,6 +4,24 @@ pub const BUILD_ID: &str = env!("BRIDGET_BUILD_ID");
 /// Désignation employée quand la machine du daemon n'est pas attestée.
 pub const MACHINE_NON_ATTESTEE: &str = "machine non attestée";
 
+/// Rendu HUMAIN d'un hôte, quelle que soit la forme de son absence.
+///
+/// Il y avait DEUX vocabulaires pour le même fait : un champ absent devenait
+/// « machine non attestée », mais un champ portant la valeur de repli
+/// s'affichait « inconnu ». Deux littéraux libres pour « on ne sait pas quelle
+/// machine » — donc un code qui reconnaît l'un ne reconnaît pas l'autre.
+/// Ce sont bien LE MÊME FAIT, et ils se rendent désormais pareil.
+///
+/// Ne pas confondre avec les autres « inconnu » du dépôt — build-id, système
+/// d'exploitation, nom d'outil : ceux-là désignent d'AUTRES faits et ne doivent
+/// surtout pas être unifiés avec celui-ci.
+pub fn describe_host(host: Option<&str>) -> &str {
+    match host {
+        Some(host) if bridget_core::host_is_attested(host) => host,
+        _ => MACHINE_NON_ATTESTEE,
+    }
+}
+
 /// Nom de la machine qui exécute ce binaire.
 ///
 /// **Ré-export**, pas une copie : il n'existe qu'une seule implémentation, dans
@@ -26,6 +44,21 @@ pub fn stale_daemon_warning_at(daemon_build_id: &str, daemon_host: Option<&str>)
 /// serait la quatrième erreur d'attribution de la ligne fondatrice
 /// (`launchctl` + uid local pour un daemon qui est ailleurs).
 fn remediation(local_host: &str, daemon_host: Option<&str>) -> String {
+    // AUCUNE COMMANDE LOCALE SANS MACHINE ATTESTEE. Si les deux côtés portent
+    // la valeur de repli, l'égalité ne prouve rien : proposer `launchctl` ou
+    // `systemctl` enverrait l'exploitant relancer un service SUR SA MACHINE
+    // alors que le daemon est peut-être ailleurs. Il exécuterait la commande,
+    // rien d'utile ne se produirait, et rien ne lui dirait pourquoi.
+    // C'est le seul des trois points qui produit un GESTE, pas un verdict.
+    if !bridget_core::host_is_attested(local_host)
+        || !daemon_host.is_some_and(bridget_core::host_is_attested)
+    {
+        return format!(
+            "machine du daemon non attestée — on ne sait pas où relancer ; \
+             renseigner HOSTNAME de part et d'autre avant toute relance ({})",
+            describe_host(daemon_host)
+        );
+    }
     match daemon_host {
         Some(host) if host != local_host => {
             format!("relancer le daemon sur {host} — aucune commande locale ne l'atteint")
@@ -56,24 +89,25 @@ pub fn stale_daemon_warning_for(
     (daemon_build_id != local_build_id).then(|| {
         // Incident fondateur (2026-08-23) : deux correctifs semblaient absents
         // pendant des heures parce qu'un daemon périmé continuait de répondre.
+        let ici = describe_host(Some(local_host));
         if local_build_id == "unknown" {
             return format!(
-                "client non identifiable sur {local_host} : compilé sans dépôt Git, \
+                "client non identifiable sur {ici} : compilé sans dépôt Git, \
                  build-id absent — le daemon ({daemon_build_id}) n'est pas mis en cause ; \
                  poser BRIDGET_BUILD_ID à la compilation"
             );
         }
-        let machine = daemon_host.unwrap_or(MACHINE_NON_ATTESTEE);
+        let machine = describe_host(daemon_host);
         let remediation = remediation(local_host, daemon_host);
         if daemon_build_id == "unknown" {
             format!(
                 "daemon build-id inconnu sur {machine} — client {local_build_id} \
-                 sur {local_host} : {remediation}"
+                 sur {ici} : {remediation}"
             )
         } else {
             format!(
                 "daemon périmé sur {machine} ({daemon_build_id}) — client \
-                 {local_build_id} sur {local_host} : {remediation}"
+                 {local_build_id} sur {ici} : {remediation}"
             )
         }
     })
@@ -216,5 +250,73 @@ mod tests {
             bridget_core::host::local_host(),
             "le ré-export et le chemin complet désignent le même item"
         );
+    }
+
+    /// QUATRIEME ORACLE — le seul des trois points qui produit un GESTE.
+    ///
+    /// Quand aucune machine n'est attestee, `remediation` proposait une commande
+    /// LOCALE parce que les deux cotes portaient la meme valeur de repli. On
+    /// envoyait l'exploitant relancer un service sur SA machine alors que le
+    /// daemon est peut-etre ailleurs : il execute, rien ne se passe, et rien ne
+    /// lui dit pourquoi.
+    ///
+    /// Mutant qui tue ce test : retirer la garde d'attestation en tete de
+    /// `remediation` -> une commande locale reapparait et l'assertion meurt en
+    /// affichant le message complet.
+    #[test]
+    fn aucune_commande_locale_quand_la_machine_n_est_pas_attestee() {
+        let sentinelle = bridget_core::HOTE_NON_ATTESTE;
+        let warning = stale_daemon_warning_for("client", sentinelle, "daemon", Some(sentinelle))
+            .expect("écart signalé");
+        assert!(
+            !warning.contains("launchctl") && !warning.contains("systemctl"),
+            "aucune commande locale ne doit être proposée : {warning}"
+        );
+        assert!(
+            warning.contains("on ne sait pas où relancer"),
+            "le message doit dire qu'on ignore où agir : {warning}"
+        );
+        // L'hôte LOCAL aussi passe par le rendu unique : sans cela le message
+        // disait « sur inconnu » d'un côté et « machine non attestée » de
+        // l'autre — les deux vocabulaires, dans la MÊME phrase.
+        assert!(
+            !warning.contains(&format!("sur {sentinelle}")),
+            "la machine locale non attestée doit se lire comme telle : {warning}"
+        );
+
+        // Cas mixte : un seul côté attesté ne suffit pas non plus.
+        let mixte = stale_daemon_warning_for("client", "cartae", "daemon", Some(sentinelle))
+            .expect("écart signalé");
+        assert!(
+            !mixte.contains("systemctl") && !mixte.contains("launchctl"),
+            "{mixte}"
+        );
+
+        // CONTRÔLE POSITIF : deux machines attestées et identiques → la
+        // commande locale revient. Sans lui, une remédiation qui ne proposerait
+        // JAMAIS rien passerait les assertions ci-dessus.
+        let local = stale_daemon_warning_for("client", "cartae", "daemon", Some("cartae"))
+            .expect("écart signalé");
+        assert!(
+            local.contains("systemctl") || local.contains("launchctl"),
+            "une machine attestée et locale doit recevoir sa commande : {local}"
+        );
+    }
+
+    /// Les DEUX formes de l'absence se rendent PAREIL.
+    ///
+    /// Mutant qui tue ce test : faire rendre `host` tel quel par `describe_host`
+    /// pour la sentinelle -> la première assertion meurt en affichant « inconnu ».
+    #[test]
+    fn les_deux_formes_de_l_absence_se_rendent_pareil() {
+        assert_eq!(
+            describe_host(Some(bridget_core::HOTE_NON_ATTESTE)),
+            MACHINE_NON_ATTESTEE,
+            "un champ portant le repli doit se lire comme un champ absent"
+        );
+        assert_eq!(describe_host(None), MACHINE_NON_ATTESTEE);
+        assert_eq!(describe_host(Some("   ")), MACHINE_NON_ATTESTEE);
+        // Contrôle positif : un vrai nom passe intact.
+        assert_eq!(describe_host(Some("cartae")), "cartae");
     }
 }

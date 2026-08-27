@@ -191,7 +191,7 @@ fn recovery_trace_scope(
             "trace de reprise non lisible d'ici : machine non attestée — locale « {} », daemon « {} ». \
              Une machine indéterminée n'est pas une machine, et deux indéterminées ne sont pas la même.",
             local_host,
-            daemon_host.unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE)
+            crate::build_info::describe_host(daemon_host)
         ));
     }
     Err(format!(
@@ -199,7 +199,7 @@ fn recovery_trace_scope(
         local_db_path.display(),
         local_host,
         daemon_db_path.unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE),
-        daemon_host.unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE)
+        crate::build_info::describe_host(daemon_host)
     ))
 }
 
@@ -527,12 +527,9 @@ fn render_vivant(out: &mut String, snapshot: &RepriseSnapshot) {
             // vaut là où le daemon tourne, et les deux diffèrent en fédération.
             out.push_str(&format!(
                 "  machine_daemon: {}\n",
-                yaml_string(
-                    status
-                        .daemon_host
-                        .as_deref()
-                        .unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE)
-                )
+                yaml_string(crate::build_info::describe_host(
+                    status.daemon_host.as_deref()
+                ))
             ));
             out.push_str(&format!(
                 "  socket: {}\n",

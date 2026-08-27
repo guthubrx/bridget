@@ -800,10 +800,12 @@ fn validate_command_id(command_id: &str) -> Result<(), String> {
 /// Une machine vide vient d'un daemon antérieur au champ : on le DIT, on ne
 /// suppose pas la machine locale.
 fn machine_ou_non_attestee(host: &str) -> &str {
+    // Rendu UNIQUE : un champ vide et un champ portant la valeur de repli
+    // disent le meme fait et doivent se lire pareil.
     if host.trim().is_empty() {
         crate::build_info::MACHINE_NON_ATTESTEE
     } else {
-        host
+        crate::build_info::describe_host(Some(host))
     }
 }
 
@@ -3499,10 +3501,7 @@ fn cmd_status() {
             "hors ligne"
         }
     );
-    let machine = status
-        .daemon_host
-        .as_deref()
-        .unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE);
+    let machine = crate::build_info::describe_host(status.daemon_host.as_deref());
     println!("Machine du daemon: {machine}");
     println!("Socket: {}", config.socket_path.display());
     // La base affichée est celle que le DAEMON atteste, jamais le chemin que ce

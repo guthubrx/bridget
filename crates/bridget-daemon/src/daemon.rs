@@ -3752,7 +3752,10 @@ fn handle_register_with_channel(
                 .insert(conn_id.to_string(), final_name.clone());
             state.conn_hosts.insert(
                 conn_id.to_string(),
-                host.clone().unwrap_or_else(|| "inconnu".to_string()),
+                // Sentinelle PARTAGEE : ce champ est relu par les gardes de
+                // localite, qui doivent pouvoir la reconnaitre.
+                host.clone()
+                    .unwrap_or_else(|| bridget_core::HOTE_NON_ATTESTE.to_string()),
             );
             state.conn_operating_systems.insert(
                 conn_id.to_string(),
@@ -3904,7 +3907,7 @@ fn handle_register_with_channel(
                 };
                 let host = previous
                     .as_ref()
-                    .filter(|presence| presence.host != "inconnu")
+                    .filter(|presence| bridget_core::host_is_attested(&presence.host))
                     .map(|presence| presence.host.clone())
                     .or(host)
                     .unwrap_or_else(|| "inconnu".to_string());
@@ -6182,11 +6185,14 @@ fn handle_wrapper_message(
             // du tunnel. `conn_hosts` porte l'hôte attesté à l'enregistrement.
             let hosts = crate::lifecycle::SpawnHosts {
                 searched_on: st.host.clone(),
+                // Absence de connexion connue OU hote non atteste : meme fait,
+                // meme valeur. Le rendu s en chargera, pas deux litteraux.
                 requested_from: st
                     .conn_hosts
                     .get(conn_id)
+                    .filter(|host| bridget_core::host_is_attested(host))
                     .cloned()
-                    .unwrap_or_else(|| crate::build_info::MACHINE_NON_ATTESTEE.to_string()),
+                    .unwrap_or_else(|| bridget_core::HOTE_NON_ATTESTE.to_string()),
             };
             let decision = submit_spawn(
                 &st.fleet,
