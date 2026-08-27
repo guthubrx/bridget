@@ -3066,6 +3066,13 @@ fn parse_directory_args(
     Ok(parsed)
 }
 
+fn daemon_status_or_exit(command: &str, config: &DaemonConfig) -> daemon::DaemonStatus {
+    daemon::get_status(config).unwrap_or_else(|error| {
+        eprintln!("bridget {command}: {error}");
+        std::process::exit(1);
+    })
+}
+
 fn cmd_agents(args: &[String]) {
     let parsed = parse_directory_args("agents", args, true).unwrap_or_else(|error| {
         eprintln!("bridget {error}");
@@ -3074,7 +3081,7 @@ fn cmd_agents(args: &[String]) {
     });
 
     let config = DaemonConfig::default();
-    let mut status = daemon::get_status(&config);
+    let mut status = daemon_status_or_exit("agents", &config);
     if let Some(domain) = &parsed.domain {
         status
             .agents
@@ -3123,7 +3130,7 @@ fn cmd_who(args: &[String]) {
         std::process::exit(2);
     });
     let config = DaemonConfig::default();
-    let status = daemon::get_status(&config);
+    let status = daemon_status_or_exit("who", &config);
     if !status.running {
         eprintln!("daemon non démarré (socket absente)");
         std::process::exit(1);
@@ -3549,7 +3556,7 @@ fn cmd_cleanup(args: &[String]) {
 
 fn cmd_status() {
     let config = DaemonConfig::default();
-    let status = daemon::get_status(&config);
+    let status = daemon_status_or_exit("status", &config);
     println!(
         "Daemon: {}",
         if status.running {
@@ -5420,7 +5427,7 @@ mod idempotency_projection_tests {
             ..DaemonConfig::default()
         };
         // Daemon injoignable → aucune attestation, donc aucun compte.
-        let status = daemon::get_status(&config);
+        let status = daemon::get_status(&config).expect("statut hors ligne observable");
         assert!(
             status.message_count.is_none(),
             "sans attestation du daemon, aucun compte ne doit être rendu"
