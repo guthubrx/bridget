@@ -17,7 +17,7 @@ intention.
 
 ## Rebase et preuves finales
 
-- Base rebasée sur `06d54831761107f5ccf3d501047eb10561e4c569`; le conflit du
+- Base rebasée sur `75dd315bc2e6389f9c206d179443701f03f94100`; le conflit du
   harnais avec le refus des options inconnues a conservé les deux familles de
   témoins.
 - Le vrai binaire, relié à une socket Unix jetable, donne **16 passés / 0
@@ -27,5 +27,9 @@ intention.
 - Retirer séparément la garde de `reply` donne **0 passé / 2 échecs** : avec
   un dernier expéditeur réel, les deux trames interdites quittent aussi le
   programme.
+- La fixture distingue désormais `connection_accepted` de la trame : elle
+  accepte toute connexion en attente avant le signal d'arrêt. Insérer une
+  connexion nue juste avant la garde de `send`, puis de `reply`, donne chaque
+  fois **0 passé / 2 échecs** avec `connection_accepted: true`.
 - La restauration redonne le banc nominal; `rustfmt` ciblé et `git diff
   --check` restent verts.

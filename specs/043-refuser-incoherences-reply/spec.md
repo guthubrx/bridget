@@ -2,7 +2,7 @@
 
 **Statut** : En cours
 
-**Base gelée** : `06d54831761107f5ccf3d501047eb10561e4c569`
+**Base gelée** : `75dd315bc2e6389f9c206d179443701f03f94100`
 
 **Objectif** : `747a0775-7b9c-4069-94a8-62f94f97fd07`
 
@@ -49,10 +49,15 @@ message.
 ## Oracles et mutants
 
 Les oracles exécutent le vrai binaire contre une socket Unix jetable et
-capturent le JSON envoyé. Ils couvrent les deux commandes, les refus sans
-connexion, les deux contrôles positifs et le cas humain combiné.
+observent séparément la trame et `connection_accepted`. La fixture tente
+d'abord `accept` avant de lire son signal d'arrêt : une connexion déjà dans la
+file ne peut donc pas être masquée par la fin du client. Les refus exigent à la
+fois l'absence de trame et `connection_accepted=false`. Ils couvrent les deux
+commandes, les deux contrôles positifs et le cas humain combiné.
 
 - Retirer la garde de délai doit laisser partir un message ayant
   `reply=false` : la construction ne sérialise désormais le délai que sous
   `reply=true`, mais l'intention explicite reste interdite avant connexion.
 - Retirer le refus humain laisse partir un message humain malgré `--reply`.
+- Insérer une connexion nue juste avant chaque garde fait mourir les deux cas
+  de sa voie sur `connection_accepted=true`.

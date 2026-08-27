@@ -42,16 +42,19 @@ fn short_message_fixture_root() -> PathBuf {
     ))
 }
 
+#[derive(Debug)]
+struct CapturedMessage {
+    serialized_message: Option<String>,
+    connection_accepted: bool,
+}
+
 fn capture_one_message(
     listener: UnixListener,
     stop: mpsc::Receiver<()>,
-) -> thread::JoinHandle<Option<String>> {
+) -> thread::JoinHandle<CapturedMessage> {
     thread::spawn(move || {
         listener.set_nonblocking(true).unwrap();
         loop {
-            if stop.try_recv().is_ok() {
-                return None;
-            }
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     stream
@@ -59,17 +62,73 @@ fn capture_one_message(
                         .unwrap();
                     let mut reader = BufReader::new(stream.try_clone().unwrap());
                     let mut register = String::new();
-                    reader.read_line(&mut register).unwrap();
-                    assert!(register.contains("\"type\":\"Register\""));
+                    match reader.read_line(&mut register) {
+                        Ok(0) => {
+                            return CapturedMessage {
+                                serialized_message: None,
+                                connection_accepted: true,
+                            };
+                        }
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                            ) =>
+                        {
+                            return CapturedMessage {
+                                serialized_message: None,
+                                connection_accepted: true,
+                            };
+                        }
+                        Ok(_) => {}
+                        Err(error) => panic!("lire le Register CLI: {error}"),
+                    }
+                    if !register.contains("\"type\":\"Register\"") {
+                        return CapturedMessage {
+                            serialized_message: None,
+                            connection_accepted: true,
+                        };
+                    }
                     writeln!(stream, "{{\"type\":\"Registered\",\"name\":\"probe\"}}").unwrap();
                     stream.flush().unwrap();
                     let mut message = String::new();
-                    reader.read_line(&mut message).unwrap();
+                    match reader.read_line(&mut message) {
+                        Ok(0) => {
+                            return CapturedMessage {
+                                serialized_message: None,
+                                connection_accepted: true,
+                            };
+                        }
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                            ) =>
+                        {
+                            return CapturedMessage {
+                                serialized_message: None,
+                                connection_accepted: true,
+                            };
+                        }
+                        Ok(_) => {}
+                        Err(error) => panic!("lire le Send CLI: {error}"),
+                    }
                     writeln!(stream, "{{\"type\":\"Ack\",\"id\":\"probe-ack\"}}").unwrap();
                     stream.flush().unwrap();
-                    return Some(message);
+                    return CapturedMessage {
+                        serialized_message: Some(message),
+                        connection_accepted: true,
+                    };
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    // Accepter d'abord : une connexion déjà dans la file doit
+                    // rester observable même si le client vient de sortir.
+                    if stop.try_recv().is_ok() {
+                        return CapturedMessage {
+                            serialized_message: None,
+                            connection_accepted: false,
+                        };
+                    }
                     thread::sleep(Duration::from_millis(1));
                 }
                 Err(error) => panic!("accepter la connexion CLI: {error}"),
@@ -87,6 +146,21 @@ fn run_message_cli_as(
     agent_name: Option<&str>,
     previous_sender: Option<&str>,
 ) -> (Output, Option<String>, bool, bool) {
+    let (output, captured, pid_exists, database_exists) =
+        run_message_cli_observed(args, agent_name, previous_sender);
+    (
+        output,
+        captured.serialized_message,
+        pid_exists,
+        database_exists,
+    )
+}
+
+fn run_message_cli_observed(
+    args: &[&str],
+    agent_name: Option<&str>,
+    previous_sender: Option<&str>,
+) -> (Output, CapturedMessage, bool, bool) {
     let root = short_message_fixture_root();
     let cache = root.join(".cache/bridget");
     fs::create_dir_all(&cache).unwrap();
@@ -104,11 +178,11 @@ fn run_message_cli_as(
 
     let output = run_cli_as(&root, args, agent_name);
     let _ = stop_tx.send(());
-    let serialized_message = capture.join().unwrap();
+    let captured = capture.join().unwrap();
     let pid_exists = cache.join("bridget.pid").exists();
     let database_exists = cache.join("bridget.db").exists();
     fs::remove_dir_all(&root).unwrap();
-    (output, serialized_message, pid_exists, database_exists)
+    (output, captured, pid_exists, database_exists)
 }
 
 fn assert_command_value_rejected(command: &str, option: &str, invalid_value: Option<&str>) {
@@ -177,12 +251,17 @@ fn assert_reply_contract_rejected(
     previous_sender: Option<&str>,
     option: &str,
 ) {
-    let (output, serialized_message, pid_exists, database_exists) =
-        run_message_cli_as(args, agent_name, previous_sender);
+    let (output, captured, pid_exists, database_exists) =
+        run_message_cli_observed(args, agent_name, previous_sender);
 
     assert!(
-        serialized_message.is_none(),
-        "{args:?}: la contradiction a laissé partir {serialized_message:?}"
+        !captured.connection_accepted,
+        "{args:?}: la contradiction a ouvert une connexion: {captured:?}"
+    );
+    assert!(
+        captured.serialized_message.is_none(),
+        "{args:?}: la contradiction a laissé partir {:?}",
+        captured.serialized_message
     );
     assert_eq!(output.status.code(), Some(2), "sortie réelle: {output:?}");
     assert!(output.stdout.is_empty(), "stdout inattendu: {output:?}");
