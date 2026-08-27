@@ -1,7 +1,7 @@
 use maicie::app::{reconcile_catalogue_from_store, unix_secs_to_rfc3339_z};
 use maicie::catalogue::{
-    AddEntry, CatalogueEntry, CatalogueJournal, MissionSource, MissionSourceKind, Severity,
-    TransitionTrigger, project_registre,
+    AddEntry, CatalogueEntry, CatalogueJournal, EntryNature, MissionSource, MissionSourceKind,
+    Severity, TransitionTrigger, project_registre,
 };
 use maicie::domain::{
     ClasseDuree, Delegation, EtatObjectif, EtatOutboxDelegation, ModeObjectif, ObjectifCoordonne,
@@ -110,6 +110,7 @@ fn sample_add(id: &str, date: &str) -> AddEntry {
             failed: None,
         },
         severity: Severity::Major,
+            nature: EntryNature::Constat,
         text: "constat ouvert".into(),
         recurrence_of: None,
     }

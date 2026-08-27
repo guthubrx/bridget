@@ -92,6 +92,7 @@ fn gate_session_017_cinq_promesses() {
                     failed: None,
                 },
                 severity: Severity::Info,
+            nature: maicie::catalogue::EntryNature::Constat,
                 recurrence_of: None,
                 text: "victime de troncature volontaire".into(),
             })
@@ -365,9 +366,12 @@ fn gate_session_017_cinq_promesses() {
         "PROMESSE(5) VUE — MUTATION: footer requalifies inventé"
     );
     assert_eq!(
-        view.ouverts.len(),
+        view.ouverts
+            .iter()
+            .filter(|item| item.nature == maicie::catalogue::EntryNature::Constat)
+            .count(),
         independent.ouverts,
-        "PROMESSE(5) VUE — MUTATION: liste ouverts et footer.ouverts divergent"
+        "PROMESSE(5) VUE — MUTATION: liste dû et footer.ouverts divergent"
     );
     assert_eq!(
         view.attente.len(),
@@ -448,8 +452,9 @@ fn gate_session_017_cinq_promesses() {
 /// Si la projection mente ou hardcode le pied, le gate échoue parce que ce
 /// compteur ne lit que les entrées brutes.
 fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts {
-    use maicie::catalogue::TransitionTrigger;
+    use maicie::catalogue::{EntryNature, TransitionTrigger};
     let mut delivered: BTreeMap<String, TransitionTrigger> = BTreeMap::new();
+    let mut nature_override: BTreeMap<String, EntryNature> = BTreeMap::new();
     let mut requalifs: BTreeSet<String> = BTreeSet::new();
     let mut adds: BTreeMap<String, &maicie::catalogue::AddEntry> = BTreeMap::new();
     let mut pendings: BTreeMap<String, &maicie::catalogue::PendingQualificationEntry> =
@@ -463,6 +468,9 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
             CatalogueEntry::Transition(transition) => match transition.trigger {
                 TransitionTrigger::Requalified => {
                     requalifs.insert(transition.constat_id.clone());
+                    if let Some(nature) = transition.nature_to {
+                        nature_override.insert(transition.constat_id.clone(), nature);
+                    }
                 }
                 other => {
                     delivered.entry(transition.constat_id.clone()).or_insert(other);
@@ -478,11 +486,22 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
         .values()
         .filter(|add| !delivered.contains_key(&add.id))
         .collect();
-    let recurrents = ouverts
+    let nature_of = |add: &&maicie::catalogue::AddEntry| {
+        nature_override
+            .get(&add.id)
+            .copied()
+            .unwrap_or(add.nature)
+    };
+    let du: Vec<_> = ouverts
+        .iter()
+        .copied()
+        .filter(|add| nature_of(add) == EntryNature::Constat)
+        .collect();
+    let recurrents = du
         .iter()
         .filter(|add| add.recurrence_of.is_some())
         .count();
-    let gates_rates = ouverts
+    let gates_rates = du
         .iter()
         .filter(|add| {
             add.mission_source.kind == MissionSourceKind::Gate
@@ -510,7 +529,7 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
         .count();
 
     AuthorityCounts {
-        ouverts: ouverts.len(),
+        ouverts: du.len(),
         recurrents,
         gates_rates,
         pending_qualification,
