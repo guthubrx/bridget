@@ -41,6 +41,9 @@ limite. Les valeurs valides existantes restent inchangées.
    oracles `send` et `reply` du délai. Le mutant symétrique des sauts fait
    échouer les deux oracles correspondants.
 5. Les appelants réels mesurés avec 60, 9 et 1 restent compatibles.
+6. Sans dernier expéditeur enregistré, `reply` refuse encore une valeur
+   invalide avec le code 2 et nomme l'option avant de lire cet état. Un mutant
+   remontant la lecture d'état avant l'analyse des options tue cet oracle.
 
 ## Hors périmètre
 

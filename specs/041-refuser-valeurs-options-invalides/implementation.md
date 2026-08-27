@@ -17,16 +17,18 @@ daemon sur une socket Unix courte. Il capture le JSON effectivement envoyé :
 - une valeur invalide, nulle, négative, absente ou hors type doit produire le
   code 2 sans connexion ;
 - les diagnostics nomment l'option et, lorsqu'elle existe, la valeur brute ;
+- sans dernier expéditeur enregistré, `reply` refuse encore `--timeout abc` et
+  `--hops abc` avant de lire cet état ;
 - les valeurs de contrôle `9` et `2` sont sérialisées exactement par `send` et
   `reply`.
 
 Univers listés avant exécution :
 
 - base : 35 tests unitaires CLI + 3 tests d'intégration CLI = 38 ;
-- tête : 35 tests unitaires CLI + 8 tests d'intégration CLI = 43.
+- tête amendée : 35 tests unitaires CLI + 9 tests d'intégration CLI = 44.
 
-Résultats : base `38 passed / 0 failed / 0 ignored`, tête
-`43 passed / 0 failed / 0 ignored`.
+Résultats : base `38 passed / 0 failed / 0 ignored`, tête amendée
+`44 passed / 0 failed / 0 ignored`.
 
 ## Mutants
 
@@ -35,6 +37,9 @@ Résultats : base `38 passed / 0 failed / 0 ignored`, tête
   `--timeout abc`.
 - Restaurer l'ancien repli des sauts donne `0 passed / 2 failed` avec la même
   preuve pour `--hops abc`.
+- Remonter la lecture du dernier expéditeur avant l'analyse des options fait
+  échouer l'oracle sans état à `0 passed / 1 failed` : le mutant rend le code 1
+  sans nommer l'option, au lieu du code 2 attendu.
 - Après restauration, les condensats SHA-256 des deux fichiers reviennent aux
   valeurs nominales et le harnais repasse intégralement.
 
@@ -47,7 +52,7 @@ Résultats : base `38 passed / 0 failed / 0 ignored`, tête
   ajouté par ce lot.
 - Les deux fichiers Rust modifiés passent `rustfmt --check` et le delta passe
   `git diff --check`.
-- L'univers daemon complet compte 642 tests sur la base et 647 sur la tête,
+- L'univers daemon complet compte 642 tests sur la base et 648 sur la tête amendée,
   mais aucune campagne ne fournit de ligne finale en 60 secondes. Les deux
   montrent avant blocage les mêmes échecs
   `enregistrement_auxiliaire_mcp_ne_revendique_pas_la_presence_du_wrapper_vivant`

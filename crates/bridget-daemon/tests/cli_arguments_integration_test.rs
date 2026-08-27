@@ -171,6 +171,22 @@ fn reply_refuse_des_hops_invalides_avant_de_lire_son_etat() {
 }
 
 #[test]
+fn reply_refuse_les_valeurs_invalides_sans_dernier_expediteur() {
+    let root = fixture_root("reply-sans-expediteur");
+    fs::create_dir_all(root.join(".cache/bridget")).unwrap();
+
+    let outputs = ["--timeout", "--hops"]
+        .map(|option| (option, run_cli(&root, &["reply", option, "abc", "message"])));
+    fs::remove_dir_all(&root).unwrap();
+
+    for (option, output) in outputs {
+        assert_eq!(output.status.code(), Some(2), "sortie réelle: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(option), "option absente de {stderr}");
+    }
+}
+
+#[test]
 fn send_et_reply_conservent_les_valeurs_numeriques_valides() {
     for args in [
         vec![
