@@ -508,6 +508,12 @@ fn desired_state_path(config: &DaemonConfig) -> PathBuf {
 
 /// État partagé du daemon.
 struct DaemonState {
+    /// Machine et base **de ce daemon**, retenues une fois au démarrage.
+    ///
+    /// Elles voyagent ensuite dans `ClientWelcome` : un client fédéré ne peut
+    /// pas les déduire, et jusqu'ici il affichait les siennes à leur place.
+    host: String,
+    db_path: PathBuf,
     router: Router,
     circuit_breaker: CircuitBreaker,
     deduplicator: Deduplicator,
@@ -1946,6 +1952,8 @@ impl DaemonState {
         let registry = AgentRegistry::load()?;
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
         Ok(DaemonState {
+            host: crate::build_info::local_host(),
+            db_path: config.db_path.clone(),
             router: Router::new(),
             circuit_breaker: CircuitBreaker::new(
                 config.circuit_breaker_window,
@@ -2511,6 +2519,9 @@ fn reserve_managed_recoveries(
             &order,
             now,
             &resolved_definition,
+            // Reprise : le daemon relance ses propres agents chez lui, donc
+            // demandeur et exécutant sont la même machine.
+            &crate::lifecycle::SpawnHosts::local(),
         )? {
             SpawnDecision::Ready(recovery) => prepared.push(recovery),
             SpawnDecision::Rejected(reason) => {
@@ -6061,6 +6072,17 @@ fn handle_wrapper_message(
                 issued_at,
                 deadline_at,
             };
+            // Seul endroit du programme où les deux machines coexistent : le
+            // daemon cherche le `cwd` chez LUI, le demandeur peut être au bout
+            // du tunnel. `conn_hosts` porte l'hôte attesté à l'enregistrement.
+            let hosts = crate::lifecycle::SpawnHosts {
+                searched_on: st.host.clone(),
+                requested_from: st
+                    .conn_hosts
+                    .get(conn_id)
+                    .cloned()
+                    .unwrap_or_else(|| crate::build_info::MACHINE_NON_ATTESTEE.to_string()),
+            };
             let decision = submit_spawn(
                 &st.fleet,
                 &st.registry,
@@ -6068,6 +6090,7 @@ fn handle_wrapper_message(
                 &order,
                 unix_timestamp(),
                 st.recovering,
+                &hosts,
             );
             match decision {
                 Ok(SpawnDecision::Ready(prepared)) => {
@@ -6888,6 +6911,16 @@ fn handle_wrapper_message(
             }
         }
 
+        // Le daemon atteste SA machine et SA base : le client n'a plus à
+        // deviner, et n'affiche plus les siennes à leur place.
+        WrapperToDaemon::DaemonIdentityRequest => {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            Some(DaemonToWrapper::DaemonIdentityReport {
+                host: st.host.clone(),
+                db_path: st.db_path.display().to_string(),
+            })
+        }
+
         WrapperToDaemon::ListAgents => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let agents = st.agent_infos();
@@ -7158,7 +7191,7 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
         return DaemonStatus::default();
     }
 
-    let build_id = daemon_build_id(&config.socket_path);
+    let identity = daemon_identity(&config.socket_path);
 
     let stream = match UnixStream::connect(&config.socket_path) {
         Ok(s) => s,
@@ -7231,17 +7264,28 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
         _ => vec![],
     };
 
-    // Compter les messages en base
-    let message_count = match Store::open(&config.db_path) {
-        Ok(store) => store.recent_messages(1000).map(|v| v.len()).unwrap_or(0),
-        Err(_) => 0,
-    };
+    // Compter les messages en base — mais SEULEMENT si la base locale est
+    // celle du daemon interrogé. Sur une machine fédérée, `config.db_path`
+    // désigne un fichier d'ici, pas celui du daemon qui vient de répondre :
+    // le compte était lu dans un orphelin local et présenté sous le chemin
+    // d'à côté, comme s'il décrivait le daemon.
+    let daemon_host = identity.as_ref().and_then(|identity| identity.host.clone());
+    let daemon_db_path = identity
+        .as_ref()
+        .and_then(|identity| identity.db_path.clone());
+    let message_count = message_count_is_measurable(daemon_db_path.as_deref(), &config.db_path)
+        .then(|| match Store::open(&config.db_path) {
+            Ok(store) => store.recent_messages(1000).map(|v| v.len()).unwrap_or(0),
+            Err(_) => 0,
+        });
 
     DaemonStatus {
         running: true,
         agents,
         message_count,
-        build_id,
+        build_id: identity.map(|identity| identity.build_id),
+        daemon_host,
+        daemon_db_path,
     }
 }
 
@@ -7251,7 +7295,59 @@ fn build_id_probe_issuer_scope() -> String {
     crate::mcp::issuer_scope(BUILD_ID_PROBE_IDENTITY)
 }
 
-fn daemon_build_id(socket_path: &std::path::Path) -> Option<String> {
+/// Le compte de messages n'est mesurable d'ici que si la base locale est
+/// EXACTEMENT celle que le daemon atteste. Sans attestation, il ne l'est pas :
+/// une absence n'autorise pas à compter dans le fichier qu'on a sous la main.
+pub(crate) fn message_count_is_measurable(
+    daemon_db_path: Option<&str>,
+    local_db_path: &std::path::Path,
+) -> bool {
+    daemon_db_path.is_some_and(|path| std::path::Path::new(path) == local_db_path)
+}
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::message_count_is_measurable;
+    use std::path::Path;
+
+    /// POINT 1 — la garde qui empêche de compter dans la base d'à côté.
+    ///
+    /// Éprouvée sur la décision elle-même, et non à travers `get_status` : un
+    /// premier oracle passait par une socket absente, donc `get_status` sortait
+    /// AVANT la garde et le test restait vert même sans elle. Le mutant l'a
+    /// montré ; ce test-ci le tue.
+    ///
+    /// Mutant qui tue ce test : rendre `true` inconditionnellement → le premier
+    /// cas, celui de la fédération, meurt.
+    #[test]
+    fn compter_n_est_permis_que_sur_la_base_attestee_par_le_daemon() {
+        let ici = Path::new("/home/moi/.cache/bridget/bridget.db");
+
+        // Fédération : le daemon est ailleurs, sa base aussi. Rien à compter.
+        assert!(!message_count_is_measurable(
+            Some("/Users/moi/.cache/bridget/bridget.db"),
+            ici
+        ));
+        // Daemon antérieur : pas d'attestation, donc pas de comptage non plus.
+        assert!(!message_count_is_measurable(None, ici));
+        // Contrôle positif : même base des deux côtés → le compte est légitime.
+        // Sans lui, une garde qui refuserait TOUJOURS passerait ce test.
+        assert!(message_count_is_measurable(
+            Some("/home/moi/.cache/bridget/bridget.db"),
+            ici
+        ));
+    }
+}
+
+/// Ce que le daemon atteste de LUI-MÊME au client qui l'interroge.
+#[derive(Debug, Clone, Default)]
+pub struct DaemonIdentity {
+    pub build_id: String,
+    pub host: Option<String>,
+    pub db_path: Option<String>,
+}
+
+fn daemon_identity(socket_path: &std::path::Path) -> Option<DaemonIdentity> {
     use std::io::{BufRead, BufReader, BufWriter, Write};
     use std::os::unix::net::UnixStream;
 
@@ -7299,9 +7395,46 @@ fn daemon_build_id(socket_path: &std::path::Path) -> Option<String> {
     match reader.read_line(&mut line).ok()? {
         0 => None,
         _ => match decode(line.trim()).ok()? {
-            DaemonToWrapper::ClientWelcome { build_id, .. } => Some(build_id),
+            DaemonToWrapper::ClientWelcome { build_id, .. } => {
+                // Second aller-retour, sur la MÊME connexion : la machine et la
+                // base ne sont pas déductibles côté client.
+                let (host, db_path) =
+                    match probe_daemon_identity(&mut writer, &mut reader, &mut line) {
+                        Some((host, db_path)) => (Some(host), Some(db_path)),
+                        // Daemon antérieur au message : non attesté, jamais deviné.
+                        None => (None, None),
+                    };
+                Some(DaemonIdentity {
+                    build_id,
+                    host,
+                    db_path,
+                })
+            }
             _ => None,
         },
+    }
+}
+
+/// Demande au daemon ce qu'il atteste de lui-même. `None` = daemon antérieur.
+fn probe_daemon_identity<W: std::io::Write, R: std::io::BufRead>(
+    writer: &mut W,
+    reader: &mut R,
+    line: &mut String,
+) -> Option<(String, String)> {
+    writeln!(
+        writer,
+        "{}",
+        encode(&WrapperToDaemon::DaemonIdentityRequest).ok()?
+    )
+    .ok()?;
+    writer.flush().ok()?;
+    line.clear();
+    if reader.read_line(line).ok()? == 0 {
+        return None;
+    }
+    match decode(line.trim()).ok()? {
+        DaemonToWrapper::DaemonIdentityReport { host, db_path } => Some((host, db_path)),
+        _ => None,
     }
 }
 
@@ -7309,8 +7442,13 @@ fn daemon_build_id(socket_path: &std::path::Path) -> Option<String> {
 pub struct DaemonStatus {
     pub running: bool,
     pub agents: Vec<bridget_transport::protocol::AgentInfo>,
-    pub message_count: usize,
+    /// `None` quand la base locale n'est PAS celle du daemon interrogé : on ne
+    /// rend alors aucun chiffre plutôt qu'un chiffre pris ailleurs.
+    pub message_count: Option<usize>,
     pub build_id: Option<String>,
+    /// Machine et base attestées par le daemon lui-même.
+    pub daemon_host: Option<String>,
+    pub daemon_db_path: Option<String>,
 }
 
 #[cfg(test)]

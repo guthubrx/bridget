@@ -53,6 +53,30 @@ pub fn source_environment() -> SourceEnvironment {
         .collect()
 }
 
+/// Les deux machines d'un ordre de lancement : celle dont le système de
+/// fichiers est réellement interrogé, et celle qui a demandé.
+///
+/// Elles diffèrent dès qu'un agent fédéré demande un lancement : la commande
+/// traverse le tunnel et le daemon **maître** valide le `cwd` chez LUI. Le refus
+/// disait alors « répertoire de travail disparu » sans dire où il avait cherché.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnHosts {
+    pub searched_on: String,
+    pub requested_from: String,
+}
+
+impl SpawnHosts {
+    /// Demandeur et exécutant confondus — chemin de reprise, où le daemon
+    /// relance ses propres agents chez lui.
+    pub fn local() -> Self {
+        let host = crate::build_info::local_host();
+        SpawnHosts {
+            searched_on: host.clone(),
+            requested_from: host,
+        }
+    }
+}
+
 /// Applique le lookup/rejeu idempotent avant toute garde mutable. Une
 /// réservation neuve est ensuite soit préparée pour T906, soit terminée avec
 /// l'un des onze motifs fermés du contrat.
@@ -63,6 +87,7 @@ pub fn submit_spawn(
     order: &SpawnOrder,
     now: i64,
     recovering: bool,
+    hosts: &SpawnHosts,
 ) -> Result<SpawnDecision, FleetError> {
     if recovering && !supervisor.knows_command(&order.command_id) {
         return Ok(SpawnDecision::Rejected(SpawnRefusal::DaemonRecovering));
@@ -101,7 +126,7 @@ pub fn submit_spawn(
     }
     match supervisor.request_spawn(order, now)? {
         SpawnSubmission::Start(lease) => {
-            let prepared = match prepare_spawn(registry, source, order, lease.clone()) {
+            let prepared = match prepare_spawn(registry, source, order, lease.clone(), hosts) {
                 Ok(prepared) => prepared,
                 Err(reason) => {
                     let (category, detail) = refusal_record(&reason);
@@ -130,10 +155,11 @@ pub fn submit_spawn_from_resolved(
     order: &SpawnOrder,
     now: i64,
     resolved: &ResolvedAgentDefinition,
+    hosts: &SpawnHosts,
 ) -> Result<SpawnDecision, FleetError> {
     let registry = AgentRegistry::from_resolved(&order.agent_type, resolved)
         .map_err(|_| FleetError::InvalidOrder("définition figée de reprise invalide"))?;
-    submit_spawn(supervisor, &registry, source, order, now, false)
+    submit_spawn(supervisor, &registry, source, order, now, false, hosts)
 }
 
 fn prepare_spawn(
@@ -141,8 +167,16 @@ fn prepare_spawn(
     source: &SourceEnvironment,
     order: &SpawnOrder,
     lease: SpawnLease,
+    hosts: &SpawnHosts,
 ) -> Result<PreparedSpawn, SpawnRefusal> {
-    prepare_spawn_parts(registry, source, &order.agent_type, &order.cwd, lease)
+    prepare_spawn_parts(
+        registry,
+        source,
+        &order.agent_type,
+        &order.cwd,
+        lease,
+        hosts,
+    )
 }
 
 /// Reprépare une génération persistante restée en vol sans repasser par la
@@ -166,6 +200,7 @@ pub fn prepare_recovery(
         &candidate.agent_type,
         &candidate.cwd,
         candidate.lease,
+        &SpawnHosts::local(),
     )
 }
 
@@ -175,6 +210,7 @@ fn prepare_spawn_parts(
     agent_type: &str,
     cwd: &Path,
     lease: SpawnLease,
+    hosts: &SpawnHosts,
 ) -> Result<PreparedSpawn, SpawnRefusal> {
     let definition = registry
         .get(agent_type)
@@ -204,7 +240,12 @@ fn prepare_spawn_parts(
         });
     }
     if !cwd.is_dir() {
-        return Err(SpawnRefusal::CwdGone);
+        // Le verdict porte la machine qui l'a rendu : c'est ICI que le chemin a
+        // été cherché, et le demandeur peut être ailleurs.
+        return Err(SpawnRefusal::CwdGone {
+            searched_on: hosts.searched_on.clone(),
+            requested_from: hosts.requested_from.clone(),
+        });
     }
     let mut env = build_environment(definition, source)?;
     if lease.persistent {
@@ -214,7 +255,10 @@ fn prepare_spawn_parts(
         );
     }
     if let Ok(max) = std::env::var("BRIDGET_PROVIDER_RELAUNCH_MAX") {
-        env.insert("BRIDGET_PROVIDER_RELAUNCH_MAX".to_string(), OsString::from(max));
+        env.insert(
+            "BRIDGET_PROVIDER_RELAUNCH_MAX".to_string(),
+            OsString::from(max),
+        );
     }
     if !command_exists(&definition.command, &env) {
         return Err(SpawnRefusal::CommandMissing {
@@ -326,7 +370,7 @@ fn refusal_record(reason: &SpawnRefusal) -> (&'static str, String) {
         SpawnRefusal::BillingGuard { .. } => "billing_guard",
         SpawnRefusal::NameActive => "name_active",
         SpawnRefusal::EnvUnfit { .. } => "env_unfit",
-        SpawnRefusal::CwdGone => "cwd_gone",
+        SpawnRefusal::CwdGone { .. } => "cwd_gone",
         SpawnRefusal::NegotiationFailed { .. } => "negotiation_failed",
         SpawnRefusal::SpawnTimeout => "spawn_timeout",
         SpawnRefusal::QuotaExceeded { .. } => "quota_exceeded",
@@ -372,7 +416,12 @@ fn decision_from_issue(issue: SpawnCommandIssue, quota: usize) -> SpawnDecision 
                 "billing_guard" => SpawnRefusal::BillingGuard { variable: reason },
                 "name_active" => SpawnRefusal::NameActive,
                 "env_unfit" => SpawnRefusal::EnvUnfit { detail: reason },
-                "cwd_gone" => SpawnRefusal::CwdGone,
+                // Reconstruction depuis une issue ancienne : les hôtes ne sont
+                // pas dans la catégorie. On ne les invente pas.
+                "cwd_gone" => SpawnRefusal::CwdGone {
+                    searched_on: String::new(),
+                    requested_from: String::new(),
+                },
                 "spawn_timeout" => SpawnRefusal::SpawnTimeout,
                 "quota_exceeded" => SpawnRefusal::QuotaExceeded { limit: quota },
                 "daemon_recovering" => SpawnRefusal::DaemonRecovering,
@@ -465,6 +514,15 @@ mod tests {
         ])
     }
 
+    /// Deux machines DISTINCTES : c'est la situation fédérée réelle, et c'est
+    /// la seule où l'oracle du point 5 peut distinguer les deux hôtes.
+    fn hosts_fixture() -> SpawnHosts {
+        SpawnHosts {
+            searched_on: "monordinateur".to_string(),
+            requested_from: "cartae".to_string(),
+        }
+    }
+
     fn order(root: &Path, id: &str, name: &str) -> SpawnOrder {
         SpawnOrder {
             agent_type: "fixture".to_string(),
@@ -545,6 +603,7 @@ mod tests {
             &order(&root, "claude-native", "claude-agent"),
             NOW,
             false,
+            &hosts_fixture(),
         )
         .unwrap();
         assert!(matches!(decision, SpawnDecision::Ready(_)));
@@ -565,7 +624,16 @@ mod tests {
         );
         let order = order(&root, "command-unsupported-model", "never-started");
         let refusal = rejection(
-            submit_spawn(&supervisor, &registry, &source(&root), &order, NOW, false).unwrap(),
+            submit_spawn(
+                &supervisor,
+                &registry,
+                &source(&root),
+                &order,
+                NOW,
+                false,
+                &hosts_fixture(),
+            )
+            .unwrap(),
         );
         assert_eq!(
             refusal,
@@ -598,7 +666,7 @@ mod tests {
         let request = order(&root, "command-unsupported-effort", "never-started");
         assert!(matches!(
             rejection(
-                submit_spawn(&supervisor, &registry, &source(&root), &request, NOW, false)
+                submit_spawn(&supervisor, &registry, &source(&root), &request, NOW, false, &hosts_fixture())
                     .unwrap()
             ),
             SpawnRefusal::UnsupportedCapability { ref capability, .. }
@@ -659,7 +727,13 @@ mod tests {
                     detail: "HOME absent de l'environnement du daemon".to_string(),
                 },
             ),
-            ("cwd", SpawnRefusal::CwdGone),
+            (
+                "cwd",
+                SpawnRefusal::CwdGone {
+                    searched_on: "monordinateur".to_string(),
+                    requested_from: "cartae".to_string(),
+                },
+            ),
             (
                 "negotiation",
                 SpawnRefusal::UnsupportedCapability {
@@ -715,11 +789,29 @@ mod tests {
                 *known_types = registry.known_types();
             }
             let actual = rejection(
-                submit_spawn(&supervisor, &registry, &env, &request, NOW, false).unwrap(),
+                submit_spawn(
+                    &supervisor,
+                    &registry,
+                    &env,
+                    &request,
+                    NOW,
+                    false,
+                    &hosts_fixture(),
+                )
+                .unwrap(),
             );
             assert_eq!(actual, expected, "famille {label}");
             let replay = rejection(
-                submit_spawn(&supervisor, &registry, &env, &request, NOW, false).unwrap(),
+                submit_spawn(
+                    &supervisor,
+                    &registry,
+                    &env,
+                    &request,
+                    NOW,
+                    false,
+                    &hosts_fixture(),
+                )
+                .unwrap(),
             );
             assert_eq!(replay, expected, "rejeu divergent pour {label}");
             assert_eq!(supervisor.active_count(), 0, "résidu actif pour {label}");
@@ -739,6 +831,7 @@ mod tests {
                 &order(&nq_root, "command-first", "agent-a"),
                 NOW,
                 false,
+                &hosts_fixture(),
             )
             .unwrap(),
             SpawnDecision::Ready(_)
@@ -753,6 +846,7 @@ mod tests {
                     &order(&nq_root, "command-name", "agent-a"),
                     NOW,
                     false,
+                    &hosts_fixture(),
                 )
                 .unwrap()
             ),
@@ -768,6 +862,7 @@ mod tests {
                     &order(&nq_root, "command-quota", "agent-b"),
                     NOW,
                     false,
+                    &hosts_fixture(),
                 )
                 .unwrap()
             ),
@@ -789,6 +884,7 @@ mod tests {
                     &order(&root, "command-recovering", "agent-r"),
                     NOW,
                     true,
+                    &hosts_fixture(),
                 )
                 .unwrap()
             ),
@@ -799,13 +895,90 @@ mod tests {
 
         let known = order(&root, "command-known-before-recovery", "agent-known");
         assert!(matches!(
-            submit_spawn(&supervisor, &registry, &source(&root), &known, NOW, false,).unwrap(),
+            submit_spawn(
+                &supervisor,
+                &registry,
+                &source(&root),
+                &known,
+                NOW,
+                false,
+                &hosts_fixture()
+            )
+            .unwrap(),
             SpawnDecision::Ready(_)
         ));
         assert!(matches!(
-            submit_spawn(&supervisor, &registry, &source(&root), &known, NOW, true,).unwrap(),
+            submit_spawn(
+                &supervisor,
+                &registry,
+                &source(&root),
+                &known,
+                NOW,
+                true,
+                &hosts_fixture()
+            )
+            .unwrap(),
             SpawnDecision::Await(_)
         ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// POINT 5 — le refus doit dire OÙ le daemon a cherché et QUI a demandé.
+    ///
+    /// Contrôle positif d'abord : un `cwd` existant est accepté, donc l'absence
+    /// de refus ci-dessous n'est pas le silence d'une garde morte.
+    ///
+    /// Mutant qui tue ce test : recopier `hosts.searched_on` dans les deux
+    /// champs → l'assertion sur `requested_from == "cartae"` meurt. Un oracle
+    /// qui vérifierait seulement que les champs sont non vides survivrait.
+    #[test]
+    fn le_refus_de_cwd_nomme_la_machine_cherchee_et_la_machine_demandeuse() {
+        let root = root("cwd-attribution");
+        fs::create_dir_all(&root).unwrap();
+        let supervisor = supervisor(&root, 4);
+        let registry = registry("/bin/sh", "acp", &[]);
+        let env = source(&root);
+
+        // Contrôle positif : le répertoire existe, la garde laisse passer.
+        assert!(matches!(
+            submit_spawn(
+                &supervisor,
+                &registry,
+                &env,
+                &order(&root, "cwd-present", "agent-present"),
+                NOW,
+                false,
+                &hosts_fixture(),
+            )
+            .unwrap(),
+            SpawnDecision::Ready(_)
+        ));
+
+        // Répertoire absent : le refus porte les DEUX machines.
+        let mut absent = order(&root, "cwd-absent", "agent-absent");
+        absent.cwd = root.join("repertoire-qui-n-existe-pas");
+        let refusal = rejection(
+            submit_spawn(
+                &supervisor,
+                &registry,
+                &env,
+                &absent,
+                NOW,
+                false,
+                &hosts_fixture(),
+            )
+            .unwrap(),
+        );
+        match refusal {
+            SpawnRefusal::CwdGone {
+                searched_on,
+                requested_from,
+            } => {
+                assert_eq!(searched_on, "monordinateur", "machine où l'on a cherché");
+                assert_eq!(requested_from, "cartae", "machine qui a demandé");
+            }
+            other => panic!("refus attendu CwdGone, obtenu {other:?}"),
+        }
         let _ = fs::remove_dir_all(root);
     }
 }

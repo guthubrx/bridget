@@ -74,6 +74,8 @@ pub struct RepriseSnapshot {
     pub now: SystemTime,
     pub repo: PathBuf,
     pub socket_path: PathBuf,
+    /// Base **de cette machine**. Elle ne décrit le daemon que si celui-ci est
+    /// local — la carte doit donc toujours l'afficher avec sa machine.
     pub db_path: PathBuf,
     pub binary_cli: Option<PathBuf>,
     pub status: Result<DaemonStatus, String>,
@@ -121,7 +123,27 @@ pub fn collect_snapshot(
     let db_path = absolutize(&config.db_path);
     let binary_cli = std::env::current_exe().ok().map(|path| absolutize(&path));
 
-    let status = Ok(daemon::get_status(config));
+    let status = daemon::get_status(config);
+    // La flotte décrite doit être celle du daemon interrogé. Tant que sa base
+    // n'est pas la nôtre, la trace de reprise locale décrit une AUTRE flotte :
+    // on ne la lit pas, et la carte dit pourquoi.
+    let base_du_daemon_est_ici = status
+        .daemon_db_path
+        .as_deref()
+        .is_some_and(|path| Path::new(path) == config.db_path);
+    let recovery_losses = if base_du_daemon_est_ici {
+        collect_recovery_losses(&db_path)
+    } else {
+        Err(format!(
+            "trace de reprise non lisible d'ici : la base locale ({}) n'est pas celle du daemon ({})",
+            db_path.display(),
+            status
+                .daemon_db_path
+                .as_deref()
+                .unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE)
+        ))
+    };
+    let status = Ok(status);
 
     let (open_requests, recent_messages) = collect_ledger(config);
 
@@ -134,7 +156,6 @@ pub fn collect_snapshot(
             .and_then(|loaded| loaded.pin.maicie_config.as_deref()),
     );
     let maicie = collect_maicie(maicie_config.as_deref());
-    let recovery_losses = collect_recovery_losses(&db_path);
 
     RepriseSnapshot {
         now,
@@ -471,13 +492,33 @@ fn render_vivant(out: &mut String, snapshot: &RepriseSnapshot) {
                 if status.running { "true" } else { "false" }
             ));
             // Chemins RÉELLEMENT ceux de status (DaemonConfig résolu), jamais
-            // une reconstruction parallèle depuis un HOME inventé.
+            // une reconstruction parallèle depuis un HOME inventé. Chacun porte
+            // désormais SA machine : `socket` et `db_locale` valent ici, `db`
+            // vaut là où le daemon tourne, et les deux diffèrent en fédération.
+            out.push_str(&format!(
+                "  machine_daemon: {}\n",
+                yaml_string(
+                    status
+                        .daemon_host
+                        .as_deref()
+                        .unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE)
+                )
+            ));
             out.push_str(&format!(
                 "  socket: {}\n",
                 yaml_string(&snapshot.socket_path.display().to_string())
             ));
             out.push_str(&format!(
                 "  db: {}\n",
+                yaml_string(
+                    status
+                        .daemon_db_path
+                        .as_deref()
+                        .unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE)
+                )
+            ));
+            out.push_str(&format!(
+                "  db_locale: {}\n",
                 yaml_string(&snapshot.db_path.display().to_string())
             ));
             out.push_str(&format!(
@@ -510,11 +551,15 @@ fn render_vivant(out: &mut String, snapshot: &RepriseSnapshot) {
         Err(error) => {
             out.push_str("  daemon_en_ligne: false\n");
             out.push_str(&format!(
+                "  machine_daemon: {}\n",
+                yaml_string(crate::build_info::MACHINE_NON_ATTESTEE)
+            ));
+            out.push_str(&format!(
                 "  socket: {}\n",
                 yaml_string(&snapshot.socket_path.display().to_string())
             ));
             out.push_str(&format!(
-                "  db: {}\n",
+                "  db_locale: {}\n",
                 yaml_string(&snapshot.db_path.display().to_string())
             ));
             out.push_str("  build_id_daemon: indisponible\n");
@@ -871,7 +916,7 @@ fn render_acces(out: &mut String, snapshot: &RepriseSnapshot) {
         yaml_string(&snapshot.socket_path.display().to_string())
     ));
     out.push_str(&format!(
-        "  bridget_db: {}\n",
+        "  bridget_db_locale: {}\n",
         yaml_string(&snapshot.db_path.display().to_string())
     ));
 }
@@ -1067,8 +1112,12 @@ mod tests {
                     rate_limits: Default::default(),
                     model_mismatch: None,
                 }],
-                message_count: 3,
+                message_count: Some(3),
                 build_id: Some("abc123".to_string()),
+                // Le daemon de la fixture tourne AILLEURS : c'est le cas fédéré,
+                // le seul où l'attribution est vérifiable.
+                daemon_host: Some("monordinateur".to_string()),
+                daemon_db_path: Some("/Users/moi/.cache/bridget/bridget.db".to_string()),
             }),
             open_requests: Ok(vec![]),
             recent_messages: Ok(vec![]),
@@ -1092,7 +1141,7 @@ mod tests {
             card.contains("socket: /resolved/cache/bridget.sock"),
             "la carte doit recopier le chemin résolu de status: {card}"
         );
-        assert!(card.contains("db: /resolved/cache/bridget.db"));
+        assert!(card.contains("db_locale: /resolved/cache/bridget.db"));
         assert!(
             !card.contains("$HOME") && !card.contains("~/.cache"),
             "aucun chemin reconstruit depuis HOME: {card}"
@@ -1105,14 +1154,73 @@ mod tests {
         );
     }
 
+    /// POINT 2 — la carte décrivait la flotte à partir d'un fichier qui n'est
+    /// pas le sien. Chaque chemin doit désormais porter SA machine.
+    ///
+    /// La fixture place le daemon sur une AUTRE machine que le client : c'est la
+    /// seule configuration où l'attribution est vérifiable.
+    ///
+    /// Mutant qui tue ce test : réafficher `snapshot.db_path` sous la clé `db`
+    /// → l'assertion sur le chemin du daemon meurt, et celle qui interdit de
+    /// présenter la base locale comme celle du daemon meurt aussi.
+    #[test]
+    fn la_carte_attribue_chaque_base_a_sa_machine() {
+        let card = render_card(&base_snapshot(
+            SystemTime::UNIX_EPOCH + Duration::from_secs(10),
+        ));
+        assert!(
+            card.contains("machine_daemon: monordinateur"),
+            "la carte doit nommer la machine du daemon: {card}"
+        );
+        assert!(
+            card.contains("db: /Users/moi/.cache/bridget/bridget.db"),
+            "la clé db doit porter la base ATTESTÉE par le daemon: {card}"
+        );
+        assert!(
+            card.contains("db_locale: /resolved/cache/bridget.db"),
+            "la base d'ici doit être nommée comme locale: {card}"
+        );
+        assert!(
+            !card.contains("db: /resolved/cache/bridget.db"),
+            "la base locale ne doit jamais être présentée comme celle du daemon: {card}"
+        );
+    }
+
+    /// POINT 2 — la trace de reprise locale décrit une AUTRE flotte quand la
+    /// base du daemon n'est pas la nôtre : on ne la lit pas, et on dit pourquoi.
+    ///
+    /// Mutant qui tue ce test : lire la trace sans la garde → `recovery_losses`
+    /// redevient `Ok(..)` et l'assertion meurt.
+    #[test]
+    fn la_trace_de_reprise_n_est_pas_lue_quand_la_base_est_ailleurs() {
+        let mut config = DaemonConfig::default();
+        config.socket_path = PathBuf::from("/tmp/bridget-absent-reprise-oracle.sock");
+        let snapshot = collect_snapshot(
+            &config,
+            Path::new("/repo"),
+            None,
+            None,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(10),
+        );
+        let error = snapshot
+            .recovery_losses
+            .expect_err("sans base attestée, la trace locale ne doit pas être lue");
+        assert!(
+            error.contains("n'est pas celle du daemon"),
+            "le refus doit dire pourquoi: {error}"
+        );
+    }
+
     #[test]
     fn source_indisponible_se_declare_sans_inventer_ni_echouer_en_bloc() {
         let mut snapshot = base_snapshot(SystemTime::UNIX_EPOCH + Duration::from_secs(10));
         snapshot.status = Ok(DaemonStatus {
             running: false,
             agents: vec![],
-            message_count: 0,
+            message_count: None,
             build_id: None,
+            daemon_host: None,
+            daemon_db_path: None,
         });
         snapshot.open_requests = Err("daemon hors ligne (socket absente)".to_string());
         snapshot.recent_messages = Err("daemon hors ligne (socket absente)".to_string());

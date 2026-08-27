@@ -797,6 +797,16 @@ fn validate_command_id(command_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Une machine vide vient d'un daemon antérieur au champ : on le DIT, on ne
+/// suppose pas la machine locale.
+fn machine_ou_non_attestee(host: &str) -> &str {
+    if host.trim().is_empty() {
+        crate::build_info::MACHINE_NON_ATTESTEE
+    } else {
+        host
+    }
+}
+
 fn display_spawn_refusal(reason: &SpawnRefusal) -> String {
     match reason {
         SpawnRefusal::UnknownType {
@@ -837,7 +847,18 @@ fn display_spawn_refusal(reason: &SpawnRefusal) -> String {
         }
         SpawnRefusal::NameActive => "nom déjà actif".to_string(),
         SpawnRefusal::EnvUnfit { detail } => format!("environnement inapte: {detail}"),
-        SpawnRefusal::CwdGone => "répertoire de travail disparu".to_string(),
+        // Le refus dit OÙ il a cherché et QUI a demandé : sans cela, un
+        // opérateur fédéré cherche le répertoire du mauvais côté du tunnel.
+        SpawnRefusal::CwdGone {
+            searched_on,
+            requested_from,
+        } => {
+            let searched_on = machine_ou_non_attestee(searched_on);
+            let requested_from = machine_ou_non_attestee(requested_from);
+            format!(
+                "répertoire de travail introuvable sur {searched_on}, demandé depuis {requested_from}"
+            )
+        }
         SpawnRefusal::NegotiationFailed { detail } => format!("négociation échouée: {detail}"),
         SpawnRefusal::SpawnTimeout => "délai de lancement dépassé".to_string(),
         SpawnRefusal::QuotaExceeded { limit } => format!("quota de flotte atteint ({limit})"),
@@ -3076,7 +3097,7 @@ fn cmd_who(args: &[String]) {
 
     print!("{}", render_who(&agents, parsed.domain.as_deref()));
     println!("Daemon build-id: {build_id}");
-    emit_stale_daemon_warning(status.build_id.as_deref());
+    emit_stale_daemon_warning(status.build_id.as_deref(), status.daemon_host.as_deref());
     emit_disk_warning();
 }
 
@@ -3493,24 +3514,47 @@ fn cmd_status() {
             "hors ligne"
         }
     );
+    let machine = status
+        .daemon_host
+        .as_deref()
+        .unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE);
+    println!("Machine du daemon: {machine}");
     println!("Socket: {}", config.socket_path.display());
-    println!("Base de données: {}", config.db_path.display());
+    // La base affichée est celle que le DAEMON atteste, jamais le chemin que ce
+    // client calculerait pour lui-même : les deux divergent dès que le daemon
+    // est au bout d'un tunnel.
+    println!(
+        "Base de données du daemon: {}",
+        status
+            .daemon_db_path
+            .as_deref()
+            .unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE)
+    );
     println!("Agents connectés: {}", status.agents.len());
-    println!("Messages en base: {}", status.message_count);
+    match status.message_count {
+        Some(count) => println!("Messages en base: {count}"),
+        None => println!(
+            "Messages en base: non mesurable d'ici — la base locale ({}) n'est pas celle du daemon",
+            config.db_path.display()
+        ),
+    }
     println!(
         "Build-id daemon: {}",
         status.build_id.as_deref().unwrap_or("inconnu")
     );
-    emit_stale_daemon_warning(status.build_id.as_deref());
+    emit_stale_daemon_warning(status.build_id.as_deref(), status.daemon_host.as_deref());
     emit_disk_warning();
 }
 
-fn stale_daemon_warning_for_status(build_id: Option<&str>) -> Option<String> {
-    crate::build_info::stale_daemon_warning(build_id.unwrap_or("unknown"))
+fn stale_daemon_warning_for_status(
+    build_id: Option<&str>,
+    daemon_host: Option<&str>,
+) -> Option<String> {
+    crate::build_info::stale_daemon_warning_at(build_id.unwrap_or("unknown"), daemon_host)
 }
 
-fn emit_stale_daemon_warning(build_id: Option<&str>) {
-    if let Some(warning) = stale_daemon_warning_for_status(build_id) {
+fn emit_stale_daemon_warning(build_id: Option<&str>, daemon_host: Option<&str>) {
+    if let Some(warning) = stale_daemon_warning_for_status(build_id, daemon_host) {
         eprintln!("{warning}");
     }
 }
@@ -5223,19 +5267,55 @@ mod idempotency_projection_tests {
 
     #[test]
     fn who_et_status_signalent_exactement_un_daemon_perime() {
-        // Observe les identifiants et la remédiation structurelle — pas un
-        // libellé humain (le gate fondateur a déjà payé ce piège cette nuit).
-        assert!(stale_daemon_warning_for_status(Some(crate::build_info::BUILD_ID)).is_none());
-        let warning = stale_daemon_warning_for_status(Some("daemon-ancien")).unwrap();
+        // Observe les identifiants et l'ATTRIBUTION — pas un libellé humain
+        // (le gate fondateur a déjà payé ce piège cette nuit).
+        let ici = crate::build_info::local_host();
+        assert!(
+            stale_daemon_warning_for_status(Some(crate::build_info::BUILD_ID), Some(&ici))
+                .is_none()
+        );
+        let warning =
+            stale_daemon_warning_for_status(Some("daemon-ancien"), Some("monordinateur")).unwrap();
         assert!(warning.contains("daemon-ancien"));
         assert!(warning.contains(crate::build_info::BUILD_ID));
-        let remediation = format!("gui/{}/com.bridget.daemon", unsafe { libc::getuid() });
-        assert!(warning.contains(&remediation));
+        // La VALEUR portée est la machine du daemon, pas la mienne : un oracle
+        // qui vérifierait seulement la présence d'un hôte passerait aussi avec
+        // le mauvais.
         assert!(
-            stale_daemon_warning_for_status(None)
-                .unwrap()
-                .contains(&remediation)
+            warning.contains("daemon périmé sur monordinateur"),
+            "{warning}"
         );
+        // Machine non attestée : le message le dit, il ne suppose pas la mienne.
+        let sans_hote = stale_daemon_warning_for_status(Some("daemon-ancien"), None).unwrap();
+        assert!(
+            sans_hote.contains(crate::build_info::MACHINE_NON_ATTESTEE),
+            "{sans_hote}"
+        );
+        assert!(
+            !sans_hote.contains(&format!("daemon périmé sur {ici}")),
+            "{sans_hote}"
+        );
+    }
+
+    /// Daemon injoignable : aucune attestation, donc aucun chiffre.
+    ///
+    /// CE QUE CE TEST NE PROUVE PAS, et je le dis parce que je l'ai cru :
+    /// il ne franchit PAS la garde de comptage. `get_status` sort dès que la
+    /// socket est absente, bien avant elle. Le mutant qui retire la garde
+    /// laisse ce test VERT. La garde elle-même est éprouvée par
+    /// `daemon::attribution_tests::compter_n_est_permis_que_sur_la_base_attestee_par_le_daemon`.
+    #[test]
+    fn status_ne_compte_pas_les_messages_d_une_base_qui_n_est_pas_celle_du_daemon() {
+        let mut config = DaemonConfig::default();
+        config.socket_path = std::path::PathBuf::from("/tmp/bridget-absent-oracle.sock");
+        // Daemon injoignable → aucune attestation, donc aucun compte.
+        let status = daemon::get_status(&config);
+        assert!(
+            status.message_count.is_none(),
+            "sans attestation du daemon, aucun compte ne doit être rendu"
+        );
+        assert!(status.daemon_db_path.is_none());
+        assert!(status.daemon_host.is_none());
     }
 }
 

@@ -911,19 +911,11 @@ fn unix_now_secs() -> i64 {
         .min(i64::MAX as u64) as i64
 }
 
+/// Source unique du nom de machine : l'annuaire, les refus de lancement et le
+/// contrôle de péremption doivent nommer la MÊME machine, sinon deux vues du
+/// même système désignent des hôtes différents.
 fn host_name() -> String {
-    if let Ok(host) = std::env::var("HOSTNAME")
-        && !host.trim().is_empty()
-    {
-        return host;
-    }
-    Command::new("hostname")
-        .output()
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|host| host.trim().to_string())
-        .filter(|host| !host.is_empty())
-        .unwrap_or_else(|| "inconnu".to_string())
+    crate::build_info::local_host()
 }
 
 const INTERACTIVE_AGENT_PROTOCOL: &str = "tmux";
@@ -1606,11 +1598,12 @@ pub fn launch(
         // le compaction de contexte (contrairement à un message système).
     } else if agent_type == "claude" {
         // Pour Claude Code (claude et gclaude)
-        let already_bypassed = agent_args.iter().any(|a| {
-            a.contains("dangerously-skip-permissions") || a.contains("bypassPermissions")
-        }) || final_args.iter().any(|a| {
-            a.contains("dangerously-skip-permissions") || a.contains("bypassPermissions")
-        });
+        let already_bypassed = agent_args
+            .iter()
+            .any(|a| a.contains("dangerously-skip-permissions") || a.contains("bypassPermissions"))
+            || final_args.iter().any(|a| {
+                a.contains("dangerously-skip-permissions") || a.contains("bypassPermissions")
+            });
         if !already_bypassed {
             ensure_claude_permission_bypass(&mut final_args);
         }
@@ -3518,7 +3511,8 @@ fn launch_acp_with_status(
                         Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
                     );
                     if let Some(definition_digest) = frozen_definition_digest {
-                        let worktree = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                        let worktree =
+                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
                         let resume = managed_resume_context(
                             home,
                             &worktree,
@@ -3681,9 +3675,9 @@ fn strip_codex_approval_bypass(args: &mut Vec<String>) {
 }
 
 fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
-    let has_skip = args
-        .iter()
-        .any(|a| a == "--dangerously-skip-permissions" || a.contains("dangerously-skip-permissions"));
+    let has_skip = args.iter().any(|a| {
+        a == "--dangerously-skip-permissions" || a.contains("dangerously-skip-permissions")
+    });
     let has_mode = args
         .iter()
         .any(|a| a == "bypassPermissions" || a.contains("bypassPermissions"));
@@ -4479,8 +4473,7 @@ mod prompt_tests {
                 |row| row.get(0),
             )
             .unwrap();
-        let mut delegation: maicie::domain::Delegation =
-            serde_json::from_slice(&payload).unwrap();
+        let mut delegation: maicie::domain::Delegation = serde_json::from_slice(&payload).unwrap();
         match etat {
             EtatDelegation::Annulee => delegation.annuler().unwrap(),
             EtatDelegation::AEvaluer => delegation.transition(EtatDelegation::AEvaluer).unwrap(),
@@ -5756,10 +5749,7 @@ mod reconnect_tests {
         )
         .unwrap();
         apply_managed_permission_policy("codex_app_server", "allow", &mut codex_allow);
-        assert!(
-            !codex_allow.is_empty(),
-            "PRESENCE: argv managed non vide"
-        );
+        assert!(!codex_allow.is_empty(), "PRESENCE: argv managed non vide");
         assert_eq!(
             codex_allow
                 .iter()
@@ -6381,11 +6371,7 @@ mod reconnect_tests {
             None,
         )
         .unwrap();
-        let rejected = writer.enqueue(
-            "update",
-            None,
-            serde_json::json!({"content":"live"}),
-        );
+        let rejected = writer.enqueue("update", None, serde_json::json!({"content":"live"}));
         assert!(
             rejected
                 .as_ref()
