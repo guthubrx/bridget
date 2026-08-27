@@ -32,6 +32,12 @@ Bridget.
    interactive ouverte vue par le daemon, sans dépendre de la copie Maicie
    locale, puis intégrer les états opérateur à la partition.
 8. Rendre source, cardinal lu, cardinal corrélé et âge, sans rendre le contenu.
+9. Fermer les deux sources de partition sur toute entrée active invalide : une
+   délégation Maicie illisible ou un enregistrement d'annuaire mal formé rend
+   la source indisponible, jamais une liste partielle.
+10. Pendant la découverte Codex, tolérer seulement la disparition concurrente
+    d'un processus ou descripteur ; une permission refusée ou toute autre
+    erreur d'accès invalide la découverte complète.
 
 ## Découverte et déterminisme du harnais
 
@@ -87,7 +93,9 @@ message dans la sortie.
 - `bash -n scripts/test-bridget-idle.sh` ;
 - harnais complet `scripts/test-bridget-idle.sh`, base et tête ;
 - mutants opposés sur le cas bloqué et le cas accepté, puis mutants ciblés
-  rétablissant la sous-chaîne et l'oubli d'une première ligne partielle ;
+  rétablissant la sous-chaîne, l'oubli d'une première ligne partielle, le
+  filtrage d'une délégation ou d'un agent invalide et l'ignorance d'une
+  permission refusée ;
 - tir réel local en lecture seule sur Cartae, avec cardinal rendu ;
 - `git diff --check` et relecture du diff complet.
 

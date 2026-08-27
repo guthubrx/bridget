@@ -28,3 +28,9 @@
   témoins exact, sur-ensemble et mention non corrélée.
 - [x] T012 Fermer la découverte sur une première ligne partielle et l'éprouver
   à la découverte puis dans la chaîne complète.
+- [x] T013 Fermer la copie Maicie sur tout participant actif non textuel, avec
+  contrôle sain et mutant de filtrage silencieux.
+- [x] T014 Fermer l'annuaire sur toute entrée invalide, rendre les cardinaux
+  reçus/valides et tuer le mutant qui rétablit la partition partielle.
+- [x] T015 Distinguer une disparition concurrente d'une erreur d'accès aux
+  descripteurs Codex, avec contrôle positif et mutant sélectif.

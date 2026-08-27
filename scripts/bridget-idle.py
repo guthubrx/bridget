@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import errno
 import json
 import math
 import os
@@ -241,14 +242,22 @@ def read_occupied_from_maicie_copy(
     ) as error:
         return None, str(error)
     occupied: set[str] = set()
+    valid_rows = 0
     for (payload,) in rows:
         try:
             delegation = json.loads(payload)
-            participant = delegation.get("participant")
-            if isinstance(participant, str):
-                occupied.add(participant)
         except (TypeError, ValueError, json.JSONDecodeError):
-            return None, "délégation SQLite invalide"
+            continue
+        if not isinstance(delegation, dict):
+            continue
+        participant = delegation.get("participant")
+        if not isinstance(participant, str) or not participant:
+            continue
+        valid_rows += 1
+        occupied.add(participant)
+    if valid_rows != len(rows):
+        suffix = "valide" if valid_rows == 1 else "valides"
+        return None, f"{len(rows)} délégations reçues/{valid_rows} {suffix}"
     return occupied, None
 
 
@@ -898,13 +907,17 @@ def discover_codex_trace(
         descriptor_root = proc_root / str(pid) / "fd"
         try:
             descriptors = list(descriptor_root.iterdir())
-        except OSError:
-            continue
+        except OSError as error:
+            if error.errno in (errno.ENOENT, errno.ENOTDIR, errno.ESRCH):
+                continue
+            return None, f"descripteurs-codex-inaccessibles:{error.errno or 'inconnu'}"
         for descriptor in descriptors:
             try:
                 target = descriptor.readlink()
-            except OSError:
-                continue
+            except OSError as error:
+                if error.errno in (errno.ENOENT, errno.ENOTDIR, errno.ESRCH):
+                    continue
+                return None, f"descripteur-codex-inaccessible:{error.errno or 'inconnu'}"
             if not target.is_absolute():
                 continue
             if not _path_within(target, canonical_root):
@@ -1372,6 +1385,27 @@ def domain_in_fleet_scope(domain: Any) -> bool:
     return False
 
 
+def validate_agent_directory(
+    raw: Any,
+) -> tuple[list[dict[str, Any]] | None, set[str] | None, str | None]:
+    """Refuse toute vue partielle : un enregistrement invalide ferme l'annuaire."""
+    if not isinstance(raw, list):
+        return None, None, "payload non liste"
+    agents: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name or name in names:
+            continue
+        agents.append(entry)
+        names.add(name)
+    if len(agents) != len(raw):
+        return None, None, f"{len(raw)} recus/{len(agents)} valides"
+    return agents, names, None
+
+
 def _public_intake_observation(
     name: str, observation: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1638,6 +1672,22 @@ def partition_oracle(
     return True, f"partition ok ({len(daemon_names)} agents)"
 
 
+def close_partition_when_maicie_unavailable(
+    result: dict[str, Any], reason: str | None
+) -> None:
+    """Une mission inobservable interdit de déclarer un agent sans mission."""
+    if not reason:
+        return
+    uncertain = [name for name, _ in result["libres"]]
+    uncertain.extend(name for name, _ in result["muets"])
+    result["libres"] = []
+    result["muets"] = []
+    result["indetermines"].extend(
+        (name, "missions-inobservables:maicie-indisponible") for name in uncertain
+    )
+    result["indetermines"].sort()
+
+
 def classify_legacy(
     agents: list[dict[str, Any]],
     occupied: set[str],
@@ -1824,13 +1874,22 @@ def main() -> int:
         agents = json.loads(Path(options.agents_json).read_text(encoding="utf-8"))
     else:
         agents, agents_error = run_json([options.bridget_bin, "agents", "--json"])
-        if agents_error or not isinstance(agents, list):
+        if agents_error:
             print(
                 f"annuaire Bridget indisponible: "
-                f"{inert_text(agents_error or 'payload invalide')}",
+                f"{inert_text(agents_error)}",
                 flush=True,
             )
             return 1
+
+    typed_agents, daemon_names, directory_error = validate_agent_directory(agents)
+    if directory_error or typed_agents is None or daemon_names is None:
+        print(
+            f"annuaire Bridget indisponible: "
+            f"{inert_text(directory_error or 'payload invalide')}",
+            flush=True,
+        )
+        return 1
 
     if options.occupied_json:
         occupied = set(
@@ -1886,9 +1945,6 @@ def main() -> int:
         branch_backlog = None
         branch_error = f"temporaire Git indisponible: {error}"
 
-    assert isinstance(agents, list)
-    typed_agents = [a for a in agents if isinstance(a, dict)]
-    daemon_names = {a["name"] for a in typed_agents if isinstance(a.get("name"), str)}
     turn_observations = read_turn_observations(options.journal_root, daemon_names)
     stamp = int(time.time()) if options.now is None else options.now
     intake_observations = read_intake_observations(
@@ -1913,6 +1969,7 @@ def main() -> int:
         intake_observations=intake_observations,
         intake_after_secs=options.intake_after_secs,
     )
+    close_partition_when_maicie_unavailable(result, maicie_error)
     ok, detail = partition_oracle(result, daemon_names)
     if not ok:
         print(f"ORACLE PARTITION ROUGE: {inert_text(detail)}", flush=True)

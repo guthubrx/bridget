@@ -66,7 +66,8 @@ json_diagnostic_valide_et_inerte_et_backlog_branches
 test-bridget-idle: checks
 ```
 
-Résultat base : **23 passés / 0 échoué**, agrégat passé.
+Résultat de la base d'origine `2078a59` : **23 passés / 0 échoué**, agrégat
+passé. Ce nombre ne décrit pas le parent immédiat du second amendement.
 
 La tête amendée contient 43 contrôles nommés et un agrégat. Liste brute :
 
@@ -117,7 +118,21 @@ json_diagnostic_valide_et_inerte_et_backlog_branches
 test-bridget-idle: checks
 ```
 
-Résultat tête : **43 passés / 0 échoué**, agrégat passé. La partition de
+Résultat du parent immédiat `d2a720d` : **43 passés / 0 échoué**, agrégat
+passé. Le relisting porte sur toutes les lignes de résultat, indépendamment de
+la forme de l'instruction qui les imprime ; la liste brute ci-dessus contient
+bien 43 témoins, et non 38.
+
+La tête après contre-revue ajoute quatre témoins :
+
+```text
+decouverte_codex_permission_refusee_indisponible
+maicie_participant_invalide_ferme_la_source
+maicie_invalide_ferme_la_partition_complete
+annuaire_invalide_refuse
+```
+
+Résultat final : **47 passés / 0 échoué**, agrégat passé. La partition de
 fixture porte 28 agents, sans omission ni recouvrement.
 
 ## Mutants opposés
@@ -141,12 +156,22 @@ le tir nominal :
 5. rendre de nouveau `False` pour une première ligne Codex partielle : mort
    dans `decouverte_codex_ligne_partielle_fermee` ; la trace valide voisine
    serait sinon choisie avec `error=None`.
+6. neutraliser la fermeture quand une délégation active est invalide : mort
+   dans `maicie_participant_invalide_ferme_la_source`, après le contrôle sain
+   `maicie_copie_sidecars_intacts` ; la charge partielle redevient `{'bob'}` ;
+7. neutraliser la fermeture de l'annuaire : mort dans
+   `annuaire_invalide_refuse`, après `cli_texte_branches_et_limites` vert ; la
+   CLI rend à tort `partition ok (1 agents)` avec trois entrées reçues ;
+8. ignorer de nouveau toute erreur d'accès aux descripteurs : mort dans
+   `decouverte_codex_permission_refusee_indisponible`, après
+   `decouverte_trace_codex_par_processus` vert ; la permission refusée devient
+   à tort `trace-codex-active-absente`.
 
 La restauration finale est attestée par :
 
 ```text
-2e5392d8850e29d53b443bd5fc65379cbe1b65ebf11719dbcede77f21cc1ddfc  scripts/bridget-idle.py
-df1e587c2068e29e4e13b8c351c4c593bfe5641ca2e9978d4c6d97c4c4523942  scripts/test-bridget-idle.sh
+f134231956b5bd6645966c84fce205b86c34ea1550ff325ad08b906b8478dbad  scripts/bridget-idle.py
+b7859ed57fe24e03336a08f610fe5c3c2571a1c52ff587481bf3e024207aae90  scripts/test-bridget-idle.sh
 ```
 
 ## Tir réel final sur Cartae
@@ -174,10 +199,11 @@ projection ne contient aucun corps de conversation.
 - `bash -n scripts/test-bridget-idle.sh` : vert ;
 - `ruff check scripts/bridget-idle.py` : vert ;
 - `git diff --check` : vert ;
-- harnais base : 23 passés / 0 échoué, agrégat passé ;
-- harnais tête : 43 passés / 0 échoué, agrégat passé.
+- harnais base d'origine : 23 passés / 0 échoué, agrégat passé ;
+- harnais parent immédiat : 43 passés / 0 échoué, agrégat passé ;
+- harnais tête finale : 47 passés / 0 échoué, agrégat passé.
 
-## Revue hostile : 6 problèmes trouvés, 6 corrigés
+## Revue hostile : 9 problèmes trouvés, 9 corrigés
 
 | # | Problème | Sévérité | Correction |
 |---|---|---|---|
@@ -187,6 +213,9 @@ projection ne contient aucun corps de conversation.
 | 4 | Une trace principale valide pouvait masquer un second descripteur de rôle inconnu | Moyenne | Tout rôle Codex inconnu et toute session Claude indéterminable rendent la découverte inobservable |
 | 5 | Une sous-chaîne ou une mention de l'identifiant fabriquait une prise inexistante | Haute | Extraction de l'identifiant de l'enveloppe canonique et égalité exacte, avec deux témoins négatifs |
 | 6 | Une première ligne partielle disparaissait si une autre trace valide existait | Haute | État de rôle inconnu fermé, éprouvé à la découverte et dans la chaîne complète |
+| 7 | Une délégation active au participant non textuel disparaissait de la charge | Bloquante | La source Maicie devient indisponible avec cardinal reçus/valides ; aucune absence de mission n'est ensuite déclarée |
+| 8 | Des entrées d'annuaire invalides étaient filtrées avant une partition déclarée complète | Bloquante | Validation atomique de toutes les entrées et refus de toute vue partielle |
+| 9 | Toute erreur d'accès à un descripteur était assimilée à une disparition | Haute | Seuls `ENOENT`, `ENOTDIR` et `ESRCH` sont tolérés ; les autres ferment la découverte |
 
 ## Non mesuré et limite durable
 

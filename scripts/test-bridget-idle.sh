@@ -789,6 +789,25 @@ if discovery_error or discovered != codex_discovery_trace:
     raise SystemExit(f"trace Codex active non découverte: path={discovered} error={discovery_error}")
 print("decouverte_trace_codex_par_processus: OK")
 
+# Une disparition concurrente est tolérable ; une permission refusée ne l'est
+# pas, sinon une seconde trace peut disparaître d'une source dite observable.
+descriptor_directory = fake_proc / "701" / "fd"
+descriptor_directory.chmod(0)
+try:
+    denied_path, denied_error = mod.discover_codex_trace(
+        700, trace_root, proc_root=fake_proc
+    )
+finally:
+    descriptor_directory.chmod(0o700)
+if denied_path is not None or not (denied_error or "").startswith(
+    "descripteurs-codex-inaccessibles:"
+):
+    raise SystemExit(
+        "permission des descripteurs ignorée: "
+        f"path={denied_path} error={denied_error}"
+    )
+print("decouverte_codex_permission_refusee_indisponible: OK")
+
 codex_partial_role_trace = trace_root / "rollout-role-partial.jsonl"
 codex_partial_role_trace.write_text(
     json.dumps(
@@ -1158,6 +1177,16 @@ if (wal_before, shm_before) != (wal_after, shm_after):
     raise SystemExit("lecture idle a touché les sidecars de production (copie obligatoire)")
 print("maicie_copie_sidecars_intacts: OK")
 
+conn.execute("INSERT INTO delegations VALUES ('d2', 'o1', '{\"participant\":42}')")
+conn.commit()
+invalid_occ, invalid_err = mod.read_occupied_from_maicie_copy(str(config))
+if invalid_occ is not None or invalid_err != "2 délégations reçues/1 valide":
+    raise SystemExit(
+        "participant actif non textuel filtré silencieusement: "
+        f"occ={invalid_occ} err={invalid_err}"
+    )
+print("maicie_participant_invalide_ferme_la_source: OK")
+
 # Bridget DB copie : requête backlog + sidecars intacts
 bdb = fixture / "bridget.db"
 bconn = sqlite3.connect(bdb)
@@ -1383,10 +1412,15 @@ if bad_backlog is not None or not bad_error:
 print("backlog_branches_depot_invalide_indisponible: OK")
 
 agents_path = fixture / "agents.json"
+invalid_agents_path = fixture / "agents-invalides.json"
 occupied_path = fixture / "occupied.json"
 backlog_path = fixture / "backlog.json"
 intake_traces_path = fixture / "intake-traces.json"
 agents_path.write_text(json.dumps(agents), encoding="utf-8")
+invalid_agents_path.write_text(
+    json.dumps([agents[0], "entree-invalide", {"state": "connected"}]),
+    encoding="utf-8",
+)
 occupied_path.write_text(json.dumps(sorted(occupied)), encoding="utf-8")
 backlog_path.write_text(json.dumps(backlog), encoding="utf-8")
 intake_traces_path.write_text(
@@ -1421,6 +1455,34 @@ fi
 grep -q 'refs locales sans fetch' <<<"$out"
 grep -q 'age du commit de tete uniquement' <<<"$out"
 echo 'cli_texte_branches_et_limites: OK'
+maicie_invalid_json="$("$system_python" "$idle" --agents-json "$agents_json" --config "${fixture_root}/config.json" --backlog-json "$backlog_json" --intake-traces-json "$intake_traces_json" --local-host fixture-host --journal-root "$journal_root" --git-repo "$git_repo" --now 2000000000 --json)"
+"$system_python" - "$maicie_invalid_json" <<'PY'
+import json, sys
+
+data = json.loads(sys.argv[1])
+assert data["maicie"] == {
+    "state": "unavailable",
+    "reason": "2 délégations reçues/1 valide",
+}
+assert data["libres"] == []
+assert data["muets"] == []
+assert any(
+    item["name"] == "alice"
+    and item["reason"] == "missions-inobservables:maicie-indisponible"
+    for item in data["indetermines"]
+)
+print("maicie_invalide_ferme_la_partition_complete: OK")
+PY
+set +e
+invalid_agents_out="$("$system_python" "$idle" --agents-json "${fixture_root}/agents-invalides.json" --occupied-json "$occupied_json" --backlog-json "$backlog_json" --intake-traces-json "$intake_traces_json" --local-host fixture-host --journal-root "$journal_root" --git-repo "$git_repo" --now 2000000000 2>&1)"
+invalid_agents_rc=$?
+set -e
+if [[ "$invalid_agents_rc" -eq 0 ]]; then
+  echo "annuaire_invalide_refuse: sortie nulle: ${invalid_agents_out}" >&2
+  exit 1
+fi
+grep -q 'annuaire Bridget indisponible: 3 recus/1 valides' <<<"$invalid_agents_out"
+echo 'annuaire_invalide_refuse: OK (3 recus/1 valides)'
 "$system_python" - "$out" <<'PY'
 import sys
 

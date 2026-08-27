@@ -150,6 +150,19 @@ jamais `MANDAT_NON_SOUMIS`. Elle apparaît comme
   acceptation, un tour actif ou un `enqueue` corrélé produit
   `REMISE_PENDANT_TOUR_ACTIF`, catégorie distincte dans la partition ; il ne
   traverse jamais la branche temporelle de `MANDAT_NON_SOUMIS`.
+- **FR-3613** : toute délégation active dont le participant n'est pas une
+  chaîne non vide rend la copie Maicie indisponible ; aucune mission valide
+  voisine ne peut masquer cette ligne. Tant que cette source est indisponible,
+  aucun agent n'est déclaré `LIBRE` ou `MUET` : ces catégories deviennent
+  indéterminées parce que l'absence de mission n'est pas observable.
+- **FR-3614** : chaque entrée reçue de l'annuaire doit être un objet portant un
+  nom textuel non vide et unique. Une seule entrée invalide rend l'annuaire
+  entier indisponible avec les cardinaux reçus et valides ; aucune partition
+  partielle n'est annoncée saine.
+- **FR-3615** : la découverte Codex ne tolère silencieusement que les erreurs
+  attribuables à la disparition concurrente d'un processus ou descripteur. Une
+  permission refusée ou toute autre erreur d'accès rend la source
+  indisponible.
 
 ## Critères de succès
 
@@ -181,6 +194,17 @@ jamais `MANDAT_NON_SOUMIS`. Elle apparaît comme
 - **SC-3610** : un descripteur Codex dont la première ligne n'est pas terminée
   rend `PRISE_INOBSERVABLE` dans l'oracle de découverte et dans la chaîne
   complète, sans disparaître derrière une autre trace valide.
+- **SC-3611** : une délégation saine reste lue ; ajouter une seconde
+  délégation active avec `participant=42` rend la source indisponible avec
+  `2 délégations reçues/1 valide`. Dans la chaîne complète, la projection
+  Maicie est indisponible, `LIBRES` et `MUETS` sont vides, et l'agent sain
+  voisin porte `missions-inobservables:maicie-indisponible`.
+- **SC-3612** : un annuaire sain conserve sa partition ; une vue de trois
+  entrées dont une seule est valide échoue avec `3 recus/1 valides`, sans
+  rendre `partition ok`.
+- **SC-3613** : une découverte normale retrouve sa trace principale ; refuser
+  l'accès au répertoire des descripteurs rend
+  `descripteurs-codex-inaccessibles`, jamais `trace-codex-active-absente`.
 
 ## Limite de portée obligatoire
 
