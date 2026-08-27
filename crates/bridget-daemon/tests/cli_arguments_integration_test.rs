@@ -4,8 +4,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn fixture_root(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -35,11 +36,16 @@ fn short_message_fixture_root() -> PathBuf {
     ))
 }
 
-fn capture_one_message(listener: UnixListener) -> thread::JoinHandle<Option<String>> {
+fn capture_one_message(
+    listener: UnixListener,
+    stop: mpsc::Receiver<()>,
+) -> thread::JoinHandle<Option<String>> {
     thread::spawn(move || {
         listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + Duration::from_millis(100);
         loop {
+            if stop.try_recv().is_ok() {
+                return None;
+            }
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     stream
@@ -58,9 +64,6 @@ fn capture_one_message(listener: UnixListener) -> thread::JoinHandle<Option<Stri
                     return Some(message);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        return None;
-                    }
                     thread::sleep(Duration::from_millis(1));
                 }
                 Err(error) => panic!("accepter la connexion CLI: {error}"),
@@ -75,9 +78,11 @@ fn run_message_cli(args: &[&str]) -> (Output, Option<String>, bool, bool) {
     fs::create_dir_all(&cache).unwrap();
     fs::write(cache.join("last-sender-probe"), "destinataire\n").unwrap();
     let listener = UnixListener::bind(cache.join("bridget.sock")).unwrap();
-    let capture = capture_one_message(listener);
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let capture = capture_one_message(listener, stop_rx);
 
     let output = run_cli(&root, args);
+    let _ = stop_tx.send(());
     let serialized_message = capture.join().unwrap();
     let pid_exists = cache.join("bridget.pid").exists();
     let database_exists = cache.join("bridget.db").exists();
