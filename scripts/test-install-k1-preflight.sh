@@ -9,6 +9,38 @@ cleanup() {
 }
 trap cleanup EXIT
 
+session049_passed=0
+session049_failed=0
+session049_record() {
+  local name="$1"
+  shift
+  if "$@"; then
+    printf 'session-049 %s ... ok\n' "$name"
+    session049_passed=$((session049_passed + 1))
+  else
+    printf 'session-049 %s ... FAILED\n' "$name" >&2
+    session049_failed=$((session049_failed + 1))
+  fi
+}
+
+database_from_config() {
+  python3 - "$1" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    print(json.load(stream)["database_path"])
+PY
+}
+
+directory_mode() {
+  python3 - "$1" <<'PY'
+import os, stat, sys
+print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode))[2:])
+PY
+}
+
+printf '%s\n' \
+  'univers session-049 (5 scénarios): défaut durable, XDG absolu, XDG relatif, cache préservé averti, état préservé silencieux'
+
 home="${fixture_root}/home"
 fake_target="${fixture_root}/maicie-candidate"
 command_log="${fixture_root}/commands.log"
@@ -82,6 +114,81 @@ grep -q 'gate Maicie accepté sur la paire publiée' <<<"$missing_config"
 [[ -f "${home}/.config/maicie/config.json" ]]
 [[ "$(wc -l <"$command_log")" == "2" ]]
 
+default_state_is_durable() {
+  local expected="${home}/.local/state/maicie/maicie.sqlite3"
+  local actual
+  actual="$(database_from_config "${home}/.config/maicie/config.json")"
+  [[ "$actual" == "$expected" ]] \
+    && [[ "$actual" != "${home}/.cache/"* ]] \
+    && [[ -d "${home}/.local/state/maicie" ]] \
+    && [[ "$(directory_mode "${home}/.local/state/maicie")" == "700" ]]
+}
+session049_record default_hors_cache default_state_is_durable
+
+xdg_home="${fixture_root}/xdg-home"
+xdg_state="${fixture_root}/xdg-state"
+mkdir -p "${xdg_home}/.local/bin" "${xdg_home}/.config/maicie"
+cp "${home}/.local/bin/bridget" "${xdg_home}/.local/bin/bridget"
+ln -s "$fake_target" "${xdg_home}/.local/bin/maicie"
+: >"$command_log"
+xdg_output="$(
+  HOME="$xdg_home" \
+  XDG_STATE_HOME="$xdg_state" \
+  K1_TEST_COMMAND_LOG="$command_log" \
+  K1_TEST_PREFLIGHT_EXIT=0 \
+  "$installer" --skip-services --skip-verify 2>&1
+)"
+xdg_absolute_is_honoured() {
+  [[ "$(database_from_config "${xdg_home}/.config/maicie/config.json")" \
+    == "${xdg_state}/maicie/maicie.sqlite3" ]] \
+    && [[ -d "${xdg_state}/maicie" ]] \
+    && [[ "$(directory_mode "${xdg_state}/maicie")" == "700" ]] \
+    && ! grep -Fq 'XDG_STATE_HOME relatif ignoré' <<<"$xdg_output"
+}
+session049_record xdg_absolu_honore xdg_absolute_is_honoured
+
+relative_home="${fixture_root}/relative-home"
+mkdir -p "${relative_home}/.local/bin" "${relative_home}/.config/maicie"
+cp "${home}/.local/bin/bridget" "${relative_home}/.local/bin/bridget"
+ln -s "$fake_target" "${relative_home}/.local/bin/maicie"
+: >"$command_log"
+relative_output="$(
+  HOME="$relative_home" \
+  XDG_STATE_HOME='relative/state' \
+  K1_TEST_COMMAND_LOG="$command_log" \
+  K1_TEST_PREFLIGHT_EXIT=0 \
+  "$installer" --skip-services --skip-verify 2>&1
+)"
+xdg_relative_falls_back() {
+  [[ "$(database_from_config "${relative_home}/.config/maicie/config.json")" \
+    == "${relative_home}/.local/state/maicie/maicie.sqlite3" ]] \
+    && grep -Fq 'XDG_STATE_HOME relatif ignoré' <<<"$relative_output"
+}
+session049_record xdg_relatif_replie xdg_relative_falls_back
+
+cache_database="${home}/.cache/bridget/maicie-state/maicie.sqlite3"
+cat >"${home}/.config/maicie/config.json" <<EOF
+{"version":1,"database_path":"${cache_database}"}
+EOF
+cp "${home}/.config/maicie/config.json" "${fixture_root}/cache-config.before.json"
+: >"$command_log"
+cache_output="$(
+  HOME="$home" \
+  K1_TEST_COMMAND_LOG="$command_log" \
+  K1_TEST_PREFLIGHT_EXIT=0 \
+  "$installer" --skip-services --skip-verify 2>&1
+)"
+existing_cache_is_preserved_and_warned() {
+  cmp -s "${fixture_root}/cache-config.before.json" \
+    "${home}/.config/maicie/config.json" \
+    && grep -Fq 'AVERTISSEMENT: base Maicie durable située sous un cache' \
+      <<<"$cache_output" \
+    && grep -Fq "$cache_database" <<<"$cache_output" \
+    && grep -Fq "${home}/.local/state/maicie/maicie.sqlite3" <<<"$cache_output"
+}
+session049_record cache_explicite_preserve_averti \
+  existing_cache_is_preserved_and_warned
+
 force_root="${fixture_root}/force"
 force_repo="${force_root}/repo"
 force_home="${force_root}/home"
@@ -144,9 +251,11 @@ cat >"${force_home}/.config/maicie/config.json" <<EOF
 EOF
 cp "${force_home}/.config/maicie/config.json" "${force_root}/config.before.json"
 
-HOME="$force_home" \
-K1_TEST_COMMAND_LOG="$force_log" \
-"${force_repo}/scripts/install-k1.sh" --force --skip-services --skip-verify >/dev/null
+force_output="$(
+  HOME="$force_home" \
+  K1_TEST_COMMAND_LOG="$force_log" \
+  "${force_repo}/scripts/install-k1.sh" --force --skip-services --skip-verify 2>&1
+)"
 
 if ! cmp -s "${force_root}/config.before.json" "${force_home}/.config/maicie/config.json"; then
   echo "--force a remplacé la configuration préflightée avant activation" >&2
@@ -165,6 +274,15 @@ grep -Fq "\"${force_home}/.local/bin/maicie\" preflight" \
   "${force_home}/.local/bin/maicie-suivi"
 grep -Fxq "ExecStart=${force_home}/.local/bin/maicie-suivi" \
   "${force_home}/.config/systemd/user/bridget-maicie-releve.service"
+
+existing_state_is_preserved_without_warning() {
+  cmp -s "${force_root}/config.before.json" \
+    "${force_home}/.config/maicie/config.json" \
+    && ! grep -Fq 'AVERTISSEMENT: base Maicie durable située sous un cache' \
+      <<<"$force_output"
+}
+session049_record etat_explicite_preserve_silencieux \
+  existing_state_is_preserved_without_warning
 
 systemctl_state="${force_root}/systemctl.state"
 systemctl_log="${force_root}/systemctl.log"
@@ -222,4 +340,7 @@ grep -Fxq 'stop bridget-maicie-releve.service' "$systemctl_log"
 grep -Fxq 'enable --now bridget-maicie-releve.timer' "$systemctl_log"
 grep -Fxq 'start bridget-maicie-releve.service' "$systemctl_log"
 
+printf 'session-049 result: %s passed / %s failed / 0 ignored\n' \
+  "$session049_passed" "$session049_failed"
+[[ "$session049_failed" == "0" ]]
 echo "gate installation Maicie: refus, paire finale --force et relève gardée vérifiés"
