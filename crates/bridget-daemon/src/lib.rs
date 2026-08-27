@@ -7,6 +7,7 @@ pub mod daemon;
 pub mod desired_state;
 pub mod disk_hygiene;
 pub mod fleet;
+pub mod greffe_policy_refresh;
 pub mod idempotency;
 pub mod ledger;
 pub mod lifecycle;
