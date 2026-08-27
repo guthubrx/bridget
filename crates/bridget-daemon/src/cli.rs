@@ -1474,11 +1474,11 @@ fn parse_review_target(
             );
         }
     };
-    if !target.is_valid() {
-        return Err(
-            "--review-ref attend <remote>/<branche> valide et --expected-head exactement 40 hexadécimaux minuscules"
-                .to_string(),
-        );
+    if target.remote_and_branch().is_none() {
+        return Err("--review-ref attend <remote>/<branche> valide".to_string());
+    }
+    if !is_canonical_git_sha(&target.expected_head) {
+        return Err("--expected-head attend exactement 40 hexadécimaux minuscules".to_string());
     }
     Ok(Some(target))
 }

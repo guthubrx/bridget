@@ -9,8 +9,10 @@ use maicie::domain::guichet::{RequeteGuichet, parse_claim};
 use maicie::domain::{ClasseDuree, EtatDelegation, EtatObjectif, MotifRefusGreffe};
 use maicie::store::{GuichetCommitPhase, MaicieStore, SCHEMA_VERSION};
 use rusqlite::{Connection, ErrorCode};
+use serde_json::{Value, json};
 use std::fs;
-use std::io::Read;
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -41,6 +43,69 @@ fn git(repository: &Path, arguments: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn start_identity_then_unavailable(socket: &Path) -> thread::JoinHandle<()> {
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let socket = socket.to_owned();
+    let server = thread::spawn(move || {
+        let _ = fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        ready_tx.send(()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let (mut reader, mut writer) = split(stream);
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"RoleHandshake","role":"client"})
+        );
+        write_json(&mut writer, json!({"type":"RoleAccepted","role":"client"}));
+        assert_eq!(read_json(&mut reader)["type"], "ClientHello");
+        write_json(
+            &mut writer,
+            json!({
+                "type":"ClientWelcome",
+                "version":1,
+                "horizon_secs":3600,
+                "issued_at_tolerance_secs":30,
+                "capabilities":["send_idempotent","lookup"]
+            }),
+        );
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"DaemonIdentityRequest"})
+        );
+        drop(listener);
+        write_json(
+            &mut writer,
+            json!({
+                "type":"DaemonIdentityReport",
+                "host":bridget_core::local_host(),
+                "db_path":"/var/lib/bridget/bridget.db",
+                "instance_id":"daemon-status-review"
+            }),
+        );
+    });
+    ready_rx.recv().unwrap();
+    server
+}
+
+fn split(stream: UnixStream) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
+    (
+        BufReader::new(stream.try_clone().unwrap()),
+        BufWriter::new(stream),
+    )
+}
+
+fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+fn write_json(writer: &mut BufWriter<UnixStream>, value: Value) {
+    serde_json::to_writer(&mut *writer, &value).unwrap();
+    writer.write_all(b"\n").unwrap();
+    writer.flush().unwrap();
 }
 
 fn durations() -> DurationClasses {
@@ -554,10 +619,12 @@ fn status_alerte_quand_le_sha_juge_n_est_plus_ancetre_de_la_tete_distante() {
     )
     .unwrap();
 
+    let identity_server = start_identity_then_unavailable(&socket);
     let json_output = Command::new(env!("CARGO_BIN_EXE_maicie"))
         .args(["status", "--config", config.to_str().unwrap(), "--json"])
         .output()
         .unwrap();
+    identity_server.join().unwrap();
     assert!(
         json_output.status.success(),
         "{}",
@@ -574,10 +641,12 @@ fn status_alerte_quand_le_sha_juge_n_est_plus_ancetre_de_la_tete_distante() {
     assert_eq!(observation["reviewed_head"], judged);
     assert_eq!(observation["observed_head"], rewritten);
 
+    let identity_server = start_identity_then_unavailable(&socket);
     let plain_output = Command::new(env!("CARGO_BIN_EXE_maicie"))
         .args(["status", "--config", config.to_str().unwrap()])
         .output()
         .unwrap();
+    identity_server.join().unwrap();
     assert!(plain_output.status.success());
     let plain = String::from_utf8(plain_output.stdout).unwrap();
     assert!(plain.contains("ALERTE_VERDICT_REECRIT"), "{plain}");

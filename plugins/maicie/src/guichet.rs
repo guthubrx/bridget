@@ -1104,13 +1104,13 @@ mod mutation_tests {
         .unwrap()
     }
 
-    fn delegate_payload(review_target: Option<ReviewTarget>) -> DelegatePayload {
-        DelegatePayload {
+    fn delegate_payload(review_target: Option<ReviewTarget>) -> ServiceRequestPayload {
+        ServiceRequestPayload::Delegate {
             goal: "relire la tête gelée".to_string(),
+            review_target,
             explicit_target: Some("reviewer".to_string()),
             required_tags: vec!["review".to_string()],
             duration: GuichetDurationClass::Normale,
-            review_target,
             suite: ServiceSuiteDeclaration::Aucune,
             depends_on: Vec::new(),
             references: Vec::new(),
