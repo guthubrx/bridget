@@ -1716,7 +1716,10 @@ fn guichet_outcome_name(outcome: GuichetOutcome) -> &'static str {
 fn linked_request_id(payload: &ServiceRequestPayload) -> Option<&str> {
     match payload {
         ServiceRequestPayload::DeliveryReport { in_reply_to, .. } => Some(in_reply_to),
-        ServiceRequestPayload::Delegation { .. } | ServiceRequestPayload::Delegate { .. } => None,
+        ServiceRequestPayload::Delegation { .. }
+        | ServiceRequestPayload::Delegate { .. }
+        | ServiceRequestPayload::RegistreAdd { .. }
+        | ServiceRequestPayload::ObjectiveClose { .. } => None,
     }
 }
 
@@ -1807,6 +1810,7 @@ mod tests {
                 instance_id: "instance-autorisee".to_string(),
             },
             action: bridget_transport::greffe_authorization::GreffeMutationAction::Delegate,
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
             request_id: "request-authorization-replay".to_string(),
             request_issued_at: 1_787_500_000,
             grant_expires_at: 1_787_500_600,

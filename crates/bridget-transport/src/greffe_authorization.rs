@@ -32,6 +32,7 @@ pub const GREFFE_AUDIT_PATH_ENV: &str = "BRIDGET_GREFFE_AUDIT_PATH";
 
 const MAX_POLICY_BYTES: u64 = 1024 * 1024;
 const MAX_IDENTITY_BYTES: usize = 256;
+const MAX_ISSUER_SCOPE_BYTES: usize = 256;
 const MAX_REQUEST_ID_BYTES: usize = 256;
 const HMAC_BLOCK_BYTES: usize = 64;
 
@@ -68,6 +69,7 @@ pub struct GreffeAuthorizationAttestation {
     pub version: u16,
     pub principal: GreffePrincipal,
     pub action: GreffeMutationAction,
+    pub issuer_scope: String,
     pub request_id: String,
     pub request_issued_at: i64,
     pub grant_expires_at: i64,
@@ -144,6 +146,7 @@ pub struct GreffeDepositAuthorization<'a> {
     pub canonical_instance_id: Option<&'a str>,
     pub declared_from: Option<&'a str>,
     pub action: GreffeMutationAction,
+    pub issuer_scope: &'a str,
     pub request_id: &'a str,
     pub request_issued_at: i64,
     pub observed_at: i64,
@@ -152,6 +155,7 @@ pub struct GreffeDepositAuthorization<'a> {
 pub struct GreffeEffectAuthorization<'a> {
     pub attestation: Option<&'a GreffeAuthorizationAttestation>,
     pub action: GreffeMutationAction,
+    pub issuer_scope: &'a str,
     pub request_id: &'a str,
     pub request_issued_at: i64,
     pub observed_at: i64,
@@ -195,11 +199,16 @@ impl GreffeAuthorizationGate {
             if attempt.declared_from != Some(principal.name.as_str()) {
                 return Err(GreffeAuthorizationRefusal::DeclaredPrincipalMismatch);
             }
-            validate_request(attempt.request_id, attempt.request_issued_at)?;
+            validate_request(
+                attempt.issuer_scope,
+                attempt.request_id,
+                attempt.request_issued_at,
+            )?;
             let policy = GreffePolicy::load(&self.policy_path)?;
             policy.attest(
                 principal,
                 attempt.action,
+                attempt.issuer_scope,
                 attempt.request_id,
                 attempt.request_issued_at,
                 attempt.observed_at,
@@ -209,6 +218,7 @@ impl GreffeAuthorizationGate {
             GreffeAuthorizationStage::Deposit,
             audit_principal.as_ref(),
             attempt.action,
+            attempt.issuer_scope,
             attempt.request_id,
             attempt.observed_at,
             result,
@@ -236,11 +246,16 @@ impl GreffeAuthorizationGate {
             let attestation = attempt
                 .attestation
                 .ok_or(GreffeAuthorizationRefusal::AttestationMissing)?;
-            validate_request(attempt.request_id, attempt.request_issued_at)?;
+            validate_request(
+                attempt.issuer_scope,
+                attempt.request_id,
+                attempt.request_issued_at,
+            )?;
             let policy = GreffePolicy::load(&self.policy_path)?;
             policy.verify(
                 attestation,
                 attempt.action,
+                attempt.issuer_scope,
                 attempt.request_id,
                 attempt.request_issued_at,
                 attempt.observed_at,
@@ -251,6 +266,7 @@ impl GreffeAuthorizationGate {
             GreffeAuthorizationStage::Effect,
             principal,
             attempt.action,
+            attempt.issuer_scope,
             attempt.request_id,
             attempt.observed_at,
             result,
@@ -273,6 +289,7 @@ impl GreffeAuthorizationGate {
         stage: GreffeAuthorizationStage,
         principal: Option<&GreffePrincipal>,
         action: GreffeMutationAction,
+        issuer_scope: &str,
         request_id: &str,
         observed_at: i64,
         result: Result<T, GreffeAuthorizationRefusal>,
@@ -289,6 +306,7 @@ impl GreffeAuthorizationGate {
                 stage,
                 principal,
                 action,
+                issuer_scope,
                 request_id,
                 allowed,
                 reason,
@@ -348,10 +366,14 @@ fn valid_identity_component(value: &str) -> bool {
 }
 
 fn validate_request(
+    issuer_scope: &str,
     request_id: &str,
     request_issued_at: i64,
 ) -> Result<(), GreffeAuthorizationRefusal> {
-    if request_id.is_empty()
+    if issuer_scope.is_empty()
+        || issuer_scope.len() > MAX_ISSUER_SCOPE_BYTES
+        || issuer_scope.chars().any(char::is_control)
+        || request_id.is_empty()
         || request_id.len() > MAX_REQUEST_ID_BYTES
         || request_id.chars().any(char::is_control)
         || request_issued_at <= 0
@@ -461,6 +483,7 @@ impl GreffePolicy {
         &self,
         principal: GreffePrincipal,
         action: GreffeMutationAction,
+        issuer_scope: &str,
         request_id: &str,
         request_issued_at: i64,
         now: i64,
@@ -470,6 +493,7 @@ impl GreffePolicy {
             version: GREFFE_ATTESTATION_VERSION,
             principal,
             action,
+            issuer_scope: issuer_scope.to_string(),
             request_id: request_id.to_string(),
             request_issued_at,
             grant_expires_at: grant.expires_at,
@@ -484,12 +508,14 @@ impl GreffePolicy {
         &self,
         attestation: &GreffeAuthorizationAttestation,
         action: GreffeMutationAction,
+        issuer_scope: &str,
         request_id: &str,
         request_issued_at: i64,
         now: i64,
     ) -> Result<GreffePrincipal, GreffeAuthorizationRefusal> {
         if attestation.version != GREFFE_ATTESTATION_VERSION
             || attestation.action != action
+            || attestation.issuer_scope != issuer_scope
             || attestation.request_id != request_id
             || attestation.request_issued_at != request_issued_at
             || attestation.grant_expires_at <= now
@@ -580,6 +606,7 @@ struct UnsignedAttestation<'a> {
     version: u16,
     principal: &'a GreffePrincipal,
     action: GreffeMutationAction,
+    issuer_scope: &'a str,
     request_id: &'a str,
     request_issued_at: i64,
     grant_expires_at: i64,
@@ -591,6 +618,7 @@ fn signature(key: &[u8; 32], attestation: &GreffeAuthorizationAttestation) -> St
         version: attestation.version,
         principal: &attestation.principal,
         action: attestation.action,
+        issuer_scope: &attestation.issuer_scope,
         request_id: &attestation.request_id,
         request_issued_at: attestation.request_issued_at,
         grant_expires_at: attestation.grant_expires_at,
@@ -652,6 +680,7 @@ struct GreffeAuditEvent<'a> {
     stage: GreffeAuthorizationStage,
     principal: Option<&'a GreffePrincipal>,
     action: GreffeMutationAction,
+    issuer_scope: &'a str,
     request_id: &'a str,
     allowed: bool,
     reason: &'a str,
@@ -708,6 +737,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     const NOW: i64 = 1_788_000_000;
+    const ISSUER_SCOPE: &str = "026_scope_0123456789abcdef0123456789abcdef";
     const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
@@ -781,6 +811,7 @@ mod tests {
                 canonical_instance_id: instance_id,
                 declared_from,
                 action,
+                issuer_scope: ISSUER_SCOPE,
                 request_id: "request-1",
                 request_issued_at: NOW - 1,
                 observed_at: NOW,
@@ -795,6 +826,7 @@ mod tests {
             self.gate().authorize_effect(GreffeEffectAuthorization {
                 attestation,
                 action,
+                issuer_scope: ISSUER_SCOPE,
                 request_id: "request-1",
                 request_issued_at: NOW - 1,
                 observed_at: NOW,
@@ -826,6 +858,7 @@ mod tests {
                     canonical_instance_id: instance_id,
                     declared_from,
                     action: GreffeMutationAction::Delegate,
+                    issuer_scope: ISSUER_SCOPE,
                     request_id: "request-1",
                     request_issued_at: NOW - 1,
                     observed_at: NOW,
@@ -1026,6 +1059,43 @@ mod tests {
             fixture
                 .effect(Some(&attestation), GreffeMutationAction::ObjectiveClose)
                 .unwrap_err(),
+            GreffeAuthorizationRefusal::AttestationMismatch
+        );
+    }
+
+    #[test]
+    fn issuer_scope_copie_est_refuse_avant_mutation_durable() {
+        let fixture = Fixture::new("copied-issuer-scope");
+        let attestation = fixture
+            .deposit(
+                Some("agent-autorise"),
+                Some("instance-autorisee"),
+                Some("agent-autorise"),
+                GreffeMutationAction::Delegate,
+            )
+            .unwrap();
+        let durable_state = fixture.root.join("durable-effect-state");
+        fs::write(&durable_state, b"unchanged").unwrap();
+
+        let result = fixture.gate().authorize_effect_then(
+            GreffeEffectAuthorization {
+                attestation: Some(&attestation),
+                action: GreffeMutationAction::Delegate,
+                issuer_scope: "026_scope_ffffffffffffffffffffffffffffffff",
+                request_id: "request-1",
+                request_issued_at: NOW - 1,
+                observed_at: NOW,
+            },
+            |_| fs::write(&durable_state, b"mutated").unwrap(),
+        );
+
+        assert_eq!(
+            fs::read_to_string(&durable_state).unwrap(),
+            "unchanged",
+            "une attestation ne s'étend jamais à une seconde portée idempotente"
+        );
+        assert_eq!(
+            result.unwrap_err(),
             GreffeAuthorizationRefusal::AttestationMismatch
         );
     }
