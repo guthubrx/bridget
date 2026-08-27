@@ -10,3 +10,5 @@
   abusivement le lien.
 - [x] T007 Comparer les univers et comptes base/tête, puis les gates statiques.
 - [x] T008 Documenter, committer, pousser et rendre le matériel.
+- [x] T009 Ajouter le témoin permanent distinguant réception seule et activité
+  émise, puis rejouer le mutant existant sans l'élargir.

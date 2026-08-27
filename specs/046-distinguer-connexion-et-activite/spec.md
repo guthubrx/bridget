@@ -51,6 +51,12 @@ passer une activité inexistante pour une capacité récente.
 L'envoi idempotent du canal MCP et l'envoi historique produisent la même mise à
 jour d'activité après leur propre point d'acceptation durable.
 
+### US4 — Réception sans activité émise
+
+Une présence ancienne reçoit réellement un mandat sur sa connexion. La remise
+arrive au destinataire, mais son `last_seen_secs` reste ancien tant qu'il
+n'émet aucune activité propre.
+
 ## Exigences fonctionnelles
 
 - **FR-4601** : `SendIdempotent` rafraîchit la présence de l'expéditeur logique
@@ -64,6 +70,8 @@ jour d'activité après leur propre point d'acceptation durable.
   `last_seen_secs` sans nouveau contrat filaire.
 - **FR-4606** : une activité émise par une connexion MCP ou CLI auxiliaire ne
   rafraîchit jamais `link_seen` et ne prolonge donc pas le retain du wrapper.
+- **FR-4607** : la seule remise d'un message au destinataire ne rafraîchit
+  jamais sa capacité ; réception et émission restent deux faits distincts.
 
 ## Critères de succès
 
@@ -77,6 +85,8 @@ jour d'activité après leur propre point d'acceptation durable.
 - **SC-4605** : après l'envoi, l'âge du lien principal reste supérieur à
   soixante secondes tandis que l'âge public d'activité devient inférieur à
   deux secondes.
+- **SC-4606** : un destinataire vieilli à 1 900 s reçoit effectivement un
+  mandat, puis conserve un âge d'au moins 1 800 s.
 
 ## Consommateurs et portée
 

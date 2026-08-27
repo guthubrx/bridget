@@ -94,6 +94,23 @@ Meurent à l'assertion d'âge public :
 
 Le contrôle `session_046_envoi_refuse_ne_rajeunit_pas_last_seen` reste vert.
 
+### Amendement de contre-revue — réception seule
+
+Le témoin permanent
+`session_046_reception_seule_ne_rajeunit_pas_last_seen` utilise un wrapper
+enregistré pour remettre réellement un mandat à la présence vieillie. La trame
+`Deliver` est lue sur la socket cible avant l'assertion : le montage prouve donc
+la réception, puis exige que `last_seen_secs` reste supérieur à 1 800 secondes.
+
+L'univers `session_046_` relisté contient quatre tests. Le nominal rend **4
+passés / 0 échec / 0 ignoré**. Le mutant existant, strictement inchangé, retire
+les deux écrivains post-acceptation : les deux témoins d'émission meurent à
+`last_seen_secs=1900`, tandis que le refus et la réception seule restent verts,
+soit **2 passés / 2 échoués / 0 ignoré**. Après restauration, le condensat de
+`daemon.rs` revient à
+`6a58ce3a9d3f99327300a6ed41e70fc2c3fd26b7ad18c4df4369980fbb781e8f`
+et le nominal final rend de nouveau **4/0/0**.
+
 ### Mutant 2 — rajeunir aussi le socket
 
 Le mutant remplace `touch_message_activity()` par `touch_capacity()` au site

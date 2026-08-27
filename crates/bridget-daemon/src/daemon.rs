@@ -8153,7 +8153,7 @@ mod presence_tests {
         } else {
             assert!(
                 sender.last_seen_secs >= 1800,
-                "un refus ne doit pas inventer une activité, reçu={} s",
+                "un refus ou une réception seule ne doit pas inventer une activité, reçu={} s",
                 sender.last_seen_secs
             );
         }
@@ -8236,6 +8236,40 @@ mod presence_tests {
                 ..
             })
         ));
+        assert_sender_last_seen(&mut shared.lock().unwrap(), false);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn session_046_reception_seule_ne_rajeunit_pas_last_seen() {
+        let (mut state, config) = state_with_aged_sender("last-seen-reception");
+        let (target_writer, mut target_reader) = control_socket("last-seen-reception");
+        state
+            .conn_names
+            .insert("conn-1".to_string(), "agent-2".to_string());
+        state
+            .connections
+            .insert("conn-sender".to_string(), target_writer);
+        let shared = Arc::new(Mutex::new(state));
+        let result = handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::Send(BridgetMessage::new(
+                "identité-écrasée-par-le-wrapper",
+                "agent-sender",
+                "mandat reçu sans activité émise",
+            )),
+            &shared,
+        );
+        assert!(matches!(result, Some(DaemonToWrapper::Ack { .. })));
+        let delivered = read_control(&mut target_reader);
+        assert!(
+            matches!(
+                delivered,
+                DaemonToWrapper::Deliver(ref message)
+                    if message.from == "agent-2" && message.to == "agent-sender"
+            ),
+            "trame reçue par la cible: {delivered:?}"
+        );
         assert_sender_last_seen(&mut shared.lock().unwrap(), false);
         let _ = std::fs::remove_file(config.db_path);
     }
