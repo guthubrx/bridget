@@ -8,19 +8,35 @@ use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+use uuid::Uuid;
 
-fn temporary_root(label: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("horloge système")
-        .as_nanos();
-    // Les sockets Unix comptent chaque octet du chemin : le dossier temporaire
-    // macOS peut déjà dépasser SUN_LEN avant même d'ajouter bridget.sock.
-    PathBuf::from(format!("/tmp/bgbi-{label}-{}-{nanos}", std::process::id()))
+/// Racine strictement possédée par un banc : même une panique libère ses
+/// artefacts, dont le `target/` privé peut peser plus d'un Gio.
+struct FixtureRoot(PathBuf);
+
+impl FixtureRoot {
+    fn new(label: &str) -> Self {
+        // Les sockets Unix comptent chaque octet du chemin : le dossier
+        // temporaire macOS peut déjà dépasser SUN_LEN avant bridget.sock.
+        let root = PathBuf::from(format!("/tmp/bgbi-{label}-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("créer la racine de fixture");
+        Self(root)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for FixtureRoot {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 fn repository_root() -> PathBuf {
@@ -150,15 +166,15 @@ fn status(binary: &Path, home: &Path) -> std::process::Output {
 
 #[test]
 fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
-    let root = temporary_root("seam");
-    let home = root.join("home");
-    let target = root.join("target");
+    let root = FixtureRoot::new("seam");
+    let home = root.path().join("home");
+    let target = root.path().join("target");
     fs::create_dir_all(&home).expect("home isolé");
 
     let old_build_id = "daemon-build-test";
     let new_build_id = "client-build-avance";
     let compiled = build_cli(&repository_root(), &target, old_build_id);
-    let daemon_binary = root.join("bridget-daemon");
+    let daemon_binary = root.path().join("bridget-daemon");
     copy_binary(&compiled, &daemon_binary);
 
     let daemon = DaemonGuard::start(&daemon_binary, &home);
@@ -200,7 +216,7 @@ fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
     // l'avancée de HEAD déjà vérifiée par build_identity.rs. Cette couture doit
     // alors alerter le CLI sans toucher au daemon encore en cours.
     let rebuilt = build_cli(&repository_root(), &target, new_build_id);
-    let client_binary = root.join("bridget-client-avance");
+    let client_binary = root.path().join("bridget-client-avance");
     copy_binary(&rebuilt, &client_binary);
     let different_build = status(&client_binary, &home);
     assert!(different_build.status.success());
@@ -226,5 +242,45 @@ fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
     assert_eq!(String::from_utf8_lossy(&different_build.stderr), expected);
 
     daemon.stop();
-    fs::remove_dir_all(root).expect("nettoyer le test de couture");
+}
+
+#[test]
+fn racines_de_fixture_sont_uniques_au_dela_du_pid() {
+    let first = FixtureRoot::new("unicite");
+    let second = FixtureRoot::new("unicite");
+    assert_ne!(
+        first.path(),
+        second.path(),
+        "deux fixtures ne peuvent pas partager une racine même sous le même PID"
+    );
+}
+
+#[test]
+fn racine_de_fixture_est_liberee_en_sortie_normale() {
+    let path = {
+        let fixture = FixtureRoot::new("normal");
+        fixture.path().to_path_buf()
+    };
+    assert!(
+        !path.exists(),
+        "la racine doit disparaître à la sortie normale: {}",
+        path.display()
+    );
+}
+
+#[test]
+fn racine_de_fixture_est_liberee_apres_panique() {
+    let mut observed = None;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let fixture = FixtureRoot::new("panique");
+        observed = Some(fixture.path().to_path_buf());
+        panic!("panique volontaire du témoin de nettoyage");
+    }));
+    assert!(result.is_err(), "la panique de contrôle doit être capturée");
+    let path = observed.expect("racine créée avant la panique");
+    assert!(
+        !path.exists(),
+        "la racine doit disparaître après panique: {}",
+        path.display()
+    );
 }
