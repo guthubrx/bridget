@@ -6,4 +6,3 @@
 3. Centraliser attestation et ouverture dans un helper recevant la même
    `MaicieConfig`.
 4. Rejouer les témoins, les mutants de couverture et les gates ciblés.
-
