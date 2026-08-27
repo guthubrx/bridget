@@ -112,6 +112,10 @@ where
 pub const CLIENT_CONTRACT_VERSION: u16 = 1;
 /// Version du contrat de service du guichet Maicie.
 pub const SERVICE_CONTRACT_VERSION: u16 = 1;
+/// Version requise uniquement lorsqu'une délégation transporte une cible de
+/// revue. Les autres opérations restent en v1 afin que `ServiceHello` et les
+/// clients historiques ne négocient pas une capacité qu'ils n'utilisent pas.
+pub const REVIEW_DELEGATE_CONTRACT_VERSION: u16 = 2;
 /// Version de l'extension de faits attestés pour la coordination active.
 ///
 /// Elle reste une capacité négociée du contrat de service v1 : les clients 015
@@ -300,6 +304,8 @@ pub enum ServiceRequestPayload {
     Delegate {
         goal: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        review_target: Option<ReviewTarget>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         explicit_target: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         required_tags: Vec<String>,
@@ -317,6 +323,22 @@ pub enum ServiceRequestPayload {
         objective_id: String,
         reason: String,
     },
+}
+
+impl ServiceRequestPayload {
+    /// Version minimale que le producteur doit annoncer pour cette charge.
+    ///
+    /// Le daemon valide séparément la paire version/charge : cette méthode
+    /// évite seulement que les producteurs CLI et MCP divergent.
+    pub fn required_contract_version(&self) -> u16 {
+        match self {
+            Self::Delegate {
+                review_target: Some(_),
+                ..
+            } => REVIEW_DELEGATE_CONTRACT_VERSION,
+            _ => SERVICE_CONTRACT_VERSION,
+        }
+    }
 }
 
 /// Déclaration de suite structurée : aucune valeur libre ne peut jouer le rôle
@@ -1865,6 +1887,53 @@ mod tests {
                 "{{\"objective_id\":\"objective-1\",\"delegation_id\":\"delegation-1\",\"delivery_hash\":\"{}\",\"in_reply_to\":\"message-1\"}}",
                 "0".repeat(64)
             )
+        );
+    }
+
+    #[test]
+    fn delegation_historique_reste_v1_et_cible_de_revue_exige_v2() {
+        let ordinary = ServiceRequestPayload::Delegate {
+            goal: "relire le lot".to_string(),
+            review_target: None,
+            explicit_target: None,
+            required_tags: Vec::new(),
+            duration: GuichetDurationClass::Courte,
+            suite: ServiceSuiteDeclaration::Aucune,
+            depends_on: Vec::new(),
+            references: Vec::new(),
+        };
+        assert_eq!(
+            ordinary.required_contract_version(),
+            SERVICE_CONTRACT_VERSION
+        );
+        assert!(
+            !serde_json::to_string(&ordinary)
+                .unwrap()
+                .contains("review_target")
+        );
+
+        let targeted = ServiceRequestPayload::Delegate {
+            goal: "relire le lot".to_string(),
+            review_target: Some(ReviewTarget {
+                target_ref: "origin/session-047-verdict-tete-reecrite".to_string(),
+                expected_head: "a".repeat(40),
+            }),
+            explicit_target: None,
+            required_tags: Vec::new(),
+            duration: GuichetDurationClass::Courte,
+            suite: ServiceSuiteDeclaration::Aucune,
+            depends_on: Vec::new(),
+            references: Vec::new(),
+        };
+        assert_eq!(
+            targeted.required_contract_version(),
+            REVIEW_DELEGATE_CONTRACT_VERSION
+        );
+        let wire = serde_json::to_string(&targeted).unwrap();
+        assert!(wire.contains(r#""target_ref":"origin/session-047-verdict-tete-reecrite""#));
+        assert_eq!(
+            serde_json::from_str::<ServiceRequestPayload>(&wire).unwrap(),
+            targeted
         );
     }
 

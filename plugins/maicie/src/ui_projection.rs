@@ -6,8 +6,10 @@
 
 use crate::config::{ConfigError, MaicieConfig};
 use crate::domain::{DecisionCoordination, Delegation, ObjectifCoordonne};
+use crate::review_continuity::StoredReviewVerdict;
 use crate::store::{MaicieStore, RemiseLocale, StoreError};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
@@ -26,6 +28,9 @@ pub struct UiObjectiveProjection {
     pub delegations: Vec<Delegation>,
     pub decisions: Vec<DecisionCoordination>,
     pub local_deliveries: Vec<RemiseLocale>,
+    /// Verdicts terminaux relus depuis les octets du guichet. Leur continuité
+    /// Git reste une observation de la surface consommatrice.
+    pub review_verdicts: Vec<StoredReviewVerdict>,
 }
 
 #[derive(Debug)]
@@ -54,11 +59,21 @@ pub fn read_ui_mission_projection_v1(
 ) -> Result<UiMissionProjectionV1, UiProjectionError> {
     let config = MaicieConfig::load(config_path).map_err(UiProjectionError::Config)?;
     let store = MaicieStore::open(&config.database_path).map_err(UiProjectionError::Store)?;
+    let mut verdicts_by_objective = BTreeMap::new();
+    for verdict in store.review_verdicts().map_err(UiProjectionError::Store)? {
+        verdicts_by_objective
+            .entry(verdict.objective_id)
+            .or_insert_with(Vec::new)
+            .push(verdict);
+    }
     let objectives = store
         .objective_snapshots(None)
         .map_err(UiProjectionError::Store)?
         .into_iter()
         .map(|snapshot| UiObjectiveProjection {
+            review_verdicts: verdicts_by_objective
+                .remove(&snapshot.objective.id)
+                .unwrap_or_default(),
             objective: snapshot.objective,
             delegations: snapshot.delegations,
             decisions: snapshot.decisions,
@@ -73,9 +88,7 @@ pub fn read_ui_mission_projection_v1(
 
 /// Pour l'instantané page : n'envoie que les objectifs encore vivants.
 /// L'historique `clos` reste dans le greffe ; la page ne l'affiche pas.
-pub fn retain_living_objectives(
-    mut projection: UiMissionProjectionV1,
-) -> UiMissionProjectionV1 {
+pub fn retain_living_objectives(mut projection: UiMissionProjectionV1) -> UiMissionProjectionV1 {
     use crate::domain::EtatObjectif;
     projection
         .objectives
@@ -108,6 +121,7 @@ mod tests {
             delegations: Vec::new(),
             decisions: Vec::new(),
             local_deliveries: Vec::new(),
+            review_verdicts: Vec::new(),
         }
     }
 
@@ -134,6 +148,7 @@ mod tests {
                     delegations: snapshot.delegations,
                     decisions: snapshot.decisions,
                     local_deliveries: snapshot.remises_locales,
+                    review_verdicts: Vec::new(),
                 })
                 .collect(),
         };
@@ -159,17 +174,23 @@ mod tests {
         };
         let filtered = retain_living_objectives(projection);
         assert_eq!(filtered.objectives.len(), 2);
-        assert!(filtered
-            .objectives
-            .iter()
-            .all(|item| item.objective.etat != EtatObjectif::Clos));
-        assert!(filtered
-            .objectives
-            .iter()
-            .any(|item| item.objective.but == living_but));
-        assert!(!filtered
-            .objectives
-            .iter()
-            .any(|item| item.objective.but == closed_but));
+        assert!(
+            filtered
+                .objectives
+                .iter()
+                .all(|item| item.objective.etat != EtatObjectif::Clos)
+        );
+        assert!(
+            filtered
+                .objectives
+                .iter()
+                .any(|item| item.objective.but == living_but)
+        );
+        assert!(
+            !filtered
+                .objectives
+                .iter()
+                .any(|item| item.objective.but == closed_but)
+        );
     }
 }

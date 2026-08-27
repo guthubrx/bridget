@@ -15,6 +15,7 @@ pub mod profiles;
 pub mod preuve;
 pub mod reconcile;
 pub mod review;
+pub mod review_continuity;
 pub mod review_git;
 pub mod routines;
 pub mod runtime;

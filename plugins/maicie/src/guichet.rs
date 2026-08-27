@@ -10,7 +10,8 @@ use super::{
 };
 use crate::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use bridget_transport::protocol::{
-    GuichetDurationClass, ReviewVerdictEvidence, ServiceSuiteDeclaration,
+    GuichetDurationClass, ReviewTarget, ReviewVerdictEvidence, ServiceRequestPayload,
+    ServiceSuiteDeclaration,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -78,6 +79,7 @@ pub struct DemandeDelegation {
     pub explicit_target: Option<String>,
     pub required_tags: Vec<String>,
     pub duration: ClasseDuree,
+    pub review_target: Option<ReviewTarget>,
     pub suite: SuiteObjective,
     pub depends_on: Vec<Uuid>,
     pub references: Vec<Uuid>,
@@ -183,6 +185,8 @@ struct DelegatePayload {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     required_tags: Vec<String>,
     duration: GuichetDurationClass,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    review_target: Option<ReviewTarget>,
     suite: ServiceSuiteDeclaration,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     depends_on: Vec<String>,
@@ -206,10 +210,18 @@ struct ObjectiveClosePayload {
 pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDomainError> {
     let wire: ServiceRequestWire = serde_json::from_slice(&claim.canonical_request)
         .map_err(|_| GuichetDomainError::InvalidEnvelope("JSON ou champs invalides"))?;
-    if wire.kind != "service_request" || wire.v != 1 || wire.to != "maicie" {
+    if wire.kind != "service_request" || wire.to != "maicie" {
         return Err(GuichetDomainError::InvalidEnvelope(
             "type, version ou cible invalide",
         ));
+    }
+    match (wire.v, wire.operation.as_str()) {
+        (1, _) | (2, "delegate") => {}
+        _ => {
+            return Err(GuichetDomainError::InvalidEnvelope(
+                "version incompatible avec l’opération",
+            ));
+        }
     }
     validate_identifier(&wire.issuer_scope)?;
     validate_identifier(&wire.request_id)?;
@@ -282,6 +294,30 @@ pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDoma
         "delegate" => {
             let payload: DelegatePayload = serde_json::from_value(wire.payload.clone())
                 .map_err(|_| GuichetDomainError::InvalidEnvelope("délégation invalide"))?;
+            match (wire.v, payload.review_target.as_ref()) {
+                (1, None) => {}
+                (2, Some(target)) if target.is_valid() => {}
+                (1, Some(_)) => {
+                    return Err(GuichetDomainError::InvalidEnvelope(
+                        "cible de revue interdite en version historique",
+                    ));
+                }
+                (2, None) => {
+                    return Err(GuichetDomainError::InvalidEnvelope(
+                        "cible de revue absente en version 2",
+                    ));
+                }
+                (2, Some(_)) => {
+                    return Err(GuichetDomainError::InvalidEnvelope(
+                        "cible de revue invalide",
+                    ));
+                }
+                _ => {
+                    return Err(GuichetDomainError::InvalidEnvelope(
+                        "version incompatible avec la délégation",
+                    ));
+                }
+            }
             if payload.goal.trim().is_empty() || payload.goal.len() > 16 * 1024 {
                 return Err(GuichetDomainError::InvalidEnvelope(
                     "but de délégation invalide",
@@ -336,12 +372,31 @@ pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDoma
                 GuichetDurationClass::Normale => ClasseDuree::Normale,
                 GuichetDurationClass::Longue => ClasseDuree::Longue,
             };
-            ensure_canonical(&claim.canonical_request, &wire, "delegate", &payload)?;
+            // La forme canonique appartient au contrat filaire public. Le
+            // type privé ci-dessus garde le décodage strict, mais son ordre de
+            // champs ne doit jamais créer une seconde canonisation.
+            let canonical_payload = ServiceRequestPayload::Delegate {
+                goal: payload.goal.clone(),
+                review_target: payload.review_target.clone(),
+                explicit_target: payload.explicit_target.clone(),
+                required_tags: payload.required_tags.clone(),
+                duration: payload.duration,
+                suite: payload.suite.clone(),
+                depends_on: payload.depends_on.clone(),
+                references: payload.references.clone(),
+            };
+            ensure_canonical(
+                &claim.canonical_request,
+                &wire,
+                "delegate",
+                &canonical_payload,
+            )?;
             RequeteGuichet::Delegate(DemandeDelegation {
                 goal: payload.goal,
                 explicit_target: payload.explicit_target,
                 required_tags: payload.required_tags,
                 duration,
+                review_target: payload.review_target,
                 suite,
                 depends_on,
                 references,
@@ -972,7 +1027,7 @@ fn ensure_canonical<T: Serialize>(
 ) -> Result<(), GuichetDomainError> {
     let canonical = serde_json::to_vec(&CanonicalServiceRequest {
         kind: "service_request",
-        v: 1,
+        v: wire.v,
         issuer_scope: &wire.issuer_scope,
         request_id: &wire.request_id,
         issued_at: wire.issued_at,
@@ -1027,9 +1082,17 @@ mod mutation_tests {
     }
 
     fn canonical<T: Serialize>(operation: &'static str, payload: &T) -> Vec<u8> {
+        canonical_version(1, operation, payload)
+    }
+
+    fn canonical_version<T: Serialize>(
+        version: u8,
+        operation: &'static str,
+        payload: &T,
+    ) -> Vec<u8> {
         serde_json::to_vec(&CanonicalServiceRequest {
             kind: "service_request",
-            v: 1,
+            v: version,
             issuer_scope: "scope-test",
             request_id: "request-test",
             issued_at: 1_000,
@@ -1039,6 +1102,77 @@ mod mutation_tests {
             payload,
         })
         .unwrap()
+    }
+
+    fn delegate_payload(review_target: Option<ReviewTarget>) -> ServiceRequestPayload {
+        ServiceRequestPayload::Delegate {
+            goal: "relire la tête gelée".to_string(),
+            review_target,
+            explicit_target: Some("reviewer".to_string()),
+            required_tags: vec!["review".to_string()],
+            duration: GuichetDurationClass::Normale,
+            suite: ServiceSuiteDeclaration::Aucune,
+            depends_on: Vec::new(),
+            references: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn spec_047_version_de_revue_ne_peut_pas_perdre_sa_cible() {
+        let target = ReviewTarget {
+            target_ref: "origin/session-047-verdict-tete-reecrite".to_string(),
+            expected_head: "a".repeat(40),
+        };
+        let modern_payload = delegate_payload(Some(target.clone()));
+        let modern = claim(
+            canonical_version(2, "delegate", &modern_payload),
+            1,
+            "token-modern",
+        );
+        let RequeteGuichet::Delegate(parsed) = parse_claim(&modern).unwrap().request else {
+            panic!("délégation moderne attendue")
+        };
+        assert_eq!(parsed.review_target, Some(target.clone()));
+
+        let legacy_with_target = claim(
+            canonical("delegate", &modern_payload),
+            1,
+            "token-legacy-target",
+        );
+        assert!(matches!(
+            parse_claim(&legacy_with_target),
+            Err(GuichetDomainError::InvalidEnvelope(
+                "cible de revue interdite en version historique"
+            ))
+        ));
+
+        let modern_without_target = delegate_payload(None);
+        let modern_without_target = claim(
+            canonical_version(2, "delegate", &modern_without_target),
+            1,
+            "token-modern-empty",
+        );
+        assert!(matches!(
+            parse_claim(&modern_without_target),
+            Err(GuichetDomainError::InvalidEnvelope(
+                "cible de revue absente en version 2"
+            ))
+        ));
+
+        let status = DelegationPayload {
+            delegation_id: Uuid::new_v4().to_string(),
+        };
+        let modern_status = claim(
+            canonical_version(2, "mission_status", &status),
+            1,
+            "token-modern-status",
+        );
+        assert!(matches!(
+            parse_claim(&modern_status),
+            Err(GuichetDomainError::InvalidEnvelope(
+                "version incompatible avec l’opération"
+            ))
+        ));
     }
 
     #[test]

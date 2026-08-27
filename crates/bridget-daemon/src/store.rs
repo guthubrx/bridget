@@ -1907,6 +1907,7 @@ mod tests {
         first.operation = ServiceRequestOperation::Delegate;
         first.payload = ServiceRequestPayload::Delegate {
             goal: "déléguer sans rafraîchir les droits".to_string(),
+            review_target: None,
             explicit_target: None,
             required_tags: Vec::new(),
             duration: bridget_transport::protocol::GuichetDurationClass::Courte,

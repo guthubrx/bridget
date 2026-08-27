@@ -5,9 +5,8 @@ use bridget_core::{BridgetMessage, router::validate_agent_name};
 use bridget_transport::protocol::{
     AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole,
     GuichetDurationClass, IdempotencyIssue, LedgerMessage, LedgerScope, PresenceMode, RequestInfo,
-    ReviewTarget, ReviewVerdict, ReviewVerdictEvidence, RuntimeSource, SERVICE_CONTRACT_VERSION,
-    ServiceRequestOperation, ServiceRequestPayload, ServiceSuiteDeclaration, decode, encode,
-    is_canonical_git_sha,
+    ReviewTarget, ReviewVerdict, ReviewVerdictEvidence, RuntimeSource, ServiceRequestOperation,
+    ServiceRequestPayload, ServiceSuiteDeclaration, decode, encode, is_canonical_git_sha,
 };
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::fmt::Write as _;
@@ -1300,10 +1299,16 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
                 crate::mcp::issuer_scope(&scope_identity),
             )
         });
-    if kind != "delivery-report"
-        && (verdict.is_some() || review_ref.is_some() || expected_head.is_some())
+    if kind != "delivery-report" && verdict.is_some() {
+        return Err("--verdict est réservé à delivery-report".to_string());
+    }
+    if !matches!(kind, "delivery-report" | "delegate")
+        && (review_ref.is_some() || expected_head.is_some())
     {
-        return Err("les options de verdict sont réservées à delivery-report".to_string());
+        return Err(
+            "--review-ref et --expected-head sont réservés à delivery-report ou delegate"
+                .to_string(),
+        );
     }
     let (operation, payload) = match kind {
         "delivery-report" => {
@@ -1340,6 +1345,7 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
             },
         ),
         "delegate" => {
+            let review_target = parse_review_target(review_ref, expected_head)?;
             let duration = match duration.as_deref().unwrap_or("normale") {
                 "courte" => GuichetDurationClass::Courte,
                 "normale" => GuichetDurationClass::Normale,
@@ -1354,6 +1360,7 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
                 ServiceRequestOperation::Delegate,
                 ServiceRequestPayload::Delegate {
                     goal: goal.ok_or_else(|| "--goal est requis".to_string())?,
+                    review_target,
                     explicit_target,
                     required_tags,
                     duration,
@@ -1378,8 +1385,9 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
         ),
         _ => return Err(format!("type de dépôt fermé inconnu: {kind}")),
     };
+    let version = payload.required_contract_version();
     Ok(WrapperToDaemon::ServiceRequest {
-        version: SERVICE_CONTRACT_VERSION,
+        version,
         issuer_scope,
         request_id,
         issued_at,
@@ -1395,11 +1403,10 @@ fn observe_review_verdict(
     review_ref: Option<String>,
     expected_head: Option<String>,
 ) -> Result<Option<ReviewVerdictEvidence>, String> {
-    let (verdict, target_ref, expected_head) = match (verdict, review_ref, expected_head) {
-        (None, None, None) => return Ok(None),
-        (Some(verdict), Some(target_ref), Some(expected_head)) => {
-            (verdict, target_ref, expected_head)
-        }
+    let review_target = parse_review_target(review_ref, expected_head)?;
+    let (verdict, target) = match (verdict, review_target) {
+        (None, None) => return Ok(None),
+        (Some(verdict), Some(target)) => (verdict, target),
         _ => {
             return Err(
                 "--verdict, --review-ref et --expected-head doivent être fournis ensemble"
@@ -1416,16 +1423,7 @@ fn observe_review_verdict(
             return Err("--verdict attend approve|approve_with_changes|amender|stop".to_string());
         }
     };
-    let target = ReviewTarget {
-        target_ref,
-        expected_head,
-    };
-    let (remote, branch) = target
-        .remote_and_branch()
-        .ok_or_else(|| "--review-ref attend <remote>/<branche> valide".to_string())?;
-    if !is_canonical_git_sha(&target.expected_head) {
-        return Err("--expected-head attend exactement 40 hexadécimaux minuscules".to_string());
-    }
+    let (remote, branch) = target.remote_and_branch().expect("cible déjà validée");
 
     let _ = git_stdout(&["remote", "get-url", remote], "remote de revue")?;
     let measured_head = git_stdout(&["rev-parse", "--verify", "HEAD^{commit}"], "HEAD")?;
@@ -1466,6 +1464,31 @@ fn observe_review_verdict(
         measured_head,
         observed_target_head,
     }))
+}
+
+fn parse_review_target(
+    review_ref: Option<String>,
+    expected_head: Option<String>,
+) -> Result<Option<ReviewTarget>, String> {
+    let target = match (review_ref, expected_head) {
+        (None, None) => return Ok(None),
+        (Some(target_ref), Some(expected_head)) => ReviewTarget {
+            target_ref,
+            expected_head,
+        },
+        _ => {
+            return Err(
+                "--review-ref et --expected-head doivent être fournis ensemble".to_string(),
+            );
+        }
+    };
+    if target.remote_and_branch().is_none() {
+        return Err("--review-ref attend <remote>/<branche> valide".to_string());
+    }
+    if !is_canonical_git_sha(&target.expected_head) {
+        return Err("--expected-head attend exactement 40 hexadécimaux minuscules".to_string());
+    }
+    Ok(Some(target))
 }
 
 fn git_stdout(arguments: &[&str], observation: &str) -> Result<String, String> {
@@ -3043,6 +3066,13 @@ fn parse_directory_args(
     Ok(parsed)
 }
 
+fn daemon_status_or_exit(command: &str, config: &DaemonConfig) -> daemon::DaemonStatus {
+    daemon::get_status(config).unwrap_or_else(|error| {
+        eprintln!("bridget {command}: {error}");
+        std::process::exit(1);
+    })
+}
+
 fn cmd_agents(args: &[String]) {
     let parsed = parse_directory_args("agents", args, true).unwrap_or_else(|error| {
         eprintln!("bridget {error}");
@@ -3051,7 +3081,7 @@ fn cmd_agents(args: &[String]) {
     });
 
     let config = DaemonConfig::default();
-    let mut status = daemon::get_status(&config);
+    let mut status = daemon_status_or_exit("agents", &config);
     if let Some(domain) = &parsed.domain {
         status
             .agents
@@ -3100,7 +3130,7 @@ fn cmd_who(args: &[String]) {
         std::process::exit(2);
     });
     let config = DaemonConfig::default();
-    let status = daemon::get_status(&config);
+    let status = daemon_status_or_exit("who", &config);
     if !status.running {
         eprintln!("daemon non démarré (socket absente)");
         std::process::exit(1);
@@ -3526,7 +3556,7 @@ fn cmd_cleanup(args: &[String]) {
 
 fn cmd_status() {
     let config = DaemonConfig::default();
-    let status = daemon::get_status(&config);
+    let status = daemon_status_or_exit("status", &config);
     println!(
         "Daemon: {}",
         if status.running {
@@ -4669,6 +4699,7 @@ mod hook_tests {
 #[cfg(test)]
 mod idempotency_projection_tests {
     use super::*;
+    use bridget_transport::protocol::{REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION};
     use rusqlite::params;
     use std::os::unix::net::UnixListener;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -5014,6 +5045,73 @@ mod idempotency_projection_tests {
     }
 
     #[test]
+    fn depot_delegate_versionne_atomiquement_sa_cible_de_revue() {
+        let ordinary = [
+            "deposer",
+            "delegate",
+            "--from",
+            "jc2",
+            "--goal",
+            "relire le lot",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        assert!(matches!(
+            parse_guichet_deposit(&ordinary).unwrap(),
+            WrapperToDaemon::ServiceRequest {
+                version: SERVICE_CONTRACT_VERSION,
+                payload: ServiceRequestPayload::Delegate {
+                    review_target: None,
+                    ..
+                },
+                ..
+            }
+        ));
+
+        let targeted = [
+            "deposer",
+            "delegate",
+            "--from",
+            "jc2",
+            "--goal",
+            "relire le lot",
+            "--review-ref",
+            "origin/session-047-verdict-tete-reecrite",
+            "--expected-head",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        assert!(matches!(
+            parse_guichet_deposit(&targeted).unwrap(),
+            WrapperToDaemon::ServiceRequest {
+                version: REVIEW_DELEGATE_CONTRACT_VERSION,
+                payload: ServiceRequestPayload::Delegate {
+                    review_target: Some(ReviewTarget { target_ref, expected_head }),
+                    ..
+                },
+                ..
+            } if target_ref == "origin/session-047-verdict-tete-reecrite"
+                && expected_head == "a".repeat(40)
+        ));
+
+        for missing in ["--review-ref", "--expected-head"] {
+            let mut incomplete = targeted.clone();
+            let position = incomplete
+                .iter()
+                .position(|value| value == missing)
+                .unwrap();
+            incomplete.drain(position..=position + 1);
+            assert!(
+                parse_guichet_deposit(&incomplete).is_err(),
+                "option isolée acceptée : {missing}"
+            );
+        }
+    }
+
+    #[test]
     fn depot_guichet_refuse_les_formes_ouvertes_ou_incompletes() {
         let hash = "0".repeat(64);
         let missing_link = vec![
@@ -5329,7 +5427,7 @@ mod idempotency_projection_tests {
             ..DaemonConfig::default()
         };
         // Daemon injoignable → aucune attestation, donc aucun compte.
-        let status = daemon::get_status(&config);
+        let status = daemon::get_status(&config).expect("statut hors ligne observable");
         assert!(
             status.message_count.is_none(),
             "sans attestation du daemon, aucun compte ne doit être rendu"

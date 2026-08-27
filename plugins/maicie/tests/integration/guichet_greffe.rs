@@ -9,8 +9,10 @@ use maicie::domain::guichet::{RequeteGuichet, parse_claim};
 use maicie::domain::{ClasseDuree, EtatDelegation, EtatObjectif, MotifRefusGreffe};
 use maicie::store::{GuichetCommitPhase, MaicieStore, SCHEMA_VERSION};
 use rusqlite::{Connection, ErrorCode};
+use serde_json::{Value, json};
 use std::fs;
-use std::io::Read;
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -20,6 +22,90 @@ use uuid::Uuid;
 
 fn root(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("maicie-guichet-graft-{label}-{}", Uuid::new_v4()))
+}
+
+fn git(repository: &Path, arguments: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(arguments)
+        .env("LC_ALL", "C")
+        .env("GIT_AUTHOR_NAME", "Fixture")
+        .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Fixture")
+        .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {arguments:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn start_identity_then_unavailable(socket: &Path) -> thread::JoinHandle<()> {
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let socket = socket.to_owned();
+    let server = thread::spawn(move || {
+        let _ = fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        ready_tx.send(()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let (mut reader, mut writer) = split(stream);
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"RoleHandshake","role":"client"})
+        );
+        write_json(&mut writer, json!({"type":"RoleAccepted","role":"client"}));
+        assert_eq!(read_json(&mut reader)["type"], "ClientHello");
+        write_json(
+            &mut writer,
+            json!({
+                "type":"ClientWelcome",
+                "version":1,
+                "horizon_secs":3600,
+                "issued_at_tolerance_secs":30,
+                "capabilities":["send_idempotent","lookup"]
+            }),
+        );
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"DaemonIdentityRequest"})
+        );
+        drop(listener);
+        write_json(
+            &mut writer,
+            json!({
+                "type":"DaemonIdentityReport",
+                "host":bridget_core::local_host(),
+                "db_path":"/var/lib/bridget/bridget.db",
+                "instance_id":"daemon-status-review"
+            }),
+        );
+    });
+    ready_rx.recv().unwrap();
+    server
+}
+
+fn split(stream: UnixStream) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
+    (
+        BufReader::new(stream.try_clone().unwrap()),
+        BufWriter::new(stream),
+    )
+}
+
+fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+fn write_json(writer: &mut BufWriter<UnixStream>, value: Value) {
+    serde_json::to_writer(&mut *writer, &value).unwrap();
+    writer.write_all(b"\n").unwrap();
+    writer.flush().unwrap();
 }
 
 fn durations() -> DurationClasses {
@@ -64,6 +150,18 @@ fn seed(database: &Path) -> maicie::app::DelegationCreated {
 }
 
 fn seed_review(database: &Path, key: &str) -> maicie::app::DelegationCreated {
+    let target = ReviewTarget {
+        target_ref: "origin/fix/review".to_string(),
+        expected_head: "1".repeat(40),
+    };
+    seed_review_target(database, key, &target)
+}
+
+fn seed_review_target(
+    database: &Path,
+    key: &str,
+    target: &ReviewTarget,
+) -> maicie::app::DelegationCreated {
     let mut store = MaicieStore::open(database).unwrap();
     let candidates = vec![DelegationCandidate {
         name: "prospective".to_string(),
@@ -71,10 +169,6 @@ fn seed_review(database: &Path, key: &str) -> maicie::app::DelegationCreated {
         available: true,
         dnd: false,
     }];
-    let target = ReviewTarget {
-        target_ref: "origin/fix/review".to_string(),
-        expected_head: "1".repeat(40),
-    };
     let request = DelegateRequest {
         goal: "relire la tête gelée",
         explicit_target: Some("prospective"),
@@ -82,7 +176,7 @@ fn seed_review(database: &Path, key: &str) -> maicie::app::DelegationCreated {
         duration: ClasseDuree::Normale,
         reply: true,
         constat_id: None,
-        review_target: Some(&target),
+        review_target: Some(target),
         suite: maicie::domain::SuiteObjective::Aucune,
         depends_on: &[],
         references: &[],
@@ -425,7 +519,142 @@ fn verdict_concordant_termine_la_revue_sans_clore_l_objectif() {
     assert_ne!(snapshot.objective.etat, EtatObjectif::Clos);
     assert_eq!(snapshot.delegations[0].etat, EtatDelegation::Terminee);
     assert_eq!(snapshot.decisions.len(), 1);
+    let verdicts = store
+        .review_verdicts_for(created.objective_id)
+        .expect("le verdict doit être relu depuis sa réponse terminale");
+    assert_eq!(verdicts.len(), 1);
+    assert_eq!(verdicts[0].delegation_id, created.delegation_id);
+    assert_eq!(verdicts[0].evidence.target_ref, "origin/fix/review");
+    assert_eq!(verdicts[0].evidence.measured_head, head);
     drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn status_alerte_quand_le_sha_juge_n_est_plus_ancetre_de_la_tete_distante() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = root("status-review-rewritten");
+    let remote = root.join("remote.git");
+    let repository = root.join("repository");
+    let database = root.join("maicie.sqlite3");
+    let config = root.join("maicie.json");
+    let socket = std::env::temp_dir().join(format!("mc-r47-{}.sock", Uuid::new_v4()));
+    fs::create_dir_all(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    git(&root, &["init", "--bare", "-q", remote.to_str().unwrap()]);
+    git(
+        &root,
+        &[
+            "init",
+            "-q",
+            "-b",
+            "fix/review",
+            repository.to_str().unwrap(),
+        ],
+    );
+    git(
+        &repository,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    fs::write(repository.join("value.txt"), "base\n").unwrap();
+    git(&repository, &["add", "value.txt"]);
+    git(&repository, &["commit", "-qm", "base"]);
+    let base = git(&repository, &["rev-parse", "HEAD"]);
+    fs::write(repository.join("value.txt"), "jugé\n").unwrap();
+    git(&repository, &["commit", "-qam", "jugé"]);
+    let judged = git(&repository, &["rev-parse", "HEAD"]);
+    git(
+        &repository,
+        &["push", "-q", "origin", "HEAD:refs/heads/fix/review"],
+    );
+
+    let target = ReviewTarget {
+        target_ref: "origin/fix/review".to_string(),
+        expected_head: judged.clone(),
+    };
+    let created = seed_review_target(&database, "status-review-rewritten", &target);
+    let claim = review_claim(
+        "request-status-review-rewritten",
+        &created,
+        &target.target_ref,
+        &judged,
+        &judged,
+        &judged,
+    );
+    let mut store = MaicieStore::open(&database).unwrap();
+    process_guichet_claim(&mut store, &claim, "response-status-review", 1_010).unwrap();
+    drop(store);
+
+    git(&repository, &["reset", "--hard", &base]);
+    fs::write(repository.join("value.txt"), "frère\n").unwrap();
+    git(&repository, &["add", "value.txt"]);
+    git(&repository, &["commit", "-qm", "frère"]);
+    let rewritten = git(&repository, &["rev-parse", "HEAD"]);
+    git(
+        &repository,
+        &[
+            "push",
+            "-q",
+            "--force",
+            "origin",
+            "HEAD:refs/heads/fix/review",
+        ],
+    );
+    fs::write(
+        &config,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "bridget_socket": &socket,
+            "database_path": database,
+            "durations": {"short_secs": 30, "normal_secs": 60, "long_secs": 90},
+            "review_project": {
+                "project_id": "bridget",
+                "repository_root": repository,
+                "referent_id": "referent-fixture"
+            },
+            "profiles": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let identity_server = start_identity_then_unavailable(&socket);
+    let json_output = Command::new(env!("CARGO_BIN_EXE_maicie"))
+        .args(["status", "--config", config.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    identity_server.join().unwrap();
+    assert!(
+        json_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&json_output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    let observation = value["review_continuity"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["delegation_id"] == created.delegation_id.to_string())
+        .unwrap();
+    assert_eq!(observation["state"], "rewritten");
+    assert_eq!(observation["reviewed_head"], judged);
+    assert_eq!(observation["observed_head"], rewritten);
+
+    let identity_server = start_identity_then_unavailable(&socket);
+    let plain_output = Command::new(env!("CARGO_BIN_EXE_maicie"))
+        .args(["status", "--config", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    identity_server.join().unwrap();
+    assert!(plain_output.status.success());
+    let plain = String::from_utf8(plain_output.stdout).unwrap();
+    assert!(plain.contains("ALERTE_VERDICT_REECRIT"), "{plain}");
+    assert!(
+        plain.contains(&created.delegation_id.to_string()),
+        "{plain}"
+    );
+    let _ = fs::remove_file(socket);
     fs::remove_dir_all(root).unwrap();
 }
 

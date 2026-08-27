@@ -15,6 +15,9 @@ use bridget_transport::{
     WrapperToDaemon,
 };
 use log::{debug, error, info, warn};
+use maicie::review_continuity::{
+    ReviewContinuityObservation, ReviewContinuityState, observe_delegation_review,
+};
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -131,6 +134,7 @@ fn managed_resume_context(
                         "Instruction : {}",
                         resume_card_external_text(&mission.instruction)
                     ),
+                    render_resume_review(&mission.review_continuity),
                 ]),
                 ResumeStance::Waiting { mission, reason } => {
                     // Exhaustif sur ResumeWaitReason — pas de catch-all header.
@@ -171,6 +175,7 @@ fn managed_resume_context(
                             "Instruction d'origine (NE PAS RELANCER) : {}",
                             resume_card_external_text(&mission.instruction)
                         ),
+                        render_resume_review(&mission.review_continuity),
                     ]);
                 }
                 ResumeStance::Absent => lines.push(format!(
@@ -234,6 +239,36 @@ struct ResumeMission {
     delegation_state: String,
     local_delivery: String,
     instruction: String,
+    review_continuity: ReviewContinuityObservation,
+}
+
+fn render_resume_review(observation: &ReviewContinuityObservation) -> String {
+    let target = resume_card_external_text(observation.target_ref.as_deref().unwrap_or("absente"));
+    let reviewed =
+        resume_card_external_text(observation.reviewed_head.as_deref().unwrap_or("absent"));
+    let observed =
+        resume_card_external_text(observation.observed_head.as_deref().unwrap_or("absente"));
+    match observation.state {
+        ReviewContinuityState::TargetAbsent => {
+            "Suivi du verdict : inobservable (cible Git typée absente).".to_string()
+        }
+        ReviewContinuityState::VerdictAbsent => {
+            format!("Suivi du verdict : en attente de dépôt typé pour {target}@{reviewed}.")
+        }
+        ReviewContinuityState::StillAncestor => format!(
+            "Suivi du verdict : objet jugé {reviewed} toujours ancêtre de {target}@{observed}."
+        ),
+        ReviewContinuityState::Rewritten => format!(
+            "ALERTE VERDICT RÉÉCRIT : objet jugé {reviewed} non ancêtre de {target}@{observed}."
+        ),
+        ReviewContinuityState::Unobservable => format!(
+            "Suivi du verdict : inobservable ({}), cible={target}, sha_jugé={reviewed}.",
+            observation
+                .reason
+                .map(|reason| reason.as_str())
+                .unwrap_or("motif_absent")
+        ),
+    }
 }
 
 /// Motif d'attente — **exhaustif**. Aucun bras `_` dans la consigne ni
@@ -433,6 +468,10 @@ fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, Stri
             config.display()
         ));
     }
+    let review_repository = maicie::config::MaicieConfig::load(&config)
+        .map_err(|error| error.to_string())?
+        .review_project
+        .map(|project| project.repository_root);
     let projection = maicie::ui_projection::read_ui_mission_projection_v1(&config)
         .map_err(|error| error.to_string())?;
     let ranking = |item: &maicie::ui_projection::UiObjectiveProjection,
@@ -489,6 +528,13 @@ fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, Stri
             .map(|delivery| resume_fact_label(&delivery.state))
             .unwrap_or_else(|| "inconnue".to_string()),
         instruction: delegation.instruction.clone(),
+        review_continuity: observe_delegation_review(
+            review_repository.as_deref(),
+            delegation,
+            item.review_verdicts
+                .iter()
+                .find(|verdict| verdict.delegation_id == delegation.id),
+        ),
     };
     if resume_mission_actionable(&item.objective.etat, &delegation.etat) {
         Ok(ResumeStance::Actionable(mission))
@@ -4178,12 +4224,13 @@ fn codex_model_from_args(args: &[String]) -> Option<String> {
 mod prompt_tests {
     use super::{
         codex_resume_bootstrap, interactive_bridget_prompt, is_protected_principal_checkout,
-        managed_resume_context, prepare_codex_agent_args,
+        managed_resume_context, prepare_codex_agent_args, render_resume_review,
     };
     use bridget_transport::protocol::ReviewTarget;
     use maicie::app::{DelegateRequest, DelegationCandidate, close, delegate};
     use maicie::config::DurationClasses;
     use maicie::domain::ClasseDuree;
+    use maicie::review_continuity::{ReviewContinuityObservation, ReviewContinuityState};
     use maicie::store::MaicieStore;
     use std::fs;
     use std::path::PathBuf;
@@ -4556,6 +4603,10 @@ mod prompt_tests {
         );
         assert!(context.contains("branche=resume-wt"), "{context}");
         assert!(context.contains(" M tracked.txt"));
+        assert!(
+            context.contains("Suivi du verdict : en attente de dépôt typé"),
+            "la carte réelle doit distinguer le verdict absent d'un état vert: {context}"
+        );
         assert!(context.contains("lis ton diff, committe"));
         assert!(context.contains("reprends la mission"), "{context}");
         assert!(
@@ -4568,6 +4619,27 @@ mod prompt_tests {
             "worktree lié ne doit pas déclencher la règle 6: {context}"
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn carte_de_reprise_nomme_la_reecriture_du_sha_juge() {
+        let judged = "1".repeat(40);
+        let observed = "2".repeat(40);
+        let rendered = render_resume_review(&ReviewContinuityObservation {
+            delegation_id: uuid::Uuid::new_v4(),
+            state: ReviewContinuityState::Rewritten,
+            target_ref: Some("origin/session-047".to_string()),
+            reviewed_head: Some(judged.clone()),
+            observed_head: Some(observed.clone()),
+            verdict: None,
+            reason: None,
+        });
+        assert_eq!(
+            rendered,
+            format!(
+                "ALERTE VERDICT RÉÉCRIT : objet jugé {judged} non ancêtre de origin/session-047@{observed}."
+            )
+        );
     }
 
     #[test]

@@ -127,16 +127,18 @@ pub fn collect_snapshot(
     // La flotte décrite doit être celle du daemon interrogé. Tant que sa base
     // n'est pas la nôtre, la trace de reprise locale décrit une AUTRE flotte :
     // on ne la lit pas, et la carte dit pourquoi.
-    let recovery_losses = match recovery_trace_scope(
-        status.daemon_host.as_deref(),
-        status.daemon_db_path.as_deref(),
-        &crate::build_info::local_host(),
-        &db_path,
-    ) {
-        Ok(()) => collect_recovery_losses(&db_path),
-        Err(motif) => Err(motif),
+    let recovery_losses = match &status {
+        Ok(status) => match recovery_trace_scope(
+            status.daemon_host.as_deref(),
+            status.daemon_db_path.as_deref(),
+            &crate::build_info::local_host(),
+            &db_path,
+        ) {
+            Ok(()) => collect_recovery_losses(&db_path),
+            Err(motif) => Err(motif),
+        },
+        Err(error) => Err(format!("statut daemon indisponible: {error}")),
     };
-    let status = Ok(status);
 
     let (open_requests, recent_messages) = collect_ledger(config);
 
@@ -1285,6 +1287,19 @@ mod tests {
             !card.contains("inventé") && !card.contains("/tmp/bridget.sock"),
             "pas de valeur inventée: {card}"
         );
+    }
+
+    #[test]
+    fn sonde_identite_indisponible_ne_devient_pas_absence_d_agents() {
+        let mut snapshot = base_snapshot(SystemTime::UNIX_EPOCH + Duration::from_secs(10));
+        snapshot.status =
+            Err("identité du daemon indisponible: délai de lecture de 2 s dépassé".to_string());
+
+        let card = render_card(&snapshot);
+        assert!(card.contains("daemon_en_ligne: false"));
+        assert!(card.contains("identité du daemon indisponible"));
+        assert!(card.contains("délai de lecture de 2 s dépassé"));
+        assert!(!card.contains("(aucun agent connecté)"));
     }
 
     #[test]
