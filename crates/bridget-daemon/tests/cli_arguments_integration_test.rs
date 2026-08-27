@@ -1,7 +1,12 @@
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 fn fixture_root(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -17,9 +22,100 @@ fn run_cli(home: &Path, args: &[&str]) -> Output {
         .env_clear()
         .env("HOME", home)
         .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("BRIDGET_AGENT_NAME", "probe")
         .stdin(Stdio::null())
         .output()
         .expect("exécuter le vrai binaire bridget")
+}
+
+fn short_message_fixture_root() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "b41-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4().simple()
+    ))
+}
+
+fn capture_one_message(
+    listener: UnixListener,
+    stop: mpsc::Receiver<()>,
+) -> thread::JoinHandle<Option<String>> {
+    thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        loop {
+            if stop.try_recv().is_ok() {
+                return None;
+            }
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(1)))
+                        .unwrap();
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut register = String::new();
+                    reader.read_line(&mut register).unwrap();
+                    assert!(register.contains("\"type\":\"Register\""));
+                    writeln!(stream, "{{\"type\":\"Registered\",\"name\":\"probe\"}}").unwrap();
+                    stream.flush().unwrap();
+                    let mut message = String::new();
+                    reader.read_line(&mut message).unwrap();
+                    writeln!(stream, "{{\"type\":\"Ack\",\"id\":\"probe-ack\"}}").unwrap();
+                    stream.flush().unwrap();
+                    return Some(message);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("accepter la connexion CLI: {error}"),
+            }
+        }
+    })
+}
+
+fn run_message_cli(args: &[&str]) -> (Output, Option<String>, bool, bool) {
+    let root = short_message_fixture_root();
+    let cache = root.join(".cache/bridget");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(cache.join("last-sender-probe"), "destinataire\n").unwrap();
+    let listener = UnixListener::bind(cache.join("bridget.sock")).unwrap();
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let capture = capture_one_message(listener, stop_rx);
+
+    let output = run_cli(&root, args);
+    let _ = stop_tx.send(());
+    let serialized_message = capture.join().unwrap();
+    let pid_exists = cache.join("bridget.pid").exists();
+    let database_exists = cache.join("bridget.db").exists();
+    fs::remove_dir_all(&root).unwrap();
+    (output, serialized_message, pid_exists, database_exists)
+}
+
+fn assert_command_value_rejected(command: &str, option: &str, invalid_value: Option<&str>) {
+    let mut args = match command {
+        "send" => vec!["send", "--to", "destinataire"],
+        "reply" => vec!["reply"],
+        _ => panic!("commande de fixture inconnue: {command}"),
+    };
+    if let Some(value) = invalid_value {
+        args.extend([option, value, "message"]);
+    } else {
+        args.extend(["message", option]);
+    }
+    let (output, serialized_message, pid_exists, database_exists) = run_message_cli(&args);
+
+    assert!(
+        serialized_message.is_none(),
+        "{command} {option}: la valeur invalide a laissé partir {serialized_message:?}"
+    );
+    assert_eq!(output.status.code(), Some(2), "sortie réelle: {output:?}");
+    assert!(output.stdout.is_empty(), "stdout inattendu: {output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(option), "option absente de {stderr}");
+    if let Some(value) = invalid_value {
+        assert!(stderr.contains(value), "valeur absente de {stderr}");
+    }
+    assert!(!pid_exists, "la validation ne doit pas créer le PID file");
+    assert!(!database_exists, "la validation ne doit pas créer la base");
 }
 
 #[test]
@@ -44,6 +140,85 @@ fn daemon_stop_est_refuse_avant_tout_effet_de_bord() {
     assert!(!pid_exists, "la validation ne doit pas créer le PID file");
     assert!(!socket_exists, "la validation ne doit pas créer la socket");
     assert!(!database_exists, "la validation ne doit pas créer la base");
+}
+
+#[test]
+fn send_refuse_un_timeout_invalide_avant_tout_effet_de_bord() {
+    for value in [Some("abc"), Some("0"), Some("18446744073709551616"), None] {
+        assert_command_value_rejected("send", "--timeout", value);
+    }
+}
+
+#[test]
+fn reply_refuse_un_timeout_invalide_avant_de_lire_son_etat() {
+    for value in [Some("abc"), Some("0"), Some("18446744073709551616"), None] {
+        assert_command_value_rejected("reply", "--timeout", value);
+    }
+}
+
+#[test]
+fn send_refuse_des_hops_invalides_avant_tout_effet_de_bord() {
+    for value in [Some("abc"), Some("0"), Some("-1"), Some("2147483648"), None] {
+        assert_command_value_rejected("send", "--hops", value);
+    }
+}
+
+#[test]
+fn reply_refuse_des_hops_invalides_avant_de_lire_son_etat() {
+    for value in [Some("abc"), Some("0"), Some("-1"), Some("2147483648"), None] {
+        assert_command_value_rejected("reply", "--hops", value);
+    }
+}
+
+#[test]
+fn reply_refuse_les_valeurs_invalides_sans_dernier_expediteur() {
+    let root = fixture_root("reply-sans-expediteur");
+    fs::create_dir_all(root.join(".cache/bridget")).unwrap();
+
+    let outputs = ["--timeout", "--hops"]
+        .map(|option| (option, run_cli(&root, &["reply", option, "abc", "message"])));
+    fs::remove_dir_all(&root).unwrap();
+
+    for (option, output) in outputs {
+        assert_eq!(output.status.code(), Some(2), "sortie réelle: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(option), "option absente de {stderr}");
+    }
+}
+
+#[test]
+fn send_et_reply_conservent_les_valeurs_numeriques_valides() {
+    for args in [
+        vec![
+            "send",
+            "--to",
+            "destinataire",
+            "--reply",
+            "--timeout",
+            "9",
+            "--hops",
+            "2",
+            "message",
+        ],
+        vec![
+            "reply",
+            "--reply",
+            "--timeout",
+            "9",
+            "--hops",
+            "2",
+            "message",
+        ],
+    ] {
+        let (output, message, pid_exists, database_exists) = run_message_cli(&args);
+        assert!(output.status.success(), "sortie réelle: {output:?}");
+        let message: serde_json::Value =
+            serde_json::from_str(message.as_deref().expect("message sérialisé")).unwrap();
+        assert_eq!(message["reply_timeout"], 9);
+        assert_eq!(message["hops"], 2);
+        assert!(!pid_exists, "la commande ne doit pas créer le PID file");
+        assert!(!database_exists, "la commande ne doit pas créer la base");
+    }
 }
 
 #[test]

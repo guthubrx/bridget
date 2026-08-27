@@ -1014,18 +1014,14 @@ fn cmd_send(args: &[String]) {
             "--reply" => {
                 reply = true;
             }
-            "--timeout" => {
-                i += 1;
-                if i < args.len() {
-                    timeout_secs = args[i].parse().ok();
-                }
-            }
-            "--hops" => {
-                i += 1;
-                if i < args.len() {
-                    hops = args[i].parse().unwrap_or(4);
-                }
-            }
+            "--timeout" => match positive_integer_option(args, &mut i, "--timeout") {
+                Ok(value) => timeout_secs = Some(value),
+                Err(error) => exit_argument_error(&error),
+            },
+            "--hops" => match positive_integer_option(args, &mut i, "--hops") {
+                Ok(value) => hops = value,
+                Err(error) => exit_argument_error(&error),
+            },
             "--id" => match option_value(args, &mut i, "--id") {
                 Ok(value) => id = Some(value),
                 Err(error) => send_usage_error(&error),
@@ -1148,6 +1144,20 @@ fn option_value(args: &[String], index: &mut usize, option: &str) -> Result<Stri
         .cloned()
         .filter(|value| !value.starts_with("--"))
         .ok_or_else(|| format!("{option} requiert une valeur"))
+}
+
+fn positive_integer_option<T>(args: &[String], index: &mut usize, option: &str) -> Result<T, String>
+where
+    T: std::str::FromStr + PartialOrd + From<u8>,
+{
+    let value = option_value(args, index, option)?;
+    let invalid =
+        || format!("{option}: valeur « {value} » invalide (entier strictement positif attendu)");
+    let parsed = value.parse::<T>().map_err(|_| invalid())?;
+    if parsed <= T::from(0) {
+        return Err(invalid());
+    }
+    Ok(parsed)
 }
 
 fn cmd_guichet(args: &[String]) {
@@ -2843,30 +2853,6 @@ fn cmd_dnd(args: &[String]) {
 }
 
 fn cmd_reply(args: &[String]) {
-    let agent_name = current_agent_name();
-
-    let reply_file = socket_path()
-        .parent()
-        .unwrap()
-        .join(format!("last-sender-{}", agent_name));
-
-    let previous = match std::fs::read_to_string(&reply_file) {
-        Ok(content) => content.trim().to_string(),
-        Err(_) => {
-            eprintln!("reply: aucun expediteur precedent trouve.");
-            eprintln!("  (utilise 'bridget send --to <nom> \"message\"')");
-            std::process::exit(1);
-        }
-    };
-
-    let mut previous_parts = previous.splitn(2, '\t');
-    let to = previous_parts.next().unwrap_or_default().to_string();
-    let implicit_in_reply_to = previous_parts.next().map(str::to_string);
-    if to.is_empty() {
-        eprintln!("reply: expediteur precedent vide.");
-        std::process::exit(1);
-    }
-
     let mut reply_flag = false;
     let mut hops: i32 = 4;
     let mut timeout_secs: Option<u64> = None;
@@ -2881,18 +2867,14 @@ fn cmd_reply(args: &[String]) {
             "--reply" => {
                 reply_flag = true;
             }
-            "--timeout" => {
-                if i + 1 < args.len() {
-                    timeout_secs = args[i + 1].parse().ok();
-                    i += 1;
-                }
-            }
-            "--hops" => {
-                if i + 1 < args.len() {
-                    hops = args[i + 1].parse().unwrap_or(4);
-                    i += 1;
-                }
-            }
+            "--timeout" => match positive_integer_option(args, &mut i, "--timeout") {
+                Ok(value) => timeout_secs = Some(value),
+                Err(error) => exit_argument_error(&error),
+            },
+            "--hops" => match positive_integer_option(args, &mut i, "--hops") {
+                Ok(value) => hops = value,
+                Err(error) => exit_argument_error(&error),
+            },
             "--in-reply-to" => match option_value(args, &mut i, "--in-reply-to") {
                 Ok(value) => explicit_in_reply_to = Some(value),
                 Err(error) => {
@@ -2920,6 +2902,27 @@ fn cmd_reply(args: &[String]) {
             }
         }
         i += 1;
+    }
+
+    let agent_name = current_agent_name();
+    let reply_file = socket_path()
+        .parent()
+        .unwrap()
+        .join(format!("last-sender-{agent_name}"));
+    let previous = match std::fs::read_to_string(&reply_file) {
+        Ok(content) => content.trim().to_string(),
+        Err(_) => {
+            eprintln!("reply: aucun expediteur precedent trouve.");
+            eprintln!("  (utilise 'bridget send --to <nom> \"message\"')");
+            std::process::exit(1);
+        }
+    };
+    let mut previous_parts = previous.splitn(2, '\t');
+    let to = previous_parts.next().unwrap_or_default().to_string();
+    let implicit_in_reply_to = previous_parts.next().map(str::to_string);
+    if to.is_empty() {
+        eprintln!("reply: expediteur precedent vide.");
+        std::process::exit(1);
     }
 
     let body = body_parts.join(" ");
