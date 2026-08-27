@@ -12,5 +12,5 @@
   `crates/bridget-daemon/src/cli.rs` sans modifier la cohérence des options.
 - [x] T006 Rejouer les mutants de garde et de séparateur, restaurer avec
   condensats identiques et exécuter les portes finales.
-- [ ] T007 Finaliser `specs/045-refuser-options-inconnues-messages/implementation.md`,
+- [x] T007 Finaliser `specs/045-refuser-options-inconnues-messages/implementation.md`,
   relire le diff, committer et publier la tête.

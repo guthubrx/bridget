@@ -47,6 +47,9 @@ Après restauration du mutant final, les condensats nominaux sont :
 - `cargo check --workspace --all-targets` : vert.
 - `rustfmt --edition 2024 --check` sur les deux fichiers Rust : vert.
 - `git diff --check` : vert.
+- Composition avec `main` à `72c41b1` : `merge-tree` et `write-tree` rendent
+  tous deux `2a6c7bab8de59948b98ecb9d4fb8c124cf76e7ed`, puis
+  `cargo check --workspace --all-targets` est vert sur cet arbre composé.
 - Clippy strict `--all-targets --no-deps -D warnings` : rouge sur la base et la
   tête avec les mêmes 10 diagnostics dans `wrapper.rs`, `daemon.rs`,
   `managed_supervisor.rs`, `ui.rs` et `store.rs`. Aucun diagnostic ne vise les
@@ -57,7 +60,7 @@ Après restauration du mutant final, les condensats nominaux sont :
 ## REX — Retour d'expérience
 
 **Date** : 2026-08-27
-**Tâches complétées** : 6/7 avant composition et publication finales
+**Tâches complétées** : 7/7
 
 ### Ce qui a fonctionné
 
