@@ -8,4 +8,4 @@
 - [x] T4705 — Ajouter la projection `maicie status`.
 - [x] T4706 — Ajouter l'alerte à la carte de reprise.
 - [x] T4707 — Éprouver compatibilité, états dégradés et mutant causal.
-- [ ] T4708 — Mesurer base/tête, documenter les non-mesures et livrer.
+- [x] T4708 — Mesurer base/tête, documenter les non-mesures et livrer.

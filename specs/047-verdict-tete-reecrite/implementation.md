@@ -4,7 +4,7 @@
 
 - Branche : `session-047-verdict-tete-reecrite`
 - Base contractuelle : `bc745335530985ce305e82fea4007071c752d5b0`
-- Statut : implémentation terminée, gates finaux en cours
+- Statut : implémentation terminée, prête à relire
 
 ## Tranche 1 — Continuité du verdict
 
@@ -124,3 +124,51 @@
   donc aucune alerte.
 - Ces objets réels complètent la fixture ; aucun test permanent ne dépend de
   leur présence future dans le reflog.
+
+## Gates finaux base / tête
+
+Périmètre déclaré : `bridget-transport`, `maicie` et `bridget-daemon`.
+`cargo test --no-run` a été exécuté avant le listage et le comptage, et est
+vert des deux côtés.
+
+Le banc
+`daemon::presence_tests::stop_apres_register_traverse_le_wrapper_et_le_superviseur_reels`
+ne termine pas sur cet hôte, sur la base comme sur la tête. Il est soustrait
+par son nom exact ; aucun résultat partiel de sa passe suspendue n'est compté.
+
+| Arbre | Univers brut | Univers mesuré | Passés | Échoués | Ignorés |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| base `06d54831761107f5ccf3d501047eb10561e4c569` | 1257 | 1256 | 1229 | 8 | 19 |
+| tête 047 | 1267 | 1266 | 1239 | 8 | 19 |
+
+Les huit rouges sont identiques en nom et en message des deux côtés :
+
+- `daemon::presence_tests::enregistrement_auxiliaire_mcp_ne_revendique_pas_la_presence_du_wrapper_vivant` ;
+- `daemon::presence_tests::sigkill_daemon_reconcilie_l_ancien_groupe_avant_une_reprise_unique` ;
+- `daemon::presence_tests::tour_non_abouti_redevient_mandatable_et_le_mandat_parvient` ;
+- `claude_gere_sans_bypass_reste_sans_outil` ;
+- `wrapper_codex_natif_repond_et_reste_attachable` ;
+- `wrapper_codex_sans_signal_laisse_effort_et_limite_inconnus` ;
+- `prompt_reduit_rejoue_le_corpus_dans_la_meme_session` ;
+- `reprise_codex_rejoue_la_panne_mcp_et_clot_les_demandes_liees`.
+
+Une première composition de la tête avait trois rouges supplémentaires. Ils
+ont été instruits au lieu d'être imputés au hasard : diagnostic CLI fusionnant
+deux erreurs, fixture de canonisation utilisant l'ordre d'une structure
+privée, et fixture `status` dépourvue de l'attestation locale désormais
+obligatoire. Après correction, leurs harnais complets rendent respectivement
+6/0/0, 54/0/0 et 18/0/0 ; la passe globale ne les reproduit plus.
+
+`cargo clippy --all-targets` analyse les deux arbres jusqu'au bout et rend 48
+avertissements sur la base comme sur la tête : écart nul. `cargo fmt --check`
+reste rouge sur une dette préexistante, avec 74 emplacements sur la base et 72
+sur la tête. `git diff --check` est vert.
+
+## Non mesuré
+
+- macOS après raccord ;
+- suite workspace complète hors du périmètre déclaré ;
+- le banc suspendu ci-dessus, qui reste une non-mesure et non un rouge ;
+- détection automatique d'un lot ouvert sans branche distante, explicitement
+  hors périmètre ;
+- persistance future des objets réels de rebase dans les reflogs.

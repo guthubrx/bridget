@@ -1,6 +1,6 @@
 # Spécification 047 — Signaler un verdict attaché à une tête réécrite
 
-**Statut** : Prête à implémenter
+**Statut** : Implémentée — prête à relire
 
 **Base gelée** : `bc745335530985ce305e82fea4007071c752d5b0`
 
@@ -75,12 +75,13 @@ Une erreur de commande, une sortie ambiguë ou un objet indisponible produit
 
 ### D4 — Compatibilité
 
-Les champs de cible sont optionnels sur le fil. Une ancienne trame reste
-lisible par le nouveau code et produit `target_absent`.
+Une délégation historique sans cible reste en version 1 et produit
+`target_absent`. Une délégation portant une cible utilise exclusivement la
+version 2 ; un nouveau daemon refuse toute combinaison v1/v2 ambiguë.
 
-Le comportement d'un ancien daemon recevant les nouveaux champs doit être
-mesuré. Il doit soit refuser explicitement la demande, soit préserver la cible;
-une délégation créée silencieusement comme mission ordinaire est interdite.
+Le vrai daemon de la base contractuelle refuse la trame v2 ciblée avant toute
+écriture SQLite. Il ne peut donc pas créer silencieusement une délégation
+ordinaire en perdant la cible.
 
 ## Scénarios
 
