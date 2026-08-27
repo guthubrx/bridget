@@ -156,12 +156,46 @@ fn serve_statuses(socket: &std::path::Path, runs: usize, ready: mpsc::Sender<()>
     let listener = UnixListener::bind(socket).expect("socket benchmark");
     ready.send(()).expect("signal prêt");
     for run in 0..runs {
+        accept_daemon_identity(&listener);
         accept_empty_guichet(&listener);
         accept_empty_coordination(&listener);
         accept_client(&listener);
         send_agent_list(&listener);
         send_snapshot(&listener, run);
     }
+}
+
+fn accept_daemon_identity(listener: &UnixListener) {
+    let (stream, _) = listener.accept().expect("connexion identité daemon status");
+    let (mut reader, mut writer) = split(stream);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"RoleHandshake","role":"client"})
+    );
+    write_json(&mut writer, json!({"type":"RoleAccepted","role":"client"}));
+    assert_eq!(read_json(&mut reader)["type"], "ClientHello");
+    write_json(
+        &mut writer,
+        json!({
+            "type":"ClientWelcome",
+            "version":1,
+            "horizon_secs":3600,
+            "issued_at_tolerance_secs":30,
+            "capabilities":["send_idempotent","lookup"]
+        }),
+    );
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"DaemonIdentityRequest"})
+    );
+    write_json(
+        &mut writer,
+        json!({
+            "type":"DaemonIdentityReport",
+            "host":bridget_core::local_host(),
+            "db_path":"/var/lib/bridget/bridget.db"
+        }),
+    );
 }
 
 fn accept_empty_coordination(listener: &UnixListener) {

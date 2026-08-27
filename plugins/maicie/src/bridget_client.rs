@@ -504,6 +504,16 @@ pub struct BridgetClient {
     deadline: Option<Instant>,
 }
 
+/// Identité que le daemon atteste de lui-même sur la connexion client déjà
+/// négociée. Les deux champs sont requis sur le fil ; l'absence de rapport est
+/// représentée par une erreur de transport, jamais par une identité locale par
+/// défaut.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonIdentity {
+    pub host: String,
+    pub db_path: String,
+}
+
 /// Frontière filaire observable uniquement par les crash-tests d'outbox.
 ///
 /// Le jalon suit l'écriture complète du JSONL et précède toute lecture de
@@ -613,6 +623,17 @@ impl BridgetClient {
 
     pub fn limits(&self) -> BridgetClientLimits {
         self.limits
+    }
+
+    /// Demande l'identité attestée du daemon sur cette connexion `Client`.
+    ///
+    /// La négociation ayant déjà eu lieu au constructeur, cette sonde est un
+    /// unique aller-retour. Une réponse absente, rejetée ou d'un autre type
+    /// reste une erreur distincte : l'appelant peut refuser une écriture sans
+    /// confondre un daemon muet avec un contrat incompatible.
+    pub fn daemon_identity(&mut self) -> Result<DaemonIdentity, BridgetClientError> {
+        let response = self.request(json!({"type": "DaemonIdentityRequest"}))?;
+        parse_daemon_identity(response)
     }
 
     /// Envoie l'enveloppe exacte fournie par l'outbox, sans generer ni muter
@@ -2171,6 +2192,19 @@ fn parse_client_welcome(response: Value) -> Result<NegotiatedContract, BridgetCl
     }
 }
 
+fn parse_daemon_identity(response: Value) -> Result<DaemonIdentity, BridgetClientError> {
+    match response_type(&response)? {
+        "DaemonIdentityReport" => Ok(DaemonIdentity {
+            host: required_string(&response, "host")?,
+            db_path: required_string(&response, "db_path")?,
+        }),
+        "ClientRejected" => Err(BridgetClientError::ClientRejected {
+            reason: response.get("reason").cloned().unwrap_or(Value::Null),
+        }),
+        other => Err(unexpected("DaemonIdentityReport", other)),
+    }
+}
+
 fn expect_role_accepted(response: &Value, role: &str) -> Result<(), BridgetClientError> {
     match response_type(response)? {
         "RoleAccepted" if response.get("role").and_then(Value::as_str) == Some(role) => Ok(()),
@@ -2302,9 +2336,9 @@ fn unexpected(expected: &str, received: &str) -> BridgetClientError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BridgetClientError, BridgetClientLimits, GuichetClient, PublicMessage, ReplayPublicMessage,
-        TestMonotonicClock, monotonic_now, replay_idempotent_request, test_clock_slot,
-        validate_send_idempotent_frame,
+        BridgetClient, BridgetClientError, BridgetClientLimits, GuichetClient, PublicMessage,
+        ReplayPublicMessage, TestMonotonicClock, monotonic_now, replay_idempotent_request,
+        test_clock_slot, validate_send_idempotent_frame,
     };
     use serde_json::json;
     use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -2366,6 +2400,147 @@ mod tests {
                 delivery_id: None,
             }
         );
+    }
+
+    /// Oracle du contrat d'attribution : la requête doit passer APRÈS le
+    /// handshake Client, sur la même connexion, sans recommencer une seconde
+    /// négociation. Le contrôle positif prouve que la garde future n'est pas
+    /// un refus systématique.
+    #[test]
+    fn daemon_identity_emprunte_la_connexion_client_deja_negociee() {
+        let socket = identity_socket("rapport");
+        let listener = UnixListener::bind(&socket).expect("socket identité");
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("connexion client");
+            let reader_stream = stream.try_clone().expect("clone lecteur");
+            let mut reader = BufReader::new(reader_stream);
+            let mut writer = BufWriter::new(stream);
+            accept_client_contract(&mut reader, &mut writer);
+            assert_eq!(
+                read_json(&mut reader),
+                json!({"type":"DaemonIdentityRequest"}),
+                "la sonde doit être le second aller-retour, pas une seconde poignée client"
+            );
+            write_json(
+                &mut writer,
+                json!({
+                    "type":"DaemonIdentityReport",
+                    "host":"machine-registre",
+                    "db_path":"/var/lib/bridget/bridget.db"
+                }),
+            );
+        });
+
+        let mut client = BridgetClient::connect_with_limits(
+            &socket,
+            "maicie-locality-guard",
+            BridgetClientLimits::default(),
+        )
+        .expect("contrat client");
+        let identity = client
+            .daemon_identity()
+            .expect("rapport d'identité conforme");
+        assert_eq!(identity.host, "machine-registre");
+        assert_eq!(identity.db_path, "/var/lib/bridget/bridget.db");
+
+        server.join().expect("serveur identité");
+        let _ = std::fs::remove_file(socket);
+    }
+
+    /// Un refus de matrice ne doit jamais être aplati en absence de réponse :
+    /// la garde refusera dans les deux cas, mais l'opérateur doit savoir si la
+    /// sonde est interdite plutôt que croire le daemon simplement indisponible.
+    #[test]
+    fn daemon_identity_conserve_le_refus_de_role_comme_diagnostic_distinct() {
+        let socket = identity_socket("refus-role");
+        let listener = UnixListener::bind(&socket).expect("socket identité");
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("connexion client");
+            let reader_stream = stream.try_clone().expect("clone lecteur");
+            let mut reader = BufReader::new(reader_stream);
+            let mut writer = BufWriter::new(stream);
+            accept_client_contract(&mut reader, &mut writer);
+            assert_eq!(
+                read_json(&mut reader),
+                json!({"type":"DaemonIdentityRequest"})
+            );
+            write_json(
+                &mut writer,
+                json!({"type":"ClientRejected","reason":"MessageOutsideClientRole"}),
+            );
+        });
+
+        let mut client =
+            BridgetClient::connect(&socket, "maicie-locality-guard").expect("contrat client");
+        let error = client
+            .daemon_identity()
+            .expect_err("un ClientRejected ne doit pas devenir une identité absente");
+        assert!(matches!(error, BridgetClientError::ClientRejected { .. }));
+
+        server.join().expect("serveur identité");
+        let _ = std::fs::remove_file(socket);
+    }
+
+    /// L'absence de trame est un fait différent d'un rejet : le client doit
+    /// remonter la fermeture pour que la garde refuse sans présenter la sonde
+    /// comme saine. L'attente est bornée par les limites du client.
+    #[test]
+    fn daemon_identity_conserve_l_absence_de_rapport_comme_fermeture() {
+        let socket = identity_socket("absence");
+        let listener = UnixListener::bind(&socket).expect("socket identité");
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("connexion client");
+            let reader_stream = stream.try_clone().expect("clone lecteur");
+            let mut reader = BufReader::new(reader_stream);
+            let mut writer = BufWriter::new(stream);
+            accept_client_contract(&mut reader, &mut writer);
+            assert_eq!(
+                read_json(&mut reader),
+                json!({"type":"DaemonIdentityRequest"})
+            );
+            // La connexion se ferme sans rapport : ce n'est pas un succès par défaut.
+        });
+
+        let mut client =
+            BridgetClient::connect(&socket, "maicie-locality-guard").expect("contrat client");
+        let error = client
+            .daemon_identity()
+            .expect_err("une fermeture sans rapport doit rester observable");
+        assert!(matches!(error, BridgetClientError::Closed));
+
+        server.join().expect("serveur identité");
+        let _ = std::fs::remove_file(socket);
+    }
+
+    /// Une réponse d'un autre type est une rupture de contrat, pas une
+    /// attestation permissive. L'oracle empêche d'ajouter un `unwrap_or` qui
+    /// cacherait une sonde cassée derrière un comportement local apparemment sain.
+    #[test]
+    fn daemon_identity_refuse_une_reponse_de_type_inattendu() {
+        let socket = identity_socket("type-inattendu");
+        let listener = UnixListener::bind(&socket).expect("socket identité");
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("connexion client");
+            let reader_stream = stream.try_clone().expect("clone lecteur");
+            let mut reader = BufReader::new(reader_stream);
+            let mut writer = BufWriter::new(stream);
+            accept_client_contract(&mut reader, &mut writer);
+            assert_eq!(
+                read_json(&mut reader),
+                json!({"type":"DaemonIdentityRequest"})
+            );
+            write_json(&mut writer, json!({"type":"AgentList","agents":[]}));
+        });
+
+        let mut client =
+            BridgetClient::connect(&socket, "maicie-locality-guard").expect("contrat client");
+        let error = client
+            .daemon_identity()
+            .expect_err("un type inattendu doit être refusé");
+        assert!(matches!(error, BridgetClientError::Protocol(_)));
+
+        server.join().expect("serveur identité");
+        let _ = std::fs::remove_file(socket);
     }
 
     #[test]
@@ -2495,6 +2670,47 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner()) = None;
         }
+    }
+
+    fn identity_socket(label: &str) -> std::path::PathBuf {
+        let socket = std::env::temp_dir().join(format!(
+            "maicie-daemon-identity-{label}-{}-{}.sock",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let _ = std::fs::remove_file(&socket);
+        socket
+    }
+
+    fn accept_client_contract(
+        reader: &mut BufReader<UnixStream>,
+        writer: &mut BufWriter<UnixStream>,
+    ) {
+        assert_eq!(
+            read_json(reader),
+            json!({"type":"RoleHandshake","role":"client"})
+        );
+        write_json(writer, json!({"type":"RoleAccepted","role":"client"}));
+        let hello = read_json(reader);
+        assert_eq!(hello["type"], "ClientHello");
+        assert_eq!(hello["contract_version"], 1);
+        assert!(
+            hello["issuer_scope"]
+                .as_str()
+                .is_some_and(|scope| !scope.is_empty()),
+            "la sonde doit porter un issuer_scope client non vide"
+        );
+        assert_eq!(hello["capabilities"], json!(["send_idempotent", "lookup"]));
+        write_json(
+            writer,
+            json!({
+                "type":"ClientWelcome",
+                "version":1,
+                "horizon_secs":60,
+                "issued_at_tolerance_secs":5,
+                "capabilities":["send_idempotent","lookup"]
+            }),
+        );
     }
 
     fn read_json(reader: &mut BufReader<UnixStream>) -> serde_json::Value {

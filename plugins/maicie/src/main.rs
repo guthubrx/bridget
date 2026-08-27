@@ -15,7 +15,7 @@ use maicie::app::{
     stored_profile_activation_proposal, summarize,
 };
 use maicie::bridget_client::{
-    AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits,
+    AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits, DaemonIdentity,
 };
 use maicie::catalogue::{self, AppendOutcome, CatalogueError, CatalogueJournal};
 use maicie::config::{ConfigError, MaicieConfig};
@@ -62,6 +62,7 @@ const EXIT_BRIDGET: u8 = 4;
 const EXIT_DELEGATE: u8 = 5;
 const EXIT_STORE: u8 = 6;
 const MAX_STATUS_RUNTIME_OBSERVATIONS: usize = 256;
+const LOCALITY_GUARD_ISSUER_SCOPE: &str = "maicie-locality-guard";
 
 fn main() -> ExitCode {
     match run(env::args().skip(1).collect()) {
@@ -387,6 +388,7 @@ fn open_store_with_reconciliation(
     limits: BridgetClientLimits,
     migrate: bool,
 ) -> Result<ReconciledStore, CliError> {
+    require_local_daemon(config, limits)?;
     let mut store = open_maicie_store(&config.database_path, migrate)?;
     reconcile_pending(&mut store, config, limits)?;
     reconcile_activation_startup_at(&mut store, &config.bridget_socket, unix_now()?)
@@ -436,6 +438,71 @@ fn open_store_with_reconciliation(
         store,
         coordination,
     })
+}
+
+/// Le registre Maicie appartient à la machine du daemon joint. La sonde est
+/// donc faite avant l'ouverture SQLite : une identité absente ou distante ne
+/// peut ni créer une base locale ni y rejouer une outbox.
+fn require_local_daemon(
+    config: &MaicieConfig,
+    limits: BridgetClientLimits,
+) -> Result<(), CliError> {
+    let mut client = BridgetClient::connect_with_limits(
+        &config.bridget_socket,
+        LOCALITY_GUARD_ISSUER_SCOPE,
+        limits,
+    )
+    .map_err(|error| daemon_identity_refusal(&error))?;
+    let identity = client
+        .daemon_identity()
+        .map_err(|error| daemon_identity_refusal(&error))?;
+    let local_host = bridget_core::local_host();
+
+    if !bridget_core::host_is_attested(&local_host) {
+        return Err(CliError::DaemonStoreLocality(
+            "cette machine n'est pas attestée ; le registre Maicie suit le daemon joint. Exécutez la commande sur la machine qui héberge le daemon après avoir rétabli son nom de machine".to_string(),
+        ));
+    }
+    if !bridget_core::host_is_attested(&identity.host) {
+        return Err(CliError::DaemonStoreLocality(
+            "la machine du daemon n'est pas attestée ; le registre Maicie suit le daemon joint. Exécutez la commande sur la machine qui héberge le daemon après avoir rétabli son nom de machine".to_string(),
+        ));
+    }
+    if daemon_store_is_local(&identity, &local_host) {
+        return Ok(());
+    }
+
+    Err(CliError::DaemonStoreLocality(format!(
+        "le daemon joint s'exécute sur {} tandis que cette commande s'exécute sur {}; le registre Maicie suit le daemon joint. Exécutez la commande sur la machine qui héberge le daemon",
+        sanitize_terminal(&identity.host),
+        sanitize_terminal(&local_host),
+    )))
+}
+
+fn daemon_store_is_local(identity: &DaemonIdentity, local_host: &str) -> bool {
+    bridget_core::host_is_attested(&identity.host)
+        && bridget_core::host_is_attested(local_host)
+        && identity.host == local_host
+}
+
+fn daemon_identity_refusal(error: &BridgetClientError) -> CliError {
+    CliError::DaemonStoreLocality(format!(
+        "{} ; aucune écriture SQLite n'a été ouverte. Réessayez depuis la machine qui héberge le daemon après avoir rétabli son attestation",
+        daemon_identity_failure_detail(error),
+    ))
+}
+
+fn daemon_identity_failure_detail(error: &BridgetClientError) -> &'static str {
+    match error {
+        BridgetClientError::Closed | BridgetClientError::Timeout { .. } => {
+            "rapport d'identité absent"
+        }
+        BridgetClientError::ClientRejected { .. } => "demande d'identité refusée par le daemon",
+        BridgetClientError::Protocol(_) | BridgetClientError::Decode { .. } => {
+            "rapport d'identité invalide"
+        }
+        _ => "rapport d'identité indisponible",
+    }
 }
 
 fn list_routine_candidates(
@@ -3180,6 +3247,7 @@ enum CliError {
     Catalogue(CatalogueError),
     CatalogueReconcile(CatalogueReconcileError),
     Bridget(BridgetClientError),
+    DaemonStoreLocality(String),
     Delegate(DelegateError),
     TargetUnknownBridget(String),
     TargetMissingMaicieProfile {
@@ -3205,7 +3273,7 @@ impl CliError {
         match self {
             Self::Usage(_) => EXIT_USAGE,
             Self::Configuration(_) | Self::Catalogue(_) => EXIT_CONFIGURATION,
-            Self::Bridget(_) => EXIT_BRIDGET,
+            Self::Bridget(_) | Self::DaemonStoreLocality(_) => EXIT_BRIDGET,
             Self::Delegate(DelegateError::Store(_))
             | Self::Store(_)
             | Self::CatalogueReconcile(CatalogueReconcileError::Store(_)) => EXIT_STORE,
@@ -3236,6 +3304,7 @@ impl CliError {
             Self::CatalogueReconcile(CatalogueReconcileError::Catalogue(_)) => "catalogue",
             Self::CatalogueReconcile(_) => "catalogue_reconcile",
             Self::Bridget(_) => "bridget",
+            Self::DaemonStoreLocality(_) => "daemon_store_not_local",
             Self::Delegate(DelegateError::EnvelopeMismatch) => "envelope_mismatch",
             Self::Delegate(DelegateError::ContrainteRefusee { .. }) => {
                 "delegate_constraint_refused"
@@ -3275,6 +3344,7 @@ impl fmt::Display for CliError {
             Self::Catalogue(error) => error.fmt(formatter),
             Self::CatalogueReconcile(error) => error.fmt(formatter),
             Self::Bridget(error) => error.fmt(formatter),
+            Self::DaemonStoreLocality(detail) => write!(formatter, "écriture refusée : {detail}"),
             Self::Delegate(error) => error.fmt(formatter),
             Self::TargetUnknownBridget(target) => write!(
                 formatter,
@@ -3331,17 +3401,23 @@ impl fmt::Display for CliError {
 mod tests {
     use super::{
         Command, DelegateError, DelegateOutput, RegistreAction, RegistreArgs,
-        SchemaPreflightOutput, candidates_from, delegate_error_for_cli,
-        format_routine_approval_screen, parse_command, peel_migrate_flag,
+        SchemaPreflightOutput, candidates_from, daemon_identity_failure_detail,
+        daemon_store_is_local, delegate_error_for_cli, format_routine_approval_screen,
+        open_store_with_reconciliation, parse_command, peel_migrate_flag,
         routine_approval_preflight, run, sanitize_terminal,
     };
     use bridget_transport::protocol::ReviewTarget;
-    use maicie::bridget_client::AgentInfo;
+    use maicie::bridget_client::{AgentInfo, BridgetClientError, DaemonIdentity};
     use maicie::config::{DurationClasses, MaicieConfig, ProfileConfig};
     use maicie::domain::SuiteObjective;
     use maicie::routines::{EtatRoutine, Routine, sealed_template_hash};
     use maicie::store::{SCHEMA_VERSION, SchemaPreflight};
+    use serde_json::json;
+    use std::fs;
+    use std::io::{BufRead, BufReader, BufWriter, Write};
+    use std::os::unix::{fs::PermissionsExt, net::UnixListener};
     use std::path::PathBuf;
+    use std::thread;
     use uuid::Uuid;
 
     fn agent_info(name: &str, state: &str, domain: Option<&str>) -> AgentInfo {
@@ -3407,6 +3483,172 @@ mod tests {
         routine.goal = "ronde".into();
         routine.template_hash = sealed_template_hash(&routine);
         assert!(routine_approval_preflight(&routine).is_ok());
+    }
+
+    /// Oracle fédéré : une machine distante peut partager n'importe quel
+    /// chemin local. Seul l'hôte attesté décide ; le contrôle positif local
+    /// empêche une garde qui refuserait systématiquement.
+    #[test]
+    fn garde_daemon_exige_un_hote_atteste_localement() {
+        let federated_same_path = DaemonIdentity {
+            host: "machine-distante".to_string(),
+            db_path: "/home/moi/.cache/bridget/bridget.db".to_string(),
+        };
+        assert!(
+            !daemon_store_is_local(&federated_same_path, "machine-locale"),
+            "hôtes distincts doivent rester fédérés, quel que soit le chemin du daemon"
+        );
+
+        let local_same_path = DaemonIdentity {
+            host: "machine-locale".to_string(),
+            db_path: "/home/moi/.cache/bridget/bridget.db".to_string(),
+        };
+        assert!(
+            daemon_store_is_local(&local_same_path, "machine-locale"),
+            "contrôle positif : un hôte attesté identique doit franchir la garde"
+        );
+
+        let unknown_host = DaemonIdentity {
+            host: bridget_core::HOTE_NON_ATTESTE.to_string(),
+            db_path: "/home/moi/.cache/bridget/bridget.db".to_string(),
+        };
+        assert!(
+            !daemon_store_is_local(&unknown_host, "machine-locale"),
+            "le repli HOTE_NON_ATTESTE n'atteste aucune machine"
+        );
+        assert!(
+            !daemon_store_is_local(&local_same_path, bridget_core::HOTE_NON_ATTESTE),
+            "le repli local n'atteste aucune machine non plus"
+        );
+    }
+
+    /// Les trois échecs ne sont pas un succès local implicite. Ils ont tous
+    /// le même verdict d'écriture (refus), mais leur détail reste observable
+    /// pour distinguer un daemon muet, une matrice de rôle cassée et un fil
+    /// incompatible.
+    #[test]
+    fn garde_daemon_n_aplatit_pas_les_echecs_d_attestation() {
+        assert_eq!(
+            daemon_identity_failure_detail(&BridgetClientError::Closed),
+            "rapport d'identité absent"
+        );
+        assert_eq!(
+            daemon_identity_failure_detail(&BridgetClientError::ClientRejected {
+                reason: serde_json::json!("MessageOutsideClientRole"),
+            }),
+            "demande d'identité refusée par le daemon"
+        );
+        assert_eq!(
+            daemon_identity_failure_detail(&BridgetClientError::Protocol(
+                "DaemonIdentityReport invalide".to_string(),
+            )),
+            "rapport d'identité invalide"
+        );
+    }
+
+    /// Le refus fédéré doit précéder l'ouverture SQLite. Ce témoin couvre le
+    /// mutant qui déplacerait la garde après `open_maicie_store` : le message
+    /// resterait un refus, mais la base locale aurait déjà été créée.
+    #[test]
+    fn garde_federee_refuse_avant_d_ouvrir_sqlite() {
+        let root = std::env::temp_dir().join(format!("maicie-locality-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("répertoire temporaire");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .expect("permissions du répertoire temporaire");
+        let socket = root.join("bridget.sock");
+        let database = root.join("maicie.sqlite3");
+        let listener = UnixListener::bind(&socket).expect("socket daemon témoin");
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("connexion client");
+            let reader_stream = stream.try_clone().expect("clone lecteur");
+            let mut reader = BufReader::new(reader_stream);
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+
+            reader.read_line(&mut line).expect("role client");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&line).expect("role JSON"),
+                json!({"type":"RoleHandshake","role":"client"})
+            );
+            writeln!(writer, "{}", json!({"type":"RoleAccepted","role":"client"}))
+                .expect("RoleAccepted");
+            writer.flush().expect("flush RoleAccepted");
+
+            line.clear();
+            reader.read_line(&mut line).expect("ClientHello");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&line)
+                    .expect("ClientHello JSON")
+                    .get("type"),
+                Some(&json!("ClientHello"))
+            );
+            writeln!(
+                writer,
+                "{}",
+                json!({
+                    "type":"ClientWelcome",
+                    "version":1,
+                    "horizon_secs":60,
+                    "issued_at_tolerance_secs":0,
+                    "capabilities":["send_idempotent","lookup"]
+                })
+            )
+            .expect("ClientWelcome");
+            writer.flush().expect("flush ClientWelcome");
+
+            line.clear();
+            reader.read_line(&mut line).expect("demande identité");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&line).expect("identité JSON"),
+                json!({"type":"DaemonIdentityRequest"})
+            );
+            writeln!(
+                writer,
+                "{}",
+                json!({
+                    "type":"DaemonIdentityReport",
+                    "host":"machine-federee-temoin",
+                    "db_path":"/var/lib/bridget/bridget.db"
+                })
+            )
+            .expect("rapport identité");
+            writer.flush().expect("flush rapport identité");
+        });
+
+        let config = MaicieConfig {
+            version: 1,
+            bridget_socket: socket,
+            database_path: database.clone(),
+            durations: DurationClasses {
+                short_secs: 30,
+                normal_secs: 60,
+                long_secs: 90,
+            },
+            status_capture_budget_ms: None,
+            catalogue_path: None,
+            coordination_policies: None,
+            review_project: None,
+            profiles: Vec::new(),
+        };
+        let error = match open_store_with_reconciliation(
+            &config,
+            maicie::bridget_client::BridgetClientLimits::default(),
+            false,
+        ) {
+            Ok(_) => panic!("un daemon fédéré doit être refusé"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("écriture refusée"),
+            "le refus doit être explicite, obtenu : {error}"
+        );
+        assert!(
+            !database.exists(),
+            "la base SQLite locale ne doit pas être créée avant le refus"
+        );
+
+        server.join().expect("daemon témoin");
+        fs::remove_dir_all(root).expect("nettoyage témoin");
     }
 
     #[test]
