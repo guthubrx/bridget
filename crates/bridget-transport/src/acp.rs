@@ -844,8 +844,14 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                     "sessionId": &worker.session_id,
                     "prompt": [{ "type": "text", "text": prompt_for(&message) }]
                 }),
-                (!message.reply).then_some(worker.notify_timeout),
-                message.reply.then_some(message.deadline_at).flatten(),
+                // L'échéance absolue vient du daemon (relue à chaque livraison).
+                // Sans elle, repli sur la valeur figée au spawn — qui ne suit
+                // PAS un changement de agents.json tant que l'agent vit.
+                message
+                    .deadline_at
+                    .is_none()
+                    .then_some(worker.notify_timeout),
+                message.deadline_at,
                 &worker.clock,
                 &cancellation,
                 &cancelled,
@@ -3141,6 +3147,167 @@ sleep 2
         let events = transport.drain_events();
         assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, reason } if message_id == "timeout-active" && reason.contains("timeout ACP"))));
         assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, .. } if message_id == "timeout-queued")));
+    }
+
+    /// ORACLE — un mandat reply=false (tous les mandats Maicie) honore
+    /// `deadline_at` absolu du daemon, PAS le notify_timeout figé au spawn.
+    /// Mutant : remettre `(!reply).then_some(notify_timeout)` exclusif → meurt.
+    /// Preuve d'abord qu'un tour normal aboutit (sinon projection vide).
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_deadline_daemon_sauve_un_tour_reply_false_malgre_notify_fige() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-acp-deadline-hot-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        // Tour normal : aboutit malgré notify_timeout=1 (complète avant 1 s).
+        let script_ok = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read prompt
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+"#;
+        let mut transport_ok = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script_ok.to_string()],
+            queue_capacity: 2,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+        })
+        .unwrap();
+        transport_ok.enable_journal(&root, "ok").unwrap();
+        let mut ok_msg = message("tour-normal");
+        ok_msg.reply = false;
+        transport_ok.deliver(&ok_msg).unwrap();
+        let mut saw_ok = false;
+        for _ in 0..50 {
+            thread::sleep(Duration::from_millis(20));
+            if transport_ok.drain_events().iter().any(|event| {
+                matches!(
+                    event,
+                    AcpEvent::TurnFinished { message, .. } if message.id == "tour-normal"
+                )
+            }) {
+                saw_ok = true;
+                break;
+            }
+        }
+        assert!(saw_ok, "contrôle positif : un tour court doit aboutir d'abord");
+
+        // Tour long : notify figé à 1 s, mais deadline_at (daemon) à +30 s.
+        // Le faux ACP répond après 2 s → survit grâce au deadline daemon.
+        let script_long = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read prompt
+sleep 2
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+"#;
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut transport_long = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script_long.to_string()],
+            queue_capacity: 2,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+        })
+        .unwrap();
+        transport_long.enable_journal(&root, "long").unwrap();
+        let mut long_msg = message("tour-deadline-hot");
+        long_msg.reply = false;
+        long_msg.deadline_at = Some(now + 30);
+        transport_long.deliver(&long_msg).unwrap();
+        let mut saw_long = false;
+        let mut saw_timeout = false;
+        for _ in 0..200 {
+            thread::sleep(Duration::from_millis(50));
+            for event in transport_long.drain_events() {
+                match event {
+                    AcpEvent::TurnFinished { message, .. }
+                        if message.id == "tour-deadline-hot" =>
+                    {
+                        saw_long = true;
+                    }
+                    AcpEvent::DeliveryRejected { message_id, reason }
+                        if message_id == "tour-deadline-hot" && reason.contains("timeout ACP") =>
+                    {
+                        saw_timeout = true;
+                    }
+                    _ => {}
+                }
+            }
+            if saw_long || saw_timeout {
+                break;
+            }
+        }
+        assert!(
+            saw_long && !saw_timeout,
+            "deadline_at daemon doit sauver reply=false malgré notify_timeout=1 ; \
+             finished={saw_long} timeout={saw_timeout}"
+        );
+
+        // Sans deadline_at, le même script tombe à 1 s — le signal est DIT.
+        let mut transport_kill = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script_long.to_string()],
+            queue_capacity: 2,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+        })
+        .unwrap();
+        transport_kill.enable_journal(&root, "kill").unwrap();
+        let mut kill_msg = message("tour-tue");
+        kill_msg.reply = false;
+        // pas de deadline_at → notify_timeout figé gagne
+        transport_kill.deliver(&kill_msg).unwrap();
+        let mut kill_reason = None;
+        for _ in 0..80 {
+            thread::sleep(Duration::from_millis(50));
+            for event in transport_kill.drain_events() {
+                if let AcpEvent::DeliveryRejected { message_id, reason } = event {
+                    if message_id == "tour-tue" {
+                        kill_reason = Some(reason);
+                    }
+                }
+            }
+            if kill_reason.is_some() {
+                break;
+            }
+        }
+        let kill_reason = kill_reason.expect("sans deadline, le tour long doit être tué");
+        assert!(
+            kill_reason.contains("timeout ACP"),
+            "signal d'échéance attendu, reçu {kill_reason}"
+        );
+        let kill_events = std::fs::read_dir(root.join("kill"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .flat_map(|entry| crate::journal::valid_events(&entry.path()))
+            .collect::<Vec<_>>();
+        let terminal = kill_events.iter().find(|event| {
+            event["event"] == "error" && event["message_id"] == "tour-tue"
+        });
+        assert!(
+            terminal.is_some_and(|event| {
+                event["payload"]["terminal_kind"] == json!("turn_failed")
+            }),
+            "un tour tué DOIT porter terminal_kind=turn_failed ; reçu {kill_events:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

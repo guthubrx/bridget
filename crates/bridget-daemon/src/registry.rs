@@ -12,7 +12,10 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 const DEFAULT_QUEUE_CAPACITY: usize = 32;
-const DEFAULT_NOTIFY_TIMEOUT_SECS: u64 = 600;
+/// Plafond par défaut d'un tour sans `deadline_at` absolue.
+/// 600 s condamnait toute revue qui compile un workspace ; 2700 s couvre
+/// aussi les types absents de `agents.json` (codex via définition native).
+pub const DEFAULT_NOTIFY_TIMEOUT_SECS: u64 = 2700;
 // launchd démarre le daemon avec un PATH minimal : les pilotes embarqués ne
 // doivent pas dépendre de la configuration interactive de l'utilisateur.
 const NATIVE_CODEX_COMMAND: &str = "/opt/homebrew/bin/codex";
@@ -1016,7 +1019,7 @@ mod tests {
         assert_eq!(codex.protocol, "codex_app_server");
         assert_eq!(codex.permissions, "allow");
         assert_eq!(codex.queue_capacity, 32);
-        assert_eq!(codex.notify_timeout_secs, 600);
+        assert_eq!(codex.notify_timeout_secs, DEFAULT_NOTIFY_TIMEOUT_SECS);
         assert!(codex.pass_env.contains(&"CODEX_HOME".to_string()));
         assert!(!codex.pass_env.contains(&"OPENAI_API_KEY".to_string()));
         assert_eq!(registry.get("gemini").unwrap().args, vec!["--acp"]);
@@ -1167,7 +1170,7 @@ mod tests {
         assert!(first.pass_env.contains(&"CODEX_HOME".to_string()));
         assert_eq!(first.permissions, "allow");
         assert_eq!(first.queue_capacity, 32);
-        assert_eq!(first.notify_timeout_secs, 600);
+        assert_eq!(first.notify_timeout_secs, DEFAULT_NOTIFY_TIMEOUT_SECS);
         assert_eq!(first.mcp.interactive, "codex");
         assert!(!first.mcp.acp_session);
         assert_eq!(
