@@ -1,4 +1,4 @@
-# Plan — Session 026, première tranche
+# Plan — Session 026, greffe central fédéré
 
 ## Décision
 
@@ -18,6 +18,8 @@ ajoutée par 026.
    append-only.
 3. v19/026 vérifie comportementalement v18 puis reconstruit uniquement
    `guichet_refusal_receptions`.
+4. v20/026 vérifie une vraie v19 puis reconstruit `guichet_receptions` sans
+   recopier le vocabulaire fermé des opérations dans un `CHECK` SQL.
 
 Le code 026 est composé sur le commit v18 gelé de rc1. Son test de composition
 ajoute `review_target: None`, champ introduit par 021, au nouveau fixture rc1.
@@ -34,7 +36,8 @@ Il ne modifie pas la sémantique du refus local.
 - `plugins/maicie/src/app.rs` : lookup des UUID connus, appel de la règle unique,
   choix du motif puis persistance.
 - `plugins/maicie/src/domain.rs` : source unique des noms SQL.
-- `plugins/maicie/src/store.rs` : v19 et lecture fail-closed.
+- `plugins/maicie/src/store.rs` : v19, v20 et lecture fail-closed des deux
+  vocabulaires dont SQL ne copie plus les variantes.
 
 ## Témoins
 
@@ -42,7 +45,8 @@ Il ne modifie pas la sémantique du refus local.
 2. Admission réelle par le daemon sans confusion entre dépôt et succès.
 3. Contradiction UUID connue, persistance, rejeu exact et limite branche/SHA.
 4. Round-trip exhaustif des vocabulaires et corruption SQL inconnue.
-5. v18 réelle→v19, fausse v18, fausse v19, parcours privé v14 et bootstrap.
+5. v18 réelle→v19, vraie v19→v20 avec conservation octet pour octet, fausses
+   formes, parcours privé v14 et bootstrap.
 6. Suites Maicie/guichet existantes, puis workspace complet.
 7. Formatage, `git diff --check` et clippy ciblé.
 

@@ -430,7 +430,7 @@ fn verdict_concordant_termine_la_revue_sans_clore_l_objectif() {
 }
 
 #[test]
-fn parcours_v16_v17_v18_v19_conserve_les_refus_et_motifs_de_revue() {
+fn parcours_v16_v17_v18_v19_v20_conserve_les_refus_et_motifs_de_revue() {
     let root = root("migration-v17-review-refusals");
     let database = root.join("maicie.sqlite3");
     drop(MaicieStore::open(&database).unwrap());
@@ -455,9 +455,10 @@ fn parcours_v16_v17_v18_v19_conserve_les_refus_et_motifs_de_revue() {
                  'scope-v16','request-v16',X'0102','delivery_report','delegation_missing',
                  'response-v16',X'0304',1,'claim-v16',1000
              );
-             DELETE FROM schema_migrations WHERE version = 17;",
+             DELETE FROM schema_migrations WHERE version > 16;",
         )
         .unwrap();
+    crate::historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection.pragma_update(None, "user_version", 16).unwrap();
     drop(connection);
 

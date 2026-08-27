@@ -26,7 +26,14 @@ fn schema_version_constante(source: &str) -> i64 {
 }
 
 fn corps_migrate(source: &str) -> &str {
-    let debut = source.find("fn migrate(").expect("fn migrate introuvable");
+    let signature = if source.contains("fn migrate_to_version(") {
+        "fn migrate_to_version("
+    } else {
+        "fn migrate("
+    };
+    let debut = source
+        .find(signature)
+        .expect("fonction migrate introuvable");
     let apres_signe = &source[debut..];
     let ouverture = apres_signe.find('{').expect("corps de migrate introuvable");
     let bytes = apres_signe.as_bytes();

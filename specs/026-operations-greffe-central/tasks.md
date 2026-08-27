@@ -22,23 +22,26 @@
 
 ## Seconde tranche urgente — pilotage fédéré
 
-- [ ] T2620 Appliquer réellement `delegate` avec configuration et candidats
+- [x] T2620 Appliquer réellement `delegate` avec configuration et candidats
   centraux par le même service que le CLI.
-- [ ] T2621 Ajouter `registre_add` sans chemin fourni par l'appelant, via le
+- [x] T2621 Ajouter `registre_add` sans chemin fourni par l'appelant, via le
   journal déclaré par le greffe.
-- [ ] T2622 Ajouter `objective_close` sur preuve centrale attestée, via la même
+- [x] T2622 Ajouter `objective_close` sur preuve centrale attestée, via la même
   transaction et les mêmes gardes que le CLI.
 - [ ] T2623 Rendre durables les tentatives `profile_approve` et
   `routine_approve`, sans les ajouter à l'enum autorisé.
-- [ ] T2624 Exposer les quatre outils MCP, enregistrer l'identité MCP résolue et
+- [x] T2624 Exposer les quatre outils MCP, enregistrer l'identité MCP résolue et
   rendre l'issue terminale complète depuis le daemon maître.
+- [x] T2625 Migrer une vraie v19 vers v20 en supprimant l'énumération SQL muette
+  de `guichet_receptions`, avec conservation octet pour octet et validation
+  fermée par `OperationGuichet`.
 
 ## Critères de livraison de la première tranche
 
 - `cargo test --workspace --no-run` précède le comptage ;
-- le contrat contradiction et la migration v19 sont verts ;
+- le contrat contradiction et les migrations v19 puis v20 sont verts ;
 - les rouges workspace sont listés et imputés ;
 - les deux approbations reportées sont annoncées comme ignorées, jamais comme
   tenues ;
-- le SHA réellement mesuré et la chaîne v17→v18→v19 sont publiés ;
+- le SHA réellement mesuré et la chaîne v17→v18→v19→v20 sont publiés ;
 - le commit suit strictement `type(scope): Description`, sans trailer.

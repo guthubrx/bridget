@@ -49,7 +49,7 @@ use uuid::Uuid;
 
 /// Version courante du schéma SQLite. Les oracles de migration doivent lire
 /// cette constante — un littéral en dur meurt à chaque migration.
-pub const SCHEMA_VERSION: i64 = 19;
+pub const SCHEMA_VERSION: i64 = 20;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -7489,6 +7489,14 @@ fn parse_tracked_request_kind(value: &str) -> Result<TypeEffetDemandeSuivie, Sto
 }
 
 fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), StoreError> {
+    migrate_to_version(connection, allow_upgrade, SCHEMA_VERSION)
+}
+
+fn migrate_to_version(
+    connection: &mut Connection,
+    allow_upgrade: bool,
+    target_version: i64,
+) -> Result<(), StoreError> {
     // L'ouverture est un chemin concurrent normal : plusieurs processus
     // Maicie peuvent démarrer avant qu'un seul ait fini de poser le schéma.
     // Le verrou IMMEDIATE couvre donc la lecture de version et toutes les
@@ -7502,10 +7510,10 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
     let current_version: i64 = tx
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(StoreError::Sql)?;
-    if current_version > SCHEMA_VERSION {
+    if current_version > target_version {
         return Err(StoreError::UnsupportedSchema {
             found: current_version,
-            supported: SCHEMA_VERSION,
+            supported: target_version,
         });
     }
     let schema_populated = database_has_user_schema(&tx)?;
@@ -7513,12 +7521,12 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
     // Une base peuplée avec user_version remis à 0 n'est PAS neuve — c'est
     // une migration déguisée (porte v0) et exige le même consentement.
     if !allow_upgrade {
-        let needs_consent = (current_version > 0 && current_version < SCHEMA_VERSION)
+        let needs_consent = (current_version > 0 && current_version < target_version)
             || (current_version == 0 && schema_populated);
         if needs_consent {
             return Err(StoreError::MigrationRequired {
                 found: current_version,
-                supported: SCHEMA_VERSION,
+                supported: target_version,
             });
         }
     }
@@ -8029,12 +8037,25 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
     }
     // v19 : le vocabulaire autorisé reste fermé par les enums Rust ; la table
     // durable des refus conserve aussi le nom d'une tentative rejetée.
-    if current_version < 19 {
-        verify_local_delegate_refusals_shape_v18(&tx)?;
-        migrate_guichet_refusal_vocabulary_v19(&tx)?;
+    if target_version >= 19 {
+        if current_version < 19 {
+            verify_local_delegate_refusals_shape_v18(&tx)?;
+            migrate_guichet_refusal_vocabulary_v19(&tx)?;
+        }
+        verify_guichet_refusal_shape_v19(&tx)?;
     }
-    verify_guichet_refusal_shape_v19(&tx)?;
-    for version in (current_version + 1)..=SCHEMA_VERSION {
+    // v20 : la table des reçus ne recopie plus l'enum des opérations dans
+    // un CHECK SQL. Rust reste fermé et refuse une valeur inconnue à la
+    // lecture ; une nouvelle variante légitime ne requiert plus une seconde
+    // liste silencieuse dans le DDL.
+    if target_version >= 20 {
+        if current_version < 20 {
+            verify_guichet_reception_shape_v19(&tx)?;
+            migrate_guichet_reception_vocabulary_v20(&tx)?;
+        }
+        verify_guichet_reception_shape_v20(&tx)?;
+    }
+    for version in (current_version + 1)..=target_version {
         tx.execute(
             "INSERT OR IGNORE INTO schema_migrations(version, applied_at)\n\
              VALUES (?1, CAST(strftime('%s','now') AS INTEGER))",
@@ -8042,7 +8063,7 @@ fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), Store
         )
         .map_err(StoreError::Sql)?;
     }
-    tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+    tx.pragma_update(None, "user_version", target_version)
         .map_err(StoreError::Sql)?;
     tx.commit().map_err(StoreError::Sql)
 }
@@ -8210,6 +8231,145 @@ fn verify_guichet_refusal_shape_v19(tx: &Transaction<'_>) -> Result<(), StoreErr
     if probe.is_err() || before != after {
         return Err(StoreError::Corrupt(
             "forme v19 des refus fédérés incomplète",
+        ));
+    }
+    Ok(())
+}
+
+/// Une vraie v19 porte encore le vocabulaire historique fermé dans le DDL.
+/// La sonde prouve simultanément qu'une opération historique entre et que
+/// `delegate` n'entre pas, puis annule les deux essais dans tous les cas.
+fn verify_guichet_reception_shape_v19(tx: &Transaction<'_>) -> Result<(), StoreError> {
+    let before: i64 = tx
+        .query_row("SELECT COUNT(*) FROM guichet_receptions", [], |row| {
+            row.get(0)
+        })
+        .map_err(|_| StoreError::Corrupt("forme v19 des reçus du guichet incompatible avec v20"))?;
+    let suffix = Uuid::new_v4();
+    let historical_request = format!("maicie-v20-history-{suffix}");
+    let mutation_request = format!("maicie-v20-mutation-{suffix}");
+    tx.execute_batch("SAVEPOINT maicie_v20_preflight_v19")
+        .map_err(StoreError::Sql)?;
+    let historical = tx.execute(
+        "INSERT INTO guichet_receptions(
+             issuer_scope,request_id,operation,canonical_request_bytes,
+             response_message_id,claim_generation,claim_token,outcome,reply_bytes,processed_at
+         ) VALUES('maicie-v20-shape',?1,'delivery_report',X'01',?2,1,?3,'accepted',X'02',1)",
+        params![
+            historical_request,
+            format!("response-{suffix}"),
+            format!("claim-{suffix}"),
+        ],
+    );
+    let mutation_rejected = tx
+        .execute(
+            "INSERT INTO guichet_receptions(
+                 issuer_scope,request_id,operation,canonical_request_bytes,
+                 response_message_id,claim_generation,claim_token,outcome,reply_bytes,processed_at
+             ) VALUES('maicie-v20-shape',?1,'delegate',X'03',?2,1,?3,'accepted',X'04',1)",
+            params![
+                mutation_request,
+                format!("response-mutation-{suffix}"),
+                format!("claim-mutation-{suffix}"),
+            ],
+        )
+        .is_err();
+    tx.execute_batch(
+        "ROLLBACK TO maicie_v20_preflight_v19;
+         RELEASE maicie_v20_preflight_v19;",
+    )
+    .map_err(StoreError::Sql)?;
+    let after: i64 = tx
+        .query_row("SELECT COUNT(*) FROM guichet_receptions", [], |row| {
+            row.get(0)
+        })
+        .map_err(StoreError::Sql)?;
+    if historical.is_err() || !mutation_rejected || before != after {
+        return Err(StoreError::Corrupt(
+            "forme v19 des reçus du guichet incompatible avec v20",
+        ));
+    }
+    Ok(())
+}
+
+/// Migration v20 : les contraintes structurelles restent en SQL, tandis que
+/// le vocabulaire fermé appartient exclusivement à `OperationGuichet`.
+fn migrate_guichet_reception_vocabulary_v20(tx: &Transaction<'_>) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "ALTER TABLE guichet_receptions RENAME TO guichet_receptions_v19;
+         CREATE TABLE guichet_receptions (
+             issuer_scope TEXT NOT NULL,
+             request_id TEXT NOT NULL,
+             operation TEXT NOT NULL,
+             canonical_request_bytes BLOB NOT NULL,
+             objective_id TEXT,
+             delegation_id TEXT,
+             delivery_hash TEXT,
+             in_reply_to TEXT,
+             response_message_id TEXT NOT NULL,
+             claim_generation INTEGER NOT NULL CHECK(claim_generation >= 0),
+             claim_token TEXT NOT NULL,
+             outcome TEXT NOT NULL CHECK(outcome IN ('accepted','request_already_terminal')),
+             reply_bytes BLOB NOT NULL,
+             decision_id TEXT,
+             processed_at INTEGER NOT NULL,
+             PRIMARY KEY(issuer_scope, request_id),
+             UNIQUE(in_reply_to, response_message_id)
+         );
+         INSERT INTO guichet_receptions(
+             issuer_scope,request_id,operation,canonical_request_bytes,
+             objective_id,delegation_id,delivery_hash,in_reply_to,response_message_id,
+             claim_generation,claim_token,outcome,reply_bytes,decision_id,processed_at
+         )
+         SELECT issuer_scope,request_id,operation,canonical_request_bytes,
+                objective_id,delegation_id,delivery_hash,in_reply_to,response_message_id,
+                claim_generation,claim_token,outcome,reply_bytes,decision_id,processed_at
+         FROM guichet_receptions_v19;
+         DROP TABLE guichet_receptions_v19;",
+    )
+    .map_err(StoreError::Sql)
+}
+
+/// Une v20 accepte le stockage d'un nom futur mais sa lecture Rust le refuse
+/// fail-closed. La sonde reste entièrement sous savepoint.
+fn verify_guichet_reception_shape_v20(tx: &Transaction<'_>) -> Result<(), StoreError> {
+    let before: i64 = tx
+        .query_row("SELECT COUNT(*) FROM guichet_receptions", [], |row| {
+            row.get(0)
+        })
+        .map_err(|_| StoreError::Corrupt("forme v20 des reçus du guichet incomplète"))?;
+    let suffix = Uuid::new_v4();
+    let request_id = format!("maicie-v20-unknown-{suffix}");
+    tx.execute_batch("SAVEPOINT maicie_v20_reception_shape")
+        .map_err(StoreError::Sql)?;
+    let inserted = tx.execute(
+        "INSERT INTO guichet_receptions(
+             issuer_scope,request_id,operation,canonical_request_bytes,
+             response_message_id,claim_generation,claim_token,outcome,reply_bytes,processed_at
+         ) VALUES('maicie-v20-shape',?1,'future_operation',X'05',?2,1,?3,'accepted',X'06',1)",
+        params![
+            request_id,
+            format!("response-unknown-{suffix}"),
+            format!("claim-unknown-{suffix}"),
+        ],
+    );
+    let rejected_on_read = matches!(
+        load_guichet_reception(tx, "maicie-v20-shape", &request_id),
+        Err(StoreError::Corrupt("opération guichet inconnue"))
+    );
+    tx.execute_batch(
+        "ROLLBACK TO maicie_v20_reception_shape;
+         RELEASE maicie_v20_reception_shape;",
+    )
+    .map_err(StoreError::Sql)?;
+    let after: i64 = tx
+        .query_row("SELECT COUNT(*) FROM guichet_receptions", [], |row| {
+            row.get(0)
+        })
+        .map_err(StoreError::Sql)?;
+    if inserted.is_err() || !rejected_on_read || before != after {
+        return Err(StoreError::Corrupt(
+            "forme v20 des reçus du guichet incomplète",
         ));
     }
     Ok(())
@@ -9514,5 +9674,140 @@ mod coordination_transaction_tests {
                 .record_notification_issue(message_id, &IdempotencyIssue::IdempotencyExpired)
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod migration_v20_tests {
+    use super::*;
+    use rusqlite::types::Value;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn reception_row(connection: &Connection) -> Vec<Value> {
+        connection
+            .query_row(
+                "SELECT issuer_scope,request_id,operation,canonical_request_bytes,
+                        objective_id,delegation_id,delivery_hash,in_reply_to,response_message_id,
+                        claim_generation,claim_token,outcome,reply_bytes,decision_id,processed_at
+                 FROM guichet_receptions WHERE request_id='request-v19-history'",
+                [],
+                |row| (0..15).map(|index| row.get(index)).collect(),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn vraie_v19_migre_vers_v20_en_conservant_le_recu_octet_pour_octet() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-real-v19-v20-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let database = root.join("maicie.sqlite3");
+        let mut connection = Connection::open(&database).unwrap();
+        migrate_to_version(&mut connection, false, 19).unwrap();
+        connection
+            .execute(
+                "INSERT INTO guichet_receptions(
+                     issuer_scope,request_id,operation,canonical_request_bytes,
+                     objective_id,delegation_id,delivery_hash,in_reply_to,response_message_id,
+                     claim_generation,claim_token,outcome,reply_bytes,decision_id,processed_at
+                 ) VALUES(
+                     'scope-v19','request-v19-history','delivery_report',X'000102FF',
+                     NULL,NULL,'hash-v19','message-v19','response-v19',
+                     3,'claim-v19','accepted',X'7B226F6374657473223A22763139227D',NULL,1787000000
+                 )",
+                [],
+            )
+            .unwrap();
+        let before = reception_row(&connection);
+        let v19_sql: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='guichet_receptions'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(v19_sql.contains("CHECK(operation IN"));
+        drop(connection);
+        fs::set_permissions(&database, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let store = MaicieStore::open_with_migration_consent(&database, true).unwrap();
+        assert_eq!(store.schema_version().unwrap(), 20);
+        drop(store);
+
+        let connection = Connection::open(&database).unwrap();
+        assert_eq!(reception_row(&connection), before);
+        let v20_sql: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='guichet_receptions'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!v20_sql.contains("CHECK(operation"));
+        let probes: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM guichet_receptions WHERE issuer_scope='maicie-v20-shape'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(probes, 0, "les préflights v20 doivent être rollbackés");
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_inconnue_durable_est_refusee_par_le_vocabulaire_rust() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-v20-unknown-operation-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let database = root.join("maicie.sqlite3");
+        drop(MaicieStore::open(&database).unwrap());
+        let mut connection = Connection::open(&database).unwrap();
+        let tx = connection.transaction().unwrap();
+        tx
+            .execute(
+                "INSERT INTO guichet_receptions(
+                     issuer_scope,request_id,operation,canonical_request_bytes,
+                     response_message_id,claim_generation,claim_token,outcome,reply_bytes,processed_at
+                 ) VALUES('scope-v20','request-unknown','future_operation',X'01',
+                          'response-unknown',1,'claim-unknown','accepted',X'02',1)",
+                [],
+            )
+            .unwrap();
+        let observed: String = tx
+            .query_row(
+                "SELECT operation FROM guichet_receptions
+                 WHERE issuer_scope='scope-v20' AND request_id='request-unknown'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(observed, "future_operation");
+        assert!(matches!(
+            load_guichet_reception(&tx, "scope-v20", "request-unknown"),
+            Err(StoreError::Corrupt("opération guichet inconnue"))
+        ));
+        tx.commit().unwrap();
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parseur_rust_refuse_le_nom_inconnu_observe() {
+        let observed = "future_operation";
+        assert!(matches!(
+            parse_operation_name(observed),
+            Err(StoreError::Corrupt("opération guichet inconnue"))
+        ));
     }
 }

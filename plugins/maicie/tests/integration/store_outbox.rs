@@ -37,6 +37,7 @@ fn migrations_idempotentes_et_base_privee() {
         store.issuer_scope().to_string()
     };
     let connection = rusqlite::Connection::open(&database).unwrap();
+    crate::historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     connection
         .execute("DELETE FROM schema_migrations WHERE version = 2", [])
@@ -184,6 +185,7 @@ fn migration_v1_convertit_un_refus_terminal_historique_en_rejected() {
             rusqlite::params![br#"{"kind":"invalid_issued_at"}"#.as_slice(), MESSAGE_ID],
         )
         .unwrap();
+    crate::historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     connection
         .execute("DELETE FROM schema_migrations WHERE version = 2", [])
@@ -221,6 +223,7 @@ fn migration_v2_vers_v6_conserve_les_donnees_historiques_et_cree_les_tables_requ
     connection
         .execute("DROP TABLE coordination_decisions", [])
         .unwrap();
+    crate::historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection.pragma_update(None, "user_version", 2).unwrap();
     connection
         .execute("DELETE FROM schema_migrations WHERE version = 3", [])
@@ -277,6 +280,7 @@ fn migration_v3_vers_v6_ajoute_les_preuves_et_la_reservation_delegate() {
                  ON activation_outbox(terminal, state, retry_until, command_id);",
         )
         .unwrap();
+    crate::historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection.pragma_update(None, "user_version", 3).unwrap();
     connection
         .execute("DELETE FROM schema_migrations WHERE version = 4", [])
