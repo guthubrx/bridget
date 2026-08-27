@@ -517,7 +517,19 @@ fn desired_state_path(config: &DaemonConfig) -> PathBuf {
 }
 
 /// État partagé du daemon.
+#[cfg(test)]
+struct FixtureRoot(std::path::PathBuf);
+
+#[cfg(test)]
+impl Drop for FixtureRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 struct DaemonState {
+    #[cfg(test)]
+    fixture_root: Option<FixtureRoot>,
     /// Machine, base et identité **de ce daemon**, retenues une fois au
     /// démarrage.
     ///
@@ -1966,6 +1978,8 @@ impl DaemonState {
         let registry = AgentRegistry::load()?;
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
         Ok(DaemonState {
+            #[cfg(test)]
+            fixture_root: None,
             host: crate::build_info::local_host(),
             db_path: config.db_path.clone(),
             instance_id: Uuid::new_v4().to_string(),
@@ -8622,6 +8636,26 @@ mod presence_tests {
     /// Construit un état minimal avec un agent enregistré et sa présence.
     fn state_with_registered_agent(label: &str) -> (DaemonState, DaemonConfig) {
         let base = std::env::temp_dir().join(format!("bridget-{}-{}", label, std::process::id()));
+        let registry_home = base.join("home");
+        let fixture_root = FixtureRoot(registry_home.clone());
+        std::fs::create_dir_all(registry_home.join(".config/bridget")).unwrap();
+        let registry_file = registry_home.join(".config/bridget/agents.json");
+        std::fs::write(
+            &registry_file,
+            serde_json::json!({
+                "agents": {
+                    "claude": {
+                        "command": "/bin/sh",
+                        "protocol": "acp",
+                        "forbidden_env": [],
+                        "pass_env": []
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&registry_file, std::fs::Permissions::from_mode(0o600)).unwrap();
         let config = DaemonConfig {
             socket_path: base.with_extension("sock"),
             db_path: base.with_extension("db"),
@@ -8633,7 +8667,18 @@ mod presence_tests {
             retention_days: 7,
         };
         let (managed_tx, _managed_rx) = mpsc::channel();
-        let mut state = DaemonState::new(&config, managed_tx).unwrap();
+        let previous_home = std::env::var_os("HOME");
+        // DaemonState::new charge le registre via HOME ; la fixture doit lui
+        // fournir une racine locale avant toute construction d'état.
+        unsafe { std::env::set_var("HOME", &registry_home) };
+        let state_result = DaemonState::new(&config, managed_tx);
+        if let Some(home) = previous_home {
+            unsafe { std::env::set_var("HOME", home) };
+        } else {
+            unsafe { std::env::remove_var("HOME") };
+        }
+        let mut state = state_result.unwrap();
+        state.fixture_root = Some(fixture_root);
         state
             .router
             .register(Some("agent-2"), &bridget_core::AgentType::Claude, "conn-1")
