@@ -17,7 +17,7 @@ use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 
 pub const MARKER_INVENTORY_VERSION: u16 = 1;
@@ -97,6 +97,8 @@ pub enum PolicyRefreshError {
     PolicyUnavailable,
     PolicyInvalid,
     PolicyPathNotCanonical,
+    PolicyPathNotUnique,
+    LockPathNotUnique,
     MissingMarkerSource {
         principal: String,
     },
@@ -154,6 +156,14 @@ impl fmt::Display for PolicyRefreshError {
             Self::PolicyPathNotCanonical => write!(
                 formatter,
                 "le chemin de politique doit être absolu, canonique et non lié"
+            ),
+            Self::PolicyPathNotUnique => write!(
+                formatter,
+                "la politique régénérable doit posséder exactement une entrée de répertoire"
+            ),
+            Self::LockPathNotUnique => write!(
+                formatter,
+                "le verrou de régénération doit posséder exactement une entrée de répertoire"
             ),
             Self::MissingMarkerSource { principal } => write!(
                 formatter,
@@ -250,6 +260,9 @@ fn validate_policy_path(policy_path: &Path) -> Result<(), PolicyRefreshError> {
         std::fs::canonicalize(policy_path).map_err(|_| PolicyRefreshError::PolicyUnavailable)?;
     if metadata.file_type().is_symlink() || canonical != policy_path {
         return Err(PolicyRefreshError::PolicyPathNotCanonical);
+    }
+    if metadata.nlink() != 1 {
+        return Err(PolicyRefreshError::PolicyPathNotUnique);
     }
     Ok(())
 }
@@ -505,6 +518,14 @@ impl PolicyRefreshLock {
             .map_err(|error| PolicyRefreshError::Io(error.to_string()))?;
         verify_private_regular_file(&file)
             .map_err(|error| PolicyRefreshError::Io(error.to_string()))?;
+        if file
+            .metadata()
+            .map_err(|error| PolicyRefreshError::Io(error.to_string()))?
+            .nlink()
+            != 1
+        {
+            return Err(PolicyRefreshError::LockPathNotUnique);
+        }
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err(PolicyRefreshError::Io(
                 io::Error::last_os_error().to_string(),
@@ -760,6 +781,38 @@ mod tests {
             .unwrap_err(),
             PolicyRefreshError::PolicyPathNotCanonical
         );
+    }
+
+    #[test]
+    fn politique_a_plusieurs_entrees_est_refusee_avant_le_plan() {
+        let fixture = Fixture::new("hard-linked-policy");
+        let alias = fixture.root.join("policy-alias.json");
+        fs::hard_link(&fixture.policy, &alias).unwrap();
+        let original = fs::read(&fixture.policy).unwrap();
+
+        assert_eq!(
+            refresh_policy(&fixture.policy, &[], NOW, true).unwrap_err(),
+            PolicyRefreshError::PolicyPathNotUnique
+        );
+        assert_eq!(fs::read(&fixture.policy).unwrap(), original);
+        assert_eq!(fs::read(alias).unwrap(), original);
+    }
+
+    #[test]
+    fn verrou_a_plusieurs_entrees_est_refuse_avant_le_plan() {
+        let fixture = Fixture::new("hard-linked-lock");
+        let lock = fixture.root.join(".policy.json.refresh.lock");
+        let alias = fixture.root.join("lock-alias");
+        fs::write(&lock, b"").unwrap();
+        fs::set_permissions(&lock, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::hard_link(&lock, &alias).unwrap();
+        let original = fs::read(&fixture.policy).unwrap();
+
+        assert_eq!(
+            refresh_policy(&fixture.policy, &[], NOW, true).unwrap_err(),
+            PolicyRefreshError::LockPathNotUnique
+        );
+        assert_eq!(fs::read(&fixture.policy).unwrap(), original);
     }
 
     #[test]

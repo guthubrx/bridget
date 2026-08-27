@@ -68,6 +68,11 @@ politique sous verrou, calcule la génération suivante sans saturation, puis
 écrit par fichier temporaire synchronisé et renommage atomique. Le répertoire
 est synchronisé avant succès.
 
+Le rafraîchisseur exige un seul lien physique (`st_nlink == 1`) pour la
+politique et pour le verrou. Cette contrainte est propre à la régénération : la
+garde historique reste compatible, mais deux noms du même inode ne peuvent pas
+obtenir deux exclusions indépendantes avant une réécriture.
+
 Une erreur avant le renommage est un échec propre : l'original est encore au
 chemin final. Une erreur après le renommage ne permet plus de promettre cet
 état. L'outil relit et valide alors le fichier final, expose l'état observé et

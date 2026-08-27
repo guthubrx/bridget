@@ -155,6 +155,8 @@ figure dans la liste des entrées mortes.
 - Un inventaire est trop ancien ou daté dans le futur : refus avant écriture.
 - Un inventaire n'est pas un fichier privé appartenant à l'utilisateur effectif
   : refus sur le descripteur ouvert avant toute réécriture.
+- La politique régénérable ou son verrou possède plusieurs liens physiques :
+  refus avant plan, car un verrou attaché à un nom ne protège pas ses alias.
 - Plusieurs instances existantes portent des expirations ou révocations
   différentes : refus ; l'outil ne choisit jamais quel droit conserver.
 - La génération vaut la valeur maximale : refus plutôt que retour à zéro.
@@ -196,7 +198,10 @@ figure dans la liste des entrées mortes.
 - **FR-010**: La génération DOIT croître strictement à chaque réécriture ; une
   exécution sans changement NE DOIT PAS réécrire le fichier.
 - **FR-011**: La réécriture DOIT être sérialisée entre processus, atomique,
-  synchronisée sur disque et produire un fichier régulier en mode `0600`.
+  synchronisée sur disque et produire un fichier régulier en mode `0600`. La
+  politique régénérable et son verrou DOIVENT chacun posséder exactement une
+  entrée de répertoire afin qu'un même inode ne puisse recevoir deux verrous
+  indépendants par deux noms absolus.
 - **FR-012**: Toute erreur antérieure au renommage DOIT laisser la politique
   originale inchangée. Toute erreur postérieure DOIT provoquer une relecture et
   une validation du chemin final, puis rendre une issue explicitement
