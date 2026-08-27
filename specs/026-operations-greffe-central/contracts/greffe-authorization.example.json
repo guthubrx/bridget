@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "generation": 1,
+  "attestation_key": "REMPLACER_PAR_64_CHIFFRES_HEXADECIMAUX_ALEATOIRES",
+  "principals": [
+    {
+      "principal": "NOM_AGENT_ACTUEL_A_REMPLACER",
+      "actions": [
+        "delegate",
+        "registre_add",
+        "objective_close"
+      ],
+      "instances": [
+        {
+          "instance_id": "INSTANCE_ACTUELLE_A_REMPLACER",
+          "expires_at": 1893456000,
+          "revoked": false
+        }
+      ]
+    }
+  ]
+}

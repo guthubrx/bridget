@@ -138,6 +138,23 @@ relève et le résultat côté serveur, mais ne fondent aucun droit métier. Le
 rejeu idempotent restitue toujours l'attestation originale ; il n'émet jamais
 une nouvelle signature pour rafraîchir un droit expiré ou révoqué.
 
+### Mise en service de la politique
+
+1. Copier `contracts/greffe-authorization.example.json` vers
+   `~/.config/bridget/greffe-authorization.json`, remplacer le nom et
+   l'instance par les identités actuellement enregistrées, produire
+   `attestation_key` avec `openssl rand -hex 32`, fixer une expiration future,
+   puis imposer le mode `0600`. Dupliquer l'entrée `principals` pour chaque
+   agent explicitement autorisé ; aucun autre agent n'obtient de droit.
+2. Un emplacement différent est déclaré aux processus Bridget **et** Maicie
+   par `BRIDGET_GREFFE_POLICY_PATH`; le journal privé est déplacé avec
+   `BRIDGET_GREFFE_AUDIT_PATH` (défaut :
+   `~/.cache/bridget/greffe-authorization.jsonl`).
+3. Sans fichier de politique privé et lisible, les trois mutations sont toutes
+   refusées : le fil conserve le motif uniforme
+   `greffe_authorization_denied`, tandis que le journal interne nomme
+   exactement `policy_unavailable`.
+
 Cette politique suppose toutefois un appelant non hostile sous le même compte.
 `crates/bridget-transport/src/protocol.rs:854-882` reçoit aujourd'hui `name` et
 `instance_id` du client dans `Register` ;

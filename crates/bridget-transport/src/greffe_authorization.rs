@@ -959,6 +959,35 @@ mod tests {
     }
 
     #[test]
+    fn exemple_de_politique_adapte_autorise_exactement_les_trois_mutations() {
+        let fixture = Fixture::new("documented-policy");
+        let example_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+            "../../specs/026-operations-greffe-central/contracts/greffe-authorization.example.json",
+        );
+        let mut example: serde_json::Value =
+            serde_json::from_slice(&fs::read(example_path).unwrap()).unwrap();
+        example["attestation_key"] = json!(KEY);
+        example["principals"][0]["principal"] = json!("agent-autorise");
+        example["principals"][0]["instances"][0]["instance_id"] = json!("instance-autorisee");
+        example["principals"][0]["instances"][0]["expires_at"] = json!(NOW + 300);
+        fs::write(&fixture.policy, serde_json::to_vec(&example).unwrap()).unwrap();
+        fs::set_permissions(&fixture.policy, fs::Permissions::from_mode(0o600)).unwrap();
+
+        for action in GreffeMutationAction::ALL {
+            let attestation = fixture
+                .deposit(
+                    Some("agent-autorise"),
+                    Some("instance-autorisee"),
+                    Some("agent-autorise"),
+                    action,
+                )
+                .unwrap();
+            assert_eq!(attestation.action, action);
+        }
+        assert_eq!(fixture.audit_lines().len(), GreffeMutationAction::ALL.len());
+    }
+
+    #[test]
     fn nom_canonique_absent_est_refuse_avant_mutation_durable() {
         Fixture::new("missing-name").assert_deposit_refused_before_mutation(
             None,
@@ -1218,7 +1247,12 @@ mod tests {
                 .unwrap_err(),
             GreffeAuthorizationRefusal::PolicyInvalid
         );
-        assert_eq!(fixture.audit_lines().len(), 2);
+        let audit = fixture.audit_lines();
+        assert_eq!(audit.len(), 2);
+        assert_eq!(audit[0]["allowed"], false);
+        assert_eq!(audit[0]["reason"], "policy_unavailable");
+        assert_eq!(audit[1]["allowed"], false);
+        assert_eq!(audit[1]["reason"], "policy_invalid");
     }
 
     #[test]
