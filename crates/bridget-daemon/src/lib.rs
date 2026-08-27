@@ -11,6 +11,7 @@ pub mod idempotency;
 pub mod ledger;
 pub mod lifecycle;
 pub mod managed_process;
+mod managed_supervisor;
 pub mod managers;
 pub mod mcp;
 pub mod mcp_identity;
