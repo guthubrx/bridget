@@ -13840,14 +13840,15 @@ mod presence_tests {
             event_tx,
             Some(managed_test_binary()),
         );
-        shared
-            .lock()
-            .unwrap()
-            .managed_tx
-            .send(ManagedSupervisorCommand::Start {
-                prepared,
-                stop: Arc::clone(&shared.lock().unwrap().managed_spawns[&lease.command_id].stop),
-            })
+        let (managed_tx, stop) = {
+            let state = shared.lock().unwrap();
+            (
+                state.managed_tx.clone(),
+                Arc::clone(&state.managed_spawns[&lease.command_id].stop),
+            )
+        };
+        managed_tx
+            .send(ManagedSupervisorCommand::Start { prepared, stop })
             .unwrap();
 
         let ready_deadline = Instant::now() + Duration::from_secs(5);
