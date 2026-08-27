@@ -7329,10 +7329,6 @@ pub fn get_status(config: &DaemonConfig) -> Result<DaemonStatus, String> {
     use std::io::{BufReader, BufWriter, Write};
     use std::os::unix::net::UnixStream;
 
-    if !config.socket_path.exists() {
-        return Ok(DaemonStatus::default());
-    }
-
     let identity = match daemon_identity(&config.socket_path)? {
         Some(identity) => identity,
         // La socket a disparu ou refuse la connexion : aucun daemon n'est
