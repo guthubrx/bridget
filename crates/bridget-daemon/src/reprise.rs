@@ -248,7 +248,7 @@ fn send_ledger_both(
     let reg = WrapperToDaemon::Register {
         agent_type: "cli".to_string(),
         name: Some(format!("cli-reprise-{}", std::process::id())),
-        host: None,
+        host: Some(crate::build_info::local_host()),
         transport: None,
         channel: bridget_transport::ChannelReport::Unknown,
         mode: Some(PresenceMode::Cli),
@@ -1211,8 +1211,10 @@ mod tests {
     /// redevient `Ok(..)` et l'assertion meurt.
     #[test]
     fn la_trace_de_reprise_n_est_pas_lue_quand_la_base_est_ailleurs() {
-        let mut config = DaemonConfig::default();
-        config.socket_path = PathBuf::from("/tmp/bridget-absent-reprise-oracle.sock");
+        let config = DaemonConfig {
+            socket_path: PathBuf::from("/tmp/bridget-absent-reprise-oracle.sock"),
+            ..DaemonConfig::default()
+        };
         let snapshot = collect_snapshot(
             &config,
             Path::new("/repo"),

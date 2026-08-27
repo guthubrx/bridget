@@ -7265,7 +7265,7 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
     let reg = WrapperToDaemon::Register {
         agent_type: "status-probe".to_string(),
         name: Some(format!("status-{}", std::process::id())),
-        host: None,
+        host: Some(crate::build_info::local_host()),
         transport: None,
         channel: ChannelReport::Unknown,
         mode: Some(PresenceMode::Cli),

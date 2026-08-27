@@ -1739,17 +1739,18 @@ fn send_control_to_daemon(command: WrapperToDaemon) -> Result<DaemonToWrapper, S
     send_control_to_daemon_at(&socket_path(), command)
 }
 
-fn send_control_to_daemon_at(
-    socket: &std::path::Path,
-    command: WrapperToDaemon,
-) -> Result<DaemonToWrapper, String> {
-    let stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
-    let mut writer = BufWriter::new(stream);
-
-    let reg = WrapperToDaemon::Register {
+/// Enregistrement d'une connexion CLI — source UNIQUE des trois usages.
+///
+/// Le champ `host` était `None` sur les trois : le daemon lisait ensuite
+/// `requested_from` dans `conn_hosts` et n'y trouvait rien, si bien qu'un refus
+/// de lancement ne pouvait pas nommer la machine demandeuse. Trois copies du
+/// même bloc, c'est trois occasions d'oublier la même chose ; il n'y en a plus
+/// qu'une.
+fn cli_register(usage: &str) -> WrapperToDaemon {
+    WrapperToDaemon::Register {
         agent_type: "cli".to_string(),
-        name: Some(format!("cli-send-{}", std::process::id())),
-        host: None,
+        name: Some(format!("cli-{usage}-{}", std::process::id())),
+        host: Some(crate::build_info::local_host()),
         transport: None,
         channel: bridget_transport::ChannelReport::Unknown,
         mode: Some(PresenceMode::Cli),
@@ -1759,7 +1760,17 @@ fn send_control_to_daemon_at(
         domain: None,
         turn_in_progress: false,
         journal_available: None,
-    };
+    }
+}
+
+fn send_control_to_daemon_at(
+    socket: &std::path::Path,
+    command: WrapperToDaemon,
+) -> Result<DaemonToWrapper, String> {
+    let stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
+    let mut writer = BufWriter::new(stream);
+
+    let reg = cli_register("send");
     let reg_json = encode(&reg).map_err(|e| e.to_string())?;
     writeln!(writer, "{}", reg_json).map_err(|e| e.to_string())?;
     writer.flush().map_err(|e| e.to_string())?;
@@ -2009,20 +2020,7 @@ fn send_rename_to_daemon(current_name: &str, name: &str) -> Result<DaemonToWrapp
     let read_stream = stream.try_clone().map_err(|e| e.to_string())?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(read_stream);
-    let register = WrapperToDaemon::Register {
-        agent_type: "cli".to_string(),
-        name: Some(format!("cli-rename-{}", std::process::id())),
-        host: None,
-        transport: None,
-        channel: bridget_transport::ChannelReport::Unknown,
-        mode: Some(PresenceMode::Cli),
-        location: None,
-        os: None,
-        instance_id: None,
-        domain: None,
-        turn_in_progress: false,
-        journal_available: None,
-    };
+    let register = cli_register("rename");
     writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     writer.flush().map_err(|e| e.to_string())?;
@@ -2063,20 +2061,7 @@ fn send_runtime_to_daemon(
         .map_err(|e| e.to_string())?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(read_stream);
-    let register = WrapperToDaemon::Register {
-        agent_type: "cli".to_string(),
-        name: Some(format!("cli-runtime-{}", std::process::id())),
-        host: None,
-        transport: None,
-        channel: bridget_transport::ChannelReport::Unknown,
-        mode: Some(PresenceMode::Cli),
-        location: None,
-        os: None,
-        instance_id: None,
-        domain: None,
-        turn_in_progress: false,
-        journal_available: None,
-    };
+    let register = cli_register("runtime");
     writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     writer.flush().map_err(|e| e.to_string())?;
@@ -5306,8 +5291,10 @@ mod idempotency_projection_tests {
     /// `daemon::attribution_tests::compter_n_est_permis_que_sur_la_base_attestee_par_le_daemon`.
     #[test]
     fn status_ne_compte_pas_les_messages_d_une_base_qui_n_est_pas_celle_du_daemon() {
-        let mut config = DaemonConfig::default();
-        config.socket_path = std::path::PathBuf::from("/tmp/bridget-absent-oracle.sock");
+        let config = DaemonConfig {
+            socket_path: std::path::PathBuf::from("/tmp/bridget-absent-oracle.sock"),
+            ..DaemonConfig::default()
+        };
         // Daemon injoignable → aucune attestation, donc aucun compte.
         let status = daemon::get_status(&config);
         assert!(
@@ -5384,5 +5371,37 @@ mod depot_tests {
         assert!(!send_deposited(&IdempotencyIssue::EnvelopeMismatch));
         assert!(!send_deposited(&IdempotencyIssue::IdempotencyExpired));
         assert!(!send_deposited(&IdempotencyIssue::InvalidIssuedAt));
+    }
+
+    /// M2 — le `Register` du CLI doit porter SA machine.
+    ///
+    /// Il envoyait `host: None` sur ses trois usages ; le daemon lisait ensuite
+    /// `requested_from` dans `conn_hosts` et n'y trouvait rien. La couture
+    /// bout-en-bout est éprouvée par `spawn_refusal_hosts_test` ; celui-ci garde
+    /// la VALEUR émise, à la source.
+    ///
+    /// Mutant qui tue ce test : remettre `host: None` dans `cli_register` → la
+    /// première assertion meurt en affichant `None`.
+    #[test]
+    fn le_register_du_cli_porte_la_machine_locale() {
+        let attendu = crate::build_info::local_host();
+        for usage in ["send", "rename", "runtime"] {
+            match cli_register(usage) {
+                WrapperToDaemon::Register { host, name, .. } => {
+                    assert_eq!(
+                        host.as_deref(),
+                        Some(attendu.as_str()),
+                        "usage {usage} : le CLI doit attester sa machine"
+                    );
+                    // Contrôle de sens : les trois usages restent distincts, la
+                    // mise en facteur n'a pas confondu les noms.
+                    assert!(
+                        name.is_some_and(|name| name.starts_with(&format!("cli-{usage}-"))),
+                        "usage {usage} : le nom doit rester distinct"
+                    );
+                }
+                autre => panic!("Register attendu, obtenu {autre:?}"),
+            }
+        }
     }
 }
