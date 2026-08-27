@@ -17,7 +17,16 @@
 
 ### T001 — Oracle du pair silencieux
 
-- **Statut** : en attente.
+- **Statut** : terminé.
+- **Fichier** : `crates/bridget-daemon/tests/identity_probe_timeout_test.rs`.
+- **Instrument** : vrai binaire `bridget status`, vraie socket Unix jetable,
+  première trame décodée comme `RoleHandshake(Client)`, pair ensuite muet.
+- **Univers** : 1 test, 0 benchmark, listé avant le tir.
+- **Preuve rouge** :
+  `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.02s`.
+- **Diagnostic** : le client dépasse la borne externe de quatre secondes. Le
+  parent lui envoie SIGTERM, attend sa fin et libère la fixture ; aucun enfant
+  ni répertoire `bg51-*` ne reste après le tir.
 
 ### T002 — Sonde bornée et résultat explicite
 
@@ -30,4 +39,3 @@
 ### T004 — Mutant et validations
 
 - **Statut** : en attente.
-

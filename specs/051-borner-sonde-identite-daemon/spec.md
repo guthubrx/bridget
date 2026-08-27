@@ -7,8 +7,8 @@ Spec: 051-borner-sonde-identite-daemon
 Titre: Distinguer le silence du daemon de son absence
 Statut: En cours
 Priorité: P0
-Tâches: 0/4 (0%)
-Tests: 0/4 (0%)
+Tâches: 1/4 (25%)
+Tests: 1/4 (25%)
 
 Résumé:
 - Contexte: La sonde d’identité attend sans limite après qu’un pair Unix a accepté la connexion.
@@ -145,3 +145,11 @@ est rendue par la commande avant toute collecte ultérieure.
 - corriger l’arrêt coopératif du daemon ou nettoyer ses processus orphelins ;
 - introduire une relance automatique après expiration.
 
+## Mesure initiale
+
+- Univers ciblé listé avant le tir : 1 test, 0 benchmark.
+- Le vrai binaire envoie bien `RoleHandshake(Client)` au pair muet.
+- La base dépasse l’échéance externe et rend :
+  `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.02s`.
+- Après SIGTERM de l’enfant possédé par le banc, aucun processus ni répertoire
+  `bg51-*` ne subsiste.
