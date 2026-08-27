@@ -5,10 +5,10 @@
 
 Spec: 051-borner-sonde-identite-daemon
 Titre: Distinguer le silence du daemon de son absence
-Statut: En cours
+Statut: Prêt pour revue
 Priorité: P0
-Tâches: 1/4 (25%)
-Tests: 1/4 (25%)
+Tâches: 4/4 (100%)
+Tests: 4/4 (100%)
 
 Résumé:
 - Contexte: La sonde d’identité attend sans limite après qu’un pair Unix a accepté la connexion.
@@ -27,7 +27,7 @@ Fichiers:
 
 **Feature Branch**: `session-051-borner-sonde-identite-daemon`
 **Created**: 2026-08-27
-**Status**: En cours
+**Status**: Prêt pour revue
 **Priority**: P0
 **Dependencies**: SPEC-048-identite-instance-daemon, SPEC-039-validation-identite-mcp
 **Base gelée**: `f893b1e4a010a333dc8ba2348df9b8ee8e45663c`
@@ -153,3 +153,20 @@ est rendue par la commande avant toute collecte ultérieure.
   `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.02s`.
 - Après SIGTERM de l’enfant possédé par le banc, aucun processus ni répertoire
   `bg51-*` ne subsiste.
+
+## Résultats mesurés
+
+- Pair muet corrigé :
+  `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.06s`.
+- Contrôles d’identité et de redémarrage :
+  `test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 570 filtered out`.
+- Propagation reaper et reprise :
+  `test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 571 filtered out`.
+- Banc CLI voisin :
+  `test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out`.
+- Mutant final sans pose du délai :
+  `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.02s`.
+- Restauration attestée par SHA-256 identique :
+  `b68741bc79664e589d1f1938c1d078560e8e124a4a2a8ea2eee862b3abf494de`.
+- `cargo check --workspace --all-targets` est vert. Clippy strict reste rouge
+  sur dix dettes hors delta déjà présentes ; aucun résultat vert n’est revendiqué.
