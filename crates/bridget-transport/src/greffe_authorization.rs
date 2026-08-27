@@ -22,6 +22,7 @@
 //! d'un autre agent. Centraliser la déclaration réduit les sources d'identité,
 //! mais ne l'authentifie pas.
 
+use crate::greffe_policy_refresh::MarkerSource;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -364,7 +365,8 @@ fn canonical_principal(
 ) -> Result<GreffePrincipal, GreffeAuthorizationRefusal> {
     let name = name.ok_or(GreffeAuthorizationRefusal::PrincipalNameMissing)?;
     let instance_id = instance_id.ok_or(GreffeAuthorizationRefusal::PrincipalInstanceMissing)?;
-    if !valid_identity_component(name) || !valid_identity_component(instance_id) {
+    if !is_valid_greffe_identity_component(name) || !is_valid_greffe_identity_component(instance_id)
+    {
         return Err(GreffeAuthorizationRefusal::InvalidPrincipal);
     }
     if name.starts_with("cli-send-") {
@@ -376,7 +378,7 @@ fn canonical_principal(
     })
 }
 
-fn valid_identity_component(value: &str) -> bool {
+pub fn is_valid_greffe_identity_component(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_IDENTITY_BYTES && !value.chars().any(char::is_control)
 }
 
@@ -398,29 +400,31 @@ fn validate_request(
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct GreffePolicyFile {
-    version: u16,
-    generation: u64,
-    attestation_key: String,
-    principals: Vec<PrincipalPolicyFile>,
+pub(crate) struct GreffePolicyFile {
+    pub(crate) version: u16,
+    pub(crate) generation: u64,
+    pub(crate) attestation_key: String,
+    pub(crate) principals: Vec<PrincipalPolicyFile>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PrincipalPolicyFile {
-    principal: String,
-    actions: Vec<GreffeMutationAction>,
-    instances: Vec<InstancePolicyFile>,
+pub(crate) struct PrincipalPolicyFile {
+    pub(crate) principal: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) marker_source: Option<MarkerSource>,
+    pub(crate) actions: Vec<GreffeMutationAction>,
+    pub(crate) instances: Vec<InstancePolicyFile>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct InstancePolicyFile {
-    instance_id: String,
-    expires_at: i64,
-    revoked: bool,
+pub(crate) struct InstancePolicyFile {
+    pub(crate) instance_id: String,
+    pub(crate) expires_at: i64,
+    pub(crate) revoked: bool,
 }
 
 struct GreffePolicy {
@@ -442,34 +446,38 @@ struct InstancePolicy {
 
 impl GreffePolicy {
     fn load(path: &Path) -> Result<Self, GreffeAuthorizationRefusal> {
-        let content = read_private_file(path)?;
-        let file: GreffePolicyFile = serde_json::from_str(&content)
-            .map_err(|_| GreffeAuthorizationRefusal::PolicyInvalid)?;
+        let file = load_policy_file(path)?;
+        Self::from_file(&file)
+    }
+
+    fn from_file(file: &GreffePolicyFile) -> Result<Self, GreffeAuthorizationRefusal> {
         if file.version != GREFFE_POLICY_VERSION || file.generation == 0 {
             return Err(GreffeAuthorizationRefusal::PolicyInvalid);
         }
         let attestation_key = decode_key(&file.attestation_key)?;
         let mut principals = BTreeMap::new();
-        for entry in file.principals {
-            if !valid_identity_component(&entry.principal)
+        for entry in &file.principals {
+            if !is_valid_greffe_identity_component(&entry.principal)
                 || entry.actions.is_empty()
                 || entry.instances.is_empty()
             {
                 return Err(GreffeAuthorizationRefusal::PolicyInvalid);
             }
             let action_count = entry.actions.len();
-            let actions = entry.actions.into_iter().collect::<BTreeSet<_>>();
+            let actions = entry.actions.iter().copied().collect::<BTreeSet<_>>();
             if actions.len() != action_count {
                 return Err(GreffeAuthorizationRefusal::PolicyInvalid);
             }
             let mut instances = BTreeMap::new();
-            for instance in entry.instances {
-                if !valid_identity_component(&instance.instance_id) || instance.expires_at <= 0 {
+            for instance in &entry.instances {
+                if !is_valid_greffe_identity_component(&instance.instance_id)
+                    || instance.expires_at <= 0
+                {
                     return Err(GreffeAuthorizationRefusal::PolicyInvalid);
                 }
                 if instances
                     .insert(
-                        instance.instance_id,
+                        instance.instance_id.clone(),
                         InstancePolicy {
                             expires_at: instance.expires_at,
                             revoked: instance.revoked,
@@ -481,7 +489,10 @@ impl GreffePolicy {
                 }
             }
             if principals
-                .insert(entry.principal, PrincipalPolicy { actions, instances })
+                .insert(
+                    entry.principal.clone(),
+                    PrincipalPolicy { actions, instances },
+                )
                 .is_some()
             {
                 return Err(GreffeAuthorizationRefusal::PolicyInvalid);
@@ -579,6 +590,16 @@ impl GreffePolicy {
         }
         Ok(instance)
     }
+}
+
+pub(crate) fn load_policy_file(
+    path: &Path,
+) -> Result<GreffePolicyFile, GreffeAuthorizationRefusal> {
+    let content = read_private_file(path)?;
+    let file: GreffePolicyFile =
+        serde_json::from_str(&content).map_err(|_| GreffeAuthorizationRefusal::PolicyInvalid)?;
+    GreffePolicy::from_file(&file)?;
+    Ok(file)
 }
 
 fn read_private_file(path: &Path) -> Result<String, GreffeAuthorizationRefusal> {
@@ -736,7 +757,7 @@ fn append_audit(path: &Path, event: GreffeAuditEvent<'_>) -> std::io::Result<()>
     Ok(())
 }
 
-fn verify_private_regular_file(file: &File) -> std::io::Result<()> {
+pub(crate) fn verify_private_regular_file(file: &File) -> std::io::Result<()> {
     let metadata = file.metadata()?;
     if !metadata.is_file() {
         return Err(std::io::Error::other("fichier régulier requis"));
