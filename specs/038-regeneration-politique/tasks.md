@@ -23,7 +23,7 @@
 
 ## Phase 5 — Validation et livraison
 
-- [ ] T010 Exécuter compilation avant comptage, univers ciblés, dépendants, suite finale, formatage, clippy, revue hostile et REX dans `specs/038-regeneration-politique/implementation.md`
+- [x] T010 Exécuter compilation avant comptage, univers ciblés, dépendants, suite finale, formatage, clippy, revue hostile et REX dans `specs/038-regeneration-politique/implementation.md`
 
 ## Dépendances
 
