@@ -17,3 +17,5 @@
   `specs/040-observateur-espace-disque/implementation.md`.
 - [x] T008 Vérifier le périmètre, publier et consigner le REX dans
   `specs/040-observateur-espace-disque/implementation.md`.
+- [x] T009 Rebaser sur le contrat de sonde bornée et distinguer l'absence
+  déterminée du daemon de l'inventaire indisponible après attestation.

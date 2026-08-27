@@ -7395,17 +7395,17 @@ pub fn get_status(config: &DaemonConfig) -> Result<DaemonStatus, String> {
         Some(identity) => identity,
         // La socket a disparu ou refuse la connexion : aucun daemon n'est
         // observable. C'est distinct d'un pair qui a accepté puis s'est tu.
-        None => return Ok(DaemonStatus::default()),
+        None => return Ok(daemon_absent_status()),
     };
 
     let stream = match UnixStream::connect(&config.socket_path) {
         Ok(s) => s,
-        Err(_) => return Ok(DaemonStatus::default()),
+        Err(_) => return Ok(daemon_inventory_unavailable(&identity)),
     };
 
     let read_stream = match stream.try_clone() {
         Ok(s) => s,
-        Err(_) => return Ok(DaemonStatus::default()),
+        Err(_) => return Ok(daemon_inventory_unavailable(&identity)),
     };
 
     let mut writer = BufWriter::new(stream);
@@ -7428,38 +7428,38 @@ pub fn get_status(config: &DaemonConfig) -> Result<DaemonStatus, String> {
     };
     let reg_json = match encode(&reg) {
         Ok(j) => j,
-        Err(_) => return Ok(DaemonStatus::default()),
+        Err(_) => return Ok(daemon_inventory_unavailable(&identity)),
     };
     if writeln!(writer, "{}", reg_json).is_err() {
-        return Ok(DaemonStatus::default());
+        return Ok(daemon_inventory_unavailable(&identity));
     }
     if writer.flush().is_err() {
-        return Ok(DaemonStatus::default());
+        return Ok(daemon_inventory_unavailable(&identity));
     }
 
     // Lire Registered
     let mut line = String::new();
     if reader.read_line(&mut line).is_err() {
-        return Ok(DaemonStatus::default());
+        return Ok(daemon_inventory_unavailable(&identity));
     }
 
     // Demander la liste des agents
     let list_req = WrapperToDaemon::ListAgents;
     let list_json = match encode(&list_req) {
         Ok(j) => j,
-        Err(_) => return Ok(DaemonStatus::default()),
+        Err(_) => return Ok(daemon_inventory_unavailable(&identity)),
     };
     if writeln!(writer, "{}", list_json).is_err() {
-        return Ok(DaemonStatus::default());
+        return Ok(daemon_inventory_unavailable(&identity));
     }
     if writer.flush().is_err() {
-        return Ok(DaemonStatus::default());
+        return Ok(daemon_inventory_unavailable(&identity));
     }
 
     // Lire AgentList
     let mut resp_line = String::new();
     if reader.read_line(&mut resp_line).is_err() {
-        return Ok(DaemonStatus::default());
+        return Ok(daemon_inventory_unavailable(&identity));
     }
     let (agents, agents_inventory_available) = match decode::<DaemonToWrapper>(resp_line.trim()) {
         Ok(DaemonToWrapper::AgentList { agents }) => (
@@ -8120,44 +8120,152 @@ pub struct DaemonStatus {
     pub daemon_db_path: Option<String>,
 }
 
+/// Absence déterminée : aucune socket ne répond, donc l'inventaire vide est
+/// une connaissance complète, pas une défaillance de collecte.
+fn daemon_absent_status() -> DaemonStatus {
+    DaemonStatus {
+        agents_inventory_available: true,
+        ..DaemonStatus::default()
+    }
+}
+
+/// Une identité valide a attesté le daemon, puis la collecte a échoué. Ne pas
+/// rabattre cette incertitude vers une absence : un appelant doit pouvoir
+/// distinguer « aucun agent » de « agents inconnus ».
+fn daemon_inventory_unavailable(identity: &DaemonIdentity) -> DaemonStatus {
+    DaemonStatus {
+        running: true,
+        agents_inventory_available: false,
+        message_count: None,
+        build_id: Some(identity.build_id.clone()),
+        daemon_host: identity.host.clone(),
+        daemon_db_path: identity.db_path.clone(),
+        ..DaemonStatus::default()
+    }
+}
+
 #[cfg(test)]
 mod inventory_provenance_tests {
-    use super::{DaemonConfig, DaemonToWrapper, encode, get_status};
+    use super::{
+        CLIENT_CONTRACT_VERSION, ConnectionRole, DaemonConfig, DaemonToWrapper, WrapperToDaemon,
+        encode, get_status,
+    };
     use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixListener;
+    use std::os::unix::net::{UnixListener, UnixStream};
     use std::thread;
-    #[test]
-    fn socket_absente_inventaire_indisponible() {
-        let mut config = DaemonConfig::default();
-        config.socket_path = std::env::temp_dir().join("bridget-no-such-socket");
-        let status = get_status(&config);
-        assert!(!status.running);
-        assert!(!status.agents_inventory_available);
+
+    /// Sert l'aller-retour d'identité complet qu'emprunte réellement
+    /// `get_status`, puis rend la connexion au scénario qui suit. Sans cette
+    /// négociation, un EOF ici ne prouverait que l'échec de la sonde préalable.
+    fn serve_daemon_identity(mut stream: UnixStream) -> UnixStream {
+        let read_stream = stream.try_clone().expect("cloner la connexion d'identité");
+        let mut reader = BufReader::new(read_stream);
+        let mut line = String::new();
+
+        assert!(reader.read_line(&mut line).expect("lire le rôle") > 0);
+        assert!(matches!(
+            super::decode(line.trim()).expect("décoder le rôle"),
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Client
+            }
+        ));
+        writeln!(
+            stream,
+            "{}",
+            encode(&DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            })
+            .expect("encoder l'acceptation")
+        )
+        .expect("répondre au rôle");
+        stream.flush().expect("flush du rôle");
+
+        line.clear();
+        assert!(reader.read_line(&mut line).expect("lire l'accueil") > 0);
+        assert!(matches!(
+            super::decode(line.trim()).expect("décoder l'accueil"),
+            WrapperToDaemon::ClientHello { .. }
+        ));
+        writeln!(
+            stream,
+            "{}",
+            encode(&DaemonToWrapper::ClientWelcome {
+                version: CLIENT_CONTRACT_VERSION,
+                build_id: "fixture-status".to_string(),
+                horizon_secs: 60,
+                issued_at_tolerance_secs: 5,
+                capabilities: vec![],
+            })
+            .expect("encoder l'accueil")
+        )
+        .expect("répondre à l'accueil");
+        stream.flush().expect("flush de l'accueil");
+
+        line.clear();
+        assert!(reader.read_line(&mut line).expect("lire la demande") > 0);
+        assert!(matches!(
+            super::decode(line.trim()).expect("décoder la demande"),
+            WrapperToDaemon::DaemonIdentityRequest
+        ));
+        writeln!(
+            stream,
+            "{}",
+            encode(&DaemonToWrapper::DaemonIdentityReport {
+                host: "fixture-host".to_string(),
+                db_path: "/fixture/status.db".to_string(),
+                instance_id: "fixture-instance".to_string(),
+            })
+            .expect("encoder le rapport")
+        )
+        .expect("répondre au rapport");
+        stream.flush().expect("flush du rapport");
+        stream
     }
 
     #[test]
-    fn eof_apres_register_inventaire_indisponible() {
+    fn socket_absente_donne_un_inventaire_vide_disponible() {
+        let mut config = DaemonConfig::default();
+        config.socket_path = std::env::temp_dir().join(format!(
+            "bridget-no-such-socket-{}.sock",
+            uuid::Uuid::new_v4()
+        ));
+        let status = get_status(&config).expect("l'absence déterminée est un statut");
+        assert!(!status.running);
+        assert!(status.agents_inventory_available);
+        assert!(status.agents.is_empty());
+    }
+
+    #[test]
+    fn eof_apres_identite_et_register_garde_un_inventaire_indisponible() {
         let path = std::env::temp_dir().join(format!("bridget-eof-{}.sock", uuid::Uuid::new_v4()));
         let listener = UnixListener::bind(&path).unwrap();
         let thread_path = path.clone();
         let handle = thread::spawn(move || {
             let (first, _) = listener.accept().unwrap();
-            drop(first);
+            drop(serve_daemon_identity(first));
             let (mut stream, _) = listener.accept().unwrap();
             let mut line = String::new();
             BufReader::new(stream.try_clone().unwrap())
                 .read_line(&mut line)
                 .unwrap();
+            assert!(matches!(
+                super::decode(line.trim()).expect("décoder Register"),
+                WrapperToDaemon::Register { .. }
+            ));
             writeln!(stream, "{{}}").unwrap();
             stream.flush().unwrap();
             let mut list_line = String::new();
             BufReader::new(stream.try_clone().unwrap())
                 .read_line(&mut list_line)
                 .unwrap();
+            assert!(matches!(
+                super::decode(list_line.trim()).expect("décoder ListAgents"),
+                WrapperToDaemon::ListAgents
+            ));
         });
         let mut config = DaemonConfig::default();
         config.socket_path = path.clone();
-        let status = get_status(&config);
+        let status = get_status(&config).expect("le daemon a été attesté");
         handle.join().unwrap();
         let _ = std::fs::remove_file(thread_path);
         assert!(status.running);
@@ -8172,18 +8280,26 @@ mod inventory_provenance_tests {
         let thread_path = path.clone();
         let handle = thread::spawn(move || {
             let (first, _) = listener.accept().unwrap();
-            drop(first);
+            drop(serve_daemon_identity(first));
             let (mut stream, _) = listener.accept().unwrap();
             let mut line = String::new();
             BufReader::new(stream.try_clone().unwrap())
                 .read_line(&mut line)
                 .unwrap();
+            assert!(matches!(
+                super::decode(line.trim()).expect("décoder Register"),
+                WrapperToDaemon::Register { .. }
+            ));
             writeln!(stream, "{{}}").unwrap();
             stream.flush().unwrap();
             let mut list_line = String::new();
             BufReader::new(stream.try_clone().unwrap())
                 .read_line(&mut list_line)
                 .unwrap();
+            assert!(matches!(
+                super::decode(list_line.trim()).expect("décoder ListAgents"),
+                WrapperToDaemon::ListAgents
+            ));
             writeln!(
                 stream,
                 "{}",
@@ -8194,7 +8310,7 @@ mod inventory_provenance_tests {
         });
         let mut config = DaemonConfig::default();
         config.socket_path = path.clone();
-        let status = get_status(&config);
+        let status = get_status(&config).expect("la liste vide est un statut");
         handle.join().unwrap();
         let _ = std::fs::remove_file(thread_path);
         assert_eq!(

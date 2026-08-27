@@ -1124,9 +1124,27 @@ mod tests {
                 .contains("identité du daemon indisponible")
         );
 
-        let absent = agents_from_status(Ok(crate::daemon::DaemonStatus::default()))
-            .expect("un daemon réellement absent reste observable");
+        let absent = agents_from_status(Ok(crate::daemon::DaemonStatus {
+            agents_inventory_available: true,
+            ..crate::daemon::DaemonStatus::default()
+        }))
+        .expect("un daemon réellement absent reste observable")
+        .expect("l'absence déterminée donne un inventaire connu");
         assert!(absent.is_empty());
+    }
+
+    #[test]
+    fn daemon_present_mais_inventaire_indisponible_reste_incertain() {
+        let inventory = agents_from_status(Ok(crate::daemon::DaemonStatus {
+            running: true,
+            agents_inventory_available: false,
+            ..crate::daemon::DaemonStatus::default()
+        }))
+        .expect("le statut attesté reste lisible");
+        assert!(
+            inventory.is_none(),
+            "un daemon présent mais muet ne doit pas devenir un annuaire vide"
+        );
     }
 
     #[test]

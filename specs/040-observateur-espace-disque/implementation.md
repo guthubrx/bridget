@@ -2,9 +2,9 @@
 
 ## Gel et portée
 
-- base commune à intégrer : `90802b0377741b509f3743c5675544315b6f0f29` ;
-- branche : `session-040-observateur-espace-disque` ;
-- état : validé localement, publication en cours ;
+- base de l'amendement : `14fdace1e3dfd75557eec35f83f08ab1b3c04b05` ;
+- branche d'amendement : `session-040-observateur-espace-disque-amend-rc7` ;
+- état : amendé localement, contre-vérification requise ;
 - interdiction maintenue : aucune purge automatique nouvelle, locale ou
   distante.
 
@@ -79,10 +79,38 @@ l'ancien découpage au premier tiret (0 passé / 1 échec).
 Sous le code sain, la famille reaper compte 17 passés / 0 échec. Les deux
 mutants ont été rejoués après l'amendement et restaurés.
 
-## Charge M2 — provenance de l'inventaire
+## Amendement 051 — absence déterminée et collecte indisponible
 
-`DaemonStatus` porte désormais `agents_inventory_available`. Une réponse
-décodable qui n'est pas `AgentList`, ainsi qu'une fin de flux ou une erreur de
-lecture, conserve `running` mais marque l'inventaire indisponible. Le reaper
-ne projette alors pas une liste vide comme inventaire attesté : il reste en
-mode protection (absence de connaissance, jamais absence d'agent).
+Le rebase sur le contrat de sonde bornée a révélé que la tête 040 rabattait
+encore deux faits distincts vers `DaemonStatus::default()` : la socket absente
+et l'échec après une identité déjà attestée.
+
+- `daemon_identity` ne rend `None` que pour `NotFound` et
+  `ConnectionRefused`. Ces deux cas donnent `running=false`, une liste vide et
+  `agents_inventory_available=true` : l'absence est une connaissance complète.
+- Une erreur de sonde (pair accepté mais muet, réponse invalide ou délai)
+  reste un `Err` nommé. Le reaper la propage et ne fabrique aucun annuaire.
+- Après une identité valide, tout échec de Register/ListAgents conserve
+  `running=true` et rend `agents_inventory_available=false`, sans ouvrir ni
+  compter la base locale. Le reaper transforme alors ce statut en inventaire
+  absent, donc en protection fail-closed.
+
+L'inventaire des consommateurs décisionnels confirme l'arbitrage : le reaper
+propage une erreur de sonde et ne produit `Vec::new()` que pour
+`running=false`; la reprise distingue daemon hors ligne et liste réellement
+vide ; la CLI annonce l'état hors ligne avant d'interpréter les agents. Aucun
+consommateur ne peut donc conclure à l'absence de tous les agents à partir
+d'une liste vide sans le fait déterminé d'absence de daemon.
+
+Le témoin EOF sert d'abord le vrai RoleHandshake/ClientHello/rapport
+d'identité sur la première connexion, puis accepte Register et ferme après
+ListAgents sur la seconde. Il prouve ainsi l'indisponibilité de l'inventaire
+après présence attestée, et non un simple échec de la sonde préalable.
+
+Mesures sur la tête amendée : inventaire daemon 3 passés / 0 échec / 591
+filtrés ; famille reaper 20 passés / 0 échec / 574 filtrés. Le mutant M3 qui
+fait accepter toute réponse non-`AgentList` comme inventaire vide donne 2
+passés / 1 échec / 591 filtrés, sur le témoin EOF. Le mutant M1 qui retire la
+reconnaissance du nom complet à tiret donne successivement `jc2` au lieu de
+`jc2-review`, puis `Incertain` au lieu de `Protégé` après inversion de l'ordre
+des deux assertions : les deux yeux du témoin sont causaux.

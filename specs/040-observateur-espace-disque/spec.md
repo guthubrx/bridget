@@ -1,6 +1,6 @@
 # Spécification 040 — Observateur d'espace disque fédéré
 
-**Statut** : En cours
+**Statut** : Amendée — contre-vérification de la tête rebasée requise
 
 **Base commune à intégrer** : `90802b0377741b509f3743c5675544315b6f0f29`
 
@@ -87,6 +87,11 @@ arbre candidat sous cette racine est rendu ; un instrument silencieux sur
   Aucun repli vers `TMPDIR` n'est admis.
 - **FR-0409** : la phase reste `observer` ; l'API et le CLI n'ajoutent ni
   suppression, ni signal, ni commande distante.
+- **FR-0410** : l'absence déterminée du daemon (`NotFound` ou
+  `ConnectionRefused` avant toute négociation) produit un inventaire vide et
+  disponible. Dès qu'un daemon a attesté son identité, tout échec ultérieur de
+  collecte produit un inventaire indisponible ; il ne devient jamais une liste
+  vide.
 
 ## Critères de succès
 
