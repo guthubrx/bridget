@@ -56,6 +56,39 @@ fn validate_message_body(body: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn unknown_argument(command: &str, argument: &str) -> String {
+    format!("{command}: argument inconnu: {argument}")
+}
+
+/// Les commandes sans option doivent refuser le premier surplus avant tout
+/// effet de bord. Les wrappers et les corps libres de `send`/`reply` ne font
+/// volontairement pas partie de cette grammaire fermée.
+fn validate_zero_arity_command(command: &str, args: &[String]) -> Result<(), String> {
+    if matches!(
+        command,
+        "daemon"
+            | "mcp"
+            | "discover"
+            | "status"
+            | "ledger"
+            | "version"
+            | "--version"
+            | "-v"
+            | "help"
+            | "--help"
+            | "-h"
+    ) && let Some(argument) = args.first()
+    {
+        return Err(unknown_argument(command, argument));
+    }
+    Ok(())
+}
+
+fn exit_argument_error(error: &str) -> ! {
+    eprintln!("bridget {error}");
+    std::process::exit(2);
+}
+
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
@@ -88,6 +121,10 @@ pub fn run() {
             std::process::exit(1);
         });
         launch_agent_wrapper(cmd, &agent_type, rest);
+    }
+
+    if let Err(error) = validate_zero_arity_command(cmd, &args[2..]) {
+        exit_argument_error(&error);
     }
 
     // --- Sous-commandes daemon / client ---
@@ -1725,23 +1762,48 @@ fn send_control_to_daemon_at(
     Ok(resp)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CancelArgs {
+    id: String,
+    reason: Option<String>,
+}
+
+fn parse_cancel_args(args: &[String]) -> Result<CancelArgs, String> {
+    let id = match args.first() {
+        Some(argument) if argument.starts_with('-') => {
+            return Err(unknown_argument("cancel", argument));
+        }
+        Some(id) => id.clone(),
+        None => return Err("cancel: identifiant manquant".to_string()),
+    };
+    let reason = match args.get(1).map(String::as_str) {
+        None => None,
+        Some("--reason") => Some(
+            args.get(2)
+                .cloned()
+                .ok_or_else(|| "cancel: --reason requiert une valeur".to_string())?,
+        ),
+        Some(argument) => return Err(unknown_argument("cancel", argument)),
+    };
+    if let Some(argument) = args.get(if reason.is_some() { 3 } else { 1 }) {
+        return Err(unknown_argument("cancel", argument));
+    }
+    Ok(CancelArgs { id, reason })
+}
+
 fn cmd_cancel(args: &[String]) {
-    if args.is_empty() {
+    let parsed = parse_cancel_args(args).unwrap_or_else(|error| {
+        eprintln!("bridget {error}");
         eprintln!("usage: bridget cancel <id> [--reason <texte>]");
         std::process::exit(2);
-    }
-    let reason = args
-        .windows(2)
-        .find(|pair| pair[0] == "--reason")
-        .map(|pair| pair[1].clone());
-    let id = args[0].clone();
+    });
     match send_control_to_daemon(WrapperToDaemon::CancelRequest {
-        id: id.clone(),
+        id: parsed.id.clone(),
         sender: current_agent_name(),
-        reason,
+        reason: parsed.reason,
     }) {
         Ok(DaemonToWrapper::RequestCancelled { state, .. }) => {
-            println!("Demande #{} : {}", id, state)
+            println!("Demande #{} : {}", parsed.id, state)
         }
         Ok(DaemonToWrapper::Nack { reason, .. }) => {
             eprintln!("REJET: {}", reason);
@@ -2068,20 +2130,43 @@ fn cmd_runtime(args: &[String]) {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HookCommand {
+    ClaudeRuntime,
+    ClaudeStatusline,
+    Unknown(String),
+}
+
+fn parse_hook_args(args: &[String]) -> Result<HookCommand, String> {
+    let Some(name) = args.first() else {
+        return Err("hook: nom manquant".to_string());
+    };
+    match name.as_str() {
+        "claude-runtime" | "claude-statusline" if args.len() > 1 => {
+            Err(unknown_argument("hook", &args[1]))
+        }
+        "claude-runtime" => Ok(HookCommand::ClaudeRuntime),
+        "claude-statusline" => Ok(HookCommand::ClaudeStatusline),
+        _ => Ok(HookCommand::Unknown(name.clone())),
+    }
+}
+
 /// Commande appelée par un hook d'agent, jamais par un humain.
 ///
-/// Contrat : sortie standard vide, code de retour toujours 0. Un hook qui
-/// écrit ou qui échoue perturberait la session de l'agent observé (FR-013).
+/// Exception délibérée à la règle générale de refus : un NOM de hook inconnu
+/// reste fail-soft, avec stdout vide et code 0, car faire échouer un hook
+/// perturberait la session observée (FR-013). Les deux noms connus gardent en
+/// revanche une arité stricte afin de ne jamais ignorer un argument.
 fn cmd_hook(args: &[String]) {
-    match args.first().map(String::as_str) {
-        Some("claude-runtime") => hook_claude_runtime(),
-        Some("claude-statusline") => hook_claude_statusline(),
-        Some(other) => {
-            log::debug!("hook inconnu: {}", other);
-        }
-        None => {
-            eprintln!("usage: bridget hook <claude-runtime|claude-statusline>");
-            std::process::exit(2);
+    match parse_hook_args(args).unwrap_or_else(|error| {
+        eprintln!("bridget {error}");
+        eprintln!("usage: bridget hook <claude-runtime|claude-statusline>");
+        std::process::exit(2);
+    }) {
+        HookCommand::ClaudeRuntime => hook_claude_runtime(),
+        HookCommand::ClaudeStatusline => hook_claude_statusline(),
+        HookCommand::Unknown(name) => {
+            log::debug!("hook inconnu: {}", name);
         }
     }
 }
@@ -2354,8 +2439,23 @@ fn claude_settings_path() -> std::path::PathBuf {
 /// Commande du hook telle qu'inscrite dans la configuration de Claude Code.
 const HOOK_COMMAND: &str = "bridget hook claude-runtime";
 
+fn parse_install_hooks_args(args: &[String]) -> Result<bool, String> {
+    match args {
+        [] => Ok(false),
+        [option] if option == "--remove" => Ok(true),
+        [option, argument, ..] if option == "--remove" => {
+            Err(unknown_argument("install-hooks", argument))
+        }
+        [argument, ..] => Err(unknown_argument("install-hooks", argument)),
+    }
+}
+
 fn cmd_install_hooks(args: &[String]) {
-    let remove = args.iter().any(|arg| arg == "--remove");
+    let remove = parse_install_hooks_args(args).unwrap_or_else(|error| {
+        eprintln!("bridget {error}");
+        eprintln!("usage: bridget install-hooks [--remove]");
+        std::process::exit(2);
+    });
     let path = claude_settings_path();
 
     let content = match std::fs::read_to_string(&path) {
@@ -2546,20 +2646,27 @@ fn domain_state_path(agent: &str) -> std::path::PathBuf {
         .join(agent)
 }
 
-fn cmd_domain(args: &[String]) {
-    let reset = args.iter().any(|arg| arg == "--reset");
-    let requested = args.iter().find(|arg| !arg.starts_with("--")).cloned();
+fn parse_domain_args(args: &[String]) -> Result<Option<String>, String> {
+    match args {
+        [option] if option == "--reset" => Ok(None),
+        [domain] if !domain.starts_with('-') => {
+            validate_agent_name(domain).map_err(|reason| format!("domain: {reason}"))?;
+            Ok(Some(domain.clone()))
+        }
+        [] => Err("domain: nom ou --reset requis".to_string()),
+        [first, argument, ..] if first == "--reset" || !first.starts_with('-') => {
+            Err(unknown_argument("domain", argument))
+        }
+        [argument, ..] => Err(unknown_argument("domain", argument)),
+    }
+}
 
-    if !reset && requested.is_none() {
+fn cmd_domain(args: &[String]) {
+    let domain = parse_domain_args(args).unwrap_or_else(|error| {
+        eprintln!("bridget {error}");
         eprintln!("usage: bridget domain <nom> | bridget domain --reset");
         std::process::exit(2);
-    }
-    if let Some(name) = &requested
-        && let Err(reason) = validate_agent_name(name)
-    {
-        eprintln!("erreur: {}", reason);
-        std::process::exit(2);
-    }
+    });
 
     let agent = current_agent_name();
     if agent == "human" {
@@ -2567,7 +2674,6 @@ fn cmd_domain(args: &[String]) {
         std::process::exit(1);
     }
 
-    let domain = if reset { None } else { requested };
     let message = WrapperToDaemon::Domain {
         agent: agent.clone(),
         domain: domain.clone(),
@@ -2631,23 +2737,40 @@ fn parse_duration(value: &str) -> Result<Duration, String> {
     Ok(Duration::from_secs(amount * multiplier))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DndArgs {
+    Enable(Option<Duration>),
+    Disable,
+}
+
+fn parse_dnd_args(args: &[String]) -> Result<DndArgs, String> {
+    match args {
+        [] => Ok(DndArgs::Enable(None)),
+        [value] if value == "off" => Ok(DndArgs::Disable),
+        [option, value] if option == "--duration" => parse_duration(value)
+            .map(|duration| DndArgs::Enable(Some(duration)))
+            .map_err(|reason| format!("dnd: {reason}")),
+        [option] if option == "--duration" => {
+            Err("dnd: --duration requiert une valeur".to_string())
+        }
+        [option, value, argument, ..] if option == "--duration" => {
+            parse_duration(value).map_err(|reason| format!("dnd: {reason}"))?;
+            Err(unknown_argument("dnd", argument))
+        }
+        [first, argument, ..] if first == "off" => Err(unknown_argument("dnd", argument)),
+        [argument, ..] => Err(unknown_argument("dnd", argument)),
+    }
+}
+
 fn cmd_dnd(args: &[String]) {
-    let lift = args.iter().any(|arg| arg == "off");
-    let duration = match args.iter().position(|arg| arg == "--duration") {
-        Some(index) => match args.get(index + 1) {
-            Some(value) => match parse_duration(value) {
-                Ok(duration) => Some(duration),
-                Err(reason) => {
-                    eprintln!("erreur: {}", reason);
-                    std::process::exit(2);
-                }
-            },
-            None => {
-                eprintln!("usage: bridget dnd [off] [--duration 30m]");
-                std::process::exit(2);
-            }
-        },
-        None => None,
+    let parsed = parse_dnd_args(args).unwrap_or_else(|error| {
+        eprintln!("bridget {error}");
+        eprintln!("usage: bridget dnd [off] [--duration 30m]");
+        std::process::exit(2);
+    });
+    let (lift, duration) = match parsed {
+        DndArgs::Enable(duration) => (false, duration),
+        DndArgs::Disable => (true, None),
     };
 
     let agent = current_agent_name();
@@ -2839,19 +2962,61 @@ fn cmd_reply(args: &[String]) {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DirectoryArgs {
+    json: bool,
+    domain: Option<String>,
+}
+
+fn parse_directory_args(
+    command: &str,
+    args: &[String],
+    allow_json: bool,
+) -> Result<DirectoryArgs, String> {
+    let mut parsed = DirectoryArgs {
+        json: false,
+        domain: None,
+    };
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" if allow_json && !parsed.json => parsed.json = true,
+            "--json" if allow_json => {
+                return Err(format!("{command}: option dupliquée: --json"));
+            }
+            "--domain" if parsed.domain.is_none() => {
+                index += 1;
+                let domain = args
+                    .get(index)
+                    .filter(|value| !value.starts_with('-'))
+                    .cloned()
+                    .ok_or_else(|| format!("{command}: --domain requiert une valeur"))?;
+                parsed.domain = Some(domain);
+            }
+            "--domain" => return Err(format!("{command}: option dupliquée: --domain")),
+            argument => return Err(unknown_argument(command, argument)),
+        }
+        index += 1;
+    }
+    Ok(parsed)
+}
+
 fn cmd_agents(args: &[String]) {
-    let json_output = args.iter().any(|a| a == "--json");
-    let filter = extract_domain_filter(args);
+    let parsed = parse_directory_args("agents", args, true).unwrap_or_else(|error| {
+        eprintln!("bridget {error}");
+        eprintln!("usage: bridget agents [--json] [--domain <nom>]");
+        std::process::exit(2);
+    });
 
     let config = DaemonConfig::default();
     let mut status = daemon::get_status(&config);
-    if let Some(domain) = &filter {
+    if let Some(domain) = &parsed.domain {
         status
             .agents
             .retain(|agent| agent.domain.as_deref() == Some(domain.as_str()));
     }
     if !status.running {
-        if json_output {
+        if parsed.json {
             println!("[]");
         } else {
             eprintln!("daemon non demarre (socket absente)");
@@ -2859,7 +3024,7 @@ fn cmd_agents(args: &[String]) {
         std::process::exit(1);
     }
 
-    if json_output {
+    if parsed.json {
         println!(
             "{}",
             serde_json::to_string(&status.agents).unwrap_or_else(|_| "[]".to_string())
@@ -2886,15 +3051,12 @@ fn cmd_agents(args: &[String]) {
     }
 }
 
-/// Extrait la valeur de `--domain <nom>` des arguments d'une commande d'annuaire.
-fn extract_domain_filter(args: &[String]) -> Option<String> {
-    args.iter()
-        .position(|arg| arg == "--domain")
-        .and_then(|index| args.get(index + 1))
-        .cloned()
-}
-
 fn cmd_who(args: &[String]) {
+    let parsed = parse_directory_args("who", args, false).unwrap_or_else(|error| {
+        eprintln!("bridget {error}");
+        eprintln!("usage: bridget who [--domain <nom>]");
+        std::process::exit(2);
+    });
     let config = DaemonConfig::default();
     let status = daemon::get_status(&config);
     if !status.running {
@@ -2902,9 +3064,8 @@ fn cmd_who(args: &[String]) {
         std::process::exit(1);
     }
 
-    let filter = extract_domain_filter(args);
     let build_id = status.build_id.as_deref().unwrap_or("inconnu");
-    let agents: Vec<_> = match &filter {
+    let agents: Vec<_> = match &parsed.domain {
         Some(domain) => status
             .agents
             .into_iter()
@@ -2913,7 +3074,7 @@ fn cmd_who(args: &[String]) {
         None => status.agents,
     };
 
-    print!("{}", render_who(&agents, filter.as_deref()));
+    print!("{}", render_who(&agents, parsed.domain.as_deref()));
     println!("Daemon build-id: {build_id}");
     emit_stale_daemon_warning(status.build_id.as_deref());
     emit_disk_warning();
@@ -3290,8 +3451,20 @@ fn cmd_reaper(args: &[String]) {
     }
 }
 
+fn parse_cleanup_args(args: &[String]) -> Result<(), String> {
+    match args {
+        [option] if option == "--dry-run" => Ok(()),
+        [option, argument, ..] if option == "--dry-run" => {
+            Err(unknown_argument("cleanup", argument))
+        }
+        [argument, ..] => Err(unknown_argument("cleanup", argument)),
+        [] => Err("cleanup: --dry-run requis".to_string()),
+    }
+}
+
 fn cmd_cleanup(args: &[String]) {
-    if args.first().map(String::as_str) != Some("--dry-run") {
+    if let Err(error) = parse_cleanup_args(args) {
+        eprintln!("bridget {error}");
         eprintln!("usage: bridget cleanup --dry-run");
         eprintln!("Liste les target/ des worktrees déjà mergés — aucune suppression.");
         std::process::exit(2);
@@ -3410,6 +3583,92 @@ mod hook_tests {
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
     use std::thread;
+
+    fn argv(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn commandes_sans_arguments_refusent_le_surplus_qu_elles_recevront_en_production() {
+        for command in [
+            "daemon",
+            "mcp",
+            "discover",
+            "status",
+            "ledger",
+            "version",
+            "--version",
+            "-v",
+            "help",
+            "--help",
+            "-h",
+        ] {
+            let error = validate_zero_arity_command(command, &argv(&["SURPLUS"]))
+                .expect_err("le surplus doit être refusé");
+            assert!(error.contains(command), "commande absente de {error}");
+            assert!(error.contains("SURPLUS"), "argument absent de {error}");
+            assert!(validate_zero_arity_command(command, &[]).is_ok());
+        }
+    }
+
+    #[test]
+    fn parseurs_structures_refusent_tous_le_premier_surplus() {
+        let errors = [
+            parse_cancel_args(&argv(&["--SURPLUS"])).unwrap_err(),
+            parse_cancel_args(&argv(&["demande", "SURPLUS"])).unwrap_err(),
+            parse_hook_args(&argv(&["claude-runtime", "SURPLUS"])).unwrap_err(),
+            parse_install_hooks_args(&argv(&["--remove", "SURPLUS"])).unwrap_err(),
+            parse_domain_args(&argv(&["revue", "SURPLUS"])).unwrap_err(),
+            parse_dnd_args(&argv(&["off", "SURPLUS"])).unwrap_err(),
+            parse_directory_args("agents", &argv(&["--json", "SURPLUS"]), true).unwrap_err(),
+            parse_directory_args("who", &argv(&["--domain", "revue", "SURPLUS"]), false)
+                .unwrap_err(),
+            parse_cleanup_args(&argv(&["--dry-run", "SURPLUS"])).unwrap_err(),
+        ];
+        for error in errors {
+            assert!(error.contains("SURPLUS"), "argument non nommé dans {error}");
+        }
+    }
+
+    #[test]
+    fn parseurs_structures_conservent_les_formes_documentees_et_le_hook_fail_soft() {
+        assert_eq!(
+            parse_cancel_args(&argv(&["demande", "--reason", "plus utile"])).unwrap(),
+            CancelArgs {
+                id: "demande".to_string(),
+                reason: Some("plus utile".to_string()),
+            }
+        );
+        assert_eq!(
+            parse_hook_args(&argv(&["claude-runtime"])).unwrap(),
+            HookCommand::ClaudeRuntime
+        );
+        assert_eq!(
+            parse_hook_args(&argv(&["extension-future", "payload-opaque"])).unwrap(),
+            HookCommand::Unknown("extension-future".to_string())
+        );
+        assert!(!parse_install_hooks_args(&[]).unwrap());
+        assert!(parse_install_hooks_args(&argv(&["--remove"])).unwrap());
+        assert_eq!(
+            parse_domain_args(&argv(&["revue-croisee"])).unwrap(),
+            Some("revue-croisee".to_string())
+        );
+        assert_eq!(parse_domain_args(&argv(&["--reset"])).unwrap(), None);
+        assert_eq!(parse_dnd_args(&[]).unwrap(), DndArgs::Enable(None));
+        assert_eq!(parse_dnd_args(&argv(&["off"])).unwrap(), DndArgs::Disable);
+        assert_eq!(
+            parse_dnd_args(&argv(&["--duration", "15m"])).unwrap(),
+            DndArgs::Enable(Some(Duration::from_secs(15 * 60)))
+        );
+        assert_eq!(
+            parse_directory_args("agents", &argv(&["--domain", "revue", "--json"]), true).unwrap(),
+            DirectoryArgs {
+                json: true,
+                domain: Some("revue".to_string()),
+            }
+        );
+        assert!(parse_cleanup_args(&argv(&["--dry-run"])).is_ok());
+    }
 
     #[test]
     fn repli_cli_prend_le_nom_dans_l_environnement() {
