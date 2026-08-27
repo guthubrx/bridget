@@ -17,15 +17,21 @@ fn fixture_root(label: &str) -> PathBuf {
 }
 
 fn run_cli(home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_bridget"))
+    run_cli_as(home, args, Some("probe"))
+}
+
+fn run_cli_as(home: &Path, args: &[&str], agent_name: Option<&str>) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
+    command
         .args(args)
         .env_clear()
         .env("HOME", home)
         .env("PATH", std::env::var("PATH").unwrap_or_default())
-        .env("BRIDGET_AGENT_NAME", "probe")
-        .stdin(Stdio::null())
-        .output()
-        .expect("exécuter le vrai binaire bridget")
+        .stdin(Stdio::null());
+    if let Some(agent_name) = agent_name {
+        command.env("BRIDGET_AGENT_NAME", agent_name);
+    }
+    command.output().expect("exécuter le vrai binaire bridget")
 }
 
 fn short_message_fixture_root() -> PathBuf {
@@ -73,15 +79,30 @@ fn capture_one_message(
 }
 
 fn run_message_cli(args: &[&str]) -> (Output, Option<String>, bool, bool) {
+    run_message_cli_as(args, Some("probe"), Some("destinataire"))
+}
+
+fn run_message_cli_as(
+    args: &[&str],
+    agent_name: Option<&str>,
+    previous_sender: Option<&str>,
+) -> (Output, Option<String>, bool, bool) {
     let root = short_message_fixture_root();
     let cache = root.join(".cache/bridget");
     fs::create_dir_all(&cache).unwrap();
-    fs::write(cache.join("last-sender-probe"), "destinataire\n").unwrap();
+    if let Some(previous_sender) = previous_sender {
+        let agent_name = agent_name.unwrap_or("human");
+        fs::write(
+            cache.join(format!("last-sender-{agent_name}")),
+            format!("{previous_sender}\n"),
+        )
+        .unwrap();
+    }
     let listener = UnixListener::bind(cache.join("bridget.sock")).unwrap();
     let (stop_tx, stop_rx) = mpsc::channel();
     let capture = capture_one_message(listener, stop_rx);
 
-    let output = run_cli(&root, args);
+    let output = run_cli_as(&root, args, agent_name);
     let _ = stop_tx.send(());
     let serialized_message = capture.join().unwrap();
     let pid_exists = cache.join("bridget.pid").exists();
@@ -146,6 +167,27 @@ fn assert_missing_message_option_value_rejected(args: &[&str], option: &str) {
         stderr.contains("requiert une valeur"),
         "cause absente de {stderr}"
     );
+    assert!(!pid_exists, "la validation ne doit pas créer le PID file");
+    assert!(!database_exists, "la validation ne doit pas créer la base");
+}
+
+fn assert_reply_contract_rejected(
+    args: &[&str],
+    agent_name: Option<&str>,
+    previous_sender: Option<&str>,
+    option: &str,
+) {
+    let (output, serialized_message, pid_exists, database_exists) =
+        run_message_cli_as(args, agent_name, previous_sender);
+
+    assert!(
+        serialized_message.is_none(),
+        "{args:?}: la contradiction a laissé partir {serialized_message:?}"
+    );
+    assert_eq!(output.status.code(), Some(2), "sortie réelle: {output:?}");
+    assert!(output.stdout.is_empty(), "stdout inattendu: {output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(option), "option absente de {stderr}");
     assert!(!pid_exists, "la validation ne doit pas créer le PID file");
     assert!(!database_exists, "la validation ne doit pas créer la base");
 }
@@ -219,6 +261,58 @@ fn reply_refuse_les_valeurs_invalides_sans_dernier_expediteur() {
 }
 
 #[test]
+fn send_et_reply_refusent_timeout_sans_reply_avant_connexion() {
+    for (args, previous_sender) in [
+        (
+            vec!["send", "--to", "destinataire", "--timeout", "30", "message"],
+            Some("destinataire"),
+        ),
+        (
+            vec!["reply", "--timeout", "30", "message"],
+            Some("destinataire"),
+        ),
+    ] {
+        assert_reply_contract_rejected(&args, Some("probe"), previous_sender, "--timeout");
+    }
+}
+
+#[test]
+fn send_et_reply_refusent_reply_humain_avant_connexion() {
+    for (args, previous_sender) in [
+        (
+            vec![
+                "send",
+                "--to",
+                "destinataire",
+                "--reply",
+                "--timeout",
+                "30",
+                "message",
+            ],
+            Some("destinataire"),
+        ),
+        (
+            vec![
+                "send",
+                "--to",
+                "destinataire",
+                "--from",
+                "human",
+                "--reply",
+                "message",
+            ],
+            Some("destinataire"),
+        ),
+        (
+            vec!["reply", "--reply", "--timeout", "30", "message"],
+            Some("destinataire"),
+        ),
+    ] {
+        assert_reply_contract_rejected(&args, None, previous_sender, "--reply");
+    }
+}
+
+#[test]
 fn send_et_reply_conservent_les_valeurs_numeriques_valides() {
     for args in [
         vec![
@@ -246,6 +340,7 @@ fn send_et_reply_conservent_les_valeurs_numeriques_valides() {
         assert!(output.status.success(), "sortie réelle: {output:?}");
         let message: serde_json::Value =
             serde_json::from_str(message.as_deref().expect("message sérialisé")).unwrap();
+        assert_eq!(message["reply"], true);
         assert_eq!(message["reply_timeout"], 9);
         assert_eq!(message["hops"], 2);
         assert!(!pid_exists, "la commande ne doit pas créer le PID file");
@@ -335,6 +430,20 @@ fn send_nomme_les_options_de_texte_privees_de_valeur() {
         &["send", "--to", "destinataire", "message", "--from"],
         "--from",
     );
+}
+
+#[test]
+fn message_humain_sans_demande_suivie_reste_envoye() {
+    let (output, message, pid_exists, database_exists) =
+        run_message_cli_as(&["send", "--to", "destinataire", "message"], None, None);
+    assert!(output.status.success(), "sortie réelle: {output:?}");
+    let message: serde_json::Value =
+        serde_json::from_str(message.as_deref().expect("message sérialisé")).unwrap();
+    assert_eq!(message["from"], "human");
+    assert_eq!(message["reply"], false);
+    assert!(message["reply_timeout"].is_null());
+    assert!(!pid_exists, "la commande ne doit pas créer le PID file");
+    assert!(!database_exists, "la commande ne doit pas créer la base");
 }
 
 #[test]
