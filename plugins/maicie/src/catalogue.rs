@@ -151,6 +151,51 @@ impl MissionSource {
     }
 }
 
+/// Nature d'une entrée du registre — cycles de vie distincts.
+///
+/// `constat` : défaut mesuré, fermable. `regle` : invariant de méthode,
+/// jamais fermé. `resultat` : acquis déjà consigné, pas un dû.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryNature {
+    #[default]
+    Constat,
+    Regle,
+    Resultat,
+}
+
+impl EntryNature {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Constat => "constat",
+            Self::Regle => "regle",
+            Self::Resultat => "resultat",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "constat" => Some(Self::Constat),
+            "regle" => Some(Self::Regle),
+            "resultat" => Some(Self::Resultat),
+            _ => None,
+        }
+    }
+
+    pub const fn is_constat(self) -> bool {
+        matches!(self, Self::Constat)
+    }
+
+    fn skip_if_constat(nature: &EntryNature) -> bool {
+        nature.is_constat()
+    }
+
+    /// Seul un constat se ferme ou se réfute.
+    pub const fn allows_closure(self) -> bool {
+        self.is_constat()
+    }
+}
+
 /// Entrée `add` du journal v1.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -161,6 +206,9 @@ pub struct AddEntry {
     pub date: String,
     pub mission_source: MissionSource,
     pub severity: Severity,
+    /// Cycle de vie. Absent au journal → `constat` (rétrocompat).
+    #[serde(default, skip_serializing_if = "EntryNature::skip_if_constat")]
+    pub nature: EntryNature,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurrence_of: Option<String>,
     pub text: String,
@@ -198,6 +246,12 @@ pub struct TransitionEntry {
     /// Requalification : nouvelle sévérité.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub severity_to: Option<Severity>,
+    /// Reclassification : nature d'origine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nature_from: Option<EntryNature>,
+    /// Reclassification : nouvelle nature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nature_to: Option<EntryNature>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -293,6 +347,7 @@ impl RaisonRefutation {
 pub enum RaisonRequalification {
     SeveriteAjustee,
     PerimetreAffine,
+    NatureReclassee,
 }
 
 impl RaisonRequalification {
@@ -300,6 +355,7 @@ impl RaisonRequalification {
         match self {
             Self::SeveriteAjustee => "severite_ajustee",
             Self::PerimetreAffine => "perimetre_affine",
+            Self::NatureReclassee => "nature_reclassee",
         }
     }
 
@@ -307,6 +363,7 @@ impl RaisonRequalification {
         match value {
             "severite_ajustee" => Some(Self::SeveriteAjustee),
             "perimetre_affine" => Some(Self::PerimetreAffine),
+            "nature_reclassee" => Some(Self::NatureReclassee),
             _ => None,
         }
     }
@@ -515,6 +572,7 @@ pub fn transcribe_observed_fact(
             date: fact.date.clone(),
             mission_source,
             severity: covered.derived_severity(),
+            nature: EntryNature::Constat,
             recurrence_of: None,
             text: fact.text.clone(),
         };
@@ -549,11 +607,12 @@ pub struct OpenConstatView {
     pub id: String,
     pub date: String,
     pub severity: Severity,
+    pub nature: EntryNature,
     pub recurrence_of: Option<String>,
     pub gate_failed: bool,
     pub text: String,
     pub mission_source: MissionSource,
-    /// True si une requalification a ajusté la sévérité affichée.
+    /// True si une requalification a ajusté la sévérité ou la nature.
     pub requalifie: bool,
 }
 
@@ -584,10 +643,13 @@ pub struct ClosedConstatView {
     pub recurrence_of: Option<String>,
 }
 
-/// Pied N/M/K/P + T/R/Q.
+/// Pied : dû / règles / résultats séparés + T/R/Q.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegistreFooter {
+    /// Ouverts de nature `constat` — le dû fermable.
     pub ouverts: usize,
+    pub ouverts_regle: usize,
+    pub ouverts_resultat: usize,
     pub recurrents: usize,
     pub gates_rates: usize,
     pub pending_qualification: usize,
@@ -755,6 +817,7 @@ impl CatalogueJournal {
             date,
             mission_source,
             severity,
+            nature: EntryNature::Constat,
             recurrence_of: None,
             text: pending.text.clone(),
         };
@@ -818,7 +881,17 @@ impl CatalogueJournal {
             reference: None,
             severity_from: None,
             severity_to: None,
+            nature_from: None,
+            nature_to: None,
         };
+        let existing = self.read_entries()?;
+        let nature = resolve_open_nature(&link.constat_id, &existing).unwrap_or(EntryNature::Constat);
+        if !nature.allows_closure() {
+            return Err(CatalogueError::TransitionInvalide(format!(
+                "clôture refusée : nature={} n'est pas un constat fermable",
+                nature.as_str()
+            )));
+        }
         self.append_transition(entry)
     }
 
@@ -862,20 +935,33 @@ impl CatalogueJournal {
         )
     }
 
-    /// Requalifie : charge réelle, sévérité changée — reste ouvert.
+    /// Requalifie : sévérité et/ou nature — reste ouvert.
+    ///
+    /// Au moins un des deux changements est obligatoire. Une règle ne peut
+    /// jamais porter `blocker` (refus à l'écriture).
     pub fn requalify_constat(
         &mut self,
         constat_id: &str,
-        from: Severity,
-        to: Severity,
+        severity: Option<(Severity, Severity)>,
+        nature: Option<(EntryNature, EntryNature)>,
         raison: RaisonRequalification,
         reference: Option<&str>,
         observed_at: &str,
     ) -> Result<AppendOutcome, CatalogueError> {
-        if from == to {
+        let severity_change = severity.is_some_and(|(from, to)| from != to);
+        let nature_change = nature.is_some_and(|(from, to)| from != to);
+        if !severity_change && !nature_change {
             return Err(CatalogueError::TransitionInvalide(
-                "requalification refusée : sévérité inchangée".into(),
+                "requalification refusée : sévérité et nature inchangées".into(),
             ));
+        }
+        if let Some((from, to)) = severity {
+            if from == to && !nature_change {
+                return Err(CatalogueError::TransitionInvalide(
+                    "requalification refusée : sévérité inchangée".into(),
+                ));
+            }
+            let _ = (from, to);
         }
         let reference = match reference {
             Some(raw) if !raw.trim().is_empty() => {
@@ -901,6 +987,30 @@ impl CatalogueJournal {
                 "constat {constat_id} déjà delivered : requalification refusée"
             )));
         }
+        let effective_severity = severity
+            .map(|(_, to)| to)
+            .or_else(|| resolve_open_severity(constat_id, &existing))
+            .ok_or_else(|| CatalogueError::ReferenceInconnue {
+                field: "constat_id",
+                id: constat_id.to_string(),
+            })?;
+        let target_nature = nature
+            .map(|(_, to)| to)
+            .or_else(|| resolve_open_nature(constat_id, &existing))
+            .unwrap_or(EntryNature::Constat);
+        if target_nature == EntryNature::Regle && effective_severity == Severity::Blocker {
+            return Err(CatalogueError::TransitionInvalide(
+                "requalification refusée : une règle ne peut pas porter blocker".into(),
+            ));
+        }
+        let (severity_from, severity_to) = match severity {
+            Some((from, to)) => (Some(from), Some(to)),
+            None => (None, None),
+        };
+        let (nature_from, nature_to) = match nature {
+            Some((from, to)) => (Some(from), Some(to)),
+            None => (None, None),
+        };
         let entry = TransitionEntry {
             v: CATALOGUE_VERSION,
             kind: TransitionKind::Transition,
@@ -912,8 +1022,10 @@ impl CatalogueJournal {
             trigger: TransitionTrigger::Requalified,
             raison: Some(raison.as_str().to_string()),
             reference,
-            severity_from: Some(from),
-            severity_to: Some(to),
+            severity_from,
+            severity_to,
+            nature_from,
+            nature_to,
         };
         self.append_entry_with_existing(CatalogueEntry::Transition(entry), &existing)
     }
@@ -951,6 +1063,8 @@ impl CatalogueJournal {
             reference: Some(reference.trim().to_string()),
             severity_from: None,
             severity_to: None,
+            nature_from: None,
+            nature_to: None,
         };
         validate_transition_shape(&entry)?;
         let existing = self.read_entries()?;
@@ -963,6 +1077,13 @@ impl CatalogueJournal {
                 field: "constat_id",
                 id: constat_id.to_string(),
             });
+        }
+        let nature = resolve_open_nature(constat_id, &existing).unwrap_or(EntryNature::Constat);
+        if !nature.allows_closure() {
+            return Err(CatalogueError::TransitionInvalide(format!(
+                "{verb} refusée : nature={} n'est pas un constat fermable",
+                nature.as_str()
+            )));
         }
         let already_delivered = existing.iter().any(|prev| match prev {
             CatalogueEntry::Transition(t) => {
@@ -1345,6 +1466,11 @@ fn validate_add_shape(entry: &AddEntry) -> Result<(), CatalogueError> {
     }
     validate_rfc3339_with_offset(&entry.date)?;
     entry.mission_source.validate()?;
+    if entry.nature == EntryNature::Regle && entry.severity == Severity::Blocker {
+        return Err(CatalogueError::Format(
+            "une règle ne peut pas porter severity=blocker".into(),
+        ));
+    }
     if let Some(parent) = &entry.recurrence_of {
         if parent.trim().is_empty() {
             return Err(CatalogueError::Format("recurrence_of vide".into()));
@@ -1385,9 +1511,11 @@ fn validate_transition_shape(entry: &TransitionEntry) -> Result<(), CatalogueErr
                 || entry.reference.is_some()
                 || entry.severity_from.is_some()
                 || entry.severity_to.is_some()
+                || entry.nature_from.is_some()
+                || entry.nature_to.is_some()
             {
                 return Err(CatalogueError::TransitionInvalide(
-                    "raison/référence/sévérité interdites pour objective_closed".into(),
+                    "raison/référence/sévérité/nature interdites pour objective_closed".into(),
                 ));
             }
         }
@@ -1435,9 +1563,13 @@ fn validate_transition_shape(entry: &TransitionEntry) -> Result<(), CatalogueErr
                 }
                 _ => unreachable!(),
             }
-            if entry.severity_from.is_some() || entry.severity_to.is_some() {
+            if entry.severity_from.is_some()
+                || entry.severity_to.is_some()
+                || entry.nature_from.is_some()
+                || entry.nature_to.is_some()
+            {
                 return Err(CatalogueError::TransitionInvalide(
-                    "sévérité interdite pour fermeture/réfutation".into(),
+                    "sévérité/nature interdites pour fermeture/réfutation".into(),
                 ));
             }
         }
@@ -1462,11 +1594,38 @@ fn validate_transition_shape(entry: &TransitionEntry) -> Result<(), CatalogueErr
                     "raison de requalification inconnue '{raison}'"
                 )));
             }
-            match (entry.severity_from, entry.severity_to) {
-                (Some(from), Some(to)) if from != to => {}
+            match (entry.severity_from, entry.severity_to, entry.nature_from, entry.nature_to)
+            {
+                (Some(from), Some(to), nature_from, nature_to) if from != to => {
+                    if let (Some(nf), Some(nt)) = (nature_from, nature_to) {
+                        if nf == nt {
+                            return Err(CatalogueError::TransitionInvalide(
+                                "requalification : nature_from ≠ nature_to si les deux sont présents"
+                                    .into(),
+                            ));
+                        }
+                    } else if nature_from.is_some() || nature_to.is_some() {
+                        return Err(CatalogueError::TransitionInvalide(
+                            "requalification : nature_from et nature_to ensemble ou absents".into(),
+                        ));
+                    }
+                }
+                (None, None, Some(from), Some(to)) if from != to => {}
+                (Some(from), Some(to), Some(nf), Some(nt)) if from == to && nf != nt => {}
                 _ => {
                     return Err(CatalogueError::TransitionInvalide(
-                        "requalification : severity_from ≠ severity_to obligatoires".into(),
+                        "requalification : changer severity_from≠severity_to et/ou nature_from≠nature_to"
+                            .into(),
+                    ));
+                }
+            }
+            if entry.nature_to == Some(EntryNature::Regle) {
+                let blocker = entry.severity_to == Some(Severity::Blocker)
+                    || (entry.severity_to.is_none()
+                        && entry.severity_from == Some(Severity::Blocker));
+                if blocker {
+                    return Err(CatalogueError::TransitionInvalide(
+                        "requalification refusée : une règle ne peut pas porter blocker".into(),
                     ));
                 }
             }
@@ -1629,6 +1788,7 @@ pub fn migrate_prose_record(
             date: record.date.clone().expect("date présente"),
             mission_source: record.mission_source.clone().expect("source présente"),
             severity: record.severity.expect("sévérité présente"),
+            nature: EntryNature::Constat,
             recurrence_of: record.recurrence_of.clone(),
             text: record.text.clone(),
         };
@@ -1680,7 +1840,9 @@ pub fn parse_prose_corpus(bytes: &[u8]) -> Result<Vec<ProseMigrationRecord>, Cat
 /// Réduit le journal en vue déterministe (aucune écriture).
 pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
     let mut delivered_by: BTreeMap<String, &TransitionEntry> = BTreeMap::new();
-    let mut requalifs: BTreeMap<String, &TransitionEntry> = BTreeMap::new();
+    let mut severity_override: BTreeMap<String, Severity> = BTreeMap::new();
+    let mut nature_override: BTreeMap<String, EntryNature> = BTreeMap::new();
+    let mut requalifie_ids: BTreeSet<String> = BTreeSet::new();
     let mut adds: BTreeMap<String, &AddEntry> = BTreeMap::new();
     let mut pendings: BTreeMap<String, &PendingQualificationEntry> = BTreeMap::new();
 
@@ -1691,8 +1853,13 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
             }
             CatalogueEntry::Transition(transition) => match transition.trigger {
                 TransitionTrigger::Requalified => {
-                    // Dernière requalification gagne (ordre journal).
-                    requalifs.insert(transition.constat_id.clone(), transition);
+                    requalifie_ids.insert(transition.constat_id.clone());
+                    if let Some(severity) = transition.severity_to {
+                        severity_override.insert(transition.constat_id.clone(), severity);
+                    }
+                    if let Some(nature) = transition.nature_to {
+                        nature_override.insert(transition.constat_id.clone(), nature);
+                    }
                 }
                 TransitionTrigger::ObjectiveClosed
                 | TransitionTrigger::RemediedAttested
@@ -1712,15 +1879,20 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
         .values()
         .filter(|add| !delivered_by.contains_key(&add.id))
         .map(|add| {
-            let requalifie = requalifs.contains_key(&add.id);
-            let severity = requalifs
+            let requalifie = requalifie_ids.contains(&add.id);
+            let severity = severity_override
                 .get(&add.id)
-                .and_then(|t| t.severity_to)
+                .copied()
                 .unwrap_or(add.severity);
+            let nature = nature_override
+                .get(&add.id)
+                .copied()
+                .unwrap_or(add.nature);
             OpenConstatView {
                 id: add.id.clone(),
                 date: add.date.clone(),
                 severity,
+                nature,
                 recurrence_of: add.recurrence_of.clone(),
                 gate_failed: add.mission_source.is_failed_gate(),
                 text: add.text.clone(),
@@ -1774,14 +1946,31 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
             .then_with(|| left.id.cmp(&right.id))
     });
 
+    let ouverts_du = ouverts
+        .iter()
+        .filter(|item| item.nature == EntryNature::Constat)
+        .count();
+    let ouverts_regle = ouverts
+        .iter()
+        .filter(|item| item.nature == EntryNature::Regle)
+        .count();
+    let ouverts_resultat = ouverts
+        .iter()
+        .filter(|item| item.nature == EntryNature::Resultat)
+        .count();
     let recurrents = ouverts
         .iter()
-        .filter(|item| item.recurrence_of.is_some())
+        .filter(|item| item.nature == EntryNature::Constat && item.recurrence_of.is_some())
         .count();
-    let gates_rates = ouverts.iter().filter(|item| item.gate_failed).count();
+    let gates_rates = ouverts
+        .iter()
+        .filter(|item| item.nature == EntryNature::Constat && item.gate_failed)
+        .count();
     let requalifies = ouverts.iter().filter(|item| item.requalifie).count();
     let footer = RegistreFooter {
-        ouverts: ouverts.len(),
+        ouverts: ouverts_du,
+        ouverts_regle,
+        ouverts_resultat,
         recurrents,
         gates_rates,
         pending_qualification: attente.len(),
@@ -1796,6 +1985,48 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
         refutes,
         footer,
     }
+}
+
+fn resolve_open_nature(constat_id: &str, entries: &[CatalogueEntry]) -> Option<EntryNature> {
+    let mut nature = None;
+    for entry in entries {
+        match entry {
+            CatalogueEntry::Add(add) if add.id == constat_id => {
+                nature = Some(add.nature);
+            }
+            CatalogueEntry::Transition(transition)
+                if transition.constat_id == constat_id
+                    && transition.trigger == TransitionTrigger::Requalified =>
+            {
+                if let Some(to) = transition.nature_to {
+                    nature = Some(to);
+                }
+            }
+            _ => {}
+        }
+    }
+    nature
+}
+
+fn resolve_open_severity(constat_id: &str, entries: &[CatalogueEntry]) -> Option<Severity> {
+    let mut severity = None;
+    for entry in entries {
+        match entry {
+            CatalogueEntry::Add(add) if add.id == constat_id => {
+                severity = Some(add.severity);
+            }
+            CatalogueEntry::Transition(transition)
+                if transition.constat_id == constat_id
+                    && transition.trigger == TransitionTrigger::Requalified =>
+            {
+                if let Some(to) = transition.severity_to {
+                    severity = Some(to);
+                }
+            }
+            _ => {}
+        }
+    }
+    severity
 }
 
 fn compare_open_constats(left: &OpenConstatView, right: &OpenConstatView) -> Ordering {
@@ -1859,8 +2090,9 @@ pub fn render_registre_list_sections(view: &RegistreView, sections: RegistreList
                 .unwrap_or_default();
             let gate = if item.gate_failed { " gate=failed" } else { "" };
             out.push_str(&format!(
-                "- {badge} [{severity:?}] {id} {date} source={source_kind}/{source_id}{recurrence}{gate}\n  {text}\n",
+                "- {badge} [{severity:?}] nature={nature} {id} {date} source={source_kind}/{source_id}{recurrence}{gate}\n  {text}\n",
                 severity = item.severity,
+                nature = item.nature.as_str(),
                 id = item.id,
                 date = item.date,
                 source_kind = match item.mission_source.kind {
@@ -1935,10 +2167,12 @@ pub fn render_registre_list_sections(view: &RegistreView, sections: RegistreList
     }
     // Pied : les trois états toujours, même si le corps est filtré.
     out.push_str(&format!(
-        "pied: {n} OUVERTS dont {m} récurrents, {k} gates ratés, {p} en attente ; {t} FERMÉS, {r} RÉFUTÉS, {q} REQUALIFIÉS\n",
+        "pied: {n} DÛ dont {m} récurrents, {k} gates ratés ; {nr} RÈGLES ; {ns} RÉSULTATS ; {p} en attente ; {t} FERMÉS, {r} RÉFUTÉS, {q} REQUALIFIÉS\n",
         n = view.footer.ouverts,
         m = view.footer.recurrents,
         k = view.footer.gates_rates,
+        nr = view.footer.ouverts_regle,
+        ns = view.footer.ouverts_resultat,
         p = view.footer.pending_qualification,
         t = view.footer.traites,
         r = view.footer.refutes,
@@ -1965,6 +2199,7 @@ mod tests {
                 failed: None,
             },
             severity,
+            nature: EntryNature::Constat,
             recurrence_of: None,
             text: format!("texte {id}"),
         }
@@ -2517,6 +2752,7 @@ mod tests {
                 failed: None,
             },
             severity: Severity::Major,
+            nature: EntryNature::Constat,
             recurrence_of: None,
             text: "trois décisions sans témoin".into(),
         };
@@ -2571,6 +2807,7 @@ mod tests {
                 failed: None,
             },
             severity: Severity::Major,
+            nature: EntryNature::Constat,
             recurrence_of: None,
             text: text.into(),
         }
@@ -2604,7 +2841,7 @@ mod tests {
             "badge OUVERT absent: {rendered}"
         );
         assert!(
-            rendered.contains("pied: 1 OUVERTS") && rendered.contains("0 FERMÉS, 0 RÉFUTÉS"),
+            rendered.contains("pied: 1 DÛ") && rendered.contains("0 FERMÉS, 0 RÉFUTÉS"),
             "pied ouvert exact attendu, reçu: {rendered}"
         );
         assert!(
@@ -2738,5 +2975,100 @@ mod tests {
             "pied trois états, reçu: {rendered}"
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Contrôle positif d'abord : un constat se ferme. Puis la règle refuse.
+    #[test]
+    fn oracle_une_regle_ne_peut_pas_etre_fermee() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-nature-close-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("catalogue.jsonl");
+        let mut journal = CatalogueJournal::open(&path).unwrap();
+        let mut constat = sample_add("c-ok", Severity::Major, "2026-08-27T01:00:00Z");
+        constat.nature = EntryNature::Constat;
+        journal.append_add(constat).unwrap();
+        assert_eq!(
+            journal
+                .close_constat_attested(
+                    "c-ok",
+                    RaisonFermeture::CorrigeParLot,
+                    "sha:4f6cf27",
+                    "2026-08-27T01:01:00Z",
+                )
+                .unwrap(),
+            AppendOutcome::Appended,
+            "PROMESSE — un constat DOIT pouvoir se fermer (contrôle positif)"
+        );
+        let mut regle = sample_add("r-interdit", Severity::Major, "2026-08-27T01:00:00Z");
+        regle.nature = EntryNature::Regle;
+        journal.append_add(regle).unwrap();
+        let err = journal
+            .close_constat_attested(
+                "r-interdit",
+                RaisonFermeture::CorrigeParLot,
+                "sha:4f6cf27",
+                "2026-08-27T01:02:00Z",
+            )
+            .expect_err("PROMESSE — une règle NE DOIT PAS se fermer");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("n'est pas un constat fermable") || msg.contains("regle"),
+            "motif de refus attendu, reçu: {msg}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Contrôle positif : un constat porte Blocker. Puis la règle refuse.
+    #[test]
+    fn oracle_une_regle_ne_peut_pas_porter_blocker() {
+        let mut ok = sample_add("c-blocker", Severity::Blocker, "2026-08-27T01:00:00Z");
+        ok.nature = EntryNature::Constat;
+        assert!(
+            validate_add_shape(&ok).is_ok(),
+            "PROMESSE — un constat DOIT pouvoir porter blocker"
+        );
+        let mut regle = sample_add("r-blocker", Severity::Blocker, "2026-08-27T01:00:00Z");
+        regle.nature = EntryNature::Regle;
+        let err = validate_add_shape(&regle).expect_err("PROMESSE — règle+blocker interdit");
+        assert!(
+            err.to_string().contains("blocker"),
+            "refus blocker sur règle, reçu: {err}"
+        );
+    }
+
+    /// Contrôle positif : un constat compte dans le dû. Une règle n'y entre pas.
+    #[test]
+    fn oracle_le_pied_ne_compte_pas_une_regle_dans_le_du() {
+        let constat = CatalogueEntry::Add({
+            let mut e = sample_add("c-du", Severity::Major, "2026-08-27T01:00:00Z");
+            e.nature = EntryNature::Constat;
+            e
+        });
+        let regle = CatalogueEntry::Add({
+            let mut e = sample_add("r-hors-du", Severity::Major, "2026-08-27T01:00:00Z");
+            e.nature = EntryNature::Regle;
+            e
+        });
+        let view = project_registre(&[constat]);
+        assert_eq!(
+            view.footer.ouverts, 1,
+            "PROMESSE — un constat DOIT compter dans le dû"
+        );
+        assert_eq!(view.footer.ouverts_regle, 0);
+        let view = project_registre(&[regle]);
+        assert_eq!(
+            view.footer.ouverts, 0,
+            "PROMESSE — une règle NE DOIT PAS compter dans le dû"
+        );
+        assert_eq!(view.footer.ouverts_regle, 1);
+        let rendered = render_registre_list(&view);
+        assert!(
+            rendered.contains("pied: 0 DÛ") && rendered.contains("1 RÈGLES"),
+            "pied scindé, reçu: {rendered}"
+        );
     }
 }

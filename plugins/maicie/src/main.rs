@@ -867,11 +867,13 @@ enum RegistreAction {
         reference: String,
         date: String,
     },
-    /// Requalifié : vrai, sévérité changée — reste ouvert.
+    /// Requalifié : sévérité et/ou nature — reste ouvert.
     Requalifier {
         constat_id: String,
-        from: catalogue::Severity,
-        to: catalogue::Severity,
+        from: Option<catalogue::Severity>,
+        to: Option<catalogue::Severity>,
+        nature_from: Option<catalogue::EntryNature>,
+        nature_to: Option<catalogue::EntryNature>,
         raison: catalogue::RaisonRequalification,
         reference: Option<String>,
         date: String,
@@ -1625,6 +1627,8 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
     let mut reference = None;
     let mut de = None;
     let mut vers = None;
+    let mut nature_de = None;
+    let mut nature_vers = None;
     let mut index = 0;
     while index < tail.len() {
         match tail[index].as_str() {
@@ -1679,6 +1683,16 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             "--vers" => {
                 set_once_string(&mut vers, next_value(tail, &mut index, "--vers")?, "vers")?
             }
+            "--nature-de" => set_once_string(
+                &mut nature_de,
+                next_value(tail, &mut index, "--nature-de")?,
+                "nature-de",
+            )?,
+            "--nature-vers" => set_once_string(
+                &mut nature_vers,
+                next_value(tail, &mut index, "--nature-vers")?,
+                "nature-vers",
+            )?,
             "--fermes" => {
                 if fermes {
                     return Err(CliError::Usage("option --fermes dupliquée"));
@@ -1834,12 +1848,47 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
                 "--raison typée obligatoire pour registre requalifier",
             ))?;
             let raison = catalogue::RaisonRequalification::parse(&raison_raw).ok_or(
-                CliError::Usage("raison requalifier : severite_ajustee|perimetre_affine"),
+                CliError::Usage(
+                    "raison requalifier : severite_ajustee|perimetre_affine|nature_reclassee",
+                ),
             )?;
+            let from = match de {
+                Some(raw) => Some(parse_severity(&raw)?),
+                None => None,
+            };
+            let to = match vers {
+                Some(raw) => Some(parse_severity(&raw)?),
+                None => None,
+            };
+            if from.is_some() != to.is_some() {
+                return Err(CliError::Usage(
+                    "requalifier : --de et --vers ensemble ou absents",
+                ));
+            }
+            let nature_from = match nature_de {
+                Some(raw) => Some(parse_entry_nature(&raw)?),
+                None => None,
+            };
+            let nature_to = match nature_vers {
+                Some(raw) => Some(parse_entry_nature(&raw)?),
+                None => None,
+            };
+            if nature_from.is_some() != nature_to.is_some() {
+                return Err(CliError::Usage(
+                    "requalifier : --nature-de et --nature-vers ensemble ou absents",
+                ));
+            }
+            if from.is_none() && nature_from.is_none() {
+                return Err(CliError::Usage(
+                    "requalifier : fournir --de/--vers et/ou --nature-de/--nature-vers",
+                ));
+            }
             RegistreAction::Requalifier {
                 constat_id: constat_id.ok_or(CliError::Usage("--constat obligatoire"))?,
-                from: parse_severity(&de.ok_or(CliError::Usage("--de obligatoire"))?)?,
-                to: parse_severity(&vers.ok_or(CliError::Usage("--vers obligatoire"))?)?,
+                from,
+                to,
+                nature_from,
+                nature_to,
                 raison,
                 reference,
                 date: date.ok_or(CliError::Usage("--date obligatoire"))?,
@@ -1862,6 +1911,12 @@ fn parse_severity(value: &str) -> Result<catalogue::Severity, CliError> {
         "info" => Ok(catalogue::Severity::Info),
         _ => Err(CliError::Usage("severity : blocker, major, minor ou info")),
     }
+}
+
+fn parse_entry_nature(value: &str) -> Result<catalogue::EntryNature, CliError> {
+    catalogue::EntryNature::parse(value).ok_or(CliError::Usage(
+        "nature : constat, regle ou resultat",
+    ))
 }
 
 fn parse_source_kind(value: &str) -> Result<catalogue::MissionSourceKind, CliError> {
@@ -2036,6 +2091,8 @@ fn run_registre(arguments: RegistreArgs, migrate: bool) -> Result<String, CliErr
             constat_id,
             from,
             to,
+            nature_from,
+            nature_to,
             raison,
             reference,
             date,
@@ -2045,11 +2102,29 @@ fn run_registre(arguments: RegistreArgs, migrate: bool) -> Result<String, CliErr
                     CliError::Catalogue(CatalogueError::TransitionInvalide(error.to_string()))
                 })?;
             }
+            let severity = match (from, to) {
+                (Some(a), Some(b)) => Some((a, b)),
+                (None, None) => None,
+                _ => {
+                    return Err(CliError::Usage(
+                        "requalifier : --de et --vers ensemble ou absents",
+                    ));
+                }
+            };
+            let nature = match (nature_from, nature_to) {
+                (Some(a), Some(b)) => Some((a, b)),
+                (None, None) => None,
+                _ => {
+                    return Err(CliError::Usage(
+                        "requalifier : --nature-de et --nature-vers ensemble ou absents",
+                    ));
+                }
+            };
             let outcome = journal
                 .requalify_constat(
                     &constat_id,
-                    from,
-                    to,
+                    severity,
+                    nature,
                     raison,
                     reference.as_deref(),
                     &date,
