@@ -4,25 +4,14 @@ pub const BUILD_ID: &str = env!("BRIDGET_BUILD_ID");
 /// Désignation employée quand la machine du daemon n'est pas attestée.
 pub const MACHINE_NON_ATTESTEE: &str = "machine non attestée";
 
-/// Nom de la machine qui exécute ce binaire. Source unique du projet :
-/// `wrapper::host_name` s'y ramène, et l'annuaire affiche la même valeur.
-pub fn local_host() -> String {
-    if let Ok(host) = std::env::var("HOSTNAME")
-        && !host.trim().is_empty()
-    {
-        return host.trim().to_string();
-    }
-    std::process::Command::new("hostname")
-        .output()
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|host| host.trim().to_string())
-        .filter(|host| !host.is_empty())
-        .unwrap_or_else(|| "inconnu".to_string())
-}
+/// Nom de la machine qui exécute ce binaire.
+///
+/// **Ré-export**, pas une copie : il n'existe qu'une seule implémentation, dans
+/// `bridget_core::host`. Le langage interdit ici la divergence qu'un simple
+/// renvoi manuel finirait par autoriser — et le greffe, qui ne dépend pas de ce
+/// paquet, lit exactement la même.
+pub use bridget_core::local_host;
 
-/// Chemins qui n'ont pas encore l'hôte du daemon sous la main. La machine est
-/// alors déclarée **non attestée** — jamais supposée locale.
 pub fn stale_daemon_warning(daemon_build_id: &str) -> Option<String> {
     stale_daemon_warning_at(daemon_build_id, None)
 }
@@ -208,6 +197,24 @@ mod tests {
         assert!(
             !warning.contains("daemon périmé sur cartae"),
             "une machine inconnue ne doit pas être supposée locale : {warning}"
+        );
+    }
+
+    /// La chaîne complète doit rendre UNE SEULE valeur.
+    ///
+    /// `wrapper::host_name` -> `build_info::local_host` -> `bridget_core::local_host`.
+    /// CE QUE CET ORACLE PROUVE ET CE QU'IL NE PROUVE PAS, je le dis ici plutôt
+    /// que de laisser croire : il constate l'égalité des valeurs rendues. Il ne
+    /// PROTÈGE pas contre une copie fidèle. Ce qui protège, c'est que
+    /// `build_info::local_host` est un `pub use` — il n'existe qu'un seul item,
+    /// et le langage interdit qu'un second en diverge.
+    #[test]
+    fn les_deux_chemins_rendent_la_meme_machine() {
+        assert_eq!(local_host(), bridget_core::local_host());
+        assert_eq!(
+            local_host(),
+            bridget_core::host::local_host(),
+            "le ré-export et le chemin complet désignent le même item"
         );
     }
 }
