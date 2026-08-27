@@ -2482,8 +2482,9 @@
 
   // Ensemble fermé des payload.kind d'ACTES journalisés.
   // Source de vérité écriture : bridget_transport::JournalUpdateKind::ACTS.
-  // Un oracle Rust (TEMOIN_vocabulaire_vue_et_ecriture_ne_divergent_pas) meurt
-  // si cette liste diverge de l'enum. Ne pas ajouter un kind ici sans l'enum.
+  // Oracle Rust TEMOIN_vocabulaire_vue_et_ecriture_ne_divergent_pas : évalue
+  // ce Set **au runtime** via node require (sens, pas parse source). Borne :
+  // protège le contenu runtime ; ne protège pas un export retiré du module.
   //
   // tool_call = héritage pré-78d57dc. Accepté tant que journaux/fixtures legacy
   // l'écrivent ; projeté en `tool`. Disparition : quand (1) daemons post-78d57dc,

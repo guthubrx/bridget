@@ -65,7 +65,6 @@ struct QueueState {
     closed: bool,
 }
 
-
 struct PendingProviderRequest {
     message_id: Option<String>,
     method: String,
@@ -137,7 +136,7 @@ impl CodexActKind {
     }
 
     fn as_str(self) -> &'static str {
-        self.as_update_kind().as_str()
+        crate::act_kind::pilot_kind_str(self.as_update_kind())
     }
 }
 
@@ -151,7 +150,6 @@ struct ReaderContext {
     pinned_model: Option<String>,
     active_detail: ActiveTurnDetail,
 }
-
 
 pub struct CodexAppServerTransport {
     connection_id: String,
@@ -901,10 +899,7 @@ fn record_active_act(
         .map(|active| active.message_id.clone());
     if let Some(message_id) = message_id {
         let mut payload = serde_json::Map::from_iter([
-            (
-                "kind".to_string(),
-                Value::String(kind.as_str().to_string()),
-            ),
+            ("kind".to_string(), Value::String(kind.as_str().to_string())),
             ("text".to_string(), Value::String(text.to_string())),
         ]);
         if let Some(detail) = detail {
@@ -1779,13 +1774,7 @@ mod tests {
             Some("m1"),
             json!({"kind":"intent","text":"fantôme"}),
         );
-        let drained: Vec<_> = observations
-            .0
-            .lock()
-            .unwrap()
-            .events
-            .drain(..)
-            .collect();
+        let drained: Vec<_> = observations.0.lock().unwrap().events.drain(..).collect();
         assert!(
             drained.iter().any(|event| matches!(
                 &event.kind,
@@ -1798,6 +1787,98 @@ mod tests {
             writer.stop();
         }
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Dette 3 — oracle bout-en-bout Codex : commandExecution → record_active_act
+    /// avec kind interdit → JournalFailed drainé. Preuve d'abord qu'un cas valide passe.
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_codex_pilote_kind_interdit_emet_JournalFailed_bout_en_bout() {
+        let (events_ok, journal_ok) = {
+            let _suite = crate::act_kind::pilot_kind_suite_lock();
+            codex_activity_turn_managed_events("e2e-ok")
+        };
+        assert!(
+            events_ok
+                .iter()
+                .all(|event| { !matches!(event.kind, ManagedEventKind::JournalFailed { .. }) }),
+            "cas valide ne doit pas émettre JournalFailed, got {events_ok:?}"
+        );
+        assert!(
+            journal_ok.iter().any(|event| {
+                event["event"] == "update" && event["payload"]["kind"] == "command"
+            }),
+            "cas valide doit journaliser kind=command, got {journal_ok:?}"
+        );
+
+        let (events_bad, journal_bad) =
+            crate::act_kind::with_forced_pilot_update_kind("intent", || {
+                codex_activity_turn_managed_events("e2e-bad")
+            });
+        assert!(
+            events_bad.iter().any(|event| matches!(
+                &event.kind,
+                ManagedEventKind::JournalFailed { detail }
+                    if detail.contains("hors vocabulaire")
+            )),
+            "kind interdit du pilote doit être VISIBLE via JournalFailed, got {events_bad:?}"
+        );
+        assert!(
+            journal_bad
+                .iter()
+                .all(|event| event["payload"]["kind"] != "intent"),
+            "le kind refusé ne doit jamais atteindre le JSONL, got {journal_bad:?}"
+        );
+    }
+
+    fn codex_activity_turn_managed_events(label: &str) -> (Vec<ManagedEvent>, Vec<Value>) {
+        let root = root(label);
+        let trace = root.join("trace.jsonl");
+        let environment = [
+            (
+                "BRIDGET_CODEX_TRACE".to_string(),
+                trace.to_string_lossy().into_owned(),
+            ),
+            ("BRIDGET_CODEX_ACTIVITY".to_string(), "1".to_string()),
+        ];
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            fake_options(&trace),
+            &environment,
+            false,
+        )
+        .expect("session native e2e");
+        transport
+            .activate_journal(&root, "codex-native", None)
+            .expect("journal e2e");
+        transport.deliver(&message(label)).expect("livraison e2e");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut events = Vec::new();
+        while Instant::now() < deadline {
+            events.extend(transport.drain_events());
+            if events.iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::TurnFinished {
+                        terminal: ManagedTerminal::Completed,
+                        ..
+                    }
+                )
+            }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        events.extend(transport.drain_events());
+        transport.stop();
+        let journal_path = fs::read_dir(root.join("codex-native"))
+            .expect("répertoire journal")
+            .next()
+            .expect("fichier journal")
+            .expect("entrée journal")
+            .path();
+        let journal_events = crate::journal::valid_events(&journal_path);
+        let _ = fs::remove_dir_all(&root);
+        (events, journal_events)
     }
 
     #[test]
@@ -1842,11 +1923,17 @@ mod tests {
             json!({"kind":"intent"}),
         );
         assert!(
-            observations.0.lock().unwrap().events.iter().any(|event| matches!(
-                &event.kind,
-                ManagedEventKind::JournalFailed { detail }
-                    if detail.contains("hors vocabulaire")
-            )),
+            observations
+                .0
+                .lock()
+                .unwrap()
+                .events
+                .iter()
+                .any(|event| matches!(
+                    &event.kind,
+                    ManagedEventKind::JournalFailed { detail }
+                        if detail.contains("hors vocabulaire")
+                )),
             "TEMOIN_codex_JournalFailed doit mourir si Err est avalée"
         );
         if let Some(writer) = journal.lock().unwrap().take() {
@@ -1930,6 +2017,11 @@ mod tests {
     }
 
     fn journal_detail_fixture(label: &str, with_activity: bool) -> (Vec<Value>, Vec<Value>) {
+        let _suite = if with_activity {
+            Some(crate::act_kind::pilot_kind_suite_lock())
+        } else {
+            None
+        };
         let root = root(label);
         let trace = root.join("trace.jsonl");
         let mut environment = vec![(
@@ -1996,10 +2088,7 @@ mod tests {
                 "BRIDGET_CODEX_TRACE".to_string(),
                 trace.to_string_lossy().into_owned(),
             ),
-            (
-                "BRIDGET_CODEX_TEXT_MODE".to_string(),
-                text_mode.to_string(),
-            ),
+            ("BRIDGET_CODEX_TEXT_MODE".to_string(), text_mode.to_string()),
         ];
         let mut transport = CodexAppServerTransport::spawn_with_environment(
             fake_options(&trace),
@@ -2051,7 +2140,8 @@ mod tests {
                 continue;
             };
             if entry["event"] == "provider_request" {
-                let payload = serde_json::to_string(&entry["payload"]).expect("payload sérialisable");
+                let payload =
+                    serde_json::to_string(&entry["payload"]).expect("payload sérialisable");
                 assert!(
                     !payload.contains(forbidden),
                     "provider_request ne doit pas porter {forbidden:?}: {payload}"
@@ -2059,8 +2149,7 @@ mod tests {
             }
             if entry["event"] == "error" {
                 if let Some(pending) = entry.pointer("/payload/pending_provider_request") {
-                    let pending =
-                        serde_json::to_string(pending).expect("pending sérialisable");
+                    let pending = serde_json::to_string(pending).expect("pending sérialisable");
                     assert!(
                         !pending.contains(forbidden),
                         "pending_provider_request ne doit pas porter {forbidden:?}: {pending}"
@@ -2644,9 +2733,7 @@ mod tests {
         let events = journal_text_fixture("temoin-a", "deltas");
         let updates: Vec<_> = events
             .iter()
-            .filter(|event| {
-                event["event"] == "update" && event["payload"]["kind"] == "text"
-            })
+            .filter(|event| event["event"] == "update" && event["payload"]["kind"] == "text")
             .collect();
         let contents: Vec<&str> = updates
             .iter()
@@ -2673,9 +2760,7 @@ mod tests {
         let events = journal_text_fixture("temoin-b", "final_only");
         let updates: Vec<_> = events
             .iter()
-            .filter(|event| {
-                event["event"] == "update" && event["payload"]["kind"] == "text"
-            })
+            .filter(|event| event["event"] == "update" && event["payload"]["kind"] == "text")
             .collect();
         let contents: Vec<&str> = updates
             .iter()

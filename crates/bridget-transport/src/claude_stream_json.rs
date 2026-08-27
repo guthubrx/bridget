@@ -5,8 +5,8 @@
 //! la session gérée, le journal et son cycle de vie.
 
 use crate::claude_provider_session::{
-    ProviderSessionStore, classify_resume_failure, prepare_launch_args, session_id_from_system_init,
-    strip_resume_arg,
+    ProviderSessionStore, classify_resume_failure, prepare_launch_args,
+    session_id_from_system_init, strip_resume_arg,
 };
 use crate::journal::{JournalFailureSink, JournalLiveFeed, JournalWriter, with_turn_failed_kind};
 use crate::managed_session::{
@@ -126,9 +126,7 @@ impl ClaudeStreamJsonTransport {
         // Connected et une reprise réelle peut dépasser ce plafond (~10,5 s).
         // La validation `--resume` vit dans le reader, après le spawn.
         let spawned = spawn_claude_child(&options, environment, inherit_stderr)?
-            .ok_or_else(|| {
-                TransportError::Io("impossible de lancer Claude".to_string())
-            })?;
+            .ok_or_else(|| TransportError::Io("impossible de lancer Claude".to_string()))?;
 
         let pid = spawned.child.id();
         let writer = Arc::new(Mutex::new(Some(spawned.stdin)));
@@ -481,12 +479,7 @@ fn relaunch_after_resume_failure(
     {
         let _ = store.clear();
     }
-    push_internal(
-        events,
-        ManagedEventKind::Error {
-            detail: notice,
-        },
-    );
+    push_internal(events, ManagedEventKind::Error { detail: notice });
     {
         let mut child = bootstrap
             .child
@@ -788,7 +781,10 @@ fn spawn_reader(
         } else {
             (stdout, prefetch)
         };
-        let mut lines = prefetch.into_iter().map(Ok).chain(BufReader::new(stdout).lines());
+        let mut lines = prefetch
+            .into_iter()
+            .map(Ok)
+            .chain(BufReader::new(stdout).lines());
         while let Some(line) = lines.next() {
             let Ok(line) = line else { break };
             let raw = line.as_bytes().to_vec();
@@ -880,8 +876,7 @@ fn spawn_reader(
                     .unwrap_or_default();
                 if !assistant_text.is_empty() {
                     let message_id = {
-                        let mut state =
-                            queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                        let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
                         if let Some(active) = state.active.as_mut() {
                             if active.text_updates == 0 {
                                 if active.response.is_empty() {
@@ -1107,7 +1102,6 @@ fn usage_event(value: &Value) -> Option<ManagedEventKind> {
     })
 }
 
-
 /// Plafond du champ `detail` (input sérialisé). Au-delà : troncature + «…».
 /// Choix étroit : garder le journal lisible si un outil reçoit un gros blob.
 const TOOL_INPUT_DETAIL_MAX: usize = 512;
@@ -1125,7 +1119,10 @@ fn record_tool_uses_from_assistant(
     };
     let message_id = {
         let state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
-        state.active.as_ref().map(|active| active.message_id.clone())
+        state
+            .active
+            .as_ref()
+            .map(|active| active.message_id.clone())
     };
     let Some(message_id) = message_id else {
         return;
@@ -1150,7 +1147,7 @@ fn record_tool_uses_from_assistant(
             "update",
             Some(&message_id),
             json!({
-                "kind": "tool",
+                "kind": crate::act_kind::pilot_kind_str(crate::JournalUpdateKind::Tool),
                 "text": name,
                 "tool": name,
                 "detail": detail,
@@ -1315,6 +1312,102 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Dette 3 — oracle bout-en-bout : le PILOTE (tool_use → record_tool_uses)
+    /// écrit un kind interdit ; l'événement terminal JournalFailed apparaît
+    /// dans drain_events. Pas un appel direct à record_or_terminal.
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_claude_pilote_kind_interdit_emet_JournalFailed_bout_en_bout() {
+        // Preuve d'abord : cas valide → tool au journal, PAS de JournalFailed.
+        let (events_ok, journal_ok) = {
+            let _suite = crate::act_kind::pilot_kind_suite_lock();
+            claude_tool_turn_managed_events()
+        };
+        assert!(
+            events_ok
+                .iter()
+                .all(|event| { !matches!(event.kind, ManagedEventKind::JournalFailed { .. }) }),
+            "cas valide ne doit pas émettre JournalFailed, got {events_ok:?}"
+        );
+        assert!(
+            journal_ok
+                .iter()
+                .any(|event| { event["event"] == "update" && event["payload"]["kind"] == "tool" }),
+            "cas valide doit journaliser kind=tool, got {journal_ok:?}"
+        );
+
+        // Chemin réel : provider tool_use → pilote → enqueue refuse → JournalFailed.
+        let (events_bad, journal_bad) = crate::act_kind::with_forced_pilot_update_kind(
+            "intent",
+            claude_tool_turn_managed_events,
+        );
+        assert!(
+            events_bad.iter().any(|event| matches!(
+                &event.kind,
+                ManagedEventKind::JournalFailed { detail }
+                    if detail.contains("hors vocabulaire")
+            )),
+            "kind interdit du pilote doit être VISIBLE via JournalFailed, got {events_bad:?}"
+        );
+        assert!(
+            journal_bad
+                .iter()
+                .all(|event| { event["payload"]["kind"] != "intent" }),
+            "le kind refusé ne doit jamais atteindre le JSONL, got {journal_bad:?}"
+        );
+    }
+
+    fn claude_tool_turn_managed_events() -> (Vec<ManagedEvent>, Vec<Value>) {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-claude-e2e-act-{}-{}",
+            std::process::id(),
+            FIXTURE_SEQ.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut opts = options();
+        opts.args[1] = concat!(
+            "while IFS= read -r line; do ",
+            "printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_demo\",\"name\":\"Read\",\"input\":{\"file_path\":\"/tmp/demo.toml\",\"limit\":1}}]}}'; ",
+            "printf '%s\\n' '{\"type\":\"result\",\"is_error\":false,\"terminal_reason\":\"completed\",\"stop_reason\":\"end_turn\",\"result\":\"ok\"}'; ",
+            "done"
+        )
+        .to_string();
+        let mut transport = ClaudeStreamJsonTransport::spawn(opts).unwrap();
+        transport
+            .activate_journal(&root, "claude-e2e", None)
+            .unwrap();
+        transport.deliver(&message("claude-e2e-1")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut events = Vec::new();
+        while Instant::now() < deadline {
+            events.extend(transport.drain_events());
+            if events.iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::TurnFinished {
+                        terminal: ManagedTerminal::Completed,
+                        ..
+                    }
+                )
+            }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        // Drainer le reste (JournalFailed peut arriver juste avant/après fin).
+        events.extend(transport.drain_events());
+        transport.stop();
+        let journal_path = fs::read_dir(root.join("claude-e2e"))
+            .expect("répertoire journal")
+            .next()
+            .expect("fichier journal")
+            .expect("entrée journal")
+            .path();
+        let journal_events = crate::journal::valid_events(&journal_path);
+        let _ = fs::remove_dir_all(&root);
+        (events, journal_events)
+    }
+
     #[test]
     #[allow(non_snake_case)]
     fn mutant_avale_err_record_tue_TEMOIN_claude_JournalFailed() {
@@ -1432,7 +1525,11 @@ mod tests {
             .iter()
             .filter(|event| event["event"] == "update")
             .collect();
-        assert!(updates.iter().all(|event| event["payload"]["kind"] == "text"));
+        assert!(
+            updates
+                .iter()
+                .all(|event| event["payload"]["kind"] == "text")
+        );
         let contents: Vec<&str> = updates
             .iter()
             .filter_map(|event| event["payload"]["content"].as_str())
@@ -1504,7 +1601,6 @@ mod tests {
         );
     }
 
-
     /// (TOOL) Appel d'outil Claude → update kind=tool avec NOM + CONTENU input.
     /// Source : message assistant (input complet), pas content_block_start (input {}).
     /// Mutant : retirer record_tool_uses_from_assistant, ou vider text/detail → meurt.
@@ -1514,9 +1610,7 @@ mod tests {
         let events = journal_fixture_tool_use();
         let tools: Vec<_> = events
             .iter()
-            .filter(|event| {
-                event["event"] == "update" && event["payload"]["kind"] == "tool"
-            })
+            .filter(|event| event["event"] == "update" && event["payload"]["kind"] == "tool")
             .collect();
         assert_eq!(
             tools.len(),
@@ -1567,6 +1661,7 @@ mod tests {
     }
 
     fn journal_fixture_tool_use() -> Vec<Value> {
+        let _suite = crate::act_kind::pilot_kind_suite_lock();
         // Forme mesurée L19 de /tmp/flux-outil.jsonl : assistant + tool_use + input.
         journal_fixture(concat!(
             "while IFS= read -r line; do ",
@@ -1575,7 +1670,6 @@ mod tests {
             "done"
         ))
     }
-
 
     fn journal_fixture(provider_script: &str) -> Vec<Value> {
         // Compteur atomique : sous parallelisme, SystemTime::nanos peut
@@ -1978,9 +2072,7 @@ done
             fs::set_permissions(&fake, permissions).unwrap();
         }
         let store = crate::claude_provider_session::ProviderSessionStore::new(&root, "agent-x");
-        store
-            .store("00000000-0000-0000-0000-000000000000")
-            .unwrap();
+        store.store("00000000-0000-0000-0000-000000000000").unwrap();
         let options = ClaudeStreamJsonOptions {
             command: fake.to_string_lossy().into_owned(),
             args: Vec::new(),
@@ -2085,8 +2177,7 @@ exit 0
         assert!(t0.elapsed() < DAEMON_SPAWN_TIMEOUT);
         t_neuf.stop();
 
-        let store =
-            crate::claude_provider_session::ProviderSessionStore::new(&root, "agent-lent");
+        let store = crate::claude_provider_session::ProviderSessionStore::new(&root, "agent-lent");
         store.store("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap();
         let options_lent = ClaudeStreamJsonOptions {
             command: fake.to_string_lossy().into_owned(),
