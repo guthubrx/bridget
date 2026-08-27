@@ -177,6 +177,20 @@ fn unix_timestamp() -> i64 {
 // Constante pour la période de grâce des timeouts (M-004)
 const TIMEOUT_GRACE_PERIOD: u64 = 30; // secondes
 
+/// Vrai si un tour `busy` a dépassé notify_timeout + grâce et doit redevenir
+/// mandatable. Sans `busy_since`, on retombe sur `capacity_seen` (Register
+/// historique / upgrade à chaud).
+fn busy_turn_is_stale(presence: &Presence, ttl_secs: u64) -> bool {
+    if presence.state != "busy" {
+        return false;
+    }
+    let elapsed = presence
+        .busy_since
+        .unwrap_or(presence.capacity_seen)
+        .elapsed();
+    elapsed >= Duration::from_secs(ttl_secs)
+}
+
 #[derive(Clone)]
 struct Presence {
     name: String,
@@ -196,6 +210,10 @@ struct Presence {
     journal_available: bool,
     os: String,
     state: String,
+    /// Instant où le tour `busy` a commencé (`TurnState true` / Register
+    /// `turn_in_progress`). Absent hors busy. Sert à libérer un tour qui
+    /// n'aboutit jamais : sans cela Maicie refuse tout mandat (connected|dnd).
+    busy_since: Option<Instant>,
     /// Dernière attestation de CAPACITÉ (register, tour, runtime…) — pas le
     /// heartbeat. C'est ce que `last_seen_secs` expose à who / bridget-idle.
     capacity_seen: Instant,
@@ -1983,12 +2001,50 @@ impl DaemonState {
             .presences
             .get_mut(instance_id)
             .ok_or_else(|| "présence de l'équipier introuvable".to_string())?;
-        presence.state = if in_progress { "busy" } else { "connected" }.to_string();
+        if in_progress {
+            presence.state = "busy".to_string();
+            presence.busy_since = Some(Instant::now());
+        } else {
+            presence.state = "connected".to_string();
+            presence.busy_since = None;
+        }
         presence.touch_capacity();
         Ok(())
     }
 
+    /// Libère les tours `busy` plus vieux que notify_timeout + grâce.
+    /// Sans TurnState false (tour non abouti), l'agent resterait non mandatable
+    /// indéfiniment : Maicie n'envoie qu'aux connected|dnd.
+    fn release_stale_busy_turns(&mut self) {
+        let busy_ids: Vec<(String, String)> = self
+            .presences
+            .iter()
+            .filter(|(_, presence)| presence.state == "busy")
+            .map(|(id, presence)| (id.clone(), presence.agent_type.clone()))
+            .collect();
+        let mut stale = Vec::new();
+        for (id, agent_type) in busy_ids {
+            let ttl = live_notify_timeout_secs(&self.registry, &agent_type)
+                .saturating_add(TIMEOUT_GRACE_PERIOD);
+            if let Some(presence) = self.presences.get(&id) {
+                if busy_turn_is_stale(presence, ttl) {
+                    stale.push(id);
+                }
+            }
+        }
+        for id in stale {
+            if let Some(presence) = self.presences.get_mut(&id) {
+                presence.state = "connected".to_string();
+                presence.busy_since = None;
+                presence.touch_capacity();
+            }
+        }
+    }
+
     fn agent_infos(&mut self) -> Vec<bridget_transport::protocol::AgentInfo> {
+        // Avant le retain : un busy périmé redevient connected (mandatable)
+        // sans attendre un TurnState false qui peut ne jamais venir.
+        self.release_stale_busy_turns();
         // Lot B (déjà sur main) : exemption `connected` levée — retain =
         // horloge lien seule via `presence_within_retention`.
         // Ce lot (purge/orphan) : capturer les IDs purgés pour orpheliner les
@@ -3633,6 +3689,11 @@ fn handle_register_with_channel(
                             "connected"
                         }
                         .to_string(),
+                        busy_since: if turn_in_progress {
+                            Some(Instant::now())
+                        } else {
+                            None
+                        },
                         capacity_seen: Instant::now(),
                         link_seen: Instant::now(),
                         reconnect_count,
@@ -7106,6 +7167,7 @@ mod presence_tests {
                 journal_available: false,
                 os: "Linux".to_string(),
                 state: "connected".to_string(),
+                busy_since: None,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -7187,6 +7249,7 @@ mod presence_tests {
                 journal_available: true,
                 os: "macOS".to_string(),
                 state: "connected".to_string(),
+                busy_since: None,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -10135,6 +10198,7 @@ mod presence_tests {
                 journal_available: true,
                 os: "macOS".to_string(),
                 state: "connected".to_string(),
+                busy_since: None,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -10303,6 +10367,7 @@ mod presence_tests {
                 journal_available: true,
                 os: "macOS".to_string(),
                 state: "connected".to_string(),
+                busy_since: None,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -10585,6 +10650,183 @@ mod presence_tests {
             "busy jury ne doit pas être purgé: {infos:?}"
         );
         let _ = std::fs::remove_file(&config.db_path);
+    }
+
+    /// ORACLE — le vrai CLI Maicie sélectionne le busy libéré via ListAgents,
+    /// délègue, envoie idempotemment, puis le mandat arrive au wrapper.
+    #[test]
+    fn tour_non_abouti_redevient_mandatable_et_le_mandat_parvient() {
+        let (mut state, config) = state_with_registered_agent("busy-tour-non-abouti");
+        state.set_turn_state("conn-1", true).unwrap();
+        let ttl = live_notify_timeout_secs(&state.registry, "claude")
+            .saturating_add(TIMEOUT_GRACE_PERIOD);
+        let aged = Instant::now()
+            .checked_sub(Duration::from_secs(ttl.saturating_add(1)))
+            .expect("horloge busy_since");
+        state.presences.get_mut("instance-1").unwrap().busy_since = Some(aged);
+
+        let (writer_stream, peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        state.connections.insert(
+            "conn-1".to_string(),
+            Arc::new(Mutex::new(BufWriter::new(writer_stream))),
+        );
+        assert_eq!(state.next_conn_id(), "conn-1");
+        let shared = Arc::new(Mutex::new(state));
+        let listener = UnixListener::bind(&config.socket_path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = Arc::clone(&stop);
+        let server_state = Arc::clone(&shared);
+        let server = thread::spawn(move || {
+            let mut connections = Vec::new();
+            while !server_stop.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let connection_state = Arc::clone(&server_state);
+                        connections.push(thread::spawn(move || {
+                            let _ = handle_connection(stream, connection_state);
+                        }));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("accept Maicie: {error}"),
+                }
+            }
+            for connection in connections {
+                connection.join().unwrap();
+            }
+        });
+
+        let root = std::env::temp_dir().join(format!(
+            "maicie-busy-oracle-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let maicie_config = root.join("maicie.json");
+        std::fs::write(
+            &maicie_config,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "bridget_socket": config.socket_path,
+                "database_path": root.join("maicie.sqlite3"),
+                "durations": {"short_secs": 30, "normal_secs": 60, "long_secs": 90},
+                "profiles": [{
+                    "id": "agent-2",
+                    "display_name": "Agent 2",
+                    "tags": [],
+                    "personality_ref": "profiles/agent-2.md",
+                    "tools": ["bridget_send"],
+                    "spawn_order_ref": "agents/agent-2"
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        const MANDAT_BODY: &str = "MANDAT-BUSY-RECOVERY-ORACLE-98beefe0";
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let output = Command::new("cargo")
+            .current_dir(workspace)
+            .args([
+                "run", "--quiet", "-p", "maicie", "--", "delegate", "--config",
+            ])
+            .arg(&maicie_config)
+            .args([
+                "--goal",
+                MANDAT_BODY,
+                "--suite",
+                "aucune",
+                "--to",
+                "agent-2",
+                "--duration",
+                "courte",
+                "--idempotency-key",
+                "busy-recovery-integrated-oracle",
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        stop.store(true, Ordering::SeqCst);
+        server.join().unwrap();
+
+        let mut line = String::new();
+        let arrival = BufReader::new(peer).read_line(&mut line);
+        assert!(
+            arrival.is_ok() && line.contains(MANDAT_BODY),
+            "mandat absent après sélection Maicie réelle; lecture={arrival:?}; stdout={}; stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.status.success(),
+            "Maicie a échoué après livraison: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let _ = std::fs::remove_file(&config.socket_path);
+        let _ = std::fs::remove_file(&config.db_path);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    const MAX_NOTIFY_TIMEOUT_CHILD_ENV: &str = "BRIDGET_MAX_NOTIFY_TIMEOUT_CHILD";
+
+    /// Frontière du registre : `u64::MAX` ne doit jamais faire paniquer
+    /// `agent_infos` lors du calcul notify_timeout + grâce.
+    #[test]
+    fn notify_timeout_max_ne_panique_pas_dans_agent_infos() {
+        if std::env::var(MAX_NOTIFY_TIMEOUT_CHILD_ENV).ok().as_deref() == Some("1") {
+            let (mut state, config) = state_with_registered_agent("max-notify-timeout-child");
+            state.set_turn_state("conn-1", true).unwrap();
+            let infos = state.agent_infos();
+            assert_eq!(infos[0].state, "busy");
+            let _ = std::fs::remove_file(config.db_path);
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "bridget-max-notify-timeout-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let registry_dir = root.join(".config/bridget");
+        std::fs::create_dir_all(&registry_dir).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let registry_path = registry_dir.join("agents.json");
+        std::fs::write(
+            &registry_path,
+            serde_json::to_vec(&serde_json::json!({
+                "agents": {
+                    "claude": {
+                        "command": "/bin/true",
+                        "protocol": "acp",
+                        "forbidden_env": [],
+                        "pass_env": [],
+                        "notify_timeout_secs": u64::MAX
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&registry_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("daemon::presence_tests::notify_timeout_max_ne_panique_pas_dans_agent_infos")
+            .arg("--nocapture")
+            .env("HOME", &root)
+            .env(MAX_NOTIFY_TIMEOUT_CHILD_ENV, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "agent_infos a paniqué à u64::MAX: stdout={}; stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// ORACLE lot B — contrôle positif : capacité/lien frais → survit
