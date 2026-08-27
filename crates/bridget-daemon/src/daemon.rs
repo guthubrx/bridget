@@ -8172,6 +8172,10 @@ mod signal_disposition_tests {
 /// VARIE d'une exécution à l'autre — 2, 7, 8 puis 10 mesurés le 2026-08-27,
 /// dont deux comptes différents sur le MÊME commit.
 ///
+/// Le méta-gate `scripts/check-review-witness-selection.sh` reliste cette
+/// famille et refuse les arguments libtest qui en omettent un seul témoin.
+/// Son banc exécutable est `make test-review-witnesses`.
+///
 /// CONSÉQUENCE POUR QUI ARRIVE ICI : un oracle rangé dans cette famille sera
 /// vert dans votre intention et ne gardera rien — ni chez vous, ni en revue, ni
 /// au merge. Si votre test doit protéger quelque chose, mettez-le ailleurs et
