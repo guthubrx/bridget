@@ -8122,7 +8122,7 @@ pub struct DaemonStatus {
 
 #[cfg(test)]
 mod inventory_provenance_tests {
-    use super::{encode, get_status, DaemonConfig, DaemonToWrapper};
+    use super::{get_status, DaemonConfig};
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
     use std::thread;
@@ -8141,11 +8141,15 @@ mod inventory_provenance_tests {
         let listener = UnixListener::bind(&path).unwrap();
         let thread_path = path.clone();
         let handle = thread::spawn(move || {
+            let (first, _) = listener.accept().unwrap();
+            drop(first);
             let (mut stream, _) = listener.accept().unwrap();
             let mut line = String::new();
             BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();
-            writeln!(stream, "{}", encode(&DaemonToWrapper::Registered { name: "probe".into() }).unwrap()).unwrap();
+            writeln!(stream, "{{}}").unwrap();
             stream.flush().unwrap();
+            let mut list_line = String::new();
+            BufReader::new(stream.try_clone().unwrap()).read_line(&mut list_line).unwrap();
         });
         let mut config = DaemonConfig::default();
         config.socket_path = path.clone();
