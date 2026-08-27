@@ -1,11 +1,11 @@
 //! Résolution locale de l'identité appelante MCP.
 
+use bridget_core::router::validate_agent_name;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const MAX_ANCESTORS: usize = 16;
-const MAX_AGENT_NAME_LENGTH: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityError {
@@ -209,15 +209,8 @@ pub fn write_marker(
 fn read_name(path: &Path) -> Option<String> {
     let name = fs::read_to_string(path).ok()?;
     let name = name.trim();
-    valid_name(name).then(|| name.to_string())
-}
-
-fn valid_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= MAX_AGENT_NAME_LENGTH
-        && name
-            .chars()
-            .all(|character| character.is_alphanumeric() || character == '-' || character == '_')
+    validate_agent_name(name).ok()?;
+    Some(name.to_string())
 }
 
 #[cfg(test)]
