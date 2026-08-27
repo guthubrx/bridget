@@ -127,21 +127,14 @@ pub fn collect_snapshot(
     // La flotte décrite doit être celle du daemon interrogé. Tant que sa base
     // n'est pas la nôtre, la trace de reprise locale décrit une AUTRE flotte :
     // on ne la lit pas, et la carte dit pourquoi.
-    let base_du_daemon_est_ici = status
-        .daemon_db_path
-        .as_deref()
-        .is_some_and(|path| Path::new(path) == config.db_path);
-    let recovery_losses = if base_du_daemon_est_ici {
-        collect_recovery_losses(&db_path)
-    } else {
-        Err(format!(
-            "trace de reprise non lisible d'ici : la base locale ({}) n'est pas celle du daemon ({})",
-            db_path.display(),
-            status
-                .daemon_db_path
-                .as_deref()
-                .unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE)
-        ))
+    let recovery_losses = match recovery_trace_scope(
+        status.daemon_host.as_deref(),
+        status.daemon_db_path.as_deref(),
+        &crate::build_info::local_host(),
+        &db_path,
+    ) {
+        Ok(()) => collect_recovery_losses(&db_path),
+        Err(motif) => Err(motif),
     };
     let status = Ok(status);
 
@@ -171,6 +164,31 @@ pub fn collect_snapshot(
         pin,
         recovery_losses,
     }
+}
+
+/// La trace de reprise locale ne décrit la flotte du daemon que si la base du
+/// daemon est bien celle d'ici — MACHINE **et** chemin.
+///
+/// Séparée de la lecture pour être éprouvable dans ses DEUX issues : un test qui
+/// ne prouverait que le refus laisserait vivre un mutant rendant la condition
+/// toujours fausse, et la trace ne serait plus jamais lue sans que rien ne
+/// rougisse.
+fn recovery_trace_scope(
+    daemon_host: Option<&str>,
+    daemon_db_path: Option<&str>,
+    local_host: &str,
+    local_db_path: &Path,
+) -> Result<(), String> {
+    if daemon::daemon_store_is_local(daemon_host, daemon_db_path, local_host, local_db_path) {
+        return Ok(());
+    }
+    Err(format!(
+        "trace de reprise non lisible d'ici : la base locale ({} sur {}) n'est pas celle du daemon ({} sur {})",
+        local_db_path.display(),
+        local_host,
+        daemon_db_path.unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE),
+        daemon_host.unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE)
+    ))
 }
 
 fn collect_recovery_losses(
@@ -1325,6 +1343,53 @@ mod tests {
         assert!(
             card.contains("geste: \"livrer carte reprise\"")
                 || card.contains("geste: livrer carte reprise")
+        );
+    }
+
+    /// M4 — le contrôle POSITIF qui manquait.
+    ///
+    /// Un mutant rendant la condition toujours fausse laissait toute la famille
+    /// `reprise::tests` verte : le test existant ne prouvait que le REFUS
+    /// distant, jamais qu'une trace locale attestée reste lisible. Les deux
+    /// issues sont désormais éprouvées sur la même fonction.
+    ///
+    /// Mutant qui tue ce test : rendre la condition toujours fausse → le premier
+    /// cas meurt en affichant le motif de refus qu'il n'aurait pas dû recevoir.
+    #[test]
+    fn la_trace_est_lue_ici_et_refusee_ailleurs() {
+        let chemin = PathBuf::from("/home/moi/.cache/bridget/bridget.db");
+
+        // POSITIF : même machine, même chemin → la trace nous concerne.
+        assert_eq!(
+            recovery_trace_scope(
+                Some("cartae"),
+                Some("/home/moi/.cache/bridget/bridget.db"),
+                "cartae",
+                &chemin
+            ),
+            Ok(()),
+            "une base attestée locale doit rester lisible"
+        );
+
+        // NÉGATIF, et c'est le cas piégeux : MÊME CHEMIN, autre machine.
+        let refus = recovery_trace_scope(
+            Some("monordinateur"),
+            Some("/home/moi/.cache/bridget/bridget.db"),
+            "cartae",
+            &chemin,
+        )
+        .expect_err("un daemon distant ne rend pas la trace locale lisible");
+        assert!(
+            refus.contains("sur cartae") && refus.contains("sur monordinateur"),
+            "le motif doit nommer LES DEUX machines : {refus}"
+        );
+
+        // Daemon antérieur : non attesté, donc refus explicite.
+        let inconnu = recovery_trace_scope(None, None, "cartae", &chemin)
+            .expect_err("sans attestation, la trace n'est pas réputée locale");
+        assert!(
+            inconnu.contains(crate::build_info::MACHINE_NON_ATTESTEE),
+            "{inconnu}"
         );
     }
 }

@@ -7328,11 +7328,16 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
     let daemon_db_path = identity
         .as_ref()
         .and_then(|identity| identity.db_path.clone());
-    let message_count = message_count_is_measurable(daemon_db_path.as_deref(), &config.db_path)
-        .then(|| match Store::open(&config.db_path) {
-            Ok(store) => store.recent_messages(1000).map(|v| v.len()).unwrap_or(0),
-            Err(_) => 0,
-        });
+    let message_count = daemon_store_is_local(
+        daemon_host.as_deref(),
+        daemon_db_path.as_deref(),
+        &crate::build_info::local_host(),
+        &config.db_path,
+    )
+    .then(|| match Store::open(&config.db_path) {
+        Ok(store) => store.recent_messages(1000).map(|v| v.len()).unwrap_or(0),
+        Err(_) => 0,
+    });
 
     DaemonStatus {
         running: true,
@@ -7353,43 +7358,89 @@ fn build_id_probe_issuer_scope() -> String {
 /// Le compte de messages n'est mesurable d'ici que si la base locale est
 /// EXACTEMENT celle que le daemon atteste. Sans attestation, il ne l'est pas :
 /// une absence n'autorise pas à compter dans le fichier qu'on a sous la main.
-pub(crate) fn message_count_is_measurable(
+pub(crate) fn daemon_store_is_local(
+    daemon_host: Option<&str>,
     daemon_db_path: Option<&str>,
+    local_host: &str,
     local_db_path: &std::path::Path,
 ) -> bool {
-    daemon_db_path.is_some_and(|path| std::path::Path::new(path) == local_db_path)
+    // MÊME CHEMIN N'EST PAS MÊME MACHINE. Deux hôtes Linux portent couramment
+    // le même `/home/moi/.cache/bridget/bridget.db` : comparer les chemins seuls
+    // déclarait locale une base qui vit ailleurs, et faisait lire le fichier d'à
+    // côté comme s'il décrivait le daemon. L'hôte était disponible et écarté de
+    // la décision — le système savait nommer la machine, il ne l'attribuait pas.
+    //
+    // Source UNIQUE : `get_status` et la carte de reprise passent tous deux ici,
+    // pour que deux vues du même système ne puissent pas diverger.
+    daemon_host.is_some_and(|host| host == local_host)
+        && daemon_db_path.is_some_and(|path| std::path::Path::new(path) == local_db_path)
 }
 
 #[cfg(test)]
 mod attribution_tests {
-    use super::message_count_is_measurable;
+    use super::daemon_store_is_local;
     use std::path::Path;
 
     /// POINT 1 — la garde qui empêche de compter dans la base d'à côté.
     ///
     /// Éprouvée sur la décision elle-même, et non à travers `get_status` : un
     /// premier oracle passait par une socket absente, donc `get_status` sortait
-    /// AVANT la garde et le test restait vert même sans elle. Le mutant l'a
-    /// montré ; ce test-ci le tue.
+    /// AVANT la garde et le test restait vert même sans elle.
     ///
-    /// Mutant qui tue ce test : rendre `true` inconditionnellement → le premier
-    /// cas, celui de la fédération, meurt.
+    /// DEUX CONTRÔLES OPPOSÉS SUR LE MÊME CHEMIN, c'est le cœur du test :
+    /// même chemin + hôtes distincts doit rendre FAUX ; même chemin + même hôte
+    /// doit rendre VRAI. Un seul des deux ne prouverait rien — une garde qui
+    /// refuserait toujours passerait le premier, une garde qui ignorerait l'hôte
+    /// passerait le second.
+    ///
+    /// Mutant qui tue ce test : retirer la comparaison d'hôtes → le premier cas,
+    /// deux machines partageant le même chemin, devient vrai et meurt.
     #[test]
-    fn compter_n_est_permis_que_sur_la_base_attestee_par_le_daemon() {
-        let ici = Path::new("/home/moi/.cache/bridget/bridget.db");
+    fn compter_exige_la_meme_machine_et_le_meme_chemin() {
+        let chemin = Path::new("/home/moi/.cache/bridget/bridget.db");
 
-        // Fédération : le daemon est ailleurs, sa base aussi. Rien à compter.
-        assert!(!message_count_is_measurable(
-            Some("/Users/moi/.cache/bridget/bridget.db"),
-            ici
+        // MÊME CHEMIN, HÔTES DISTINCTS — le cas que deux Linux produisent tout
+        // seuls. La base nommée existe ici ET là-bas ; elle n'est pas la même.
+        assert!(
+            !daemon_store_is_local(
+                Some("monordinateur"),
+                Some("/home/moi/.cache/bridget/bridget.db"),
+                "cartae",
+                chemin
+            ),
+            "même chemin sur deux machines distinctes ne doit PAS être local"
+        );
+
+        // MÊME CHEMIN, MÊME HÔTE — contrôle positif opposé.
+        assert!(
+            daemon_store_is_local(
+                Some("cartae"),
+                Some("/home/moi/.cache/bridget/bridget.db"),
+                "cartae",
+                chemin
+            ),
+            "même chemin sur la même machine DOIT être local"
+        );
+
+        // MÊME HÔTE, CHEMINS DISTINCTS — l'hôte seul ne suffit pas non plus.
+        assert!(
+            !daemon_store_is_local(Some("cartae"), Some("/autre/bridget.db"), "cartae", chemin),
+            "un autre chemin sur la même machine n'est pas cette base"
+        );
+
+        // Daemon antérieur : rien d'attesté, donc rien à compter.
+        assert!(!daemon_store_is_local(None, None, "cartae", chemin));
+        assert!(!daemon_store_is_local(
+            Some("cartae"),
+            None,
+            "cartae",
+            chemin
         ));
-        // Daemon antérieur : pas d'attestation, donc pas de comptage non plus.
-        assert!(!message_count_is_measurable(None, ici));
-        // Contrôle positif : même base des deux côtés → le compte est légitime.
-        // Sans lui, une garde qui refuserait TOUJOURS passerait ce test.
-        assert!(message_count_is_measurable(
+        assert!(!daemon_store_is_local(
+            None,
             Some("/home/moi/.cache/bridget/bridget.db"),
-            ici
+            "cartae",
+            chemin
         ));
     }
 }
