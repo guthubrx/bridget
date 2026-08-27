@@ -30,3 +30,16 @@
   domaine finalise l'instruction avec les trois identifiants durables.
 - **Contrôle nominal** : oracle ciblé `1 passed / 0 failed`; le témoin de cible
   de revue reste `1 passed / 0 failed` et conserve son texte initial.
+
+### T5203 — Fermer le chemin différé
+
+- **Statut** : Complété
+- **Oracle rouge avant production** :
+  `f37_depends_on_cree_arete_et_deblocage_a_la_cloture` ferme un vrai dernier
+  prérequis, trouve l'outbox créée, puis rend `0 passed / 1 failed` sur le corps
+  final encore limité au but.
+- **Raccord** : la transaction de déblocage crée le `message_id`, finalise la
+  délégation, persiste ce nouvel état et sérialise les mêmes octets dans
+  l'outbox.
+- **Contrôles nominaux** : chemin différé `1 passed / 0 failed`; chemin immédiat
+  rejoué `1 passed / 0 failed`.

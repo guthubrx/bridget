@@ -4,7 +4,7 @@
   la notification autonome, la frontière transport et la relation avec 047.
 - [x] **T5202 — Fermer le chemin immédiat.** Ajouter l'oracle sur le vrai
   `PublicMessage`, le format partagé et le raccord de création immédiate.
-- [ ] **T5203 — Fermer le chemin différé.** Éprouver un dernier prérequis réel
+- [x] **T5203 — Fermer le chemin différé.** Éprouver un dernier prérequis réel
   puis raccorder la même règle au déblocage transactionnel.
 - [ ] **T5204 — Prouver et livrer.** Rejouer le mutant après correctif, la
   reprise historique, les gates base/tête et la composition ; documenter les
