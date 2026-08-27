@@ -1077,6 +1077,32 @@ impl CatalogueJournal {
             .map(|(_, to)| to)
             .or_else(|| resolve_open_nature(constat_id, &existing))
             .unwrap_or(EntryNature::Constat);
+        if let Some((from, _)) = severity {
+            let current = resolve_open_severity(constat_id, &existing).ok_or_else(|| {
+                CatalogueError::ReferenceInconnue {
+                    field: "constat_id",
+                    id: constat_id.to_string(),
+                }
+            })?;
+            if current != from {
+                return Err(CatalogueError::TransitionInvalide(format!(
+                    "requalification refusée : severity_from périmée (courante={current:?}, fournie={from:?})"
+                )));
+            }
+        }
+        if let Some((from, _)) = nature {
+            let current = resolve_open_nature(constat_id, &existing).ok_or_else(|| {
+                CatalogueError::ReferenceInconnue {
+                    field: "constat_id",
+                    id: constat_id.to_string(),
+                }
+            })?;
+            if current != from {
+                return Err(CatalogueError::TransitionInvalide(format!(
+                    "requalification refusée : nature_from périmée (courante={current:?}, fournie={from:?})"
+                )));
+            }
+        }
         if target_nature == EntryNature::Regle && effective_severity == Severity::Blocker {
             return Err(CatalogueError::TransitionInvalide(
                 "requalification refusée : une règle ne peut pas porter blocker".into(),
@@ -3809,6 +3835,92 @@ mod tests {
             "trace nature+sévérité au journal, reçu: {raw}"
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn requalification_refuse_nature_from_perimee() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-requalify-stale-nature-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("c.jsonl");
+        let mut journal = CatalogueJournal::open(&path).unwrap();
+        journal
+            .append_add(sample_add(
+                "c-stale-nature",
+                Severity::Minor,
+                "2026-08-27T05:00:00Z",
+            ))
+            .unwrap();
+        journal
+            .requalify_constat(
+                "c-stale-nature",
+                None,
+                Some((EntryNature::Constat, EntryNature::Resultat)),
+                RaisonRequalification::NatureReclassee,
+                None,
+                "2026-08-27T05:01:00Z",
+            )
+            .unwrap();
+        let error = journal
+            .requalify_constat(
+                "c-stale-nature",
+                None,
+                Some((EntryNature::Constat, EntryNature::Regle)),
+                RaisonRequalification::NatureReclassee,
+                None,
+                "2026-08-27T05:02:00Z",
+            )
+            .expect_err("nature_from périmée doit refuser");
+        assert!(
+            error.to_string().contains("nature_from périmée"),
+            "motif attendu: {error}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn requalification_refuse_severite_from_perimee() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-requalify-stale-severity-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("c.jsonl");
+        let mut journal = CatalogueJournal::open(&path).unwrap();
+        journal
+            .append_add(sample_add(
+                "c-stale-severity",
+                Severity::Minor,
+                "2026-08-27T05:00:00Z",
+            ))
+            .unwrap();
+        journal
+            .requalify_constat(
+                "c-stale-severity",
+                Some((Severity::Minor, Severity::Major)),
+                None,
+                RaisonRequalification::SeveriteAjustee,
+                None,
+                "2026-08-27T05:01:00Z",
+            )
+            .unwrap();
+        let error = journal
+            .requalify_constat(
+                "c-stale-severity",
+                Some((Severity::Minor, Severity::Info)),
+                None,
+                RaisonRequalification::SeveriteAjustee,
+                None,
+                "2026-08-27T05:02:00Z",
+            )
+            .expect_err("severity_from périmée doit refuser");
+        assert!(
+            error.to_string().contains("severity_from périmée"),
+            "motif attendu: {error}"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     /// Témoin 2 — solde de mission ≠ fermeture prouvée.

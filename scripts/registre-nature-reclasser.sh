@@ -37,8 +37,9 @@ date = os.environ["DATE"]
 ref = os.environ["REF"]
 catalogue = os.environ["CATALOGUE_PATH"]
 
-def current_nature(cid: str) -> str:
+def current_qualification(cid: str) -> tuple[str, str]:
     nature = "constat"
+    severity = "minor"
     with open(catalogue, encoding="utf-8") as fh:
         for raw in fh:
             raw = raw.strip()
@@ -50,14 +51,17 @@ def current_nature(cid: str) -> str:
                 continue
             if entry.get("kind") == "add" and entry.get("id") == cid:
                 nature = entry.get("nature", "constat")
+                severity = entry.get("severity", "minor")
             if (
                 entry.get("kind") == "transition"
                 and entry.get("constat_id") == cid
                 and entry.get("trigger") == "requalified"
-                and entry.get("nature_to")
             ):
-                nature = entry["nature_to"]
-    return nature
+                if entry.get("nature_to"):
+                    nature = entry["nature_to"]
+                if entry.get("severity_to"):
+                    severity = entry["severity_to"]
+    return nature, severity
 
 n = skipped = applied = 0
 with open(table, encoding="utf-8") as fh:
@@ -74,8 +78,9 @@ with open(table, encoding="utf-8") as fh:
         sev_de = row.get("severity_de") or ""
         sev_vers = row.get("severity_vers") or ""
 
-        if current_nature(cid) == vers:
-            print(f"SKIP_ALREADY id={cid} nature={vers}")
+        current_nature, current_severity = current_qualification(cid)
+        if current_nature == vers and (not sev_vers or current_severity == sev_vers):
+            print(f"SKIP_ALREADY id={cid} nature={vers} severity={current_severity}")
             skipped += 1
             continue
 
