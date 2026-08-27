@@ -508,12 +508,16 @@ fn desired_state_path(config: &DaemonConfig) -> PathBuf {
 
 /// État partagé du daemon.
 struct DaemonState {
-    /// Machine et base **de ce daemon**, retenues une fois au démarrage.
+    /// Machine, base et identité **de ce daemon**, retenues une fois au
+    /// démarrage.
     ///
-    /// Elles voyagent ensuite dans `ClientWelcome` : un client fédéré ne peut
-    /// pas les déduire, et jusqu'ici il affichait les siennes à leur place.
+    /// Le rapport dédié les atteste ensuite sur chaque connexion : un client
+    /// fédéré ne peut pas les déduire, ni confondre deux redémarrages locaux.
     host: String,
     db_path: PathBuf,
+    /// Valeur éphémère créée une fois pour ce démarrage. Elle rend observable
+    /// le remplacement d'un daemon même quand hôte, base et build sont égaux.
+    instance_id: String,
     router: Router,
     circuit_breaker: CircuitBreaker,
     deduplicator: Deduplicator,
@@ -1954,6 +1958,7 @@ impl DaemonState {
         Ok(DaemonState {
             host: crate::build_info::local_host(),
             db_path: config.db_path.clone(),
+            instance_id: Uuid::new_v4().to_string(),
             router: Router::new(),
             circuit_breaker: CircuitBreaker::new(
                 config.circuit_breaker_window,
@@ -7022,13 +7027,14 @@ fn handle_wrapper_message(
             }
         }
 
-        // Le daemon atteste SA machine et SA base : le client n'a plus à
-        // deviner, et n'affiche plus les siennes à leur place.
+        // Le daemon atteste SA machine, SA base et SON démarrage : le client
+        // n'a plus à deviner, ni à confondre deux instances du même binaire.
         WrapperToDaemon::DaemonIdentityRequest => {
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
             Some(DaemonToWrapper::DaemonIdentityReport {
                 host: st.host.clone(),
                 db_path: st.db_path.display().to_string(),
+                instance_id: st.instance_id.clone(),
             })
         }
 
@@ -7419,7 +7425,10 @@ fn build_id_probe_issuer_scope() -> String {
 #[cfg(test)]
 mod matrice_roles_tests {
     use super::*;
+    use std::os::unix::net::UnixListener;
+    use std::path::PathBuf;
     use std::sync::mpsc;
+    use std::thread;
 
     /// Etat minimal : on n'eprouve que la matrice, pas la presence.
     ///
@@ -7451,6 +7460,70 @@ mod matrice_roles_tests {
         (state, config)
     }
 
+    struct NettoyageSondeIdentite {
+        socket_path: PathBuf,
+        db_path: PathBuf,
+    }
+
+    impl Drop for NettoyageSondeIdentite {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.socket_path);
+            let _ = std::fs::remove_file(&self.db_path);
+        }
+    }
+
+    fn sert_une_identite(
+        listener: UnixListener,
+        state: Arc<Mutex<DaemonState>>,
+    ) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("connexion du client de sonde");
+            handle_connection(stream, state).expect("service de la sonde");
+        })
+    }
+
+    /// Oracle M1 local-vers-local : le socket est remplacé entre deux
+    /// démarrages qui partagent délibérément hôte, binaire et base. BUILD_ID
+    /// reste identique ; seule l'identité de démarrage doit changer.
+    #[test]
+    fn redemarrage_local_sur_le_meme_socket_change_l_identite_d_instance() {
+        let (premier_etat, config) = etat_nu("identite-instance-redemarrage");
+        let _nettoyage = NettoyageSondeIdentite {
+            socket_path: config.socket_path.clone(),
+            db_path: config.db_path.clone(),
+        };
+        let premier_listener = UnixListener::bind(&config.socket_path).expect("premier socket");
+        let premier_serveur = sert_une_identite(premier_listener, premier_etat);
+        let premier = daemon_identity(&config.socket_path).expect("premier rapport d'identite");
+        premier_serveur.join().expect("premier daemon termine");
+
+        std::fs::remove_file(&config.socket_path).expect("retrait premier socket");
+        let (managed_tx, _managed_rx) = mpsc::channel();
+        let second_etat = Arc::new(Mutex::new(
+            DaemonState::new(&config, managed_tx).expect("second daemon"),
+        ));
+        let second_listener = UnixListener::bind(&config.socket_path).expect("second socket");
+        let second_serveur = sert_une_identite(second_listener, second_etat);
+        let second = daemon_identity(&config.socket_path).expect("second rapport d'identite");
+        second_serveur.join().expect("second daemon termine");
+
+        assert_eq!(premier.build_id, second.build_id, "meme binaire attendu");
+        assert_eq!(premier.host, second.host, "meme hote attendu");
+        assert_eq!(premier.db_path, second.db_path, "meme base attendue");
+        let premier_id = premier
+            .instance_id
+            .as_deref()
+            .expect("le premier rapport doit attester une instance");
+        let second_id = second
+            .instance_id
+            .as_deref()
+            .expect("le second rapport doit attester une instance");
+        assert_ne!(
+            premier_id, second_id,
+            "un redemarrage local ne doit jamais reemployer l'identite d'instance"
+        );
+    }
+
     /// La sonde d'identite doit etre atteignable sur les DEUX roles.
     ///
     /// Le greffe se connecte en role Client pour deleguer, mais son guichet
@@ -7480,7 +7553,11 @@ mod matrice_roles_tests {
             let reponse =
                 handle_wrapper_message(connexion, WrapperToDaemon::DaemonIdentityRequest, &shared);
             match reponse {
-                Some(DaemonToWrapper::DaemonIdentityReport { host, db_path }) => {
+                Some(DaemonToWrapper::DaemonIdentityReport {
+                    host,
+                    db_path,
+                    instance_id,
+                }) => {
                     // Les VALEURS, pas la presence : ce sont celles de l'etat.
                     let attendu = shared.lock().unwrap_or_else(|p| p.into_inner());
                     assert_eq!(host, attendu.host, "role {role:?}");
@@ -7489,6 +7566,7 @@ mod matrice_roles_tests {
                         attendu.db_path.display().to_string(),
                         "role {role:?}"
                     );
+                    assert_eq!(instance_id, attendu.instance_id, "role {role:?}");
                 }
                 autre => panic!("role {role:?} : identite attendue, obtenu {autre:?}"),
             }
@@ -7631,6 +7709,8 @@ pub struct DaemonIdentity {
     pub build_id: String,
     pub host: Option<String>,
     pub db_path: Option<String>,
+    /// `None` désigne un daemon antérieur, donc une instance non attestée.
+    pub instance_id: Option<String>,
 }
 
 fn daemon_identity(socket_path: &std::path::Path) -> Option<DaemonIdentity> {
@@ -7684,16 +7764,19 @@ fn daemon_identity(socket_path: &std::path::Path) -> Option<DaemonIdentity> {
             DaemonToWrapper::ClientWelcome { build_id, .. } => {
                 // Second aller-retour, sur la MÊME connexion : la machine et la
                 // base ne sont pas déductibles côté client.
-                let (host, db_path) =
+                let (host, db_path, instance_id) =
                     match probe_daemon_identity(&mut writer, &mut reader, &mut line) {
-                        Some((host, db_path)) => (Some(host), Some(db_path)),
+                        Some((host, db_path, instance_id)) => {
+                            (Some(host), Some(db_path), Some(instance_id))
+                        }
                         // Daemon antérieur au message : non attesté, jamais deviné.
-                        None => (None, None),
+                        None => (None, None, None),
                     };
                 Some(DaemonIdentity {
                     build_id,
                     host,
                     db_path,
+                    instance_id,
                 })
             }
             _ => None,
@@ -7706,7 +7789,7 @@ fn probe_daemon_identity<W: std::io::Write, R: std::io::BufRead>(
     writer: &mut W,
     reader: &mut R,
     line: &mut String,
-) -> Option<(String, String)> {
+) -> Option<(String, String, String)> {
     writeln!(
         writer,
         "{}",
@@ -7719,7 +7802,11 @@ fn probe_daemon_identity<W: std::io::Write, R: std::io::BufRead>(
         return None;
     }
     match decode(line.trim()).ok()? {
-        DaemonToWrapper::DaemonIdentityReport { host, db_path } => Some((host, db_path)),
+        DaemonToWrapper::DaemonIdentityReport {
+            host,
+            db_path,
+            instance_id,
+        } => Some((host, db_path, instance_id)),
         _ => None,
     }
 }

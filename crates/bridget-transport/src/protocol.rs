@@ -1494,8 +1494,16 @@ pub enum DaemonToWrapper {
     Disconnect,
     /// Réponse à ListAgents.
     AgentList { agents: Vec<AgentInfo> },
-    /// Machine et base attestées par le daemon lui-même.
-    DaemonIdentityReport { host: String, db_path: String },
+    /// Machine, base et instance attestées par le daemon lui-même.
+    ///
+    /// `instance_id` est renouvelé à chaque démarrage : contrairement à
+    /// `build_id`, il distingue deux daemons successifs du même binaire sur le
+    /// même hôte et la même base.
+    DaemonIdentityReport {
+        host: String,
+        db_path: String,
+        instance_id: String,
+    },
     /// Réponse à UsageWindow. `aggregate: None` signifie « aucun échantillon
     /// attesté dans la fenêtre » — le greffe doit rendre « inconnu », pas zéro.
     UsageWindowResult {
@@ -2825,22 +2833,28 @@ mod tests {
         assert!(!welcome.allowed_for_attach());
     }
 
-    /// La machine et la base du daemon voyagent par un message DÉDIÉ, dont les
-    /// deux valeurs doivent survivre au tour du fil — et rester distinctes de
-    /// tout chemin local.
+    /// La machine, la base et l'instance du daemon voyagent par un message
+    /// DÉDIÉ. Les trois valeurs doivent survivre au tour du fil : l'instance
+    /// reste distincte du build et du chemin local.
     ///
-    /// Mutant qui tue ce test : renvoyer `db_path` à la place de `host` → la
-    /// première assertion meurt.
+    /// Mutant qui tue ce test : renvoyer `db_path` à la place de
+    /// `instance_id` → la dernière assertion meurt.
     #[test]
-    fn le_daemon_atteste_sa_machine_et_sa_base() {
+    fn le_daemon_atteste_sa_machine_sa_base_et_son_instance() {
         let report = DaemonToWrapper::DaemonIdentityReport {
             host: "monordinateur".to_string(),
             db_path: "/Users/moi/.cache/bridget/bridget.db".to_string(),
+            instance_id: "daemon-7f0c01d2".to_string(),
         };
         match decode::<DaemonToWrapper>(&encode(&report).unwrap()).unwrap() {
-            DaemonToWrapper::DaemonIdentityReport { host, db_path } => {
+            DaemonToWrapper::DaemonIdentityReport {
+                host,
+                db_path,
+                instance_id,
+            } => {
                 assert_eq!(host, "monordinateur");
                 assert_eq!(db_path, "/Users/moi/.cache/bridget/bridget.db");
+                assert_eq!(instance_id, "daemon-7f0c01d2");
             }
             other => panic!("variante inattendue: {other:?}"),
         }
