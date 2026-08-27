@@ -20,6 +20,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::managed_supervisor::ManagedSupervisorGuard;
 use crate::idempotency::{
     IdempotencyKey, IdempotencyStore, LookupResult, OperationKind, ReplyTracking, Reservation,
     SendDelivery,
@@ -401,7 +402,7 @@ enum ManagedStopTarget {
     Immediate(StopOutcome),
 }
 
-enum ManagedSupervisorCommand {
+pub(crate) enum ManagedSupervisorCommand {
     Start {
         prepared: PreparedSpawn,
         stop: Arc<ManagedStopControl>,
@@ -413,7 +414,7 @@ enum ManagedSupervisorCommand {
     },
 }
 
-enum ManagedSupervisorEvent {
+pub(crate) enum ManagedSupervisorEvent {
     Connected {
         lease: SpawnLease,
         conn_id: String,
@@ -1069,27 +1070,13 @@ struct SupervisedProcess {
     stop_attempted: bool,
 }
 
-fn start_managed_supervisor(
-    fleet: Arc<FleetSupervisor>,
-    config: &DaemonConfig,
-    commands: Receiver<ManagedSupervisorCommand>,
-    events: Sender<ManagedSupervisorEvent>,
-) {
-    #[cfg(test)]
-    let executable_override =
-        std::env::var_os("BRIDGET_T908_MANAGED_EXECUTABLE").map(PathBuf::from);
-    #[cfg(not(test))]
-    let executable_override = None;
-    start_managed_supervisor_with_executable(fleet, config, commands, events, executable_override);
-}
-
-fn start_managed_supervisor_with_executable(
+pub(crate) fn spawn_managed_supervisor_thread(
     fleet: Arc<FleetSupervisor>,
     config: &DaemonConfig,
     commands: Receiver<ManagedSupervisorCommand>,
     events: Sender<ManagedSupervisorEvent>,
     executable_override: Option<PathBuf>,
-) {
+) -> thread::JoinHandle<()> {
     let marker_store = ManagedMarkerStore::at_directory(
         config
             .db_path
@@ -1144,7 +1131,7 @@ fn start_managed_supervisor_with_executable(
                 last_stderr_purge = Instant::now();
             }
         }
-    });
+    })
 }
 
 fn handle_managed_command(
@@ -2417,17 +2404,29 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
 
     let (managed_tx, managed_rx) = mpsc::channel();
     let (managed_event_tx, managed_event_rx) = mpsc::channel();
-    let state = Arc::new(Mutex::new(DaemonState::new(&config, managed_tx)?));
-    let recoveries = {
-        let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
-        reserve_managed_recoveries(&mut st, unix_timestamp())?
-    };
+    let state = Arc::new(Mutex::new(DaemonState::new(&config, managed_tx.clone())?));
     let fleet = state
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .fleet
         .clone();
-    start_managed_supervisor(fleet, &config, managed_rx, managed_event_tx);
+    #[cfg(test)]
+    let executable_override =
+        std::env::var_os("BRIDGET_T908_MANAGED_EXECUTABLE").map(PathBuf::from);
+    #[cfg(not(test))]
+    let executable_override = None;
+    let supervisor_guard = ManagedSupervisorGuard::from_existing_sender(
+        managed_tx,
+        managed_rx,
+        fleet,
+        &config,
+        managed_event_tx,
+        executable_override,
+    );
+    let recoveries = {
+        let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
+        reserve_managed_recoveries(&mut st, unix_timestamp())?
+    };
     for (prepared, stop) in recoveries {
         let command_id = prepared.lease.command_id.clone();
         let instance_id = prepared.lease.instance_id.clone();
@@ -2666,6 +2665,8 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             info!("daemon arrêté proprement");
+            drop(state);
+            supervisor_guard.shutdown();
             return Ok(());
         }
 
@@ -7700,15 +7701,19 @@ mod presence_tests {
 
         let shared = Arc::new(Mutex::new(state));
         let (event_tx, event_rx) = mpsc::channel();
-        start_managed_supervisor_with_executable(
+        let _supervisor = ManagedSupervisorGuard::from_existing_sender(
+            managed_tx,
+            managed_rx,
             Arc::clone(&shared.lock().unwrap().fleet),
             &config,
-            managed_rx,
             event_tx,
             Some(shim),
         );
         for (prepared, stop) in recoveries {
-            managed_tx
+            shared
+                .lock()
+                .unwrap()
+                .managed_tx
                 .send(ManagedSupervisorCommand::Start { prepared, stop })
                 .unwrap();
         }
@@ -7794,7 +7799,7 @@ mod presence_tests {
             );
             thread::sleep(Duration::from_millis(10));
         }
-        drop(managed_tx);
+        drop(shared);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -12449,14 +12454,18 @@ mod presence_tests {
             handle_connection(stream, connection_state).unwrap();
         });
         let (event_tx, event_rx) = mpsc::channel();
-        start_managed_supervisor_with_executable(
+        let _supervisor = ManagedSupervisorGuard::from_existing_sender(
+            managed_tx,
+            managed_rx,
             Arc::clone(&shared.lock().unwrap().fleet),
             &config,
-            managed_rx,
             event_tx,
             Some(managed_test_binary()),
         );
-        managed_tx
+        shared
+            .lock()
+            .unwrap()
+            .managed_tx
             .send(ManagedSupervisorCommand::Start {
                 prepared,
                 stop: Arc::clone(&shared.lock().unwrap().managed_spawns[&lease.command_id].stop),
@@ -12528,7 +12537,6 @@ mod presence_tests {
         }
         connection.join().unwrap();
         drop(shared);
-        drop(managed_tx);
         std::fs::remove_dir_all(root).unwrap();
     }
 
