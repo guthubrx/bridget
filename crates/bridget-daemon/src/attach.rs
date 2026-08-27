@@ -1846,15 +1846,18 @@ fn render_journal_event(bytes: &[u8], agent: &str) -> String {
             ),
             permission_summary(payload),
         ),
-        "turn_end" => ("[fin]".to_string(), turn_end_summary(payload)),
-        "error" => (
-            "[erreur]".to_string(),
-            payload
-                .get("reason")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("erreur sans motif")
-                .to_string(),
+        "provider_request" => (
+            format!(
+                "[interaction] {}",
+                payload
+                    .get("provider")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("fournisseur inconnu")
+            ),
+            provider_request_summary(payload),
         ),
+        "turn_end" => ("[fin]".to_string(), turn_end_summary(payload)),
+        "error" => ("[erreur]".to_string(), error_summary(payload)),
         // Laissé volontairement brut : tout autre `event` (et tout `update` dont
         // le `kind` n'est ni text, tool, ni tool_call). Aucun autre type
         // n'apparaît aujourd'hui dans les journaux de production.
@@ -1910,6 +1913,47 @@ fn permission_summary(payload: &serde_json::Value) -> String {
         Some("cancelled") => "autorisation refusée".to_string(),
         Some(outcome) => format!("décision : {outcome}"),
         None => "décision absente".to_string(),
+    }
+}
+
+fn provider_request_summary(payload: &serde_json::Value) -> String {
+    let method = payload
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("méthode inconnue");
+    let request_id = provider_request_id(payload.get("request_id"));
+    let state = match payload.get("state").and_then(serde_json::Value::as_str) {
+        Some("pending") => "en attente",
+        Some(_) => "état inconnu",
+        None => "état absent",
+    };
+    match payload.get("turn_id").and_then(serde_json::Value::as_str) {
+        Some(turn_id) => {
+            format!("{method} — {state} — requête {request_id} — tour {turn_id}")
+        }
+        None => format!("{method} — {state} — requête {request_id} — tour non attesté"),
+    }
+}
+
+fn provider_request_id(value: Option<&serde_json::Value>) -> String {
+    match value {
+        Some(serde_json::Value::String(value)) => value.clone(),
+        Some(serde_json::Value::Number(value)) => value.to_string(),
+        _ => "identifiant inconnu".to_string(),
+    }
+}
+
+fn error_summary(payload: &serde_json::Value) -> String {
+    let reason = payload
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("erreur sans motif");
+    match payload.get("pending_provider_request") {
+        Some(pending) if pending.is_object() => format!(
+            "{reason} — interaction pendante : {}",
+            provider_request_summary(pending)
+        ),
+        _ => reason.to_string(),
     }
 }
 
@@ -4050,6 +4094,42 @@ mod tests {
         let stamp = short_timestamp(Some("2026-08-24T12:00:43Z"));
         assert_eq!(rendered, format!("{stamp} [livré] prompt accepté"));
         assert!(!rendered.contains("non pris en charge"));
+    }
+
+    #[test]
+    fn test_019_rend_requete_fournisseur_et_correlation_de_lecheance() {
+        let request_ref = format!("sha256:{}", "a".repeat(64));
+        let turn_ref = format!("sha256:{}", "b".repeat(64));
+        let pending = json!({
+            "provider": "codex",
+            "method": "item/commandExecution/requestApproval",
+            "request_id": request_ref,
+            "turn_id": turn_ref,
+            "state": "pending"
+        });
+        let request = journal_record(1, "provider_request", pending.clone());
+        let error = journal_record(
+            2,
+            "error",
+            json!({
+                "reason": "échéance Codex dépassée",
+                "pending_provider_request": pending
+            }),
+        );
+        let stamp = short_timestamp(Some("2026-08-23T09:07:00Z"));
+
+        assert_eq!(
+            render_journal_event(&request, "coder2"),
+            format!(
+                "{stamp} [interaction] codex item/commandExecution/requestApproval — en attente — requête {request_ref} — tour {turn_ref}"
+            )
+        );
+        assert_eq!(
+            render_journal_event(&error, "coder2"),
+            format!(
+                "{stamp} [erreur] échéance Codex dépassée — interaction pendante : item/commandExecution/requestApproval — en attente — requête {request_ref} — tour {turn_ref}"
+            )
+        );
     }
 
     #[test]

@@ -11,5 +11,6 @@ test-support = []
 bridget-core = { path = "../bridget-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 log = { workspace = true }
 libc = "0.2"
