@@ -153,6 +153,8 @@ figure dans la liste des entrées mortes.
 - Une politique historique ne porte pas encore `marker_source` : la garde
   continue à la lire, mais l'outil refuse de la régénérer avant annotation.
 - Un inventaire est trop ancien ou daté dans le futur : refus avant écriture.
+- Un inventaire n'est pas un fichier privé appartenant à l'utilisateur effectif
+  : refus sur le descripteur ouvert avant toute réécriture.
 - Plusieurs instances existantes portent des expirations ou révocations
   différentes : refus ; l'outil ne choisit jamais quel droit conserver.
 - La génération vaut la valeur maximale : refus plutôt que retour à zéro.
@@ -175,7 +177,9 @@ figure dans la liste des entrées mortes.
   la naissance du processus et le fichier de nom avant de le déclarer vivant.
 - **FR-004**: Un inventaire DOIT identifier sa source, son instant d'observation,
   ses marqueurs vivants et ses marqueurs périmés ; il ne peut être complet si
-  une entrée n'a pas été lue ou validée.
+  une entrée n'a pas été lue ou validée. Son fichier DOIT être régulier,
+  appartenir à l'utilisateur effectif et interdire tout accès au groupe et aux
+  autres ; ces attributs sont vérifiés sur le descripteur déjà ouvert.
 - **FR-005**: Zéro marqueur vivant dans une source DOIT produire une erreur et
   NE DOIT jamais produire une politique vide ou une réécriture partielle.
 - **FR-006**: La régénération DOIT exiger exactement toutes les sources nommées

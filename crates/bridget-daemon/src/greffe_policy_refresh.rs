@@ -1,6 +1,7 @@
 //! Point d'entrée isolé du rafraîchisseur de politique du greffe.
 
 use bridget_transport::fsutil::write_private_file_atomic;
+use bridget_transport::greffe_authorization::verify_private_regular_file;
 use bridget_transport::greffe_policy_refresh::{MarkerInventory, refresh_policy};
 use std::ffi::OsString;
 use std::fs::OpenOptions;
@@ -145,6 +146,8 @@ fn read_inventory(path: &Path) -> Result<MarkerInventory, RunError> {
             "inventaire non régulier ou trop volumineux".to_string(),
         ));
     }
+    verify_private_regular_file(&file)
+        .map_err(|error| RunError::Message(format!("inventaire privé requis : {error}")))?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .map_err(|error| RunError::Message(format!("inventaire illisible : {error}")))?;
@@ -204,6 +207,16 @@ enum RunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bridget_transport::greffe_policy_refresh::{
+        LiveMarker, MARKER_INVENTORY_VERSION, MarkerSource,
+    };
+    use serde_json::json;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
     fn invoke(arguments: &[&str]) -> (i32, String, String) {
         let mut stdout = Vec::new();
@@ -245,5 +258,86 @@ mod tests {
         ]);
         assert_eq!(relative, 2);
         assert!(relative_error.contains("--policy exige un chemin absolu"));
+    }
+
+    #[test]
+    fn inventaire_trop_ouvert_est_refuse_avant_politique_et_prive_passe() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-greffe-refresh-private-input-{}-{}",
+            std::process::id(),
+            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let policy_path = root.join("policy.json");
+        let inventory_path = root.join("inventory.json");
+        let Ok(now) = unix_now() else {
+            panic!("l'horloge de la fixture doit être valide");
+        };
+        let source = MarkerSource {
+            host: "cartae-test".to_string(),
+            marker_directory: root.join("agent-pids"),
+        };
+        let policy = json!({
+            "version": 1,
+            "generation": 7,
+            "attestation_key": KEY,
+            "principals": [{
+                "principal": "agent-vivant",
+                "marker_source": source,
+                "actions": ["delegate"],
+                "instances": [{
+                    "instance_id": "instance-ancienne",
+                    "expires_at": now + 600,
+                    "revoked": false
+                }]
+            }]
+        });
+        let inventory = MarkerInventory {
+            version: MARKER_INVENTORY_VERSION,
+            source: source.clone(),
+            observed_at: now,
+            complete: true,
+            live: vec![LiveMarker {
+                principal: "agent-vivant".to_string(),
+                instance_id: "instance-nouvelle".to_string(),
+                pid: 42,
+                birth: 420,
+            }],
+            stale: Vec::new(),
+        };
+        fs::write(&policy_path, serde_json::to_vec_pretty(&policy).unwrap()).unwrap();
+        fs::set_permissions(&policy_path, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(
+            &inventory_path,
+            serde_json::to_vec_pretty(&inventory).unwrap(),
+        )
+        .unwrap();
+        fs::set_permissions(&inventory_path, fs::Permissions::from_mode(0o644)).unwrap();
+        let original = fs::read(&policy_path).unwrap();
+        let arguments = vec![
+            OsString::from("refresh"),
+            OsString::from("--policy"),
+            policy_path.as_os_str().to_os_string(),
+            OsString::from("--inventory"),
+            inventory_path.as_os_str().to_os_string(),
+        ];
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(run(arguments.clone(), &mut stdout, &mut stderr), 2);
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            "bridget-greffe-policy-refresh: inventaire privé requis : permissions 0644, attendu 0600 ou plus restrictif\n"
+        );
+        assert_eq!(fs::read(&policy_path).unwrap(), original);
+
+        fs::set_permissions(&inventory_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(run(arguments, &mut stdout, &mut stderr), 0);
+        assert!(stderr.is_empty());
+        assert_eq!(fs::read(&policy_path).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -757,7 +757,9 @@ fn append_audit(path: &Path, event: GreffeAuditEvent<'_>) -> std::io::Result<()>
     Ok(())
 }
 
-pub(crate) fn verify_private_regular_file(file: &File) -> std::io::Result<()> {
+/// Vérifie sur le descripteur ouvert qu'un fichier sensible est régulier,
+/// appartient à l'utilisateur effectif et n'est accessible ni au groupe ni aux autres.
+pub fn verify_private_regular_file(file: &File) -> std::io::Result<()> {
     let metadata = file.metadata()?;
     if !metadata.is_file() {
         return Err(std::io::Error::other("fichier régulier requis"));

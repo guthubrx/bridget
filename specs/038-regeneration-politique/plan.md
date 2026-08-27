@@ -93,6 +93,8 @@ la procédure de compilation et l'usage via SSH sont documentés.
    marqueur périmé jamais projeté comme vivant.
 2. Source vide, absente, incomplète, dupliquée ou trop ancienne : erreur et
    octets de politique inchangés.
+   Un inventaire trop ouvert ou d'un autre propriétaire est refusé sur son
+   descripteur avant que le plan puisse être calculé.
 3. Agent redémarré : ancienne instance absente, nouvelle unique, actions et
    grant inchangés, génération `N+1`, mode `0600`.
 4. Agent momentanément arrêté : entrée conservée exactement et nommée dans
