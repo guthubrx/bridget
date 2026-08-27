@@ -851,10 +851,12 @@ def _proc_descendants(
         children_path = proc_root / str(pid) / "task" / str(pid) / "children"
         try:
             children = children_path.read_text(encoding="ascii").split()
-        except OSError:
-            if pid == root_pid:
-                return None, "processus-pane-absent"
-            continue
+        except OSError as error:
+            if error.errno in (errno.ENOENT, errno.ENOTDIR, errno.ESRCH):
+                if pid == root_pid:
+                    return None, "processus-pane-absent"
+                continue
+            return None, f"arbre-processus-inaccessible:{error.errno or 'inconnu'}"
         try:
             pending.extend(int(child) for child in children)
         except ValueError:
