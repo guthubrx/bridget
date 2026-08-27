@@ -595,32 +595,52 @@ impl GreffePolicy {
 pub(crate) fn load_policy_file(
     path: &Path,
 ) -> Result<GreffePolicyFile, GreffeAuthorizationRefusal> {
-    let content = read_private_file(path)?;
+    load_policy_file_detailed(path).map_err(|error| match error {
+        PolicyFileLoadError::Unavailable => GreffeAuthorizationRefusal::PolicyUnavailable,
+        PolicyFileLoadError::UnsupportedType | PolicyFileLoadError::Invalid => {
+            GreffeAuthorizationRefusal::PolicyInvalid
+        }
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PolicyFileLoadError {
+    Unavailable,
+    UnsupportedType,
+    Invalid,
+}
+
+pub(crate) fn load_policy_file_detailed(
+    path: &Path,
+) -> Result<GreffePolicyFile, PolicyFileLoadError> {
+    let content = read_private_file_detailed(path)?;
     let file: GreffePolicyFile =
-        serde_json::from_str(&content).map_err(|_| GreffeAuthorizationRefusal::PolicyInvalid)?;
-    GreffePolicy::from_file(&file)?;
+        serde_json::from_str(&content).map_err(|_| PolicyFileLoadError::Invalid)?;
+    GreffePolicy::from_file(&file).map_err(|_| PolicyFileLoadError::Invalid)?;
     Ok(file)
 }
 
-fn read_private_file(path: &Path) -> Result<String, GreffeAuthorizationRefusal> {
+fn read_private_file_detailed(path: &Path) -> Result<String, PolicyFileLoadError> {
     let mut file = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(path)
-        .map_err(|_| GreffeAuthorizationRefusal::PolicyUnavailable)?;
+        .map_err(|_| PolicyFileLoadError::Unavailable)?;
     let metadata = file
         .metadata()
-        .map_err(|_| GreffeAuthorizationRefusal::PolicyUnavailable)?;
-    if !metadata.is_file()
-        || metadata.uid() != unsafe { libc::geteuid() }
+        .map_err(|_| PolicyFileLoadError::Unavailable)?;
+    if !metadata.is_file() {
+        return Err(PolicyFileLoadError::UnsupportedType);
+    }
+    if metadata.uid() != unsafe { libc::geteuid() }
         || metadata.permissions().mode() & 0o077 != 0
         || metadata.len() > MAX_POLICY_BYTES
     {
-        return Err(GreffeAuthorizationRefusal::PolicyInvalid);
+        return Err(PolicyFileLoadError::Invalid);
     }
     let mut content = String::new();
     file.read_to_string(&mut content)
-        .map_err(|_| GreffeAuthorizationRefusal::PolicyUnavailable)?;
+        .map_err(|_| PolicyFileLoadError::Unavailable)?;
     Ok(content)
 }
 

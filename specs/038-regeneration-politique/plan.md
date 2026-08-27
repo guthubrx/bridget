@@ -40,6 +40,10 @@ machine, canonicalise le répertoire, refuse un répertoire lien ou illisible,
 relit chaque marqueur et compare son `birth` au processus local. Son inventaire
 ne peut donc pas être confondu par accident avec celui d'un autre hôte.
 
+Chaque fichier d'entrée est ouvert avec `O_NONBLOCK`, puis son type est vérifié
+sur le descripteur avant lecture. Un FIFO numérique ne peut donc plus suspendre
+le scanner ; son type est nommé séparément des erreurs de droits ou de contenu.
+
 Pour un hôte distant, le même binaire est exécuté via SSH sur cet hôte. Seul le
 JSON d'inventaire revient vers la machine qui détient la fixture de politique ;
 les PID distants ne sont jamais interprétés localement.

@@ -157,6 +157,9 @@ figure dans la liste des entrées mortes.
   : refus sur le descripteur ouvert avant toute réécriture.
 - La politique régénérable ou son verrou possède plusieurs liens physiques :
   refus avant plan, car un verrou attaché à un nom ne protège pas ses alias.
+- Un marqueur, un fichier de nom, un inventaire ou une politique est un FIFO ou
+  un autre type spécial : ouverture non bloquante, refus de type nommé avant
+  lecture ; le témoin réel possède sa propre limite de deux secondes.
 - Plusieurs instances existantes portent des expirations ou révocations
   différentes : refus ; l'outil ne choisit jamais quel droit conserver.
 - La génération vaut la valeur maximale : refus plutôt que retour à zéro.
@@ -177,6 +180,8 @@ figure dans la liste des entrées mortes.
   historique qui ne porte pas encore cette annotation.
 - **FR-003**: Le scanner DOIT vérifier localement chaque marqueur contre le PID,
   la naissance du processus et le fichier de nom avant de le déclarer vivant.
+  Les marqueurs et fichiers de nom DOIVENT être ouverts sans blocage et leur
+  type régulier vérifié sur le descripteur avant lecture.
 - **FR-004**: Un inventaire DOIT identifier sa source, son instant d'observation,
   ses marqueurs vivants et ses marqueurs périmés ; il ne peut être complet si
   une entrée n'a pas été lue ou validée. Son fichier DOIT être régulier,
@@ -214,6 +219,10 @@ figure dans la liste des entrées mortes.
   clé d'attestation.
 - **FR-015**: Le même scanner DOIT pouvoir être exécuté sur un hôte distant et
   son inventaire rapatrié ; aucun PID distant ne doit être validé localement.
+- **FR-016**: Tous les fichiers d'entrée du rafraîchisseur DOIVENT être ouverts
+  sans blocage, puis validés comme fichiers réguliers sur le descripteur avant
+  lecture. Un type spécial DOIT produire un motif opérateur distinct des droits
+  insuffisants et du contenu invalide.
 
 ### Non-Functional Requirements
 

@@ -65,6 +65,8 @@ pub enum MarkerScanError {
     DirectoryNotCanonical,
     DirectoryUnreadable,
     InvalidMarker { marker: String },
+    UnsupportedMarkerType { marker: String },
+    UnsupportedNameFileType { marker: String },
     NoLiveMarker,
 }
 
@@ -83,6 +85,16 @@ impl fmt::Display for MarkerScanError {
             Self::InvalidMarker { marker } => {
                 write!(formatter, "marqueur invalide ou illisible : {marker}")
             }
+            Self::UnsupportedMarkerType { marker } => {
+                write!(
+                    formatter,
+                    "type de fichier de marqueur non pris en charge : {marker}"
+                )
+            }
+            Self::UnsupportedNameFileType { marker } => write!(
+                formatter,
+                "type de fichier de nom non pris en charge pour le marqueur : {marker}"
+            ),
             Self::NoLiveMarker => write!(formatter, "aucun marqueur vivant observé"),
         }
     }
@@ -315,10 +327,7 @@ fn scan_marker_directory_with(
         }
         match processes.birth(pid) {
             Some(birth) if birth == marker.birth => {
-                let principal =
-                    read_name(&marker.name_file).ok_or_else(|| MarkerScanError::InvalidMarker {
-                        marker: marker_name.clone(),
-                    })?;
+                let principal = read_name_for_scan(&marker.name_file, &marker_name)?;
                 live.push(LiveMarker {
                     principal,
                     instance_id: marker.instance_id,
@@ -359,7 +368,7 @@ fn scan_marker_directory_with(
 fn read_marker_file(path: &Path, marker_name: &str) -> Result<AgentPidMarker, MarkerScanError> {
     let mut file = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(path)
         .map_err(|_| MarkerScanError::InvalidMarker {
             marker: marker_name.to_string(),
@@ -369,7 +378,12 @@ fn read_marker_file(path: &Path, marker_name: &str) -> Result<AgentPidMarker, Ma
         .map_err(|_| MarkerScanError::InvalidMarker {
             marker: marker_name.to_string(),
         })?;
-    if !metadata.is_file() || metadata.len() > MAX_MARKER_BYTES {
+    if !metadata.is_file() {
+        return Err(MarkerScanError::UnsupportedMarkerType {
+            marker: marker_name.to_string(),
+        });
+    }
+    if metadata.len() > MAX_MARKER_BYTES {
         return Err(MarkerScanError::InvalidMarker {
             marker: marker_name.to_string(),
         });
@@ -403,10 +417,45 @@ fn local_hostname() -> Result<String, MarkerScanError> {
 }
 
 fn read_name(path: &Path) -> Option<String> {
-    let name = fs::read_to_string(path).ok()?;
+    read_name_file(path).ok()
+}
+
+fn read_name_for_scan(path: &Path, marker_name: &str) -> Result<String, MarkerScanError> {
+    read_name_file(path).map_err(|error| match error {
+        NameFileReadError::UnsupportedType => MarkerScanError::UnsupportedNameFileType {
+            marker: marker_name.to_string(),
+        },
+        NameFileReadError::Unreadable => MarkerScanError::InvalidMarker {
+            marker: marker_name.to_string(),
+        },
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NameFileReadError {
+    UnsupportedType,
+    Unreadable,
+}
+
+fn read_name_file(path: &Path) -> Result<String, NameFileReadError> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| NameFileReadError::Unreadable)?;
+    let metadata = file.metadata().map_err(|_| NameFileReadError::Unreadable)?;
+    if !metadata.is_file() {
+        return Err(NameFileReadError::UnsupportedType);
+    }
+    if metadata.len() > MAX_MARKER_BYTES {
+        return Err(NameFileReadError::Unreadable);
+    }
+    let mut name = String::new();
+    file.read_to_string(&mut name)
+        .map_err(|_| NameFileReadError::Unreadable)?;
     let name = name.trim();
-    validate_agent_name(name).ok()?;
-    Some(name.to_string())
+    validate_agent_name(name).map_err(|_| NameFileReadError::Unreadable)?;
+    Ok(name.to_string())
 }
 
 #[cfg(test)]

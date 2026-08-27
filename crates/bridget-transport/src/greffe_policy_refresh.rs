@@ -7,8 +7,8 @@
 
 use crate::fsutil::{AtomicWritePhase, write_private_file_atomic_observed};
 use crate::greffe_authorization::{
-    GreffeAuthorizationRefusal, GreffePolicyFile, InstancePolicyFile,
-    is_valid_greffe_identity_component, load_policy_file, verify_private_regular_file,
+    GreffePolicyFile, InstancePolicyFile, PolicyFileLoadError, is_valid_greffe_identity_component,
+    load_policy_file_detailed, verify_private_regular_file,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -96,6 +96,7 @@ pub enum PostRenamePolicyState {
 pub enum PolicyRefreshError {
     PolicyUnavailable,
     PolicyInvalid,
+    PolicyFileTypeUnsupported,
     PolicyPathNotCanonical,
     PolicyPathNotUnique,
     LockPathNotUnique,
@@ -153,6 +154,9 @@ impl fmt::Display for PolicyRefreshError {
         match self {
             Self::PolicyUnavailable => write!(formatter, "politique indisponible"),
             Self::PolicyInvalid => write!(formatter, "politique invalide"),
+            Self::PolicyFileTypeUnsupported => {
+                write!(formatter, "type de fichier de politique non pris en charge")
+            }
             Self::PolicyPathNotCanonical => write!(
                 formatter,
                 "le chemin de politique doit être absolu, canonique et non lié"
@@ -307,9 +311,10 @@ fn refresh_policy_observed(
 }
 
 fn load_refreshable_policy(path: &Path) -> Result<GreffePolicyFile, PolicyRefreshError> {
-    load_policy_file(path).map_err(|error| match error {
-        GreffeAuthorizationRefusal::PolicyUnavailable => PolicyRefreshError::PolicyUnavailable,
-        _ => PolicyRefreshError::PolicyInvalid,
+    load_policy_file_detailed(path).map_err(|error| match error {
+        PolicyFileLoadError::Unavailable => PolicyRefreshError::PolicyUnavailable,
+        PolicyFileLoadError::UnsupportedType => PolicyRefreshError::PolicyFileTypeUnsupported,
+        PolicyFileLoadError::Invalid => PolicyRefreshError::PolicyInvalid,
     })
 }
 

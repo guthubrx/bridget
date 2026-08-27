@@ -135,16 +135,19 @@ fn execute_refresh(arguments: &[OsString], stdout: &mut dyn Write) -> Result<(),
 fn read_inventory(path: &Path) -> Result<MarkerInventory, RunError> {
     let mut file = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(path)
         .map_err(|error| RunError::Message(format!("inventaire illisible : {error}")))?;
     let metadata = file
         .metadata()
         .map_err(|error| RunError::Message(format!("inventaire illisible : {error}")))?;
-    if !metadata.is_file() || metadata.len() > MAX_INVENTORY_BYTES {
+    if !metadata.is_file() {
         return Err(RunError::Message(
-            "inventaire non régulier ou trop volumineux".to_string(),
+            "type de fichier d'inventaire non pris en charge".to_string(),
         ));
+    }
+    if metadata.len() > MAX_INVENTORY_BYTES {
+        return Err(RunError::Message("inventaire trop volumineux".to_string()));
     }
     verify_private_regular_file(&file)
         .map_err(|error| RunError::Message(format!("inventaire privé requis : {error}")))?;

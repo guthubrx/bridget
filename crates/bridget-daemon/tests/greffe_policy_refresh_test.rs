@@ -6,11 +6,14 @@ use bridget_transport::greffe_authorization::{
 };
 use bridget_transport::greffe_policy_refresh::{MarkerInventory, PolicyRegenerationReport};
 use serde_json::json;
+use std::ffi::CString;
 use std::fs;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -46,7 +49,33 @@ fn run(arguments: &[&Path]) -> std::process::Output {
     for argument in arguments {
         command.arg(argument);
     }
-    command.output().unwrap()
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            return child.wait_with_output().unwrap();
+        }
+        if Instant::now() >= deadline {
+            let pid = child.id();
+            assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) }, 0);
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "commande bloquée au-delà de 2 s, pid {pid}, stdout={:?}, stderr={:?}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn make_fifo(path: &Path) {
+    let raw = CString::new(path.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
 }
 
 #[test]
@@ -190,4 +219,125 @@ fn vrai_binaire_regenere_puis_la_garde_accepte_une_mutation_durable() {
     )
     .unwrap();
     assert_eq!(fs::read(&durable).unwrap(), b"mutated-by-new");
+}
+
+#[test]
+fn vrai_binaire_refuse_les_fichiers_speciaux_sans_bloquer() {
+    let fixture = Fixture::new();
+    let markers = fixture.path("agent-pids");
+    fs::create_dir(&markers).unwrap();
+    make_fifo(&markers.join("4242"));
+    let scan = run(&[Path::new("scan"), Path::new("--markers"), &markers]);
+    assert_eq!(scan.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8(scan.stderr).unwrap(),
+        "bridget-greffe-policy-refresh: type de fichier de marqueur non pris en charge : 4242\n"
+    );
+
+    fs::remove_file(markers.join("4242")).unwrap();
+    let names = fixture.path("names");
+    fs::create_dir(&names).unwrap();
+    let name_fifo = names.join("current");
+    make_fifo(&name_fifo);
+    let pid = std::process::id();
+    let birth = process_birth(pid).unwrap();
+    write_marker(&markers, pid, birth, "instance-nouvelle", &name_fifo).unwrap();
+    let name_file = run(&[Path::new("scan"), Path::new("--markers"), &markers]);
+    assert_eq!(name_file.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8(name_file.stderr).unwrap(),
+        format!(
+            "bridget-greffe-policy-refresh: type de fichier de nom non pris en charge pour le marqueur : {pid}\n"
+        )
+    );
+
+    let policy_path = fixture.path("policy.json");
+    let inventory_path = fixture.path("inventory.json");
+    make_fifo(&inventory_path);
+    let inventory = run(&[
+        Path::new("refresh"),
+        Path::new("--policy"),
+        &policy_path,
+        Path::new("--inventory"),
+        &inventory_path,
+    ]);
+    assert_eq!(inventory.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8(inventory.stderr).unwrap(),
+        "bridget-greffe-policy-refresh: type de fichier d'inventaire non pris en charge\n"
+    );
+
+    fs::remove_file(&inventory_path).unwrap();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let source = bridget_transport::greffe_policy_refresh::MarkerSource {
+        host: "cartae-test".to_string(),
+        marker_directory: markers.clone(),
+    };
+    let inventory = MarkerInventory {
+        version: bridget_transport::greffe_policy_refresh::MARKER_INVENTORY_VERSION,
+        source: source.clone(),
+        observed_at: now,
+        complete: true,
+        live: vec![bridget_transport::greffe_policy_refresh::LiveMarker {
+            principal: "agent-redemarre".to_string(),
+            instance_id: "instance-nouvelle".to_string(),
+            pid: 42,
+            birth: 420,
+        }],
+        stale: Vec::new(),
+    };
+    fs::write(
+        &inventory_path,
+        serde_json::to_vec_pretty(&inventory).unwrap(),
+    )
+    .unwrap();
+    fs::set_permissions(&inventory_path, fs::Permissions::from_mode(0o600)).unwrap();
+    make_fifo(&policy_path);
+    let policy_fifo = run(&[
+        Path::new("refresh"),
+        Path::new("--policy"),
+        &policy_path,
+        Path::new("--inventory"),
+        &inventory_path,
+    ]);
+    assert_eq!(policy_fifo.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8(policy_fifo.stderr).unwrap(),
+        "bridget-greffe-policy-refresh: type de fichier de politique non pris en charge\n"
+    );
+
+    fs::remove_file(&policy_path).unwrap();
+    let policy = json!({
+        "version": 1,
+        "generation": 11,
+        "attestation_key": KEY,
+        "principals": [{
+            "principal": "agent-redemarre",
+            "marker_source": source,
+            "actions": ["delegate"],
+            "instances": [{
+                "instance_id": "instance-ancienne",
+                "expires_at": now + 600,
+                "revoked": false
+            }]
+        }]
+    });
+    fs::write(&policy_path, serde_json::to_vec_pretty(&policy).unwrap()).unwrap();
+    fs::set_permissions(&policy_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let ordinary = run(&[
+        Path::new("refresh"),
+        Path::new("--policy"),
+        &policy_path,
+        Path::new("--inventory"),
+        &inventory_path,
+    ]);
+    assert_eq!(
+        ordinary.status.code(),
+        Some(0),
+        "fichiers ordinaires privés refusés : {}",
+        String::from_utf8_lossy(&ordinary.stderr)
+    );
 }
