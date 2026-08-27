@@ -7931,6 +7931,20 @@ mod signal_disposition_tests {
     }
 }
 
+/// ⚠ FAMILLE COURAMMENT SAUTÉE EN REVUE — un test ajouté ici peut n'être joué
+/// par personne.
+///
+/// Elle n'est PAS exclue par le harnais : `cargo test` la joue. Ce sont les
+/// relecteurs qui l'écartent à la main, chacun de son côté, avec
+/// `--skip daemon::presence_tests`, parce qu'elle rend un nombre de rouges qui
+/// VARIE d'une exécution à l'autre — 2, 7, 8 puis 10 mesurés le 2026-08-27,
+/// dont deux comptes différents sur le MÊME commit.
+///
+/// CONSÉQUENCE POUR QUI ARRIVE ICI : un oracle rangé dans cette famille sera
+/// vert dans votre intention et ne gardera rien — ni chez vous, ni en revue, ni
+/// au merge. Si votre test doit protéger quelque chose, mettez-le ailleurs et
+/// dites pourquoi ; si sa place est vraiment ici, dites-le aussi, pour que le
+/// prochain sache que vous avez choisi.
 #[cfg(test)]
 mod presence_tests {
     use super::*;
