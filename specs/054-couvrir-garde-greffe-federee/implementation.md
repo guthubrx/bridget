@@ -36,7 +36,10 @@ sites d'ouverture directe hors helper gardé : ["open_maicie_store:376", "open_m
 test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 21 filtered out
 ```
 
-Le total `1 + 21 = 22` correspond à l'univers des tests du binaire compilé.
+Le total `1 + 21 = 22` concorde avec l'exécution complète de la même commande
+sur le même arbre, qui rend `22 passed; 0 filtered out`. Il n'est pas comparé
+à un comptage statique absolu des attributs de test : les conditions `cfg`, les
+tests ignorés et le périmètre de crates rendent cette égalité non générale.
 
 ## Correction
 
@@ -73,6 +76,9 @@ Après restauration, les deux témoins rendent chacun :
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out
 ```
 
+Cette concordance ne sert qu'à comparer les exécutions du même binaire et de
+la même commande ; elle ne constitue pas une preuve autonome du SHA compilé.
+
 ## Validation
 
 ```text
@@ -97,7 +103,9 @@ tir conservé est celui des 22 tests verts ci-dessus.
 Deux commandes filtrées ont aussi été rejetées parce que `--exact` avait reçu
 le nom sans le préfixe de module : `0 passed; 22 filtered out`. Relancées avec
 le nom qualifié `tests::…`, elles rendent chacune `1 passed; 21 filtered out`.
-La somme de contrôle prouve dans les deux cas l'univers de 22 tests.
+Le tir nul est distingué du tir réel par la présence d'un test exécuté. Les
+totaux concordent avec le tir complet de cette même commande, sans inférence
+sur un comptage statique absolu.
 
 Limites déclarées : la campagne workspace complète et macOS n'ont pas été
 mesurés dans ce lot ciblé.
