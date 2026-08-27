@@ -9,4 +9,4 @@
 - [x] T005 Rejouer le banc nominal et la sélection réelle complète.
 - [x] T006 Exécuter les gates statiques, relire le diff et documenter les
   non-mesures.
-- [ ] T007 Committer, pousser et vérifier les identités locale et distante.
+- [x] T007 Committer, pousser et vérifier les identités locale et distante.

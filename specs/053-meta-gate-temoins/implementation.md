@@ -83,6 +83,15 @@ potentiel de suppression à comportement constant après relecture est estimé �
 zéro ligne : les deux scripts séparent le gate livré du harnais qui prouve ses
 issues opposées.
 
+## Livraison
+
+Le commit fonctionnel `290b0c671e4360b7f91d22bc25417283aec17528`
+a été poussé. Sa valeur locale, la référence distante suivie et
+`git ls-remote` étaient identiques. Au dernier contrôle, `main` avait déjà
+avancé à `00833fcbcbde396298a09a9dcc8b27ecd0dbf540` ; aucune mesure du lot ne lui
+est attribuée. L'objet compilé et éprouvé reste la branche issue de la base
+gelée `52173dc7d886e30d980332734e99e815bd092309`.
+
 ## Non mesuré
 
 - exécution des 109 tests de présence, volontairement distincte du listing ;
