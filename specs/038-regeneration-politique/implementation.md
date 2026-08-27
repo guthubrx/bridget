@@ -4,7 +4,8 @@
 
 - **Spec** : 038-regeneration-politique
 - **Branche** : session-038-regeneration-politique
-- **Base gelée** : b676afa86174df1def7a57caa73b969567364c42
+- **Base gelée initiale** : b676afa86174df1def7a57caa73b969567364c42
+- **Base de livraison rebasée** : 7a9b582f23a05d10df624a61c04a223ce19d7753
 - **Démarré** : 2026-08-27
 - **Terminé** : En cours
 
@@ -58,12 +59,52 @@
 
 ### T010 — Gates et livraison
 
-- **Statut** : En cours
-- **Commit** : À venir
-- **Notes** : le clippy strict expose des diagnostics préexistants hors delta ;
-  une seconde commande ciblée, avec ces diagnostics explicitement neutralisés,
-  ne trouve aucun avertissement supplémentaire dans 038.
+- **Statut** : Gates terminés, revue externe demandée
+- **Commit** : `docs(038): Consigne les gates de livraison`
+- **Compilation avant comptage** : `cargo test --workspace --no-run` vert
+  après rebase, `Finished test profile` en 11,41 s.
+- **Clôture déterminée par le diff** : `bridget-transport`, `maicie` et
+  `bridget-daemon`.
+- **Paquet transport** : univers listé 191 ; 190 passed / 0 failed / 1 ignored.
+- **Paquet Maicie** : univers listé 405 ; 398 passed / 0 failed / 7 ignored.
+- **Paquet daemon** : univers listé 624 ; 602 passed / 10 failed / 11 ignored /
+  1 filtered. L'unique exclusion, vérifiée comme une seule correspondance, est
+  `daemon::presence_tests::stop_apres_register_traverse_le_wrapper_et_le_superviseur_reels`.
+- **Workspace final, exécuté une seule fois** : univers listé 1262 ;
+  1232 passed / 10 failed / 19 ignored / 1 filtered. Le compte ferme sans
+  additionner les lignes `test result` produites par des sous-processus.
+- **Imputation des dix rouges** : aucun n'appartient au delta 038.
+  `enregistrement_auxiliaire_mcp_ne_revendique_pas_la_presence_du_wrapper_vivant`
+  est 0/1 sur la base et sur la tête avec la même assertion ; les binaires
+  `claude_native_permissions_test` et `codex_native_test` reproduisent les mêmes
+  rouges sur la base ; `ui_relay_test` rend 17/3 des deux côtés avec des noms
+  variables ; `sigkill_daemon_reconcilie_l_ancien_groupe_avant_une_reprise_unique`,
+  `prompt_reduit_rejoue_le_corpus_dans_la_meme_session` et
+  `reprise_codex_rejoue_la_panne_mcp_et_clot_les_demandes_liees` sont les rouges
+  préexistants ou instables déjà instruits. Les sorties brutes sont conservées.
+- **Formatage** : `rustfmt --check` ciblé vert. `cargo fmt --all --check` reste
+  rouge sur les mêmes 81 emplacements à la base et à la tête, aucun dans le
+  delta 038.
+- **Clippy** : la commande stricte sur transport + Maicie + daemon reste rouge
+  sur le même ensemble de diagnostics préexistants à la base et à la tête. Les
+  commandes ciblant les surfaces 038, après neutralisation explicite de ces
+  seuls diagnostics hérités, sont vertes sous `-D warnings`.
+- **Hygiène** : `git diff --check` vert ; `git merge-tree` contre
+  `origin/main` 2561dce20e2b7154c19d5ff6f3b44d79921f9003 vert.
+- **Résidus** : le correctif de terminaison de 7a9b582 fait finir
+  `attach_journal_attestation_test` en 0,26 s ; aucun processus issu de la passe
+  rebasée ne subsiste.
 
 ## REX — Retour d'expérience
 
-À compléter après les gates et la revue externe.
+- Une collecte distribuée sûre doit rendre sa complétude structurelle : la
+  politique énumère les sources exigées, l'invocation ne peut donc pas réduire
+  silencieusement le périmètre observé.
+- Un test négatif ne suffit pas pour une garde. Le chemin réel du binaire prouve
+  aussi qu'une politique régénérée autorise effectivement la nouvelle instance
+  à produire un effet durable.
+- Une ligne `test result` n'est pas nécessairement un harnais : les comptes
+  finaux sont rapprochés de l'univers listé et utilisent le résultat extérieur.
+- Une base portant un correctif d'infrastructure doit précéder sa mesure. La
+  première passe, restée sur b676afa, bloquait sur l'ancien arrêt ; le rebase
+  demandé sur 7a9b582 a fait terminer le même harnais sans résidu.

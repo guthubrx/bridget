@@ -5,7 +5,7 @@
 
 Spec: 038-regeneration-politique
 Titre: Régénération explicite de la politique du greffe
-Statut: In Progress
+Statut: Ready for Review
 Priorité: P0
 Tâches: 9/10 (90%)
 Tests: 17/17 (100%)
@@ -28,7 +28,7 @@ Fichiers:
 
 **Feature Branch**: `session-038-regeneration-politique`
 **Created**: 2026-08-27
-**Status**: In Progress
+**Status**: Ready for Review
 **Priority**: P0
 **Dependencies**: SPEC-026
 
