@@ -311,6 +311,7 @@ fn delegate_est_admis_comme_depot_sans_etre_confondu_avec_un_succes_metier() {
         operation: ServiceRequestOperation::Delegate,
         payload: ServiceRequestPayload::Delegate {
             goal: format!("lot dépendant de {prerequisite}"),
+            review_target: None,
             explicit_target: Some("prospective".to_string()),
             required_tags: Vec::new(),
             duration: GuichetDurationClass::Normale,

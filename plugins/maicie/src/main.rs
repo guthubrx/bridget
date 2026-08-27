@@ -36,6 +36,9 @@ use maicie::reconcile::{
     reconcile_guichet_startup_with_central_service, reconcile_notification_startup_with_limits,
     reconcile_startup_with_limits,
 };
+use maicie::review_continuity::{
+    ReviewContinuityObservation, ReviewContinuityObserver, ReviewContinuityState,
+};
 use maicie::routines::{
     EtatRoutine, ProposeRoutineRequest, RoutineError, RoutineStatusRow, approve_routine,
     evaluate_routines, pause_routine, propose_routine, resume_routine, routines_status_rows,
@@ -47,6 +50,7 @@ use maicie::store::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::env;
 use std::fmt;
 use std::fs;
@@ -131,6 +135,7 @@ fn run_status(arguments: StatusArgs, migrate: bool) -> Result<String, CliError> 
         coordination: coordination_report,
     } = open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)?;
     let snapshots = status(&store, arguments.objective_id).map_err(CliError::Objective)?;
+    let review_continuity = capture_review_continuity(&config, &store, &snapshots)?;
     let refus_contraintes = store
         .local_delegate_refusal_counts()
         .map_err(CliError::Store)?;
@@ -138,6 +143,7 @@ fn run_status(arguments: StatusArgs, migrate: bool) -> Result<String, CliError> 
     render_objective_output(
         ObjectiveOutput::Status {
             coordination: snapshots.into_iter().map(SnapshotOutput::from).collect(),
+            review_continuity,
             refus_contraintes,
             availability: sources.availability,
             availability_state: sources.availability_state,
@@ -153,6 +159,35 @@ fn run_status(arguments: StatusArgs, migrate: bool) -> Result<String, CliError> 
         },
         arguments.json,
     )
+}
+
+fn capture_review_continuity(
+    config: &MaicieConfig,
+    store: &MaicieStore,
+    snapshots: &[ObjectiveSnapshot],
+) -> Result<Vec<ReviewContinuityObservation>, CliError> {
+    let repository_root = config
+        .review_project
+        .as_ref()
+        .map(|project| project.repository_root.as_path());
+    let verdicts = store.review_verdicts().map_err(CliError::Store)?;
+    let verdicts_by_delegation = verdicts
+        .iter()
+        .map(|verdict| (verdict.delegation_id, verdict))
+        .collect::<BTreeMap<_, _>>();
+    let mut observer = ReviewContinuityObserver::new(repository_root);
+    let mut observations = Vec::new();
+    // Complexité : O((d + r) log r), où `d` est le nombre de délégations et
+    // `r` le nombre de verdicts ; chaque cible Git distincte n'est lue qu'une fois.
+    for snapshot in snapshots {
+        for delegation in &snapshot.delegations {
+            observations.push(observer.observe(
+                delegation,
+                verdicts_by_delegation.get(&delegation.id).copied(),
+            ));
+        }
+    }
+    Ok(observations)
 }
 
 /// Réalise une capture Attach entièrement éphémère. Elle est limitée par une
@@ -2720,6 +2755,7 @@ impl From<DelegateResult> for DelegateOutput {
 enum ObjectiveOutput {
     Status {
         coordination: Vec<SnapshotOutput>,
+        review_continuity: Vec<ReviewContinuityObservation>,
         refus_contraintes: CompteursRefusDelegationLocale,
         availability: Vec<AvailabilityOutput>,
         availability_state: EtatFlux,
@@ -3111,6 +3147,7 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
     Ok(match output {
         ObjectiveOutput::Status {
             coordination,
+            review_continuity,
             refus_contraintes,
             availability,
             availability_state,
@@ -3126,8 +3163,14 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
                 .flat_map(|agent| agent.observations.iter())
                 .filter(|observation| observation.nature == "permission_auto_decidee")
                 .count();
-            format!(
-                "objectifs={} refus_contradiction_suite={} disponibilité={} état_disponibilité={} motif_disponibilité={} snapshot_transport={} runtime={} permissions_auto_décidées={} fraîcheur={} flux={} coordination_fraîcheur={} coordination_motif={} coûts={}",
+            let count = |state| {
+                review_continuity
+                    .iter()
+                    .filter(|observation| observation.state == state)
+                    .count()
+            };
+            let mut rendered = format!(
+                "objectifs={} refus_contradiction_suite={} disponibilité={} état_disponibilité={} motif_disponibilité={} snapshot_transport={} runtime={} permissions_auto_décidées={} fraîcheur={} flux={} coordination_fraîcheur={} coordination_motif={} revue_cible_absente={} revue_verdict_absent={} revue_ancetre={} revue_reecrite={} revue_inobservable={} coûts={}",
                 coordination.len(),
                 refus_contraintes.suite_aucune_avec_citation_non_classee,
                 availability.len(),
@@ -3140,6 +3183,11 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
                 flux_name(stream_state),
                 coordination_freshness.state,
                 coordination_freshness.reason.as_deref().unwrap_or("aucun"),
+                count(ReviewContinuityState::TargetAbsent),
+                count(ReviewContinuityState::VerdictAbsent),
+                count(ReviewContinuityState::StillAncestor),
+                count(ReviewContinuityState::Rewritten),
+                count(ReviewContinuityState::Unobservable),
                 render_costs_summary(
                     &coordination
                         .iter()
@@ -3147,7 +3195,31 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
                         .cloned()
                         .collect::<Vec<_>>(),
                 ),
-            )
+            );
+            for observation in review_continuity.iter().filter(|observation| {
+                matches!(
+                    observation.state,
+                    ReviewContinuityState::Rewritten | ReviewContinuityState::Unobservable
+                )
+            }) {
+                rendered.push_str(&format!(
+                    "\n{} delegation={} cible={} sha_jugé={} tête_observée={} motif={}",
+                    if observation.state == ReviewContinuityState::Rewritten {
+                        "ALERTE_VERDICT_REECRIT"
+                    } else {
+                        "VERDICT_INOBSERVABLE"
+                    },
+                    observation.delegation_id,
+                    observation.target_ref.as_deref().unwrap_or("absente"),
+                    observation.reviewed_head.as_deref().unwrap_or("absent"),
+                    observation.observed_head.as_deref().unwrap_or("absente"),
+                    observation
+                        .reason
+                        .map(|reason| reason.as_str())
+                        .unwrap_or("aucun"),
+                ));
+            }
+            rendered
         }
         ObjectiveOutput::Decision { decision } => format!(
             "décision={} objectif={} état=applied",

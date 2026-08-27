@@ -8,8 +8,8 @@ use bridget_transport::greffe_authorization::{
 use bridget_transport::protocol::{
     AttachRefusal, CLIENT_CONTRACT_VERSION, COORDINATION_EVENTS_VERSION,
     COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole, IdempotencyIssue,
-    PresenceMode, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal, SpawnRefusal,
-    StopOutcome, decode, encode,
+    PresenceMode, REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION, ServiceCapability,
+    ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
@@ -3271,6 +3271,7 @@ fn raw_guichet_frame(line: &str) -> bool {
 }
 
 fn guichet_request_is_valid(
+    version: u16,
     request_id: &str,
     operation: bridget_transport::protocol::ServiceRequestOperation,
     payload: &bridget_transport::protocol::ServiceRequestPayload,
@@ -3282,7 +3283,24 @@ fn guichet_request_is_valid(
                 byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-')
             })
     };
-    if !identifier(request_id) {
+    let version_matches_payload = match (version, operation, payload) {
+        (
+            SERVICE_CONTRACT_VERSION,
+            bridget_transport::protocol::ServiceRequestOperation::Delegate,
+            bridget_transport::protocol::ServiceRequestPayload::Delegate { review_target, .. },
+        ) => review_target.is_none(),
+        (SERVICE_CONTRACT_VERSION, _, _) => true,
+        (
+            REVIEW_DELEGATE_CONTRACT_VERSION,
+            bridget_transport::protocol::ServiceRequestOperation::Delegate,
+            bridget_transport::protocol::ServiceRequestPayload::Delegate {
+                review_target: Some(target),
+                ..
+            },
+        ) => target.is_valid(),
+        _ => false,
+    };
+    if !identifier(request_id) || !version_matches_payload {
         return false;
     }
     match (operation, payload) {
@@ -3314,6 +3332,7 @@ fn guichet_request_is_valid(
             bridget_transport::protocol::ServiceRequestOperation::Delegate,
             bridget_transport::protocol::ServiceRequestPayload::Delegate {
                 goal,
+                review_target,
                 explicit_target,
                 required_tags,
                 duration: _,
@@ -3335,6 +3354,9 @@ fn guichet_request_is_valid(
                 .all(|value| identifier(value) && relations.insert(value.as_str()));
             !goal.trim().is_empty()
                 && goal.len() <= 16 * 1024
+                && review_target
+                    .as_ref()
+                    .is_none_or(|target| target.is_valid())
                 && explicit_target
                     .as_ref()
                     .is_none_or(|target| identifier(target))
@@ -5756,10 +5778,16 @@ fn handle_wrapper_message(
             operation,
             payload,
         } => {
-            if version != SERVICE_CONTRACT_VERSION {
+            if !matches!(
+                version,
+                SERVICE_CONTRACT_VERSION | REVIEW_DELEGATE_CONTRACT_VERSION
+            ) {
                 return Some(DaemonToWrapper::ServiceRejected {
                     reason: ServiceRefusal::UnsupportedVersion {
-                        supported_versions: vec![SERVICE_CONTRACT_VERSION],
+                        supported_versions: vec![
+                            SERVICE_CONTRACT_VERSION,
+                            REVIEW_DELEGATE_CONTRACT_VERSION,
+                        ],
                     },
                 });
             }
@@ -5768,7 +5796,7 @@ fn handle_wrapper_message(
                     reason: ServiceRefusal::ReservedTargetRequired,
                 });
             }
-            if !guichet_request_is_valid(&request_id, operation, &payload)
+            if !guichet_request_is_valid(version, &request_id, operation, &payload)
                 || crate::idempotency::validate_issuer_scope(&issuer_scope).is_err()
             {
                 return Some(DaemonToWrapper::ServiceRejected {
@@ -9690,6 +9718,138 @@ mod presence_tests {
             shared.lock().unwrap().connection_roles.get("conn-role"),
             Some(&ConnectionRole::Wrapper)
         );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn requete_delegate_distingue_v1_historique_et_v2_ciblee() {
+        let delegate =
+            |review_target| bridget_transport::protocol::ServiceRequestPayload::Delegate {
+                goal: "relire le lot".to_string(),
+                review_target,
+                explicit_target: None,
+                required_tags: Vec::new(),
+                duration: bridget_transport::protocol::GuichetDurationClass::Courte,
+                suite: bridget_transport::protocol::ServiceSuiteDeclaration::Aucune,
+                depends_on: Vec::new(),
+                references: Vec::new(),
+            };
+        let target = bridget_transport::protocol::ReviewTarget {
+            target_ref: "origin/session-047-verdict-tete-reecrite".to_string(),
+            expected_head: "a".repeat(40),
+        };
+        let operation = bridget_transport::protocol::ServiceRequestOperation::Delegate;
+
+        assert!(guichet_request_is_valid(
+            SERVICE_CONTRACT_VERSION,
+            "request-v1",
+            operation,
+            &delegate(None),
+        ));
+        assert!(guichet_request_is_valid(
+            REVIEW_DELEGATE_CONTRACT_VERSION,
+            "request-v2",
+            operation,
+            &delegate(Some(target.clone())),
+        ));
+        assert!(!guichet_request_is_valid(
+            SERVICE_CONTRACT_VERSION,
+            "request-v1-cible-interdite",
+            operation,
+            &delegate(Some(target)),
+        ));
+        assert!(!guichet_request_is_valid(
+            REVIEW_DELEGATE_CONTRACT_VERSION,
+            "request-v2-sans-cible",
+            operation,
+            &delegate(None),
+        ));
+        assert!(!guichet_request_is_valid(
+            REVIEW_DELEGATE_CONTRACT_VERSION,
+            "request-v2-autre-operation",
+            bridget_transport::protocol::ServiceRequestOperation::RegistreAdd,
+            &bridget_transport::protocol::ServiceRequestPayload::RegistreAdd {
+                line: "kind=add id=constat-1".to_string(),
+            },
+        ));
+
+        let request = |version, payload| WrapperToDaemon::ServiceRequest {
+            version,
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+            request_id: format!("request-version-{version}"),
+            issued_at: unix_timestamp(),
+            from: "jc2".to_string(),
+            to: "maicie".to_string(),
+            operation,
+            payload,
+        };
+        let (state, config) = state_with_registered_agent("delegate-review-version");
+        let shared = Arc::new(Mutex::new(state));
+        let unsupported = handle_wrapper_message(
+            "delegate-review-version",
+            request(
+                3,
+                delegate(Some(bridget_transport::protocol::ReviewTarget {
+                    target_ref: "origin/main".to_string(),
+                    expected_head: "a".repeat(40),
+                })),
+            ),
+            &shared,
+        );
+        assert!(
+            matches!(
+                &unsupported,
+                Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::UnsupportedVersion { supported_versions }
+                }) if supported_versions == &vec![
+                    SERVICE_CONTRACT_VERSION,
+                    REVIEW_DELEGATE_CONTRACT_VERSION,
+                ]
+            ),
+            "réponse inattendue : {unsupported:?}"
+        );
+        assert!(matches!(
+            handle_wrapper_message(
+                "delegate-review-version",
+                request(
+                    SERVICE_CONTRACT_VERSION,
+                    delegate(Some(bridget_transport::protocol::ReviewTarget {
+                        target_ref: "origin/main".to_string(),
+                        expected_head: "a".repeat(40),
+                    },))
+                ),
+                &shared,
+            ),
+            Some(DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::InvalidEnvelope
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "delegate-review-version",
+                request(REVIEW_DELEGATE_CONTRACT_VERSION, delegate(None)),
+                &shared,
+            ),
+            Some(DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::InvalidEnvelope
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "delegate-review-version",
+                request(
+                    REVIEW_DELEGATE_CONTRACT_VERSION,
+                    delegate(Some(bridget_transport::protocol::ReviewTarget {
+                        target_ref: "origin/main".to_string(),
+                        expected_head: "a".repeat(40),
+                    })),
+                ),
+                &shared,
+            ),
+            Some(DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::GreffeAuthorizationDenied
+            })
+        ));
         let _ = std::fs::remove_file(config.db_path);
     }
 

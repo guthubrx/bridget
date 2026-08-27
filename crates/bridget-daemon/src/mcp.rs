@@ -4,8 +4,9 @@ use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, GuichetDelegateMutationStatus,
     GuichetDurationClass, GuichetRegistreAddStatus, GuichetReplyPayload, IdempotencyIssue,
-    LedgerScope, PresenceMode, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal,
-    ServiceRequestOperation, ServiceRequestPayload, ServiceSuiteDeclaration, decode, encode,
+    LedgerScope, PresenceMode, ReviewTarget, SERVICE_CONTRACT_VERSION, ServiceCapability,
+    ServiceRefusal, ServiceRequestOperation, ServiceRequestPayload, ServiceSuiteDeclaration,
+    decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
@@ -858,6 +859,8 @@ fn execute_maicie_delegate(
             "suite_objective_id",
             "depends_on",
             "references",
+            "review_ref",
+            "expected_head",
             "request_id",
             "issued_at",
         ],
@@ -867,6 +870,7 @@ fn execute_maicie_delegate(
     let required_tags = optional_string_array(arguments, "required_tags", 32)?;
     let depends_on = optional_string_array(arguments, "depends_on", 100)?;
     let references = optional_string_array(arguments, "references", 100)?;
+    let review_target = optional_review_target(arguments)?;
     let duration = match arguments
         .get("duration")
         .and_then(Value::as_str)
@@ -893,6 +897,7 @@ fn execute_maicie_delegate(
         ServiceRequestOperation::Delegate,
         ServiceRequestPayload::Delegate {
             goal,
+            review_target,
             explicit_target,
             required_tags,
             duration,
@@ -956,8 +961,9 @@ fn execute_maicie_mutation(
     let (request_id, issued_at) = mutation_coordinates(arguments)?;
     let scope = issuer_scope(instance_id);
     let mut connection = registered_connection(identity, instance_id, socket)?;
+    let version = payload.required_contract_version();
     let request = WrapperToDaemon::ServiceRequest {
-        version: SERVICE_CONTRACT_VERSION,
+        version,
         issuer_scope: scope.clone(),
         request_id: request_id.clone(),
         issued_at,
@@ -981,6 +987,19 @@ fn execute_maicie_mutation(
         }) => Err(ToolError::Technical {
             code: "authorization_denied",
             message: "mutation du greffe refusée".to_string(),
+        }),
+        Ok(DaemonToWrapper::ServiceRejected {
+            reason: ServiceRefusal::UnsupportedVersion { .. },
+        }) => Err(ToolError::Technical {
+            code: "unsupported_version",
+            message: "le daemon ne prend pas en charge ce contrat de délégation".to_string(),
+        }),
+        Ok(DaemonToWrapper::ServiceRejected {
+            reason: ServiceRefusal::CanonicalBytesMismatch,
+        }) => Err(ToolError::Technical {
+            code: "canonical_bytes_mismatch",
+            message: "le daemon a refusé une extension de requête qu'il ne conserve pas"
+                .to_string(),
         }),
         Ok(response) => unexpected_response(response),
         Err(ToolError::Technical {
@@ -1424,6 +1443,32 @@ fn optional_non_empty_string(
         .transpose()
 }
 
+fn optional_review_target(
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<Option<ReviewTarget>, ToolError> {
+    let review_ref = optional_non_empty_string(arguments, "review_ref")?;
+    let expected_head = optional_non_empty_string(arguments, "expected_head")?;
+    let target = match (review_ref, expected_head) {
+        (None, None) => return Ok(None),
+        (Some(target_ref), Some(expected_head)) => ReviewTarget {
+            target_ref,
+            expected_head,
+        },
+        _ => {
+            return Err(ToolError::InvalidParams(
+                "review_ref et expected_head doivent être fournis ensemble".to_string(),
+            ));
+        }
+    };
+    if !target.is_valid() {
+        return Err(ToolError::InvalidParams(
+            "review_ref attend <remote>/<branche> valide et expected_head exactement 40 hexadécimaux minuscules"
+                .to_string(),
+        ));
+    }
+    Ok(Some(target))
+}
+
 fn optional_bool(
     arguments: &serde_json::Map<String, Value>,
     key: &str,
@@ -1567,6 +1612,8 @@ fn tools() -> Vec<Value> {
                     "suite_objective_id": { "type": "string", "minLength": 1 },
                     "depends_on": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1 } },
                     "references": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1 } },
+                    "review_ref": { "type": "string", "minLength": 3, "description": "Référence distante <remote>/<branche>, atomique avec expected_head." },
+                    "expected_head": { "type": "string", "pattern": "^[0-9a-f]{40}$", "description": "SHA complet gelé, atomique avec review_ref." },
                     "request_id": { "type": "string", "minLength": 1, "description": "Clé à réutiliser avec issued_at pour un retry exact." },
                     "issued_at": { "type": "integer", "minimum": 1 }
                 },
@@ -1989,6 +2036,88 @@ mod tests {
         assert_eq!(result["issuer_scope"], expected_scope);
         server.join().unwrap();
         std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
+    fn delegate_mcp_transporte_atomiquement_la_cible_de_revue_en_v2() {
+        let socket = test_socket("delegate-review-target");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::Register { .. }
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::Registered {
+                    name: "jc2".to_string(),
+                },
+            );
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::ServiceRequest {
+                    version: bridget_transport::protocol::REVIEW_DELEGATE_CONTRACT_VERSION,
+                    operation: ServiceRequestOperation::Delegate,
+                    payload: ServiceRequestPayload::Delegate {
+                        review_target: Some(ReviewTarget { target_ref, expected_head }),
+                        ..
+                    },
+                    ..
+                } if target_ref == "origin/session-047-verdict-tete-reecrite"
+                    && expected_head == "a".repeat(40)
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::GuichetResult {
+                    version: SERVICE_CONTRACT_VERSION,
+                    issuer_scope: issuer_scope("instance-review-target"),
+                    request_id: "request-review-target".to_string(),
+                    issue: "queued".to_string(),
+                    expires_at: 1_787_824_560,
+                    payload: None,
+                },
+            );
+        });
+
+        let result = execute_tool_at_with_scope(
+            "jc2",
+            "instance-review-target",
+            "maicie_delegate",
+            json!({
+                "goal": "relire le lot",
+                "review_ref": "origin/session-047-verdict-tete-reecrite",
+                "expected_head": "a".repeat(40),
+                "request_id": "request-review-target",
+                "issued_at": 1_787_824_500_i64,
+            })
+            .as_object()
+            .unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(result["status"], "queued");
+        server.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+
+        for isolated in [
+            json!({ "goal": "relire", "review_ref": "origin/main" }),
+            json!({ "goal": "relire", "expected_head": "a".repeat(40) }),
+        ] {
+            assert!(matches!(
+                execute_tool_at_with_scope(
+                    "jc2",
+                    "instance-review-target",
+                    "maicie_delegate",
+                    isolated.as_object().unwrap(),
+                    Path::new("/socket/ne-doit-pas-etre-ouverte"),
+                ),
+                Err(ToolError::InvalidParams(reason))
+                    if reason.contains("doivent être fournis ensemble")
+            ));
+        }
     }
 
     #[test]

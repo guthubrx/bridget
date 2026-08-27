@@ -169,7 +169,7 @@ pub fn apply_guichet_mutation(
                 duration: request.duration,
                 reply: false,
                 constat_id: None,
-                review_target: None,
+                review_target: request.review_target.as_ref(),
                 suite: request.suite.clone(),
                 depends_on: &request.depends_on,
                 references: &request.references,

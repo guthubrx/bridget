@@ -32,8 +32,11 @@ use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
     StoreCommitPhase, stable_body_hash,
 };
+use crate::review_continuity::StoredReviewVerdict;
 use crate::routines::{EtatOccurrence, EtatRoutine, Routine, RoutineOccurrence};
-use bridget_transport::protocol::{CoordinationEventKind, WrapperToDaemon};
+use bridget_transport::protocol::{
+    CoordinationEventKind, GuichetOutcome, GuichetReplyPayload, WrapperToDaemon, decode,
+};
 use rusqlite::{
     Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
 };
@@ -1652,6 +1655,101 @@ impl MaicieStore {
             })
         })
         .collect()
+    }
+
+    /// Relit tous les verdicts de revue depuis les réponses terminales déjà
+    /// persistées. Aucun cache ni colonne parallèle ne peut diverger des
+    /// octets qui ont réellement quitté la greffe.
+    ///
+    /// Complexité : O(r log r), où `r` est le nombre de rapports acceptés.
+    pub fn review_verdicts(&self) -> Result<Vec<StoredReviewVerdict>, StoreError> {
+        self.review_verdicts_matching(None)
+    }
+
+    /// Variante bornée à un objectif, utilisée par les lectures ciblées.
+    pub fn review_verdicts_for(
+        &self,
+        objective_id: Uuid,
+    ) -> Result<Vec<StoredReviewVerdict>, StoreError> {
+        self.review_verdicts_matching(Some(objective_id))
+    }
+
+    fn review_verdicts_matching(
+        &self,
+        objective_id: Option<Uuid>,
+    ) -> Result<Vec<StoredReviewVerdict>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT objective_id, delegation_id, reply_bytes
+                 FROM guichet_receptions
+                 WHERE (?1 IS NULL OR objective_id = ?1)
+                   AND operation = 'delivery_report'
+                   AND outcome = 'accepted'
+                 ORDER BY objective_id, processed_at, request_id",
+            )
+            .map_err(StoreError::Sql)?;
+        let requested = objective_id.map(|value| value.to_string());
+        let rows = statement
+            .query_map(params![requested.as_deref()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            })
+            .map_err(StoreError::Sql)?;
+        let mut verdicts = Vec::new();
+        let mut seen = BTreeSet::new();
+        for row in rows {
+            let (stored_objective, stored_delegation, reply_bytes) =
+                row.map_err(StoreError::Sql)?;
+            let stored_objective = parse_uuid(&stored_objective)?;
+            let stored_delegation = parse_uuid(&stored_delegation)?;
+            if objective_id.is_some_and(|expected| stored_objective != expected) {
+                return Err(StoreError::Corrupt(
+                    "objectif du verdict de revue divergent",
+                ));
+            }
+            let reply = std::str::from_utf8(&reply_bytes)
+                .map_err(|_| StoreError::Corrupt("réponse guichet non UTF-8"))?;
+            let decoded: WrapperToDaemon = decode(reply).map_err(StoreError::Json)?;
+            let WrapperToDaemon::GuichetReply {
+                outcome: GuichetOutcome::Accepted,
+                payload:
+                    GuichetReplyPayload::DeliveryReport {
+                        objective_id: payload_objective,
+                        delegation_id: payload_delegation,
+                        review_verdict,
+                        ..
+                    },
+                ..
+            } = decoded
+            else {
+                return Err(StoreError::Corrupt(
+                    "réponse de verdict acceptée non canonique",
+                ));
+            };
+            let payload_objective = parse_uuid(&payload_objective)?;
+            let payload_delegation = parse_uuid(&payload_delegation)?;
+            if payload_objective != stored_objective || payload_delegation != stored_delegation {
+                return Err(StoreError::Corrupt(
+                    "relations du verdict de revue divergentes",
+                ));
+            }
+            let Some(evidence) = review_verdict else {
+                continue;
+            };
+            if !evidence.is_valid() || !seen.insert((stored_objective, stored_delegation)) {
+                return Err(StoreError::Corrupt("verdict de revue invalide ou dupliqué"));
+            }
+            verdicts.push(StoredReviewVerdict {
+                objective_id: stored_objective,
+                delegation_id: stored_delegation,
+                evidence,
+            });
+        }
+        Ok(verdicts)
     }
 
     /// Fenêtres de délégation : agent → premier `issued_at` d'outbox, sinon

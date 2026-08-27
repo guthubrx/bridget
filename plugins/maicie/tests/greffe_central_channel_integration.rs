@@ -5,8 +5,8 @@ use bridget_transport::greffe_authorization::{
 };
 use bridget_transport::protocol::{
     GuichetDelegateMutationStatus, GuichetDurationClass, GuichetRegistreAddStatus,
-    GuichetReplyPayload, ServiceRequestOperation, ServiceRequestPayload, ServiceSuiteDeclaration,
-    decode, encode,
+    GuichetReplyPayload, ReviewTarget, ServiceRequestOperation, ServiceRequestPayload,
+    ServiceSuiteDeclaration, decode, encode,
 };
 use maicie::app::process_guichet_claim_with_central_service;
 use maicie::bridget_client::{BridgetClientLimits, GuichetClaim};
@@ -106,22 +106,16 @@ fn run_effect_oracle(root: &Path) {
     let server_socket = socket.clone();
     let server = thread::spawn(move || serve_agent_list_once(&server_socket, ready_tx));
     ready_rx.recv().unwrap();
-    let delegate = authorized_claim(
+    let review_target = ReviewTarget {
+        target_ref: "origin/session-047-verdict-tete-reecrite".to_string(),
+        expected_head: "a".repeat(40),
+    };
+    let delegate = authorized_review_delegate_claim(
         &gate,
         &issuer_scope,
         "request-delegate-central",
         now,
-        GreffeMutationAction::Delegate,
-        ServiceRequestOperation::Delegate,
-        ServiceRequestPayload::Delegate {
-            goal: "prouver le chemin fédéré central".to_string(),
-            explicit_target: Some("prospective".to_string()),
-            required_tags: Vec::new(),
-            duration: GuichetDurationClass::Courte,
-            suite: ServiceSuiteDeclaration::Aucune,
-            depends_on: Vec::new(),
-            references: Vec::new(),
-        },
+        &review_target,
     );
     let delegated = process_guichet_claim_with_central_service(
         &mut store,
@@ -137,6 +131,14 @@ fn run_effect_oracle(root: &Path) {
     assert!(delegated.refusal_reason.is_none());
     let objective_id = delegated.objective_id.expect("objectif durable absent");
     let delegation_id = delegated.delegation_id.expect("délégation durable absente");
+    let durable_review_target = store
+        .objective_snapshots(Some(objective_id))
+        .unwrap()
+        .remove(0)
+        .delegations
+        .remove(0)
+        .review_target;
+    assert_eq!(durable_review_target, Some(review_target));
     match decode::<WrapperToDaemon>(std::str::from_utf8(&delegated.reply_bytes).unwrap()).unwrap() {
         WrapperToDaemon::GuichetReply {
             payload:
@@ -294,8 +296,9 @@ fn authorized_claim(
     operation: ServiceRequestOperation,
     payload: ServiceRequestPayload,
 ) -> GuichetClaim {
+    let version = payload.required_contract_version();
     let canonical_request = encode(&WrapperToDaemon::ServiceRequest {
-        version: 1,
+        version,
         issuer_scope: issuer_scope.to_string(),
         request_id: request_id.to_string(),
         issued_at,
@@ -330,6 +333,33 @@ fn authorized_claim(
         claim_lease_expires_at: issued_at + 30,
         expires_at: issued_at + 60,
     }
+}
+
+fn authorized_review_delegate_claim(
+    gate: &GreffeAuthorizationGate,
+    issuer_scope: &str,
+    request_id: &str,
+    issued_at: i64,
+    review_target: &ReviewTarget,
+) -> GuichetClaim {
+    authorized_claim(
+        gate,
+        issuer_scope,
+        request_id,
+        issued_at,
+        GreffeMutationAction::Delegate,
+        ServiceRequestOperation::Delegate,
+        ServiceRequestPayload::Delegate {
+            goal: "prouver le chemin fédéré central".to_string(),
+            review_target: Some(review_target.clone()),
+            explicit_target: Some("prospective".to_string()),
+            required_tags: vec!["review".to_string()],
+            duration: GuichetDurationClass::Courte,
+            suite: ServiceSuiteDeclaration::Aucune,
+            depends_on: Vec::new(),
+            references: Vec::new(),
+        },
+    )
 }
 
 fn serve_agent_list_once(socket: &Path, ready: mpsc::Sender<()>) {
