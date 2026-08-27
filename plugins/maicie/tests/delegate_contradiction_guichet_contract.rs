@@ -77,6 +77,7 @@ fn claim(request_id: &str, goal: &str) -> GuichetClaim {
         issuer_scope: ISSUER_SCOPE.to_string(),
         request_id: request_id.to_string(),
         canonical_request,
+        authorization_attestation: None,
         claimed_at: 1_787_671_001,
         claim_generation: 1,
         claim_token: CLAIM_TOKEN.to_string(),

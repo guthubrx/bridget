@@ -2,6 +2,9 @@
 //! entre les wrappers connectés, persiste l'état en SQLite.
 
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
+use bridget_transport::greffe_authorization::{
+    GreffeAuthorizationGate, GreffeDepositAuthorization, GreffeMutationAction,
+};
 use bridget_transport::protocol::{
     AttachRefusal, CLIENT_CONTRACT_VERSION, COORDINATION_EVENTS_VERSION,
     COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole, IdempotencyIssue,
@@ -20,11 +23,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::managed_supervisor::ManagedSupervisorGuard;
 use crate::idempotency::{
     IdempotencyKey, IdempotencyStore, LookupResult, OperationKind, ReplyTracking, Reservation,
     SendDelivery,
 };
+use crate::managed_supervisor::ManagedSupervisorGuard;
 use crate::store::{
     GuichetCoordinationEvent, GuichetDeposit, GuichetLifecycleEvent, GuichetNext,
     GuichetReplyInput, GuichetResult, MAX_GUICHET_FRAME_BYTES, Store, StoreError,
@@ -361,6 +364,9 @@ struct DaemonState {
     conn_hosts: HashMap<String, String>,
     conn_operating_systems: HashMap<String, String>,
     conn_instances: HashMap<String, String>,
+    /// Connexions MCP filles : elles portent le principal canonique pour les
+    /// gardes, sans devenir propriétaires de la présence du wrapper.
+    auxiliary_connections: HashSet<String>,
     /// Les clients attach négocient ce rôle explicite ; l'absence d'entrée
     /// reste un wrapper pour préserver les agents 007 déjà connectés.
     connection_roles: HashMap<String, ConnectionRole>,
@@ -1805,6 +1811,7 @@ impl DaemonState {
             conn_hosts: HashMap::new(),
             conn_operating_systems: HashMap::new(),
             conn_instances: HashMap::new(),
+            auxiliary_connections: HashSet::new(),
             connection_roles: HashMap::new(),
             client_negotiations: HashMap::new(),
             service_negotiations: HashMap::new(),
@@ -1827,15 +1834,17 @@ impl DaemonState {
     }
 
     fn mark_unreachable(&mut self, conn_id: &str) {
+        if self.auxiliary_connections.remove(conn_id) {
+            self.conn_instances.remove(conn_id);
+            return;
+        }
         if let Some(instance_id) = self.conn_instances.remove(conn_id) {
             // Une ré-inscription concurrente peut déjà détenir la même
             // instance : la fermeture de l'ancienne connexion ne doit pas
             // écraser busy/connected que le nouveau Register vient d'attester.
-            if self
-                .conn_instances
-                .values()
-                .any(|owned| owned == &instance_id)
-            {
+            if self.conn_instances.iter().any(|(owner, owned)| {
+                owned == &instance_id && !self.auxiliary_connections.contains(owner)
+            }) {
                 return;
             }
             if let Some(presence) = self.presences.get_mut(&instance_id) {
@@ -1849,12 +1858,14 @@ impl DaemonState {
     }
 
     fn mark_stopped(&mut self, conn_id: &str) {
+        if self.auxiliary_connections.remove(conn_id) {
+            self.conn_instances.remove(conn_id);
+            return;
+        }
         if let Some(instance_id) = self.conn_instances.remove(conn_id) {
-            if self
-                .conn_instances
-                .values()
-                .any(|owned| owned == &instance_id)
-            {
+            if self.conn_instances.iter().any(|(owner, owned)| {
+                owned == &instance_id && !self.auxiliary_connections.contains(owner)
+            }) {
                 return;
             }
             if let Some(presence) = self.presences.get_mut(&instance_id) {
@@ -1895,6 +1906,7 @@ impl DaemonState {
         self.conn_names.remove(&old_conn);
         self.conn_hosts.remove(&old_conn);
         self.conn_operating_systems.remove(&old_conn);
+        self.auxiliary_connections.remove(&old_conn);
         true
     }
 
@@ -1913,6 +1925,7 @@ impl DaemonState {
             self.conn_names.remove(&conn_id);
             self.conn_hosts.remove(&conn_id);
             self.conn_operating_systems.remove(&conn_id);
+            self.auxiliary_connections.remove(&conn_id);
         }
     }
 
@@ -2939,8 +2952,7 @@ fn handle_connection(
             }
 
             let response = handle_wrapper_message(&conn_id, msg, &state);
-            let registered_just_now =
-                matches!(response, Some(DaemonToWrapper::Registered { .. }));
+            let registered_just_now = matches!(response, Some(DaemonToWrapper::Registered { .. }));
             if let Some(dtw) = response {
                 let json = encode(&dtw)?;
                 writeln!(my_writer, "{}", json)?;
@@ -3135,7 +3147,37 @@ fn guichet_request_is_valid(
                 && suite_is_valid
                 && relations_are_valid
         }
+        (
+            bridget_transport::protocol::ServiceRequestOperation::RegistreAdd,
+            bridget_transport::protocol::ServiceRequestPayload::RegistreAdd { line },
+        ) => !line.trim().is_empty() && line.len() <= 32 * 1024,
+        (
+            bridget_transport::protocol::ServiceRequestOperation::ObjectiveClose,
+            bridget_transport::protocol::ServiceRequestPayload::ObjectiveClose {
+                objective_id,
+                reason,
+            },
+        ) => identifier(objective_id) && !reason.trim().is_empty() && reason.len() <= 4096,
         _ => false,
+    }
+}
+
+fn greffe_mutation_action(
+    operation: bridget_transport::protocol::ServiceRequestOperation,
+) -> Option<GreffeMutationAction> {
+    match operation {
+        bridget_transport::protocol::ServiceRequestOperation::Delegate => {
+            Some(GreffeMutationAction::Delegate)
+        }
+        bridget_transport::protocol::ServiceRequestOperation::RegistreAdd => {
+            Some(GreffeMutationAction::RegistreAdd)
+        }
+        bridget_transport::protocol::ServiceRequestOperation::ObjectiveClose => {
+            Some(GreffeMutationAction::ObjectiveClose)
+        }
+        bridget_transport::protocol::ServiceRequestOperation::DeliveryReport
+        | bridget_transport::protocol::ServiceRequestOperation::MissionStatus
+        | bridget_transport::protocol::ServiceRequestOperation::DeadlineQuestion => None,
     }
 }
 
@@ -3192,6 +3234,47 @@ fn guichet_reply_is_valid(
             delegation_id,
             ..
         } => identifier(delegation_id),
+        bridget_transport::protocol::GuichetReplyPayload::Delegate {
+            status,
+            objective_id,
+            delegation_id,
+            message_id,
+            participant,
+            candidates,
+            waiting_on_prerequisites,
+            ..
+        } => match status {
+            bridget_transport::protocol::GuichetDelegateMutationStatus::Created => {
+                objective_id.as_deref().is_some_and(identifier)
+                    && delegation_id.as_deref().is_some_and(identifier)
+                    && message_id.as_deref().is_none_or(identifier)
+                    && participant.as_deref().is_some_and(identifier)
+                    && candidates.is_empty()
+                    && !(*waiting_on_prerequisites && message_id.is_some())
+            }
+            bridget_transport::protocol::GuichetDelegateMutationStatus::SelectionRequired => {
+                objective_id.is_none()
+                    && delegation_id.is_none()
+                    && message_id.is_none()
+                    && participant.is_none()
+                    && !*waiting_on_prerequisites
+                    && candidates.len() <= 128
+                    && candidates.iter().all(|value| identifier(value))
+                    && candidates
+                        .iter()
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len()
+                        == candidates.len()
+            }
+        },
+        bridget_transport::protocol::GuichetReplyPayload::RegistreAdd { constat_id, .. } => {
+            identifier(constat_id)
+        }
+        bridget_transport::protocol::GuichetReplyPayload::ObjectiveClose {
+            objective_id,
+            decision_id,
+            ..
+        } => identifier(objective_id) && identifier(decision_id),
         bridget_transport::protocol::GuichetReplyPayload::Refused { .. } => true,
     }
 }
@@ -3201,16 +3284,37 @@ fn guichet_result_response(
     request_id: String,
     result: GuichetResult,
 ) -> DaemonToWrapper {
-    let (issue, expires_at) = match result {
-        GuichetResult::Queued { expires_at } => ("queued".to_string(), expires_at),
-        GuichetResult::OutcomeUnknown { expires_at } => ("outcome_unknown".to_string(), expires_at),
+    let (issue, expires_at, payload) = match result {
+        GuichetResult::Queued { expires_at } => ("queued".to_string(), expires_at, None),
+        GuichetResult::OutcomeUnknown { expires_at } => {
+            ("outcome_unknown".to_string(), expires_at, None)
+        }
         GuichetResult::Terminal {
-            issue, expires_at, ..
-        } => (issue, expires_at),
-        GuichetResult::CanonicalBytesMismatch => ("canonical_bytes_mismatch".to_string(), 0),
-        GuichetResult::IdempotencyExpired => ("idempotency_expired".to_string(), 0),
-        GuichetResult::InvalidIssuedAt => ("invalid_issued_at".to_string(), 0),
-        GuichetResult::ClaimStale => ("claim_stale".to_string(), 0),
+            issue,
+            expires_at,
+            reply_bytes,
+            ..
+        } => {
+            let Ok(reply) = std::str::from_utf8(&reply_bytes)
+                .ok()
+                .and_then(|line| decode(line).ok())
+                .ok_or(())
+            else {
+                return DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::TransitionInvalid,
+                };
+            };
+            let WrapperToDaemon::GuichetReply { payload, .. } = reply else {
+                return DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::TransitionInvalid,
+                };
+            };
+            (issue, expires_at, Some(payload))
+        }
+        GuichetResult::CanonicalBytesMismatch => ("canonical_bytes_mismatch".to_string(), 0, None),
+        GuichetResult::IdempotencyExpired => ("idempotency_expired".to_string(), 0, None),
+        GuichetResult::InvalidIssuedAt => ("invalid_issued_at".to_string(), 0, None),
+        GuichetResult::ClaimStale => ("claim_stale".to_string(), 0, None),
     };
     DaemonToWrapper::GuichetResult {
         version: SERVICE_CONTRACT_VERSION,
@@ -3218,6 +3322,7 @@ fn guichet_result_response(
         request_id,
         issue,
         expires_at,
+        payload,
     }
 }
 
@@ -3227,6 +3332,7 @@ fn guichet_claim_response(claim: crate::store::GuichetClaim) -> DaemonToWrapper 
         issuer_scope: claim.issuer_scope,
         request_id: claim.request_id,
         canonical_request: claim.canonical_request,
+        authorization_attestation: claim.authorization_attestation,
         claimed_at: claim.claimed_at,
         claim_generation: claim.claim_generation,
         claim_token: claim.claim_token,
@@ -3432,6 +3538,8 @@ fn handle_register_with_channel(
         host
     );
 
+    let auxiliary_mcp = agent_type == "mcp";
+    let requested_name = name.clone();
     let parsed_type = agent_type
         .parse()
         .unwrap_or(bridget_core::AgentType::Custom(agent_type));
@@ -3467,12 +3575,38 @@ fn handle_register_with_channel(
                         .iter()
                         .any(|(existing_conn, existing_instance)| {
                             existing_conn != conn_id
+                                && !state.auxiliary_connections.contains(existing_conn)
                                 && existing_instance == &instance_id
                                 && state.presences.get(&instance_id).is_some_and(|presence| {
                                     matches!(presence.state.as_str(), "connected" | "busy")
                                 })
                         });
                 if presence_owned_by_live_connection {
+                    let canonical_mcp_name = state
+                        .presences
+                        .get(&instance_id)
+                        .filter(|presence| {
+                            auxiliary_mcp
+                                && requested_name.as_deref() == Some(presence.name.as_str())
+                        })
+                        .map(|presence| presence.name.clone());
+                    if let Some(canonical_name) = canonical_mcp_name {
+                        // Le MCP est une filiation du wrapper : conserver son
+                        // principal exact pour l'autorisation, mais retirer sa
+                        // route auxiliaire afin qu'il n'apparaisse jamais comme
+                        // un second équipier dans `who`.
+                        state.router.unregister_by_conn(conn_id);
+                        state
+                            .conn_names
+                            .insert(conn_id.to_string(), canonical_name.clone());
+                        state
+                            .conn_instances
+                            .insert(conn_id.to_string(), instance_id.clone());
+                        state.auxiliary_connections.insert(conn_id.to_string());
+                        return DaemonToWrapper::Registered {
+                            name: canonical_name,
+                        };
+                    }
                     let same_equipier = state
                         .presences
                         .get(&instance_id)
@@ -3493,10 +3627,13 @@ fn handle_register_with_channel(
                     // Réconnexion du même équipier avant l'EOF de l'ancienne
                     // connexion : voler l'instance pour que mark_unreachable
                     // retardé ne puisse plus écraser busy / connected.
+                    let auxiliary_connections = &state.auxiliary_connections;
                     state
                         .conn_instances
                         .retain(|existing_conn, existing_instance| {
-                            existing_conn == conn_id || existing_instance.as_str() != instance_id
+                            existing_conn == conn_id
+                                || auxiliary_connections.contains(existing_conn)
+                                || existing_instance.as_str() != instance_id
                         });
                 }
 
@@ -4302,8 +4439,7 @@ fn stamp_turn_deadline_for_delivery(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-            message.deadline_at =
-                Some(now.saturating_add(message.reply_timeout.unwrap_or(60)));
+            message.deadline_at = Some(now.saturating_add(message.reply_timeout.unwrap_or(60)));
         }
         return;
     }
@@ -5315,14 +5451,25 @@ fn handle_wrapper_message(
                     reason: ServiceRefusal::InvalidEnvelope,
                 });
             }
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            let declared_sender_matches = st.conn_names.get(conn_id).is_some_and(|registered| {
-                registered == &from
-                    || (registered.starts_with("cli-send-") && st.router.get_agent(&from).is_some())
-            });
+            let (declared_name, declared_instance_id, declared_sender_matches) = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let name = st.conn_names.get(conn_id).cloned();
+                let instance_id = st.conn_instances.get(conn_id).cloned();
+                let matches = name.as_ref().is_some_and(|registered| {
+                    registered == &from
+                        || (registered.starts_with("cli-send-")
+                            && st.router.get_agent(&from).is_some())
+                });
+                (name, instance_id, matches)
+            };
+            let mutation_action = greffe_mutation_action(operation);
             if !declared_sender_matches {
                 return Some(DaemonToWrapper::ServiceRejected {
-                    reason: ServiceRefusal::DeclaredSenderMismatch,
+                    reason: if mutation_action.is_some() {
+                        ServiceRefusal::GreffeAuthorizationDenied
+                    } else {
+                        ServiceRefusal::DeclaredSenderMismatch
+                    },
                 });
             }
             let canonical = match encode(&WrapperToDaemon::ServiceRequest {
@@ -5343,20 +5490,75 @@ fn handle_wrapper_message(
                 }
             };
             let now = unix_timestamp();
-            match st.store.deposit_guichet(
-                &GuichetDeposit {
-                    issuer_scope: issuer_scope.clone(),
-                    request_id: request_id.clone(),
-                    issued_at,
-                    from,
-                    operation,
-                    payload,
-                    canonical_bytes: canonical,
-                },
-                CLIENT_IDEMPOTENCY_HORIZON_SECS,
-                CLIENT_ISSUED_AT_TOLERANCE_SECS,
-                now,
-            ) {
+            let mut deposit = GuichetDeposit {
+                issuer_scope: issuer_scope.clone(),
+                request_id: request_id.clone(),
+                issued_at,
+                from,
+                operation,
+                payload,
+                canonical_bytes: canonical,
+                authorization_attestation: None,
+            };
+            let authorization_declared_from = deposit.from.clone();
+            let authorization_request_id = deposit.request_id.clone();
+            let authorization_canonical_request = deposit.canonical_bytes.clone();
+            let deposit_result = match mutation_action {
+                Some(action) => {
+                    // `declared_name` et `declared_instance_id` viennent du
+                    // Register de cette connexion. Ils réduisent les sources
+                    // d'identité sans authentifier le processus pair.
+                    let gate = GreffeAuthorizationGate::from_environment();
+                    match gate.authorize_deposit_then(
+                        GreffeDepositAuthorization {
+                            canonical_name: declared_name.as_deref(),
+                            canonical_instance_id: declared_instance_id.as_deref(),
+                            declared_from: Some(authorization_declared_from.as_str()),
+                            action,
+                            issuer_scope: &issuer_scope,
+                            request_id: authorization_request_id.as_str(),
+                            request_issued_at: deposit.issued_at,
+                            canonical_request: &authorization_canonical_request,
+                            observed_at: now,
+                        },
+                        |attestation| {
+                            deposit.authorization_attestation = Some(attestation.clone());
+                            state
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner())
+                                .store
+                                .deposit_guichet(
+                                    &deposit,
+                                    CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                                    CLIENT_ISSUED_AT_TOLERANCE_SECS,
+                                    now,
+                                )
+                        },
+                    ) {
+                        Ok(result) => result,
+                        Err(refusal) => {
+                            warn!(
+                                "mutation du greffe refusée au dépôt: {}",
+                                refusal.audit_code()
+                            );
+                            return Some(DaemonToWrapper::ServiceRejected {
+                                reason: ServiceRefusal::GreffeAuthorizationDenied,
+                            });
+                        }
+                    }
+                }
+                None => state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .store
+                    .deposit_guichet(
+                        &deposit,
+                        CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                        CLIENT_ISSUED_AT_TOLERANCE_SECS,
+                        now,
+                    ),
+            };
+            match deposit_result {
                 Ok(result) => Some(guichet_result_response(issuer_scope, request_id, result)),
                 Err(StoreError::FrameTooLarge { .. }) => Some(DaemonToWrapper::ServiceRejected {
                     reason: ServiceRefusal::FrameTooLarge,
@@ -6418,11 +6620,7 @@ fn handle_wrapper_message(
                 .and_then(|instance_id| st.presences.get(instance_id))
                 .map(|presence| presence.agent_type.as_str())
                 .unwrap_or("");
-            stamp_turn_deadline_for_delivery(
-                &mut delivered_message,
-                &st.registry,
-                agent_type,
-            );
+            stamp_turn_deadline_for_delivery(&mut delivered_message, &st.registry, agent_type);
             // Push vers le destinataire
             let dtw = DaemonToWrapper::Deliver(delivered_message);
             let json = encode(&dtw).unwrap_or_default();
@@ -10109,14 +10307,9 @@ mod presence_tests {
         )
         .unwrap();
         assert!(matches!(
-            state.idempotency.reserve(
-                &key,
-                b"canon-jury",
-                1_000_000,
-                3600,
-                1_000_000,
-                30
-            ),
+            state
+                .idempotency
+                .reserve(&key, b"canon-jury", 1_000_000, 3600, 1_000_000, 30),
             Ok(Reservation::Prepared { .. })
         ));
         let mut message = BridgetMessage::new("bridget", "agent-2", "mandat de jury");
@@ -10180,7 +10373,11 @@ mod presence_tests {
         // Émetteur « bridget » avec une vraie connexion lisible.
         state
             .router
-            .register(Some("bridget"), &bridget_core::AgentType::Claude, "conn-emitter")
+            .register(
+                Some("bridget"),
+                &bridget_core::AgentType::Claude,
+                "conn-emitter",
+            )
             .unwrap();
         state
             .conn_instances
@@ -10266,8 +10463,7 @@ mod presence_tests {
             "la moitié « pas en silence » exige un Deliver lisible: {received}"
         );
         assert!(
-            received.contains("clé est close")
-                && received.contains("Change de destinataire"),
+            received.contains("clé est close") && received.contains("Change de destinataire"),
             "le signal doit porter la conduite (pas seulement le constat): {received}"
         );
         assert!(
@@ -10349,7 +10545,11 @@ mod presence_tests {
         // (voir doc de l'oracle : trou déclaré).
         state
             .router
-            .register(Some("bridget"), &bridget_core::AgentType::Claude, "conn-emitter")
+            .register(
+                Some("bridget"),
+                &bridget_core::AgentType::Claude,
+                "conn-emitter",
+            )
             .unwrap();
         state
             .conn_instances
@@ -10994,7 +11194,7 @@ mod presence_tests {
             handle_register(
                 "mcp-child",
                 "mcp".to_string(),
-                Some("mcp-child".to_string()),
+                Some("agent-2".to_string()),
                 None,
                 None,
                 Some(PresenceMode::Cli),
@@ -11008,7 +11208,15 @@ mod presence_tests {
             ),
             DaemonToWrapper::Registered { .. }
         ));
-        assert!(!state.conn_instances.contains_key("mcp-child"));
+        assert_eq!(
+            state.conn_names.get("mcp-child").map(String::as_str),
+            Some("agent-2")
+        );
+        assert_eq!(
+            state.conn_instances.get("mcp-child").map(String::as_str),
+            Some("instance-1")
+        );
+        assert!(state.auxiliary_connections.contains("mcp-child"));
 
         // Fermeture de la connexion utilisée par l'outil MCP : elle ne doit
         // ni voler l'instance, ni rendre le wrapper principal inaccessible.
@@ -11023,6 +11231,36 @@ mod presence_tests {
         assert_eq!(agents[0].model.as_deref(), Some("gpt-5.6-terra"));
         assert_eq!(agents[0].effort.as_deref(), Some("high"));
         assert_eq!(agents[0].state, "connected");
+
+        assert!(matches!(
+            handle_register(
+                "mcp-child-2",
+                "mcp".to_string(),
+                Some("agent-2".to_string()),
+                None,
+                None,
+                Some(PresenceMode::Cli),
+                None,
+                None,
+                Some("instance-1".to_string()),
+                None,
+                false,
+                None,
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        state.mark_unreachable("conn-1");
+        assert_eq!(
+            state.presences.get("instance-1").unwrap().state,
+            "unreachable",
+            "une connexion auxiliaire ne masque jamais la perte du wrapper propriétaire"
+        );
+        state.mark_unreachable("mcp-child-2");
+        assert_eq!(
+            state.presences.get("instance-1").unwrap().state,
+            "unreachable"
+        );
 
         let _ = std::fs::remove_file(config.db_path);
     }

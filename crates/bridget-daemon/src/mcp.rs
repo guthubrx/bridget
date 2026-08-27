@@ -2,8 +2,10 @@
 
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
-    CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue, LedgerScope,
-    PresenceMode, decode, encode,
+    CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, GuichetDelegateMutationStatus,
+    GuichetDurationClass, GuichetRegistreAddStatus, GuichetReplyPayload, IdempotencyIssue,
+    LedgerScope, PresenceMode, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal,
+    ServiceRequestOperation, ServiceRequestPayload, ServiceSuiteDeclaration, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
@@ -77,7 +79,6 @@ pub(crate) fn attestation_de_depot(delivery_id: Option<&str>) -> Option<&str> {
     delivery_id.filter(|delivery_id| !delivery_id.trim().is_empty())
 }
 static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
-static NEXT_CONNECTION_NAME: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Default)]
 struct Session {
@@ -632,8 +633,16 @@ fn execute_tool_at_with_scope(
 ) -> Result<Value, ToolError> {
     match name {
         "bridget_send" => execute_send(identity, instance_id, arguments, socket),
-        "bridget_who" => execute_who(arguments, socket),
-        "bridget_ledger" => execute_ledger(identity, arguments, socket),
+        "bridget_who" => execute_who(identity, instance_id, arguments, socket),
+        "bridget_ledger" => execute_ledger(identity, instance_id, arguments, socket),
+        "maicie_delegate" => execute_maicie_delegate(identity, instance_id, arguments, socket),
+        "maicie_registre_add" => {
+            execute_maicie_registre_add(identity, instance_id, arguments, socket)
+        }
+        "maicie_objective_close" => {
+            execute_maicie_objective_close(identity, instance_id, arguments, socket)
+        }
+        "maicie_request_status" => execute_maicie_request_status(instance_id, arguments, socket),
         _ => Err(ToolError::InvalidParams("outil inconnu".to_string())),
     }
 }
@@ -749,6 +758,8 @@ fn execute_send(
 }
 
 fn execute_who(
+    identity: &str,
+    instance_id: &str,
     arguments: &serde_json::Map<String, Value>,
     socket: &Path,
 ) -> Result<Value, ToolError> {
@@ -762,7 +773,7 @@ fn execute_who(
         ),
         None => None,
     };
-    let mut connection = registered_connection(socket)?;
+    let mut connection = registered_connection(identity, instance_id, socket)?;
     match connection.exchange(&WrapperToDaemon::ListAgents)? {
         DaemonToWrapper::AgentList { agents } => Ok(json!({
             "agents": agents.into_iter().filter(|agent| {
@@ -775,6 +786,7 @@ fn execute_who(
 
 fn execute_ledger(
     identity: &str,
+    instance_id: &str,
     arguments: &serde_json::Map<String, Value>,
     socket: &Path,
 ) -> Result<Value, ToolError> {
@@ -803,7 +815,7 @@ fn execute_ledger(
             })? as u16,
         None => 20,
     };
-    let mut connection = registered_connection(socket)?;
+    let mut connection = registered_connection(identity, instance_id, socket)?;
     let mut messages = Vec::new();
     let mut requests = Vec::new();
     if matches!(scope, LedgerScope::Messages | LedgerScope::Both) {
@@ -827,6 +839,369 @@ fn execute_ledger(
             RequestsScope::Mine => "mine",
             RequestsScope::All => "all",
         },
+    }))
+}
+
+fn execute_maicie_delegate(
+    identity: &str,
+    instance_id: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    reject_unknown_arguments(
+        arguments,
+        &[
+            "goal",
+            "explicit_target",
+            "required_tags",
+            "duration",
+            "suite_objective_id",
+            "depends_on",
+            "references",
+            "request_id",
+            "issued_at",
+        ],
+    )?;
+    let goal = required_non_empty_string(arguments, "goal")?;
+    let explicit_target = optional_non_empty_string(arguments, "explicit_target")?;
+    let required_tags = optional_string_array(arguments, "required_tags", 32)?;
+    let depends_on = optional_string_array(arguments, "depends_on", 100)?;
+    let references = optional_string_array(arguments, "references", 100)?;
+    let duration = match arguments
+        .get("duration")
+        .and_then(Value::as_str)
+        .unwrap_or("normale")
+    {
+        "courte" => GuichetDurationClass::Courte,
+        "normale" => GuichetDurationClass::Normale,
+        "longue" => GuichetDurationClass::Longue,
+        _ => {
+            return Err(ToolError::InvalidParams(
+                "duration doit valoir courte, normale ou longue".to_string(),
+            ));
+        }
+    };
+    let suite = optional_non_empty_string(arguments, "suite_objective_id")?
+        .map_or(ServiceSuiteDeclaration::Aucune, |objective_id| {
+            ServiceSuiteDeclaration::Objectif { objective_id }
+        });
+    execute_maicie_mutation(
+        identity,
+        instance_id,
+        arguments,
+        socket,
+        ServiceRequestOperation::Delegate,
+        ServiceRequestPayload::Delegate {
+            goal,
+            explicit_target,
+            required_tags,
+            duration,
+            suite,
+            depends_on,
+            references,
+        },
+    )
+}
+
+fn execute_maicie_registre_add(
+    identity: &str,
+    instance_id: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    reject_unknown_arguments(arguments, &["line", "request_id", "issued_at"])?;
+    execute_maicie_mutation(
+        identity,
+        instance_id,
+        arguments,
+        socket,
+        ServiceRequestOperation::RegistreAdd,
+        ServiceRequestPayload::RegistreAdd {
+            line: required_non_empty_string(arguments, "line")?,
+        },
+    )
+}
+
+fn execute_maicie_objective_close(
+    identity: &str,
+    instance_id: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    reject_unknown_arguments(
+        arguments,
+        &["objective_id", "reason", "request_id", "issued_at"],
+    )?;
+    execute_maicie_mutation(
+        identity,
+        instance_id,
+        arguments,
+        socket,
+        ServiceRequestOperation::ObjectiveClose,
+        ServiceRequestPayload::ObjectiveClose {
+            objective_id: required_non_empty_string(arguments, "objective_id")?,
+            reason: required_non_empty_string(arguments, "reason")?,
+        },
+    )
+}
+
+fn execute_maicie_mutation(
+    identity: &str,
+    instance_id: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+    operation: ServiceRequestOperation,
+    payload: ServiceRequestPayload,
+) -> Result<Value, ToolError> {
+    let (request_id, issued_at) = mutation_coordinates(arguments)?;
+    let scope = issuer_scope(instance_id);
+    let mut connection = registered_connection(identity, instance_id, socket)?;
+    let request = WrapperToDaemon::ServiceRequest {
+        version: SERVICE_CONTRACT_VERSION,
+        issuer_scope: scope.clone(),
+        request_id: request_id.clone(),
+        issued_at,
+        from: identity.to_string(),
+        to: "maicie".to_string(),
+        operation,
+        payload,
+    };
+    match connection.send_then_wait(&request) {
+        Ok(DaemonToWrapper::GuichetResult {
+            issuer_scope,
+            request_id: returned_request_id,
+            issue,
+            payload,
+            ..
+        }) if issuer_scope == scope && returned_request_id == request_id => {
+            guichet_result_value(&request_id, Some(issued_at), &scope, &issue, payload)
+        }
+        Ok(DaemonToWrapper::ServiceRejected {
+            reason: ServiceRefusal::GreffeAuthorizationDenied,
+        }) => Err(ToolError::Technical {
+            code: "authorization_denied",
+            message: "mutation du greffe refusée".to_string(),
+        }),
+        Ok(response) => unexpected_response(response),
+        Err(ToolError::Technical {
+            code: "outcome_unknown",
+            message,
+        }) => Ok(json!({
+            "status": "outcome_unknown",
+            "terminal": false,
+            "applied": false,
+            "request_id": request_id,
+            "issued_at": issued_at,
+            "issuer_scope": scope,
+            "reason": message,
+            "next": "maicie_request_status"
+        })),
+        Err(error) => Err(error),
+    }
+}
+
+fn execute_maicie_request_status(
+    instance_id: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    reject_unknown_arguments(arguments, &["request_id"])?;
+    let request_id = required_non_empty_string(arguments, "request_id")?;
+    let scope = issuer_scope(instance_id);
+    let mut connection = guichet_lookup_connection(&scope, socket)?;
+    match connection.exchange(&WrapperToDaemon::GuichetLookup {
+        version: SERVICE_CONTRACT_VERSION,
+        issuer_scope: scope.clone(),
+        request_id: request_id.clone(),
+    })? {
+        DaemonToWrapper::GuichetResult {
+            issuer_scope,
+            request_id: returned_request_id,
+            issue,
+            payload,
+            ..
+        } if issuer_scope == scope && returned_request_id == request_id => {
+            guichet_result_value(&request_id, None, &scope, &issue, payload)
+        }
+        response => unexpected_response(response),
+    }
+}
+
+fn mutation_coordinates(
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<(String, i64), ToolError> {
+    let request_id = arguments.get("request_id");
+    let issued_at = arguments.get("issued_at");
+    if request_id.is_some() != issued_at.is_some() {
+        return Err(ToolError::InvalidParams(
+            "request_id et issued_at doivent être fournis ensemble pour un retry".to_string(),
+        ));
+    }
+    match (request_id, issued_at) {
+        (Some(request_id), Some(issued_at)) => {
+            let request_id = request_id
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    ToolError::InvalidParams("request_id doit être une chaîne non vide".to_string())
+                })?
+                .to_string();
+            let issued_at = issued_at
+                .as_i64()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| {
+                    ToolError::InvalidParams("issued_at doit être un entier positif".to_string())
+                })?;
+            Ok((request_id, issued_at))
+        }
+        (None, None) => Ok((new_message_id(), now_secs())),
+        _ => unreachable!("présence contrôlée ensemble"),
+    }
+}
+
+fn optional_string_array(
+    arguments: &serde_json::Map<String, Value>,
+    key: &str,
+    max: usize,
+) -> Result<Vec<String>, ToolError> {
+    let Some(value) = arguments.get(key) else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_array()
+        .filter(|values| values.len() <= max)
+        .ok_or_else(|| {
+            ToolError::InvalidParams(format!(
+                "{key} doit être un tableau de {max} éléments au plus"
+            ))
+        })?;
+    let mut unique = HashSet::new();
+    values
+        .iter()
+        .map(|value| {
+            let value = value
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    ToolError::InvalidParams(format!("{key} doit contenir des chaînes non vides"))
+                })?
+                .to_string();
+            if !unique.insert(value.clone()) {
+                return Err(ToolError::InvalidParams(format!(
+                    "{key} contient une valeur dupliquée"
+                )));
+            }
+            Ok(value)
+        })
+        .collect()
+}
+
+fn guichet_lookup_connection(
+    issuer_scope: &str,
+    socket: &Path,
+) -> Result<DaemonConnection, ToolError> {
+    let mut connection = DaemonConnection::connect(socket)?;
+    match connection.exchange(&WrapperToDaemon::RoleHandshake {
+        role: ConnectionRole::Service,
+    })? {
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Service,
+        } => {}
+        response => return unexpected_response(response),
+    }
+    match connection.exchange(&WrapperToDaemon::ServiceHello {
+        version: SERVICE_CONTRACT_VERSION,
+        service: "maicie".to_string(),
+        issuer_scope: issuer_scope.to_string(),
+        capabilities: vec![ServiceCapability::MaicieGuichet],
+    })? {
+        DaemonToWrapper::ServiceWelcome { capabilities, .. }
+            if capabilities.contains(&ServiceCapability::MaicieGuichet) =>
+        {
+            Ok(connection)
+        }
+        response => unexpected_response(response),
+    }
+}
+
+fn guichet_result_value(
+    request_id: &str,
+    issued_at: Option<i64>,
+    issuer_scope: &str,
+    issue: &str,
+    payload: Option<GuichetReplyPayload>,
+) -> Result<Value, ToolError> {
+    if let Some(payload) = payload {
+        let mut result = serde_json::to_value(&payload).map_err(|error| ToolError::Technical {
+            code: "daemon_protocol",
+            message: format!("payload terminal non sérialisable : {error}"),
+        })?;
+        let Value::Object(fields) = &mut result else {
+            return Err(ToolError::Technical {
+                code: "daemon_protocol",
+                message: "payload terminal non structuré".to_string(),
+            });
+        };
+        let status = match &payload {
+            GuichetReplyPayload::Delegate {
+                status: GuichetDelegateMutationStatus::Created,
+                ..
+            } => "created",
+            GuichetReplyPayload::Delegate {
+                status: GuichetDelegateMutationStatus::SelectionRequired,
+                ..
+            } => "selection_required",
+            GuichetReplyPayload::RegistreAdd {
+                status: GuichetRegistreAddStatus::Appended,
+                ..
+            } => "appended",
+            GuichetReplyPayload::RegistreAdd {
+                status: GuichetRegistreAddStatus::IdempotentNoop,
+                ..
+            } => "idempotent_noop",
+            GuichetReplyPayload::ObjectiveClose { .. } => "closed",
+            GuichetReplyPayload::Refused { .. } => "refused",
+            GuichetReplyPayload::DeliveryReport { .. }
+            | GuichetReplyPayload::MissionStatus { .. }
+            | GuichetReplyPayload::DeadlineQuestion { .. } => "terminal",
+        };
+        let applied = matches!(
+            &payload,
+            GuichetReplyPayload::Delegate {
+                status: GuichetDelegateMutationStatus::Created,
+                ..
+            } | GuichetReplyPayload::RegistreAdd { .. }
+                | GuichetReplyPayload::ObjectiveClose { .. }
+        ) && issue == "accepted";
+        fields.insert("status".to_string(), json!(status));
+        fields.insert("terminal".to_string(), json!(true));
+        fields.insert("applied".to_string(), json!(applied));
+        fields.insert("issue".to_string(), json!(issue));
+        fields.insert("request_id".to_string(), json!(request_id));
+        fields.insert("issuer_scope".to_string(), json!(issuer_scope));
+        if let Some(issued_at) = issued_at {
+            fields.insert("issued_at".to_string(), json!(issued_at));
+        }
+        return Ok(result);
+    }
+    if matches!(
+        issue,
+        "accepted" | "refused" | "request_already_terminal" | "recipient_unavailable"
+    ) {
+        return Err(ToolError::Technical {
+            code: "terminal_payload_missing",
+            message: "issue terminale sans résultat métier relu du maître".to_string(),
+        });
+    }
+    let pending = matches!(issue, "queued" | "outcome_unknown");
+    Ok(json!({
+        "status": issue,
+        "terminal": !pending,
+        "applied": false,
+        "request_id": request_id,
+        "issued_at": issued_at,
+        "issuer_scope": issuer_scope,
+        "next": pending.then_some("maicie_request_status")
     }))
 }
 
@@ -876,18 +1251,22 @@ fn fetch_ledger_requests(
     }
 }
 
-fn registered_connection(socket: &Path) -> Result<DaemonConnection, ToolError> {
+fn registered_connection(
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+) -> Result<DaemonConnection, ToolError> {
     let mut connection = DaemonConnection::connect(socket)?;
     let registration = WrapperToDaemon::Register {
         agent_type: "mcp".to_string(),
-        name: Some(ephemeral_connection_name()),
+        name: Some(identity.to_string()),
         host: None,
         transport: None,
         channel: bridget_transport::ChannelReport::Unknown,
         mode: Some(PresenceMode::Cli),
         location: None,
         os: None,
-        instance_id: None,
+        instance_id: Some(instance_id.to_string()),
         domain: None,
         turn_in_progress: false,
         journal_available: None,
@@ -1078,11 +1457,6 @@ fn new_message_id() -> String {
     format!("mcp-{}-{:x}-{:x}", std::process::id(), now_secs(), sequence)
 }
 
-fn ephemeral_connection_name() -> String {
-    let sequence = NEXT_CONNECTION_NAME.fetch_add(1, Ordering::Relaxed);
-    format!("mcp-{}-{sequence}", std::process::id())
-}
-
 fn ledger_message_dto(message: bridget_transport::protocol::LedgerMessage) -> Value {
     let mut payload = json!({
         "id": message.id,
@@ -1180,6 +1554,67 @@ fn tools() -> Vec<Value> {
                 "additionalProperties": false
             }
         }),
+        json!({
+            "name": "maicie_delegate",
+            "description": "Créer une délégation dans le greffe Maicie central. Une réponse queued exige maicie_request_status.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "goal": { "type": "string", "minLength": 1 },
+                    "explicit_target": { "type": "string", "minLength": 1 },
+                    "required_tags": { "type": "array", "maxItems": 32, "items": { "type": "string", "minLength": 1 } },
+                    "duration": { "enum": ["courte", "normale", "longue"], "default": "normale" },
+                    "suite_objective_id": { "type": "string", "minLength": 1 },
+                    "depends_on": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1 } },
+                    "references": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1 } },
+                    "request_id": { "type": "string", "minLength": 1, "description": "Clé à réutiliser avec issued_at pour un retry exact." },
+                    "issued_at": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["goal"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "maicie_registre_add",
+            "description": "Ajouter une ligne fermée au registre central. Aucun chemin de registre ne vient de l'appelant.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "line": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "minLength": 1 },
+                    "issued_at": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["line"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "maicie_objective_close",
+            "description": "Clore un objectif dans le greffe central avec un motif explicite.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "objective_id": { "type": "string", "minLength": 1 },
+                    "reason": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "minLength": 1 },
+                    "issued_at": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["objective_id", "reason"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "maicie_request_status",
+            "description": "Relire depuis le daemon maître l'issue terminale et ses identifiants durables.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "request_id": { "type": "string", "minLength": 1 }
+                },
+                "required": ["request_id"],
+                "additionalProperties": false
+            }
+        }),
     ]
 }
 
@@ -1253,7 +1688,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    3
+                    7
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -1268,6 +1703,33 @@ mod tests {
                 }
                 other => panic!("expectation inconnue: {other}"),
             }
+        }
+    }
+
+    #[test]
+    fn catalogue_mcp_expose_exactement_les_quatre_verbes_du_greffe() {
+        let names = tools()
+            .into_iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_string())
+            .collect::<BTreeSet<_>>();
+        let expected = [
+            "bridget_ledger",
+            "bridget_send",
+            "bridget_who",
+            "maicie_delegate",
+            "maicie_objective_close",
+            "maicie_registre_add",
+            "maicie_request_status",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+        assert_eq!(names, expected);
+        for forbidden in ["profile_approve", "routine_approve", "command"] {
+            assert!(
+                names.iter().all(|name| !name.contains(forbidden)),
+                "l'action humaine {forbidden} ne doit jamais être un outil MCP"
+            );
         }
     }
 
@@ -1352,6 +1814,246 @@ mod tests {
     fn write_command(writer: &mut BufWriter<UnixStream>, response: DaemonToWrapper) {
         writeln!(writer, "{}", encode(&response).unwrap()).unwrap();
         writer.flush().unwrap();
+    }
+
+    #[test]
+    fn mutation_mcp_declare_l_identite_une_fois_et_ne_vend_pas_queued_comme_un_effet() {
+        let socket = test_socket("greffe-queued");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let expected_scope = issuer_scope("instance-greffe-1");
+        let server_scope = expected_scope.clone();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::Register {
+                    agent_type,
+                    name: Some(name),
+                    instance_id: Some(instance_id),
+                    ..
+                } if agent_type == "mcp"
+                    && name == "jc2"
+                    && instance_id == "instance-greffe-1"
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::Registered {
+                    name: "jc2".to_string(),
+                },
+            );
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::ServiceRequest {
+                    issuer_scope,
+                    request_id,
+                    issued_at: 1_787_824_100,
+                    from,
+                    operation: ServiceRequestOperation::RegistreAdd,
+                    payload: ServiceRequestPayload::RegistreAdd { line },
+                    ..
+                } if issuer_scope == server_scope
+                    && request_id == "request-registre-1"
+                    && from == "jc2"
+                    && line == "kind=add id=constat-1"
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::GuichetResult {
+                    version: SERVICE_CONTRACT_VERSION,
+                    issuer_scope: server_scope,
+                    request_id: "request-registre-1".to_string(),
+                    issue: "queued".to_string(),
+                    expires_at: 1_787_824_160,
+                    payload: None,
+                },
+            );
+        });
+
+        let result = execute_tool_at_with_scope(
+            "jc2",
+            "instance-greffe-1",
+            "maicie_registre_add",
+            json!({
+                "line": "kind=add id=constat-1",
+                "request_id": "request-registre-1",
+                "issued_at": 1_787_824_100_i64,
+            })
+            .as_object()
+            .unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(result["status"], "queued");
+        assert_eq!(result["terminal"], false);
+        assert_eq!(result["applied"], false);
+        assert_eq!(result["next"], "maicie_request_status");
+        assert_eq!(result["issuer_scope"], expected_scope);
+        server.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
+    fn coupure_apres_depot_mcp_reste_outcome_unknown_sans_succes_invente() {
+        let socket = test_socket("greffe-cut");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::Register { .. }
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::Registered {
+                    name: "jc2".to_string(),
+                },
+            );
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::ServiceRequest {
+                    operation: ServiceRequestOperation::ObjectiveClose,
+                    ..
+                }
+            ));
+            // Fermeture volontaire après lecture : le dépôt peut avoir eu lieu,
+            // mais aucun résultat terminal n'est attesté à l'appelant.
+        });
+        let result = execute_tool_at_with_scope(
+            "jc2",
+            "instance-greffe-2",
+            "maicie_objective_close",
+            json!({
+                "objective_id": "objective-1",
+                "reason": "objectif atteint",
+                "request_id": "request-close-1",
+                "issued_at": 1_787_824_200_i64,
+            })
+            .as_object()
+            .unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(result["status"], "outcome_unknown");
+        assert_eq!(result["terminal"], false);
+        assert_eq!(result["applied"], false);
+        assert_eq!(result["next"], "maicie_request_status");
+        server.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
+    fn request_status_relit_les_identifiants_terminaux_du_maitre() {
+        let socket = test_socket("greffe-status");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let expected_scope = issuer_scope("instance-greffe-3");
+        let server_scope = expected_scope.clone();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Service
+                }
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Service,
+                },
+            );
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::ServiceHello {
+                    service,
+                    issuer_scope,
+                    capabilities,
+                    ..
+                } if service == "maicie"
+                    && issuer_scope == server_scope
+                    && capabilities == vec![ServiceCapability::MaicieGuichet]
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::ServiceWelcome {
+                    version: SERVICE_CONTRACT_VERSION,
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![ServiceCapability::MaicieGuichet],
+                },
+            );
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::GuichetLookup {
+                    issuer_scope,
+                    request_id,
+                    ..
+                } if issuer_scope == server_scope && request_id == "request-delegate-1"
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::GuichetResult {
+                    version: SERVICE_CONTRACT_VERSION,
+                    issuer_scope: server_scope,
+                    request_id: "request-delegate-1".to_string(),
+                    issue: "accepted".to_string(),
+                    expires_at: 1_787_824_360,
+                    payload: Some(GuichetReplyPayload::Delegate {
+                        status: GuichetDelegateMutationStatus::Created,
+                        objective_id: Some("objective-1".to_string()),
+                        delegation_id: Some("delegation-1".to_string()),
+                        message_id: Some("message-1".to_string()),
+                        participant: Some("cursor-1".to_string()),
+                        candidates: Vec::new(),
+                        waiting_on_prerequisites: false,
+                        replayed: false,
+                    }),
+                },
+            );
+        });
+        let result = execute_tool_at_with_scope(
+            "jc2",
+            "instance-greffe-3",
+            "maicie_request_status",
+            json!({ "request_id": "request-delegate-1" })
+                .as_object()
+                .unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(result["status"], "created");
+        assert_eq!(result["terminal"], true);
+        assert_eq!(result["applied"], true);
+        assert_eq!(result["objective_id"], "objective-1");
+        assert_eq!(result["delegation_id"], "delegation-1");
+        assert_eq!(result["message_id"], "message-1");
+        assert_eq!(result["issuer_scope"], expected_scope);
+        server.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
+    fn mutation_mcp_refuse_toute_seconde_source_de_principal_ou_de_registre() {
+        let socket = Path::new("/socket/inutile");
+        for forbidden in ["from", "principal", "database_path", "catalogue_path"] {
+            let mut arguments = json!({ "line": "kind=add id=constat-1" });
+            arguments[forbidden] = json!("forged");
+            assert!(matches!(
+                execute_tool_at_with_scope(
+                    "jc2",
+                    "instance-greffe-4",
+                    "maicie_registre_add",
+                    arguments.as_object().unwrap(),
+                    socket,
+                ),
+                Err(ToolError::InvalidParams(reason)) if reason.contains(forbidden)
+            ));
+        }
     }
 
     #[test]
@@ -2185,12 +2887,12 @@ mod tests {
     }
 
     #[test]
-    fn huit_connexions_simultanees_ont_des_noms_ephemeres_distincts_et_la_neuvieme_est_busy() {
+    fn huit_connexions_simultanees_gardent_le_principal_resolu_et_la_neuvieme_est_busy() {
         let started = Arc::new(Barrier::new(MAX_IN_FLIGHT_TOOL_CALLS + 1));
         let (started_tx, started_rx) = mpsc::channel();
         let socket = test_socket("eight-registers");
         let listener = UnixListener::bind(&socket).unwrap();
-        let (names_tx, names_rx) = mpsc::channel();
+        let (principals_tx, principals_rx) = mpsc::channel();
         let daemon = thread::spawn(move || {
             for _ in 0..MAX_IN_FLIGHT_TOOL_CALLS {
                 let (stream, _) = listener.accept().unwrap();
@@ -2198,8 +2900,10 @@ mod tests {
                 let mut writer = BufWriter::new(stream);
                 match read_command(&mut reader) {
                     WrapperToDaemon::Register {
-                        name: Some(name), ..
-                    } => names_tx.send(name).unwrap(),
+                        name: Some(name),
+                        instance_id: Some(instance_id),
+                        ..
+                    } => principals_tx.send((name, instance_id)).unwrap(),
                     other => panic!("Register MCP attendu: {other:?}"),
                 }
                 write_command(
@@ -2234,7 +2938,9 @@ mod tests {
                 })
             };
             let execute = move |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| {
-                let _connection = registered_connection(&socket_for_calls).unwrap();
+                let _connection =
+                    registered_connection("fixture-agent", "fixture-instance", &socket_for_calls)
+                        .unwrap();
                 started_tx.send(()).unwrap();
                 barrier.wait();
                 Ok(json!({ "agents": [] }))
@@ -2260,10 +2966,13 @@ mod tests {
             1
         );
 
-        let names = (0..MAX_IN_FLIGHT_TOOL_CALLS)
-            .map(|_| names_rx.recv_timeout(Duration::from_secs(2)).unwrap())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(names.len(), MAX_IN_FLIGHT_TOOL_CALLS);
+        let principals = (0..MAX_IN_FLIGHT_TOOL_CALLS)
+            .map(|_| principals_rx.recv_timeout(Duration::from_secs(2)).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(principals.len(), MAX_IN_FLIGHT_TOOL_CALLS);
+        assert!(principals.iter().all(|(name, instance_id)| {
+            name == "fixture-agent" && instance_id == "fixture-instance"
+        }));
         daemon.join().unwrap();
         std::fs::remove_file(socket).unwrap();
     }

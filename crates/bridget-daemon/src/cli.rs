@@ -4,9 +4,10 @@ use crate::daemon::{self, DaemonConfig};
 use bridget_core::{BridgetMessage, router::validate_agent_name};
 use bridget_transport::protocol::{
     AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole,
-    IdempotencyIssue, LedgerMessage, LedgerScope, PresenceMode, RequestInfo, ReviewTarget,
-    ReviewVerdict, ReviewVerdictEvidence, RuntimeSource, SERVICE_CONTRACT_VERSION,
-    ServiceRequestOperation, ServiceRequestPayload, decode, encode, is_canonical_git_sha,
+    GuichetDurationClass, IdempotencyIssue, LedgerMessage, LedgerScope, PresenceMode, RequestInfo,
+    ReviewTarget, ReviewVerdict, ReviewVerdictEvidence, RuntimeSource, SERVICE_CONTRACT_VERSION,
+    ServiceRequestOperation, ServiceRequestPayload, ServiceSuiteDeclaration, decode, encode,
+    is_canonical_git_sha,
 };
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::fmt::Write as _;
@@ -938,7 +939,7 @@ fn cmd_guichet(args: &[String]) {
         Err(error) => {
             eprintln!("erreur: {error}");
             eprintln!(
-                "usage: bridget guichet deposer <delivery-report|mission-status|deadline-question> [options]"
+                "usage: bridget guichet deposer <delivery-report|mission-status|deadline-question|delegate|registre-add|objective-close> [options]"
             );
             std::process::exit(2);
         }
@@ -1004,6 +1005,15 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
     let mut verdict = None;
     let mut review_ref = None;
     let mut expected_head = None;
+    let mut goal = None;
+    let mut explicit_target = None;
+    let mut required_tags = Vec::new();
+    let mut duration = None;
+    let mut suite_objective_id = None;
+    let mut depends_on = Vec::new();
+    let mut references = Vec::new();
+    let mut line = None;
+    let mut reason = None;
     let mut index = 2;
     while index < args.len() {
         let option = args[index].as_str();
@@ -1020,6 +1030,15 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
             "--verdict" => verdict = Some(value),
             "--review-ref" => review_ref = Some(value),
             "--expected-head" => expected_head = Some(value),
+            "--goal" => goal = Some(value),
+            "--target" => explicit_target = Some(value),
+            "--tag" => required_tags.push(value),
+            "--duration" => duration = Some(value),
+            "--suite-objective" => suite_objective_id = Some(value),
+            "--depends-on" => depends_on.push(value),
+            "--reference" => references.push(value),
+            "--line" => line = Some(value),
+            "--reason" => reason = Some(value),
             _ => return Err(format!("option guichet inconnue: {option}")),
         }
         index += 1;
@@ -1079,6 +1098,43 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
             ServiceRequestPayload::Delegation {
                 delegation_id: delegation_id
                     .ok_or_else(|| "--delegation est requis".to_string())?,
+            },
+        ),
+        "delegate" => {
+            let duration = match duration.as_deref().unwrap_or("normale") {
+                "courte" => GuichetDurationClass::Courte,
+                "normale" => GuichetDurationClass::Normale,
+                "longue" => GuichetDurationClass::Longue,
+                _ => return Err("--duration doit valoir courte, normale ou longue".to_string()),
+            };
+            let suite = suite_objective_id
+                .map_or(ServiceSuiteDeclaration::Aucune, |objective_id| {
+                    ServiceSuiteDeclaration::Objectif { objective_id }
+                });
+            (
+                ServiceRequestOperation::Delegate,
+                ServiceRequestPayload::Delegate {
+                    goal: goal.ok_or_else(|| "--goal est requis".to_string())?,
+                    explicit_target,
+                    required_tags,
+                    duration,
+                    suite,
+                    depends_on,
+                    references,
+                },
+            )
+        }
+        "registre-add" => (
+            ServiceRequestOperation::RegistreAdd,
+            ServiceRequestPayload::RegistreAdd {
+                line: line.ok_or_else(|| "--line est requis".to_string())?,
+            },
+        ),
+        "objective-close" => (
+            ServiceRequestOperation::ObjectiveClose,
+            ServiceRequestPayload::ObjectiveClose {
+                objective_id: objective_id.ok_or_else(|| "--objective est requis".to_string())?,
+                reason: reason.ok_or_else(|| "--reason est requis".to_string())?,
             },
         ),
         _ => return Err(format!("type de dépôt fermé inconnu: {kind}")),
@@ -4420,6 +4476,75 @@ mod idempotency_projection_tests {
                 ..
             } if request_id == "deposit-1" && in_reply_to == "message-1"
         ));
+    }
+
+    #[test]
+    fn depot_guichet_parse_les_trois_mutations_sans_chemin_ni_principal_annexe() {
+        let cases = [
+            (
+                vec![
+                    "deposer",
+                    "delegate",
+                    "--from",
+                    "jc2",
+                    "--goal",
+                    "lot central",
+                    "--target",
+                    "cursor-1",
+                    "--duration",
+                    "courte",
+                ],
+                ServiceRequestOperation::Delegate,
+            ),
+            (
+                vec![
+                    "deposer",
+                    "registre-add",
+                    "--from",
+                    "jc2",
+                    "--line",
+                    "kind=add id=constat-1",
+                ],
+                ServiceRequestOperation::RegistreAdd,
+            ),
+            (
+                vec![
+                    "deposer",
+                    "objective-close",
+                    "--from",
+                    "jc2",
+                    "--objective",
+                    "objective-1",
+                    "--reason",
+                    "objectif atteint",
+                ],
+                ServiceRequestOperation::ObjectiveClose,
+            ),
+        ];
+        for (args, expected_operation) in cases {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert!(matches!(
+                parse_guichet_deposit(&args).unwrap(),
+                WrapperToDaemon::ServiceRequest { operation, .. }
+                    if operation == expected_operation
+            ));
+        }
+        for forbidden in ["--database", "--journal", "--principal"] {
+            let args = [
+                "deposer",
+                "registre-add",
+                "--from",
+                "jc2",
+                "--line",
+                "kind=add id=constat-1",
+                forbidden,
+                "/tmp/forged",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+            assert!(parse_guichet_deposit(&args).is_err());
+        }
     }
 
     #[test]

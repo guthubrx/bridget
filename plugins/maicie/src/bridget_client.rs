@@ -302,6 +302,7 @@ pub struct GuichetResult {
     pub request_id: String,
     pub issue: String,
     pub expires_at: i64,
+    pub payload: Option<bridget_transport::protocol::GuichetReplyPayload>,
 }
 
 /// Demande relevée de manière exclusive par le service Maicie.
@@ -310,6 +311,8 @@ pub struct GuichetClaim {
     pub issuer_scope: String,
     pub request_id: String,
     pub canonical_request: Vec<u8>,
+    pub authorization_attestation:
+        Option<bridget_transport::greffe_authorization::GreffeAuthorizationAttestation>,
     pub claimed_at: i64,
     pub claim_generation: u64,
     pub claim_token: String,
@@ -1960,6 +1963,17 @@ fn parse_guichet_claim(response: Value) -> Result<Option<GuichetClaim>, BridgetC
             issuer_scope: required_string(&response, "issuer_scope")?,
             request_id: required_string(&response, "request_id")?,
             canonical_request: decode_base64_bytes(&response, "canonical_request")?,
+            authorization_attestation: response
+                .get("authorization_attestation")
+                .filter(|value| !value.is_null())
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|_| {
+                    BridgetClientError::Protocol(
+                        "attestation d'autorisation guichet invalide".to_string(),
+                    )
+                })?,
             claimed_at: required_i64(&response, "claimed_at")?,
             claim_generation: required_u64(&response, "claim_generation")?,
             claim_token: required_string(&response, "claim_token")?,
@@ -1981,6 +1995,15 @@ fn parse_guichet_result(response: Value) -> Result<GuichetResult, BridgetClientE
             request_id: required_string(&response, "request_id")?,
             issue: required_string(&response, "issue")?,
             expires_at: required_i64(&response, "expires_at")?,
+            payload: response
+                .get("payload")
+                .filter(|value| !value.is_null())
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|_| {
+                    BridgetClientError::Protocol("payload terminal guichet invalide".to_string())
+                })?,
         }),
         "Nack" => Err(parse_nack(response)?),
         "ClientRejected" | "ServiceRejected" => Err(BridgetClientError::ClientRejected {

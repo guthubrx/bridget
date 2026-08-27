@@ -1780,6 +1780,8 @@ define_sql_vocabulary! {
         MissionStatus => "mission_status",
         DeadlineQuestion => "deadline_question",
         Delegate => "delegate",
+        RegistreAdd => "registre_add",
+        ObjectiveClose => "objective_close",
     }
 }
 
@@ -1819,6 +1821,11 @@ define_sql_vocabulary! {
         TeteMesureeDivergente => "measured_head_mismatch",
         SuiteAucuneAvecCitationNonClassee => "suite_none_with_unclassified_citation",
         OperationNonDisponible => "operation_not_available",
+        MutationInvalide => "mutation_invalid",
+        CibleIndisponible => "target_unavailable",
+        ObjectifAbsent => "objective_missing",
+        ObjectifDejaClos => "objective_already_closed",
+        AutorisationRefusee => "authorization_denied",
     }
 }
 

@@ -9,6 +9,7 @@ use crate::catalogue::{
     ArbitrationLink, AttestedClosure, CatalogueError, CatalogueJournal, ReconcileReport,
 };
 use crate::citation::unclassified_known_citations;
+use crate::config::MaicieConfig;
 use crate::config::{CoordinationPoliciesConfig, DurationClasses};
 use crate::domain::guichet::{
     GuichetDomainError, ProjectionCoordinationState, ProjectionDurationClass, ProjectionFreshness,
@@ -25,6 +26,7 @@ use crate::domain::{
     PolitiqueReassignation, SnapshotTransport, SourceSnapshot, SuiteObjective, TypeDecision,
     TypeFaitReassignation,
 };
+use crate::greffe_service::{GreffeServiceError, apply_guichet_mutation};
 use crate::outbox::{PreparedDelegation, stable_body_hash};
 pub use crate::store::GuichetLifecycleResult;
 use crate::store::{
@@ -140,6 +142,79 @@ pub fn process_guichet_claim(
     now: i64,
 ) -> Result<GuichetProcessResult, GuichetError> {
     let canonical = parse_claim(claim).map_err(guichet_domain_error)?;
+    if let Some(reason) = delegate_refusal_before_effect(store, &canonical)? {
+        let stored = store
+            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+            .map_err(guichet_store_error)?;
+        return Ok(guichet_process_result(stored, Some(reason)));
+    }
+    if matches!(
+        &canonical.request,
+        RequeteGuichet::Delegate(_)
+            | RequeteGuichet::RegistreAdd(_)
+            | RequeteGuichet::ObjectiveClose(_)
+    ) {
+        let reason = MotifRefusGreffe::OperationNonDisponible;
+        let stored = store
+            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+            .map_err(guichet_store_error)?;
+        return Ok(guichet_process_result(stored, Some(reason)));
+    }
+    process_non_mutating_guichet_claim(store, claim, &canonical, response_message_id, now)
+}
+
+/// Variante du maître : les mutations passent par le service partagé et
+/// produisent un reçu terminal. Les refus déterministes sont eux aussi
+/// persistés ; une panne technique laisse le claim rejouable.
+pub fn process_guichet_claim_with_central_service(
+    store: &mut MaicieStore,
+    config: &MaicieConfig,
+    limits: crate::bridget_client::BridgetClientLimits,
+    claim: &GuichetClaim,
+    response_message_id: &str,
+    now: i64,
+) -> Result<GuichetProcessResult, GuichetError> {
+    let canonical = parse_claim(claim).map_err(guichet_domain_error)?;
+    if let Some(reason) = delegate_refusal_before_effect(store, &canonical)? {
+        let stored = store
+            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+            .map_err(guichet_store_error)?;
+        return Ok(guichet_process_result(stored, Some(reason)));
+    }
+    if matches!(
+        &canonical.request,
+        RequeteGuichet::Delegate(_)
+            | RequeteGuichet::RegistreAdd(_)
+            | RequeteGuichet::ObjectiveClose(_)
+    ) {
+        return match apply_guichet_mutation(
+            store,
+            config,
+            limits,
+            claim,
+            &canonical,
+            response_message_id,
+            now,
+        ) {
+            Ok(stored) => Ok(guichet_process_result(stored, None)),
+            Err(error) => {
+                let Some(reason) = deterministic_service_refusal(&error) else {
+                    return Err(GuichetError::Store(error.to_string()));
+                };
+                let stored = store
+                    .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+                    .map_err(guichet_store_error)?;
+                Ok(guichet_process_result(stored, Some(reason)))
+            }
+        };
+    }
+    process_non_mutating_guichet_claim(store, claim, &canonical, response_message_id, now)
+}
+
+fn delegate_refusal_before_effect(
+    store: &mut MaicieStore,
+    canonical: &RequeteCanonique,
+) -> Result<Option<MotifRefusGreffe>, GuichetError> {
     if let RequeteGuichet::Delegate(request) = &canonical.request {
         let cited = crate::citation::extract_uuids(&request.goal);
         let known = store
@@ -151,19 +226,20 @@ pub fn process_guichet_claim(
             &request.depends_on,
             &request.references,
         );
-        let reason = if matches!(request.suite, SuiteObjective::Aucune) && !unclassified.is_empty()
-        {
-            MotifRefusGreffe::SuiteAucuneAvecCitationNonClassee
-        } else {
-            // Cette première tranche ferme le défaut mesuré sans prétendre que
-            // l'opération de délégation fédérée est déjà applicative.
-            MotifRefusGreffe::OperationNonDisponible
-        };
-        let stored = store
-            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
-            .map_err(guichet_store_error)?;
-        return Ok(guichet_process_result(stored, Some(reason)));
+        if matches!(request.suite, SuiteObjective::Aucune) && !unclassified.is_empty() {
+            return Ok(Some(MotifRefusGreffe::SuiteAucuneAvecCitationNonClassee));
+        }
     }
+    Ok(None)
+}
+
+fn process_non_mutating_guichet_claim(
+    store: &mut MaicieStore,
+    claim: &GuichetClaim,
+    canonical: &RequeteCanonique,
+    response_message_id: &str,
+    now: i64,
+) -> Result<GuichetProcessResult, GuichetError> {
     let stored = match &canonical.request {
         RequeteGuichet::DeliveryReport(report) => {
             store.graft_delivery_report(claim, &canonical, report, response_message_id, now)
@@ -179,7 +255,11 @@ pub fn process_guichet_claim(
         RequeteGuichet::DeadlineQuestion { .. } => {
             process_deadline_question_canonical(store, claim, &canonical, response_message_id, now)
         }
-        RequeteGuichet::Delegate(_) => unreachable!("delegate traité avant les greffes métier"),
+        RequeteGuichet::Delegate(_)
+        | RequeteGuichet::RegistreAdd(_)
+        | RequeteGuichet::ObjectiveClose(_) => {
+            unreachable!("mutation traitée avant les greffes consultatives")
+        }
     };
     match stored {
         Ok(stored) => Ok(guichet_process_result(stored, None)),
@@ -192,6 +272,45 @@ pub fn process_guichet_claim(
                 .map_err(guichet_store_error)?;
             Ok(guichet_process_result(stored, Some(reason)))
         }
+    }
+}
+
+fn deterministic_service_refusal(error: &GreffeServiceError) -> Option<MotifRefusGreffe> {
+    match error {
+        GreffeServiceError::Authorization(_) => Some(MotifRefusGreffe::AutorisationRefusee),
+        GreffeServiceError::Invalid(_) => Some(MotifRefusGreffe::MutationInvalide),
+        GreffeServiceError::Delegate(DelegateError::ContrainteRefusee { .. }) => {
+            Some(MotifRefusGreffe::SuiteAucuneAvecCitationNonClassee)
+        }
+        GreffeServiceError::Delegate(DelegateError::TargetUnavailable(_)) => {
+            Some(MotifRefusGreffe::CibleIndisponible)
+        }
+        GreffeServiceError::Delegate(
+            DelegateError::Invalid(_) | DelegateError::EnvelopeMismatch,
+        ) => Some(MotifRefusGreffe::MutationInvalide),
+        GreffeServiceError::Objective(ObjectiveError::NotFound(_))
+        | GreffeServiceError::Store(StoreError::NotFound(_)) => {
+            Some(MotifRefusGreffe::ObjectifAbsent)
+        }
+        GreffeServiceError::Objective(ObjectiveError::Invalid("objectif déjà clos"))
+        | GreffeServiceError::Store(StoreError::Invalid("objectif déjà clos")) => {
+            Some(MotifRefusGreffe::ObjectifDejaClos)
+        }
+        GreffeServiceError::Objective(ObjectiveError::Invalid(_))
+        | GreffeServiceError::Catalogue(crate::catalogue::CatalogueError::Format(_))
+        | GreffeServiceError::Catalogue(crate::catalogue::CatalogueError::IdempotenceConflict {
+            ..
+        }) => Some(MotifRefusGreffe::MutationInvalide),
+        GreffeServiceError::Store(StoreError::EnvelopeMismatch) => {
+            Some(MotifRefusGreffe::EnveloppeDivergente)
+        }
+        GreffeServiceError::CatalogueAbsent
+        | GreffeServiceError::Catalogue(_)
+        | GreffeServiceError::CatalogueReconcile(_)
+        | GreffeServiceError::Objective(ObjectiveError::Store(_))
+        | GreffeServiceError::Delegate(DelegateError::Store(_))
+        | GreffeServiceError::Store(_)
+        | GreffeServiceError::Bridget(_) => None,
     }
 }
 

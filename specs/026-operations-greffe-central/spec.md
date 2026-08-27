@@ -5,7 +5,7 @@
 **Base fonctionnelle** : session 021, tête `2623772`
 
 **Dépendance de schéma** : v17 (021) → v18 (refus local rc1) → v19 (026)
-**Statut** : première tranche urgente — refus fédéré d'une contradiction attestable
+**Statut** : seconde tranche urgente — pilotage fédéré du greffe central
 
 ## Pourquoi cette tranche existe
 
@@ -21,6 +21,12 @@ un refus terminal durable avant toute mutation métier.
 Elle ne prétend pas encore déléguer à distance. Une demande cohérente reçoit
 `operation_not_available`, elle aussi persistée : un dépôt n'est jamais vendu
 comme un effet applicatif.
+
+La seconde tranche conserve cette porte unique et rend applicatives trois
+mutations strictement bornées : `delegate`, `registre_add` et
+`objective_close`. Leur consultation terminale est un quatrième verbe séparé :
+un dépôt `queued` ou un transport interrompu n'est jamais présenté comme un
+effet métier réussi.
 
 ## Propriétés livrées
 
@@ -83,6 +89,97 @@ v19 ne s'applique qu'après la vraie v18 de rc1. Son préflight transactionnel :
 Une base seulement estampillée v18, sans ce DDL, est refusée sans mutation. Une
 base estampillée v19 qui porte encore le CHECK v18 est également refusée.
 
+### P2606 — Même service métier, quel que soit l'appelant
+
+Les commandes locales et les claims fédérés appellent le même service Maicie
+pour déléguer, ajouter au registre et clore un objectif. Ce service ouvre la
+configuration centrale, la même base SQLite et le même journal déclarés par le
+greffe ; aucun chemin, URI de base ou journal n'est accepté depuis la charge.
+
+Les gardes, l'idempotence et les transactions restent celles des chemins
+locaux. Le guichet ne recopie pas la sélection des candidats, le parseur du
+journal ni la clôture d'objectif.
+
+### P2607 — Quatre verbes, résultats terminaux seulement
+
+Le client MCP expose exactement `maicie_delegate`, `maicie_registre_add`,
+`maicie_objective_close` et `maicie_request_status`. Les trois premiers
+déposent une demande canonique et rendent seulement `queued` ou
+`outcome_unknown` tant que le maître n'a pas persisté de reçu terminal.
+
+`maicie_request_status` relit ce reçu auprès du daemon maître. Seul ce résultat
+terminal peut annoncer `created`, `appended`, `closed`, `selection_required`
+ou `refused`, avec les identifiants durables correspondants.
+
+### P2608 — Identité de connexion centralisée, mais encore déclarative
+
+Le serveur MCP enregistre auprès du daemon le nom et l'instance déjà résolus au
+démarrage. Le daemon conserve cette identité avec la connexion ; les charges de
+mutation ne répètent aucun jeton ni principal. Déplacer le couple de chaque
+requête vers un `Register` unique réduit les sources d'identité, mais ne
+l'authentifie pas.
+
+Le point d'appel du service reçoit un principal injecté par le daemon. Un champ
+`from` filaire reste une déclaration à comparer, jamais une source d'autorité.
+Une politique centrale fermée borne ensuite ce principal aux actions
+`delegate`, `registre_add` et `objective_close`, avec refus par défaut.
+
+L'attestation serveur signe sa version, le nom et l'instance du principal,
+l'action, l'`issuer_scope`, le `request_id`, son instant d'émission, le SHA-256
+des octets canoniques exacts, l'expiration du droit et la génération de la
+politique. Au dépôt, le condensé vient des octets reçus ; juste avant l'effet,
+il est recalculé depuis les octets relus dans le greffe. Une substitution de la
+charge durable invalide donc l'attestation, même si tous ses identifiants sont
+restés inchangés.
+
+L'attestation ne signe pas l'instant local d'observation, le jeton de claim, la
+génération de claim, son lease, ni le reçu terminal : ces valeurs décrivent la
+relève et le résultat côté serveur, mais ne fondent aucun droit métier. Le
+rejeu idempotent restitue toujours l'attestation originale ; il n'émet jamais
+une nouvelle signature pour rafraîchir un droit expiré ou révoqué.
+
+### Mise en service de la politique
+
+1. Copier `contracts/greffe-authorization.example.json` vers
+   `~/.config/bridget/greffe-authorization.json`, remplacer le nom et
+   l'instance par les identités actuellement enregistrées, produire
+   `attestation_key` avec `openssl rand -hex 32`, fixer une expiration future,
+   puis imposer le mode `0600`. Dupliquer l'entrée `principals` pour chaque
+   agent explicitement autorisé ; aucun autre agent n'obtient de droit.
+2. Un emplacement différent est déclaré aux processus Bridget **et** Maicie
+   par `BRIDGET_GREFFE_POLICY_PATH`; le journal privé est déplacé avec
+   `BRIDGET_GREFFE_AUDIT_PATH` (défaut :
+   `~/.cache/bridget/greffe-authorization.jsonl`).
+3. Sans fichier de politique privé et lisible, les trois mutations sont toutes
+   refusées : le fil conserve le motif uniforme
+   `greffe_authorization_denied`, tandis que le journal interne nomme
+   exactement `policy_unavailable`.
+
+Cette politique suppose toutefois un appelant non hostile sous le même compte.
+`crates/bridget-transport/src/protocol.rs:854-882` reçoit aujourd'hui `name` et
+`instance_id` du client dans `Register` ;
+`crates/bridget-daemon/src/daemon.rs:6206-6258` transmet ces valeurs, puis
+`crates/bridget-daemon/src/daemon.rs:3443-3465` et
+`crates/bridget-daemon/src/daemon.rs:3630-3632` les écrivent sans vérifier la
+filiation du processus pair. La preuve de filiation de
+`crates/bridget-daemon/src/mcp_identity.rs:143-186` est exécutée côté processus
+MCP et redevient donc une déclaration sur le fil.
+
+Sur le déploiement mesuré le 27 août 2026, le répertoire `agent-pids` est en
+`0770` et ses marqueurs en `0660`, tous sous le même compte `moi:moi` : aucune
+frontière de privilège ne sépare les agents locaux. Un client local parlant le
+protocole brut peut donc se déclarer sous un autre nom. Cette borne cessera
+d'être acceptable dès que des comptes différents partageront le daemon ;
+l'identité devra alors être établie côté serveur, notamment en tenant compte des
+agents distants dont le processus pair visible est celui du tunnel.
+
+### P2609 — Compatibilité et frontière humaine inchangées
+
+Les extensions filaires sont additives et gardent les anciennes trames
+décodables. `profile_approve`, `routine_approve` et toute commande arbitraire
+restent absentes des outils et des opérations autorisées : ces actions restent
+réservées à la frappe humaine.
+
 ## Scénarios d'acceptation
 
 1. Un objectif central existe. Un claim `delegate`, `suite=aucune`, cite son
@@ -97,6 +194,17 @@ base estampillée v19 qui porte encore le CHECK v18 est également refusée.
    fausse v18 et une fausse v19 ne modifient ni schéma ni numéro.
 5. Une copie privée v14 emprunte réellement v17, v18 puis v19 ; sa source reste
    octet-identique. Le bootstrap vide est exercé séparément.
+6. Un MCP enregistré sous son identité résolue dépose chacune des trois
+   mutations ; aucun premier retour ne prétend que l'effet est appliqué.
+7. La relève Maicie applique chaque mutation par le même service que le CLI,
+   persiste son reçu terminal, puis le statut rend l'issue et ses identifiants.
+8. Un dépôt interrompu avant résultat reste `outcome_unknown`; sa consultation
+   ultérieure relit le reçu du maître sans ouvrir de base sur l'appelant.
+9. Les charges ne peuvent fournir ni chemin de base, ni chemin de journal, ni
+   principal d'autorisation.
+10. Les témoins d'autorisation déclarent explicitement qu'ils prouvent le
+    traitement du principal enregistré, pas l'authenticité de `Register` face à
+    un client local capable de parler le protocole brut.
 
 ## Frontière de sécurité inchangée
 
@@ -111,11 +219,11 @@ comme acquise.
 
 ## Travail explicitement reporté
 
-- appliquer réellement `delegate` au greffe central ;
-- ajouter `registre_add` et `objective_close` ;
 - persister les tentatives `profile_approve` et `routine_approve` avant refus ;
-- exposer la consultation complète d'une issue terminale ;
-- fournir le client mince MCP éventuel du même guichet.
+- établir côté daemon l'identité de `Register` contre la filiation réelle du
+  processus pair, y compris derrière un tunnel distant ;
+- interdire à `Rename` de cibler la connexion d'un autre appelant ;
+- exposer toute autre commande Maicie.
 
 Ces éléments ne doivent jamais ouvrir une base locale ni créer une seconde
 porte d'écriture.

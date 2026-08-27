@@ -7,7 +7,7 @@
 
 use crate::app::{
     GuichetError, apply_attested_coordination_event, process_guichet_claim,
-    record_guichet_lifecycle_event,
+    process_guichet_claim_with_central_service, record_guichet_lifecycle_event,
 };
 use crate::bridget_client::{
     BridgetClient, BridgetClientError, BridgetClientLimits, CoordinationClient,
@@ -547,11 +547,48 @@ pub fn reconcile_guichet_startup_with_limits(
     )
 }
 
+/// Relève de production du greffe central : les mutations admises empruntent
+/// le même service que le CLI, tandis que les tests historiques peuvent
+/// conserver explicitement le processeur non applicatif de la première tranche.
+pub fn reconcile_guichet_startup_with_central_service(
+    store: &mut MaicieStore,
+    config: &crate::config::MaicieConfig,
+    observed_at: i64,
+    limits: BridgetClientLimits,
+) -> Result<GuichetReconcileReport, ReconcileError> {
+    reconcile_guichet_startup_inner(
+        store,
+        &config.bridget_socket,
+        Some(config),
+        observed_at,
+        limits,
+        |_| Ok(()),
+    )
+}
+
 /// Variante des crash-tests : les jalons ne modifient aucun état et servent
 /// uniquement à interrompre un vrai processus aux trois frontières durables.
 pub fn reconcile_guichet_startup_observed_with_limits(
     store: &mut MaicieStore,
     bridget_socket: impl AsRef<Path>,
+    observed_at: i64,
+    limits: BridgetClientLimits,
+    observer: impl FnMut(GuichetReconcilePhase) -> Result<(), ReconcileError>,
+) -> Result<GuichetReconcileReport, ReconcileError> {
+    reconcile_guichet_startup_inner(
+        store,
+        bridget_socket.as_ref(),
+        None,
+        observed_at,
+        limits,
+        observer,
+    )
+}
+
+fn reconcile_guichet_startup_inner(
+    store: &mut MaicieStore,
+    bridget_socket: &Path,
+    central_config: Option<&crate::config::MaicieConfig>,
     observed_at: i64,
     limits: BridgetClientLimits,
     mut observer: impl FnMut(GuichetReconcilePhase) -> Result<(), ReconcileError>,
@@ -601,8 +638,18 @@ pub fn reconcile_guichet_startup_observed_with_limits(
         // pour le claim courant : ce réconciliateur ne reconstruit jamais de
         // réponse ni de token par lui-même.
         let response_message_id = Uuid::new_v4().to_string();
-        let processed = process_guichet_claim(store, &claim, &response_message_id, observed_at)
-            .map_err(ReconcileError::Guichet)?;
+        let processed = match central_config {
+            Some(config) => process_guichet_claim_with_central_service(
+                store,
+                config,
+                limits,
+                &claim,
+                &response_message_id,
+                observed_at,
+            ),
+            None => process_guichet_claim(store, &claim, &response_message_id, observed_at),
+        }
+        .map_err(ReconcileError::Guichet)?;
         observer(GuichetReconcilePhase::AfterStoreCommitBeforeReply)?;
         let response = match client.reply_exact_bytes(&processed.reply_bytes) {
             Ok(response) => response,

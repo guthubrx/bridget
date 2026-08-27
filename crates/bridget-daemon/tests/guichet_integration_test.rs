@@ -892,7 +892,7 @@ esac
         assert_eq!(
             stderr.lines().nth(1),
             Some(
-                "usage: bridget guichet deposer <delivery-report|mission-status|deadline-question> [options]"
+                "usage: bridget guichet deposer <delivery-report|mission-status|deadline-question|delegate|registre-add|objective-close> [options]"
             ),
             "{} doit atteindre le refus CLI attendu",
             case.name

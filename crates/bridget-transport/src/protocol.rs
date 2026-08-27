@@ -163,6 +163,7 @@ pub enum ServiceRefusal {
     ReservedTargetRequired,
     InvalidIssuedAt,
     FrameTooLarge,
+    GreffeAuthorizationDenied,
 }
 
 /// Opérations fermées que Bridget peut déposer dans le guichet Maicie.
@@ -173,6 +174,8 @@ pub enum ServiceRequestOperation {
     MissionStatus,
     DeadlineQuestion,
     Delegate,
+    RegistreAdd,
+    ObjectiveClose,
 }
 
 /// Verdict fermé d'une revue. Le transport conserve le fait déclaré ; seule
@@ -307,6 +310,13 @@ pub enum ServiceRequestPayload {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         references: Vec<String>,
     },
+    RegistreAdd {
+        line: String,
+    },
+    ObjectiveClose {
+        objective_id: String,
+        reason: String,
+    },
 }
 
 /// Déclaration de suite structurée : aucune valeur libre ne peut jouer le rôle
@@ -347,6 +357,25 @@ pub enum GuichetRefusalReason {
     MeasuredHeadMismatch,
     SuiteNoneWithUnclassifiedCitation,
     OperationNotAvailable,
+    MutationInvalid,
+    TargetUnavailable,
+    ObjectiveMissing,
+    ObjectiveAlreadyClosed,
+    AuthorizationDenied,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuichetDelegateMutationStatus {
+    Created,
+    SelectionRequired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuichetRegistreAddStatus {
+    Appended,
+    IdempotentNoop,
 }
 
 /// Fait terminal attesté uniquement par Bridget pour une demande du guichet.
@@ -394,6 +423,30 @@ pub enum GuichetReplyPayload {
         delegation_id: String,
         duration_class: GuichetDurationClass,
         deadline_at: i64,
+    },
+    Delegate {
+        status: GuichetDelegateMutationStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        objective_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delegation_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        participant: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        candidates: Vec<String>,
+        waiting_on_prerequisites: bool,
+        replayed: bool,
+    },
+    RegistreAdd {
+        status: GuichetRegistreAddStatus,
+        constat_id: String,
+    },
+    ObjectiveClose {
+        objective_id: String,
+        decision_id: String,
+        replayed: bool,
     },
     /// Refus fermé sans projection inventée quand les faits locaux demandés
     /// par la requête n'existent pas ou ne sont pas corrélés.
@@ -853,6 +906,9 @@ pub enum WrapperToDaemon {
     /// S'enregistrer auprès du daemon.
     Register {
         agent_type: String,
+        /// Identité déclarée une fois à l'ouverture de la connexion. Le daemon
+        /// ne vérifie pas encore la filiation du processus pair : un client
+        /// local parlant le protocole brut peut donc déclarer un autre nom.
         name: Option<String>,
         #[serde(default)]
         host: Option<String>,
@@ -879,6 +935,8 @@ pub enum WrapperToDaemon {
         #[serde(default)]
         os: Option<String>,
         #[serde(default)]
+        /// Instance déclarée avec le nom. Elle réduit les sources d'identité,
+        /// mais ne constitue ni une authentification ni une preuve de filiation.
         instance_id: Option<String>,
         /// Regroupement de travail de l'agent : nom du dépôt d'où il a été
         /// lancé, ou domaine choisi explicitement s'il en existe un.
@@ -1212,6 +1270,10 @@ pub enum DaemonToWrapper {
         request_id: String,
         issue: String,
         expires_at: i64,
+        /// Charge terminale relue depuis les octets durables du maître. Elle
+        /// reste absente tant que l'issue n'est pas terminale.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        payload: Option<GuichetReplyPayload>,
     },
     /// Une seule demande a été relevée sous une lease durable.
     #[serde(rename = "guichet_claimed")]
@@ -1222,6 +1284,11 @@ pub enum DaemonToWrapper {
         request_id: String,
         #[serde(with = "base64_bytes")]
         canonical_request: Vec<u8>,
+        /// Attestation produite par le daemon et persistée hors des octets
+        /// canoniques fournis par l'appelant.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authorization_attestation:
+            Option<crate::greffe_authorization::GreffeAuthorizationAttestation>,
         claimed_at: i64,
         claim_generation: u64,
         claim_token: String,
@@ -2553,6 +2620,94 @@ mod tests {
             r#"{"type":"coordination_event","v":1,"event_id":"evt","request_id":"req","kind":"unknown_fact","reminder_message_id":"msg","recipient":"codex","generation":1,"observed_at":1}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn mutations_du_greffe_et_resultat_terminal_font_un_roundtrip_ferme() {
+        let mutations = [
+            (
+                ServiceRequestOperation::RegistreAdd,
+                ServiceRequestPayload::RegistreAdd {
+                    line: "kind=add id=constat-1".to_string(),
+                },
+                "registre_add",
+            ),
+            (
+                ServiceRequestOperation::ObjectiveClose,
+                ServiceRequestPayload::ObjectiveClose {
+                    objective_id: "objective-1".to_string(),
+                    reason: "objectif atteint".to_string(),
+                },
+                "objective_close",
+            ),
+        ];
+        for (operation, payload, wire_name) in mutations {
+            let request = WrapperToDaemon::ServiceRequest {
+                version: SERVICE_CONTRACT_VERSION,
+                issuer_scope: "026_scope_0123456789abcdef0123456789abcdef".to_string(),
+                request_id: format!("request-{wire_name}"),
+                issued_at: 1_787_824_000,
+                from: "jc2".to_string(),
+                to: "maicie".to_string(),
+                operation,
+                payload: payload.clone(),
+            };
+            let wire = encode(&request).unwrap();
+            assert!(wire.contains(&format!(r#""operation":"{wire_name}""#)));
+            assert!(matches!(
+                decode::<WrapperToDaemon>(&wire).unwrap(),
+                WrapperToDaemon::ServiceRequest {
+                    operation: decoded_operation,
+                    payload: decoded_payload,
+                    ..
+                } if decoded_operation == operation && decoded_payload == payload
+            ));
+        }
+
+        let result = DaemonToWrapper::GuichetResult {
+            version: SERVICE_CONTRACT_VERSION,
+            issuer_scope: "026_scope_0123456789abcdef0123456789abcdef".to_string(),
+            request_id: "request-close".to_string(),
+            issue: "accepted".to_string(),
+            expires_at: 1_787_824_060,
+            payload: Some(GuichetReplyPayload::ObjectiveClose {
+                objective_id: "objective-1".to_string(),
+                decision_id: "decision-1".to_string(),
+                replayed: false,
+            }),
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(&encode(&result).unwrap()).unwrap(),
+            DaemonToWrapper::GuichetResult {
+                issue,
+                payload: Some(GuichetReplyPayload::ObjectiveClose {
+                    objective_id,
+                    decision_id,
+                    replayed: false,
+                }),
+                ..
+            } if issue == "accepted"
+                && objective_id == "objective-1"
+                && decision_id == "decision-1"
+        ));
+
+        let historical: DaemonToWrapper = decode(
+            r#"{"type":"guichet_result","v":1,"issuer_scope":"026_scope_0123456789abcdef0123456789abcdef","request_id":"request-old","issue":"queued","expires_at":1787824060}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            historical,
+            DaemonToWrapper::GuichetResult { payload: None, .. }
+        ));
+        assert!(matches!(
+            decode::<DaemonToWrapper>(
+                r#"{"type":"ServiceRejected","reason":{"kind":"greffe_authorization_denied"}}"#
+            )
+            .unwrap(),
+            DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::GreffeAuthorizationDenied
+            }
+        ));
     }
 
     #[test]
