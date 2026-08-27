@@ -675,7 +675,15 @@ mod spawn_executor_tests {
             &socket_absent,
             DaemonToWrapper::SpawnRejected {
                 command_id: "cwd-executor-absent".to_string(),
-                reason: SpawnRefusal::CwdGone,
+                // DEUX machines ATTESTÉES et DIFFÉRENTES, imposées au banc :
+                // c'est la seule configuration où le rendu peut prouver qu'il
+                // distingue « où l'on a cherché » de « qui a demandé ». Des
+                // valeurs recalculées par le code de production ne prouveraient
+                // que la recopie.
+                reason: SpawnRefusal::CwdGone {
+                    searched_on: "machine-executante".to_string(),
+                    requested_from: "machine-demandeuse".to_string(),
+                },
             },
         );
         let refusal = send_control_to_daemon_at(&socket_absent, ordre_absent)
@@ -687,10 +695,14 @@ mod spawn_executor_tests {
             }
             other => panic!("SpawnRejected attendu, reçu {other:?}"),
         };
+        // Le texte HISTORIQUE appartenait aux deux issues : il ne prouvait plus
+        // rien depuis que le refus nomme les machines. On exige donc le rendu
+        // EXACT du nouveau contrat — les deux noms, chacun à sa place.
         assert_eq!(
             format!("SPAWN REFUSÉ: {}", display_spawn_refusal(&reason)),
-            "SPAWN REFUSÉ: répertoire de travail disparu",
-            "le texte doit venir de CwdGone, pas du pré-contrôle client"
+            "SPAWN REFUSÉ: répertoire de travail introuvable sur machine-executante, \
+             demandé depuis machine-demandeuse",
+            "le texte doit venir de CwdGone et nommer les DEUX machines, pas du pré-contrôle client"
         );
         assert!(matches!(
             daemon_absent.join().expect("daemon absent termine"),
