@@ -7451,6 +7451,7 @@ fn build_id_probe_issuer_scope() -> String {
 mod matrice_roles_tests {
     use super::*;
     use std::io::{BufRead, BufReader, BufWriter, Write};
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
     use std::sync::mpsc;
@@ -7495,6 +7496,15 @@ mod matrice_roles_tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.socket_path);
             let _ = std::fs::remove_file(&self.db_path);
+        }
+    }
+
+    struct NettoyageCheminInaccessible(PathBuf);
+
+    impl Drop for NettoyageCheminInaccessible {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
@@ -7573,7 +7583,7 @@ mod matrice_roles_tests {
     }
 
     #[test]
-    fn socket_absente_et_daemon_ancien_restent_deux_etats_observables() {
+    fn absence_daemon_ancien_et_chemin_inaccessible_restent_distincts() {
         let chemin_absent = PathBuf::from(format!(
             "/tmp/bridget-identite-absente-{}-{}.sock",
             std::process::id(),
@@ -7606,6 +7616,21 @@ mod matrice_roles_tests {
         assert!(identite.host.is_none());
         assert!(identite.db_path.is_none());
         assert!(identite.instance_id.is_none());
+
+        let root_inaccessible = PathBuf::from(format!(
+            "/tmp/bridget-identite-inaccessible-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir(&root_inaccessible).expect("créer le chemin inaccessible");
+        let _nettoyage_inaccessible = NettoyageCheminInaccessible(root_inaccessible.clone());
+        let socket_inaccessible = root_inaccessible.join("bridget.sock");
+        let _listener = UnixListener::bind(&socket_inaccessible).expect("lier avant le refus");
+        std::fs::set_permissions(&root_inaccessible, std::fs::Permissions::from_mode(0o000))
+            .expect("rendre le chemin inaccessible");
+        let error = daemon_identity(&socket_inaccessible)
+            .expect_err("une erreur d'accès n'est pas une absence de daemon");
+        assert!(error.contains("connexion impossible"), "{error}");
     }
 
     /// Oracle M1 local-vers-local : le socket est remplacé entre deux
