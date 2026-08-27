@@ -164,13 +164,36 @@ fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
     let daemon = DaemonGuard::start(&daemon_binary, &home);
     let same_build = status(&daemon_binary, &home);
     assert!(same_build.status.success());
-    assert!(
-        String::from_utf8_lossy(&same_build.stdout).contains("Build-id daemon: daemon-build-test")
-    );
+    let rendu = String::from_utf8_lossy(&same_build.stdout).to_string();
+    assert!(rendu.contains("Build-id daemon: daemon-build-test"));
     assert!(
         same_build.stderr.is_empty(),
         "égalité silencieuse: {:?}",
         same_build.stderr
+    );
+
+    // La sonde d'identité doit rendre les DEUX valeurs que le daemon atteste,
+    // et ce sont les VALEURS qu'on éprouve — pas la présence des champs.
+    // La machine est imposée au banc, la base est celle du HOME isolé : les deux
+    // sont donc connues d'avance et nommées ici, sans être recalculées par le
+    // code de production.
+    assert!(
+        rendu.contains(&format!("Machine du daemon: {BANC_HOST}")),
+        "la machine attestée doit être celle du banc: {rendu}"
+    );
+    let base_attendue = home.join(".cache/bridget/bridget.db");
+    assert!(
+        rendu.contains(&format!(
+            "Base de données du daemon: {}",
+            base_attendue.display()
+        )),
+        "la base attestée doit être celle du daemon: {rendu}"
+    );
+    // Contrôle de sens : sans attestation, ces deux lignes diraient « machine
+    // non attestée ». Leur absence prouve que la sonde a bien abouti.
+    assert!(
+        !rendu.contains("machine non attestée"),
+        "la sonde d'identité n'a pas abouti: {rendu}"
     );
 
     // Une reconstruction ultérieure porte une identité différente, comme après
