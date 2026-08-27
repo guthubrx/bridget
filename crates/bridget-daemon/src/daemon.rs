@@ -8122,13 +8122,37 @@ pub struct DaemonStatus {
 
 #[cfg(test)]
 mod inventory_provenance_tests {
-    use super::{get_status, DaemonConfig};
+    use super::{encode, get_status, DaemonConfig, DaemonToWrapper};
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    use std::thread;
     #[test]
     fn socket_absente_inventaire_indisponible() {
         let mut config = DaemonConfig::default();
         config.socket_path = std::env::temp_dir().join("bridget-no-such-socket");
         let status = get_status(&config);
         assert!(!status.running);
+        assert!(!status.agents_inventory_available);
+    }
+
+    #[test]
+    fn eof_apres_register_inventaire_indisponible() {
+        let path = std::env::temp_dir().join(format!("bridget-eof-{}.sock", uuid::Uuid::new_v4()));
+        let listener = UnixListener::bind(&path).unwrap();
+        let thread_path = path.clone();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();
+            writeln!(stream, "{}", encode(&DaemonToWrapper::Registered { name: "probe".into() }).unwrap()).unwrap();
+            stream.flush().unwrap();
+        });
+        let mut config = DaemonConfig::default();
+        config.socket_path = path.clone();
+        let status = get_status(&config);
+        handle.join().unwrap();
+        let _ = std::fs::remove_file(thread_path);
+        assert!(status.running);
         assert!(!status.agents_inventory_available);
     }
 }
