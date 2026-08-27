@@ -298,8 +298,8 @@ fn print_usage() {
            attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            spawn <TYPE>           Lance un équipier géré [--name N] [--persistent]\n  \
            stop <N>               Arrête un équipier géré\n  \
-           send --to <N> <MSG>    Envoie un message\n  \
-           reply <MSG>            Répond au dernier expéditeur\n  \
+           send --to <N> [--] <MSG> Envoie un message\n  \
+           reply [--] <MSG>       Répond au dernier expéditeur\n  \
            cancel <ID>            Annule une demande suivie [--reason <T>]\n  \
            requests [--all]       Mes demandes (défaut) ou toutes les ouvertes\n  \
            rename <N>             Renomme l'agent courant\n  \
@@ -321,7 +321,8 @@ fn print_usage() {
            --in-reply-to <id>     Lie la réponse à une demande suivie\n  \
            --reply                Réponse attendue\n  \
            --timeout <S>          Délai avant échec (défaut: 60)\n  \
-           --hops <N>             Sauts restants (défaut: 4)\n\n\
+           --hops <N>             Sauts restants (défaut: 4)\n  \
+           --                      Fin des options ; le reste est le message\n\n\
            --id <clé>             Clé de rejeu (avec --issued-at)\n  \
            --issued-at <unix>     Instant d'émission du rejeu\n  \
            --issuer-scope <portée> Portée requise pour un envoi ordinaire idempotent\n\n\
@@ -999,18 +1000,14 @@ fn cmd_send(args: &[String]) {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--to" => {
-                i += 1;
-                if i < args.len() {
-                    to = Some(args[i].clone());
-                }
-            }
-            "--from" => {
-                i += 1;
-                if i < args.len() {
-                    from = Some(args[i].clone());
-                }
-            }
+            "--to" => match option_value(args, &mut i, "--to") {
+                Ok(value) => to = Some(value),
+                Err(error) => send_usage_error(&error),
+            },
+            "--from" => match option_value(args, &mut i, "--from") {
+                Ok(value) => from = Some(value),
+                Err(error) => send_usage_error(&error),
+            },
             "--reply" => {
                 reply = true;
             }
@@ -1038,6 +1035,13 @@ fn cmd_send(args: &[String]) {
                 Ok(value) => in_reply_to = Some(value),
                 Err(error) => send_usage_error(&error),
             },
+            "--" => {
+                body_parts.extend(args[i + 1..].iter().cloned());
+                break;
+            }
+            unknown if unknown.starts_with('-') => {
+                exit_argument_error(&format!("argument non reconnu: {unknown}"));
+            }
             _ => {
                 body_parts.push(args[i].clone());
             }
@@ -1049,7 +1053,7 @@ fn cmd_send(args: &[String]) {
         Some(t) => t,
         None => {
             eprintln!(
-                "usage: bridget send --to <nom> [--in-reply-to ID] [--reply] [--hops N] <message>"
+                "usage: bridget send --to <nom> [--in-reply-to ID] [--reply] [--hops N] [--] <message>"
             );
             std::process::exit(2);
         }
@@ -1536,7 +1540,7 @@ fn resolved_idempotent_options(
 fn send_usage_error(error: &str) -> ! {
     eprintln!("erreur: {error}");
     eprintln!(
-        "usage: bridget send --to <nom> [--in-reply-to ID] [--id <clé> --issued-at <unix> [--issuer-scope <portée>]] <message>"
+        "usage: bridget send --to <nom> [--in-reply-to ID] [--id <clé> --issued-at <unix> [--issuer-scope <portée>]] [--] <message>"
     );
     std::process::exit(2);
 }
@@ -2880,7 +2884,7 @@ fn cmd_reply(args: &[String]) {
                 Err(error) => {
                     eprintln!("reply: {error}");
                     eprintln!(
-                        "usage: bridget reply [--in-reply-to ID] [--reply] [--hops N] <message>"
+                        "usage: bridget reply [--in-reply-to ID] [--reply] [--hops N] [--] <message>"
                     );
                     std::process::exit(2);
                 }
@@ -2897,6 +2901,13 @@ fn cmd_reply(args: &[String]) {
                 Ok(value) => issuer_scope = Some(value),
                 Err(error) => send_usage_error(&error),
             },
+            "--" => {
+                body_parts.extend(args[i + 1..].iter().cloned());
+                break;
+            }
+            unknown if unknown.starts_with('-') => {
+                exit_argument_error(&format!("argument non reconnu: {unknown}"));
+            }
             _ => {
                 body_parts.push(args[i].clone());
             }
@@ -2927,7 +2938,7 @@ fn cmd_reply(args: &[String]) {
 
     let body = body_parts.join(" ");
     if body.is_empty() {
-        eprintln!("usage: bridget reply [--in-reply-to ID] [--reply] [--hops N] <message>");
+        eprintln!("usage: bridget reply [--in-reply-to ID] [--reply] [--hops N] [--] <message>");
         std::process::exit(2);
     }
 
