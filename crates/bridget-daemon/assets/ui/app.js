@@ -912,6 +912,117 @@
         }
       });
 
+      function permissionTimelineEvents(payload) {
+        const base = { session_id: "s-perm", message_id: "m-perm" };
+        return [
+          {
+            kind: "record",
+            agent: "relec6",
+            at: 1,
+            record: {
+              ...base,
+              seq: 1,
+              ts: "2026-08-27T04:00:00Z",
+              event: "turn_start",
+              payload: {},
+            },
+          },
+          {
+            kind: "record",
+            agent: "relec6",
+            at: 2,
+            record: {
+              ...base,
+              seq: 2,
+              ts: "2026-08-27T04:00:01Z",
+              event: "permission",
+              payload,
+            },
+          },
+          {
+            kind: "record",
+            agent: "relec6",
+            at: 3,
+            record: {
+              ...base,
+              seq: 3,
+              ts: "2026-08-27T04:00:02Z",
+              event: "turn_end",
+              payload: {},
+            },
+          },
+        ];
+      }
+
+      function permissionActRenderLine(timeline) {
+        const work = timeline.find((entry) => entry.kind === "work");
+        assert.ok(work, "entrée work attendue pour une permission journalisée");
+        assert.equal(
+          work.acts.length,
+          1,
+          `un acte approval attendu, obtenu=${JSON.stringify(work.acts)}`,
+        );
+        const act = work.acts[0];
+        return act.detail ? `${act.text} — ${act.detail}` : act.text;
+      }
+
+      test("permission_acceptee_affiche_outil_et_decision_automatique", () => {
+        const timeline = api.projectTimeline(
+          permissionTimelineEvents({
+            tool: "bridget-bridget_ledger",
+            options: [
+              { optionId: "allow-once", kind: "allow_once" },
+              { optionId: "allow-always", kind: "allow_always" },
+              { optionId: "reject-once", kind: "reject_once" },
+            ],
+            decision: { outcome: "selected", option_id: "allow-once" },
+          }),
+        );
+        const line = permissionActRenderLine(timeline);
+        assert.equal(
+          line,
+          "bridget-bridget_ledger — Validation automatique hors interface : autoriser une fois",
+          `rendu obtenu: ${JSON.stringify(line)}`,
+        );
+      });
+
+      test("permission_refusee_affiche_outil_et_decision_automatique", () => {
+        const timeline = api.projectTimeline(
+          permissionTimelineEvents({
+            tool: "bridget-bridget_send",
+            options: [
+              { optionId: "allow-once", kind: "allow_once" },
+              { optionId: "reject-once", kind: "reject_once" },
+            ],
+            decision: { outcome: "selected", option_id: "reject-once" },
+          }),
+        );
+        const line = permissionActRenderLine(timeline);
+        assert.equal(
+          line,
+          "bridget-bridget_send — Validation automatique hors interface : refuser une fois",
+          `rendu obtenu: ${JSON.stringify(line)}`,
+        );
+      });
+
+      test("permission_sans_reponse_restee_visible_et_distincte", () => {
+        const timeline = api.projectTimeline(
+          permissionTimelineEvents({
+            tool: "bridget-bridget_ledger",
+            options: [
+              { optionId: "allow-once", kind: "allow_once" },
+              { optionId: "reject-once", kind: "reject_once" },
+            ],
+          }),
+        );
+        const line = permissionActRenderLine(timeline);
+        assert.equal(
+          line,
+          "bridget-bridget_ledger — Décision en attente — aucune réponse enregistrée",
+          `rendu obtenu: ${JSON.stringify(line)}`,
+        );
+      });
+
       test("corps_entrant_et_reponse_agent_deviennent_deux_bulles_exactes", () => {
         const events = [
           {
@@ -2499,6 +2610,101 @@
     "approval",
   ]);
 
+  const PERMISSION_OPTION_LABELS = Object.freeze({
+    allow_once: "autoriser une fois",
+    allow_always: "toujours autoriser",
+    reject_once: "refuser une fois",
+    reject_always: "toujours refuser",
+  });
+
+  function permissionOptions(payload) {
+    return Array.isArray(payload && payload.options) ? payload.options : [];
+  }
+
+  function permissionOptionId(option) {
+    return text(option && option.optionId, option && option.option_id);
+  }
+
+  function findPermissionOption(payload, optionId) {
+    if (!optionId) return null;
+    const normalized = optionId.toLowerCase();
+    return (
+      permissionOptions(payload).find((option) => {
+        const candidate = permissionOptionId(option);
+        return candidate && candidate.toLowerCase() === normalized;
+      }) || null
+    );
+  }
+
+  function permissionOptionLabel(option, fallbackId) {
+    const kind = text(option && option.kind);
+    if (kind && PERMISSION_OPTION_LABELS[kind]) {
+      return PERMISSION_OPTION_LABELS[kind];
+    }
+    const optionId = permissionOptionId(option) || text(fallbackId);
+    if (/allow/i.test(optionId)) return "autoriser";
+    if (/reject|deny|decline/i.test(optionId)) return "refuser";
+    return optionId || "option inconnue";
+  }
+
+  function resolvePermissionDecision(payload) {
+    const decision = payload && payload.decision;
+    if (typeof decision === "string") {
+      if (decision === "accept") {
+        return { state: "accepted", label: "accepté" };
+      }
+      if (decision === "decline") {
+        return { state: "refused", label: "refusé" };
+      }
+      return { state: "pending", label: null };
+    }
+    if (!decision || typeof decision !== "object") {
+      return { state: "pending", label: null };
+    }
+    const outcome = text(decision.outcome);
+    if (outcome === "cancelled") {
+      return { state: "pending", label: null };
+    }
+    if (outcome !== "selected") {
+      return { state: "pending", label: null };
+    }
+    const optionId = text(decision.option_id, decision.optionId);
+    const matched = findPermissionOption(payload, optionId);
+    const kind = text(matched && matched.kind);
+    const label = permissionOptionLabel(matched, optionId);
+    if (kind.startsWith("allow") || /allow/i.test(optionId)) {
+      return { state: "accepted", label };
+    }
+    if (kind.startsWith("reject") || /reject|deny|decline/i.test(optionId)) {
+      return { state: "refused", label };
+    }
+    return { state: "pending", label: null };
+  }
+
+  function formatPermissionAct(payload) {
+    const tool = text(
+      payload && payload.tool,
+      text(payload && payload.method, "Demande d’approbation"),
+    );
+    const resolved = resolvePermissionDecision(payload);
+    if (resolved.state === "accepted") {
+      return {
+        text: tool,
+        detail: `Validation automatique hors interface : ${resolved.label}`,
+      };
+    }
+    if (resolved.state === "refused") {
+      return {
+        text: tool,
+        detail: `Validation automatique hors interface : ${resolved.label}`,
+      };
+    }
+    return {
+      text: tool,
+      detail: "Décision en attente — aucune réponse enregistrée",
+    };
+  }
+
   function projectTimeline(events, options = {}) {
     const ordered = (Array.isArray(events) ? events : [])
       .map((event, index) => ({ ...event, __order: index }))
@@ -2602,10 +2808,11 @@
         return;
       }
       if (record.event === "permission") {
+        const permissionAct = formatPermissionAct(payload);
         turn.acts.push({
           kind: "approval",
-          text: text(payload.tool, "Demande d’approbation"),
-          detail: "Validation hors interface",
+          text: permissionAct.text,
+          detail: permissionAct.detail,
           at: entry.at,
         });
         return;
@@ -3769,6 +3976,7 @@
     decideWatchThreadRender,
     acceptTimelineEvents,
     projectTimeline,
+    formatPermissionAct,
     JOURNAL_ACT_KINDS,
     peerLabel,
     formatDuration,
