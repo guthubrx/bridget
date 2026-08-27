@@ -11,7 +11,15 @@ cargo build -p bridget-daemon --bin bridget-greffe-policy-refresh
 
 ## 2. Annoter la copie de politique
 
-Chaque principal reçoit sa source mesurable :
+Copier puis adapter l'exemple de la session 038 :
+
+```bash
+cp /chemin/absolu/vers/bridget/specs/038-regeneration-politique/contracts/greffe-authorization-refresh.example.json \
+  /chemin/absolu/vers/greffe-authorization.fixture.json
+chmod 600 /chemin/absolu/vers/greffe-authorization.fixture.json
+```
+
+Chaque principal déjà approuvé reçoit sa source mesurable :
 
 ```json
 "marker_source": {

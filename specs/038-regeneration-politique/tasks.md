@@ -6,20 +6,20 @@
 
 ## Phase 2 — Inventaire vivant
 
-- [ ] T002 [US2] Ajouter la source mesurée et l'inventaire fermé dans `crates/bridget-transport/src/greffe_authorization.rs`
-- [ ] T003 [US2] Scanner les marqueurs par PID et naissance dans `crates/bridget-daemon/src/mcp_identity.rs` et `crates/bridget-daemon/src/greffe_policy_refresh.rs`
-- [ ] T004 [US2] Exposer `scan` par le binaire dédié dans `crates/bridget-daemon/src/bin/bridget-greffe-policy-refresh.rs` sans toucher à `cli.rs`
+- [x] T002 [US2] Ajouter la source mesurée et l'inventaire fermé dans `crates/bridget-transport/src/greffe_policy_refresh.rs`, avec compatibilité dans `crates/bridget-transport/src/greffe_authorization.rs`
+- [x] T003 [US2] Scanner les marqueurs par PID et naissance dans `crates/bridget-daemon/src/mcp_identity.rs` et `crates/bridget-daemon/src/greffe_policy_refresh.rs`
+- [x] T004 [US2] Exposer `scan` par le binaire dédié dans `crates/bridget-daemon/src/bin/bridget-greffe-policy-refresh.rs` sans toucher à `cli.rs`
 
 ## Phase 3 — Régénération fermée
 
-- [ ] T005 [US1] Calculer le remplacement des seules instances approuvées et préserver les principaux morts dans `crates/bridget-transport/src/greffe_authorization.rs`
-- [ ] T006 [US1] Sérialiser sous verrou et remplacement privé atomique, avec prévisualisation par défaut, dans `crates/bridget-transport/src/greffe_authorization.rs`
-- [ ] T007 [US3] Ajouter le chemin `refresh` et son rapport non secret dans `crates/bridget-daemon/src/greffe_policy_refresh.rs`
+- [x] T005 [US1] Calculer le remplacement des seules instances approuvées et préserver les principaux morts dans `crates/bridget-transport/src/greffe_policy_refresh.rs`
+- [x] T006 [US1] Sérialiser sous verrou et remplacement privé atomique, avec prévisualisation par défaut, dans `crates/bridget-transport/src/greffe_policy_refresh.rs`
+- [x] T007 [US3] Ajouter le chemin `refresh` et son rapport non secret dans `crates/bridget-daemon/src/greffe_policy_refresh.rs`
 
 ## Phase 4 — Oracles d'effet
 
-- [ ] T008 [US1] Ajouter les oracles sources complètes, zéro marqueur, remplacement, conservation et génération dans `crates/bridget-transport/src/greffe_authorization.rs` et `crates/bridget-daemon/src/mcp_identity.rs`
-- [ ] T009 [US3] Éprouver le vrai binaire puis une mutation durable acceptée dans `crates/bridget-daemon/tests/greffe_policy_refresh_test.rs`, et rejouer le mutant de génération après correction
+- [x] T008 [US1] Ajouter les oracles sources complètes, zéro marqueur, remplacement, conservation et génération dans `crates/bridget-transport/src/greffe_policy_refresh.rs` et `crates/bridget-daemon/src/mcp_identity.rs`
+- [x] T009 [US3] Éprouver le vrai binaire puis une mutation durable acceptée dans `crates/bridget-daemon/tests/greffe_policy_refresh_test.rs`, et rejouer les mutants de génération et d'écriture directe après correction
 
 ## Phase 5 — Validation et livraison
 

@@ -7,8 +7,8 @@ Spec: 038-regeneration-politique
 Titre: Régénération explicite de la politique du greffe
 Statut: In Progress
 Priorité: P0
-Tâches: 1/10 (10%)
-Tests: 0/12 (0%)
+Tâches: 9/10 (90%)
+Tests: 17/17 (100%)
 
 Résumé:
 - Contexte: la politique lie chaque droit à une instance qui change à chaque redémarrage d'agent ; elle devient donc silencieusement périmée au fil de la journée.
