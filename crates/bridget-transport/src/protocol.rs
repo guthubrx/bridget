@@ -307,6 +307,13 @@ pub enum ServiceRequestPayload {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         references: Vec<String>,
     },
+    RegistreAdd {
+        line: String,
+    },
+    ObjectiveClose {
+        objective_id: String,
+        reason: String,
+    },
 }
 
 /// Déclaration de suite structurée : aucune valeur libre ne peut jouer le rôle
