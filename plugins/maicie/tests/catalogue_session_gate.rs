@@ -358,6 +358,10 @@ fn gate_session_017_cinq_promesses() {
         "PROMESSE(5) VUE — MUTATION: footer traites inventé"
     );
     assert_eq!(
+        view.footer.soldes, independent.soldes,
+        "PROMESSE(5) VUE — MUTATION: footer soldes inventé"
+    );
+    assert_eq!(
         view.footer.refutes, independent.refutes,
         "PROMESSE(5) VUE — MUTATION: footer refutes inventé"
     );
@@ -520,6 +524,7 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
         .filter(|pending| !adds.contains_key(&pending.id))
         .count();
     let mut traites = 0usize;
+    let mut soldes = 0usize;
     let mut refutes = 0usize;
     let mut rectifies = 0usize;
     for (id, trigger) in &delivered {
@@ -528,6 +533,7 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
         }
         match trigger {
             TransitionTrigger::Refuted => refutes += 1,
+            TransitionTrigger::ObjectiveClosed => soldes += 1,
             _ => traites += 1,
         }
     }
@@ -550,6 +556,7 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
         pending_qualification,
         delivered: delivered.len(),
         traites,
+        soldes,
         refutes,
         requalifies,
         rectifies,
@@ -564,6 +571,7 @@ struct AuthorityCounts {
     pending_qualification: usize,
     delivered: usize,
     traites: usize,
+    soldes: usize,
     refutes: usize,
     requalifies: usize,
     rectifies: usize,
