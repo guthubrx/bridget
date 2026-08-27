@@ -832,6 +832,8 @@ enum RegistreAction {
         refutes: bool,
         /// Affiche aussi les entrées encore en attente de qualification.
         attente: bool,
+        /// Historique des fermetures erronées puis rectifiées.
+        rectifies: bool,
     },
     /// Append d'une ligne JSON fermée `add` (idempotent aux octets identiques).
     Add { line: String },
@@ -864,6 +866,13 @@ enum RegistreAction {
     Refuter {
         constat_id: String,
         raison: catalogue::RaisonRefutation,
+        reference: String,
+        date: String,
+    },
+    /// Rectifie une transition erronée : delivered→open, historique conservé.
+    Rectifier {
+        constat_id: String,
+        raison: catalogue::RaisonRectification,
         reference: String,
         date: String,
     },
@@ -1605,7 +1614,7 @@ fn render_plage_list(rows: &[ResourceRangeReservation]) -> String {
 fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
     let Some((verb, tail)) = arguments.split_first() else {
         return Err(CliError::Usage(
-            "action registre obligatoire : list, add, migrer, qualifier, consign, fermer, refuter ou requalifier",
+            "action registre obligatoire : list, add, migrer, qualifier, consign, fermer, refuter, rectifier ou requalifier",
         ));
     };
     let mut config = None;
@@ -1619,6 +1628,7 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
     let mut fermes = false;
     let mut refutes = false;
     let mut attente = false;
+    let mut rectifies = false;
     let mut source_failed = false;
     let mut fait = None;
     let mut text = None;
@@ -1711,6 +1721,12 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
                 }
                 attente = true;
             }
+            "--rectifies" => {
+                if rectifies {
+                    return Err(CliError::Usage("option --rectifies dupliquée"));
+                }
+                rectifies = true;
+            }
             "--source-failed" => {
                 if source_failed {
                     return Err(CliError::Usage("option --source-failed dupliquée"));
@@ -1731,17 +1747,18 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
                 || text.is_some()
             {
                 return Err(CliError::Usage(
-                    "registre list n'accepte que --config, --fermes, --refutes et --attente",
+                    "registre list n'accepte que --config, --fermes, --refutes, --rectifies et --attente",
                 ));
             }
             RegistreAction::List {
                 fermes,
                 refutes,
                 attente,
+                rectifies,
             }
         }
         "add" => {
-            if depuis.is_some() || attente || fermes || refutes || pending_id.is_some() || fait.is_some() {
+            if depuis.is_some() || attente || fermes || refutes || rectifies || pending_id.is_some() || fait.is_some() {
                 return Err(CliError::Usage("options incompatibles avec registre add"));
             }
             RegistreAction::Add {
@@ -1749,7 +1766,7 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             }
         }
         "migrer" => {
-            if line.is_some() || attente || fermes || refutes || pending_id.is_some() || fait.is_some() {
+            if line.is_some() || attente || fermes || refutes || rectifies || pending_id.is_some() || fait.is_some() {
                 return Err(CliError::Usage(
                     "options incompatibles avec registre migrer",
                 ));
@@ -1843,6 +1860,22 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
                 date: date.ok_or(CliError::Usage("--date obligatoire"))?,
             }
         }
+        "rectifier" => {
+            let raison_raw = raison.ok_or(CliError::Usage(
+                "--raison typée obligatoire pour registre rectifier",
+            ))?;
+            let raison = catalogue::RaisonRectification::parse(&raison_raw).ok_or(
+                CliError::Usage(
+                    "raison rectifier : fermeture_erronee|refutation_erronee",
+                ),
+            )?;
+            RegistreAction::Rectifier {
+                constat_id: constat_id.ok_or(CliError::Usage("--constat obligatoire"))?,
+                raison,
+                reference: reference.ok_or(CliError::Usage("--ref obligatoire"))?,
+                date: date.ok_or(CliError::Usage("--date obligatoire"))?,
+            }
+        }
         "requalifier" => {
             let raison_raw = raison.ok_or(CliError::Usage(
                 "--raison typée obligatoire pour registre requalifier",
@@ -1896,7 +1929,7 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
         }
         _ => {
             return Err(CliError::Usage(
-                "action registre inconnue : list, add, migrer, qualifier, consign, fermer, refuter ou requalifier",
+                "action registre inconnue : list, add, migrer, qualifier, consign, fermer, refuter, rectifier ou requalifier",
             ));
         }
     };
@@ -1946,6 +1979,7 @@ fn run_registre(arguments: RegistreArgs, migrate: bool) -> Result<String, CliErr
             fermes,
             refutes,
             attente,
+            rectifies,
         } => {
             let parsed = journal.read_journal().map_err(CliError::Catalogue)?;
             if let Some(warning) = parsed.torn_tail_warning {
@@ -1958,6 +1992,7 @@ fn run_registre(arguments: RegistreArgs, migrate: bool) -> Result<String, CliErr
                     fermes,
                     refutes,
                     attente,
+                    rectifies,
                 },
             );
             let costs = store.all_mission_costs().map_err(CliError::Store)?;
@@ -2085,6 +2120,23 @@ fn run_registre(arguments: RegistreArgs, migrate: bool) -> Result<String, CliErr
             Ok(match outcome {
                 AppendOutcome::Appended => "registre refuter: appended".into(),
                 AppendOutcome::IdempotentNoop => "registre refuter: idempotent_noop".into(),
+            })
+        }
+        RegistreAction::Rectifier {
+            constat_id,
+            raison,
+            reference,
+            date,
+        } => {
+            maicie::preuve::ensure_reference_fermeture_at_write(&reference).map_err(|error| {
+                CliError::Catalogue(CatalogueError::TransitionInvalide(error.to_string()))
+            })?;
+            let outcome = journal
+                .rectify_constat_attested(&constat_id, raison, &reference, &date)
+                .map_err(CliError::Catalogue)?;
+            Ok(match outcome {
+                AppendOutcome::Appended => "registre rectifier: appended".into(),
+                AppendOutcome::IdempotentNoop => "registre rectifier: idempotent_noop".into(),
             })
         }
         RegistreAction::Requalifier {
@@ -3768,7 +3820,8 @@ mod tests {
                 action: RegistreAction::List {
                     fermes: false,
                     refutes: false,
-                    attente: false
+                    attente: false,
+                    rectifies: false,
                 },
                 ..
             })
@@ -3820,7 +3873,8 @@ mod tests {
                 action: RegistreAction::List {
                     fermes: false,
                     refutes: false,
-                    attente: true
+                    attente: true,
+                    rectifies: false,
                 },
                 ..
             })
