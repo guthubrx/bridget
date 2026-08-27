@@ -96,6 +96,47 @@ impl Metrics {
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 const PRESENCE_RETENTION: Duration = Duration::from_secs(300);
 
+/// Gestionnaires de signaux du **service** daemon uniquement.
+///
+/// Sous `cfg(test)`, no-op volontaire : un binaire de test qui hériterait de
+/// ces handlers (SIGTERM → drapeau sans `_exit`, SIGINT/SIGHUP ignorés)
+/// devient ininterruptible. Les suites interrompues laissent alors des
+/// orphelins adoptés par launchd, sourds à tout signal propre.
+#[cfg(test)]
+fn install_daemon_signal_handlers() {}
+
+#[cfg(not(test))]
+fn install_daemon_signal_handlers() {
+    // Seul SIGTERM déclenche le shutdown propre (c'est ce que launchd/systemd envoie).
+    // SIGINT (Ctrl+C) est ignoré en mode daemon — l'utilisateur doit utiliser
+    // launchctl stop ou kill -TERM pour arrêter le daemon.
+    unsafe {
+        let _ = signal_hook::low_level::register(signal_hook::consts::SIGTERM, || {
+            eprintln!(
+                "[BRIDGET] *** SIGTERM REÇU *** à {}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            );
+            SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+        });
+        let _ = signal_hook::low_level::register(signal_hook::consts::SIGINT, || {
+            eprintln!(
+                "[BRIDGET] *** SIGINT REÇU (ignoré) *** à {}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            );
+        });
+        // Ignorer SIGHUP (envoyé quand le terminal se ferme)
+        let _ = signal_hook::low_level::register(signal_hook::consts::SIGHUP, || {
+            eprintln!("[BRIDGET] *** SIGHUP REÇU (ignoré) ***");
+        });
+    }
+}
+
 /// Retain : horloge **lien** seule (`link_seen`). Aucun état — y compris
 /// `connected` — n'est immortel (lot B, composé avec A). La capacité
 /// (`capacity_seen`) reste exposée par `who` (`last_seen_secs`) mais ne
@@ -2692,35 +2733,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     // On utilise un flag atomique simple. Le shutdown propre (notification
     // des wrappers) est fait dans la boucle principale quand elle détecte le flag.
     SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
-
-    // Seul SIGTERM déclenche le shutdown propre (c'est ce que launchd/systemd envoie).
-    // SIGINT (Ctrl+C) est ignoré en mode daemon — l'utilisateur doit utiliser
-    // launchctl stop ou kill -TERM pour arrêter le daemon.
-    unsafe {
-        let _ = signal_hook::low_level::register(signal_hook::consts::SIGTERM, || {
-            eprintln!(
-                "[BRIDGET] *** SIGTERM REÇU *** à {}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            );
-            SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
-        });
-        let _ = signal_hook::low_level::register(signal_hook::consts::SIGINT, || {
-            eprintln!(
-                "[BRIDGET] *** SIGINT REÇU (ignoré) *** à {}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            );
-        });
-        // Ignorer SIGHUP (envoyé quand le terminal se ferme)
-        let _ = signal_hook::low_level::register(signal_hook::consts::SIGHUP, || {
-            eprintln!("[BRIDGET] *** SIGHUP REÇU (ignoré) ***");
-        });
-    }
+    install_daemon_signal_handlers();
 
     // Boucle d'acceptation avec timeout pour vérifier shutdown
     listener.set_nonblocking(true)?;
@@ -6780,6 +6793,88 @@ pub struct DaemonStatus {
     pub agents: Vec<bridget_transport::protocol::AgentInfo>,
     pub message_count: usize,
     pub build_id: Option<String>,
+}
+
+#[cfg(test)]
+mod signal_disposition_tests {
+    use super::install_daemon_signal_handlers;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    const CHILD_ENV: &str = "BRIDGET_SIGNAL_DISPOSITION_CHILD";
+    const TERM_DEADLINE: Duration = Duration::from_secs(2);
+
+    /// Enfant de l'oracle : emprunte le chemin d'installation des signaux du
+    /// daemon (no-op sous `cfg(test)`), puis reste vivant jusqu'à un TERM.
+    #[test]
+    #[ignore]
+    fn signal_disposition_child() {
+        if std::env::var(CHILD_ENV).ok().as_deref() != Some("1") {
+            return;
+        }
+        install_daemon_signal_handlers();
+        loop {
+            std::thread::sleep(Duration::from_secs(60));
+        }
+    }
+
+    fn assert_dies_on_term(mut child: std::process::Child, label: &str) {
+        // Prouve d'abord qu'il était vivant — sinon l'oracle passe sur une
+        // projection vide (processus déjà mort, TERM jamais évalué).
+        std::thread::sleep(Duration::from_millis(150));
+        assert!(
+            child.try_wait().expect("try_wait").is_none(),
+            "{label}: déjà mort avant TERM — projection vide"
+        );
+        assert_eq!(
+            unsafe { libc::kill(child.id() as i32, libc::SIGTERM) },
+            0,
+            "{label}: kill(SIGTERM) a échoué"
+        );
+        let deadline = Instant::now() + TERM_DEADLINE;
+        loop {
+            if child.try_wait().expect("try_wait").is_some() {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{label}: encore vivant après SIGTERM — le binaire de test \
+                 a hérité d'un gestionnaire qui empêche la mort propre"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Oracle : un binaire de test qui a emprunté `install_daemon_signal_handlers`
+    /// DOIT mourir sous TERM. La baseline `sleep` prouve d'abord que la mesure
+    /// elle-même fonctionne (sinon projection vide).
+    #[test]
+    fn binaire_de_test_meurt_sous_term_apres_install_signaux_daemon() {
+        let baseline = Command::new("sleep")
+            .arg("120")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep baseline");
+        assert_dies_on_term(baseline, "baseline sleep (disposition par défaut)");
+
+        let child = Command::new(std::env::current_exe().expect("current_exe"))
+            .arg("--exact")
+            .arg("daemon::signal_disposition_tests::signal_disposition_child")
+            .arg("--ignored")
+            .arg("--nocapture")
+            .env(CHILD_ENV, "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn signal_disposition_child");
+        assert_dies_on_term(
+            child,
+            "binaire de test après install_daemon_signal_handlers",
+        );
+    }
 }
 
 #[cfg(test)]
