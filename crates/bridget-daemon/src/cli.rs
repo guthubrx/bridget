@@ -3192,6 +3192,7 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
         cell(a.effort.as_deref()).to_string()
     });
     let rate_limit_w = column("LIMITE", &|a: &AgentInfo| format_rate_limit(a));
+    let disk_w = column("DISQUE", &|a: &AgentInfo| format_disk_space(a));
 
     let mut output = String::new();
     match filter {
@@ -3200,14 +3201,14 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
     }
     writeln!(
         output,
-        "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  ÉTAT",
-        "NOM", "TYPE", "HÔTE", "OS", "TRANSPORT", "CANAL", "MODE", "LOCALISATION", "DOMAINE", "MODÈLE", "EFFORT", "LIMITE"
+        "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {:<disk_w$}  ÉTAT",
+        "NOM", "TYPE", "HÔTE", "OS", "TRANSPORT", "CANAL", "MODE", "LOCALISATION", "DOMAINE", "MODÈLE", "EFFORT", "LIMITE", "DISQUE"
     )
     .unwrap();
     for agent in agents {
         writeln!(
             output,
-            "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {}",
+            "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {:<disk_w$}  {}",
             agent.name,
             agent.agent_type,
             agent.host,
@@ -3220,6 +3221,7 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
             format_model(agent),
             cell(agent.effort.as_deref()),
             format_rate_limit(agent),
+            format_disk_space(agent),
             agent.state
         )
         .unwrap();
@@ -3255,6 +3257,21 @@ fn format_rate_limit(agent: &AgentInfo) -> String {
         .map(format_one_rate_limit)
         .collect::<Vec<_>>()
         .join(" · ")
+}
+
+/// Affiche la dernière photographie d'espace libre, sans en déduire une
+/// pression disque ni une action. L'absence reste explicitement inconnue.
+fn format_disk_space(agent: &AgentInfo) -> String {
+    agent
+        .disk_space
+        .as_ref()
+        .map(|fact| {
+            format!(
+                "{:.1} Gio libres",
+                fact.free_bytes as f64 / 1024_f64.powi(3)
+            )
+        })
+        .unwrap_or_else(|| "—".to_string())
 }
 
 fn format_one_rate_limit(limit: &bridget_transport::protocol::RateLimitFact) -> String {
@@ -3448,14 +3465,14 @@ fn cmd_reaper(args: &[String]) {
     let sub = args.first().map(String::as_str).unwrap_or("");
     if sub != "report" {
         eprintln!(
-            "usage: bridget reaper report [--json] [--state-dir DIR] [--tmp DIR] [--min-age-secs N]"
+            "usage: bridget reaper report --tmp DIR [--json] [--state-dir DIR] [--min-age-secs N]"
         );
         eprintln!("phase observer uniquement — aucune action destructive n'existe");
         std::process::exit(2);
     }
     let mut json_output = false;
     let mut state_dir = crate::reaper::default_state_dir();
-    let mut tmp_dir = std::env::temp_dir();
+    let mut tmp_dir = None;
     let mut min_age_secs = crate::reaper::DEFAULT_MIN_AGE_SECS;
     let mut i = 1;
     while i < args.len() {
@@ -3471,7 +3488,7 @@ fn cmd_reaper(args: &[String]) {
                 }
             },
             "--tmp" => match option_value(args, &mut i, "--tmp") {
-                Ok(value) => tmp_dir = PathBuf::from(value),
+                Ok(value) => tmp_dir = Some(PathBuf::from(value)),
                 Err(error) => {
                     eprintln!("bridget reaper: {error}");
                     std::process::exit(2);
@@ -3498,6 +3515,14 @@ fn cmd_reaper(args: &[String]) {
         i += 1;
     }
 
+    let tmp_dir = require_explicit_reaper_tmp(tmp_dir).unwrap_or_else(|error| {
+        eprintln!("bridget reaper: {error}");
+        eprintln!(
+            "usage: bridget reaper report --tmp DIR [--json] [--state-dir DIR] [--min-age-secs N]"
+        );
+        std::process::exit(2);
+    });
+
     // Relève disque à chaque observation (fait attesté, pas de panique auto).
     crate::disk_hygiene::warn_if_disk_low(Path::new("/"));
 
@@ -3521,6 +3546,14 @@ fn cmd_reaper(args: &[String]) {
             std::process::exit(1);
         }
     }
+}
+
+/// Une racine explicite évite de regarder silencieusement `TMPDIR` de la
+/// machine courante, qui peut être un sous-répertoire sans rapport avec les
+/// arbres de travail à examiner.
+fn require_explicit_reaper_tmp(tmp_dir: Option<PathBuf>) -> Result<PathBuf, String> {
+    tmp_dir
+        .ok_or_else(|| "--tmp DIR est obligatoire : aucune racine TMPDIR implicite".to_string())
 }
 
 fn parse_cleanup_args(args: &[String]) -> Result<(), String> {
@@ -3678,6 +3711,19 @@ mod hook_tests {
 
     fn argv(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn reaper_exige_une_racine_explicitement_choisie() {
+        assert!(
+            require_explicit_reaper_tmp(None)
+                .unwrap_err()
+                .contains("--tmp DIR est obligatoire")
+        );
+        assert_eq!(
+            require_explicit_reaper_tmp(Some(PathBuf::from("/tmp"))).unwrap(),
+            PathBuf::from("/tmp")
+        );
     }
 
     #[test]
@@ -4478,6 +4524,7 @@ mod hook_tests {
                 })
                 .collect(),
             model_mismatch: None,
+            disk_space: None,
         };
         let rendered = format_rate_limit(&agent);
         assert!(rendered.contains("5h 19% rst "), "{rendered}");
@@ -5251,10 +5298,17 @@ mod idempotency_projection_tests {
             effort: None,
             rate_limits: vec![],
             model_mismatch: None,
+            disk_space: None,
         };
+        let mut acp = agent("acp-gere", Some(PresenceMode::Acp), None);
+        acp.disk_space = Some(bridget_transport::protocol::DiskSpaceFact {
+            volume: "/".to_string(),
+            free_bytes: 47_300_000_000,
+            observed_at_unix: 1_788_000_000,
+        });
         let rendered = render_who(
             &[
-                agent("acp-gere", Some(PresenceMode::Acp), None),
+                acp,
                 agent(
                     "tmux-interactif",
                     Some(PresenceMode::Tmux),
@@ -5270,6 +5324,8 @@ mod idempotency_projection_tests {
         assert!(rendered.contains("CANAL"));
         assert!(rendered.contains("LOCALISATION"));
         assert!(rendered.contains("LIMITE"));
+        assert!(rendered.contains("DISQUE"));
+        assert!(rendered.contains("44.1 Gio libres"));
         assert!(rendered.contains("acp-gere"));
         assert!(rendered.contains("tmux-interactif"));
         assert!(rendered.contains("cli-ephemere"));
@@ -5306,6 +5362,7 @@ mod idempotency_projection_tests {
                 used_percent: Some(19),
             }],
             model_mismatch: None,
+            disk_space: None,
         };
         let rendered = format_rate_limit(&agent);
         assert!(rendered.starts_with("5h 19% rst "), "{rendered}");
@@ -5368,6 +5425,7 @@ mod idempotency_projection_tests {
             effort: None,
             rate_limits: vec![],
             model_mismatch: None,
+            disk_space: None,
         };
         assert_eq!(format_model(&agent), "claude-opus-5");
         agent.model_mismatch = Some(bridget_transport::protocol::ModelMismatchFact {

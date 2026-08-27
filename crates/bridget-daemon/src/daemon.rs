@@ -7,9 +7,9 @@ use bridget_transport::greffe_authorization::{
 };
 use bridget_transport::protocol::{
     AttachRefusal, CLIENT_CONTRACT_VERSION, COORDINATION_EVENTS_VERSION,
-    COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole, IdempotencyIssue,
-    PresenceMode, REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION, ServiceCapability,
-    ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
+    COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole, DiskSpaceFact,
+    IdempotencyIssue, PresenceMode, REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION,
+    ServiceCapability, ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
@@ -409,6 +409,9 @@ struct Presence {
     /// Une échéance plutôt qu'un booléen : l'expiration devient une simple
     /// comparaison à la lecture, sans tâche de fond pour balayer les statuts.
     dnd_until: Option<Instant>,
+    /// Relevé local transmis par le wrapper juste après Register. Ce fait est
+    /// affiché uniquement : il ne pilote aucune politique du daemon.
+    disk_space: Option<DiskSpaceFact>,
 }
 
 impl Presence {
@@ -2307,6 +2310,7 @@ impl DaemonState {
                         presence.model.as_deref(),
                         presence.served_model.as_deref(),
                     ),
+                    disk_space: presence.disk_space.clone(),
                 })
             })
             .collect();
@@ -2348,6 +2352,7 @@ impl DaemonState {
                 effort,
                 rate_limits: Vec::new(),
                 model_mismatch: None,
+                disk_space: None,
             });
         }
         let listed_names: std::collections::HashSet<String> =
@@ -2378,6 +2383,7 @@ impl DaemonState {
                     presence.model.as_deref(),
                     presence.served_model.as_deref(),
                 ),
+                disk_space: presence.disk_space.clone(),
             });
         }
         agents.sort_by(|left, right| left.name.cmp(&right.name));
@@ -3923,6 +3929,9 @@ fn handle_register_with_channel(
                 let served_model = previous
                     .as_ref()
                     .and_then(|presence| presence.served_model.clone());
+                let disk_space = previous
+                    .as_ref()
+                    .and_then(|presence| presence.disk_space.clone());
                 // Une reconnexion par un binaire antérieur au champ conserve
                 // l'observation déjà attestée ; une présence historique sans
                 // valeur reste volontairement inconnue.
@@ -4069,6 +4078,7 @@ fn handle_register_with_channel(
                         domain: derived_domain.clone(),
                         derived_domain,
                         dnd_until,
+                        disk_space,
                     },
                 );
                 schedule_idempotent_delivery_recovery(state, conn_id, &instance_id);
@@ -6828,6 +6838,28 @@ fn handle_wrapper_message(
             Some(response)
         }
 
+        WrapperToDaemon::DiskSpace { fact } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
+                warn!(
+                    "relevé d'espace disque ignoré avant l'enregistrement: {}",
+                    conn_id
+                );
+                return None;
+            };
+            let Some(presence) = st.presences.get_mut(&instance_id) else {
+                warn!(
+                    "relevé d'espace disque ignoré sans présence: {}",
+                    instance_id
+                );
+                return None;
+            };
+            // Fait d'inventaire seulement : surtout ne pas toucher aux
+            // horloges ou à l'état, qui gouvernent la disponibilité.
+            presence.disk_space = Some(fact);
+            None
+        }
+
         WrapperToDaemon::JournalReady => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
@@ -8342,6 +8374,7 @@ mod presence_tests {
                 derived_domain: Some("projet-a".to_string()),
                 domain: Some("projet-a".to_string()),
                 dnd_until: None,
+                disk_space: None,
             },
         );
         state.router.unregister_by_conn("conn-1");
@@ -8424,6 +8457,7 @@ mod presence_tests {
                 derived_domain: None,
                 domain: None,
                 dnd_until: None,
+                disk_space: None,
             },
         );
         (state, config)
@@ -8608,6 +8642,39 @@ mod presence_tests {
             "trame reçue par la cible: {delivered:?}"
         );
         assert_sender_last_seen(&mut shared.lock().unwrap(), false);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn relevé_disque_post_enregistrement_est_projete_sans_changer_la_presence() {
+        let (state, config) = state_with_registered_agent("releve-disque");
+        let shared = Arc::new(Mutex::new(state));
+        let fact = DiskSpaceFact {
+            volume: "/".to_string(),
+            free_bytes: 47_300_000_000,
+            observed_at_unix: 1_788_000_000,
+        };
+
+        assert!(
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::DiskSpace { fact: fact.clone() },
+                &shared,
+            )
+            .is_none()
+        );
+
+        let mut state = shared.lock().unwrap();
+        let presence = state.presences.get("instance-1").unwrap();
+        assert_eq!(
+            presence.state, "connected",
+            "le relevé ne pilote pas l'état"
+        );
+        assert_eq!(presence.disk_space, Some(fact.clone()));
+        let agents = state.agent_infos();
+        assert_eq!(agents[0].disk_space, Some(fact));
+        drop(state);
+        drop(shared);
         let _ = std::fs::remove_file(config.db_path);
     }
 
@@ -11686,6 +11753,7 @@ mod presence_tests {
                 derived_domain: None,
                 domain: None,
                 dnd_until: None,
+                disk_space: None,
             },
         );
         let (writer_stream, mut peer) = UnixStream::pair().unwrap();
@@ -11858,6 +11926,7 @@ mod presence_tests {
                 derived_domain: None,
                 domain: None,
                 dnd_until: None,
+                disk_space: None,
             },
         );
         let (writer_stream, mut peer) = UnixStream::pair().unwrap();

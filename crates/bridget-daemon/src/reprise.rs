@@ -1151,6 +1151,7 @@ mod tests {
                     effort: None,
                     rate_limits: Default::default(),
                     model_mismatch: None,
+                    disk_space: None,
                 }],
                 message_count: Some(3),
                 build_id: Some("abc123".to_string()),

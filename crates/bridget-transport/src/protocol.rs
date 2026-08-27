@@ -987,6 +987,10 @@ pub enum WrapperToDaemon {
         #[serde(default)]
         journal_available: Option<bool>,
     },
+    /// Fait d'espace disque relevé par le wrapper juste après son
+    /// enregistrement. Informatif uniquement : le daemon le projette dans
+    /// l'annuaire sans l'utiliser pour accepter, refuser ou arrêter un agent.
+    DiskSpace { fact: DiskSpaceFact },
     /// Le pilote a ouvert son journal append-only pour cette connexion. Ce
     /// signal distinct du Register évite de déduire attach du mode ACP.
     JournalReady,
@@ -1659,6 +1663,17 @@ pub fn decode<T: for<'de> Deserialize<'de>>(line: &str) -> Result<T, serde_json:
     serde_json::from_str(line)
 }
 
+/// Espace libre attesté par le wrapper qui travaille sur ce volume.
+///
+/// C'est une photographie locale, pas une consigne de ramassage. Elle sert à
+/// voir quel disque est réellement sollicité avant toute décision humaine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiskSpaceFact {
+    pub volume: String,
+    pub free_bytes: u64,
+    pub observed_at_unix: i64,
+}
+
 /// Information sur un agent connecté.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "AgentInfoWire")]
@@ -1707,6 +1722,9 @@ pub struct AgentInfo {
     /// coïncident. Informational seulement : aucun refus ni bascule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_mismatch: Option<ModelMismatchFact>,
+    /// Dernier espace libre attesté par cette machine. Informatif seulement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_space: Option<DiskSpaceFact>,
 }
 
 /// Forme fil de lecture : accepte l'ancien champ mono-fenêtre `rate_limit`
@@ -1743,6 +1761,8 @@ struct AgentInfoWire {
     rate_limit: Option<RateLimitFact>,
     #[serde(default)]
     model_mismatch: Option<ModelMismatchFact>,
+    #[serde(default)]
+    disk_space: Option<DiskSpaceFact>,
 }
 
 impl From<AgentInfoWire> for AgentInfo {
@@ -1770,6 +1790,7 @@ impl From<AgentInfoWire> for AgentInfo {
             effort: wire.effort,
             rate_limits,
             model_mismatch: wire.model_mismatch,
+            disk_space: wire.disk_space,
         }
     }
 }
@@ -2398,6 +2419,26 @@ mod tests {
         assert!(info.channel.is_none());
         assert!(info.rate_limits.is_empty());
         assert!(info.model_mismatch.is_none());
+        assert!(info.disk_space.is_none());
+    }
+
+    #[test]
+    fn fait_espace_disque_post_enregistrement_garde_sa_valeur_attestee() {
+        let message = WrapperToDaemon::DiskSpace {
+            fact: DiskSpaceFact {
+                volume: "/".to_string(),
+                free_bytes: 47_300_000_000,
+                observed_at_unix: 1_788_000_000,
+            },
+        };
+        let encoded = encode(&message).unwrap();
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encoded).unwrap(),
+            WrapperToDaemon::DiskSpace { fact }
+                if fact.volume == "/"
+                    && fact.free_bytes == 47_300_000_000
+                    && fact.observed_at_unix == 1_788_000_000
+        ));
     }
 
     #[test]
