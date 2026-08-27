@@ -2044,9 +2044,11 @@ fn compare_open_constats(left: &OpenConstatView, right: &OpenConstatView) -> Ord
         .then_with(|| left.id.cmp(&right.id))
 }
 
-/// Sections optionnelles de `registre list`.
-/// Défaut : ouverts seuls + pied (les trois comptes). `--fermes` / `--refutes`
-/// / `--attente` déplient le corps correspondant — jamais une réécriture.
+/// Sections de `registre list`.
+/// Défaut : ouverts seuls + pied (les trois comptes).
+/// `--fermes` / `--refutes` **restreignent** le corps à cet état (raison + réf) —
+/// ils n'ajoutent pas une section sous le mur des ouverts. `--attente` seul
+/// reste un dépliage additif sur la vue des ouverts.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RegistreListSections {
     pub fermes: bool,
@@ -2070,40 +2072,46 @@ pub fn render_registre_list_with_attente(view: &RegistreView, show_attente: bool
     )
 }
 
-/// Vue filtrable : ouverts toujours ; fermés / réfutés / attente sur drapeau.
+/// Vue filtrable : ouverts par défaut ; `--fermes` / `--refutes` remplacent le
+/// corps (pas un élargissement). Pied toujours à trois comptes.
 pub fn render_registre_list_sections(view: &RegistreView, sections: RegistreListSections) -> String {
     let mut out = String::new();
     out.push_str("registre list\n");
-    if view.ouverts.is_empty() {
-        out.push_str("(aucun constat ouvert)\n");
-    } else {
-        for item in &view.ouverts {
-            let badge = if item.requalifie {
-                "[REQUALIFIÉ]"
-            } else {
-                "[OUVERT]"
-            };
-            let recurrence = item
-                .recurrence_of
-                .as_deref()
-                .map(|id| format!(" recurrence_of={id}"))
-                .unwrap_or_default();
-            let gate = if item.gate_failed { " gate=failed" } else { "" };
-            out.push_str(&format!(
-                "- {badge} [{severity:?}] nature={nature} {id} {date} source={source_kind}/{source_id}{recurrence}{gate}\n  {text}\n",
-                severity = item.severity,
-                nature = item.nature.as_str(),
-                id = item.id,
-                date = item.date,
-                source_kind = match item.mission_source.kind {
-                    MissionSourceKind::Mission => "mission",
-                    MissionSourceKind::Incident => "incident",
-                    MissionSourceKind::Review => "review",
-                    MissionSourceKind::Gate => "gate",
-                },
-                source_id = item.mission_source.id,
-                text = item.text,
-            ));
+    // Restriction : dès qu'on demande fermés ou réfutés, les ouverts quittent
+    // le corps — sinon 185 ouverts noient les 40 fermés et la relecture ment.
+    let show_ouverts = !sections.fermes && !sections.refutes;
+    if show_ouverts {
+        if view.ouverts.is_empty() {
+            out.push_str("(aucun constat ouvert)\n");
+        } else {
+            for item in &view.ouverts {
+                let badge = if item.requalifie {
+                    "[REQUALIFIÉ]"
+                } else {
+                    "[OUVERT]"
+                };
+                let recurrence = item
+                    .recurrence_of
+                    .as_deref()
+                    .map(|id| format!(" recurrence_of={id}"))
+                    .unwrap_or_default();
+                let gate = if item.gate_failed { " gate=failed" } else { "" };
+                out.push_str(&format!(
+                    "- {badge} [{severity:?}] nature={nature} {id} {date} source={source_kind}/{source_id}{recurrence}{gate}\n  {text}\n",
+                    severity = item.severity,
+                    nature = item.nature.as_str(),
+                    id = item.id,
+                    date = item.date,
+                    source_kind = match item.mission_source.kind {
+                        MissionSourceKind::Mission => "mission",
+                        MissionSourceKind::Incident => "incident",
+                        MissionSourceKind::Review => "review",
+                        MissionSourceKind::Gate => "gate",
+                    },
+                    source_id = item.mission_source.id,
+                    text = item.text,
+                ));
+            }
         }
     }
     if sections.fermes {
@@ -2851,8 +2859,10 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// (B) Fermé quitte les ouverts ; prouve d'abord l'existence ; un autre ouvert reste.
-    /// Mutant sans transition → encore dans ouverts. Mutant qui vide toute la vue → compagnon absent.
+    /// (B) Fermé quitte les ouverts ; prouve d'abord l'existence ; un autre ouvert reste
+    /// dans la vue **par défaut**. La vue `--fermes` montre le fermé (raison+réf) et
+    /// n'élargit plus avec les ouverts — mutant qui garde l'additif : compagnon [OUVERT]
+    /// dans `--fermes` → B meurt. Mutant qui omet le fermé de `--fermes` → B meurt.
     #[allow(non_snake_case)]
     #[test]
     fn TEMOIN_B_registre_ferme_quitte_les_ouverts_sans_vider_la_vue() {
@@ -2895,6 +2905,22 @@ mod tests {
         assert_eq!(apres.footer.ouverts, 1);
         assert_eq!(apres.footer.traites, 1);
         assert_eq!(apres.footer.refutes, 0);
+
+        // Contrôle positif vue défaut : compagnon présent, fermé retiré.
+        let defaut = render_registre_list(&apres);
+        assert!(
+            defaut.contains("[OUVERT]") && defaut.contains("temoin-reste-ouvert"),
+            "défaut doit encore montrer le compagnon ouvert: {defaut}"
+        );
+        assert!(
+            !defaut.contains("temoin-a-fermer") && !defaut.contains("[FERMÉ]"),
+            "défaut ne doit plus montrer ni lister le fermé: {defaut}"
+        );
+        assert!(
+            defaut.contains("pied: 1 DÛ") && defaut.contains("1 FERMÉS, 0 RÉFUTÉS"),
+            "pied trois comptes après fermeture, reçu: {defaut}"
+        );
+
         let rendered = render_registre_list_sections(
             &apres,
             RegistreListSections {
@@ -2907,11 +2933,15 @@ mod tests {
             rendered.contains("[FERMÉ] temoin-a-fermer")
                 && rendered.contains("raison=corrige_par_lot")
                 && rendered.contains("ref=sha:a9353c1"),
-            "fermeture avec motif+réf en dur, reçu: {rendered}"
+            "fermeture avec motif+réf en dur dans --fermes, reçu: {rendered}"
         );
         assert!(
-            rendered.contains("temoin-reste-ouvert"),
-            "compagnon ouvert encore visible: {rendered}"
+            !rendered.contains("[OUVERT]") && !rendered.contains("temoin-reste-ouvert"),
+            "--fermes restreint : pas d'ouverts (sinon 185+40=élargissement), reçu: {rendered}"
+        );
+        assert!(
+            rendered.contains("pied: 1 DÛ") && rendered.contains("1 FERMÉS, 0 RÉFUTÉS"),
+            "pied inchangé sous filtre, reçu: {rendered}"
         );
         // Append-only : le fichier contient encore l'add d'origine + transition.
         let raw = fs::read_to_string(root.join("c.jsonl")).unwrap();
@@ -2923,6 +2953,86 @@ mod tests {
         assert!(
             raw.contains("\"kind\":\"add\"") && raw.contains("\"kind\":\"transition\""),
             "pas de réécriture destructive: {raw}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// (D) Oracle ciblé : une entrée fermée DOIT apparaître dans la vue des fermés.
+    /// Meurt sur projection vide (prouve d'abord défaut ≠ vide et fermé hors défaut).
+    /// Mutant : `--fermes` omet [FERMÉ] ou n'écrit pas raison/réf → D seul meurt.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_D_vue_fermes_montre_lentree_fermee_avec_preuve() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-temoin-d-vue-fermes-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut journal = CatalogueJournal::open(root.join("c.jsonl")).unwrap();
+        journal
+            .append_add(add_avec_texte(
+                "constat/echeance-dix-minutes-condamne-tout-tour-long",
+                "ECHEANCE QUI CONDAMNE",
+            ))
+            .unwrap();
+        journal
+            .append_add(add_avec_texte(
+                "temoin-compagnon-ouvert",
+                "RESTE OUVERT POUR CONTROLE",
+            ))
+            .unwrap();
+
+        let avant = render_registre_list(&project_registre(&journal.read_entries().unwrap()));
+        assert!(
+            avant.contains("[OUVERT]")
+                && avant.contains("constat/echeance-dix-minutes-condamne-tout-tour-long")
+                && avant.contains("temoin-compagnon-ouvert"),
+            "précondition défaut non vide (sinon assertion négative vacue): {avant}"
+        );
+
+        journal
+            .close_constat_attested(
+                "constat/echeance-dix-minutes-condamne-tout-tour-long",
+                RaisonFermeture::CorrigeEnProduction,
+                "sha:c3782e7b1c398ccf19d26d262f4f7cc169bcd16b",
+                "2026-08-27T01:00:00Z",
+            )
+            .unwrap();
+        let apres = project_registre(&journal.read_entries().unwrap());
+        let defaut = render_registre_list(&apres);
+        assert!(
+            defaut.contains("[OUVERT]") && defaut.contains("temoin-compagnon-ouvert"),
+            "contrôle positif : un ouvert apparaît encore au défaut: {defaut}"
+        );
+        assert!(
+            !defaut.contains("constat/echeance-dix-minutes-condamne-tout-tour-long"),
+            "fermé a quitté le défaut: {defaut}"
+        );
+
+        let fermes = render_registre_list_sections(
+            &apres,
+            RegistreListSections {
+                fermes: true,
+                refutes: false,
+                attente: false,
+            },
+        );
+        assert!(
+            fermes.contains("--- fermés")
+                && fermes.contains(
+                    "[FERMÉ] constat/echeance-dix-minutes-condamne-tout-tour-long"
+                )
+                && fermes.contains("raison=corrige_en_production")
+                && fermes.contains("ref=sha:c3782e7b1c398ccf19d26d262f4f7cc169bcd16b"),
+            "vue --fermes doit montrer le fermé avec raison typée et référence: {fermes}"
+        );
+        assert!(
+            !fermes.contains("[OUVERT]") && !fermes.contains("temoin-compagnon-ouvert"),
+            "vue --fermes ne doit pas élargir aux ouverts: {fermes}"
+        );
+        assert!(
+            fermes.contains("1 FERMÉS, 0 RÉFUTÉS"),
+            "pied distingue fermés/réfutés: {fermes}"
         );
         let _ = fs::remove_dir_all(&root);
     }
@@ -2955,7 +3065,7 @@ mod tests {
         let rendered = render_registre_list_sections(
             &view,
             RegistreListSections {
-                fermes: true,
+                fermes: false,
                 refutes: true,
                 attente: false,
             },
@@ -2964,11 +3074,11 @@ mod tests {
             rendered.contains("[RÉFUTÉ] temoin-a-refuter")
                 && rendered.contains("raison=charge_fausse_mesuree")
                 && rendered.contains("ref=mesure:4/4"),
-            "réfutation exacte, reçu: {rendered}"
+            "réfutation exacte dans --refutes, reçu: {rendered}"
         );
         assert!(
-            !rendered.contains("[FERMÉ] temoin-a-refuter"),
-            "ne doit pas se lire comme fermé: {rendered}"
+            !rendered.contains("[FERMÉ]") && !rendered.contains("[OUVERT]"),
+            "--refutes restreint, pas fermé ni ouvert: {rendered}"
         );
         assert!(
             rendered.contains("0 FERMÉS, 1 RÉFUTÉS"),
