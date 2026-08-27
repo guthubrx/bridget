@@ -311,7 +311,11 @@ pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDoma
                         "cible de revue invalide",
                     ));
                 }
-                _ => unreachable!("version filtrée avant le décodage de la charge"),
+                _ => {
+                    return Err(GuichetDomainError::InvalidEnvelope(
+                        "version incompatible avec la délégation",
+                    ));
+                }
             }
             if payload.goal.trim().is_empty() || payload.goal.len() > 16 * 1024 {
                 return Err(GuichetDomainError::InvalidEnvelope(
