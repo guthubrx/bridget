@@ -16,6 +16,7 @@ fn claim(request_id: &str, bytes: Vec<u8>) -> GuichetClaim {
         issuer_scope: "scope-0123456789abcdef0123456789abcdef".to_string(),
         request_id: request_id.to_string(),
         canonical_request: bytes,
+        authorization_attestation: None,
         claimed_at: 1_000,
         claim_generation: 1,
         claim_token: "claim-0123456789abcdef0123456789abcdef".to_string(),

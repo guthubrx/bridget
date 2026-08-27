@@ -1017,6 +1017,7 @@ mod mutation_tests {
             issuer_scope: "scope-test".to_string(),
             request_id: "request-test".to_string(),
             canonical_request,
+            authorization_attestation: None,
             claimed_at: 1_000,
             claim_generation: generation,
             claim_token: token.to_string(),

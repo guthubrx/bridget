@@ -33,7 +33,7 @@ use maicie::profiles::{
 use maicie::reconcile::{
     CoordinationReconcileAction, CoordinationReconcileReport, ReconcileError,
     reconcile_activation_startup_at, reconcile_coordination_startup_with_limits,
-    reconcile_guichet_startup_with_limits, reconcile_notification_startup_with_limits,
+    reconcile_guichet_startup_with_central_service, reconcile_notification_startup_with_limits,
     reconcile_startup_with_limits,
 };
 use maicie::routines::{
@@ -391,8 +391,12 @@ fn open_store_with_reconciliation(
     reconcile_pending(&mut store, config, limits)?;
     reconcile_activation_startup_at(&mut store, &config.bridget_socket, unix_now()?)
         .map_err(CliError::Reconcile)?;
-    reconcile_guichet_startup_with_limits(&mut store, &config.bridget_socket, unix_now()?, limits)
+    reconcile_guichet_startup_with_central_service(&mut store, config, unix_now()?, limits)
         .map_err(CliError::Reconcile)?;
+    // Une relève peut créer une outbox de délégation. Elle emprunte aussitôt
+    // le même lookup/replay durable que la commande locale, jamais une voie
+    // d'envoi spéciale au guichet.
+    reconcile_pending(&mut store, config, limits)?;
     // Une commande relève au plus un snapshot borné. Les terminaux du guichet
     // alimentent uniquement F29 ; les événements cursés n'ouvrent jamais F28.
     let coordination =
@@ -3162,6 +3166,9 @@ fn greffe_service_error_for_cli(error: GreffeServiceError) -> CliError {
         GreffeServiceError::Store(error) => CliError::Store(error),
         GreffeServiceError::Bridget(error) => CliError::Bridget(error),
         GreffeServiceError::Delegate(error) => CliError::Delegate(error),
+        GreffeServiceError::Authorization(_) => CliError::Usage(
+            bridget_transport::greffe_authorization::GREFFE_AUTHORIZATION_PUBLIC_REFUSAL,
+        ),
         GreffeServiceError::Invalid(reason) => CliError::Usage(reason),
     }
 }

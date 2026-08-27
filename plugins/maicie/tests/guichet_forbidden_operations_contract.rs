@@ -27,6 +27,8 @@ operation_corpus! {
     ServiceRequestOperation::MissionStatus => r#"{"type":"service_request","v":1,"issuer_scope":"scope-0123456789abcdef0123456789abcdef","request_id":"corpus-status","issued_at":1000,"from":"jc6","to":"maicie","operation":"mission_status","payload":{"delegation_id":"52000000-0000-4000-8000-000000000002"}}"#,
     ServiceRequestOperation::DeadlineQuestion => r#"{"type":"service_request","v":1,"issuer_scope":"scope-0123456789abcdef0123456789abcdef","request_id":"corpus-deadline","issued_at":1000,"from":"jc6","to":"maicie","operation":"deadline_question","payload":{"delegation_id":"52000000-0000-4000-8000-000000000002"}}"#,
     ServiceRequestOperation::Delegate => r#"{"type":"service_request","v":1,"issuer_scope":"scope-0123456789abcdef0123456789abcdef","request_id":"corpus-delegate","issued_at":1000,"from":"jc6","to":"maicie","operation":"delegate","payload":{"goal":"objectif autonome","explicit_target":"prospective","duration":"normale","suite":{"kind":"aucune"}}}"#,
+    ServiceRequestOperation::RegistreAdd => r#"{"type":"service_request","v":1,"issuer_scope":"scope-0123456789abcdef0123456789abcdef","request_id":"corpus-registre-add","issued_at":1000,"from":"jc6","to":"maicie","operation":"registre_add","payload":{"line":"constat mesure"}}"#,
+    ServiceRequestOperation::ObjectiveClose => r#"{"type":"service_request","v":1,"issuer_scope":"scope-0123456789abcdef0123456789abcdef","request_id":"corpus-objective-close","issued_at":1000,"from":"jc6","to":"maicie","operation":"objective_close","payload":{"objective_id":"51000000-0000-4000-8000-000000000001","reason":"objectif atteint"}}"#,
 }
 
 fn claim(operation: &str) -> GuichetClaim {
@@ -39,6 +41,7 @@ fn claim(operation: &str) -> GuichetClaim {
         issuer_scope: "scope-0123456789abcdef0123456789abcdef".into(),
         request_id,
         canonical_request: bytes,
+        authorization_attestation: None,
         claimed_at: 1_000,
         claim_generation: 1,
         claim_token: "claim-0123456789abcdef0123456789abcdef".into(),

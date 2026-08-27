@@ -23,6 +23,10 @@ use crate::domain::guichet::{
 };
 use crate::domain::{CoutMissionAgent, CoutMissionCompteurs, DecisionCoordination};
 use crate::store::{MaicieStore, StoreError, StoredGuichetReply};
+use bridget_transport::greffe_authorization::{
+    GreffeAuthorizationGate, GreffeAuthorizationRefusal, GreffeEffectAuthorization,
+    GreffeMutationAction,
+};
 use std::fmt;
 use uuid::Uuid;
 
@@ -42,6 +46,7 @@ pub enum GreffeServiceError {
     Store(StoreError),
     Bridget(BridgetClientError),
     Delegate(DelegateError),
+    Authorization(GreffeAuthorizationRefusal),
 }
 
 impl fmt::Display for GreffeServiceError {
@@ -59,6 +64,9 @@ impl fmt::Display for GreffeServiceError {
             Self::Store(error) => write!(formatter, "stockage du greffe impossible : {error}"),
             Self::Bridget(error) => write!(formatter, "annuaire Bridget indisponible : {error}"),
             Self::Delegate(error) => write!(formatter, "délégation du greffe impossible : {error}"),
+            Self::Authorization(error) => {
+                write!(formatter, "autorisation du greffe refusée : {error}")
+            }
         }
     }
 }
@@ -68,6 +76,7 @@ impl std::error::Error for GreffeServiceError {
         match self {
             Self::Bridget(error) => Some(error),
             Self::Delegate(error) => Some(error),
+            Self::Authorization(error) => Some(error),
             Self::Catalogue(error) => Some(error),
             Self::CatalogueReconcile(error) => Some(error),
             Self::Objective(error) => Some(error),
@@ -139,6 +148,7 @@ pub fn apply_guichet_mutation(
     {
         return Ok(stored);
     }
+    let authorization_gate = GreffeAuthorizationGate::from_environment();
     let reply = match &canonical.request {
         RequeteGuichet::Delegate(request) => {
             let client = BridgetClient::connect_with_limits(
@@ -169,9 +179,22 @@ pub fn apply_guichet_mutation(
                 dedup_retained_until: retry_until,
                 max_frame_bytes: client.limits().max_frame_bytes,
             };
-            match apply_delegate(store, config, &candidates, &delegate_request)
-                .map_err(GreffeServiceError::Delegate)?
-            {
+            let result = authorization_gate
+                .authorize_effect_then(
+                    GreffeEffectAuthorization {
+                        attestation: claim.authorization_attestation.as_ref(),
+                        action: GreffeMutationAction::Delegate,
+                        issuer_scope: &canonical.issuer_scope,
+                        request_id: &canonical.request_id,
+                        request_issued_at: canonical.issued_at,
+                        canonical_request: &claim.canonical_request,
+                        observed_at: now,
+                    },
+                    |_| apply_delegate(store, config, &candidates, &delegate_request),
+                )
+                .map_err(GreffeServiceError::Authorization)?
+                .map_err(GreffeServiceError::Delegate)?;
+            match result {
                 DelegateResult::Created(created) => MutationReply::Delegate {
                     status: DelegateMutationStatus::Created,
                     objective_id: Some(created.objective_id.to_string()),
@@ -195,7 +218,20 @@ pub fn apply_guichet_mutation(
             }
         }
         RequeteGuichet::RegistreAdd(request) => {
-            let result = append_registre_add(store, config, &request.line)?;
+            let result = authorization_gate
+                .authorize_effect_then(
+                    GreffeEffectAuthorization {
+                        attestation: claim.authorization_attestation.as_ref(),
+                        action: GreffeMutationAction::RegistreAdd,
+                        issuer_scope: &canonical.issuer_scope,
+                        request_id: &canonical.request_id,
+                        request_issued_at: canonical.issued_at,
+                        canonical_request: &claim.canonical_request,
+                        observed_at: now,
+                    },
+                    |_| append_registre_add(store, config, &request.line),
+                )
+                .map_err(GreffeServiceError::Authorization)??;
             MutationReply::RegistreAdd {
                 status: match result.outcome {
                     AppendOutcome::Appended => RegistreAddMutationStatus::Appended,
@@ -205,14 +241,29 @@ pub fn apply_guichet_mutation(
             }
         }
         RequeteGuichet::ObjectiveClose(request) => {
-            let (decision, replayed) = close_objective_idempotent(
-                store,
-                config,
-                request.objective_id,
-                &request.reason,
-                now,
-                &canonical.request_id,
-            )?;
+            let (decision, replayed) = authorization_gate
+                .authorize_effect_then(
+                    GreffeEffectAuthorization {
+                        attestation: claim.authorization_attestation.as_ref(),
+                        action: GreffeMutationAction::ObjectiveClose,
+                        issuer_scope: &canonical.issuer_scope,
+                        request_id: &canonical.request_id,
+                        request_issued_at: canonical.issued_at,
+                        canonical_request: &claim.canonical_request,
+                        observed_at: now,
+                    },
+                    |_| {
+                        close_objective_idempotent(
+                            store,
+                            config,
+                            request.objective_id,
+                            &request.reason,
+                            now,
+                            &canonical.request_id,
+                        )
+                    },
+                )
+                .map_err(GreffeServiceError::Authorization)??;
             MutationReply::ObjectiveClose {
                 objective_id: request.objective_id.to_string(),
                 decision_id: decision.id.to_string(),

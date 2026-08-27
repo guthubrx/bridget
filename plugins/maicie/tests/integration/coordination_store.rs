@@ -1638,6 +1638,7 @@ fn delivery_claim(fixture: DeliveryFixture<'_>) -> GuichetClaim {
         issuer_scope: issuer_scope.to_string(),
         request_id: fixture.request_id.to_string(),
         canonical_request,
+        authorization_attestation: None,
         claimed_at: fixture.now,
         claim_generation: 1,
         claim_token: format!("claim-f28-{}-0123456789abcdef", fixture.request_id),
