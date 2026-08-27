@@ -406,11 +406,19 @@ struct ReconciledStore {
     coordination: CoordinationReconcileReport,
 }
 
-fn open_maicie_store(path: &std::path::Path, migrate: bool) -> Result<MaicieStore, CliError> {
+/// Unique frontière d'ouverture de la base Maicie configurée par le CLI.
+/// L'attestation et l'ouverture consomment la même configuration : aucun
+/// rechargement intermédiaire ne peut dissocier le daemon vérifié de la base.
+fn open_guarded_maicie_store(
+    config: &MaicieConfig,
+    limits: BridgetClientLimits,
+    migrate: bool,
+) -> Result<MaicieStore, CliError> {
+    require_local_daemon(config, limits)?;
     if migrate {
-        MaicieStore::open_and_migrate(path)
+        MaicieStore::open_and_migrate(&config.database_path)
     } else {
-        MaicieStore::open(path)
+        MaicieStore::open(&config.database_path)
     }
     .map_err(CliError::Store)
 }
@@ -423,8 +431,7 @@ fn open_store_with_reconciliation(
     limits: BridgetClientLimits,
     migrate: bool,
 ) -> Result<ReconciledStore, CliError> {
-    require_local_daemon(config, limits)?;
-    let mut store = open_maicie_store(&config.database_path, migrate)?;
+    let mut store = open_guarded_maicie_store(config, limits, migrate)?;
     reconcile_pending(&mut store, config, limits)?;
     reconcile_activation_startup_at(&mut store, &config.bridget_socket, unix_now()?)
         .map_err(CliError::Reconcile)?;
@@ -1145,7 +1152,7 @@ fn parse_migrate(arguments: &[String]) -> Result<MigrateArgs, CliError> {
 
 fn run_migrate(arguments: MigrateArgs) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let store = MaicieStore::open_and_migrate(&config.database_path).map_err(CliError::Store)?;
+    let store = open_guarded_maicie_store(&config, BridgetClientLimits::default(), true)?;
     let version = store.schema_version().map_err(CliError::Store)?;
     Ok(format!("schéma migré vers {version}"))
 }
@@ -1652,7 +1659,7 @@ fn parse_plage(arguments: &[String]) -> Result<PlageArgs, CliError> {
 
 fn run_plage(arguments: PlageArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let mut store = open_maicie_store(&config.database_path, migrate)?;
+    let mut store = open_guarded_maicie_store(&config, BridgetClientLimits::default(), migrate)?;
     match arguments.action {
         PlageAction::Reserve {
             resource,
@@ -2056,7 +2063,7 @@ fn parse_source_kind(value: &str) -> Result<catalogue::MissionSourceKind, CliErr
 
 fn run_registre(arguments: RegistreArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let store = open_maicie_store(&config.database_path, migrate)?;
+    let store = open_guarded_maicie_store(&config, BridgetClientLimits::default(), migrate)?;
     if let RegistreAction::Add { line } = &arguments.action {
         let result =
             append_registre_add(&store, &config, line).map_err(greffe_service_error_for_cli)?;
@@ -3472,11 +3479,12 @@ impl fmt::Display for CliError {
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, DelegateError, DelegateOutput, RegistreAction, RegistreArgs,
-        SchemaPreflightOutput, candidates_from, daemon_identity_failure_detail,
-        daemon_store_is_local, delegate_error_for_cli, format_routine_approval_screen,
-        open_store_with_reconciliation, parse_command, peel_migrate_flag,
-        routine_approval_preflight, run, sanitize_terminal,
+        CliError, Command, DelegateError, DelegateOutput, MigrateArgs, PlageAction, PlageArgs,
+        RegistreAction, RegistreArgs, SchemaPreflightOutput, candidates_from,
+        daemon_identity_failure_detail, daemon_store_is_local, delegate_error_for_cli,
+        format_routine_approval_screen, open_store_with_reconciliation, parse_command,
+        peel_migrate_flag, routine_approval_preflight, run, run_migrate, run_plage, run_registre,
+        sanitize_terminal,
     };
     use bridget_transport::protocol::ReviewTarget;
     use maicie::bridget_client::{AgentInfo, BridgetClientError, DaemonIdentity};
@@ -3488,7 +3496,7 @@ mod tests {
     use std::fs;
     use std::io::{BufRead, BufReader, BufWriter, Write};
     use std::os::unix::{fs::PermissionsExt, net::UnixListener};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::thread;
     use uuid::Uuid;
 
@@ -3721,6 +3729,125 @@ mod tests {
 
         server.join().expect("daemon témoin");
         fs::remove_dir_all(root).expect("nettoyage témoin");
+    }
+
+    fn config_sans_daemon(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        fs::create_dir_all(root).expect("répertoire temporaire");
+        fs::set_permissions(root, fs::Permissions::from_mode(0o700))
+            .expect("permissions du répertoire temporaire");
+        let database = root.join("maicie.sqlite3");
+        let catalogue = root.join("catalogue.jsonl");
+        let config_path = root.join("config.json");
+        let config = MaicieConfig {
+            version: 1,
+            bridget_socket: root.join("daemon-absent.sock"),
+            database_path: database.clone(),
+            durations: DurationClasses {
+                short_secs: 30,
+                normal_secs: 60,
+                long_secs: 90,
+            },
+            status_capture_budget_ms: None,
+            catalogue_path: Some(catalogue.clone()),
+            coordination_policies: None,
+            review_project: None,
+            profiles: Vec::new(),
+        };
+        fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&config).expect("configuration JSON"),
+        )
+        .expect("écriture configuration");
+        (config_path, database, catalogue)
+    }
+
+    /// Oracle de couverture runtime : les trois entrées qui contournaient le
+    /// helper historique doivent toutes refuser avant SQLite ou le journal.
+    #[test]
+    fn garde_federee_couvre_chaque_entree_directe_du_store() {
+        let mut failures = Vec::new();
+        for (index, entry) in ["migrate", "plage-list", "registre-list"]
+            .into_iter()
+            .enumerate()
+        {
+            // Les sockets Unix sont bornées à 103 octets sur macOS. Garder la
+            // fixture courte même si TMPDIR est déjà un chemin assez long.
+            let root = std::env::temp_dir().join(format!("m54-{index}-{}", Uuid::new_v4()));
+            let (config, database, catalogue) = config_sans_daemon(&root);
+            let result = match entry {
+                "migrate" => run_migrate(MigrateArgs { config }),
+                "plage-list" => run_plage(
+                    PlageArgs {
+                        config,
+                        action: PlageAction::List,
+                    },
+                    false,
+                ),
+                "registre-list" => run_registre(
+                    RegistreArgs {
+                        config,
+                        action: RegistreAction::List {
+                            fermes: false,
+                            refutes: false,
+                            attente: false,
+                            rectifies: false,
+                        },
+                    },
+                    false,
+                ),
+                _ => unreachable!("inventaire fermé"),
+            };
+            let refused = matches!(&result, Err(CliError::DaemonStoreLocality(_)));
+            let database_created = database.exists();
+            let catalogue_created = catalogue.exists();
+            if !refused || database_created || catalogue_created {
+                failures.push(format!(
+                    "{entry}: result={result:?} sqlite={database_created} catalogue={catalogue_created}"
+                ));
+            }
+            fs::remove_dir_all(root).expect("nettoyage témoin");
+        }
+        assert!(
+            failures.is_empty(),
+            "{} sur 3 entrées contournent la garde : {}",
+            failures.len(),
+            failures.join(" ; ")
+        );
+    }
+
+    /// Oracle structurel : une nouvelle ouverture directe doit rendre le banc
+    /// rouge, même si les trois entrées connues restent correctement gardées.
+    #[test]
+    fn inventaire_des_ouvertures_sqlite_reste_derriere_l_unique_helper_garde() {
+        let source = include_str!("main.rs");
+        let needle = ["MaicieStore", "::open"].concat();
+        let lines = source.lines().collect::<Vec<_>>();
+        let sites = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.contains(&needle))
+            .map(|(index, _)| {
+                let declaration = lines[..=index]
+                    .iter()
+                    .rev()
+                    .find_map(|line| line.trim_start().strip_prefix("fn "))
+                    .expect("appel d'ouverture hors fonction");
+                let function = declaration
+                    .split_once('(')
+                    .map(|(name, _)| name)
+                    .unwrap_or(declaration)
+                    .trim();
+                format!("{function}:{}", index + 1)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sites
+                .iter()
+                .map(|site| site.split_once(':').unwrap().0)
+                .collect::<Vec<_>>(),
+            vec!["open_guarded_maicie_store", "open_guarded_maicie_store"],
+            "sites d'ouverture directe hors helper gardé : {sites:?}"
+        );
     }
 
     #[test]
