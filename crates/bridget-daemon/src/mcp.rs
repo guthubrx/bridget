@@ -1632,6 +1632,18 @@ mod tests {
 
     const FIXTURES: &str = include_str!("../tests/fixtures/mcp/fr009.jsonl");
 
+    struct EmptyProcessTree;
+
+    impl crate::mcp_identity::ProcessTree for EmptyProcessTree {
+        fn birth(&self, _pid: u32) -> Option<u64> {
+            None
+        }
+
+        fn parent(&self, _pid: u32) -> Option<u32> {
+            None
+        }
+    }
+
     fn run(lines: &[Value]) -> Vec<Value> {
         let input = lines
             .iter()
@@ -1770,6 +1782,91 @@ mod tests {
         .unwrap();
         assert_eq!(response["result"]["code"], "legacy_marker");
         assert_eq!(response["result"]["isError"], true);
+    }
+
+    #[test]
+    fn identite_mcp_unicode_est_refusee_avant_toute_execution() {
+        let root = test_socket("identity-unicode").with_extension("identity");
+        std::fs::create_dir_all(&root).unwrap();
+        let name_file = root.join("agent-name");
+        std::fs::write(&name_file, "分析\n").unwrap();
+        let marker_directory = root.join("agent-pids");
+        let resolver = || {
+            crate::mcp_identity::resolve_identity_with(
+                Some(&name_file),
+                &marker_directory,
+                Some("fixture-instance"),
+                42,
+                &EmptyProcessTree,
+            )
+        };
+        let calls = Cell::new(0);
+        let execute = |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| {
+            calls.set(calls.get() + 1);
+            Ok(json!({ "agents": [] }))
+        };
+        let request = json!({
+            "jsonrpc": "2.0", "id": 39, "method": "tools/call",
+            "params": { "name": "bridget_who", "arguments": {} }
+        });
+        let mut session = Session {
+            initialize_seen: true,
+            initialized: true,
+        };
+
+        let response = dispatch_with_executor(&request, &mut session, &resolver, &execute).unwrap();
+        let execution_count = calls.get();
+        std::fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(execution_count, 0, "le refus doit précéder tout outil");
+        assert_eq!(response["result"]["code"], "identity_not_found");
+        assert_eq!(response["result"]["isError"], true);
+    }
+
+    #[test]
+    fn identite_mcp_ascii_declenche_exactement_une_execution() {
+        let root = test_socket("identity-ascii").with_extension("identity");
+        std::fs::create_dir_all(&root).unwrap();
+        let name_file = root.join("agent-name");
+        std::fs::write(&name_file, "rc5-test\n").unwrap();
+        let marker_directory = root.join("agent-pids");
+        let resolver = || {
+            crate::mcp_identity::resolve_identity_with(
+                Some(&name_file),
+                &marker_directory,
+                Some("fixture-instance"),
+                42,
+                &EmptyProcessTree,
+            )
+        };
+        let calls = Cell::new(0);
+        let execute =
+            |identity: &crate::mcp_identity::ResolvedIdentity, name: &str, arguments: &Value| {
+                calls.set(calls.get() + 1);
+                assert_eq!(identity.name, "rc5-test");
+                assert_eq!(identity.instance_id, "fixture-instance");
+                assert_eq!(name, "bridget_who");
+                assert_eq!(arguments, &json!({}));
+                Ok(json!({ "agents": [] }))
+            };
+        let request = json!({
+            "jsonrpc": "2.0", "id": 40, "method": "tools/call",
+            "params": { "name": "bridget_who", "arguments": {} }
+        });
+        let mut session = Session {
+            initialize_seen: true,
+            initialized: true,
+        };
+
+        let response = dispatch_with_executor(&request, &mut session, &resolver, &execute).unwrap();
+        let execution_count = calls.get();
+        std::fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(
+            response["result"]["structuredContent"],
+            json!({ "agents": [] })
+        );
+        assert_eq!(execution_count, 1, "le contrôle sain doit exécuter l'outil");
     }
 
     #[test]
