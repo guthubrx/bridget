@@ -5352,6 +5352,7 @@ fn handle_wrapper_message(
                     operation,
                     payload,
                     canonical_bytes: canonical,
+                    authorization_attestation: None,
                 },
                 CLIENT_IDEMPOTENCY_HORIZON_SECS,
                 CLIENT_ISSUED_AT_TOLERANCE_SECS,

@@ -1,5 +1,6 @@
 //! Persistance SQLite — ledger, compteurs disjoncteur, historique.
 
+use bridget_transport::greffe_authorization::GreffeAuthorizationAttestation;
 use bridget_transport::protocol::{
     CoordinationEventKind, GuichetLifecycleState, GuichetOutcome, ServiceRequestOperation,
     ServiceRequestPayload,
@@ -112,6 +113,8 @@ pub struct GuichetDeposit {
     pub operation: ServiceRequestOperation,
     pub payload: ServiceRequestPayload,
     pub canonical_bytes: Vec<u8>,
+    /// Métadonnée produite par le daemon, jamais lue depuis la charge client.
+    pub authorization_attestation: Option<GreffeAuthorizationAttestation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,6 +123,7 @@ pub struct GuichetClaim {
     pub issuer_scope: String,
     pub request_id: String,
     pub canonical_request: Vec<u8>,
+    pub authorization_attestation: Option<GreffeAuthorizationAttestation>,
     pub claimed_at: i64,
     pub claim_generation: u64,
     pub claim_token: String,
@@ -273,6 +277,8 @@ impl Store {
                 operation_kind TEXT NOT NULL,
                 request_id TEXT NOT NULL,
                 canonical_request BLOB NOT NULL,
+                -- Métadonnée serveur : jamais issue des octets de l'appelant.
+                authorization_attestation BLOB,
                 issued_at INTEGER NOT NULL,
                 expires_at INTEGER NOT NULL,
                 sender TEXT NOT NULL,
@@ -312,6 +318,16 @@ impl Store {
             ",
         )
         .map_err(StoreError::Sqlite)?;
+        // Les bases historiques n'ont légitimement aucune attestation. La
+        // colonne nullable conserve ce fait, tandis qu'une mutation neuve
+        // impose `Some` dans le chemin daemon avant son unique INSERT.
+        if !guichet_authorization_column_exists(conn)? {
+            conn.execute(
+                "ALTER TABLE guichet_requests ADD COLUMN authorization_attestation BLOB",
+                [],
+            )
+            .map_err(StoreError::Sqlite)?;
+        }
         // Les bases créées par T1603 n'avaient pas de curseur public. SQLite
         // ne sait pas ajouter une colonne NOT NULL sans valeur : on remplit
         // donc une fois depuis son identifiant physique, dans l'ordre durable.
@@ -626,6 +642,12 @@ impl Store {
                 max_frame_bytes: MAX_GUICHET_FRAME_BYTES,
             });
         }
+        let authorization_attestation = deposit
+            .authorization_attestation
+            .as_ref()
+            .map(serde_json::to_vec)
+            .transpose()
+            .map_err(|_| StoreError::Invariant("attestation serveur non sérialisable"))?;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -652,12 +674,14 @@ impl Store {
         tx.execute(
             "INSERT INTO guichet_requests
                 (issuer_scope, operation_kind, request_id, canonical_request,
-                 issued_at, expires_at, sender, linked_request_id, state)
-             VALUES (?1, 'service_request', ?2, ?3, ?4, ?5, ?6, ?7, 'queued')",
+                 authorization_attestation, issued_at, expires_at, sender,
+                 linked_request_id, state)
+             VALUES (?1, 'service_request', ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'queued')",
             params![
                 deposit.issuer_scope,
                 deposit.request_id,
                 deposit.canonical_bytes,
+                authorization_attestation,
                 deposit.issued_at,
                 expires_at,
                 deposit.from,
@@ -715,6 +739,9 @@ impl Store {
             issuer_scope: row.issuer_scope,
             request_id: row.request_id,
             canonical_request: row.canonical_request,
+            authorization_attestation: decode_authorization_attestation(
+                row.authorization_attestation.as_deref(),
+            )?,
             claimed_at: now,
             claim_generation: generation,
             claim_token: token,
@@ -751,6 +778,9 @@ impl Store {
             issuer_scope: row.issuer_scope,
             request_id: row.request_id,
             canonical_request: row.canonical_request,
+            authorization_attestation: decode_authorization_attestation(
+                row.authorization_attestation.as_deref(),
+            )?,
             claimed_at: now,
             claim_generation: row.claim_generation,
             claim_token: row.claim_token.expect("claim courant sans token"),
@@ -1374,6 +1404,19 @@ impl Store {
     }
 }
 
+fn guichet_authorization_column_exists(conn: &Connection) -> Result<bool, StoreError> {
+    let mut statement = conn
+        .prepare("PRAGMA table_info(guichet_requests)")
+        .map_err(StoreError::Sqlite)?;
+    let mut rows = statement.query([]).map_err(StoreError::Sqlite)?;
+    while let Some(row) = rows.next().map_err(StoreError::Sqlite)? {
+        if row.get::<_, String>(1).map_err(StoreError::Sqlite)? == "authorization_attestation" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Transition commune de résolution d'une demande, réutilisable lorsqu'une
 /// opération adjacente doit être rendue atomique avec cette clôture.
 pub(crate) fn mark_answered_in_transaction(
@@ -1559,6 +1602,7 @@ struct GuichetRow {
     issuer_scope: String,
     request_id: String,
     canonical_request: Vec<u8>,
+    authorization_attestation: Option<Vec<u8>>,
     sender: String,
     expires_at: i64,
     state: String,
@@ -1587,7 +1631,17 @@ fn guichet_row_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GuichetRow>
         result_issue: row.get(11)?,
         reply_bytes: row.get(12)?,
         linked_request_id: row.get(13)?,
+        authorization_attestation: row.get(14)?,
     })
+}
+
+fn decode_authorization_attestation(
+    bytes: Option<&[u8]>,
+) -> Result<Option<GreffeAuthorizationAttestation>, StoreError> {
+    bytes
+        .map(serde_json::from_slice)
+        .transpose()
+        .map_err(|_| StoreError::Invariant("attestation serveur durable corrompue"))
 }
 
 fn guichet_row_for_key(
@@ -1598,7 +1652,8 @@ fn guichet_row_for_key(
     conn.query_row(
         "SELECT deposited_sequence, issuer_scope, request_id, canonical_request, sender,
                 expires_at, state, claim_owner, claim_generation, claim_token,
-                claim_lease_expires_at, result_issue, reply_bytes, linked_request_id
+                claim_lease_expires_at, result_issue, reply_bytes, linked_request_id,
+                authorization_attestation
          FROM guichet_requests
          WHERE issuer_scope = ?1 AND operation_kind = 'service_request' AND request_id = ?2",
         params![issuer_scope, request_id],
@@ -1612,7 +1667,8 @@ fn guichet_next_queued(conn: &Connection, now: i64) -> Result<Option<GuichetRow>
     conn.query_row(
         "SELECT deposited_sequence, issuer_scope, request_id, canonical_request, sender,
                 expires_at, state, claim_owner, claim_generation, claim_token,
-                claim_lease_expires_at, result_issue, reply_bytes, linked_request_id
+                claim_lease_expires_at, result_issue, reply_bytes, linked_request_id,
+                authorization_attestation
          FROM guichet_requests
          WHERE state = 'queued' AND expires_at >= ?1
          ORDER BY deposited_sequence ASC LIMIT 1",
@@ -1738,6 +1794,22 @@ impl std::error::Error for StoreError {}
 mod tests {
     use super::*;
 
+    fn authorization_attestation(signature: &str) -> GreffeAuthorizationAttestation {
+        GreffeAuthorizationAttestation {
+            version: 1,
+            principal: bridget_transport::greffe_authorization::GreffePrincipal {
+                name: "agent-autorise".to_string(),
+                instance_id: "instance-autorisee".to_string(),
+            },
+            action: bridget_transport::greffe_authorization::GreffeMutationAction::Delegate,
+            request_id: "request-authorization-replay".to_string(),
+            request_issued_at: 1_787_500_000,
+            grant_expires_at: 1_787_500_600,
+            policy_generation: 7,
+            signature: signature.to_string(),
+        }
+    }
+
     fn guichet_deposit(request_id: &str, bytes: &[u8]) -> GuichetDeposit {
         GuichetDeposit {
             issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
@@ -1749,6 +1821,7 @@ mod tests {
                 delegation_id: "delegation-1".to_string(),
             },
             canonical_bytes: bytes.to_vec(),
+            authorization_attestation: None,
         }
     }
 
@@ -1808,6 +1881,54 @@ mod tests {
     }
 
     #[test]
+    fn rejeu_guichet_restitue_attestation_originale_sans_rafraichir_les_droits() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-guichet-authorization-replay-{}.db",
+            Uuid::new_v4()
+        ));
+        let mut store = Store::open(&path).unwrap();
+        let original = authorization_attestation("signature-originale");
+        let refreshed = authorization_attestation("signature-fraiche-interdite");
+        let mut first = guichet_deposit(
+            "request-authorization-replay",
+            br#"{"request":"authorization-replay"}"#,
+        );
+        first.operation = ServiceRequestOperation::Delegate;
+        first.payload = ServiceRequestPayload::Delegate {
+            goal: "déléguer sans rafraîchir les droits".to_string(),
+            explicit_target: None,
+            required_tags: Vec::new(),
+            duration: bridget_transport::protocol::GuichetDurationClass::Courte,
+            suite: bridget_transport::protocol::ServiceSuiteDeclaration::Aucune,
+            depends_on: Vec::new(),
+            references: Vec::new(),
+        };
+        first.authorization_attestation = Some(original.clone());
+        assert!(matches!(
+            store.deposit_guichet(&first, 600, 60, first.issued_at),
+            Ok(GuichetResult::Queued { .. })
+        ));
+
+        let mut replay = first.clone();
+        replay.authorization_attestation = Some(refreshed.clone());
+        assert!(matches!(
+            store.deposit_guichet(&replay, 600, 60, first.issued_at + 1),
+            Ok(GuichetResult::OutcomeUnknown { .. })
+        ));
+        let claim = match store
+            .claim_next_guichet("service-authorization", first.issued_at + 1)
+            .unwrap()
+        {
+            GuichetNext::Claimed(claim) => claim,
+            GuichetNext::Empty => panic!("dépôt autorisé absent"),
+        };
+        assert_eq!(claim.authorization_attestation, Some(original));
+        assert_ne!(claim.authorization_attestation, Some(refreshed));
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn depot_direct_refuse_une_trame_guichet_superieure_a_64_kio() {
         let path =
             std::env::temp_dir().join(format!("bridget-guichet-frame-limit-{}.db", Uuid::new_v4()));
@@ -1855,7 +1976,66 @@ mod tests {
             .unwrap();
         assert!(!columns.iter().any(|column| column == "result_bytes"));
         assert!(columns.iter().any(|column| column == "reply_bytes"));
+        assert!(
+            columns
+                .iter()
+                .any(|column| column == "authorization_attestation")
+        );
         drop(statement);
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn ouverture_ajoute_la_metadonnee_serveur_et_garde_un_depot_historique_sans_preuve() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-guichet-authorization-migration-{}.db",
+            Uuid::new_v4()
+        ));
+        let legacy = Connection::open(&path).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE guichet_requests (
+                    deposited_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    issuer_scope TEXT NOT NULL,
+                    operation_kind TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    canonical_request BLOB NOT NULL,
+                    issued_at INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    sender TEXT NOT NULL,
+                    linked_request_id TEXT,
+                    state TEXT NOT NULL CHECK (state IN ('queued', 'claimed', 'replied', 'rejected')),
+                    claim_owner TEXT,
+                    claim_generation INTEGER NOT NULL DEFAULT 0,
+                    claim_token TEXT,
+                    claim_lease_expires_at INTEGER,
+                    result_issue TEXT,
+                    reply_bytes BLOB,
+                    UNIQUE (issuer_scope, operation_kind, request_id)
+                );
+                INSERT INTO guichet_requests (
+                    issuer_scope, operation_kind, request_id, canonical_request,
+                    issued_at, expires_at, sender, state
+                ) VALUES (
+                    '015_scope_0123456789abcdef0123456789abcdef',
+                    'service_request', 'request-historique', X'010203',
+                    1787500000, 1787500600, 'agent-historique', 'queued'
+                );",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let mut store = Store::open(&path).unwrap();
+        let claim = match store
+            .claim_next_guichet("service-historique", 1_787_500_001)
+            .unwrap()
+        {
+            GuichetNext::Claimed(claim) => claim,
+            GuichetNext::Empty => panic!("dépôt historique absent après ouverture"),
+        };
+        assert_eq!(claim.canonical_request, vec![1, 2, 3]);
+        assert_eq!(claim.authorization_attestation, None);
         drop(store);
         let _ = std::fs::remove_file(path);
     }
@@ -2001,6 +2181,7 @@ mod tests {
                 review_verdict: None,
             },
             canonical_bytes: br#"{"type":"service_request"}"#.to_vec(),
+            authorization_attestation: None,
         };
         store.deposit_guichet(&deposit, 600, 60, now).unwrap();
         let claim = match store.claim_next_guichet("maicie-connection", now).unwrap() {
@@ -2177,6 +2358,7 @@ mod tests {
                     review_verdict: None,
                 },
                 canonical_bytes: format!("{{\"request\":\"{request_id}\"}}").into_bytes(),
+                authorization_attestation: None,
             };
             store.deposit_guichet(&deposit, 600, 60, now).unwrap();
             match state {

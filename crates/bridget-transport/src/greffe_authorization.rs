@@ -1,11 +1,18 @@
 //! Autorisation fermée des mutations du greffe central.
 //!
 //! Le client ne fournit jamais son principal ni un jeton dans la requête
-//! métier. Bridget construit le principal depuis la connexion enregistrée,
+//! métier. Bridget centralise le principal depuis la connexion enregistrée,
 //! confronte ce fait à une politique privée, puis émet une attestation liée à
 //! l'action et au `request_id`. Maicie recharge la politique et vérifie cette
 //! attestation juste avant l'effet : recopier une ancienne ligne du guichet ne
 //! suffit donc pas à fabriquer une autorisation.
+//!
+//! Limite de confiance : le nom et l'instance de cette connexion sont déclarés
+//! par `Register`. Le daemon ne les vérifie pas contre la filiation du processus
+//! pair. La garde suppose donc des processus non hostiles sous le même compte ;
+//! un client local capable de parler le protocole brut peut déclarer l'identité
+//! d'un autre agent. Centraliser la déclaration réduit les sources d'identité,
+//! mais ne l'authentifie pas.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -809,6 +816,8 @@ mod tests {
             declared_from: Option<&str>,
             expected: GreffeAuthorizationRefusal,
         ) {
+            // Cet oracle prouve le traitement du principal fourni à la garde,
+            // pas l'authenticité du `Register` qui alimente les cartes daemon.
             let durable_state = self.root.join("durable-business-state");
             fs::write(&durable_state, b"unchanged").unwrap();
             let result = self.gate().authorize_deposit_then(

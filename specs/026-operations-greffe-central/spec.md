@@ -111,15 +111,36 @@ déposent une demande canonique et rendent seulement `queued` ou
 terminal peut annoncer `created`, `appended`, `closed`, `selection_required`
 ou `refused`, avec les identifiants durables correspondants.
 
-### P2608 — Identité de connexion, jamais autorité déclarative
+### P2608 — Identité de connexion centralisée, mais encore déclarative
 
 Le serveur MCP enregistre auprès du daemon le nom et l'instance déjà résolus au
-démarrage. Le daemon conserve cette identité canonique avec la connexion ; les
-charges de mutation ne portent aucun jeton ni principal forgeable.
+démarrage. Le daemon conserve cette identité avec la connexion ; les charges de
+mutation ne répètent aucun jeton ni principal. Déplacer le couple de chaque
+requête vers un `Register` unique réduit les sources d'identité, mais ne
+l'authentifie pas.
 
 Le point d'appel du service reçoit un principal injecté par le daemon. Un champ
 `from` filaire reste une déclaration à comparer, jamais une source d'autorité.
-La politique d'autorisation elle-même appartient au lot dédié parallèle.
+Une politique centrale fermée borne ensuite ce principal aux actions
+`delegate`, `registre_add` et `objective_close`, avec refus par défaut.
+
+Cette politique suppose toutefois un appelant non hostile sous le même compte.
+`crates/bridget-transport/src/protocol.rs:854-882` reçoit aujourd'hui `name` et
+`instance_id` du client dans `Register` ;
+`crates/bridget-daemon/src/daemon.rs:6206-6258` transmet ces valeurs, puis
+`crates/bridget-daemon/src/daemon.rs:3443-3465` et
+`crates/bridget-daemon/src/daemon.rs:3630-3632` les écrivent sans vérifier la
+filiation du processus pair. La preuve de filiation de
+`crates/bridget-daemon/src/mcp_identity.rs:143-186` est exécutée côté processus
+MCP et redevient donc une déclaration sur le fil.
+
+Sur le déploiement mesuré le 27 août 2026, le répertoire `agent-pids` est en
+`0770` et ses marqueurs en `0660`, tous sous le même compte `moi:moi` : aucune
+frontière de privilège ne sépare les agents locaux. Un client local parlant le
+protocole brut peut donc se déclarer sous un autre nom. Cette borne cessera
+d'être acceptable dès que des comptes différents partageront le daemon ;
+l'identité devra alors être établie côté serveur, notamment en tenant compte des
+agents distants dont le processus pair visible est celui du tunnel.
 
 ### P2609 — Compatibilité et frontière humaine inchangées
 
@@ -150,6 +171,9 @@ réservées à la frappe humaine.
    ultérieure relit le reçu du maître sans ouvrir de base sur l'appelant.
 9. Les charges ne peuvent fournir ni chemin de base, ni chemin de journal, ni
    principal d'autorisation.
+10. Les témoins d'autorisation déclarent explicitement qu'ils prouvent le
+    traitement du principal enregistré, pas l'authenticité de `Register` face à
+    un client local capable de parler le protocole brut.
 
 ## Frontière de sécurité inchangée
 
@@ -165,7 +189,9 @@ comme acquise.
 ## Travail explicitement reporté
 
 - persister les tentatives `profile_approve` et `routine_approve` avant refus ;
-- définir et brancher la politique d'autorisation du principal canonique ;
+- établir côté daemon l'identité de `Register` contre la filiation réelle du
+  processus pair, y compris derrière un tunnel distant ;
+- interdire à `Rename` de cibler la connexion d'un autre appelant ;
 - exposer toute autre commande Maicie.
 
 Ces éléments ne doivent jamais ouvrir une base locale ni créer une seconde
