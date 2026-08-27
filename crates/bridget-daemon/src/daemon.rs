@@ -438,6 +438,13 @@ impl Presence {
         self.link_seen = now;
     }
 
+    /// Un message émis atteste une capacité métier, mais pas forcément le
+    /// socket principal : MCP et la CLI passent par une connexion auxiliaire.
+    /// Ne jamais prolonger le retain du wrapper à partir de cette observation.
+    fn touch_message_activity(&mut self) {
+        self.capacity_seen = Instant::now();
+    }
+
     /// Lien socket seul (heartbeat) : ne prouve aucune capacité.
     fn touch_link(&mut self) {
         self.link_seen = Instant::now();
@@ -4532,6 +4539,16 @@ fn presence_of_agent<'a>(state: &'a mut DaemonState, agent: &str) -> Option<&'a 
     state.presences.get_mut(&instance_id)
 }
 
+/// Date l'activité d'un expéditeur uniquement lorsqu'il correspond à une
+/// présence enregistrée. Un client éphémère peut transporter le message au nom
+/// de l'agent : la connexion courante n'est donc pas l'autorité, le principal
+/// logique du message l'est.
+fn touch_message_sender_activity(state: &mut DaemonState, sender: &str) {
+    if let Some(presence) = presence_of_agent(state, sender) {
+        presence.touch_message_activity();
+    }
+}
+
 /// Remplace le domaine d'un agent, ou le ramène à son domaine dérivé.
 fn handle_domain(agent: &str, domain: Option<String>, state: &mut DaemonState) -> DaemonToWrapper {
     if let Some(Err(reason)) = domain.as_deref().map(validate_runtime_value) {
@@ -5166,6 +5183,9 @@ fn handle_idempotent_send(
             reason: "impossible de préparer la remise".to_string(),
         };
     }
+    // La préparation durable est le premier point qui atteste l'envoi. Avant
+    // lui, un refus ne doit jamais faire passer l'expéditeur pour actif.
+    touch_message_sender_activity(st, &message.from);
     remember_reply_cycle(
         st,
         &message,
@@ -6914,8 +6934,13 @@ fn handle_wrapper_message(
             let target_conn = prepared.target_conn;
             let conv_key = format!("{}|{}", bridge_msg.from, bridge_msg.to);
 
-            if let Err(e) = st.store.record_message(&bridge_msg, &conv_key) {
-                error!("store: {}", e);
+            match st.store.record_message(&bridge_msg, &conv_key) {
+                Ok(()) => {
+                    // Même frontière que la voie idempotente : le message est
+                    // durable avant de rafraîchir la capacité de l'expéditeur.
+                    touch_message_sender_activity(&mut st, &bridge_msg.from);
+                }
+                Err(e) => error!("store: {}", e),
             }
             st.circuit_breaker
                 .record(&prepared.logical_sender, &bridge_msg.to);
@@ -8065,6 +8090,154 @@ mod presence_tests {
             },
         );
         (state, config)
+    }
+
+    /// Ajoute un expéditeur réellement enregistré dont la connexion reste
+    /// vivante, mais dont la dernière capacité remonte à plus de trente
+    /// minutes. Le cas reproduit les agents tmux reconnectés ensemble : lien
+    /// frais, activité publique ancienne.
+    fn state_with_aged_sender(label: &str) -> (DaemonState, DaemonConfig) {
+        let (mut state, config) = state_with_registered_agent(label);
+        assert!(matches!(
+            handle_register_with_channel(
+                "conn-sender",
+                "codex".to_string(),
+                Some("agent-sender".to_string()),
+                Some("cartae".to_string()),
+                Some("tmux".to_string()),
+                ChannelReport::Known("unix".to_string()),
+                Some(PresenceMode::Tmux),
+                Some("session:1.1".to_string()),
+                Some("Linux".to_string()),
+                Some("instance-sender".to_string()),
+                Some("bridget".to_string()),
+                false,
+                Some(false),
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { name } if name == "agent-sender"
+        ));
+        let stale = Instant::now()
+            .checked_sub(Duration::from_secs(1900))
+            .expect("horloge de capacité vieillie");
+        let sender = state.presences.get_mut("instance-sender").unwrap();
+        sender.capacity_seen = stale;
+        sender.link_seen = Instant::now()
+            .checked_sub(Duration::from_secs(120))
+            .expect("horloge de lien encore retenue");
+        (state, config)
+    }
+
+    fn assert_sender_last_seen(state: &mut DaemonState, expected_fresh: bool) {
+        assert!(
+            state
+                .presences
+                .get("instance-sender")
+                .unwrap()
+                .link_seen
+                .elapsed()
+                >= Duration::from_secs(60),
+            "l'activité MCP/CLI ne doit pas rajeunir le socket principal"
+        );
+        let sender = state
+            .agent_infos()
+            .into_iter()
+            .find(|agent| agent.name == "agent-sender")
+            .expect("expéditeur enregistré visible dans l'annuaire");
+        if expected_fresh {
+            assert!(
+                sender.last_seen_secs < 2,
+                "un message émis maintenant doit rajeunir last_seen_secs, reçu={} s",
+                sender.last_seen_secs
+            );
+        } else {
+            assert!(
+                sender.last_seen_secs >= 1800,
+                "un refus ne doit pas inventer une activité, reçu={} s",
+                sender.last_seen_secs
+            );
+        }
+    }
+
+    #[test]
+    fn session_046_envoi_idempotent_ancien_agent_actif_rajeunit_last_seen() {
+        let (state, config) = state_with_aged_sender("last-seen-idempotent");
+        let shared = Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(&shared, "client-activity", "046_scope_aaaaaaaaaaaa");
+        let mut message = BridgetMessage::new("agent-sender", "agent-2", "activité réelle");
+        message.hops = 4;
+        let result = handle_wrapper_message(
+            "client-activity",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "activity-idempotent".to_string(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            result,
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { .. },
+                ..
+            })
+        ));
+        assert_sender_last_seen(&mut shared.lock().unwrap(), true);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn session_046_envoi_historique_ancien_agent_actif_rajeunit_last_seen() {
+        let (mut state, config) = state_with_aged_sender("last-seen-historique");
+        let (target_writer, mut target_reader) = control_socket("last-seen-historique");
+        state
+            .connections
+            .insert("conn-1".to_string(), target_writer);
+        let shared = Arc::new(Mutex::new(state));
+        let result = handle_wrapper_message(
+            "conn-sender",
+            WrapperToDaemon::Send(BridgetMessage::new(
+                "identité-écrasée-par-le-wrapper",
+                "agent-2",
+                "activité historique réelle",
+            )),
+            &shared,
+        );
+        assert!(matches!(result, Some(DaemonToWrapper::Ack { .. })));
+        assert!(matches!(
+            read_control(&mut target_reader),
+            DaemonToWrapper::Deliver(message)
+                if message.from == "agent-sender" && message.to == "agent-2"
+        ));
+        assert_sender_last_seen(&mut shared.lock().unwrap(), true);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn session_046_envoi_refuse_ne_rajeunit_pas_last_seen() {
+        let (state, config) = state_with_aged_sender("last-seen-refus");
+        let shared = Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(&shared, "client-refused", "046_scope_bbbbbbbbbbbb");
+        let mut message = BridgetMessage::new("agent-sender", "agent-inconnu", "à refuser");
+        message.hops = 4;
+        let result = handle_wrapper_message(
+            "client-refused",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "activity-refused".to_string(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            result,
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::Rejected { .. },
+                ..
+            })
+        ));
+        assert_sender_last_seen(&mut shared.lock().unwrap(), false);
+        let _ = std::fs::remove_file(config.db_path);
     }
 
     #[test]
