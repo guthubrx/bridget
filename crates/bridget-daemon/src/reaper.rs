@@ -726,7 +726,7 @@ pub fn observe_live(
     world.min_age_secs = min_age_secs;
     world.prior_hits = load_prior_hits(state_dir);
     world.processes = scan_processes()?;
-    world.agents = scan_agents_best_effort();
+    world.agents = scan_agents()?;
     world.open_request_participants = scan_open_request_participants_best_effort();
     world.temp_dirs = scan_temp_dirs(tmp_dir, now)?;
 
@@ -795,13 +795,19 @@ fn scan_processes() -> io::Result<Vec<ProcessSnapshot>> {
     Ok(out)
 }
 
-fn scan_agents_best_effort() -> Vec<AgentPresence> {
+fn scan_agents() -> io::Result<Vec<AgentPresence>> {
     let config = crate::daemon::DaemonConfig::default();
-    let status = crate::daemon::get_status(&config);
+    agents_from_status(crate::daemon::get_status(&config))
+}
+
+fn agents_from_status(
+    status: Result<crate::daemon::DaemonStatus, String>,
+) -> io::Result<Vec<AgentPresence>> {
+    let status = status.map_err(io::Error::other)?;
     if !status.running {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    status
+    Ok(status
         .agents
         .into_iter()
         .map(|a| AgentPresence {
@@ -811,7 +817,7 @@ fn scan_agents_best_effort() -> Vec<AgentPresence> {
             location: a.location,
             last_seen_secs: a.last_seen_secs,
         })
-        .collect()
+        .collect())
 }
 
 fn scan_open_request_participants_best_effort() -> Vec<String> {
@@ -1009,6 +1015,23 @@ mod tests {
 
     fn world_at(now: u64) -> WorldView {
         WorldView::with_defaults(now)
+    }
+
+    #[test]
+    fn identite_indisponible_n_est_pas_un_annuaire_vide() {
+        let error = agents_from_status(Err(
+            "identité du daemon indisponible: délai de lecture dépassé".to_string(),
+        ))
+        .expect_err("l'incertitude doit interrompre l'inventaire");
+        assert!(
+            error
+                .to_string()
+                .contains("identité du daemon indisponible")
+        );
+
+        let absent = agents_from_status(Ok(crate::daemon::DaemonStatus::default()))
+            .expect("un daemon réellement absent reste observable");
+        assert!(absent.is_empty());
     }
 
     #[test]

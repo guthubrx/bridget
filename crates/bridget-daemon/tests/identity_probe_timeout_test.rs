@@ -207,7 +207,15 @@ fn pair_accepte_et_muet_rend_l_identite_indisponible_sans_seconde_connexion() {
         completed,
         "le client est resté suspendu au-delà de {CLIENT_DEADLINE:?}"
     );
-    assert!(!output.status.success(), "le silence ne peut pas réussir");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "le silence doit rendre l'échec technique défini"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "aucun statut partiel ne doit être rendu comme un succès"
+    );
     assert!(
         stderr.contains("identité du daemon indisponible"),
         "diagnostic incomplet: {stderr}"

@@ -7325,24 +7325,29 @@ fn handle_wrapper_message(
 }
 
 /// Statut du daemon — interroge le daemon via la socket locale.
-pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
-    use std::io::{BufRead, BufReader, BufWriter, Write};
+pub fn get_status(config: &DaemonConfig) -> Result<DaemonStatus, String> {
+    use std::io::{BufReader, BufWriter, Write};
     use std::os::unix::net::UnixStream;
 
     if !config.socket_path.exists() {
-        return DaemonStatus::default();
+        return Ok(DaemonStatus::default());
     }
 
-    let identity = daemon_identity(&config.socket_path);
+    let identity = match daemon_identity(&config.socket_path)? {
+        Some(identity) => identity,
+        // La socket a disparu ou refuse la connexion : aucun daemon n'est
+        // observable. C'est distinct d'un pair qui a accepté puis s'est tu.
+        None => return Ok(DaemonStatus::default()),
+    };
 
     let stream = match UnixStream::connect(&config.socket_path) {
         Ok(s) => s,
-        Err(_) => return DaemonStatus::default(),
+        Err(_) => return Ok(DaemonStatus::default()),
     };
 
     let read_stream = match stream.try_clone() {
         Ok(s) => s,
-        Err(_) => return DaemonStatus::default(),
+        Err(_) => return Ok(DaemonStatus::default()),
     };
 
     let mut writer = BufWriter::new(stream);
@@ -7365,38 +7370,38 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
     };
     let reg_json = match encode(&reg) {
         Ok(j) => j,
-        Err(_) => return DaemonStatus::default(),
+        Err(_) => return Ok(DaemonStatus::default()),
     };
     if writeln!(writer, "{}", reg_json).is_err() {
-        return DaemonStatus::default();
+        return Ok(DaemonStatus::default());
     }
     if writer.flush().is_err() {
-        return DaemonStatus::default();
+        return Ok(DaemonStatus::default());
     }
 
     // Lire Registered
     let mut line = String::new();
     if reader.read_line(&mut line).is_err() {
-        return DaemonStatus::default();
+        return Ok(DaemonStatus::default());
     }
 
     // Demander la liste des agents
     let list_req = WrapperToDaemon::ListAgents;
     let list_json = match encode(&list_req) {
         Ok(j) => j,
-        Err(_) => return DaemonStatus::default(),
+        Err(_) => return Ok(DaemonStatus::default()),
     };
     if writeln!(writer, "{}", list_json).is_err() {
-        return DaemonStatus::default();
+        return Ok(DaemonStatus::default());
     }
     if writer.flush().is_err() {
-        return DaemonStatus::default();
+        return Ok(DaemonStatus::default());
     }
 
     // Lire AgentList
     let mut resp_line = String::new();
     if reader.read_line(&mut resp_line).is_err() {
-        return DaemonStatus::default();
+        return Ok(DaemonStatus::default());
     }
     let agents = match decode::<DaemonToWrapper>(resp_line.trim()) {
         Ok(DaemonToWrapper::AgentList { agents }) => agents
@@ -7411,10 +7416,8 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
     // désigne un fichier d'ici, pas celui du daemon qui vient de répondre :
     // le compte était lu dans un orphelin local et présenté sous le chemin
     // d'à côté, comme s'il décrivait le daemon.
-    let daemon_host = identity.as_ref().and_then(|identity| identity.host.clone());
-    let daemon_db_path = identity
-        .as_ref()
-        .and_then(|identity| identity.db_path.clone());
+    let daemon_host = identity.host.clone();
+    let daemon_db_path = identity.db_path.clone();
     let message_count = daemon_store_is_local(
         daemon_host.as_deref(),
         daemon_db_path.as_deref(),
@@ -7426,17 +7429,18 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
         Err(_) => 0,
     });
 
-    DaemonStatus {
+    Ok(DaemonStatus {
         running: true,
         agents,
         message_count,
-        build_id: identity.map(|identity| identity.build_id),
+        build_id: Some(identity.build_id),
         daemon_host,
         daemon_db_path,
-    }
+    })
 }
 
 const BUILD_ID_PROBE_IDENTITY: &str = "bridget-status-build-id";
+const DAEMON_IDENTITY_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn build_id_probe_issuer_scope() -> String {
     crate::mcp::issuer_scope(BUILD_ID_PROBE_IDENTITY)
@@ -7450,6 +7454,7 @@ fn build_id_probe_issuer_scope() -> String {
 #[cfg(test)]
 mod matrice_roles_tests {
     use super::*;
+    use std::io::{BufRead, BufReader, BufWriter, Write};
     use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
     use std::sync::mpsc;
@@ -7507,6 +7512,106 @@ mod matrice_roles_tests {
         })
     }
 
+    fn sert_un_rapport_ancien(listener: UnixListener) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("connexion du client ancien");
+            let read_stream = stream.try_clone().expect("cloner le pair ancien");
+            let mut reader = BufReader::new(read_stream);
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+
+            reader.read_line(&mut line).expect("lire le rôle");
+            assert!(matches!(
+                decode(line.trim()).expect("décoder le rôle"),
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                }
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client
+                })
+                .expect("encoder l'acceptation")
+            )
+            .expect("répondre au rôle");
+            writer.flush().expect("flush du rôle");
+
+            line.clear();
+            reader.read_line(&mut line).expect("lire le contrat");
+            assert!(matches!(
+                decode(line.trim()).expect("décoder le contrat"),
+                WrapperToDaemon::ClientHello { .. }
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "daemon-ancien".to_string(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: Vec::new(),
+                })
+                .expect("encoder l'accueil")
+            )
+            .expect("répondre au contrat");
+            writer.flush().expect("flush du contrat");
+
+            line.clear();
+            reader.read_line(&mut line).expect("lire la sonde");
+            assert!(matches!(
+                decode(line.trim()).expect("décoder la sonde"),
+                WrapperToDaemon::DaemonIdentityRequest
+            ));
+            // Forme réellement produite avant SPEC-048 : le daemon répond et
+            // atteste sa présence, mais le champ d'instance récent manque.
+            writeln!(
+                writer,
+                r#"{{"type":"DaemonIdentityReport","host":"ancien","db_path":"/ancien.db"}}"#
+            )
+            .expect("répondre avec l'ancien rapport");
+            writer.flush().expect("flush de l'ancien rapport");
+        })
+    }
+
+    #[test]
+    fn socket_absente_et_daemon_ancien_restent_deux_etats_observables() {
+        let chemin_absent = PathBuf::from(format!(
+            "/tmp/bridget-identite-absente-{}-{}.sock",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        assert!(
+            daemon_identity(&chemin_absent)
+                .expect("l'absence est observable")
+                .is_none(),
+            "une socket absente signifie qu'aucun daemon n'est observable"
+        );
+
+        let socket_path = PathBuf::from(format!(
+            "/tmp/bridget-identite-ancienne-{}-{}.sock",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let _nettoyage = NettoyageSondeIdentite {
+            socket_path: socket_path.clone(),
+            db_path: socket_path.with_extension("db-inexistante"),
+        };
+        let listener = UnixListener::bind(&socket_path).expect("socket du daemon ancien");
+        let serveur = sert_un_rapport_ancien(listener);
+        let identite = daemon_identity(&socket_path)
+            .expect("le daemon ancien répond")
+            .expect("le daemon ancien est présent");
+        serveur.join().expect("daemon ancien terminé");
+
+        assert_eq!(identite.build_id, "daemon-ancien");
+        assert!(identite.host.is_none());
+        assert!(identite.db_path.is_none());
+        assert!(identite.instance_id.is_none());
+    }
+
     /// Oracle M1 local-vers-local : le socket est remplacé entre deux
     /// démarrages qui partagent délibérément hôte, binaire et base. BUILD_ID
     /// reste identique ; seule l'identité de démarrage doit changer.
@@ -7519,7 +7624,9 @@ mod matrice_roles_tests {
         };
         let premier_listener = UnixListener::bind(&config.socket_path).expect("premier socket");
         let premier_serveur = sert_une_identite(premier_listener, premier_etat);
-        let premier = daemon_identity(&config.socket_path).expect("premier rapport d'identite");
+        let premier = daemon_identity(&config.socket_path)
+            .expect("premiere sonde lisible")
+            .expect("premier rapport d'identite");
         premier_serveur.join().expect("premier daemon termine");
 
         std::fs::remove_file(&config.socket_path).expect("retrait premier socket");
@@ -7529,7 +7636,9 @@ mod matrice_roles_tests {
         ));
         let second_listener = UnixListener::bind(&config.socket_path).expect("second socket");
         let second_serveur = sert_une_identite(second_listener, second_etat);
-        let second = daemon_identity(&config.socket_path).expect("second rapport d'identite");
+        let second = daemon_identity(&config.socket_path)
+            .expect("seconde sonde lisible")
+            .expect("second rapport d'identite");
         second_serveur.join().expect("second daemon termine");
 
         assert_eq!(premier.build_id, second.build_id, "meme binaire attendu");
@@ -7738,73 +7847,97 @@ pub struct DaemonIdentity {
     pub instance_id: Option<String>,
 }
 
-fn daemon_identity(socket_path: &std::path::Path) -> Option<DaemonIdentity> {
-    use std::io::{BufRead, BufReader, BufWriter, Write};
+fn daemon_identity(socket_path: &std::path::Path) -> Result<Option<DaemonIdentity>, String> {
+    use std::io::{BufReader, BufWriter};
     use std::os::unix::net::UnixStream;
 
-    let stream = UnixStream::connect(socket_path).ok()?;
-    let read_stream = stream.try_clone().ok()?;
+    let stream = match UnixStream::connect(socket_path) {
+        Ok(stream) => stream,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(identity_probe_error("connexion impossible", error));
+        }
+    };
+    let read_stream = stream
+        .try_clone()
+        .map_err(|error| identity_probe_error("clonage de la socket impossible", error))?;
+    // La borne est posée AVANT le premier read_line. Elle couvre les trois
+    // petites réponses de négociation et interdit qu'un pair ayant accepté la
+    // connexion transforme l'incertitude en attente infinie.
+    read_stream
+        .set_read_timeout(Some(DAEMON_IDENTITY_READ_TIMEOUT))
+        .map_err(|error| identity_probe_error("pose du délai de lecture impossible", error))?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(read_stream);
-    writeln!(
-        writer,
-        "{}",
-        encode(&WrapperToDaemon::RoleHandshake {
+    write_identity_message(
+        &mut writer,
+        &WrapperToDaemon::RoleHandshake {
             role: ConnectionRole::Client,
-        })
-        .ok()?
-    )
-    .ok()?;
-    writer.flush().ok()?;
+        },
+        "du rôle",
+    )?;
     let mut line = String::new();
-    if reader.read_line(&mut line).ok()? == 0 {
-        return None;
+    if read_identity_line(&mut reader, &mut line, "l'acceptation du rôle")? == 0 {
+        return Err(
+            "identité du daemon indisponible: connexion fermée avant l'acceptation du rôle"
+                .to_string(),
+        );
     }
     if !matches!(
-        decode(line.trim()).ok()?,
+        decode(line.trim())
+            .map_err(|error| identity_probe_error("acceptation du rôle invalide", error))?,
         DaemonToWrapper::RoleAccepted {
             role: ConnectionRole::Client
         }
     ) {
-        return None;
+        return Err("identité du daemon indisponible: rôle Client non accepté".to_string());
     }
-    writeln!(
-        writer,
-        "{}",
-        encode(&WrapperToDaemon::ClientHello {
+    write_identity_message(
+        &mut writer,
+        &WrapperToDaemon::ClientHello {
             contract_version: CLIENT_CONTRACT_VERSION,
             // Même dérivation que les clients normaux : la sonde reste compatible
             // avec toute évolution de la validation de portée.
             issuer_scope: build_id_probe_issuer_scope(),
             capabilities: Vec::new(),
-        })
-        .ok()?
-    )
-    .ok()?;
-    writer.flush().ok()?;
+        },
+        "du contrat",
+    )?;
     line.clear();
-    match reader.read_line(&mut line).ok()? {
-        0 => None,
-        _ => match decode(line.trim()).ok()? {
+    match read_identity_line(&mut reader, &mut line, "l'accueil du client")? {
+        0 => Err(
+            "identité du daemon indisponible: connexion fermée avant l'accueil du client"
+                .to_string(),
+        ),
+        _ => match decode(line.trim())
+            .map_err(|error| identity_probe_error("accueil du client invalide", error))?
+        {
             DaemonToWrapper::ClientWelcome { build_id, .. } => {
                 // Second aller-retour, sur la MÊME connexion : la machine et la
                 // base ne sont pas déductibles côté client.
                 let (host, db_path, instance_id) =
-                    match probe_daemon_identity(&mut writer, &mut reader, &mut line) {
+                    match probe_daemon_identity(&mut writer, &mut reader, &mut line)? {
                         Some((host, db_path, instance_id)) => {
                             (Some(host), Some(db_path), Some(instance_id))
                         }
                         // Daemon antérieur au message : non attesté, jamais deviné.
                         None => (None, None, None),
                     };
-                Some(DaemonIdentity {
+                Ok(Some(DaemonIdentity {
                     build_id,
                     host,
                     db_path,
                     instance_id,
-                })
+                }))
             }
-            _ => None,
+            _ => Err("identité du daemon indisponible: accueil Client absent".to_string()),
         },
     }
 }
@@ -7814,26 +7947,76 @@ fn probe_daemon_identity<W: std::io::Write, R: std::io::BufRead>(
     writer: &mut W,
     reader: &mut R,
     line: &mut String,
-) -> Option<(String, String, String)> {
-    writeln!(
+) -> Result<Option<(String, String, String)>, String> {
+    write_identity_message(
         writer,
-        "{}",
-        encode(&WrapperToDaemon::DaemonIdentityRequest).ok()?
-    )
-    .ok()?;
-    writer.flush().ok()?;
+        &WrapperToDaemon::DaemonIdentityRequest,
+        "de la sonde",
+    )?;
     line.clear();
-    if reader.read_line(line).ok()? == 0 {
-        return None;
+    if read_identity_line(reader, line, "le rapport d'identité")? == 0 {
+        // Une ancienne version peut fermer après un message qu'elle ne connaît
+        // pas. Le ClientWelcome déjà reçu atteste sa présence, pas son identité.
+        return Ok(None);
     }
-    match decode(line.trim()).ok()? {
-        DaemonToWrapper::DaemonIdentityReport {
+    match decode(line.trim()) {
+        Ok(DaemonToWrapper::DaemonIdentityReport {
             host,
             db_path,
             instance_id,
-        } => Some((host, db_path, instance_id)),
-        _ => None,
+        }) => Ok(Some((host, db_path, instance_id))),
+        // Refus ou réponse connue mais différente : daemon présent, rapport
+        // récent absent. Cette compatibilité est distincte d'une expiration.
+        Ok(_) => Ok(None),
+        Err(_) if legacy_identity_report(line) => Ok(None),
+        Err(error) => Err(identity_probe_error("rapport invalide", error)),
     }
+}
+
+fn write_identity_message<W: std::io::Write>(
+    writer: &mut W,
+    message: &WrapperToDaemon,
+    phase: &str,
+) -> Result<(), String> {
+    let encoded = encode(message)
+        .map_err(|error| identity_probe_error(&format!("encodage {phase} impossible"), error))?;
+    writeln!(writer, "{encoded}")
+        .map_err(|error| identity_probe_error(&format!("envoi {phase} impossible"), error))?;
+    writer
+        .flush()
+        .map_err(|error| identity_probe_error(&format!("flush {phase} impossible"), error))
+}
+
+fn read_identity_line<R: std::io::BufRead>(
+    reader: &mut R,
+    line: &mut String,
+    phase: &str,
+) -> Result<usize, String> {
+    reader.read_line(line).map_err(|error| {
+        if matches!(
+            error.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ) {
+            format!(
+                "identité du daemon indisponible: délai de lecture de {} s dépassé pendant {phase}",
+                DAEMON_IDENTITY_READ_TIMEOUT.as_secs()
+            )
+        } else {
+            identity_probe_error(&format!("lecture impossible pendant {phase}"), error)
+        }
+    })
+}
+
+fn identity_probe_error(context: &str, error: impl std::fmt::Display) -> String {
+    format!("identité du daemon indisponible: {context}: {error}")
+}
+
+fn legacy_identity_report(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line.trim())
+        .ok()
+        .is_some_and(|value| {
+            value.get("type").and_then(serde_json::Value::as_str) == Some("DaemonIdentityReport")
+        })
 }
 
 #[derive(Default, Clone)]
