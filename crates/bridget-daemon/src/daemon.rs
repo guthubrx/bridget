@@ -2601,6 +2601,18 @@ fn schedule_idempotent_delivery_recovery(
 
 /// Lance le daemon.
 pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
+    // Gestionnaires de signaux AVANT toute trace visible de l'extérieur.
+    //
+    // Ils étaient installés après la liaison de la socket : entre le moment où
+    // le daemon devenait joignable et celui où il devenait interruptible
+    // proprement, un SIGTERM tombait sur la disposition PAR DÉFAUT et tuait le
+    // processus net — socket et fichier PID abandonnés derrière lui. Un
+    // démarrage suivi d'un arrêt immédiat laissait donc des reliques que le
+    // démarrage suivant devait déblayer. Le drapeau est remis à zéro d'abord :
+    // un SIGTERM arrivé avant la boucle sera vu à sa première itération.
+    SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
+    install_daemon_signal_handlers();
+
     // Verrouillage exclusif avec flock — empêche deux daemons de démarrer en même temps
     // Évite la race condition TOCTOU du PID file traditionnel
     let pid_file = config.socket_path.with_extension("pid");
@@ -2892,12 +2904,6 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
-
-    // Setup signal handler — flag atomique global (pas de Mutex dans le handler)
-    // On utilise un flag atomique simple. Le shutdown propre (notification
-    // des wrappers) est fait dans la boucle principale quand elle détecte le flag.
-    SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
-    install_daemon_signal_handlers();
 
     // Boucle d'acceptation avec timeout pour vérifier shutdown
     listener.set_nonblocking(true)?;

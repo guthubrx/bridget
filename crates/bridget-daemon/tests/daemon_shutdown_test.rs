@@ -116,3 +116,41 @@ fn un_daemon_nu_meurt_sur_sigterm_sans_signal_non_capturable() {
         delai.as_millis()
     );
 }
+
+/// Le fichier PID et la socket doivent avoir disparu : c'est la preuve que
+/// l'arrêt PROPRE s'est déroulé, et pas seulement que le processus est mort.
+///
+/// Mutant qui tue ce test : sortir du processus avant le nettoyage (par exemple
+/// un `_exit` posé dans le gestionnaire de signal) → les deux fichiers restent
+/// et les assertions meurent en nommant celui qui subsiste.
+#[test]
+fn l_arret_reste_propre_et_ne_laisse_ni_socket_ni_fichier_pid() {
+    let racine = racine_temporaire("propre");
+    let home = racine.join("home");
+    let mut daemon = demarrer_daemon(&home);
+    let socket = home.join(".cache/bridget/bridget.sock");
+    let fichier_pid = socket.with_extension("pid");
+
+    // Contrôle positif : les deux existent AVANT l'arrêt. Sans lui, un test qui
+    // vérifie leur absence passerait aussi si le daemon ne les créait jamais.
+    assert!(socket.exists(), "socket absente avant l'arrêt: {socket:?}");
+    assert!(
+        fichier_pid.exists(),
+        "fichier PID absent avant l'arrêt: {fichier_pid:?}"
+    );
+
+    assert_eq!(unsafe { libc::kill(daemon.id() as i32, libc::SIGTERM) }, 0);
+    let delai = attendre_la_fin(&mut daemon, BUDGET_ARRET);
+    if delai.is_none() {
+        let _ = daemon.kill();
+        let _ = daemon.wait();
+    }
+
+    let socket_restante = socket.exists();
+    let pid_restant = fichier_pid.exists();
+    let _ = fs::remove_dir_all(&racine);
+
+    assert!(delai.is_some(), "le daemon n'a pas terminé dans le budget");
+    assert!(!socket_restante, "socket laissée derrière: {socket:?}");
+    assert!(!pid_restant, "fichier PID laissé derrière: {fichier_pid:?}");
+}
