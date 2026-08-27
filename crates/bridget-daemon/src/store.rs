@@ -143,6 +143,9 @@ pub enum GuichetResult {
         issue: String,
         expires_at: i64,
         newly_finalized: bool,
+        /// Réponse canonique durable produite par Maicie, jamais reconstruite
+        /// depuis le seul libellé terminal.
+        reply_bytes: Vec<u8>,
     },
     CanonicalBytesMismatch,
     IdempotencyExpired,
@@ -889,6 +892,7 @@ impl Store {
             issue,
             expires_at,
             newly_finalized: true,
+            reply_bytes: input.reply_bytes.to_vec(),
         })
     }
 
@@ -1694,6 +1698,7 @@ fn guichet_existing_result(row: &GuichetRow, now: i64) -> GuichetResult {
                 .unwrap_or_else(|| "refused".to_string()),
             expires_at: row.expires_at,
             newly_finalized: false,
+            reply_bytes: row.reply_bytes.clone().unwrap_or_default(),
         },
         _ => GuichetResult::IdempotencyExpired,
     }
@@ -2154,6 +2159,90 @@ mod tests {
             ),
             Ok(GuichetResult::Terminal { ref issue, .. }) if issue == "accepted"
         ));
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn resultat_terminal_restitue_les_octets_durables_a_la_finalisation_au_lookup_et_au_rejeu() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-guichet-terminal-bytes-{}.db",
+            Uuid::new_v4()
+        ));
+        let mut store = Store::open(&path).unwrap();
+        let deposit = guichet_deposit(
+            "request-terminal-bytes",
+            br#"{"request":"terminal-bytes"}"#,
+        );
+        let now = deposit.issued_at;
+        store.deposit_guichet(&deposit, 600, 60, now).unwrap();
+        let claim = match store.claim_next_guichet("service-terminal", now).unwrap() {
+            GuichetNext::Claimed(claim) => claim,
+            GuichetNext::Empty => panic!("claim terminal absent"),
+        };
+        let expected = br#"{"type":"guichet_reply","result":"created"}"#;
+
+        let finalized = store
+            .reply_guichet(
+                "service-terminal",
+                GuichetReplyInput {
+                    issuer_scope: &claim.issuer_scope,
+                    request_id: &claim.request_id,
+                    generation: claim.claim_generation,
+                    token: &claim.claim_token,
+                    response_message_id: "reply-terminal-bytes",
+                    reply_bytes: expected,
+                    in_reply_to: "",
+                    outcome: GuichetOutcome::Accepted,
+                },
+                now,
+            )
+            .unwrap();
+        match finalized {
+            GuichetResult::Terminal {
+                newly_finalized: true,
+                reply_bytes,
+                ..
+            } => assert_eq!(reply_bytes, expected, "octets rendus à la finalisation"),
+            other => panic!("résultat terminal finalisé attendu, reçu {other:?}"),
+        }
+
+        match store
+            .lookup_guichet(&claim.issuer_scope, &claim.request_id, now + 1)
+            .unwrap()
+        {
+            GuichetResult::Terminal {
+                newly_finalized: false,
+                reply_bytes,
+                ..
+            } => assert_eq!(reply_bytes, expected, "octets relus par lookup"),
+            other => panic!("résultat terminal relu attendu, reçu {other:?}"),
+        }
+
+        match store
+            .reply_guichet(
+                "service-terminal",
+                GuichetReplyInput {
+                    issuer_scope: &claim.issuer_scope,
+                    request_id: &claim.request_id,
+                    generation: claim.claim_generation,
+                    token: &claim.claim_token,
+                    response_message_id: "reply-terminal-bytes",
+                    reply_bytes: expected,
+                    in_reply_to: "",
+                    outcome: GuichetOutcome::Accepted,
+                },
+                now + 1,
+            )
+            .unwrap()
+        {
+            GuichetResult::Terminal {
+                newly_finalized: false,
+                reply_bytes,
+                ..
+            } => assert_eq!(reply_bytes, expected, "octets rendus au rejeu terminal"),
+            other => panic!("rejeu terminal attendu, reçu {other:?}"),
+        }
         drop(store);
         let _ = std::fs::remove_file(path);
     }
