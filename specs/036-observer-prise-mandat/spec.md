@@ -115,8 +115,10 @@ jamais `MANDAT_NON_SOUMIS`. Elle apparaît comme
 
 - **FR-3601** : le chemin de remise tmux et les producteurs de journal ne sont
   pas modifiés ; le lot est exclusivement observateur.
-- **FR-3602** : la corrélation exige le même identifiant de mandat et un fait
-  natif horodaté après l'injection.
+- **FR-3602** : la corrélation exige l'égalité avec l'identifiant porté par la
+  première ligne de l'enveloppe canonique et un fait natif horodaté après
+  l'injection. Une appartenance de sous-chaîne, un préfixe, un sur-ensemble ou
+  une mention dans le corps ne valent jamais acceptation.
 - **FR-3603** : le seuil de 60 secondes ne s'applique qu'à l'acceptation par le
   client interactif au repos ; il ne s'applique ni au steering ni au délai
   fournisseur.
@@ -131,8 +133,10 @@ jamais `MANDAT_NON_SOUMIS`. Elle apparaît comme
 - **FR-3608** : une ligne partielle, un JSON invalide, une version de source
   non reconnue ou plusieurs traces principales indistinguables invalide
   l'observation complète ; une trace de sous-agent explicitement typée ne rend
-  pas la trace principale ambiguë. Aucune liste partielle n'est présentée comme
-  saine.
+  pas la trace principale ambiguë. Une première ligne partielle rencontrée
+  pendant la découverte ferme aussi l'observation, même si un autre descripteur
+  porte une trace principale valide. Aucune liste partielle n'est présentée
+  comme saine.
 - **FR-3609** : aucun contenu utilisateur extrait des traces natives n'est
   inclus dans la sortie texte ou JSON.
 - **FR-3610** : aucun marqueur visuel de console, y compris
@@ -171,6 +175,12 @@ jamais `MANDAT_NON_SOUMIS`. Elle apparaît comme
   injection 10:04:24Z) produit `REMISE_PENDANT_TOUR_ACTIF`, tandis que le
   contrôle `rc7` (`task_complete` 10:39:46.868Z puis injection 10:40:17Z)
   reste `MANDAT_NON_SOUMIS` ; les deux catégories sont disjointes.
+- **SC-3609** : l'enveloppe portant exactement `id=mcp-abc` est acceptée ;
+  `id=mcp-abc999` et une mention de `id=mcp-abc` dans le corps restent deux
+  témoins négatifs indépendants.
+- **SC-3610** : un descripteur Codex dont la première ligne n'est pas terminée
+  rend `PRISE_INOBSERVABLE` dans l'oracle de découverte et dans la chaîne
+  complète, sans disparaître derrière une autre trace valide.
 
 ## Limite de portée obligatoire
 

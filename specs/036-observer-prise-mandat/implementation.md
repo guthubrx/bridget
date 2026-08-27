@@ -68,7 +68,7 @@ test-bridget-idle: checks
 
 Résultat base : **23 passés / 0 échoué**, agrégat passé.
 
-La tête contient 38 contrôles nommés et un agrégat. Liste brute :
+La tête amendée contient 43 contrôles nommés et un agrégat. Liste brute :
 
 ```text
 controle_positif_details_dangereux_presents
@@ -76,12 +76,17 @@ lecture_bornes_tour_et_incertitudes
 prise_specimen_720s_non_soumise
 prise_sans_marqueur_visuel_non_soumise
 prise_saine_interdit_faux_positif
+correlation_identifiant_exact_positive
+correlation_surensemble_negative
+correlation_mention_non_correlee_negative
 prise_claude_enqueue_remove_et_direct_discrimines
 steering_cartae0_nomme_et_controle_idle_rc7_conserve
 prise_inobservable_cardinal_non_muet
 prise_inobservable_sources_invalides
 contenu_trace_non_projete
 decouverte_trace_codex_par_processus
+decouverte_codex_ligne_partielle_fermee
+chaine_prise_codex_ligne_partielle_inobservable
 decouverte_codex_refuse_sous_agent_et_ambiguite
 decouverte_trace_claude_par_projet
 controle_positif_ancien_rouge
@@ -112,7 +117,7 @@ json_diagnostic_valide_et_inerte_et_backlog_branches
 test-bridget-idle: checks
 ```
 
-Résultat tête : **38 passés / 0 échoué**, agrégat passé. La partition de
+Résultat tête : **43 passés / 0 échoué**, agrégat passé. La partition de
 fixture porte 28 agents, sans omission ni recouvrement.
 
 ## Mutants opposés
@@ -129,12 +134,19 @@ le tir nominal :
 3. neutraliser la condition `client_state_at_injection == "active"` : mort
    dans `steering_cartae0_nomme_et_controle_idle_rc7_conserve`, avec
    `client_state_at_injection=active`, 2 lignes lues et aucune acceptation.
+4. remplacer l'égalité de l'identifiant canonique par l'ancienne appartenance
+   de sous-chaîne : mort dans `correlation_surensemble_negative`, après le
+   passage de `correlation_identifiant_exact_positive` ; `mcp-abc999` produit
+   à tort une acceptation de `mcp-abc`.
+5. rendre de nouveau `False` pour une première ligne Codex partielle : mort
+   dans `decouverte_codex_ligne_partielle_fermee` ; la trace valide voisine
+   serait sinon choisie avec `error=None`.
 
 La restauration finale est attestée par :
 
 ```text
-f70d1c408954710773bd619a29cf2e78b46068fcab153c89246860455a6055e3  scripts/bridget-idle.py
-00cbca0616da6ea738ed6a35dfa77feb6dd0a8d96edbbc84dbc9061ad65cd625  scripts/test-bridget-idle.sh
+2e5392d8850e29d53b443bd5fc65379cbe1b65ebf11719dbcede77f21cc1ddfc  scripts/bridget-idle.py
+df1e587c2068e29e4e13b8c351c4c593bfe5641ca2e9978d4c6d97c4c4523942  scripts/test-bridget-idle.sh
 ```
 
 ## Tir réel final sur Cartae
@@ -145,14 +157,16 @@ Commande productive :
 python3 scripts/bridget-idle.py --json
 ```
 
-Projection brute bornée du dernier tir :
+Projection bornée du tir d'amendement :
 
 ```json
-{"daemon_count":14,"intake":{"scope":"local-only","eligible_count":10,"available_count":9,"records_read":59696},"maicie":{"state":"available","occupied_count":0},"partition":"partition ok (14 agents)","mandats_non_soumis":[{"name":"rc7","state":"MANDAT_NON_SOUMIS","client_state_at_injection":"idle","records_read":258,"matching_acceptances":0,"age_secs":248}],"remises_pendant_tour_actif":[],"prises_inobservables":[{"name":"rc1","state":"PRISE_INOBSERVABLE","source_state":"unavailable","records_read":0,"reason":"trace-codex-active-absente"}],"elapsed_seconds":1.318}
+{"daemon_count":15,"intake":{"scope":"local-only","eligible_count":10,"available_count":9,"records_read":63532},"maicie":{"state":"available","occupied_count":0},"partition":"partition ok (15 agents)","mandats_non_soumis":[],"remises_pendant_tour_actif":[{"name":"rc5","state":"REMISE_PENDANT_TOUR_ACTIF","client_state_at_injection":"active","records_read":10854,"matching_acceptances":0}],"prises_inobservables":[{"name":"rc1","state":"PRISE_INOBSERVABLE","source_state":"unavailable","records_read":0,"reason":"trace-codex-active-absente"}]}
 ```
 
 Le tir prouve que l'observateur n'est pas conditionné par la copie Maicie
-locale vide. La projection ne contient aucun corps de conversation.
+locale vide. Huit prises réelles sont corrélées exactement parmi les neuf
+sources disponibles ; le neuvième cas est le steering `rc5` encore actif. La
+projection ne contient aucun corps de conversation.
 
 ## Gates
 
@@ -161,9 +175,9 @@ locale vide. La projection ne contient aucun corps de conversation.
 - `ruff check scripts/bridget-idle.py` : vert ;
 - `git diff --check` : vert ;
 - harnais base : 23 passés / 0 échoué, agrégat passé ;
-- harnais tête : 38 passés / 0 échoué, agrégat passé.
+- harnais tête : 43 passés / 0 échoué, agrégat passé.
 
-## Revue hostile : 4 problèmes trouvés, 4 corrigés
+## Revue hostile : 6 problèmes trouvés, 6 corrigés
 
 | # | Problème | Sévérité | Correction |
 |---|---|---|---|
@@ -171,6 +185,8 @@ locale vide. La projection ne contient aucun corps de conversation.
 | 2 | La copie Maicie locale vide rendait l'observation entièrement muette | Haute | Observation de toutes les injections interactives ouvertes vues par le daemon ; contrôle sans mission locale |
 | 3 | Le seuil idle accusait une remise pendant un tour actif (`cartae0`) | Haute | État natif à l'injection, catégorie `REMISE_PENDANT_TOUR_ACTIF`, contrôle opposé `rc7` |
 | 4 | Une trace principale valide pouvait masquer un second descripteur de rôle inconnu | Moyenne | Tout rôle Codex inconnu et toute session Claude indéterminable rendent la découverte inobservable |
+| 5 | Une sous-chaîne ou une mention de l'identifiant fabriquait une prise inexistante | Haute | Extraction de l'identifiant de l'enveloppe canonique et égalité exacte, avec deux témoins négatifs |
+| 6 | Une première ligne partielle disparaissait si une autre trace valide existait | Haute | État de rôle inconnu fermé, éprouvé à la découverte et dans la chaîne complète |
 
 ## Non mesuré et limite durable
 

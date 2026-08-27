@@ -18,11 +18,15 @@ Bridget.
 4. Pour Codex, retrouver la trace active dans les descripteurs ouverts du
    processus et de ses descendants ; pour Claude, sélectionner la session du
    projet local correspondant au répertoire du pane.
-5. Lire la trace append-only intégralement. Une ligne partielle ou invalide
-   invalide la source ; une source vide n'est jamais saine.
+5. Fermer la découverte si la première ligne d'un descripteur Codex est
+   partielle, puis lire la trace append-only intégralement. Une ligne partielle
+   ou invalide invalide la source ; une source vide n'est jamais saine.
 6. Corréler les faits d'entrée acceptée postérieurs à l'injection — message
-   utilisateur Codex, message utilisateur Claude ou `queue_remove` — et
-   reconstruire l'état actif au moment de l'injection depuis les bornes natives.
+   utilisateur Codex, message utilisateur Claude ou `queue_remove` — par
+   égalité avec l'identifiant de l'enveloppe canonique. Une sous-chaîne, un
+   préfixe ou une mention dans le corps ne constituent jamais une corrélation.
+   Reconstruire ensuite l'état actif au moment de l'injection depuis les bornes
+   natives.
 7. Calculer `PRISE_ACCEPTEE`, `PRISE_EN_ATTENTE`, `MANDAT_NON_SOUMIS`,
    `REMISE_PENDANT_TOUR_ACTIF` ou `PRISE_INOBSERVABLE` pour chaque injection
    interactive ouverte vue par le daemon, sans dépendre de la copie Maicie
@@ -39,8 +43,10 @@ processus. La découverte Codex est également éprouvée sur un faux arbre
 Le spécimen rc5 est réduit aux lignes nécessaires, avec les horodatages réels
 de la spec. Deux contrôles bloqués conservent une injection et une trace non
 vide sans acceptation : l'un porte `[Pasted Content]`, l'autre du texte normal.
-Le contrôle sain ajoute la seule entrée corrélée. Côté Claude, `enqueue` et
-`remove` sont exercés séparément. Aucun rendu de pane n'entre dans le calcul.
+Le contrôle sain ajoute la seule entrée corrélée. Deux contrôles adverses
+portent un identifiant sur-ensemble et une simple mention dans le corps. Côté
+Claude, `enqueue` et `remove` sont exercés séparément. Aucun rendu de pane
+n'entre dans le calcul.
 
 ## Seuil
 
@@ -80,7 +86,8 @@ message dans la sortie.
 - `python3 -m py_compile scripts/bridget-idle.py` avec cache hors dépôt ;
 - `bash -n scripts/test-bridget-idle.sh` ;
 - harnais complet `scripts/test-bridget-idle.sh`, base et tête ;
-- mutants opposés sur le cas bloqué et le cas accepté ;
+- mutants opposés sur le cas bloqué et le cas accepté, puis mutants ciblés
+  rétablissant la sous-chaîne et l'oubli d'une première ligne partielle ;
 - tir réel local en lecture seule sur Cartae, avec cardinal rendu ;
 - `git diff --check` et relecture du diff complet.
 

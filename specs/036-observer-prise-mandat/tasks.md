@@ -24,3 +24,7 @@
   documenter les preuves dans `specs/036-observer-prise-mandat/implementation.md`.
 - [x] T010 Relire le diff, rendre le matériel et livrer une tête locale et
   distante identiques.
+- [x] T011 Corréler l'identifiant exact de l'enveloppe canonique et ajouter les
+  témoins exact, sur-ensemble et mention non corrélée.
+- [x] T012 Fermer la découverte sur une première ligne partielle et l'éprouver
+  à la découverte puis dans la chaîne complète.

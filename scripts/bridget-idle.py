@@ -513,13 +513,32 @@ def _same_host(left: Any, right: str) -> bool:
     )
 
 
-def _contains_identifier(value: Any, identifier: str) -> bool:
+def _canonical_envelope_identifier(value: str) -> str | None:
+    header = value.split("\n", 1)[0]
+    if not header.startswith("💬 ") or not header.endswith(")"):
+        return None
+    route, separator, control = header.rpartition(" (reply=")
+    if not separator or " → " not in route:
+        return None
+    reply, separator, raw_identifier = control.partition(", id=")
+    if reply not in {"yes", "no"} or not separator:
+        return None
+    identifier = raw_identifier[:-1]
+    return identifier or None
+
+
+def _contains_canonical_identifier(value: Any, identifier: str) -> bool:
     if isinstance(value, str):
-        return identifier in value
+        return _canonical_envelope_identifier(value) == identifier
     if isinstance(value, list):
-        return any(_contains_identifier(item, identifier) for item in value)
+        return any(
+            _contains_canonical_identifier(item, identifier) for item in value
+        )
     if isinstance(value, dict):
-        return any(_contains_identifier(item, identifier) for item in value.values())
+        return any(
+            _contains_canonical_identifier(item, identifier)
+            for item in value.values()
+        )
     return False
 
 
@@ -646,7 +665,7 @@ def read_native_intake_trace(
                         and payload.get("role") == "user"
                     ):
                         candidate = True
-                        contains_message = _contains_identifier(
+                        contains_message = _contains_canonical_identifier(
                             payload.get("content"), message_id
                         )
                 elif provider == "claude":
@@ -656,7 +675,7 @@ def read_native_intake_trace(
                         format_seen = True
                     if _claude_user_is_prompt(record):
                         candidate = True
-                        contains_message = _contains_identifier(
+                        contains_message = _contains_canonical_identifier(
                             record.get("message"), message_id
                         )
                         if event_epoch is None:
@@ -672,7 +691,7 @@ def read_native_intake_trace(
                         and record.get("operation") == "remove"
                     ):
                         candidate = True
-                        contains_message = _contains_identifier(
+                        contains_message = _contains_canonical_identifier(
                             record.get("content"), message_id
                         )
                     elif (
@@ -680,7 +699,9 @@ def read_native_intake_trace(
                         and record.get("operation") == "enqueue"
                     ):
                         steering_records += 1
-                        if _contains_identifier(record.get("content"), message_id):
+                        if _contains_canonical_identifier(
+                            record.get("content"), message_id
+                        ):
                             if event_epoch is None:
                                 return _unavailable_intake(
                                     source,
@@ -844,7 +865,7 @@ def _codex_trace_role(path: Path) -> str:
         with path.open(encoding="utf-8") as stream:
             first = stream.readline()
         if not first.endswith("\n"):
-            return False
+            return "unknown"
         record = json.loads(first)
     except (OSError, UnicodeError, json.JSONDecodeError):
         return "unknown"

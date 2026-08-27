@@ -382,7 +382,11 @@ codex_consumed_trace = write_trace(
                 "content": [
                     {
                         "type": "input_text",
-                        "text": f"{secret_content} id=mcp-codex-consumed",
+                        "text": (
+                            "💬 bridget → codex-consumed "
+                            "(reply=no, id=mcp-codex-consumed)\n"
+                            f"{secret_content}"
+                        ),
                     }
                 ],
             },
@@ -402,7 +406,10 @@ claude_enqueued_trace = write_trace(
                 "content": [
                     {
                         "type": "tool_result",
-                        "content": "id=mcp-claude-enqueued",
+                        "content": (
+                            "💬 bridget → claude-enqueued "
+                            "(reply=no, id=mcp-claude-enqueued)"
+                        ),
                     }
                 ],
             },
@@ -412,7 +419,10 @@ claude_enqueued_trace = write_trace(
             "type": "queue-operation",
             "operation": "enqueue",
             "sessionId": "claude-enqueued",
-            "content": "id=mcp-claude-enqueued",
+            "content": (
+                "💬 bridget → claude-enqueued "
+                "(reply=no, id=mcp-claude-enqueued)"
+            ),
         },
     ],
 )
@@ -468,14 +478,21 @@ claude_consumed_trace = write_trace(
             "type": "queue-operation",
             "operation": "enqueue",
             "sessionId": "claude-consumed",
-            "content": "id=mcp-claude-consumed",
+            "content": (
+                "💬 bridget → claude-consumed "
+                "(reply=no, id=mcp-claude-consumed)"
+            ),
         },
         {
             "timestamp": "2026-08-27T10:08:00.083Z",
             "type": "queue-operation",
             "operation": "remove",
             "sessionId": "claude-consumed",
-            "content": f"{secret_content} id=mcp-claude-consumed",
+            "content": (
+                "💬 bridget → claude-consumed "
+                "(reply=no, id=mcp-claude-consumed)\n"
+                f"{secret_content}"
+            ),
         },
     ],
 )
@@ -487,9 +504,61 @@ claude_direct_trace = write_trace(
             "timestamp": "2026-08-27T10:07:11.553Z",
             "type": "user",
             "sessionId": "claude-direct",
-            "message": {"role": "user", "content": "id=mcp-claude-direct"},
+            "message": {
+                "role": "user",
+                "content": (
+                    "💬 bridget → claude-direct "
+                    "(reply=no, id=mcp-claude-direct)"
+                ),
+            },
         },
     ],
+)
+
+
+def codex_correlation_trace(name, first_line, body=""):
+    return write_trace(
+        name,
+        [
+            {
+                "timestamp": "2026-08-27T10:00:00Z",
+                "type": "session_meta",
+                "payload": {
+                    "id": f"session-{name}",
+                    "cwd": f"/fixture/{name}",
+                    "thread_source": "user",
+                },
+            },
+            {
+                "timestamp": "2026-08-27T10:01:01Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": first_line + (f"\n{body}" if body else ""),
+                        }
+                    ],
+                },
+            },
+        ],
+    )
+
+
+codex_exact_trace = codex_correlation_trace(
+    "codex-id-exact",
+    "💬 bridget → codex-id-exact (reply=no, id=mcp-abc)",
+)
+codex_prefix_trace = codex_correlation_trace(
+    "codex-id-prefix",
+    "💬 bridget → codex-id-prefix (reply=no, id=mcp-abc999)",
+)
+codex_mention_trace = codex_correlation_trace(
+    "codex-id-mention",
+    "💬 bridget → codex-id-mention (reply=no, id=mcp-autre)",
+    "Le diagnostic mentionne id=mcp-abc sans remettre ce mandat.",
 )
 
 trace_paths = {
@@ -530,6 +599,67 @@ if specimen["codex-consumed"]["state"] != "PRISE_ACCEPTEE":
 if specimen["codex-consumed"]["matching_acceptances"] != 1:
     raise SystemExit(f"cardinal Codex sain inattendu: {specimen['codex-consumed']}")
 print("prise_saine_interdit_faux_positif: OK")
+
+correlation_names = {"codex-id-exact", "codex-id-prefix", "codex-id-mention"}
+correlation_agents = [
+    {
+        "name": name,
+        "agent_type": "codex",
+        "host": "fixture-host",
+        "state": "connected",
+        "domain": "bridget",
+        "transport": "tmux",
+        "location": f"{name}:1.1",
+    }
+    for name in correlation_names
+]
+correlation_turns = {
+    name: {
+        "state": "open",
+        "message_id": "mcp-abc",
+        "ts": "2026-08-27T10:01:00Z",
+    }
+    for name in correlation_names
+}
+correlation = mod.read_intake_observations(
+    correlation_agents,
+    correlation_names,
+    correlation_turns,
+    now=int(mod._epoch_from_iso8601("2026-08-27T10:03:00Z")),
+    intake_after_secs=60,
+    local_host="fixture-host",
+    codex_trace_root=trace_root,
+    claude_trace_root=trace_root,
+    tmux_bin="tmux-inutilise",
+    trace_paths={
+        "codex-id-exact": codex_exact_trace,
+        "codex-id-prefix": codex_prefix_trace,
+        "codex-id-mention": codex_mention_trace,
+    },
+)
+if (
+    correlation["codex-id-exact"]["state"] != "PRISE_ACCEPTEE"
+    or correlation["codex-id-exact"]["matching_acceptances"] != 1
+    or correlation["codex-id-exact"]["acceptance_records_read"] != 1
+):
+    raise SystemExit(f"identifiant canonique exact non reconnu: {correlation['codex-id-exact']}")
+print("correlation_identifiant_exact_positive: OK")
+if (
+    correlation["codex-id-prefix"]["state"] != "MANDAT_NON_SOUMIS"
+    or correlation["codex-id-prefix"]["matching_acceptances"] != 0
+    or correlation["codex-id-prefix"]["acceptance_records_read"] != 1
+    or correlation["codex-id-prefix"]["records_read"] != 2
+):
+    raise SystemExit(f"collision de préfixe prise pour une acceptation: {correlation['codex-id-prefix']}")
+print("correlation_surensemble_negative: OK")
+if (
+    correlation["codex-id-mention"]["state"] != "MANDAT_NON_SOUMIS"
+    or correlation["codex-id-mention"]["matching_acceptances"] != 0
+    or correlation["codex-id-mention"]["acceptance_records_read"] != 1
+    or correlation["codex-id-mention"]["records_read"] != 2
+):
+    raise SystemExit(f"mention non corrélée prise pour une acceptation: {correlation['codex-id-mention']}")
+print("correlation_mention_non_correlee_negative: OK")
 
 intake_now = int(mod._epoch_from_iso8601("2026-08-27T10:44:20Z"))
 intakes = mod.read_intake_observations(
@@ -658,6 +788,85 @@ discovered, discovery_error = mod.discover_codex_trace(700, trace_root, proc_roo
 if discovery_error or discovered != codex_discovery_trace:
     raise SystemExit(f"trace Codex active non découverte: path={discovered} error={discovery_error}")
 print("decouverte_trace_codex_par_processus: OK")
+
+codex_partial_role_trace = trace_root / "rollout-role-partial.jsonl"
+codex_partial_role_trace.write_text(
+    json.dumps(
+        {
+            "timestamp": "2026-08-27T10:01:24.444Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "partial",
+                "cwd": "/fixture/codex-consumed",
+                "thread_source": "user",
+            },
+        }
+    ),
+    encoding="utf-8",
+)
+partial_descriptor = fake_proc / "701" / "fd" / "11"
+partial_descriptor.symlink_to(codex_partial_role_trace)
+partial_path, partial_error = mod.discover_codex_trace(
+    700, trace_root, proc_root=fake_proc
+)
+if partial_path is not None or partial_error != "traces-codex-role-inconnu:1":
+    raise SystemExit(
+        "première ligne partielle ignorée par la découverte: "
+        f"path={partial_path} error={partial_error}"
+    )
+print("decouverte_codex_ligne_partielle_fermee: OK")
+
+fake_tmux = fixture / "tmux-fixture"
+fake_tmux.write_text(
+    "#!/bin/sh\n"
+    "case \"$5\" in\n"
+    "  '#{pane_pid}') printf '700\\n' ;;\n"
+    "  '#{pane_current_path}') printf '/fixture/codex-consumed\\n' ;;\n"
+    "  *) exit 2 ;;\n"
+    "esac\n",
+    encoding="utf-8",
+)
+fake_tmux.chmod(0o700)
+partial_chain = mod.read_intake_observations(
+    [
+        {
+            "name": "codex-partial",
+            "agent_type": "codex",
+            "host": "fixture-host",
+            "state": "connected",
+            "domain": "bridget",
+            "transport": "tmux",
+            "location": "codex-partial:1.1",
+        }
+    ],
+    {"codex-partial"},
+    {
+        "codex-partial": {
+            "state": "open",
+            "message_id": "mcp-partial",
+            "ts": "2026-08-27T10:01:00Z",
+        }
+    },
+    now=int(mod._epoch_from_iso8601("2026-08-27T10:03:00Z")),
+    intake_after_secs=60,
+    local_host="fixture-host",
+    codex_trace_root=trace_root,
+    claude_trace_root=trace_root,
+    tmux_bin=str(fake_tmux),
+    proc_root=fake_proc,
+)
+partial_observation = partial_chain.get("codex-partial")
+if (
+    not isinstance(partial_observation, dict)
+    or partial_observation.get("state") != "PRISE_INOBSERVABLE"
+    or partial_observation.get("source_state") != "unavailable"
+    or partial_observation.get("reason") != "traces-codex-role-inconnu:1"
+    or partial_observation.get("records_read") != 0
+    or partial_observation.get("matching_acceptances") != 0
+):
+    raise SystemExit(f"ligne partielle disparue de la chaîne complète: {partial_observation}")
+print("chaine_prise_codex_ligne_partielle_inobservable: OK")
+partial_descriptor.unlink()
 
 codex_unknown_trace = trace_root / "rollout-role-unknown.jsonl"
 codex_unknown_trace.write_text(
