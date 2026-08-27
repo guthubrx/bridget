@@ -13892,10 +13892,22 @@ mod presence_tests {
             if let Ok(result) = result_rx.try_recv() {
                 break result;
             }
-            assert!(
-                Instant::now() < stop_deadline,
-                "la chaîne réelle stop n'a pas produit d'issue : le superviseur n'a pas observé la terminaison de l'adaptateur après Disconnect"
-            );
+            if Instant::now() >= stop_deadline {
+                let pgid = marker.pgid as libc::pid_t;
+                let _ = unsafe { libc::kill(-pgid, libc::SIGTERM) };
+                let cleanup_deadline = Instant::now() + Duration::from_millis(500);
+                while crate::managed_process::group_exists(marker.pgid).unwrap_or(false)
+                    && Instant::now() < cleanup_deadline
+                {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                if crate::managed_process::group_exists(marker.pgid).unwrap_or(false) {
+                    let _ = unsafe { libc::kill(-pgid, libc::SIGKILL) };
+                }
+                panic!(
+                    "la chaîne réelle stop n'a pas produit d'issue : le superviseur n'a pas observé la terminaison de l'adaptateur après Disconnect (groupe nettoyé directement)"
+                );
+            }
             thread::sleep(Duration::from_millis(10));
         };
         assert!(matches!(
