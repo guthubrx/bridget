@@ -114,10 +114,10 @@ type ActiveTurnDetail = Arc<Mutex<Option<CodexTurnDetail>>>;
 
 #[derive(Debug, Clone, Copy)]
 enum CodexActKind {
+    /// Producteur : `item/started` type=commandExecution (commande réelle).
+    /// Les `outputDelta` ne sont plus journalisés ici (sortie stdout ≠ nom).
     Command,
-    // Producteur réel (`item/fileChange/patchUpdated` → record_active_act), mais
-    // 0 occurrence dans les journaux relec* du 2026-08-26 : Codex n'a pas émis
-    // cette méthode sur les tours mesurés (seulement commandExecution + approval).
+    // Producteur réel (`item/fileChange/patchUpdated` → record_active_act).
     // Conservé : la vue doit l'afficher le jour où l'événement apparaît.
     File,
     // Idem pour `item/plan/delta` — producteur présent, zéro émission mesurée.
@@ -1408,6 +1408,36 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                         },
                     );
                 }
+                // Mesure 2026-08-27 (codex app-server 0.149) : la COMMANDE réelle
+                // est dans item/started type=commandExecution.params.item.command.
+                // Les outputDelta ne portent que la sortie — ce n'est pas le nom.
+                Some("item/started") => {
+                    let item = value.pointer("/params/item").unwrap_or(&Value::Null);
+                    if item.get("type").and_then(Value::as_str) == Some("commandExecution")
+                        && let Some(command) = item
+                            .get("command")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|command| !command.is_empty())
+                    {
+                        record_active_act(
+                            &journal,
+                            &observations,
+                            &active_detail,
+                            &value,
+                            CodexActKind::Command,
+                            command,
+                            Some("item/started"),
+                        );
+                    }
+                    push_source(
+                        &observations,
+                        raw,
+                        ManagedEventKind::Update {
+                            detail: "item/started Codex".to_string(),
+                        },
+                    );
+                }
                 Some(
                     method @ ("item/reasoning/summaryTextDelta"
                     | "item/reasoning/summaryPartAdded"
@@ -1423,21 +1453,9 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                     );
                 }
                 Some("item/commandExecution/outputDelta") => {
-                    if let Some(delta) = value
-                        .pointer("/params/delta")
-                        .and_then(Value::as_str)
-                        .filter(|delta| !delta.is_empty())
-                    {
-                        record_active_act(
-                            &journal,
-                            &observations,
-                            &active_detail,
-                            &value,
-                            CodexActKind::Command,
-                            delta,
-                            None,
-                        );
-                    }
+                    // Sortie stdout uniquement — ne pas la journaliser comme
+                    // acte « command » (sinon le fil affiche la sortie à la
+                    // place du nom, constat relec*). Le nom vient de item/started.
                     push_source(
                         &observations,
                         raw,
@@ -1974,6 +1992,7 @@ mod tests {
                                         printf '%s\n' '{"method":"item/reasoning/summaryTextDelta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"reasoning-1","summaryIndex":0,"delta":"Je compare"}}'
                                         printf '%s\n' '{"method":"item/reasoning/summaryTextDelta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"reasoning-1","summaryIndex":0,"delta":" les options."}}'
                                         printf '%s\n' '{"method":"item/reasoning/textDelta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"reasoning-1","contentIndex":0,"delta":"raison brute"}}'
+                                        printf '%s\n' '{"method":"item/started","params":{"threadId":"thread-native","turnId":"turn-native","startedAtMs":1,"item":{"type":"commandExecution","id":"exec-mesure","command":"echo MESURE_CODEX_CMD_77","cwd":"/tmp/bt","status":"inProgress"}}}'
                                         printf '%s\n' '{"method":"item/commandExecution/outputDelta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"command-1","delta":"313 passés"}}'
                                         printf '%s\n' '{"method":"item/commandExecution/outputDelta","params":{"threadId":"foreign-thread","turnId":"foreign-turn","itemId":"foreign-command","delta":"ne pas attribuer"}}'
                                         printf '%s\n' '{"method":"item/fileChange/patchUpdated","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"file-1","changes":[{"path":"src/main.rs","kind":{"type":"update"},"diff":"@@ -1 +1 @@"}]}}'
@@ -2905,6 +2924,45 @@ mod tests {
         );
     }
 
+    /// (TOOL) Commande Codex → update kind=command avec le NOM réel
+    /// (`item.command`), pas la sortie stdout. Source mesurée : item/started
+    /// type=commandExecution. Mutant : remettre outputDelta en texte d'acte,
+    /// ou vider command → meurt.
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_TOOL_codex_app_server_retranscrit_command_execution_nom() {
+        let (present, _outbound) = journal_detail_fixture("temoin-tool-command", true);
+        let commands: Vec<_> = present
+            .iter()
+            .filter(|event| {
+                event["event"] == "update" && event["payload"]["kind"] == "command"
+            })
+            .collect();
+        assert_eq!(
+            commands.len(),
+            1,
+            "un seul acte command attendu (pas les outputDelta), reçu {commands:?}"
+        );
+        assert_eq!(
+            commands[0]["payload"]["text"].as_str(),
+            Some("echo MESURE_CODEX_CMD_77"),
+            "commande en dur (pas la sortie), payload={}",
+            commands[0]["payload"]
+        );
+        assert_eq!(
+            commands[0]["payload"]["detail"].as_str(),
+            Some("item/started"),
+            "provenance item/started en dur, payload={}",
+            commands[0]["payload"]
+        );
+        assert!(
+            commands
+                .iter()
+                .all(|event| event["payload"]["text"] != "313 passés"),
+            "un mutant qui rejoue outputDelta comme nom laisserait 313 passés"
+        );
+    }
+
     #[test]
     fn journal_codex_atteste_presence_puis_absence_et_ne_valide_pas_approbation() {
         let (present, outbound) = journal_detail_fixture("detail-present", true);
@@ -2935,7 +2993,7 @@ mod tests {
             "le raisonnement n'est attesté qu'au terminal"
         );
         for expected in [
-            json!({"kind":"command", "text":"313 passés"}),
+            json!({"kind":"command", "text":"echo MESURE_CODEX_CMD_77", "detail":"item/started"}),
             json!({"kind":"file", "text":"src/main.rs", "detail":"update"}),
             json!({"kind":"plan", "text":"Tester le flux"}),
             json!({
@@ -2961,6 +3019,14 @@ mod tests {
                 "acte Codex absent du journal: {expected}"
             );
         }
+        assert!(
+            present.iter().all(|event| {
+                !(event["event"] == "update"
+                    && event["payload"]["kind"] == "command"
+                    && event["payload"]["text"] == "313 passés")
+            }),
+            "outputDelta ne doit plus être journalisé comme nom de commande"
+        );
         assert_eq!(
             present
                 .iter()

@@ -1030,10 +1030,11 @@ fn spawn_reader(
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         // Le lecteur stdout est l'unique propriétaire de cette corrélation :
-        // un `tool_call_update` ACP ne répète pas nécessairement le titre du
-        // `tool_call` initial, mais chaque ligne du journal doit rester
+        // un `tool_call_update` ACP enrichit souvent titre/rawInput après coup
+        // (mesuré Cursor : Read File → Read /path + rawInput ; MCP: tool →
+        // permission qui porte le vrai nom). Chaque ligne du journal reste
         // autonome pour les consommateurs de replay.
-        let mut tool_titles = HashMap::<String, String>::new();
+        let mut tool_memory = HashMap::<String, ToolCallMemory>::new();
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else {
                 break;
@@ -1177,7 +1178,7 @@ fn spawn_reader(
                             &events,
                             "update",
                             message_id.as_deref(),
-                            tool_call_journal_payload(&value, &mut tool_titles),
+                            tool_call_journal_payload(&value, &mut tool_memory),
                         );
                     }
                 }
@@ -1186,6 +1187,20 @@ fn spawn_reader(
                         permission_response(&value, &permissions, active_turn_is_cancelled(&queue))
                     {
                         let message_id = active_message_id(&queue);
+                        // Mesure Cursor MCP : le vrai nom arrive ici
+                        // (`bridget-bridget_ledger: bridget_ledger`) alors que
+                        // tool_call ne porte que `MCP: tool` + rawInput vide.
+                        if let Some(tool_payload) =
+                            permission_tool_journal_payload(&value, &mut tool_memory)
+                        {
+                            record_or_terminal(
+                                &journal,
+                                &events,
+                                "update",
+                                message_id.as_deref(),
+                                tool_payload,
+                            );
+                        }
                         record_or_terminal(
                             &journal,
                             &events,
@@ -1605,7 +1620,58 @@ fn take_reasoning_journal_payload(reasoning_raw: &Arc<Mutex<String>>) -> Value {
     payload
 }
 
-fn tool_call_journal_payload(value: &Value, tool_titles: &mut HashMap<String, String>) -> Value {
+/// Mémoire locale au lecteur stdout : titre et arguments se complètent au fil
+/// des `tool_call` / `tool_call_update` / `request_permission` (mesuré Cursor).
+#[derive(Debug, Default, Clone)]
+struct ToolCallMemory {
+    title: Option<String>,
+    detail: String,
+}
+
+/// Plafond du champ `detail` (rawInput sérialisé), miroir Claude.
+const ACP_TOOL_INPUT_DETAIL_MAX: usize = 512;
+
+fn compact_acp_raw_input(input: &Value) -> String {
+    let raw = match input {
+        Value::Null => return String::new(),
+        Value::Object(map) if map.is_empty() => return String::new(),
+        other => other.to_string(),
+    };
+    if raw.chars().count() <= ACP_TOOL_INPUT_DETAIL_MAX {
+        return raw;
+    }
+    let truncated: String = raw.chars().take(ACP_TOOL_INPUT_DETAIL_MAX).collect();
+    format!("{truncated}…")
+}
+
+fn remember_tool_title(memory: &mut ToolCallMemory, incoming: Option<&str>) {
+    let Some(new) = incoming.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    match memory.title.as_deref() {
+        None => memory.title = Some(new.to_string()),
+        // Ne jamais écraser un vrai nom par le libellé générique Cursor MCP.
+        Some(_) if new == "MCP: tool" => {}
+        Some("MCP: tool") | Some("inconnu") => memory.title = Some(new.to_string()),
+        // Mesure Read : tool_call « Read File » puis update « Read /path ».
+        Some(_) => memory.title = Some(new.to_string()),
+    }
+}
+
+fn remember_tool_detail(memory: &mut ToolCallMemory, raw_input: Option<&Value>) {
+    let Some(detail) = raw_input
+        .map(compact_acp_raw_input)
+        .filter(|detail| !detail.is_empty())
+    else {
+        return;
+    };
+    memory.detail = detail;
+}
+
+fn tool_call_journal_payload(
+    value: &Value,
+    tool_memory: &mut HashMap<String, ToolCallMemory>,
+) -> Value {
     let update = value.pointer("/params/update").unwrap_or(&Value::Null);
     let content = update.get("content").unwrap_or(&Value::Null);
     let field = |name: &str| {
@@ -1619,23 +1685,114 @@ fn tool_call_journal_payload(value: &Value, tool_titles: &mut HashMap<String, St
     let name = field("name");
     let tool_kind = field("kind");
     let tool_call_id = field("toolCallId");
-    let title = match (tool_call_id, title) {
-        (Some(tool_call_id), Some(title)) => Some(
-            tool_titles
-                .entry(tool_call_id.to_string())
-                .or_insert_with(|| title.to_string())
-                .clone(),
-        ),
-        (Some(tool_call_id), None) => tool_titles.get(tool_call_id).cloned(),
-        (None, Some(title)) => Some(title.to_string()),
-        (None, None) => None,
-    };
-    let tool = title.as_deref().or(name).or(tool_kind).unwrap_or("inconnu");
-    let summary = update
+    let raw_input = update.get("rawInput").or_else(|| content.get("rawInput"));
+    let summary_text = update
         .get("text")
         .or_else(|| content.get("text"))
         .and_then(Value::as_str)
         .unwrap_or("");
+
+    let memory = match tool_call_id {
+        Some(tool_call_id) => tool_memory.entry(tool_call_id.to_string()).or_default(),
+        None => {
+            // Sans id : état jetable pour cette seule trame.
+            let mut ephemeral = ToolCallMemory::default();
+            remember_tool_title(&mut ephemeral, title.or(name).or(tool_kind));
+            remember_tool_detail(&mut ephemeral, raw_input);
+            let detail = if !ephemeral.detail.is_empty() {
+                ephemeral.detail.clone()
+            } else {
+                summary_text.to_string()
+            };
+            return build_tool_journal_payload(
+                ephemeral.title.as_deref().unwrap_or("inconnu"),
+                &detail,
+                None,
+                title,
+                name,
+                tool_kind,
+            );
+        }
+    };
+    remember_tool_title(memory, title.or(name).or(tool_kind));
+    remember_tool_detail(memory, raw_input);
+    // rawInput (arguments) est sticky ; le text/content de la trame reste
+    // local — un tool_call_update peut dire « terminé » sans écraser les args.
+    let detail = if !memory.detail.is_empty() {
+        memory.detail.clone()
+    } else {
+        summary_text.to_string()
+    };
+    let tool = memory
+        .title
+        .clone()
+        .unwrap_or_else(|| "inconnu".to_string());
+    build_tool_journal_payload(
+        &tool,
+        &detail,
+        tool_call_id,
+        title,
+        name,
+        tool_kind,
+    )
+}
+
+/// Enrichit le fil quand la permission porte le vrai nom (MCP Cursor).
+fn permission_tool_journal_payload(
+    value: &Value,
+    tool_memory: &mut HashMap<String, ToolCallMemory>,
+) -> Option<Value> {
+    let tool_call = value.pointer("/params/toolCall")?;
+    let tool_call_id = tool_call
+        .get("toolCallId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())?;
+    let title = tool_call
+        .get("title")
+        .or_else(|| tool_call.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if title == "MCP: tool" {
+        return None;
+    }
+    let raw_input = tool_call.get("rawInput");
+    let memory = tool_memory.entry(tool_call_id.to_string()).or_default();
+    let before = memory.clone();
+    remember_tool_title(memory, Some(title));
+    remember_tool_detail(memory, raw_input);
+    // N'émettre que si on gagne un vrai nom ou des arguments.
+    let gained_title = before.title.as_deref() != memory.title.as_deref()
+        && memory
+            .title
+            .as_deref()
+            .is_some_and(|title| title != "MCP: tool");
+    let gained_detail = before.detail != memory.detail && !memory.detail.is_empty();
+    if !gained_title && !gained_detail {
+        return None;
+    }
+    let tool = memory
+        .title
+        .clone()
+        .unwrap_or_else(|| title.to_string());
+    Some(build_tool_journal_payload(
+        &tool,
+        &memory.detail,
+        Some(tool_call_id),
+        Some(title),
+        tool_call.get("name").and_then(Value::as_str),
+        tool_call.get("kind").and_then(Value::as_str),
+    ))
+}
+
+fn build_tool_journal_payload(
+    tool: &str,
+    detail: &str,
+    tool_call_id: Option<&str>,
+    title: Option<&str>,
+    name: Option<&str>,
+    tool_kind: Option<&str>,
+) -> Value {
     // C3 : kind fermé `tool` (JournalUpdateKind::Tool). Champs legacy conservés pour
     // corrélation toolCallId / attach tant que ce dernier n'est pas porté.
     // Ne pas réécrire `tool_call` ici — c'est l'héritage borné (ToolCallLegacy).
@@ -1643,18 +1800,18 @@ fn tool_call_journal_payload(value: &Value, tool_titles: &mut HashMap<String, St
         ("kind".to_string(), Value::String("tool".to_string())),
         ("text".to_string(), Value::String(tool.to_string())),
         ("tool".to_string(), Value::String(tool.to_string())),
-        ("summary".to_string(), Value::String(summary.to_string())),
+        ("summary".to_string(), Value::String(detail.to_string())),
     ]);
-    if !summary.is_empty() {
-        payload.insert("detail".to_string(), Value::String(summary.to_string()));
+    if !detail.is_empty() {
+        payload.insert("detail".to_string(), Value::String(detail.to_string()));
     }
     for (key, value) in [
         ("tool_call_id", tool_call_id),
-        ("title", title.as_deref()),
+        ("title", title.or(Some(tool))),
         ("name", name),
         ("tool_kind", tool_kind),
     ] {
-        if let Some(value) = value {
+        if let Some(value) = value.filter(|value| !value.is_empty()) {
             payload.insert(key.to_string(), Value::String(value.to_string()));
         }
     }
@@ -1913,13 +2070,13 @@ mod tests {
     #[test]
     fn tool_call_journal_prefers_title_then_name_then_kind() {
         let update = |fields: Value| json!({"params":{"update":fields}});
-        let mut tool_titles = HashMap::new();
+        let mut tool_memory = HashMap::new();
         let titled = tool_call_journal_payload(
             &update(json!({
                 "toolCallId":"tool-1", "title":"Read src/main.rs", "name":"read_file", "kind":"read",
                 "content":{"text":"lecture"}
             })),
-            &mut tool_titles,
+            &mut tool_memory,
         );
         assert_eq!(titled["tool"], "Read src/main.rs");
         assert_eq!(titled["title"], "Read src/main.rs");
@@ -1930,7 +2087,7 @@ mod tests {
 
         let titled_update = tool_call_journal_payload(
             &update(json!({"toolCallId":"tool-1", "content":{"text":"terminé"}})),
-            &mut tool_titles,
+            &mut tool_memory,
         );
         assert_eq!(titled_update["tool"], "Read src/main.rs");
         assert_eq!(titled_update["title"], "Read src/main.rs");
@@ -1939,15 +2096,141 @@ mod tests {
 
         let named = tool_call_journal_payload(
             &update(json!({"name":"Bash cargo test", "kind":"execute"})),
-            &mut tool_titles,
+            &mut tool_memory,
         );
         assert_eq!(named["tool"], "Bash cargo test");
-        assert!(named.get("title").is_none());
+        assert!(named.get("title").is_some());
 
         let unknown_kind =
-            tool_call_journal_payload(&update(json!({"kind":"quantum_wrench"})), &mut tool_titles);
+            tool_call_journal_payload(&update(json!({"kind":"quantum_wrench"})), &mut tool_memory);
         assert_eq!(unknown_kind["tool"], "quantum_wrench");
         assert_eq!(unknown_kind["tool_kind"], "quantum_wrench");
+    }
+
+    /// Mesure Cursor 2026-08-27 : tool_call initial « Read File » + rawInput {},
+    /// puis tool_call_update titre enrichi + rawInput.path. Mutant qui ignore
+    /// rawInput ou fige le premier titre → meurt.
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_TOOL_acp_retranscrit_rawInput_et_titre_enrichi() {
+        let update = |fields: Value| {
+            json!({
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                    "sessionId": "fixture-session",
+                    "update": fields
+                }
+            })
+        };
+        let mut tool_memory = HashMap::new();
+        let first = tool_call_journal_payload(
+            &update(json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "call-mesure-read",
+                "title": "Read File",
+                "kind": "read",
+                "status": "pending",
+                "rawInput": {}
+            })),
+            &mut tool_memory,
+        );
+        assert_eq!(first["tool"], "Read File");
+        assert!(first.get("detail").is_none() || first["detail"] == "");
+
+        let enriched = tool_call_journal_payload(
+            &update(json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "call-mesure-read",
+                "title": "Read /tmp/bt/mesure-sentinel.txt",
+                "rawInput": {"path": "/tmp/bt/mesure-sentinel.txt"},
+                "locations": [{"path": "/tmp/bt/mesure-sentinel.txt"}]
+            })),
+            &mut tool_memory,
+        );
+        assert_eq!(
+            enriched["text"].as_str(),
+            Some("Read /tmp/bt/mesure-sentinel.txt"),
+            "titre enrichi en dur, payload={}",
+            enriched
+        );
+        assert_eq!(
+            enriched["tool"].as_str(),
+            Some("Read /tmp/bt/mesure-sentinel.txt"),
+            "champ tool en dur, payload={}",
+            enriched
+        );
+        assert_eq!(
+            enriched["detail"].as_str(),
+            Some(r#"{"path":"/tmp/bt/mesure-sentinel.txt"}"#),
+            "rawInput en dur (pas une présence vide), payload={}",
+            enriched
+        );
+    }
+
+    /// Mesure Cursor MCP : tool_call titre « MCP: tool », puis permission
+    /// `bridget-bridget_ledger: bridget_ledger`. Mutant qui laisse MCP: tool → meurt.
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_TOOL_acp_permission_remplace_MCP_tool_par_vrai_nom() {
+        let mut tool_memory = HashMap::new();
+        let generic = tool_call_journal_payload(
+            &json!({
+                "params": {"update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "call-mesure-mcp",
+                    "title": "MCP: tool",
+                    "kind": "other",
+                    "rawInput": {}
+                }}
+            }),
+            &mut tool_memory,
+        );
+        assert_eq!(generic["tool"], "MCP: tool");
+
+        let from_permission = permission_tool_journal_payload(
+            &json!({
+                "params": {
+                    "toolCall": {
+                        "toolCallId": "call-mesure-mcp",
+                        "title": "bridget-bridget_ledger: bridget_ledger",
+                        "kind": "other",
+                        "status": "pending"
+                    }
+                }
+            }),
+            &mut tool_memory,
+        )
+        .expect("la permission doit produire un acte tool nommé");
+        assert_eq!(
+            from_permission["text"].as_str(),
+            Some("bridget-bridget_ledger: bridget_ledger"),
+            "nom MCP en dur, payload={}",
+            from_permission
+        );
+        assert_eq!(
+            from_permission["tool"].as_str(),
+            Some("bridget-bridget_ledger: bridget_ledger"),
+            "champ tool en dur, payload={}",
+            from_permission
+        );
+
+        let later = tool_call_journal_payload(
+            &json!({
+                "params": {"update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "call-mesure-mcp",
+                    "status": "completed"
+                }}
+            }),
+            &mut tool_memory,
+        );
+        assert_eq!(
+            later["tool"].as_str(),
+            Some("bridget-bridget_ledger: bridget_ledger"),
+            "le cache ne doit pas retomber sur MCP: tool, payload={}",
+            later
+        );
     }
 
     fn session_update(session_update: &str, text: &str) -> Value {
@@ -2005,10 +2288,10 @@ mod tests {
         assert_eq!(terminal["raw"], "je vais lire le fichier");
         assert_eq!(terminal["summary"], "je vais lire le fichier");
 
-        let mut tool_titles = HashMap::new();
+        let mut tool_memory = HashMap::new();
         let act = tool_call_journal_payload(
             &session_tool_call("Read src/main.rs", "lecture"),
-            &mut tool_titles,
+            &mut tool_memory,
         );
         assert_eq!(act["kind"], "tool");
         assert_eq!(act["text"], "Read src/main.rs");
@@ -2027,10 +2310,10 @@ mod tests {
         assert!(terminal.get("summary").is_none());
         assert!(terminal.get("raw").is_none());
 
-        let mut tool_titles = HashMap::new();
+        let mut tool_memory = HashMap::new();
         let act = tool_call_journal_payload(
             &session_tool_call("Bash cargo test", "ok"),
-            &mut tool_titles,
+            &mut tool_memory,
         );
         assert_eq!(act["kind"], "tool");
         assert_eq!(act["text"], "Bash cargo test");
