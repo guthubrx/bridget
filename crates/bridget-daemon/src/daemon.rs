@@ -8381,6 +8381,25 @@ mod presence_tests {
     /// Construit un état minimal avec un agent enregistré et sa présence.
     fn state_with_registered_agent(label: &str) -> (DaemonState, DaemonConfig) {
         let base = std::env::temp_dir().join(format!("bridget-{}-{}", label, std::process::id()));
+        let registry_home = base.join("home");
+        std::fs::create_dir_all(registry_home.join(".config/bridget")).unwrap();
+        let registry_file = registry_home.join(".config/bridget/agents.json");
+        std::fs::write(
+            &registry_file,
+            serde_json::json!({
+                "agents": {
+                    "claude": {
+                        "command": "/bin/sh",
+                        "protocol": "acp",
+                        "forbidden_env": [],
+                        "pass_env": []
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&registry_file, std::fs::Permissions::from_mode(0o600)).unwrap();
         let config = DaemonConfig {
             socket_path: base.with_extension("sock"),
             db_path: base.with_extension("db"),
@@ -8392,7 +8411,17 @@ mod presence_tests {
             retention_days: 7,
         };
         let (managed_tx, _managed_rx) = mpsc::channel();
-        let mut state = DaemonState::new(&config, managed_tx).unwrap();
+        let previous_home = std::env::var_os("HOME");
+        // DaemonState::new charge le registre via HOME ; la fixture doit lui
+        // fournir une racine locale avant toute construction d'état.
+        unsafe { std::env::set_var("HOME", &registry_home) };
+        let state_result = DaemonState::new(&config, managed_tx);
+        if let Some(home) = previous_home {
+            unsafe { std::env::set_var("HOME", home) };
+        } else {
+            unsafe { std::env::remove_var("HOME") };
+        }
+        let mut state = state_result.unwrap();
         state
             .router
             .register(Some("agent-2"), &bridget_core::AgentType::Claude, "conn-1")
