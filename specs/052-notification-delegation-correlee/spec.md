@@ -5,10 +5,10 @@
 
 Spec: 052-notification-delegation-correlee
 Titre: Corréler la notification de délégation
-Statut: In Progress
+Statut: Implemented
 Priorité: P1
-Tâches: 3/4 (75%)
-Tests: 2/4 (50%)
+Tâches: 4/4 (100%)
+Tests: 4/4 (100%)
 
 Résumé:
 - Contexte: La notification automatique ne porte que le but et précède le mandat complet de 27 à 2765 secondes.
@@ -28,7 +28,7 @@ Fichiers:
 
 **Feature Branch**: `session-052-notification-delegation-correlee`
 **Created**: 2026-08-27
-**Status**: In Progress
+**Status**: Completed
 **Priority**: P1
 **Dependencies**: SPEC-026, composition avec SPEC-047
 

@@ -6,6 +6,6 @@
   `PublicMessage`, le format partagé et le raccord de création immédiate.
 - [x] **T5203 — Fermer le chemin différé.** Éprouver un dernier prérequis réel
   puis raccorder la même règle au déblocage transactionnel.
-- [ ] **T5204 — Prouver et livrer.** Rejouer le mutant après correctif, la
+- [x] **T5204 — Prouver et livrer.** Rejouer le mutant après correctif, la
   reprise historique, les gates base/tête et la composition ; documenter les
   non-mesures et pousser une tête gelée.
