@@ -276,12 +276,20 @@ fn f37_depends_on_cree_arete_et_deblocage_a_la_cloture() {
         .remove(0);
     assert_eq!(released.delegations[0].etat, EtatDelegation::Creee);
     let pending = store.pending_delegation_outboxes().unwrap();
-    assert!(
-        pending
-            .iter()
-            .any(|outbox| outbox.delegation_id == created.delegation_id),
-        "outbox créée au déblocage"
+    let outbox = pending
+        .iter()
+        .find(|outbox| outbox.delegation_id == created.delegation_id)
+        .expect("outbox créée au déblocage");
+    let message = outbox.public_message().unwrap();
+    let expected_body = format!(
+        "{goal}\n\nIDENTIFIANTS DU MANDAT\n\
+         objective_id  : {}\n\
+         delegation_id : {}\n\
+         message_id    : {}",
+        created.objective_id, created.delegation_id, outbox.message_id
     );
+    assert_eq!(message.id, outbox.message_id.to_string());
+    assert_eq!(message.body, expected_body);
     let notifications = store.pending_notification_outboxes().unwrap();
     assert!(
         notifications

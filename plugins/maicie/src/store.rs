@@ -7041,8 +7041,11 @@ fn release_waiting_dependents_on_prerequisite_closure(
         delegation
             .transition(EtatDelegation::Creee)
             .map_err(StoreError::Domain)?;
-        let body_bytes = delegation.instruction.as_bytes().to_vec();
         let message_id = Uuid::new_v4();
+        delegation
+            .finaliser_mandat(message_id)
+            .map_err(StoreError::Domain)?;
+        let body_bytes = delegation.instruction.as_bytes().to_vec();
         let deadline = issued_at
             .checked_add(
                 i64::try_from(deferred.timeout_secs)
