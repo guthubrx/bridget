@@ -5398,10 +5398,65 @@ fn handle_wrapper_message(
                 {
                     Some(ClientRefusal::CapabilityNotNegotiated)
                 }
+                // MATRICE EXHAUSTIVE — aucun `_`, et c'est délibéré.
+                //
+                // Le tiret bas précédent classait trois variantes et renvoyait
+                // les quarante-deux autres au refus, EN SILENCE. Ajouter une
+                // variante au protocole compilait sans rien dire, et le message
+                // neuf était rejeté en production sans qu'aucun test unitaire ne
+                // puisse le voir : c'est ainsi que `DaemonIdentityRequest` a été
+                // livré inatteignable. Désormais, ajouter une variante NE COMPILE
+                // PAS tant qu'elle n'est pas classée ici — le compilateur pose la
+                // question à la place du relecteur.
                 WrapperToDaemon::ClientHello { .. }
                 | WrapperToDaemon::SendIdempotent { .. }
-                | WrapperToDaemon::Lookup { .. } => None,
-                _ => Some(ClientRefusal::MessageOutsideClientRole),
+                | WrapperToDaemon::Lookup { .. }
+                // Sonde d'identité : lecture seule, aucune écriture durable, et
+                // c'est le rôle Client qui l'emprunte (`daemon_identity`).
+                | WrapperToDaemon::DaemonIdentityRequest => None,
+                WrapperToDaemon::RoleHandshake { .. }
+                | WrapperToDaemon::ServiceHello { .. }
+                | WrapperToDaemon::CoordinationSubscribe { .. }
+                | WrapperToDaemon::ServiceRequest { .. }
+                | WrapperToDaemon::GuichetClaimNext { .. }
+                | WrapperToDaemon::GuichetClaim { .. }
+                | WrapperToDaemon::GuichetLookup { .. }
+                | WrapperToDaemon::GuichetReply { .. }
+                | WrapperToDaemon::DeliverAcked { .. }
+                | WrapperToDaemon::DeliveryIndeterminate { .. }
+                | WrapperToDaemon::SpawnOrder { .. }
+                | WrapperToDaemon::StopOrder { .. }
+                | WrapperToDaemon::Subscribe { .. }
+                | WrapperToDaemon::Unsubscribe { .. }
+                | WrapperToDaemon::Subscribed { .. }
+                | WrapperToDaemon::JournalFragment { .. }
+                | WrapperToDaemon::LiveJournalFragment { .. }
+                | WrapperToDaemon::SnapshotCaughtUp { .. }
+                | WrapperToDaemon::Gap { .. }
+                | WrapperToDaemon::JournalReadError { .. }
+                | WrapperToDaemon::End { .. }
+                | WrapperToDaemon::AttachRejected { .. }
+                | WrapperToDaemon::Register { .. }
+                | WrapperToDaemon::JournalReady
+                | WrapperToDaemon::Unregister
+                | WrapperToDaemon::Rename { .. }
+                | WrapperToDaemon::Send { .. }
+                | WrapperToDaemon::DeliveryRejected { .. }
+                | WrapperToDaemon::TurnState { .. }
+                | WrapperToDaemon::CancelRequest { .. }
+                | WrapperToDaemon::ListRequests { .. }
+                | WrapperToDaemon::LedgerProjection { .. }
+                | WrapperToDaemon::Heartbeat
+                | WrapperToDaemon::ListAgents
+                | WrapperToDaemon::Runtime { .. }
+                | WrapperToDaemon::ServedModel { .. }
+                | WrapperToDaemon::RateLimit { .. }
+                | WrapperToDaemon::Usage { .. }
+                | WrapperToDaemon::UsageWindow { .. }
+                | WrapperToDaemon::Domain { .. }
+                | WrapperToDaemon::Availability { .. } => {
+                    Some(ClientRefusal::MessageOutsideClientRole)
+                }
             },
             Some(ConnectionRole::Wrapper) | None
                 if matches!(
