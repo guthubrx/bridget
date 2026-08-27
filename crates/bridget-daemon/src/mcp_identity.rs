@@ -1,11 +1,20 @@
 //! Résolution locale de l'identité appelante MCP.
 
 use bridget_core::router::validate_agent_name;
+use bridget_transport::greffe_authorization::is_valid_greffe_identity_component;
+use bridget_transport::greffe_policy_refresh::{
+    LiveMarker, MARKER_INVENTORY_VERSION, MarkerInventory, MarkerSource, StaleMarker,
+    StaleMarkerReason,
+};
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::fmt;
+use std::fs::{self, OpenOptions};
+use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 const MAX_ANCESTORS: usize = 16;
+const MAX_MARKER_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityError {
@@ -34,7 +43,8 @@ impl IdentityError {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentPidMarker {
     pub pid: u32,
     pub birth: u64,
@@ -47,6 +57,50 @@ pub struct ResolvedIdentity {
     pub name: String,
     pub instance_id: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarkerScanError {
+    InvalidObservationTime,
+    HostUnavailable,
+    DirectoryNotCanonical,
+    DirectoryUnreadable,
+    InvalidMarker { marker: String },
+    UnsupportedMarkerType { marker: String },
+    UnsupportedNameFileType { marker: String },
+    NoLiveMarker,
+}
+
+impl fmt::Display for MarkerScanError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidObservationTime => write!(formatter, "instant d'observation invalide"),
+            Self::HostUnavailable => write!(formatter, "nom d'hôte local indisponible"),
+            Self::DirectoryNotCanonical => write!(
+                formatter,
+                "le répertoire de marqueurs doit être absolu et canonique"
+            ),
+            Self::DirectoryUnreadable => {
+                write!(formatter, "répertoire de marqueurs illisible")
+            }
+            Self::InvalidMarker { marker } => {
+                write!(formatter, "marqueur invalide ou illisible : {marker}")
+            }
+            Self::UnsupportedMarkerType { marker } => {
+                write!(
+                    formatter,
+                    "type de fichier de marqueur non pris en charge : {marker}"
+                )
+            }
+            Self::UnsupportedNameFileType { marker } => write!(
+                formatter,
+                "type de fichier de nom non pris en charge pour le marqueur : {marker}"
+            ),
+            Self::NoLiveMarker => write!(formatter, "aucun marqueur vivant observé"),
+        }
+    }
+}
+
+impl std::error::Error for MarkerScanError {}
 
 pub trait ProcessTree {
     fn birth(&self, pid: u32) -> Option<u64>;
@@ -206,17 +260,209 @@ pub fn write_marker(
     )
 }
 
+/// Produit un inventaire complet sur l'hôte qui possède réellement les PID.
+pub fn scan_marker_directory(
+    marker_directory: &Path,
+    observed_at: i64,
+) -> Result<MarkerInventory, MarkerScanError> {
+    let host = local_hostname()?;
+    scan_marker_directory_with(marker_directory, host, observed_at, &SystemProcessTree)
+}
+
+fn scan_marker_directory_with(
+    marker_directory: &Path,
+    host: String,
+    observed_at: i64,
+    processes: &impl ProcessTree,
+) -> Result<MarkerInventory, MarkerScanError> {
+    if observed_at <= 0 {
+        return Err(MarkerScanError::InvalidObservationTime);
+    }
+    if host.is_empty() || host != host.trim() || host.chars().any(char::is_control) {
+        return Err(MarkerScanError::HostUnavailable);
+    }
+    let canonical =
+        fs::canonicalize(marker_directory).map_err(|_| MarkerScanError::DirectoryUnreadable)?;
+    let metadata =
+        fs::symlink_metadata(marker_directory).map_err(|_| MarkerScanError::DirectoryUnreadable)?;
+    if !marker_directory.is_absolute()
+        || canonical != marker_directory
+        || !metadata.file_type().is_dir()
+        || metadata.file_type().is_symlink()
+    {
+        return Err(MarkerScanError::DirectoryNotCanonical);
+    }
+
+    let mut entries = fs::read_dir(marker_directory)
+        .map_err(|_| MarkerScanError::DirectoryUnreadable)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| MarkerScanError::DirectoryUnreadable)?;
+    entries.sort_by_key(|entry| entry.file_name());
+    let mut live = Vec::new();
+    let mut stale = Vec::new();
+    for entry in entries {
+        let marker_name =
+            entry
+                .file_name()
+                .into_string()
+                .map_err(|_| MarkerScanError::InvalidMarker {
+                    marker: "<nom non UTF-8>".to_string(),
+                })?;
+        let pid = marker_name
+            .parse::<u32>()
+            .ok()
+            .filter(|pid| *pid > 1)
+            .ok_or_else(|| MarkerScanError::InvalidMarker {
+                marker: marker_name.clone(),
+            })?;
+        let marker = read_marker_file(&entry.path(), &marker_name)?;
+        if marker.pid != pid
+            || marker.birth == 0
+            || !is_valid_greffe_identity_component(&marker.instance_id)
+            || !marker.name_file.is_absolute()
+        {
+            return Err(MarkerScanError::InvalidMarker {
+                marker: marker_name,
+            });
+        }
+        match processes.birth(pid) {
+            Some(birth) if birth == marker.birth => {
+                let principal = read_name_for_scan(&marker.name_file, &marker_name)?;
+                live.push(LiveMarker {
+                    principal,
+                    instance_id: marker.instance_id,
+                    pid,
+                    birth,
+                });
+            }
+            Some(_) => stale.push(StaleMarker {
+                marker: marker_name,
+                pid,
+                instance_id: marker.instance_id,
+                reason: StaleMarkerReason::BirthMismatch,
+            }),
+            None => stale.push(StaleMarker {
+                marker: marker_name,
+                pid,
+                instance_id: marker.instance_id,
+                reason: StaleMarkerReason::ProcessNotLive,
+            }),
+        }
+    }
+    if live.is_empty() {
+        return Err(MarkerScanError::NoLiveMarker);
+    }
+    Ok(MarkerInventory {
+        version: MARKER_INVENTORY_VERSION,
+        source: MarkerSource {
+            host,
+            marker_directory: canonical,
+        },
+        observed_at,
+        complete: true,
+        live,
+        stale,
+    })
+}
+
+fn read_marker_file(path: &Path, marker_name: &str) -> Result<AgentPidMarker, MarkerScanError> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| MarkerScanError::InvalidMarker {
+            marker: marker_name.to_string(),
+        })?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| MarkerScanError::InvalidMarker {
+            marker: marker_name.to_string(),
+        })?;
+    if !metadata.is_file() {
+        return Err(MarkerScanError::UnsupportedMarkerType {
+            marker: marker_name.to_string(),
+        });
+    }
+    if metadata.len() > MAX_MARKER_BYTES {
+        return Err(MarkerScanError::InvalidMarker {
+            marker: marker_name.to_string(),
+        });
+    }
+    let mut raw = String::new();
+    file.read_to_string(&mut raw)
+        .map_err(|_| MarkerScanError::InvalidMarker {
+            marker: marker_name.to_string(),
+        })?;
+    serde_json::from_str(&raw).map_err(|_| MarkerScanError::InvalidMarker {
+        marker: marker_name.to_string(),
+    })
+}
+
+fn local_hostname() -> Result<String, MarkerScanError> {
+    let mut buffer = [0_u8; 256];
+    if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } != 0 {
+        return Err(MarkerScanError::HostUnavailable);
+    }
+    let length = buffer
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(buffer.len());
+    let host = std::str::from_utf8(&buffer[..length])
+        .map_err(|_| MarkerScanError::HostUnavailable)?
+        .to_string();
+    if host.is_empty() || host.chars().any(char::is_control) {
+        return Err(MarkerScanError::HostUnavailable);
+    }
+    Ok(host)
+}
+
 fn read_name(path: &Path) -> Option<String> {
-    let name = fs::read_to_string(path).ok()?;
+    read_name_file(path).ok()
+}
+
+fn read_name_for_scan(path: &Path, marker_name: &str) -> Result<String, MarkerScanError> {
+    read_name_file(path).map_err(|error| match error {
+        NameFileReadError::UnsupportedType => MarkerScanError::UnsupportedNameFileType {
+            marker: marker_name.to_string(),
+        },
+        NameFileReadError::Unreadable => MarkerScanError::InvalidMarker {
+            marker: marker_name.to_string(),
+        },
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NameFileReadError {
+    UnsupportedType,
+    Unreadable,
+}
+
+fn read_name_file(path: &Path) -> Result<String, NameFileReadError> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| NameFileReadError::Unreadable)?;
+    let metadata = file.metadata().map_err(|_| NameFileReadError::Unreadable)?;
+    if !metadata.is_file() {
+        return Err(NameFileReadError::UnsupportedType);
+    }
+    if metadata.len() > MAX_MARKER_BYTES {
+        return Err(NameFileReadError::Unreadable);
+    }
+    let mut name = String::new();
+    file.read_to_string(&mut name)
+        .map_err(|_| NameFileReadError::Unreadable)?;
     let name = name.trim();
-    validate_agent_name(name).ok()?;
-    Some(name.to_string())
+    validate_agent_name(name).map_err(|_| NameFileReadError::Unreadable)?;
+    Ok(name.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::os::unix::fs::symlink;
 
     #[derive(Default)]
     struct Fixture(BTreeMap<u32, (u64, u32)>);
@@ -392,6 +638,92 @@ mod tests {
             ),
             Ok("agent-valide".into())
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inventaire_mesure_sur_l_hote_distingue_vivant_et_pid_recycle() {
+        let root = root("scan-live-stale");
+        let markers = root.join("agent-pids");
+        let _ = marker(&root, 20, 200, "instance-nouvelle", "agent-vivant");
+        let _ = marker(&root, 30, 300, "instance-ancienne", "agent-recycle");
+        let processes = Fixture(BTreeMap::from([(20, (200, 1)), (30, (301, 1))]));
+
+        let inventory = scan_marker_directory_with(
+            &markers,
+            "hote-mesure".to_string(),
+            1_788_200_000,
+            &processes,
+        )
+        .unwrap();
+
+        assert_eq!(inventory.source.host, "hote-mesure");
+        assert_eq!(inventory.source.marker_directory, markers);
+        assert_eq!(inventory.live.len(), 1);
+        assert_eq!(inventory.live[0].principal, "agent-vivant");
+        assert_eq!(inventory.live[0].instance_id, "instance-nouvelle");
+        assert_eq!(inventory.stale.len(), 1);
+        assert_eq!(inventory.stale[0].marker, "30");
+        assert_eq!(inventory.stale[0].reason, StaleMarkerReason::BirthMismatch);
+        assert!(inventory.complete);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn zero_marqueur_vivant_est_une_erreur_et_non_un_inventaire_vide() {
+        let root = root("scan-zero-live");
+        let markers = root.join("agent-pids");
+        let _ = marker(&root, 20, 200, "instance-ancienne", "agent-arrete");
+
+        assert_eq!(
+            scan_marker_directory_with(
+                &markers,
+                "hote-mesure".to_string(),
+                1_788_200_000,
+                &Fixture::default(),
+            )
+            .unwrap_err(),
+            MarkerScanError::NoLiveMarker
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn entree_malformee_ou_repertoire_lie_interdit_un_succes_partiel() {
+        let root = root("scan-invalid");
+        let markers = root.join("agent-pids");
+        fs::create_dir_all(&markers).unwrap();
+        fs::write(markers.join("20"), "pas-du-json").unwrap();
+        assert_eq!(
+            scan_marker_directory_with(
+                &markers,
+                "hote-mesure".to_string(),
+                1_788_200_000,
+                &Fixture(BTreeMap::from([(20, (200, 1))])),
+            )
+            .unwrap_err(),
+            MarkerScanError::InvalidMarker {
+                marker: "20".to_string()
+            }
+        );
+
+        fs::remove_file(markers.join("20")).unwrap();
+        let _ = marker(&root, 20, 200, "instance-vivante", "agent-vivant");
+        let linked = root.join("linked-agent-pids");
+        symlink(&markers, &linked).unwrap();
+        assert_eq!(
+            scan_marker_directory_with(
+                &linked,
+                "hote-mesure".to_string(),
+                1_788_200_000,
+                &Fixture(BTreeMap::from([(20, (200, 1))])),
+            )
+            .unwrap_err(),
+            MarkerScanError::DirectoryNotCanonical
+        );
+
         fs::remove_dir_all(root).unwrap();
     }
 }
