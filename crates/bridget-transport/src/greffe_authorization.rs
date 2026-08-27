@@ -77,7 +77,8 @@ pub enum GreffeAuthorizationStage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GreffeAuthorizationRefusal {
-    PrincipalMissing,
+    PrincipalNameMissing,
+    PrincipalInstanceMissing,
     InvalidPrincipal,
     EphemeralCliForbidden,
     DeclaredPrincipalMismatch,
@@ -99,7 +100,8 @@ impl GreffeAuthorizationRefusal {
     /// [`GREFFE_AUTHORIZATION_PUBLIC_REFUSAL`].
     pub const fn audit_code(self) -> &'static str {
         match self {
-            Self::PrincipalMissing => "principal_missing",
+            Self::PrincipalNameMissing => "principal_name_missing",
+            Self::PrincipalInstanceMissing => "principal_instance_missing",
             Self::InvalidPrincipal => "invalid_principal",
             Self::EphemeralCliForbidden => "ephemeral_cli_forbidden",
             Self::DeclaredPrincipalMismatch => "declared_principal_mismatch",
@@ -206,6 +208,17 @@ impl GreffeAuthorizationGate {
         )
     }
 
+    /// Exécute l'écriture durable seulement après l'autorisation et son audit.
+    /// Cette forme rend l'ordre « garde puis effet » structurel pour l'appelant.
+    pub fn authorize_deposit_then<T>(
+        &self,
+        attempt: GreffeDepositAuthorization<'_>,
+        deposit: impl FnOnce(&GreffeAuthorizationAttestation) -> T,
+    ) -> Result<T, GreffeAuthorizationRefusal> {
+        let attestation = self.authorize_deposit(attempt)?;
+        Ok(deposit(&attestation))
+    }
+
     /// Revérifie l'attestation et la politique courante juste avant l'effet.
     /// Une révocation ou expiration postérieure au dépôt est donc effective.
     pub fn authorize_effect(
@@ -235,6 +248,17 @@ impl GreffeAuthorizationGate {
             attempt.observed_at,
             result,
         )
+    }
+
+    /// Exécute la mutation métier seulement après la seconde vérification et
+    /// son audit durable.
+    pub fn authorize_effect_then<T>(
+        &self,
+        attempt: GreffeEffectAuthorization<'_>,
+        effect: impl FnOnce(&GreffePrincipal) -> T,
+    ) -> Result<T, GreffeAuthorizationRefusal> {
+        let principal = self.authorize_effect(attempt)?;
+        Ok(effect(&principal))
     }
 
     fn finish_with_audit<T>(
@@ -298,9 +322,8 @@ fn canonical_principal(
     name: Option<&str>,
     instance_id: Option<&str>,
 ) -> Result<GreffePrincipal, GreffeAuthorizationRefusal> {
-    let (Some(name), Some(instance_id)) = (name, instance_id) else {
-        return Err(GreffeAuthorizationRefusal::PrincipalMissing);
-    };
+    let name = name.ok_or(GreffeAuthorizationRefusal::PrincipalNameMissing)?;
+    let instance_id = instance_id.ok_or(GreffeAuthorizationRefusal::PrincipalInstanceMissing)?;
     if !valid_identity_component(name) || !valid_identity_component(instance_id) {
         return Err(GreffeAuthorizationRefusal::InvalidPrincipal);
     }
@@ -385,13 +408,16 @@ impl GreffePolicy {
         let mut principals = BTreeMap::new();
         for entry in file.principals {
             if !valid_identity_component(&entry.principal)
-                || entry.principal.starts_with("cli-send-")
                 || entry.actions.is_empty()
                 || entry.instances.is_empty()
             {
                 return Err(GreffeAuthorizationRefusal::PolicyInvalid);
             }
+            let action_count = entry.actions.len();
             let actions = entry.actions.into_iter().collect::<BTreeSet<_>>();
+            if actions.len() != action_count {
+                return Err(GreffeAuthorizationRefusal::PolicyInvalid);
+            }
             let mut instances = BTreeMap::new();
             for instance in entry.instances {
                 if !valid_identity_component(&instance.instance_id) || instance.expires_at <= 0 {
@@ -707,15 +733,26 @@ mod tests {
                 "version": 1,
                 "generation": 7,
                 "attestation_key": KEY,
-                "principals": [{
-                    "principal": "agent-autorise",
-                    "actions": ["delegate", "registre_add", "objective_close"],
-                    "instances": [{
-                        "instance_id": "instance-autorisee",
-                        "expires_at": expires_at,
-                        "revoked": revoked
-                    }]
-                }]
+                "principals": [
+                    {
+                        "principal": "agent-autorise",
+                        "actions": ["delegate", "registre_add", "objective_close"],
+                        "instances": [{
+                            "instance_id": "instance-autorisee",
+                            "expires_at": expires_at,
+                            "revoked": revoked
+                        }]
+                    },
+                    {
+                        "principal": "cli-send-123",
+                        "actions": ["delegate", "registre_add", "objective_close"],
+                        "instances": [{
+                            "instance_id": "instance-autorisee",
+                            "expires_at": expires_at,
+                            "revoked": revoked
+                        }]
+                    }
+                ]
             });
             fs::write(&self.policy, serde_json::to_vec(&content).unwrap()).unwrap();
             fs::set_permissions(&self.policy, fs::Permissions::from_mode(0o600)).unwrap();
@@ -764,6 +801,40 @@ mod tests {
                 .map(|line| serde_json::from_str(line).unwrap())
                 .collect()
         }
+
+        fn assert_deposit_refused_before_mutation(
+            &self,
+            name: Option<&str>,
+            instance_id: Option<&str>,
+            declared_from: Option<&str>,
+            expected: GreffeAuthorizationRefusal,
+        ) {
+            let durable_state = self.root.join("durable-business-state");
+            fs::write(&durable_state, b"unchanged").unwrap();
+            let result = self.gate().authorize_deposit_then(
+                GreffeDepositAuthorization {
+                    canonical_name: name,
+                    canonical_instance_id: instance_id,
+                    declared_from,
+                    action: GreffeMutationAction::Delegate,
+                    request_id: "request-1",
+                    request_issued_at: NOW - 1,
+                    observed_at: NOW,
+                },
+                |_| fs::write(&durable_state, b"mutated").unwrap(),
+            );
+
+            assert_eq!(
+                fs::read_to_string(&durable_state).unwrap(),
+                "unchanged",
+                "la mutation durable doit rester en aval de la garde"
+            );
+            assert_eq!(result.unwrap_err(), expected);
+            assert_eq!(
+                expected.public_reason(),
+                GREFFE_AUTHORIZATION_PUBLIC_REFUSAL
+            );
+        }
     }
 
     impl Drop for Fixture {
@@ -811,46 +882,52 @@ mod tests {
     }
 
     #[test]
-    fn principal_absent_divergent_cli_ou_instance_remplacee_est_refuse_uniformement() {
-        let fixture = Fixture::new("principal-negatives");
-        let cases = [
-            (
-                None,
-                Some("instance-autorisee"),
-                Some("agent-autorise"),
-                GreffeAuthorizationRefusal::PrincipalMissing,
-            ),
-            (
-                Some("agent-autorise"),
-                Some("instance-autorisee"),
-                Some("agent-forge"),
-                GreffeAuthorizationRefusal::DeclaredPrincipalMismatch,
-            ),
-            (
-                Some("cli-send-123"),
-                Some("instance-autorisee"),
-                Some("cli-send-123"),
-                GreffeAuthorizationRefusal::EphemeralCliForbidden,
-            ),
-            (
-                Some("agent-autorise"),
-                Some("instance-remplacee"),
-                Some("agent-autorise"),
-                GreffeAuthorizationRefusal::InstanceUnknown,
-            ),
-        ];
-        for (name, instance, declared, expected) in cases {
-            let refusal = fixture
-                .deposit(name, instance, declared, GreffeMutationAction::Delegate)
-                .unwrap_err();
-            assert_eq!(refusal, expected);
-            assert_eq!(refusal.public_reason(), GREFFE_AUTHORIZATION_PUBLIC_REFUSAL);
-        }
-        assert!(
-            fixture
-                .audit_lines()
-                .iter()
-                .all(|line| line["allowed"] == false)
+    fn nom_canonique_absent_est_refuse_avant_mutation_durable() {
+        Fixture::new("missing-name").assert_deposit_refused_before_mutation(
+            None,
+            Some("instance-autorisee"),
+            Some("agent-autorise"),
+            GreffeAuthorizationRefusal::PrincipalNameMissing,
+        );
+    }
+
+    #[test]
+    fn instance_canonique_absente_est_refusee_avant_mutation_durable() {
+        Fixture::new("missing-instance").assert_deposit_refused_before_mutation(
+            Some("agent-autorise"),
+            None,
+            Some("agent-autorise"),
+            GreffeAuthorizationRefusal::PrincipalInstanceMissing,
+        );
+    }
+
+    #[test]
+    fn from_forge_est_refuse_avant_mutation_durable() {
+        Fixture::new("forged-from").assert_deposit_refused_before_mutation(
+            Some("agent-autorise"),
+            Some("instance-autorisee"),
+            Some("agent-forge"),
+            GreffeAuthorizationRefusal::DeclaredPrincipalMismatch,
+        );
+    }
+
+    #[test]
+    fn connexion_cli_send_est_refusee_avant_mutation_durable() {
+        Fixture::new("cli-send").assert_deposit_refused_before_mutation(
+            Some("cli-send-123"),
+            Some("instance-autorisee"),
+            Some("cli-send-123"),
+            GreffeAuthorizationRefusal::EphemeralCliForbidden,
+        );
+    }
+
+    #[test]
+    fn instance_remplacee_est_refusee_avant_mutation_durable() {
+        Fixture::new("replaced-instance").assert_deposit_refused_before_mutation(
+            Some("agent-autorise"),
+            Some("instance-remplacee"),
+            Some("agent-autorise"),
+            GreffeAuthorizationRefusal::InstanceUnknown,
         );
     }
 
