@@ -1866,7 +1866,7 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             ))?;
             let raison = catalogue::RaisonRectification::parse(&raison_raw).ok_or(
                 CliError::Usage(
-                    "raison rectifier : fermeture_erronee|refutation_erronee",
+                    "raison rectifier : fermeture_erronee|solde_mission_errone|refutation_erronee",
                 ),
             )?;
             RegistreAction::Rectifier {

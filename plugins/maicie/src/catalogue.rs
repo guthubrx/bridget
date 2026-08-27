@@ -378,6 +378,10 @@ impl RaisonRequalification {
 pub enum RaisonRectification {
     /// Fermeture (`remedied_attested`) posée par erreur.
     FermetureErronee,
+    /// Solde de mission (`objective_closed`) posé à tort — n'atteste pas
+    /// une correction de fond, donc rectifiable (contrairement à l'ancienne
+    /// garde « fermeture juste intacte »).
+    SoldeMissionErrone,
     /// Réfutation posée par erreur.
     RefutationErronee,
 }
@@ -386,6 +390,7 @@ impl RaisonRectification {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::FermetureErronee => "fermeture_erronee",
+            Self::SoldeMissionErrone => "solde_mission_errone",
             Self::RefutationErronee => "refutation_erronee",
         }
     }
@@ -393,6 +398,7 @@ impl RaisonRectification {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "fermeture_erronee" => Some(Self::FermetureErronee),
+            "solde_mission_errone" => Some(Self::SoldeMissionErrone),
             "refutation_erronee" => Some(Self::RefutationErronee),
             _ => None,
         }
@@ -402,6 +408,7 @@ impl RaisonRectification {
     pub const fn amends(self) -> TransitionTrigger {
         match self {
             Self::FermetureErronee => TransitionTrigger::RemediedAttested,
+            Self::SoldeMissionErrone => TransitionTrigger::ObjectiveClosed,
             Self::RefutationErronee => TransitionTrigger::Refuted,
         }
     }
@@ -669,7 +676,10 @@ pub struct PendingView {
 /// Polarité d'un constat retiré des ouverts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClosedKind {
+    /// Fermeture de fond (`remedied_attested`) — preuve typée.
     Traite,
+    /// Solde de mission (`objective_closed`) — pas une preuve de correction.
+    Solde,
     Refute,
 }
 
@@ -683,6 +693,11 @@ pub struct ClosedConstatView {
     pub raison: Option<String>,
     pub reference: Option<String>,
     pub recurrence_of: Option<String>,
+    /// Trigger de la livraison active — `objective_closed` n'est pas une
+    /// fermeture prouvée (mission soldée ≠ défaut corrigé).
+    pub trigger: TransitionTrigger,
+    /// Rempli pour `objective_closed` ; vide sinon.
+    pub objective_id: String,
 }
 
 /// Historique d'une fermeture erronée puis rectifiée — consultable sans
@@ -702,7 +717,7 @@ pub struct RectifiedConstatView {
     pub recurrence_of: Option<String>,
 }
 
-/// Pied : dû / règles / résultats séparés + T/R/Q + rectifications.
+/// Pied : dû / règles / résultats séparés + T/S/R/Q + rectifications.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegistreFooter {
     /// Ouverts de nature `constat` — le dû fermable.
@@ -712,7 +727,10 @@ pub struct RegistreFooter {
     pub recurrents: usize,
     pub gates_rates: usize,
     pub pending_qualification: usize,
+    /// Fermetures de fond (`remedied_attested`) — preuve typée.
     pub traites: usize,
+    /// Soldes de mission (`objective_closed`) — pas un dû réglé.
+    pub soldes: usize,
     pub refutes: usize,
     pub requalifies: usize,
     /// Nombre d'événements de rectification (historique).
@@ -724,7 +742,10 @@ pub struct RegistreFooter {
 pub struct RegistreView {
     pub ouverts: Vec<OpenConstatView>,
     pub attente: Vec<PendingView>,
+    /// Fermetures de fond prouvées.
     pub traites: Vec<ClosedConstatView>,
+    /// Soldes de mission (auto, sans preuve de correction).
+    pub soldes: Vec<ClosedConstatView>,
     pub refutes: Vec<ClosedConstatView>,
     /// Historique des rectifications (fermeture fautive + amendement).
     pub rectifies: Vec<RectifiedConstatView>,
@@ -1056,6 +1077,32 @@ impl CatalogueJournal {
             .map(|(_, to)| to)
             .or_else(|| resolve_open_nature(constat_id, &existing))
             .unwrap_or(EntryNature::Constat);
+        if let Some((from, _)) = severity {
+            let current = resolve_open_severity(constat_id, &existing).ok_or_else(|| {
+                CatalogueError::ReferenceInconnue {
+                    field: "constat_id",
+                    id: constat_id.to_string(),
+                }
+            })?;
+            if current != from {
+                return Err(CatalogueError::TransitionInvalide(format!(
+                    "requalification refusée : severity_from périmée (courante={current:?}, fournie={from:?})"
+                )));
+            }
+        }
+        if let Some((from, _)) = nature {
+            let current = resolve_open_nature(constat_id, &existing).ok_or_else(|| {
+                CatalogueError::ReferenceInconnue {
+                    field: "constat_id",
+                    id: constat_id.to_string(),
+                }
+            })?;
+            if current != from {
+                return Err(CatalogueError::TransitionInvalide(format!(
+                    "requalification refusée : nature_from périmée (courante={current:?}, fournie={from:?})"
+                )));
+            }
+        }
         if target_nature == EntryNature::Regle && effective_severity == Severity::Blocker {
             return Err(CatalogueError::TransitionInvalide(
                 "requalification refusée : une règle ne peut pas porter blocker".into(),
@@ -1090,9 +1137,11 @@ impl CatalogueJournal {
 
     /// Amende une transition erronée : `delivered → open`, append-only.
     ///
-    /// Refuse de défaire une clôture `objective_closed` (fermeture juste
-    /// attestée par le greffe). L'historique (fermeture + rectification)
-    /// reste dans le journal — l'entrée ne se lit plus comme intacte.
+    /// Un `objective_closed` (solde de mission) EST rectifiable : il n'atteste
+    /// pas une correction de fond. Une fermeture `remedied_attested` ou une
+    /// réfutation aussi, via leur raison dédiée. L'historique (livraison +
+    /// rectification) reste dans le journal — l'entrée ne se lit plus comme
+    /// intacte.
     pub fn rectify_constat_attested(
         &mut self,
         constat_id: &str,
@@ -1139,11 +1188,6 @@ impl CatalogueJournal {
                 "rectification refusée : {constat_id} n'est pas delivered"
             )));
         };
-        if current == TransitionTrigger::ObjectiveClosed {
-            return Err(CatalogueError::TransitionInvalide(format!(
-                "rectification refusée : {constat_id} clos par objective_closed — fermeture juste intacte"
-            )));
-        }
         if current != raison.amends() {
             return Err(CatalogueError::TransitionInvalide(format!(
                 "rectification refusée : raison {} n'amende pas un {:?}",
@@ -2041,6 +2085,7 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
                         let add = adds.get(&transition.constat_id);
                         let closed_kind = match prev.trigger {
                             TransitionTrigger::Refuted => ClosedKind::Refute,
+                            TransitionTrigger::ObjectiveClosed => ClosedKind::Solde,
                             _ => ClosedKind::Traite,
                         };
                         rectifies.push(RectifiedConstatView {
@@ -2097,6 +2142,7 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
     ouverts.sort_by(compare_open_constats);
 
     let mut traites: Vec<ClosedConstatView> = Vec::new();
+    let mut soldes: Vec<ClosedConstatView> = Vec::new();
     let mut refutes: Vec<ClosedConstatView> = Vec::new();
     for (constat_id, transition) in &delivered_by {
         let Some(add) = adds.get(constat_id) else {
@@ -2104,6 +2150,7 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
         };
         let kind = match transition.trigger {
             TransitionTrigger::Refuted => ClosedKind::Refute,
+            TransitionTrigger::ObjectiveClosed => ClosedKind::Solde,
             _ => ClosedKind::Traite,
         };
         let closed = ClosedConstatView {
@@ -2114,13 +2161,17 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
             raison: transition.raison.clone(),
             reference: transition.reference.clone(),
             recurrence_of: add.recurrence_of.clone(),
+            trigger: transition.trigger,
+            objective_id: transition.objective_id.clone(),
         };
         match kind {
             ClosedKind::Traite => traites.push(closed),
+            ClosedKind::Solde => soldes.push(closed),
             ClosedKind::Refute => refutes.push(closed),
         }
     }
     traites.sort_by(|a, b| a.observed_at.cmp(&b.observed_at).then_with(|| a.id.cmp(&b.id)));
+    soldes.sort_by(|a, b| a.observed_at.cmp(&b.observed_at).then_with(|| a.id.cmp(&b.id)));
     refutes.sort_by(|a, b| a.observed_at.cmp(&b.observed_at).then_with(|| a.id.cmp(&b.id)));
     rectifies.sort_by(|a, b| {
         a.rectified_at
@@ -2172,6 +2223,7 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
         gates_rates,
         pending_qualification: attente.len(),
         traites: traites.len(),
+        soldes: soldes.len(),
         refutes: refutes.len(),
         requalifies,
         rectifies: rectifies.len(),
@@ -2180,6 +2232,7 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
         ouverts,
         attente,
         traites,
+        soldes,
         refutes,
         rectifies,
         footer,
@@ -2352,9 +2405,9 @@ pub fn render_registre_list_sections(view: &RegistreView, sections: RegistreList
         }
     }
     if sections.fermes {
-        out.push_str("--- fermés (ce fut vrai, ce ne l'est plus) ---\n");
-        if view.traites.is_empty() {
-            out.push_str("(aucun constat fermé)\n");
+        out.push_str("--- fermés / soldés (fond prouvé ≠ mission soldée) ---\n");
+        if view.traites.is_empty() && view.soldes.is_empty() {
+            out.push_str("(aucun constat fermé ni soldé)\n");
         } else {
             for item in &view.traites {
                 let recurrence = item
@@ -2368,6 +2421,22 @@ pub fn render_registre_list_sections(view: &RegistreView, sections: RegistreList
                     observed = item.observed_at,
                     raison = item.raison.as_deref().unwrap_or("-"),
                     reference = item.reference.as_deref().unwrap_or("-"),
+                    text = item.text,
+                ));
+            }
+            for item in &view.soldes {
+                let recurrence = item
+                    .recurrence_of
+                    .as_deref()
+                    .map(|id| format!(" recurrence_of={id}"))
+                    .unwrap_or_default();
+                // Mission soldée ≠ défaut corrigé : badge et motif distincts,
+                // jamais raison=-/ref=- qui se lisent comme preuve manquante.
+                out.push_str(&format!(
+                    "- [SOLDÉ] {id} {observed} motif=mission_soldee objective={objective}{recurrence}\n  {text}\n",
+                    id = item.id,
+                    observed = item.observed_at,
+                    objective = item.objective_id,
                     text = item.text,
                 ));
             }
@@ -2410,6 +2479,7 @@ pub fn render_registre_list_sections(view: &RegistreView, sections: RegistreList
                     .unwrap_or_default();
                 let closed_label = match item.closed_kind {
                     ClosedKind::Traite => "fermeture",
+                    ClosedKind::Solde => "solde_mission",
                     ClosedKind::Refute => "réfutation",
                 };
                 out.push_str(&format!(
@@ -2441,9 +2511,10 @@ pub fn render_registre_list_sections(view: &RegistreView, sections: RegistreList
             }
         }
     }
-    // Pied : les trois états toujours, même si le corps est filtré.
+    // Pied : les états toujours, même si le corps est filtré.
+    // FERMÉS = fond prouvé ; SOLDÉS = mission soldée (pas un dû réglé).
     out.push_str(&format!(
-        "pied: {n} DÛ dont {m} récurrents, {k} gates ratés ; {nr} RÈGLES ; {ns} RÉSULTATS ; {p} en attente ; {t} FERMÉS, {r} RÉFUTÉS, {q} REQUALIFIÉS, {x} RECTIFIÉS\n",
+        "pied: {n} DÛ dont {m} récurrents, {k} gates ratés ; {nr} RÈGLES ; {ns} RÉSULTATS ; {p} en attente ; {t} FERMÉS, {s} SOLDÉS, {r} RÉFUTÉS, {q} REQUALIFIÉS, {x} RECTIFIÉS\n",
         n = view.footer.ouverts,
         m = view.footer.recurrents,
         k = view.footer.gates_rates,
@@ -2451,6 +2522,7 @@ pub fn render_registre_list_sections(view: &RegistreView, sections: RegistreList
         ns = view.footer.ouverts_resultat,
         p = view.footer.pending_qualification,
         t = view.footer.traites,
+        s = view.footer.soldes,
         r = view.footer.refutes,
         q = view.footer.requalifies,
         x = view.footer.rectifies,
@@ -3119,7 +3191,7 @@ mod tests {
             "badge OUVERT absent: {rendered}"
         );
         assert!(
-            rendered.contains("pied: 1 DÛ") && rendered.contains("0 FERMÉS, 0 RÉFUTÉS"),
+            rendered.contains("pied: 1 DÛ") && rendered.contains("0 FERMÉS, 0 SOLDÉS, 0 RÉFUTÉS"),
             "pied ouvert exact attendu, reçu: {rendered}"
         );
         assert!(
@@ -3187,7 +3259,7 @@ mod tests {
             "défaut ne doit plus montrer ni lister le fermé: {defaut}"
         );
         assert!(
-            defaut.contains("pied: 1 DÛ") && defaut.contains("1 FERMÉS, 0 RÉFUTÉS"),
+            defaut.contains("pied: 1 DÛ") && defaut.contains("1 FERMÉS, 0 SOLDÉS, 0 RÉFUTÉS"),
             "pied trois comptes après fermeture, reçu: {defaut}"
         );
 
@@ -3211,7 +3283,7 @@ mod tests {
             "--fermes restreint : pas d'ouverts (sinon 185+40=élargissement), reçu: {rendered}"
         );
         assert!(
-            rendered.contains("pied: 1 DÛ") && rendered.contains("1 FERMÉS, 0 RÉFUTÉS"),
+            rendered.contains("pied: 1 DÛ") && rendered.contains("1 FERMÉS, 0 SOLDÉS, 0 RÉFUTÉS"),
             "pied inchangé sous filtre, reçu: {rendered}"
         );
         // Append-only : le fichier contient encore l'add d'origine + transition.
@@ -3303,7 +3375,7 @@ mod tests {
             "vue --fermes ne doit pas élargir aux ouverts: {fermes}"
         );
         assert!(
-            fermes.contains("1 FERMÉS, 0 RÉFUTÉS"),
+            fermes.contains("1 FERMÉS, 0 SOLDÉS, 0 RÉFUTÉS"),
             "pied distingue fermés/réfutés: {fermes}"
         );
         let _ = fs::remove_dir_all(&root);
@@ -3354,7 +3426,7 @@ mod tests {
             "--refutes restreint, pas fermé ni ouvert: {rendered}"
         );
         assert!(
-            rendered.contains("0 FERMÉS, 1 RÉFUTÉS"),
+            rendered.contains("0 FERMÉS, 0 SOLDÉS, 1 RÉFUTÉS"),
             "pied trois états, reçu: {rendered}"
         );
         let _ = fs::remove_dir_all(&root);
@@ -3455,9 +3527,9 @@ mod tests {
         );
     }
 
-    /// Contrôle positif d'abord : fermeture juste intacte ; rectification
-    /// refuse de la défaire (objective_closed). Puis la transition erronée
-    /// (fixture réelle un-zero) DOIT pouvoir être rectifiée — append-only,
+    /// Contrôle positif d'abord : un solde de mission (`objective_closed`)
+    /// DOIT pouvoir être rectifié (il n'atteste pas une correction). Puis la
+    /// transition erronée remedied (fixture réelle un-zero) aussi — append-only,
     /// badge RECTIFIÉ, pas « jamais touchée ».
     #[test]
     fn oracle_une_transition_erronee_peut_etre_rectifiee() {
@@ -3470,16 +3542,17 @@ mod tests {
         let path = root.join("catalogue.jsonl");
         let mut journal = CatalogueJournal::open(&path).unwrap();
 
-        // (1) Transition légitime : constat fermé par greffe — reste intacte.
-        let mut juste = sample_add("c-fermeture-juste", Severity::Major, "2026-08-27T01:00:00Z");
-        juste.nature = EntryNature::Constat;
-        journal.append_add(juste).unwrap();
+        // (1) Solde de mission : rectifiable avec solde_mission_errone.
+        // Mauvaise raison (fermeture_erronee) refuse — prouve le cas légitime.
+        let mut solde = sample_add("c-solde-mission", Severity::Major, "2026-08-27T01:00:00Z");
+        solde.nature = EntryNature::Constat;
+        journal.append_add(solde).unwrap();
         let link = ArbitrationLink {
-            constat_id: "c-fermeture-juste".into(),
-            objective_id: "obj-juste".into(),
+            constat_id: "c-solde-mission".into(),
+            objective_id: "obj-solde".into(),
         };
         let closure = AttestedClosure {
-            objective_id: "obj-juste".into(),
+            objective_id: "obj-solde".into(),
             observed_at: "2026-08-27T01:01:00Z".into(),
         };
         assert_eq!(
@@ -3487,33 +3560,45 @@ mod tests {
                 .append_delivered_for_attested_closure(&link, &closure)
                 .unwrap(),
             AppendOutcome::Appended,
-            "PROMESSE — une fermeture juste DOIT pouvoir être posée"
+            "PROMESSE — un solde de mission DOIT pouvoir être posé"
         );
-        let err_juste = journal
+        let view_solde = project_registre(&journal.read_entries().unwrap());
+        assert_eq!(view_solde.footer.soldes, 1);
+        assert_eq!(view_solde.footer.traites, 0);
+        let err_mauvaise = journal
             .rectify_constat_attested(
-                "c-fermeture-juste",
+                "c-solde-mission",
                 RaisonRectification::FermetureErronee,
-                "mesure:1/1 greffe intact",
+                "mesure:1/1 mauvaise raison",
                 "2026-08-27T01:02:00Z",
             )
-            .expect_err("PROMESSE — la rectification NE DOIT PAS défaire une fermeture juste");
+            .expect_err("fermeture_erronee n'amende pas objective_closed");
         assert!(
-            err_juste.to_string().contains("objective_closed")
-                || err_juste.to_string().contains("fermeture juste"),
-            "refus fermeture juste, reçu: {err_juste}"
+            err_mauvaise.to_string().contains("n'amende pas"),
+            "refus raison inadaptée, reçu: {err_mauvaise}"
         );
-        let view_juste = project_registre(&journal.read_entries().unwrap());
         assert_eq!(
-            view_juste.footer.traites, 1,
-            "PROMESSE — transition légitime reste delivered"
+            journal
+                .rectify_constat_attested(
+                    "c-solde-mission",
+                    RaisonRectification::SoldeMissionErrone,
+                    "mesure:1/1 solde sans preuve de correction",
+                    "2026-08-27T01:03:00Z",
+                )
+                .unwrap(),
+            AppendOutcome::Appended,
+            "PROMESSE — un solde de mission DOIT être rectifiable"
         );
+        let view_apres_solde = project_registre(&journal.read_entries().unwrap());
         assert!(
-            !view_juste
+            view_apres_solde
                 .ouverts
                 .iter()
-                .any(|o| o.id == "c-fermeture-juste"),
-            "fermeture juste ne revient pas aux ouverts"
+                .any(|o| o.id == "c-solde-mission" && o.rectifie),
+            "après rectif, le solde revient ouvert avec badge RECTIFIÉ"
         );
+        assert_eq!(view_apres_solde.footer.soldes, 0);
+        assert_eq!(view_apres_solde.footer.rectifies, 1);
 
         // (2) Fixture réelle : fermeture erronée de la règle permanente.
         let mut regle = sample_add(
@@ -3585,12 +3670,12 @@ mod tests {
             "PROMESSE — une entrée rectifiée NE se lit PAS comme jamais touchée"
         );
         assert_eq!(
-            view.footer.traites, 1,
-            "la fermeture juste compagnon reste comptée fermée"
+            view.footer.traites, 0,
+            "aucune fermeture de fond restante"
         );
         assert_eq!(
-            view.footer.rectifies, 1,
-            "historique de rectification compté au pied"
+            view.footer.rectifies, 2,
+            "historique : solde + fermeture rectifiés"
         );
 
         let raw = fs::read_to_string(&path).unwrap();
@@ -3622,9 +3707,10 @@ mod tests {
             },
         );
         assert!(
-            fermes.contains("[FERMÉ] c-fermeture-juste")
+            !fermes.contains("[SOLDÉ] c-solde-mission")
+                && !fermes.contains("[FERMÉ]")
                 && !fermes.contains("regle/un-zero-doit-prouver"),
-            "--fermes : fermeture juste visible, rectifiée absente (rouverte), reçu: {fermes}"
+            "--fermes : soldes/fermés rectifiés absents (rouverts), reçu: {fermes}"
         );
         let hist = render_registre_list_sections(
             &view,
@@ -3635,6 +3721,8 @@ mod tests {
         );
         assert!(
             hist.contains("[RECTIFIÉ]")
+                && hist.contains("fautive=solde_mission")
+                && hist.contains("raison=solde_mission_errone")
                 && hist.contains("fautive=fermeture")
                 && hist.contains("raison=corrige_en_production")
                 && hist.contains("ref=sha:475ef10")
@@ -3658,6 +3746,303 @@ mod tests {
             "refus ouvert, reçu: {err_open}"
         );
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Témoin 1 — reclassement Blocker→règle.
+    /// Contrôle positif d'abord (cas légitime) : sinon projection vide.
+    /// Puis la garde refuse le nature-seul ; la même transition nature+sévérité passe.
+    #[test]
+    fn oracle_reclassement_blocker_vers_regle_franchit_la_garde_avec_trace() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-oracle-blocker-regle-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("c.jsonl");
+        let mut journal = CatalogueJournal::open(&path).unwrap();
+
+        // (0) Cas légitime : constat Major → règle sans toucher la sévérité.
+        let mut ok = sample_add("c-major-vers-regle", Severity::Major, "2026-08-27T04:00:00Z");
+        ok.nature = EntryNature::Constat;
+        journal.append_add(ok).unwrap();
+        assert_eq!(
+            journal
+                .requalify_constat(
+                    "c-major-vers-regle",
+                    None,
+                    Some((EntryNature::Constat, EntryNature::Regle)),
+                    RaisonRequalification::NatureReclassee,
+                    Some("sha:deadbeef"),
+                    "2026-08-27T04:01:00Z",
+                )
+                .unwrap(),
+            AppendOutcome::Appended,
+            "PROMESSE — un non-blocker DOIT pouvoir devenir règle"
+        );
+
+        // (1) Blocker → règle SANS baisser la sévérité : la garde DOIT tuer.
+        let mut blocker =
+            sample_add("c-blocker-vers-regle", Severity::Blocker, "2026-08-27T04:00:00Z");
+        blocker.nature = EntryNature::Constat;
+        journal.append_add(blocker).unwrap();
+        let err = journal
+            .requalify_constat(
+                "c-blocker-vers-regle",
+                None,
+                Some((EntryNature::Constat, EntryNature::Regle)),
+                RaisonRequalification::NatureReclassee,
+                Some("sha:deadbeef"),
+                "2026-08-27T04:02:00Z",
+            )
+            .expect_err("PROMESSE — nature-seul Blocker→règle DOIT échouer");
+        assert!(
+            err.to_string().contains("une règle ne peut pas porter blocker"),
+            "motif garde attendu, reçu: {err}"
+        );
+
+        // (2) Même geste avec nature ET sévérité : passe, trace au journal.
+        assert_eq!(
+            journal
+                .requalify_constat(
+                    "c-blocker-vers-regle",
+                    Some((Severity::Blocker, Severity::Major)),
+                    Some((EntryNature::Constat, EntryNature::Regle)),
+                    RaisonRequalification::NatureReclassee,
+                    Some("sha:cafebabe"),
+                    "2026-08-27T04:03:00Z",
+                )
+                .unwrap(),
+            AppendOutcome::Appended,
+            "PROMESSE — Blocker→règle avec baisse de sévérité DOIT passer"
+        );
+        let entries = journal.read_entries().unwrap();
+        let view = project_registre(&entries);
+        let ouvert = view
+            .ouverts
+            .iter()
+            .find(|o| o.id == "c-blocker-vers-regle")
+            .expect("reste ouvert après requalification");
+        assert_eq!(ouvert.nature, EntryNature::Regle);
+        assert_eq!(ouvert.severity, Severity::Major);
+        assert!(ouvert.requalifie);
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.contains("\"severity_from\":\"blocker\"")
+                && raw.contains("\"severity_to\":\"major\"")
+                && raw.contains("\"nature_from\":\"constat\"")
+                && raw.contains("\"nature_to\":\"regle\""),
+            "trace nature+sévérité au journal, reçu: {raw}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn requalification_refuse_nature_from_perimee() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-requalify-stale-nature-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("c.jsonl");
+        let mut journal = CatalogueJournal::open(&path).unwrap();
+        journal
+            .append_add(sample_add(
+                "c-stale-nature",
+                Severity::Minor,
+                "2026-08-27T05:00:00Z",
+            ))
+            .unwrap();
+        journal
+            .requalify_constat(
+                "c-stale-nature",
+                None,
+                Some((EntryNature::Constat, EntryNature::Resultat)),
+                RaisonRequalification::NatureReclassee,
+                None,
+                "2026-08-27T05:01:00Z",
+            )
+            .unwrap();
+        let error = journal
+            .requalify_constat(
+                "c-stale-nature",
+                None,
+                Some((EntryNature::Constat, EntryNature::Regle)),
+                RaisonRequalification::NatureReclassee,
+                None,
+                "2026-08-27T05:02:00Z",
+            )
+            .expect_err("nature_from périmée doit refuser");
+        assert!(
+            error.to_string().contains("nature_from périmée"),
+            "motif attendu: {error}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn requalification_refuse_severite_from_perimee() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-requalify-stale-severity-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("c.jsonl");
+        let mut journal = CatalogueJournal::open(&path).unwrap();
+        journal
+            .append_add(sample_add(
+                "c-stale-severity",
+                Severity::Minor,
+                "2026-08-27T05:00:00Z",
+            ))
+            .unwrap();
+        journal
+            .requalify_constat(
+                "c-stale-severity",
+                Some((Severity::Minor, Severity::Major)),
+                None,
+                RaisonRequalification::SeveriteAjustee,
+                None,
+                "2026-08-27T05:01:00Z",
+            )
+            .unwrap();
+        let error = journal
+            .requalify_constat(
+                "c-stale-severity",
+                Some((Severity::Minor, Severity::Info)),
+                None,
+                RaisonRequalification::SeveriteAjustee,
+                None,
+                "2026-08-27T05:02:00Z",
+            )
+            .expect_err("severity_from périmée doit refuser");
+        assert!(
+            error.to_string().contains("severity_from périmée"),
+            "motif attendu: {error}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Témoin 2 — solde de mission ≠ fermeture prouvée.
+    /// Contrôle positif d'abord : fermeture avec preuve se lit [FERMÉ] raison+ref.
+    /// Puis objective_closed se lit [SOLDÉ] motif=mission_soldee — jamais comme
+    /// une fermeture prouvée à raison=- / ref=-.
+    #[test]
+    fn oracle_solde_mission_ne_se_lit_pas_comme_fermeture_prouvee() {
+        let root = std::env::temp_dir().join(format!(
+            "maicie-oracle-solde-mission-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut journal = CatalogueJournal::open(root.join("c.jsonl")).unwrap();
+
+        // (0) Cas légitime : fermeture prouvée.
+        journal
+            .append_add(add_avec_texte("c-prouve", "DEFAUT CORRIGE"))
+            .unwrap();
+        journal
+            .close_constat_attested(
+                "c-prouve",
+                RaisonFermeture::CorrigeParLot,
+                "sha:abcdef0",
+                "2026-08-27T04:10:00Z",
+            )
+            .unwrap();
+        let view_ok = project_registre(&journal.read_entries().unwrap());
+        let fermes_ok = render_registre_list_sections(
+            &view_ok,
+            RegistreListSections {
+                fermes: true,
+                ..RegistreListSections::default()
+            },
+        );
+        assert!(
+            fermes_ok.contains("[FERMÉ] c-prouve")
+                && fermes_ok.contains("raison=corrige_par_lot")
+                && fermes_ok.contains("ref=sha:abcdef0"),
+            "PROMESSE — fermeture prouvée lisible comme telle, reçu: {fermes_ok}"
+        );
+        assert!(
+            !fermes_ok.contains("raison=-") && !fermes_ok.contains("ref=-"),
+            "fermeture prouvée ne doit pas afficher des tirets, reçu: {fermes_ok}"
+        );
+
+        // (1) Solde de mission : trigger objective_closed, sans preuve typée.
+        journal
+            .append_add(add_avec_texte("c-solde", "MISSION SOLDEE SEULEMENT"))
+            .unwrap();
+        let link = ArbitrationLink {
+            constat_id: "c-solde".into(),
+            objective_id: "obj-solde-42".into(),
+        };
+        let closure = AttestedClosure {
+            objective_id: "obj-solde-42".into(),
+            observed_at: "2026-08-27T04:11:00Z".into(),
+        };
+        assert_eq!(
+            journal
+                .append_delivered_for_attested_closure(&link, &closure)
+                .unwrap(),
+            AppendOutcome::Appended,
+            "PROMESSE — un solde de mission DOIT pouvoir être posé"
+        );
+        let view = project_registre(&journal.read_entries().unwrap());
+        assert_eq!(view.footer.traites, 1, "fermeture prouvée compte FERMÉS");
+        assert_eq!(view.footer.soldes, 1, "solde compte SOLDÉS, pas FERMÉS");
+        let solde = view
+            .soldes
+            .iter()
+            .find(|t| t.id == "c-solde")
+            .expect("solde présent dans soldes (pas traites)");
+        assert!(
+            view.traites.iter().all(|t| t.id != "c-solde"),
+            "solde ne doit pas gonfler les fermetures de fond"
+        );
+        assert_eq!(solde.trigger, TransitionTrigger::ObjectiveClosed);
+        assert!(solde.raison.is_none() && solde.reference.is_none());
+        let fermes = render_registre_list_sections(
+            &view,
+            RegistreListSections {
+                fermes: true,
+                ..RegistreListSections::default()
+            },
+        );
+        assert!(
+            fermes.contains("[SOLDÉ] c-solde")
+                && fermes.contains("motif=mission_soldee")
+                && fermes.contains("objective=obj-solde-42")
+                && fermes.contains("1 FERMÉS, 1 SOLDÉS"),
+            "solde visible comme mission soldée au pied, reçu: {fermes}"
+        );
+        assert!(
+            !fermes.contains("[FERMÉ] c-solde")
+                && !fermes.contains("raison=-")
+                && !fermes.contains("ref=-"),
+            "solde NE doit PAS se lire comme fermeture prouvée sans motif, reçu: {fermes}"
+        );
+
+        // (2) Rectifiable : une fermeture sans preuve ne peut pas être inattaquable.
+        assert_eq!(
+            journal
+                .rectify_constat_attested(
+                    "c-solde",
+                    RaisonRectification::SoldeMissionErrone,
+                    "mesure:1/1 solde sans correction attestée",
+                    "2026-08-27T04:12:00Z",
+                )
+                .unwrap(),
+            AppendOutcome::Appended,
+            "PROMESSE — objective_closed DOIT être rectifiable"
+        );
+        let view2 = project_registre(&journal.read_entries().unwrap());
+        assert_eq!(view2.footer.soldes, 0);
+        assert!(
+            view2
+                .ouverts
+                .iter()
+                .any(|o| o.id == "c-solde" && o.rectifie),
+            "après rectif, le solde revient au dû"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }
