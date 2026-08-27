@@ -142,7 +142,7 @@ fn cible_connectee_sans_profil_explique_l_inscription_maicie_manquante() {
     assert_eq!(
         error["error"]["message"],
         format!(
-            "agent Bridget connecté mais sans profil Maicie : cursorbridget; ajoutez un profil dans {} avec \"agent_name\": \"cursorbridget\"",
+            "agent Bridget sans profil Maicie : cursorbridget; ajoutez un profil dans {} avec \"agent_name\": \"cursorbridget\"",
             fixture.config.display()
         )
     );

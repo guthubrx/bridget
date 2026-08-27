@@ -740,19 +740,32 @@ fn delegate_error_for_cli(
     let DelegateError::TargetUnavailable(target) = error else {
         return CliError::Delegate(error);
     };
+    if target == MAICIE_IDENTITY {
+        return CliError::TargetIsPilot(target);
+    }
     let Some(agent) = agents.iter().find(|agent| agent.name == target) else {
         return CliError::TargetUnknownBridget(target);
     };
     let has_profile = profiles
         .iter()
         .any(|profile| profile.agent_name.as_deref().unwrap_or(&profile.id) == agent.name);
-    if agent.state == "connected" && !has_profile {
+    if !has_profile {
         return CliError::TargetMissingMaicieProfile {
             target,
             config_path: config_path.to_path_buf(),
         };
     }
-    CliError::Delegate(DelegateError::TargetUnavailable(agent.name.clone()))
+    match agent.state.as_str() {
+        "dnd" => CliError::TargetUnavailableState {
+            target,
+            state: "dnd".to_string(),
+        },
+        "connected" => CliError::TargetEligibilityDivergence(target),
+        state => CliError::TargetUnavailableState {
+            target,
+            state: state.to_string(),
+        },
+    }
 }
 
 fn unix_now() -> Result<i64, CliError> {
@@ -3089,6 +3102,12 @@ enum CliError {
         target: String,
         config_path: PathBuf,
     },
+    TargetIsPilot(String),
+    TargetUnavailableState {
+        target: String,
+        state: String,
+    },
+    TargetEligibilityDivergence(String),
     Objective(ObjectiveError),
     Store(StoreError),
     Reconcile(ReconcileError),
@@ -3114,9 +3133,11 @@ impl CliError {
             Self::CatalogueReconcile(_) => EXIT_CONFIGURATION,
             Self::Reconcile(_) => EXIT_BRIDGET,
             Self::Delegate(_) => EXIT_DELEGATE,
-            Self::TargetUnknownBridget(_) | Self::TargetMissingMaicieProfile { .. } => {
-                EXIT_DELEGATE
-            }
+            Self::TargetUnknownBridget(_)
+            | Self::TargetMissingMaicieProfile { .. }
+            | Self::TargetIsPilot(_)
+            | Self::TargetUnavailableState { .. }
+            | Self::TargetEligibilityDivergence(_) => EXIT_DELEGATE,
             Self::Objective(_) => EXIT_DELEGATE,
             Self::Profile(_) | Self::ProfileActivation(_) | Self::Routine(_) => EXIT_DELEGATE,
         }
@@ -3136,6 +3157,9 @@ impl CliError {
                 "delegate_constraint_refused"
             }
             Self::Delegate(DelegateError::TargetUnavailable(_)) => "target_unavailable",
+            Self::TargetIsPilot(_)
+            | Self::TargetUnavailableState { .. }
+            | Self::TargetEligibilityDivergence(_) => "target_unavailable",
             Self::TargetUnknownBridget(_) => "target_unknown_bridget",
             Self::TargetMissingMaicieProfile { .. } => "target_missing_maicie_profile",
             Self::Delegate(DelegateError::Store(_)) | Self::Store(_) => "store",
@@ -3178,9 +3202,35 @@ impl fmt::Display for CliError {
                 config_path,
             } => write!(
                 formatter,
-                "agent Bridget connecté mais sans profil Maicie : {}; ajoutez un profil dans {} avec \"agent_name\": \"{}\"",
+                "agent Bridget sans profil Maicie : {}; ajoutez un profil dans {} avec \"agent_name\": \"{}\"",
                 sanitize_terminal(target),
                 config_path.display(),
+                sanitize_terminal(target)
+            ),
+            Self::TargetIsPilot(target) => write!(
+                formatter,
+                "cible indisponible : {} (condition : cible réservée au pilote)",
+                sanitize_terminal(target)
+            ),
+            Self::TargetUnavailableState { target, state } if state == "busy" => write!(
+                formatter,
+                "cible indisponible : {} (condition : state=busy; tour en cours, réessayer après sa fin)",
+                sanitize_terminal(target)
+            ),
+            Self::TargetUnavailableState { target, state } if state == "dnd" => write!(
+                formatter,
+                "cible indisponible : {} (condition : state=dnd; ne pas déranger)",
+                sanitize_terminal(target)
+            ),
+            Self::TargetUnavailableState { target, state } => write!(
+                formatter,
+                "cible indisponible : {} (condition : state={})",
+                sanitize_terminal(target),
+                sanitize_terminal(state)
+            ),
+            Self::TargetEligibilityDivergence(target) => write!(
+                formatter,
+                "cible indisponible : {} (condition : divergence d'éligibilité; toutes les gardes observées sont satisfaites)",
                 sanitize_terminal(target)
             ),
             Self::Objective(error) => error.fmt(formatter),
@@ -3209,6 +3259,38 @@ mod tests {
     use maicie::store::{SCHEMA_VERSION, SchemaPreflight};
     use std::path::PathBuf;
     use uuid::Uuid;
+
+    fn agent_info(name: &str, state: &str, domain: Option<&str>) -> AgentInfo {
+        AgentInfo {
+            name: name.to_string(),
+            agent_type: "codex".to_string(),
+            connection_id: format!("conn-{name}"),
+            host: "fixture".to_string(),
+            transport: "fixture".to_string(),
+            os: "linux".to_string(),
+            state: state.to_string(),
+            last_seen_secs: 0,
+            reconnect_count: 0,
+            domain: domain.map(str::to_string),
+            model: None,
+            effort: None,
+        }
+    }
+
+    fn profile_config(agent_name: &str) -> ProfileConfig {
+        ProfileConfig {
+            id: format!("profil-{agent_name}"),
+            agent_name: Some(agent_name.to_string()),
+            agent_type: None,
+            model: None,
+            effort: None,
+            display_name: agent_name.to_string(),
+            tags: vec!["review".to_string()],
+            personality_ref: "profiles/reviewer.md".to_string(),
+            tools: Vec::new(),
+            spawn_order_ref: "agents/reviewer".to_string(),
+        }
+    }
 
     #[test]
     fn refus_avant_ecran_sur_gabarit_altere() {
@@ -3471,7 +3553,128 @@ mod tests {
         assert_eq!(error.code(), "target_missing_maicie_profile");
         assert_eq!(
             error.to_string(),
-            "agent Bridget connecté mais sans profil Maicie : cursorbridget; ajoutez un profil dans /tmp/maicie.json avec \"agent_name\": \"cursorbridget\""
+            "agent Bridget sans profil Maicie : cursorbridget; ajoutez un profil dans /tmp/maicie.json avec \"agent_name\": \"cursorbridget\""
+        );
+    }
+
+    #[test]
+    fn test_023_refus_busy_json_nomme_la_condition_reelle_et_le_reessai() {
+        let agents = vec![agent_info("relecteur", "busy", Some("lot-temporaire"))];
+        let profiles = vec![profile_config("relecteur")];
+
+        let error = delegate_error_for_cli(
+            DelegateError::TargetUnavailable("relecteur".to_string()),
+            &profiles,
+            &agents,
+            std::path::Path::new("/tmp/maicie.json"),
+        );
+        let rendered: serde_json::Value =
+            serde_json::from_str(&error.as_json()).expect("erreur JSON valide");
+
+        assert_eq!(error.code(), "target_unavailable");
+        assert_eq!(
+            rendered
+                .pointer("/error/message")
+                .and_then(|value| value.as_str()),
+            Some(
+                "cible indisponible : relecteur (condition : state=busy; tour en cours, réessayer après sa fin)"
+            )
+        );
+        assert!(
+            !rendered
+                .pointer("/error/message")
+                .and_then(|value| value.as_str())
+                .unwrap()
+                .contains("domaine"),
+            "le domaine observé n'est pas la condition exécutée"
+        );
+    }
+
+    #[test]
+    fn test_023_toutes_les_gardes_de_cible_nomment_leur_condition() {
+        let dnd = agent_info("dormeur", "dnd", Some("bridget"));
+        let stopped = agent_info("arrete", "stopped", Some("bridget"));
+        let sans_profil = agent_info("sans-profil", "busy", Some("bridget"));
+        let profiles = vec![profile_config("dormeur"), profile_config("arrete")];
+        let agents = vec![dnd, stopped, sans_profil];
+
+        let cases = [
+            (
+                "dormeur",
+                "target_unavailable",
+                "cible indisponible : dormeur (condition : state=dnd; ne pas déranger)",
+            ),
+            (
+                "arrete",
+                "target_unavailable",
+                "cible indisponible : arrete (condition : state=stopped)",
+            ),
+            (
+                "maicie",
+                "target_unavailable",
+                "cible indisponible : maicie (condition : cible réservée au pilote)",
+            ),
+            (
+                "sans-profil",
+                "target_missing_maicie_profile",
+                "agent Bridget sans profil Maicie : sans-profil; ajoutez un profil dans /tmp/maicie.json avec \"agent_name\": \"sans-profil\"",
+            ),
+            (
+                "absent",
+                "target_unknown_bridget",
+                "agent inconnu de Bridget : absent; vérifiez son inscription et sa connexion",
+            ),
+        ];
+        for (target, expected_code, expected_message) in cases {
+            let error = delegate_error_for_cli(
+                DelegateError::TargetUnavailable(target.to_string()),
+                &profiles,
+                &agents,
+                std::path::Path::new("/tmp/maicie.json"),
+            );
+            assert_eq!(error.code(), expected_code, "code de {target}");
+            assert_eq!(error.to_string(), expected_message, "condition de {target}");
+        }
+    }
+
+    #[test]
+    fn test_023_domaine_non_decisionnel_et_refus_incoherent_nomme() {
+        let profiles = vec![profile_config("hors-domaine")];
+        let agents = vec![agent_info(
+            "hors-domaine",
+            "connected",
+            Some("chantier-voisin"),
+        )];
+        let config = MaicieConfig {
+            version: 1,
+            bridget_socket: PathBuf::from("/tmp/bridget.sock"),
+            database_path: PathBuf::from("/tmp/maicie.sqlite3"),
+            durations: DurationClasses {
+                short_secs: 30,
+                normal_secs: 60,
+                long_secs: 90,
+            },
+            status_capture_budget_ms: None,
+            catalogue_path: None,
+            coordination_policies: None,
+            review_project: None,
+            profiles: profiles.clone(),
+        };
+
+        let candidates = candidates_from(&config, &agents);
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].available);
+        assert!(!candidates[0].dnd);
+
+        let impossible = delegate_error_for_cli(
+            DelegateError::TargetUnavailable("hors-domaine".to_string()),
+            &profiles,
+            &agents,
+            std::path::Path::new("/tmp/maicie.json"),
+        );
+        assert_eq!(
+            impossible.to_string(),
+            "cible indisponible : hors-domaine (condition : divergence d'éligibilité; toutes les gardes observées sont satisfaites)"
         );
     }
 
