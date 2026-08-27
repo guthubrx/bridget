@@ -2357,8 +2357,18 @@ fn defer_idempotent_delivery(
     delivery: SendDelivery,
     controls: &mut Vec<DeferredControl>,
 ) -> Result<(), String> {
-    let message = serde_json::from_slice(&delivery.message_bytes)
+    let mut message: bridget_core::BridgetMessage = serde_json::from_slice(&delivery.message_bytes)
         .map_err(|error| format!("enveloppe de remise idempotente corrompue: {error}"))?;
+    // Même autorité que Deliver classique : relire à la poussée. Les octets
+    // persistés (souvent sans deadline pour reply=false) ne doivent pas
+    // condamner le tour au notify figé du fleet (600 s mesuré sur relec6).
+    let agent_type = state
+        .conn_instances
+        .get(target_conn)
+        .and_then(|instance_id| state.presences.get(instance_id))
+        .map(|presence| presence.agent_type.as_str())
+        .unwrap_or("");
+    stamp_turn_deadline_for_delivery(&mut message, &state.registry, agent_type);
     defer_control(
         state,
         target_conn,
@@ -4166,6 +4176,49 @@ fn live_notify_timeout_secs(fallback: &AgentRegistry, agent_type: &str) -> u64 {
         Ok(live) => from(&live),
         Err(_) => from(fallback),
     }
+}
+
+/// Pose `deadline_at` absolue pour un mandat reply=false au moment de la
+/// POUSSÉE vers le wrapper. Point unique : couvre Deliver classique ET
+/// DeliverIdempotent (Maicie / reprise après redémarrage). Sans cela, le
+/// worker retombe sur `notify_timeout` figé dans fleet.json — encore 600 s
+/// pour les codex absents de agents.json.
+fn stamp_turn_deadline_for_delivery(
+    message: &mut bridget_core::BridgetMessage,
+    registry: &AgentRegistry,
+    agent_type: &str,
+) {
+    if message.reply {
+        if message.deadline_at.is_none() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            message.deadline_at =
+                Some(now.saturating_add(message.reply_timeout.unwrap_or(60)));
+        }
+        return;
+    }
+    if message.deadline_at.is_some() {
+        return;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let timeout_secs = live_notify_timeout_secs(registry, agent_type);
+    message.deadline_at = Some(now.saturating_add(timeout_secs));
+    info!(
+        "échéance de tour posée: to={} type={} timeout_secs={} deadline_at={}",
+        message.to,
+        if agent_type.is_empty() {
+            "?"
+        } else {
+            agent_type
+        },
+        timeout_secs,
+        message.deadline_at.unwrap_or(0)
+    );
 }
 
 fn next_delivery_generation() -> u64 {
@@ -6251,25 +6304,17 @@ fn handle_wrapper_message(
             // reply=yes) : relire la valeur courante et la pousser en absolu.
             // Sans cela, worker.notify_timeout figé au spawn ignore agents.json.
             let mut delivered_message = bridge_msg.clone();
-            {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                if delivered_message.reply {
-                    delivered_message.deadline_at =
-                        Some(now.saturating_add(delivered_message.reply_timeout.unwrap_or(60)));
-                } else if delivered_message.deadline_at.is_none() {
-                    let agent_type = st
-                        .conn_instances
-                        .get(&target_conn)
-                        .and_then(|instance_id| st.presences.get(instance_id))
-                        .map(|presence| presence.agent_type.as_str())
-                        .unwrap_or("");
-                    let timeout_secs = live_notify_timeout_secs(&st.registry, agent_type);
-                    delivered_message.deadline_at = Some(now.saturating_add(timeout_secs));
-                }
-            }
+            let agent_type = st
+                .conn_instances
+                .get(&target_conn)
+                .and_then(|instance_id| st.presences.get(instance_id))
+                .map(|presence| presence.agent_type.as_str())
+                .unwrap_or("");
+            stamp_turn_deadline_for_delivery(
+                &mut delivered_message,
+                &st.registry,
+                agent_type,
+            );
             // Push vers le destinataire
             let dtw = DaemonToWrapper::Deliver(delivered_message);
             let json = encode(&dtw).unwrap_or_default();
@@ -8959,6 +9004,86 @@ mod presence_tests {
         let mut message = BridgetMessage::new("maicie", "agent-2", body);
         message.hops = 4;
         message
+    }
+
+    /// ORACLE — SendIdempotent reply=false (tous les mandats Maicie) doit
+    /// poser deadline_at au DEFAULT natif pour un type ABSENT de agents.json
+    /// (codex). Mutant : omettre stamp dans defer_idempotent_delivery → None.
+    /// Mutant : reposer 600 (fleet figé) → timeout hors 2700.
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_send_idempotent_reply_false_pose_deadline_codex_sans_agents_json() {
+        let empty = AgentRegistry::from_json("{}", "/tmp/agents-temoin-codex-deadline.json")
+            .expect("registre vide charge les natifs");
+        assert_eq!(
+            empty.get("codex").unwrap().notify_timeout_secs,
+            DEFAULT_NOTIFY_TIMEOUT_SECS,
+            "précondition : natif codex = DEFAULT, pas un 600 ailleurs"
+        );
+        assert_eq!(DEFAULT_NOTIFY_TIMEOUT_SECS, 2700);
+
+        let (mut state, config) = state_with_registered_agent("idempotent-codex-deadline");
+        // Comme relec6 : type codex, présence connectée, sans entrée agents.json.
+        state.presences.get_mut("instance-1").unwrap().agent_type = "codex".to_string();
+        let (target_writer, mut target_reader) = control_socket("idempotent-codex-deadline");
+        state
+            .connections
+            .insert("conn-1".to_string(), target_writer);
+
+        let shared = Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(&shared, "client-codex-deadline", "012_scope_codexdeadline");
+
+        let mut message = idempotent_message("mandat Maicie sans reply");
+        message.reply = false;
+        assert!(
+            message.deadline_at.is_none(),
+            "contrôle positif : le client n'apporte pas de deadline"
+        );
+
+        let before = unix_now_secs() as u64;
+        let result = handle_wrapper_message(
+            "client-codex-deadline",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "mandat-codex-sans-deadline".to_string(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        );
+        assert!(
+            matches!(
+                result,
+                Some(DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                })
+            ),
+            "envoi idempotent attendu, reçu {result:?}"
+        );
+
+        let delivered = match read_control(&mut target_reader) {
+            DaemonToWrapper::DeliverIdempotent { message, .. } => message,
+            other => panic!("DeliverIdempotent attendu vers le wrapper: {other:?}"),
+        };
+        let after = unix_now_secs() as u64;
+        let deadline = delivered
+            .deadline_at
+            .expect("deadline_at DOIT être posé pour reply=false sur DeliverIdempotent");
+        let timeout = deadline.saturating_sub(before);
+        assert!(
+            timeout >= DEFAULT_NOTIFY_TIMEOUT_SECS.saturating_sub(2)
+                && timeout
+                    <= DEFAULT_NOTIFY_TIMEOUT_SECS
+                        .saturating_add(after.saturating_sub(before).saturating_add(2)),
+            "codex sans agents.json doit recevoir DEFAULT={DEFAULT_NOTIFY_TIMEOUT_SECS}s ; \
+             timeout≈{timeout} deadline={deadline} before={before} after={after}"
+        );
+        assert!(
+            timeout > 660,
+            "régression : encore le plafond 600 s (fleet/notify figé) ; timeout={timeout}"
+        );
+
+        let _ = std::fs::remove_file(config.db_path);
     }
 
     #[test]
