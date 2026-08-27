@@ -162,7 +162,10 @@ obligatoire. Après correction, leurs harnais complets rendent respectivement
 `cargo clippy --all-targets` analyse les deux arbres jusqu'au bout et rend 48
 avertissements sur la base comme sur la tête : écart nul. `cargo fmt --check`
 reste rouge sur une dette préexistante, avec 74 emplacements sur la base et 72
-sur la tête. `git diff --check` est vert.
+sur la tête : les deux emplacements retirés viennent uniquement du passage de
+`plugins/maicie/src/ui_projection.rs` sous `rustfmt` dans le commit `67fc52f9`,
+sans déplacement ni masquage d'une dette extérieure. `git diff --check` est
+vert.
 
 ## Non mesuré
 

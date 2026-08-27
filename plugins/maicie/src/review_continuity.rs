@@ -551,4 +551,37 @@ mod tests {
             ReviewContinuityState::VerdictAbsent
         );
     }
+
+    #[test]
+    fn verdict_durable_sans_cible_reste_inobservable_sans_interroger_git() {
+        let ordinary = delegation();
+        let stored = StoredReviewVerdict {
+            objective_id: ordinary.objectif_id,
+            delegation_id: ordinary.id,
+            evidence: ReviewVerdictEvidence {
+                verdict: ReviewVerdict::Approve,
+                target_ref: "origin/session-fixture".to_string(),
+                expected_head: "1".repeat(40),
+                measured_head: "1".repeat(40),
+                observed_target_head: "1".repeat(40),
+            },
+        };
+        assert!(ordinary.review_target.is_none());
+        assert!(stored.evidence.is_valid());
+
+        let mut git_observations = 0;
+        let observation = observe_delegation_review_with(&ordinary, Some(&stored), |_, _| {
+            git_observations += 1;
+            Ok(ReviewHeadRelation::StillAncestor {
+                observed_head: "1".repeat(40),
+            })
+        });
+
+        assert_eq!(git_observations, 0);
+        assert_eq!(observation.state, ReviewContinuityState::Unobservable);
+        assert_eq!(
+            observation.reason,
+            Some(ReviewUnobservableReason::VerdictWithoutTarget)
+        );
+    }
 }
