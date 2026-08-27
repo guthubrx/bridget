@@ -2942,6 +2942,7 @@ fn spawn_managed_session_transport(
                 queue_capacity: definition.queue_capacity,
                 notify_timeout_secs: definition.notify_timeout_secs,
                 model: codex_model_from_args(&definition.args),
+                permissions: definition.permissions.clone(),
             };
             let environment = string_environment(mcp_environment);
             if inherit_stderr {
