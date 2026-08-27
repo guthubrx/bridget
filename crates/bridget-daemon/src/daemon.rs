@@ -8122,7 +8122,7 @@ pub struct DaemonStatus {
 
 #[cfg(test)]
 mod inventory_provenance_tests {
-    use super::{get_status, DaemonConfig};
+    use super::{DaemonConfig, DaemonToWrapper, encode, get_status};
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
     use std::thread;
@@ -8145,11 +8145,15 @@ mod inventory_provenance_tests {
             drop(first);
             let (mut stream, _) = listener.accept().unwrap();
             let mut line = String::new();
-            BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
             writeln!(stream, "{{}}").unwrap();
             stream.flush().unwrap();
             let mut list_line = String::new();
-            BufReader::new(stream.try_clone().unwrap()).read_line(&mut list_line).unwrap();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut list_line)
+                .unwrap();
         });
         let mut config = DaemonConfig::default();
         config.socket_path = path.clone();
@@ -8158,6 +8162,46 @@ mod inventory_provenance_tests {
         let _ = std::fs::remove_file(thread_path);
         assert!(status.running);
         assert!(!status.agents_inventory_available);
+    }
+
+    #[test]
+    fn agent_list_vide_confirme_inventaire_disponible() {
+        let path =
+            std::env::temp_dir().join(format!("bridget-agent-list-{}.sock", uuid::Uuid::new_v4()));
+        let listener = UnixListener::bind(&path).unwrap();
+        let thread_path = path.clone();
+        let handle = thread::spawn(move || {
+            let (first, _) = listener.accept().unwrap();
+            drop(first);
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            writeln!(stream, "{{}}").unwrap();
+            stream.flush().unwrap();
+            let mut list_line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut list_line)
+                .unwrap();
+            writeln!(
+                stream,
+                "{}",
+                encode(&DaemonToWrapper::AgentList { agents: vec![] }).unwrap()
+            )
+            .unwrap();
+            stream.flush().unwrap();
+        });
+        let mut config = DaemonConfig::default();
+        config.socket_path = path.clone();
+        let status = get_status(&config);
+        handle.join().unwrap();
+        let _ = std::fs::remove_file(thread_path);
+        assert_eq!(
+            (status.running, status.agents_inventory_available),
+            (true, true)
+        );
+        assert!(status.agents.is_empty());
     }
 }
 
