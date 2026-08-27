@@ -125,6 +125,9 @@ issues sont différentes de `still_ancestor`.
 - **FR-4708** : l'ancienne trame sans cible reste décodable.
 - **FR-4709** : le cas « lot ouvert sans branche distante » reste hors lot et
   est déclaré comme dette ; aucune analyse de prose n'est admise.
+- **FR-4710** : une campagne relit les verdicts persistés en une seule requête
+  SQLite, puis les indexe en mémoire ; elle ne lance jamais une lecture par
+  objectif ou par délégation.
 
 ## Critères de succès
 
@@ -141,6 +144,8 @@ issues sont différentes de `still_ancestor`.
   issues non vertes distinctes.
 - **SC-4707** : l'ancien daemon ne transforme pas silencieusement une mission
   de revue nouvelle en délégation ordinaire.
+- **SC-4708** : sur l'état durable mesuré de 540 délégations, la lecture groupée
+  effectue une requête au lieu des 540 appels qu'exigerait le chemin scalaire.
 
 ## Hors périmètre
 

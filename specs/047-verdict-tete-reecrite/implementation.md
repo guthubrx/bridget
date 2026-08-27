@@ -17,6 +17,10 @@
 - Projection ajoutée à `maicie status` et à la carte de reprise.
 - Les lectures SQLite sont groupées et les cibles Git identiques mises en
   cache pendant une campagne de statut.
+- Mesure du 27 août : 540 objectifs et 540 délégations dans le greffe actif.
+  Le chemin scalaire `review_verdicts_for` aurait donc appelé SQLite 540 fois ;
+  la campagne appelle `review_verdicts` une fois, puis indexe les 41 réceptions
+  de verdict trouvées. Comparatif structurel : 540 lectures avant, 1 après.
 
 ## Preuves ciblées
 
