@@ -70,6 +70,18 @@ outboxes gardent leurs octets et sont rejouées sans reconstruction. Les deux
 producteurs actuels — création immédiate et déblocage après prérequis —
 consomment la même règle de formatage.
 
+### Statut du bloc d'identifiants
+
+Le bloc est destiné à être **lu par l'agent destinataire**, comme le reste du
+mandat. Sa forme exacte est fermée pour que les deux producteurs rendent le
+même message et que les oracles détectent toute omission ; elle ne constitue
+pas pour autant une API de parsing promise aux consommateurs automatiques.
+
+Un programme qui doit corréler une délégation utilise les identifiants typés
+du résultat terminal ou du greffe. Il ne doit pas extraire les UUID depuis le
+texte du mandat. Rendre ce texte analysable par machine exigerait un contrat
+structuré et versionné distinct ; cette session n'en crée pas implicitement.
+
 ## Relation avec la session 047
 
 La session 047 transporte une cible Git d'entrée typée vers la délégation. La
@@ -133,6 +145,9 @@ décoder le `PublicMessage` de l'outbox débloquée.
   byte-identiques avant le bloc d'identifiants.
 - **FR-5207**: Aucun second mandat manuel ni libellé « mandat à suivre » ne fait
   partie du contrat livré.
+- **FR-5208**: Le bloc textuel DOIT rester un rendu destiné à l'agent ; aucun
+  consommateur automatique ne DOIT le traiter comme la source typée des trois
+  identifiants.
 
 ### Non-Functional Requirements
 
