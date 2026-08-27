@@ -27,13 +27,17 @@ dans la grammaire MCP, jamais l'inverse.
 | Autre ASCII | Refus | Refus | Aucun |
 | Lettres Unicode | Acceptation | Refus | MCP seul |
 | Nombres Unicode | Acceptation | Refus | MCP seul |
-| Contrôles, formats, symboles et marques combinatoires | Refus | Refus | Aucun |
+| Marques combinatoires pour lesquelles `char::is_alphanumeric()` vaut vrai | Acceptation | Refus | MCP seul |
+| Autres marques combinatoires, contrôles, formats et symboles | Refus | Refus | Aucun |
 
-Les deux bornes de longueur portent sur 100 octets. La forme précomposée `é`
-est donc acceptée par MCP, tandis que sa forme décomposée `e` + marque
-combinatoire est refusée malgré un rendu visuel équivalent. Des homoglyphes
-Unicode, dont `分析` et les lettres pleine largeur, franchissent également la
-grammaire MCP privée.
+Les deux bornes de longueur portent sur 100 octets. La règle MCP historique
+accepte exactement `-`, `_` et chaque scalaire pour lequel
+`char::is_alphanumeric()` vaut vrai. Elle accepte donc certaines marques
+combinatoires porteuses de cette propriété, notamment U+0345, U+05B0 et
+U+093E, mais refuse U+0301. La forme précomposée `é` est ainsi acceptée par
+MCP, tandis que sa forme décomposée `e` + U+0301 est refusée malgré un rendu
+visuel équivalent. Des homoglyphes Unicode, dont `分析` et les lettres pleine
+largeur, franchissent également la grammaire MCP privée.
 
 La mesure du parc du 27 août 2026 à 11:16:34 UTC porte sur 15 entrées, dont
 14 connectées. Les 15 noms visibles satisfont la garde canonique ; le

@@ -19,6 +19,59 @@ l'ensemble inverse est vide.
 Au 27 août 2026 à 11:16:34 UTC, Bridget listait 15 noms, dont 14 connectés.
 Les 15 passent la garde canonique ; aucun nom du parc visible n'est retiré.
 
+La photographie a été obtenue depuis la projection native de l'annuaire avec
+la commande de mesure suivante :
+
+```javascript
+const who = await tools.mcp__bridget__bridget_who({});
+const agents = who?.structuredContent?.agents || [];
+const utf8len = s => {
+  let n=0;
+  for (const ch of s) {
+    const cp=ch.codePointAt(0);
+    n += cp<=0x7f?1:cp<=0x7ff?2:cp<=0xffff?3:4;
+  }
+  return n;
+};
+const rows = agents.map(a => {
+  const bytes = utf8len(a.name);
+  const canonical = bytes >= 1 && bytes <= 100 && /^[A-Za-z0-9_-]+$/.test(a.name);
+  return {name:a.name, state:a.state, domain:a.domain ?? null, host:a.host, bytes, canonical};
+});
+text(JSON.stringify({
+  observed_at:new Date().toISOString(),
+  listed:rows.length,
+  connected:rows.filter(r=>r.state==="connected").length,
+  bridget_domain:rows.filter(r=>r.domain==="bridget").length,
+  canonical_pass:rows.filter(r=>r.canonical).length,
+  canonical_fail:rows.filter(r=>!r.canonical),
+  rows
+},null,2));
+```
+
+La sortie portait exactement
+`observed_at=2026-08-27T11:16:34.266Z`, `listed=15`, `connected=14`,
+`bridget_domain=10`, `canonical_pass=15` et `canonical_fail=[]`. La liste brute,
+dans l'ordre rendu, était :
+
+| Nom | État | Domaine | Hôte | Octets | Canonique |
+|---|---|---|---|---:|---|
+| `agent` | `unreachable` | `null` | `inconnu` | 5 | oui |
+| `bridget` | `connected` | `bridget` | `monordinateur` | 7 | oui |
+| `cartae0` | `connected` | `bridget` | `cartae` | 7 | oui |
+| `codex-1` | `connected` | `moi` | `cartae` | 7 | oui |
+| `essai-claude` | `connected` | `work-cursor2-registre-rectif-bf33c7c` | `monordinateur` | 12 | oui |
+| `essai-claude-distant` | `connected` | `bridget` | `cartae` | 20 | oui |
+| `essai-distant` | `connected` | `essai-distant` | `cartae` | 13 | oui |
+| `essai-equipier` | `connected` | `essai-equipier` | `cartae` | 14 | oui |
+| `jc1` | `connected` | `bridget` | `cartae` | 3 | oui |
+| `jc2` | `connected` | `bridget` | `cartae` | 3 | oui |
+| `jc3` | `connected` | `bridget` | `cartae` | 3 | oui |
+| `jc6` | `connected` | `bridget` | `cartae` | 3 | oui |
+| `rc1` | `connected` | `bridget` | `cartae` | 3 | oui |
+| `rc5` | `connected` | `bridget` | `cartae` | 3 | oui |
+| `rc7` | `connected` | `bridget` | `cartae` | 3 | oui |
+
 ## Mise en œuvre
 
 `read_name` ne possède plus de grammaire privée. Il normalise le contenu du
