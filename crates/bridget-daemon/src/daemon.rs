@@ -100,6 +100,171 @@ impl Metrics {
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 const PRESENCE_RETENTION: Duration = Duration::from_secs(300);
 
+/// Pas de scrutation des threads de fond pendant leur sieste.
+///
+/// Une sieste longue n'est pas seulement un délai de réaction : tant qu'un
+/// thread de fond dort, il retient son clone de `Arc<Mutex<DaemonState>>`, donc
+/// l'état, donc le `Sender` du superviseur — et l'arrêt du daemon reste
+/// suspendu à son réveil.
+const SHUTDOWN_POLL: Duration = Duration::from_millis(100);
+
+/// Dort au plus `total`, en se réveillant pour voir si l'arrêt est demandé.
+///
+/// Rend `true` quand l'arrêt est demandé : l'appelant doit alors SORTIR de sa
+/// boucle et laisser tomber sa référence à l'état.
+fn sleep_until_shutdown(total: Duration) -> bool {
+    sleep_until_flag(total, &SHUTDOWN_REQUESTED)
+}
+
+/// Le drapeau est un paramètre : l'oracle éprouve la boucle sans toucher au
+/// statique global, que d'autres tests du même binaire partageraient.
+fn sleep_until_flag(total: Duration, flag: &AtomicBool) -> bool {
+    let deadline = Instant::now() + total;
+    loop {
+        if flag.load(Ordering::SeqCst) {
+            return true;
+        }
+        let reste = deadline.saturating_duration_since(Instant::now());
+        if reste.is_zero() {
+            return false;
+        }
+        thread::sleep(reste.min(SHUTDOWN_POLL));
+    }
+}
+
+#[cfg(test)]
+mod arret_tests {
+    use super::{SHUTDOWN_POLL, SHUTDOWN_REQUESTED, sleep_until_flag, sleep_until_shutdown};
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    /// Sérialise les tests qui manipulent le drapeau GLOBAL d'arrêt.
+    static VERROU_DRAPEAU: Mutex<()> = Mutex::new(());
+
+    /// Un thread de fond en sieste longue doit LÂCHER sa référence à l'état dès
+    /// l'ordre d'arrêt. Sans cela, l'état — et le `Sender` qu'il contient —
+    /// survit jusqu'au réveil, et l'arrêt du daemon attend d'autant.
+    ///
+    /// Mutant qui tue ce test : revenir à `thread::sleep(total)` sans scrutation
+    /// → l'attente dure la sieste entière (3 s ici) et l'assertion sur le délai
+    /// mesuré meurt en affichant la valeur.
+    #[test]
+    fn une_sieste_longue_est_interrompue_par_l_ordre_d_arret() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let observe = Arc::clone(&flag);
+        let sieste = Duration::from_secs(3);
+        let debut = Instant::now();
+        let dormeur = std::thread::spawn(move || sleep_until_flag(sieste, &observe));
+        std::thread::sleep(SHUTDOWN_POLL * 2);
+        flag.store(true, Ordering::SeqCst);
+        let interrompu = dormeur.join().expect("le dormeur ne panique pas");
+        let ecoule = debut.elapsed();
+
+        assert!(
+            interrompu,
+            "la sieste doit rendre true quand l'arrêt est demandé"
+        );
+        assert!(
+            ecoule < sieste / 2,
+            "l'arrêt doit interrompre la sieste : {} ms écoulées pour une sieste de {} ms",
+            ecoule.as_millis(),
+            sieste.as_millis()
+        );
+    }
+
+    /// Contrôle positif : sans ordre d'arrêt, la sieste va bien à son terme et
+    /// rend `false`. Sans lui, une fonction qui rendrait TOUJOURS `true`
+    /// passerait le test ci-dessus.
+    #[test]
+    fn sans_ordre_d_arret_la_sieste_va_a_son_terme() {
+        let flag = AtomicBool::new(false);
+        let sieste = SHUTDOWN_POLL * 3;
+        let debut = Instant::now();
+        let interrompu = sleep_until_flag(sieste, &flag);
+        let ecoule = debut.elapsed();
+        assert!(!interrompu, "aucun ordre d'arrêt : la sieste rend false");
+        assert!(
+            ecoule >= sieste,
+            "la sieste ne doit pas être écourtée : {} ms pour {} ms demandées",
+            ecoule.as_millis(),
+            sieste.as_millis()
+        );
+    }
+
+    /// LE CHEMIN REEL, celui que les fils de fond empruntent.
+    ///
+    /// Les deux oracles ci-dessus éprouvent `sleep_until_flag`, le helper
+    /// GÉNÉRIQUE. Or les fils rappels et purge appellent `sleep_until_shutdown`,
+    /// l'ADAPTATEUR qui le lie au drapeau global. Remplacer le seul adaptateur
+    /// par `thread::sleep(total)` les rendait insensibles à l'arrêt sans faire
+    /// rougir quoi que ce soit : les unités gardaient une couche VOISINE du
+    /// chemin de production, et le raccord n'était gardé par rien.
+    ///
+    /// Mutant qui tue ce test : `fn sleep_until_shutdown(total) { thread::sleep(total); false }`
+    /// → l'appel rend `false` après la sieste entière, les deux assertions
+    /// meurent en affichant le délai mesuré.
+    #[test]
+    fn l_adaptateur_des_fils_de_fond_observe_le_drapeau_d_arret() {
+        // Le drapeau est global : un seul test à la fois le manipule. Aucun
+        // appel à `daemon::run` n'existe dans ce binaire de test, donc personne
+        // d'autre ne l'observe ni ne le remet à zéro sous nos pieds.
+        let _ordre = VERROU_DRAPEAU
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
+
+        let sieste = Duration::from_secs(3);
+        let debut = Instant::now();
+        let dormeur = std::thread::spawn(move || sleep_until_shutdown(sieste));
+        std::thread::sleep(SHUTDOWN_POLL * 2);
+        SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+        let interrompu = dormeur.join().expect("le dormeur ne panique pas");
+        let ecoule = debut.elapsed();
+
+        // Rendre le drapeau à son état de repos AVANT d'assertir : un échec ne
+        // doit pas laisser le binaire de test avec un arrêt demandé.
+        SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
+
+        assert!(
+            interrompu,
+            "l'adaptateur doit rendre true quand l'arrêt est demandé —              il a rendu false après {} ms",
+            ecoule.as_millis()
+        );
+        assert!(
+            ecoule < sieste / 2,
+            "ARRÊT PRÉCOCE attendu : {} ms écoulées pour une sieste de {} ms",
+            ecoule.as_millis(),
+            sieste.as_millis()
+        );
+    }
+
+    /// Contrôle positif de l'adaptateur : sans ordre d'arrêt, il dort jusqu'au
+    /// bout et rend `false`. Sans lui, un adaptateur qui rendrait TOUJOURS
+    /// `true` passerait le test ci-dessus.
+    #[test]
+    fn l_adaptateur_sans_ordre_d_arret_va_au_bout_de_sa_sieste() {
+        let _ordre = VERROU_DRAPEAU
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
+
+        let sieste = SHUTDOWN_POLL * 3;
+        let debut = Instant::now();
+        let interrompu = sleep_until_shutdown(sieste);
+        let ecoule = debut.elapsed();
+
+        assert!(!interrompu, "aucun ordre d'arrêt : l'adaptateur rend false");
+        assert!(
+            ecoule >= sieste,
+            "la sieste ne doit pas être écourtée : {} ms pour {} ms demandées",
+            ecoule.as_millis(),
+            sieste.as_millis()
+        );
+    }
+}
+
 /// Gestionnaires de signaux du **service** daemon uniquement.
 ///
 /// Sous `cfg(test)`, no-op volontaire : un binaire de test qui hériterait de
@@ -2524,6 +2689,18 @@ fn schedule_idempotent_delivery_recovery(
 
 /// Lance le daemon.
 pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
+    // Gestionnaires de signaux AVANT toute trace visible de l'extérieur.
+    //
+    // Ils étaient installés après la liaison de la socket : entre le moment où
+    // le daemon devenait joignable et celui où il devenait interruptible
+    // proprement, un SIGTERM tombait sur la disposition PAR DÉFAUT et tuait le
+    // processus net — socket et fichier PID abandonnés derrière lui. Un
+    // démarrage suivi d'un arrêt immédiat laissait donc des reliques que le
+    // démarrage suivant devait déblayer. Le drapeau est remis à zéro d'abord :
+    // un SIGTERM arrivé avant la boucle sera vu à sa première itération.
+    SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
+    install_daemon_signal_handlers();
+
     // Verrouillage exclusif avec flock — empêche deux daemons de démarrer en même temps
     // Évite la race condition TOCTOU du PID file traditionnel
     let pid_file = config.socket_path.with_extension("pid");
@@ -2679,7 +2856,12 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     let st_reminder = state.clone();
     thread::spawn(move || {
         loop {
-            thread::sleep(Duration::from_secs(1)); // Réduit de 3s à 1s pour meilleure réactivité
+            // Sortie sur arrêt : ce thread détient un clone de l'Arc d'état, et
+            // l'état détient `managed_tx`. Tant qu'il boucle, le canal du
+            // superviseur ne peut PAS se fermer et l'arrêt reste suspendu.
+            if sleep_until_shutdown(Duration::from_secs(1)) {
+                return;
+            }
             let now = std::time::Instant::now();
 
             // Collecter les actions à faire
@@ -2797,7 +2979,11 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     let retention = config.retention_days;
     thread::spawn(move || {
         loop {
-            thread::sleep(Duration::from_secs(3600));
+            // Même raison qu'au-dessus, en plus aigu : une sieste d'une heure
+            // gardait l'état vivant une heure de plus après l'ordre d'arrêt.
+            if sleep_until_shutdown(Duration::from_secs(3600)) {
+                return;
+            }
             let st = st_purge.lock().unwrap_or_else(|e| e.into_inner());
             if let Ok(n) = st.store.purge_older_than_days(retention)
                 && n > 0
@@ -2806,12 +2992,6 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
-
-    // Setup signal handler — flag atomique global (pas de Mutex dans le handler)
-    // On utilise un flag atomique simple. Le shutdown propre (notification
-    // des wrappers) est fait dans la boucle principale quand elle détecte le flag.
-    SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
-    install_daemon_signal_handlers();
 
     // Boucle d'acceptation avec timeout pour vérifier shutdown
     listener.set_nonblocking(true)?;
