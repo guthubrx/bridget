@@ -1078,20 +1078,15 @@ fn cmd_send(args: &[String]) {
     }
 
     let sender = from.unwrap_or_else(current_agent_name);
-    let effective_reply = if sender == "human" {
-        // L'humain n'est pas un agent connecté — pas de reply possible
-        false
-    } else {
-        reply
-    };
+    if let Err(error) = validate_reply_options(&sender, reply, timeout_secs) {
+        exit_argument_error(&error);
+    }
     let mut msg = BridgetMessage::new(&sender, &to, &body);
     msg.in_reply_to = in_reply_to;
-    msg.reply = effective_reply;
+    msg.reply = reply;
     msg.hops = hops;
-    if let Some(t) = timeout_secs {
-        msg.reply_timeout = Some(t);
-    } else if effective_reply {
-        msg.reply_timeout = Some(60);
+    if reply {
+        msg.reply_timeout = Some(timeout_secs.unwrap_or(60));
     }
 
     let idempotent = match resolved_idempotent_options(
@@ -1114,11 +1109,7 @@ fn cmd_send(args: &[String]) {
             DaemonToWrapper::Ack { id } => {
                 // Écho du destinataire résolu : l'expéditeur vérifie immédiatement
                 // qu'il a visé la bonne cible (anti aiguillage).
-                let reply_str = if effective_reply {
-                    " [réponse attendue]"
-                } else {
-                    ""
-                };
+                let reply_str = if reply { " [réponse attendue]" } else { "" };
                 println!(
                     "OK: envoyé à « {} » (id={}, hops={}){}",
                     to, id, hops, reply_str
@@ -1162,6 +1153,23 @@ where
         return Err(invalid());
     }
     Ok(parsed)
+}
+
+fn validate_reply_options(
+    sender: &str,
+    reply_requested: bool,
+    timeout_secs: Option<u64>,
+) -> Result<(), String> {
+    if sender == "human" && reply_requested {
+        return Err(
+            "--reply ne peut pas être utilisé avec l’expéditeur « human » : aucune réponse ne peut lui être livrée"
+                .to_string(),
+        );
+    }
+    if timeout_secs.is_some() && !reply_requested {
+        return Err("--timeout requiert --reply".to_string());
+    }
+    Ok(())
 }
 
 fn cmd_guichet(args: &[String]) {
@@ -2916,6 +2924,9 @@ fn cmd_reply(args: &[String]) {
     }
 
     let agent_name = current_agent_name();
+    if let Err(error) = validate_reply_options(&agent_name, reply_flag, timeout_secs) {
+        exit_argument_error(&error);
+    }
     let reply_file = socket_path()
         .parent()
         .unwrap()
@@ -2949,16 +2960,13 @@ fn cmd_reply(args: &[String]) {
     }
 
     let sender = agent_name.clone();
-    let effective_reply = if sender == "human" { false } else { reply_flag };
 
     let mut msg = BridgetMessage::new(&sender, &to, &body);
     msg.in_reply_to = explicit_in_reply_to.or(implicit_in_reply_to);
-    msg.reply = effective_reply;
+    msg.reply = reply_flag;
     msg.hops = hops;
-    if let Some(t) = timeout_secs {
-        msg.reply_timeout = Some(t);
-    } else if effective_reply {
-        msg.reply_timeout = Some(60);
+    if reply_flag {
+        msg.reply_timeout = Some(timeout_secs.unwrap_or(60));
     }
 
     let idempotent = match resolved_idempotent_options(
