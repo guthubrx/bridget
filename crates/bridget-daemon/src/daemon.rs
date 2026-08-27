@@ -131,10 +131,14 @@ fn sleep_until_flag(total: Duration, flag: &AtomicBool) -> bool {
 
 #[cfg(test)]
 mod arret_tests {
-    use super::{SHUTDOWN_POLL, sleep_until_flag};
+    use super::{SHUTDOWN_POLL, SHUTDOWN_REQUESTED, sleep_until_flag, sleep_until_shutdown};
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
+
+    /// Sérialise les tests qui manipulent le drapeau GLOBAL d'arrêt.
+    static VERROU_DRAPEAU: Mutex<()> = Mutex::new(());
 
     /// Un thread de fond en sieste longue doit LÂCHER sa référence à l'état dès
     /// l'ordre d'arrêt. Sans cela, l'état — et le `Sender` qu'il contient —
@@ -178,6 +182,77 @@ mod arret_tests {
         let interrompu = sleep_until_flag(sieste, &flag);
         let ecoule = debut.elapsed();
         assert!(!interrompu, "aucun ordre d'arrêt : la sieste rend false");
+        assert!(
+            ecoule >= sieste,
+            "la sieste ne doit pas être écourtée : {} ms pour {} ms demandées",
+            ecoule.as_millis(),
+            sieste.as_millis()
+        );
+    }
+
+    /// LE CHEMIN REEL, celui que les fils de fond empruntent.
+    ///
+    /// Les deux oracles ci-dessus éprouvent `sleep_until_flag`, le helper
+    /// GÉNÉRIQUE. Or les fils rappels et purge appellent `sleep_until_shutdown`,
+    /// l'ADAPTATEUR qui le lie au drapeau global. Remplacer le seul adaptateur
+    /// par `thread::sleep(total)` les rendait insensibles à l'arrêt sans faire
+    /// rougir quoi que ce soit : les unités gardaient une couche VOISINE du
+    /// chemin de production, et le raccord n'était gardé par rien.
+    ///
+    /// Mutant qui tue ce test : `fn sleep_until_shutdown(total) { thread::sleep(total); false }`
+    /// → l'appel rend `false` après la sieste entière, les deux assertions
+    /// meurent en affichant le délai mesuré.
+    #[test]
+    fn l_adaptateur_des_fils_de_fond_observe_le_drapeau_d_arret() {
+        // Le drapeau est global : un seul test à la fois le manipule. Aucun
+        // appel à `daemon::run` n'existe dans ce binaire de test, donc personne
+        // d'autre ne l'observe ni ne le remet à zéro sous nos pieds.
+        let _ordre = VERROU_DRAPEAU
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
+
+        let sieste = Duration::from_secs(3);
+        let debut = Instant::now();
+        let dormeur = std::thread::spawn(move || sleep_until_shutdown(sieste));
+        std::thread::sleep(SHUTDOWN_POLL * 2);
+        SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+        let interrompu = dormeur.join().expect("le dormeur ne panique pas");
+        let ecoule = debut.elapsed();
+
+        // Rendre le drapeau à son état de repos AVANT d'assertir : un échec ne
+        // doit pas laisser le binaire de test avec un arrêt demandé.
+        SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
+
+        assert!(
+            interrompu,
+            "l'adaptateur doit rendre true quand l'arrêt est demandé —              il a rendu false après {} ms",
+            ecoule.as_millis()
+        );
+        assert!(
+            ecoule < sieste / 2,
+            "ARRÊT PRÉCOCE attendu : {} ms écoulées pour une sieste de {} ms",
+            ecoule.as_millis(),
+            sieste.as_millis()
+        );
+    }
+
+    /// Contrôle positif de l'adaptateur : sans ordre d'arrêt, il dort jusqu'au
+    /// bout et rend `false`. Sans lui, un adaptateur qui rendrait TOUJOURS
+    /// `true` passerait le test ci-dessus.
+    #[test]
+    fn l_adaptateur_sans_ordre_d_arret_va_au_bout_de_sa_sieste() {
+        let _ordre = VERROU_DRAPEAU
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
+
+        let sieste = SHUTDOWN_POLL * 3;
+        let debut = Instant::now();
+        let interrompu = sleep_until_shutdown(sieste);
+        let ecoule = debut.elapsed();
+
+        assert!(!interrompu, "aucun ordre d'arrêt : l'adaptateur rend false");
         assert!(
             ecoule >= sieste,
             "la sieste ne doit pas être écourtée : {} ms pour {} ms demandées",

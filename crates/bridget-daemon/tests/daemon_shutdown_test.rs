@@ -23,6 +23,18 @@ use std::time::{Duration, Instant};
 /// millisecondes) : on éprouve que l'arrêt ABOUTIT, pas qu'il est rapide.
 const BUDGET_ARRET: Duration = Duration::from_secs(15);
 
+/// Borne de l'arrêt PRÉCOCE, à distinguer de l'arrêt par expiration.
+///
+/// Le garde du superviseur abandonne son join au bout de trois secondes : un
+/// daemon dont les fils de fond seraient redevenus insensibles à l'ordre
+/// d'arrêt finirait donc quand même, mais SEULEMENT à cette échéance. Rester
+/// sous cette borne prouve que l'arrêt vient du chemin nominal — les fils
+/// lâchent l'état, le canal se ferme, le join réussit — et non du filet.
+/// Mesuré à une centaine de millisecondes sur le chemin sain ; la borne laisse
+/// un ordre de grandeur de marge tout en restant nettement sous les trois
+/// secondes du filet.
+const BORNE_ARRET_PRECOCE: Duration = Duration::from_secs(2);
+
 fn racine_temporaire(etiquette: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -107,13 +119,17 @@ fn un_daemon_nu_meurt_sur_sigterm_sans_signal_non_capturable() {
             BUDGET_ARRET.as_secs()
         )
     });
-    // Contrôle de sens : l'arrêt doit être *propre*, donc pas instantané au
-    // point d'avoir sauté le chemin de terminaison. Une borne haute seule ne
-    // distinguerait pas un arrêt propre d'un crash immédiat.
+    // ARRÊT PRÉCOCE, et non arrêt par expiration du filet. Sans cette borne,
+    // un daemon dont les fils de fond ignorent l'ordre d'arrêt passerait quand
+    // même — il finirait à l'échéance de trois secondes du garde, et le banc ne
+    // saurait pas distinguer le chemin nominal de son filet.
     assert!(
-        delai < BUDGET_ARRET,
-        "délai d'arrêt mesuré: {} ms",
-        delai.as_millis()
+        delai < BORNE_ARRET_PRECOCE,
+        "arrêt trop tardif : {} ms, soit au-delà de la borne d'arrêt précoce \
+         de {} ms — le daemon n'est sorti que par le filet du superviseur, \
+         pas par le chemin nominal",
+        delai.as_millis(),
+        BORNE_ARRET_PRECOCE.as_millis()
     );
 }
 
