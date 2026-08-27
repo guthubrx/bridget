@@ -124,6 +124,20 @@ Le point d'appel du service reçoit un principal injecté par le daemon. Un cham
 Une politique centrale fermée borne ensuite ce principal aux actions
 `delegate`, `registre_add` et `objective_close`, avec refus par défaut.
 
+L'attestation serveur signe sa version, le nom et l'instance du principal,
+l'action, l'`issuer_scope`, le `request_id`, son instant d'émission, le SHA-256
+des octets canoniques exacts, l'expiration du droit et la génération de la
+politique. Au dépôt, le condensé vient des octets reçus ; juste avant l'effet,
+il est recalculé depuis les octets relus dans le greffe. Une substitution de la
+charge durable invalide donc l'attestation, même si tous ses identifiants sont
+restés inchangés.
+
+L'attestation ne signe pas l'instant local d'observation, le jeton de claim, la
+génération de claim, son lease, ni le reçu terminal : ces valeurs décrivent la
+relève et le résultat côté serveur, mais ne fondent aucun droit métier. Le
+rejeu idempotent restitue toujours l'attestation originale ; il n'émet jamais
+une nouvelle signature pour rafraîchir un droit expiré ou révoqué.
+
 Cette politique suppose toutefois un appelant non hostile sous le même compte.
 `crates/bridget-transport/src/protocol.rs:854-882` reçoit aujourd'hui `name` et
 `instance_id` du client dans `Register` ;

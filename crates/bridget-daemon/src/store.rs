@@ -1813,6 +1813,8 @@ mod tests {
             issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
             request_id: "request-authorization-replay".to_string(),
             request_issued_at: 1_787_500_000,
+            canonical_request_sha256:
+                "b46a71da9cfb187a84a26628604f5d51154f7aa410e3dcaf9d2f7f9b1a0d08f0".to_string(),
             grant_expires_at: 1_787_500_600,
             policy_generation: 7,
             signature: signature.to_string(),

@@ -3,9 +3,17 @@
 //! Le client ne fournit jamais son principal ni un jeton dans la requête
 //! métier. Bridget centralise le principal depuis la connexion enregistrée,
 //! confronte ce fait à une politique privée, puis émet une attestation liée à
-//! l'action et au `request_id`. Maicie recharge la politique et vérifie cette
-//! attestation juste avant l'effet : recopier une ancienne ligne du guichet ne
-//! suffit donc pas à fabriquer une autorisation.
+//! l'action, au `request_id` et au condensé des octets canoniques exacts.
+//! Maicie recharge la politique et vérifie cette attestation sur les octets
+//! relus, juste avant l'effet : recopier ou modifier une ancienne ligne du
+//! guichet ne suffit donc pas à fabriquer une autorisation.
+//!
+//! L'attestation signe sa version, le principal, l'action, l'`issuer_scope`,
+//! le `request_id`, l'instant d'émission, le SHA-256 de la requête canonique,
+//! l'expiration du droit et la génération de politique. Elle ne signe pas
+//! l'instant local d'observation ni la mécanique de relève (`claim_token`,
+//! génération et lease), qui restent des états serveur et ne fondent aucun
+//! droit métier.
 //!
 //! Limite de confiance : le nom et l'instance de cette connexion sont déclarés
 //! par `Register`. Le daemon ne les vérifie pas contre la filiation du processus
@@ -72,6 +80,7 @@ pub struct GreffeAuthorizationAttestation {
     pub issuer_scope: String,
     pub request_id: String,
     pub request_issued_at: i64,
+    pub canonical_request_sha256: String,
     pub grant_expires_at: i64,
     pub policy_generation: u64,
     pub signature: String,
@@ -149,6 +158,7 @@ pub struct GreffeDepositAuthorization<'a> {
     pub issuer_scope: &'a str,
     pub request_id: &'a str,
     pub request_issued_at: i64,
+    pub canonical_request: &'a [u8],
     pub observed_at: i64,
 }
 
@@ -158,6 +168,7 @@ pub struct GreffeEffectAuthorization<'a> {
     pub issuer_scope: &'a str,
     pub request_id: &'a str,
     pub request_issued_at: i64,
+    pub canonical_request: &'a [u8],
     pub observed_at: i64,
 }
 
@@ -195,6 +206,7 @@ impl GreffeAuthorizationGate {
     ) -> Result<GreffeAuthorizationAttestation, GreffeAuthorizationRefusal> {
         let principal = canonical_principal(attempt.canonical_name, attempt.canonical_instance_id);
         let audit_principal = principal.as_ref().ok().cloned();
+        let canonical_request_sha256 = sha256_hex(attempt.canonical_request);
         let result = principal.and_then(|principal| {
             if attempt.declared_from != Some(principal.name.as_str()) {
                 return Err(GreffeAuthorizationRefusal::DeclaredPrincipalMismatch);
@@ -211,6 +223,7 @@ impl GreffeAuthorizationGate {
                 attempt.issuer_scope,
                 attempt.request_id,
                 attempt.request_issued_at,
+                &canonical_request_sha256,
                 attempt.observed_at,
             )
         });
@@ -242,6 +255,7 @@ impl GreffeAuthorizationGate {
         &self,
         attempt: GreffeEffectAuthorization<'_>,
     ) -> Result<GreffePrincipal, GreffeAuthorizationRefusal> {
+        let canonical_request_sha256 = sha256_hex(attempt.canonical_request);
         let result = (|| {
             let attestation = attempt
                 .attestation
@@ -258,6 +272,7 @@ impl GreffeAuthorizationGate {
                 attempt.issuer_scope,
                 attempt.request_id,
                 attempt.request_issued_at,
+                &canonical_request_sha256,
                 attempt.observed_at,
             )
         })();
@@ -486,6 +501,7 @@ impl GreffePolicy {
         issuer_scope: &str,
         request_id: &str,
         request_issued_at: i64,
+        canonical_request_sha256: &str,
         now: i64,
     ) -> Result<GreffeAuthorizationAttestation, GreffeAuthorizationRefusal> {
         let grant = self.active_grant(&principal, action, now)?;
@@ -496,6 +512,7 @@ impl GreffePolicy {
             issuer_scope: issuer_scope.to_string(),
             request_id: request_id.to_string(),
             request_issued_at,
+            canonical_request_sha256: canonical_request_sha256.to_string(),
             grant_expires_at: grant.expires_at,
             policy_generation: self.generation,
             signature: String::new(),
@@ -511,6 +528,7 @@ impl GreffePolicy {
         issuer_scope: &str,
         request_id: &str,
         request_issued_at: i64,
+        canonical_request_sha256: &str,
         now: i64,
     ) -> Result<GreffePrincipal, GreffeAuthorizationRefusal> {
         if attestation.version != GREFFE_ATTESTATION_VERSION
@@ -518,6 +536,7 @@ impl GreffePolicy {
             || attestation.issuer_scope != issuer_scope
             || attestation.request_id != request_id
             || attestation.request_issued_at != request_issued_at
+            || attestation.canonical_request_sha256 != canonical_request_sha256
             || attestation.grant_expires_at <= now
             || attestation.policy_generation == 0
         {
@@ -609,6 +628,7 @@ struct UnsignedAttestation<'a> {
     issuer_scope: &'a str,
     request_id: &'a str,
     request_issued_at: i64,
+    canonical_request_sha256: &'a str,
     grant_expires_at: i64,
     policy_generation: u64,
 }
@@ -621,6 +641,7 @@ fn signature(key: &[u8; 32], attestation: &GreffeAuthorizationAttestation) -> St
         issuer_scope: &attestation.issuer_scope,
         request_id: &attestation.request_id,
         request_issued_at: attestation.request_issued_at,
+        canonical_request_sha256: &attestation.canonical_request_sha256,
         grant_expires_at: attestation.grant_expires_at,
         policy_generation: attestation.policy_generation,
     })
@@ -649,6 +670,10 @@ fn hmac_sha256(key: &[u8], bytes: &[u8]) -> [u8; 32] {
     outer.update(outer_pad);
     outer.update(inner_digest);
     outer.finalize().into()
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -738,6 +763,9 @@ mod tests {
 
     const NOW: i64 = 1_788_000_000;
     const ISSUER_SCOPE: &str = "026_scope_0123456789abcdef0123456789abcdef";
+    const CANONICAL_REQUEST: &[u8] = br#"{"operation":"delegate","goal":"A"}"#;
+    const CANONICAL_REQUEST_SHA256: &str =
+        "beff6e8b9bca6da6bbaa448dc70686181c56f485c44544f61dca46fe690d5d59";
     const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
@@ -814,6 +842,7 @@ mod tests {
                 issuer_scope: ISSUER_SCOPE,
                 request_id: "request-1",
                 request_issued_at: NOW - 1,
+                canonical_request: CANONICAL_REQUEST,
                 observed_at: NOW,
             })
         }
@@ -829,6 +858,7 @@ mod tests {
                 issuer_scope: ISSUER_SCOPE,
                 request_id: "request-1",
                 request_issued_at: NOW - 1,
+                canonical_request: CANONICAL_REQUEST,
                 observed_at: NOW,
             })
         }
@@ -861,6 +891,7 @@ mod tests {
                     issuer_scope: ISSUER_SCOPE,
                     request_id: "request-1",
                     request_issued_at: NOW - 1,
+                    canonical_request: CANONICAL_REQUEST,
                     observed_at: NOW,
                 },
                 |_| fs::write(&durable_state, b"mutated").unwrap(),
@@ -912,6 +943,10 @@ mod tests {
         assert_eq!(principal.name, "agent-autorise");
         assert_eq!(principal.instance_id, "instance-autorisee");
         assert_eq!(attestation.request_id, "request-1");
+        assert_eq!(
+            attestation.canonical_request_sha256,
+            CANONICAL_REQUEST_SHA256
+        );
         assert_eq!(attestation.signature.len(), 64);
         let audit = fixture.audit_lines();
         assert_eq!(audit.len(), 2);
@@ -1084,6 +1119,7 @@ mod tests {
                 issuer_scope: "026_scope_ffffffffffffffffffffffffffffffff",
                 request_id: "request-1",
                 request_issued_at: NOW - 1,
+                canonical_request: CANONICAL_REQUEST,
                 observed_at: NOW,
             },
             |_| fs::write(&durable_state, b"mutated").unwrap(),
@@ -1093,6 +1129,59 @@ mod tests {
             fs::read_to_string(&durable_state).unwrap(),
             "unchanged",
             "une attestation ne s'étend jamais à une seconde portée idempotente"
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            GreffeAuthorizationRefusal::AttestationMismatch
+        );
+    }
+
+    #[test]
+    fn octet_canonique_substitue_est_refuse_avant_mutation_durable() {
+        let fixture = Fixture::new("canonical-request-substitution");
+        let attestation = fixture
+            .deposit(
+                Some("agent-autorise"),
+                Some("instance-autorisee"),
+                Some("agent-autorise"),
+                GreffeMutationAction::Delegate,
+            )
+            .unwrap();
+        let mut substituted = CANONICAL_REQUEST.to_vec();
+        let changed = substituted
+            .iter()
+            .position(|byte| *byte == b'A')
+            .expect("le témoin contient l'octet discriminant A");
+        substituted[changed] = b'B';
+        assert_eq!(
+            CANONICAL_REQUEST
+                .iter()
+                .zip(&substituted)
+                .filter(|(left, right)| left != right)
+                .count(),
+            1,
+            "le témoin substitue exactement un octet canonique"
+        );
+        let durable_state = fixture.root.join("canonical-request-effect-state");
+        fs::write(&durable_state, b"unchanged").unwrap();
+
+        let result = fixture.gate().authorize_effect_then(
+            GreffeEffectAuthorization {
+                attestation: Some(&attestation),
+                action: GreffeMutationAction::Delegate,
+                issuer_scope: ISSUER_SCOPE,
+                request_id: "request-1",
+                request_issued_at: NOW - 1,
+                canonical_request: &substituted,
+                observed_at: NOW,
+            },
+            |_| fs::write(&durable_state, b"mutated").unwrap(),
+        );
+
+        assert_eq!(
+            fs::read_to_string(&durable_state).unwrap(),
+            "unchanged",
+            "la substitution des octets relus doit être refusée avant l'effet"
         );
         assert_eq!(
             result.unwrap_err(),
