@@ -1546,9 +1546,12 @@ pub fn launch(
         // Vérifier si l'utilisateur n'a pas déjà passé --yolo ou le bypass
         let already_bypassed = agent_args
             .iter()
-            .any(|a| a == "--yolo" || a == "--dangerously-bypass-approvals-and-sandbox");
+            .any(|a| a == "--yolo" || a == "--dangerously-bypass-approvals-and-sandbox")
+            || final_args
+                .iter()
+                .any(|a| a == "--yolo" || a == "--dangerously-bypass-approvals-and-sandbox");
         if !already_bypassed {
-            final_args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+            ensure_codex_approval_bypass(&mut final_args);
         }
 
         // Ne PAS utiliser --cd : ça change le working directory de l'agent.
@@ -1557,13 +1560,13 @@ pub fn launch(
         // le compaction de contexte (contrairement à un message système).
     } else if agent_type == "claude" {
         // Pour Claude Code (claude et gclaude)
-        let already_bypassed = agent_args
-            .iter()
-            .any(|a| a.contains("dangerously-skip-permissions") || a.contains("bypassPermissions"));
+        let already_bypassed = agent_args.iter().any(|a| {
+            a.contains("dangerously-skip-permissions") || a.contains("bypassPermissions")
+        }) || final_args.iter().any(|a| {
+            a.contains("dangerously-skip-permissions") || a.contains("bypassPermissions")
+        });
         if !already_bypassed {
-            final_args.push("--dangerously-skip-permissions".to_string());
-            final_args.push("--permission-mode".to_string());
-            final_args.push("bypassPermissions".to_string());
+            ensure_claude_permission_bypass(&mut final_args);
         }
     }
 
@@ -2942,6 +2945,7 @@ fn spawn_managed_session_transport(
                 queue_capacity: definition.queue_capacity,
                 notify_timeout_secs: definition.notify_timeout_secs,
                 model: codex_model_from_args(&definition.args),
+                permissions: definition.permissions.clone(),
             };
             let environment = string_environment(mcp_environment);
             if inherit_stderr {
@@ -3111,6 +3115,15 @@ fn launch_acp_with_status(
         &instance_id,
         socket,
     )?;
+    // Même famille que le chemin interactif (`launch` L1545) : sans cette
+    // application, managed-wrapper ignore permissions et n'injecte aucun
+    // drapeau de contournement — la question d'autorisation arrive alors
+    // alors que le réglage allow aurait dû l'éviter.
+    apply_managed_permission_policy(
+        definition.protocol.as_str(),
+        definition.permissions.as_str(),
+        &mut native_args,
+    );
     let inherit_stderr = managed_reporter.is_some();
     let mut transport: Box<dyn ManagedSession> = spawn_managed_session_transport(
         definition,
@@ -3585,6 +3598,85 @@ fn apply_managed_mcp(
         }
         _ => Ok(None),
     }
+}
+
+/// Politique d'autorisation sur le chemin managed-wrapper.
+///
+/// `permissions=allow` : pose les drapeaux de contournement (même sémantique
+/// que `launch` interactif). `permissions=deny` : les retire s'ils étaient
+/// présents dans la définition — sinon deny mentirait.
+fn apply_managed_permission_policy(protocol: &str, permissions: &str, args: &mut Vec<String>) {
+    match (protocol, permissions) {
+        ("codex_app_server", "allow") => ensure_codex_approval_bypass(args),
+        ("codex_app_server", "deny") => strip_codex_approval_bypass(args),
+        ("claude_stream_json", "allow") => ensure_claude_permission_bypass(args),
+        ("claude_stream_json", "deny") => strip_claude_permission_bypass(args),
+        _ => {}
+    }
+}
+
+fn ensure_codex_approval_bypass(args: &mut Vec<String>) {
+    if args
+        .iter()
+        .any(|a| a == "--yolo" || a == "--dangerously-bypass-approvals-and-sandbox")
+    {
+        return;
+    }
+    let flag = "--dangerously-bypass-approvals-and-sandbox".to_string();
+    if let Some(pos) = args.iter().position(|a| a == "app-server") {
+        args.insert(pos, flag);
+    } else {
+        args.insert(0, flag);
+    }
+}
+
+fn strip_codex_approval_bypass(args: &mut Vec<String>) {
+    args.retain(|a| a != "--yolo" && a != "--dangerously-bypass-approvals-and-sandbox");
+}
+
+fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
+    let has_skip = args
+        .iter()
+        .any(|a| a == "--dangerously-skip-permissions" || a.contains("dangerously-skip-permissions"));
+    let has_mode = args
+        .iter()
+        .any(|a| a == "bypassPermissions" || a.contains("bypassPermissions"));
+    if !has_skip {
+        args.push("--dangerously-skip-permissions".to_string());
+    }
+    if !has_mode {
+        args.push("--permission-mode".to_string());
+        args.push("bypassPermissions".to_string());
+    }
+}
+
+fn strip_claude_permission_bypass(args: &mut Vec<String>) {
+    let mut cleaned = Vec::with_capacity(args.len());
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--dangerously-skip-permissions"
+            || args[index].contains("dangerously-skip-permissions")
+        {
+            index += 1;
+            continue;
+        }
+        if args[index] == "--permission-mode" {
+            if index + 1 < args.len()
+                && (args[index + 1] == "bypassPermissions"
+                    || args[index + 1].contains("bypassPermissions"))
+            {
+                index += 2;
+                continue;
+            }
+        }
+        if args[index] == "bypassPermissions" || args[index].contains("bypassPermissions") {
+            index += 1;
+            continue;
+        }
+        cleaned.push(args[index].clone());
+        index += 1;
+    }
+    *args = cleaned;
 }
 
 fn mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
@@ -5493,6 +5585,93 @@ mod reconnect_tests {
         assert!(!orphan.exists());
 
         drop(config);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// ORACLE : managed-wrapper transmet la politique `permissions`.
+    /// Séquence exacte de `launch_acp_with_status` : clone → MCP → policy.
+    /// Attentes en dur — jamais un appel qui reconstruit le drapeau attendu.
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_managed_wrapper_transmet_la_politique_d_autorisation() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-managed-policy-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("bridget.sock");
+
+        // Codex allow : drapeau présent, avant app-server, univers non vide.
+        let mut codex_allow = vec![
+            "-c".to_string(),
+            "model=\"gpt-5.6-terra\"".to_string(),
+            "app-server".to_string(),
+        ];
+        apply_managed_mcp(
+            "codex_app_server",
+            "codex",
+            &mut codex_allow,
+            "policy-allow",
+            &socket,
+        )
+        .unwrap();
+        apply_managed_permission_policy("codex_app_server", "allow", &mut codex_allow);
+        assert!(
+            !codex_allow.is_empty(),
+            "PRESENCE: argv managed non vide"
+        );
+        assert_eq!(
+            codex_allow
+                .iter()
+                .filter(|a| *a == "--dangerously-bypass-approvals-and-sandbox")
+                .count(),
+            1,
+            "PRESENCE allow Codex: un drapeau, reçu {codex_allow:?}"
+        );
+        let bypass_pos = codex_allow
+            .iter()
+            .position(|a| a == "--dangerously-bypass-approvals-and-sandbox")
+            .expect("drapeau Codex");
+        let app_pos = codex_allow
+            .iter()
+            .position(|a| a == "app-server")
+            .expect("app-server");
+        assert!(
+            bypass_pos < app_pos,
+            "EFFET: drapeau avant app-server, reçu {codex_allow:?}"
+        );
+
+        // Codex deny : le même chemin retire le drapeau (sinon deny ment).
+        apply_managed_permission_policy("codex_app_server", "deny", &mut codex_allow);
+        assert!(
+            codex_allow
+                .iter()
+                .all(|a| a != "--dangerously-bypass-approvals-and-sandbox" && a != "--yolo"),
+            "deny Codex retire le contournement, reçu {codex_allow:?}"
+        );
+
+        // Claude allow / deny — même chemin managed.
+        let mut claude_allow = vec!["--model".to_string(), "claude-opus-5".to_string()];
+        apply_managed_permission_policy("claude_stream_json", "allow", &mut claude_allow);
+        assert!(
+            claude_allow
+                .iter()
+                .any(|a| a == "--dangerously-skip-permissions"),
+            "PRESENCE allow Claude: skip, reçu {claude_allow:?}"
+        );
+        assert!(
+            claude_allow.iter().any(|a| a == "bypassPermissions"),
+            "PRESENCE allow Claude: mode, reçu {claude_allow:?}"
+        );
+        apply_managed_permission_policy("claude_stream_json", "deny", &mut claude_allow);
+        assert!(
+            claude_allow
+                .iter()
+                .all(|a| a != "--dangerously-skip-permissions" && a != "bypassPermissions"),
+            "deny Claude retire le bypass, reçu {claude_allow:?}"
+        );
+
         std::fs::remove_dir_all(root).unwrap();
     }
 

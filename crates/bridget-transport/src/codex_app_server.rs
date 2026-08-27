@@ -50,6 +50,10 @@ pub struct CodexAppServerOptions {
     pub queue_capacity: usize,
     pub notify_timeout_secs: u64,
     pub model: Option<String>,
+    /// Même sémantique que le pilote ACP : `allow` accepte, tout autre
+    /// réglage refuse. Une demande `item/*/requestApproval` reçoit toujours
+    /// une réponse JSON-RPC sans intervention humaine.
+    pub permissions: String,
 }
 
 #[derive(Debug)]
@@ -149,6 +153,8 @@ struct ReaderContext {
     pending_request: PendingRequest,
     pinned_model: Option<String>,
     active_detail: ActiveTurnDetail,
+    writer: Writer,
+    permissions: String,
 }
 
 pub struct CodexAppServerTransport {
@@ -243,6 +249,8 @@ impl CodexAppServerTransport {
                 pending_request: pending_request.clone(),
                 pinned_model: options.model.clone(),
                 active_detail: active_detail.clone(),
+                writer: writer.clone(),
+                permissions: options.permissions.clone(),
             },
         );
 
@@ -1081,6 +1089,38 @@ fn approval_text<'a>(value: &'a Value, method: &'a str) -> &'a str {
         .unwrap_or(method)
 }
 
+/// Réponse JSON-RPC au `item/*/requestApproval` Codex, calquée sur
+/// `permission_response` ACP : le réglage `permissions` de l'équipier décide
+/// `accept` ou `decline`, l'`id` de la demande est repris tel quel.
+fn approval_response(value: &Value, permissions: &str) -> Option<(Value, Value)> {
+    let id = value.get("id")?;
+    let method = value.get("method").and_then(Value::as_str).unwrap_or("");
+    let decision = if permissions == "allow" {
+        "accept"
+    } else {
+        "decline"
+    };
+    let decision = value
+        .pointer("/params/availableDecisions")
+        .and_then(Value::as_array)
+        .and_then(|choices| {
+            choices
+                .iter()
+                .filter_map(Value::as_str)
+                .find(|choice| *choice == decision)
+                .or_else(|| choices.iter().filter_map(Value::as_str).next())
+        })
+        .unwrap_or(decision);
+    Some((
+        json!({ "id": id, "result": { "decision": decision } }),
+        json!({
+            "method": method,
+            "decision": decision,
+            "permissions": permissions,
+        }),
+    ))
+}
+
 fn codex_journal_payload(event: &str, payload: Value) -> Value {
     // Dans ce pilote, `error` est exclusivement l'issue terminale du worker.
     // La passerelle porte le code ici afin que les enrichissements de payload
@@ -1273,6 +1313,8 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
         pending_request,
         pinned_model,
         active_detail,
+        writer,
+        permissions,
     } = context;
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
@@ -1515,6 +1557,23 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                         approval_text(&value, method),
                         Some(method),
                     );
+                    if let Some((reply, payload)) = approval_response(&value, &permissions) {
+                        let message_id = queue
+                            .0
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .active
+                            .as_ref()
+                            .map(|active| active.message_id.clone());
+                        record_or_terminal(
+                            &journal,
+                            &observations,
+                            "permission",
+                            message_id.as_deref(),
+                            payload,
+                        );
+                        let _ = write_value(&writer, reply);
+                    }
                     push_source(
                         &observations,
                         raw,
@@ -1967,7 +2026,21 @@ mod tests {
                                         turn_id) printf '%s\n' '{"id":"approval-native","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"SENTINELLE-TURN-ID-019","itemId":"i","command":"SENTINELLE-SECRETE-019"}}' ;;
                                         *) printf '%s\n' '{"id":"approval-native","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","command":"SENTINELLE-SECRETE-019"}}' ;;
                                     esac
+                                    # Attend la décision JSON-RPC (présence), puis poursuit
+                                    # le tour (effet) — sauf HOLD/EXIT pour les bancs 019.
+                                    saw_decision=0
+                                    while IFS= read -r reply; do
+                                        printf '%s\n' "$reply" >> "$BRIDGET_CODEX_TRACE"
+                                        case "$reply" in
+                                            *'"decision"'*) saw_decision=1; break ;;
+                                        esac
+                                    done
                                     if [ "${BRIDGET_CODEX_EXIT_AFTER_REQUEST:-0}" = 1 ]; then exit 0; fi
+                                    if [ "${BRIDGET_CODEX_HOLD_TURN:-0}" = 1 ]; then :;
+                                    elif [ "$saw_decision" = 1 ]; then
+                                        printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","delta":"tour poursuivi apres autorisation"}}'
+                                        printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"completed","items":[]}}}'
+                                    fi
                                 elif [ "${BRIDGET_CODEX_HOLD_TURN:-0}" != 1 ]; then
                                     if [ "${BRIDGET_CODEX_ACTIVITY:-0}" = 1 ]; then
                                         printf '%s\n' '{"method":"item/reasoning/summaryPartAdded","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"reasoning-1","summaryIndex":0}}'
@@ -2006,6 +2079,7 @@ mod tests {
             queue_capacity: 2,
             notify_timeout_secs: 2,
             model: Some("gpt-5.6-terra".to_string()),
+            permissions: "allow".to_string(),
         }
     }
 
@@ -2198,6 +2272,10 @@ mod tests {
                 (
                     "BRIDGET_CODEX_REQUEST_VARIANT".to_string(),
                     variant.to_string(),
+                ),
+                (
+                    "BRIDGET_CODEX_HOLD_TURN".to_string(),
+                    "1".to_string(),
                 ),
             ],
             false,
@@ -2474,6 +2552,10 @@ mod tests {
                     "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
                     "1".to_string(),
                 ),
+                (
+                    "BRIDGET_CODEX_HOLD_TURN".to_string(),
+                    "1".to_string(),
+                ),
             ],
             false,
         )
@@ -2544,6 +2626,10 @@ mod tests {
                 ),
                 (
                     "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
+                    "1".to_string(),
+                ),
+                (
+                    "BRIDGET_CODEX_HOLD_TURN".to_string(),
                     "1".to_string(),
                 ),
             ],
@@ -2971,13 +3057,15 @@ mod tests {
             6,
             "une notification inconnue doit rester un événement système inerte"
         );
-        assert!(
-            outbound.iter().all(|frame| !matches!(
-                frame["id"].as_str(),
-                Some("approval-7" | "approval-8" | "approval-9")
-            )),
-            "une attente affichable ne doit produire aucune décision JSON-RPC"
-        );
+        for approval_id in ["approval-7", "approval-8", "approval-9"] {
+            assert!(
+                outbound.iter().any(|frame| {
+                    frame["id"].as_str() == Some(approval_id)
+                        && frame["result"]["decision"].as_str() == Some("accept")
+                }),
+                "décision JSON-RPC absente pour {approval_id}: {outbound:?}"
+            );
+        }
 
         let (absent, _) = journal_detail_fixture("detail-absent", false);
         let reasoning = absent
@@ -3003,6 +3091,169 @@ mod tests {
             turn_end_index,
             "un silence intermédiaire ne doit jamais attester l'absence"
         );
+    }
+
+    #[test]
+    fn approval_response_choisit_accept_ou_decline_selon_permissions() {
+        let request = json!({
+            "id": "approval-unit",
+            "method": "item/commandExecution/requestApproval",
+            "params": { "command": "git worktree add", "turnId": "t1" }
+        });
+        let (allow_reply, allow_payload) = approval_response(&request, "allow").expect("allow");
+        assert_eq!(
+            allow_reply,
+            json!({ "id": "approval-unit", "result": { "decision": "accept" } }),
+            "attente en dur: allow → accept"
+        );
+        assert_eq!(allow_payload["decision"], "accept");
+        let (deny_reply, deny_payload) = approval_response(&request, "deny").expect("deny");
+        assert_eq!(
+            deny_reply,
+            json!({ "id": "approval-unit", "result": { "decision": "decline" } }),
+            "attente en dur: deny → decline"
+        );
+        assert_eq!(deny_payload["decision"], "decline");
+        assert!(
+            approval_response(&json!({ "method": "item/commandExecution/requestApproval" }), "allow")
+                .is_none(),
+            "sans id: aucune réponse inventée"
+        );
+    }
+
+    /// ORACLE PRESENCE + EFFET dans le même corps.
+    /// Présence : une réponse JSON-RPC portant `decision` est émise (trace non vide).
+    /// Effet : le tour se poursuit après cette réponse (texte + Completed).
+    /// Attentes écrites en dur — jamais un appel à `approval_response`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_codex_approbation_repond_et_le_tour_se_poursuit() {
+        let root = root("approval-presence-effet");
+        let trace = root.join("trace.jsonl");
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            fake_options(&trace),
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                (
+                    "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
+                    "1".to_string(),
+                ),
+            ],
+            false,
+        )
+        .expect("session native");
+        transport
+            .activate_journal(&root, "codex-native", None)
+            .expect("journal activé");
+        transport
+            .deliver(&message("approval-presence-effet"))
+            .expect("livraison");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut finished = false;
+        let mut saw_continuation = false;
+        while Instant::now() < deadline {
+            for event in transport.drain_events() {
+                if let ManagedEventKind::TurnFinished {
+                    terminal: ManagedTerminal::Completed,
+                    response,
+                    ..
+                } = &event.kind
+                {
+                    finished = true;
+                    saw_continuation = response.contains("tour poursuivi apres autorisation");
+                }
+            }
+            if finished {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        transport.stop();
+
+        let frames: Vec<Value> = fs::read_to_string(&trace)
+            .expect("trace fournisseur")
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        // ORACLE PRESENCE — non-vacuité : au moins une décision émise, id repris.
+        let decisions: Vec<_> = frames
+            .iter()
+            .filter(|frame| {
+                frame["id"].as_str() == Some("approval-native")
+                    && frame.get("result").is_some()
+                    && frame.get("method").is_none()
+            })
+            .collect();
+        assert!(
+            !decisions.is_empty(),
+            "PRESENCE: aucune réponse d'approbation dans la trace (vide)"
+        );
+        assert_eq!(
+            decisions[0]["result"]["decision"].as_str(),
+            Some("accept"),
+            "PRESENCE: décision attendue en dur accept, reçu {}",
+            decisions[0]
+        );
+
+        let journal_path = fs::read_dir(root.join("codex-native"))
+            .expect("répertoire journal")
+            .next()
+            .expect("fichier journal")
+            .expect("entrée journal")
+            .path();
+        let entries = crate::journal::valid_events(&journal_path);
+        let permission = entries
+            .iter()
+            .find(|entry| entry["event"] == "permission")
+            .expect("PRESENCE: événement permission journalisé");
+        assert_eq!(
+            permission["payload"]["decision"].as_str(),
+            Some("accept"),
+            "PRESENCE journal: décision en dur accept"
+        );
+        assert_eq!(
+            permission["message_id"].as_str(),
+            Some("approval-presence-effet"),
+            "PRESENCE: message_id non vide"
+        );
+
+        // ORACLE EFFET — le tour continue après la réponse (pas une garde morte).
+        assert!(
+            finished,
+            "EFFET: le tour doit atteindre Completed après la décision"
+        );
+        assert!(
+            saw_continuation,
+            "EFFET: texte de poursuite absent — le faux fournisseur n'a pas repris après décision"
+        );
+        let decision_pos = frames
+            .iter()
+            .position(|frame| {
+                frame["id"].as_str() == Some("approval-native")
+                    && frame["result"]["decision"].as_str() == Some("accept")
+            })
+            .expect("position de la décision");
+        // La poursuite est côté stdout du faux (pas dans TRACE stdin). On vérifie
+        // l'ordre journal : permission avant turn_end.
+        let permission_seq = permission["seq"].as_u64().expect("seq permission");
+        let turn_end = entries
+            .iter()
+            .find(|entry| entry["event"] == "turn_end")
+            .expect("EFFET: turn_end après poursuite");
+        assert!(
+            permission_seq < turn_end["seq"].as_u64().expect("seq turn_end"),
+            "EFFET: permission doit précéder turn_end (décision puis poursuite)"
+        );
+        assert!(
+            decision_pos < frames.len(),
+            "PRESENCE: index de décision dans un univers non vide"
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

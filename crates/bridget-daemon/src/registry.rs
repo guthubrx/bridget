@@ -899,9 +899,14 @@ fn native_claude_command_from(home: Option<PathBuf>) -> Result<String, String> {
 fn native_codex_definition() -> AgentDefinition {
     AgentDefinition {
         command: NATIVE_CODEX_COMMAND.to_string(),
+        // Même contrat que le wrapper interactif : sans ce drapeau, app-server
+        // émet des requestApproval auxquelles un managed sans réponse mourait.
+        // Le chemin managed applique aussi la politique via
+        // `apply_managed_permission_policy` (ne pas se fier au seul registre).
         args: vec![
             "-c".to_string(),
             "model=\"gpt-5.6-terra\"".to_string(),
+            "--dangerously-bypass-approvals-and-sandbox".to_string(),
             "app-server".to_string(),
         ],
         protocol: "codex_app_server".to_string(),
@@ -1013,7 +1018,12 @@ mod tests {
         assert!(Path::new(&codex.command).is_absolute());
         assert_eq!(
             codex.args,
-            vec!["-c", "model=\"gpt-5.6-terra\"", "app-server"]
+            vec![
+                "-c",
+                "model=\"gpt-5.6-terra\"",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "app-server",
+            ]
         );
         assert_eq!(codex.forbidden_env, vec!["OPENAI_API_KEY", "CODEX_API_KEY"]);
         assert_eq!(codex.protocol, "codex_app_server");
@@ -1163,7 +1173,12 @@ mod tests {
         assert_eq!(first.command, NATIVE_CODEX_COMMAND);
         assert_eq!(
             first.args,
-            vec!["-c", "model=\"gpt-5.6-terra\"", "app-server"]
+            vec![
+                "-c",
+                "model=\"gpt-5.6-terra\"",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "app-server",
+            ]
         );
         assert_eq!(first.protocol, "codex_app_server");
         assert_eq!(first.forbidden_env, vec!["OPENAI_API_KEY", "CODEX_API_KEY"]);
