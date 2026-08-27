@@ -82,6 +82,46 @@ fn cible_explicite_cree_objectif_delegation_et_outbox_atomiques() {
 }
 
 #[test]
+fn spec_052_delegation_immediate_transmet_les_trois_identifiants_dans_le_message_reel() {
+    let root = root("spec-052-immediate");
+    let database = root.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let candidates = vec![DelegationCandidate {
+        name: "prospective".to_string(),
+        tags: vec![],
+        available: true,
+        dnd: false,
+    }];
+
+    let DelegateResult::Created(created) = delegate(
+        &mut store,
+        durations(),
+        "maicie",
+        &candidates,
+        &request(Some("prospective"), &[], ClasseDuree::Normale),
+    )
+    .unwrap() else {
+        panic!("création attendue")
+    };
+    let message_id = created.message_id.expect("message immédiat attendu");
+    let pending = store.pending_delegation_outboxes().unwrap();
+    assert_eq!(pending.len(), 1);
+    let message = pending[0].public_message().unwrap();
+    let expected_body = format!(
+        "vérifier le contrat\n\nIDENTIFIANTS DU MANDAT\n\
+         objective_id  : {}\n\
+         delegation_id : {}\n\
+         message_id    : {}",
+        created.objective_id, created.delegation_id, message_id
+    );
+
+    assert_eq!(message.id, message_id.to_string());
+    assert_eq!(message.body, expected_body);
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cible_de_revue_est_persistee_et_rendue_dans_le_mandat_initial() {
     let root = root("review-target");
     let database = root.join("maicie.sqlite3");
