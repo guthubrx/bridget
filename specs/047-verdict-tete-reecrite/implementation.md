@@ -4,7 +4,7 @@
 
 - Branche : `session-047-verdict-tete-reecrite`
 - Base contractuelle : `bc745335530985ce305e82fea4007071c752d5b0`
-- Statut : en cours
+- Statut : implémentation terminée, gates finaux en cours
 
 ## Tranche 1 — Continuité du verdict
 
@@ -31,13 +31,6 @@
 - Statut réel après réécriture : 1 passé / 0 échec.
 - Carte de reprise, verdict absent puis alerte réécrite : 1 passé / 0 échec
   pour chacun des deux témoins.
-
-## Reste à faire
-
-- Propager atomiquement `ReviewTarget` sur le chemin MCP de délégation.
-- Mesurer la compatibilité avec un daemon antérieur.
-- Rebaser après séquençage des sessions 045 et 048, puis exécuter les gates et
-  comptes base/tête complets.
 
 ## Tranche 2 — Contrat métier avant raccord filaire
 
@@ -81,3 +74,53 @@
   avec le fait nouveau est impossible sans modifier l'ancien binaire ou
   cacher la cible dans un champ historique. La propriété utile tient : refus
   explicite et fail-closed avant toute écriture SQLite.
+
+## Tranche 3 — Raccord filaire versionné
+
+- `maicie_delegate` accepte `review_ref` et `expected_head` comme une paire
+  atomique, dans le CLI comme dans le serveur MCP. Un champ isolé est refusé
+  avant l'ouverture de la connexion de service.
+- Une délégation historique sans cible reste en v1. Une délégation portant une
+  cible valide exige v2. Le daemon neuf refuse une cible en v1, une délégation
+  sans cible en v2 et toute autre opération en v2.
+- La canonisation de `Delegate` utilise le type public
+  `ServiceRequestPayload` comme source unique. Un premier oracle a révélé un
+  `EnvelopeMismatch` dû à deux ordres de champs distincts entre une structure
+  privée et le protocole public ; la structure privée ne sert plus qu'au
+  décodage strict des champs inconnus.
+- `ServiceHello` reste en v1. Seule l'enveloppe `ServiceRequest::Delegate`
+  ciblée étend le contrat.
+
+## Preuves ciblées de la tranche 3
+
+- Contrat transport v1/v2 : 1 passé / 0 échec.
+- Producteurs CLI et MCP réels : 2 passés / 0 échec.
+- Matrice d'acceptation du daemon, y compris la réponse filaire : 1 passé /
+  0 échec.
+- Effet central et relecture de la cible durable : 1 passé / 0 échec.
+- Mutant du producteur de version (`v2` remplacé par `v1`) : 0 passé / 1
+  échec ; restauration au SHA-256
+  `20ffbcf00fedfa8f6aa3786262626d4b87c31c3447814399d08c8ec8af589a34`.
+- Mutant du transport MCP (cible remplacée par `None`) : 0 passé / 1 échec
+  après enregistrement et lecture de la trame réelle ; restauration au
+  SHA-256
+  `e4d4ace5d0c8e966207b4cb4518ecc52ece92f191fdb02f0e5b6332cbd80d90a`.
+- Mutant de la garde daemon (v1 ciblée autorisée) sur l'arbre rebasé : 0 passé
+  / 1 échec sur l'assertion métier ; restauration au SHA-256
+  `2cedad059249e6b78f62e82b96177ad12f0dfff3266c93ae9afed18731a9c481`.
+- Mutant du point d'effet (cible remplacée par `None`) : 0 passé / 1 échec
+  sur la relecture durable, après mise en place franchie ; restauration au
+  SHA-256
+  `afceb013b052e9c2275c32c2b1fccb8aa1c54e17ee991561a20f9b5dc7f1a414`.
+
+## Mesures Git réelles du défaut
+
+- Objet de tranche avant rebase
+  `23fea840e2f938789fd94f16cb4c126a20915706` vers tête réécrite
+  `6f0c00e745bf4bb456e11ed825835bbfe45fc6ed` : le premier n'est pas
+  ancêtre du second, donc réécriture.
+- Base `2f5fc7121f03ce91bafcd764a599ccedeb337b5c` vers tête empilée
+  `74d51dc166981a22f3d14c2d3dd45b2893d3b326` : la base reste ancêtre,
+  donc aucune alerte.
+- Ces objets réels complètent la fixture ; aucun test permanent ne dépend de
+  leur présence future dans le reflog.
