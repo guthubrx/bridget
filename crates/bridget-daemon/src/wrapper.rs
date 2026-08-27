@@ -5941,11 +5941,53 @@ mod reconnect_tests {
 
     #[test]
     fn livraison_idempotente_interactive_injecte_une_fois_et_rejoue_l_accuse() {
+        const CHILD: &str = "BRIDGET_WRAPPER_IDEMPOTENT_RECONNECT_CHILD";
+        const ROOT: &str = "BRIDGET_WRAPPER_IDEMPOTENT_RECONNECT_ROOT";
+
+        if std::env::var_os(CHILD).is_some() {
+            let root = PathBuf::from(
+                std::env::var_os(ROOT).expect("racine de reçus transmise au sous-processus"),
+            );
+            exercise_idempotent_interactive_reconnect(&root);
+            return;
+        }
+
         let root = receipt_root("interactive-idempotent");
+        let executable = std::env::current_exe().expect("binaire de test courant");
+        assert_ne!(
+            executable.file_name().and_then(|name| name.to_str()),
+            Some("firefox"),
+            "le témoin de reconnexion doit ouvrir le binaire de test, jamais Firefox"
+        );
+        let child = Command::new(executable)
+            .args([
+                "--exact",
+                "wrapper::reconnect_tests::livraison_idempotente_interactive_injecte_une_fois_et_rejoue_l_accuse",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .env(ROOT, &root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("lancement du témoin de reconnexion isolé");
+        let output = wait_child_bounded(child, "témoin de reconnexion idempotente");
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            output.status.success(),
+            "le témoin isolé doit rejouer l'accusé sans seconde injection:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    fn exercise_idempotent_interactive_reconnect(root: &Path) {
         let instance_id = "instance_012_interactive";
         let mut injections = 0;
         let message = idempotent_message("interactive-prompt");
-        let mut tracker = IdempotentDeliveryTracker::open_at(&root, instance_id).unwrap();
+        let mut tracker = IdempotentDeliveryTracker::open_at(root, instance_id).unwrap();
 
         let first = deliver_idempotent_to_interactive(
             &mut tracker,
@@ -5972,7 +6014,7 @@ mod reconnect_tests {
         // La reconnexion réouvre le même store de reçus : le daemon peut
         // redélivrer, mais le pane ne reçoit jamais un second prompt.
         drop(tracker);
-        let mut reconnected = IdempotentDeliveryTracker::open_at(&root, instance_id).unwrap();
+        let mut reconnected = IdempotentDeliveryTracker::open_at(root, instance_id).unwrap();
         let replay = deliver_idempotent_to_interactive(
             &mut reconnected,
             "interactive-delivery".to_string(),
@@ -5995,7 +6037,24 @@ mod reconnect_tests {
             }] if delivery_id == "interactive-delivery"
         ));
         drop(reconnected);
-        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn wait_child_bounded(mut child: std::process::Child, label: &str) -> std::process::Output {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if child.try_wait().expect("état du sous-processus").is_some() {
+                return child
+                    .wait_with_output()
+                    .expect("sortie du sous-processus de reconnexion");
+            }
+            if Instant::now() >= deadline {
+                let pid = child.id();
+                child.kill().expect("arrêt du sous-processus bloqué");
+                let _ = child.wait();
+                panic!("timeout : {label} (pid {pid})");
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 
     #[test]
