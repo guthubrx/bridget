@@ -1258,9 +1258,13 @@ pub fn delegate(
             }
         }
     } else {
+        let message_id = Uuid::new_v4();
+        delegation
+            .finaliser_mandat(message_id)
+            .map_err(|_| DelegateError::Invalid("mandat de délégation invalide"))?;
         let body_bytes = delegation.instruction.as_bytes().to_vec();
         let outbox = OutboxDelegation {
-            message_id: Uuid::new_v4(),
+            message_id,
             delegation_id: delegation.id,
             target: selected.clone(),
             body_hash: stable_body_hash(&body_bytes),
@@ -1273,7 +1277,6 @@ pub fn delegate(
             retry_until: request.retry_until,
             dedup_retained_until: request.dedup_retained_until,
         };
-        let message_id = outbox.message_id;
         let prepared = PreparedDelegation::new(
             objective.clone(),
             delegation.clone(),

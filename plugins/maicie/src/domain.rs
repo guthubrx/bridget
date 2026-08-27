@@ -2018,6 +2018,25 @@ impl Delegation {
         Ok(self)
     }
 
+    /// Finalise le texte remis au participant lorsque les trois identifiants
+    /// durables sont connus. Une délégation en attente n'appelle cette règle
+    /// qu'au moment où son outbox est effectivement créée.
+    ///
+    /// Complexité : O(n), où n est la longueur de l'instruction initiale.
+    pub(crate) fn finaliser_mandat(&mut self, message_id: Uuid) -> Result<(), DomainError> {
+        if self.etat != EtatDelegation::Creee || message_id.is_nil() {
+            return Err(DomainError::TransitionInterdite);
+        }
+        self.instruction = format!(
+            "{}\n\nIDENTIFIANTS DU MANDAT\n\
+             objective_id  : {}\n\
+             delegation_id : {}\n\
+             message_id    : {}",
+            self.instruction, self.objectif_id, self.id, message_id
+        );
+        Ok(())
+    }
+
     pub fn verifier(&self) -> Result<(), DomainError> {
         if self.participant.trim().is_empty()
             || self.instruction.trim().is_empty()

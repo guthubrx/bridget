@@ -2,7 +2,7 @@
 
 - [x] **T5201 — Formaliser le contrat et l'inventaire.** Consigner le choix de
   la notification autonome, la frontière transport et la relation avec 047.
-- [ ] **T5202 — Fermer le chemin immédiat.** Ajouter l'oracle sur le vrai
+- [x] **T5202 — Fermer le chemin immédiat.** Ajouter l'oracle sur le vrai
   `PublicMessage`, le format partagé et le raccord de création immédiate.
 - [ ] **T5203 — Fermer le chemin différé.** Éprouver un dernier prérequis réel
   puis raccorder la même règle au déblocage transactionnel.
