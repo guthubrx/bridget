@@ -10,7 +10,8 @@ use super::{
 };
 use crate::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use bridget_transport::protocol::{
-    GuichetDurationClass, ReviewTarget, ReviewVerdictEvidence, ServiceSuiteDeclaration,
+    GuichetDurationClass, ReviewTarget, ReviewVerdictEvidence, ServiceRequestPayload,
+    ServiceSuiteDeclaration,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -371,7 +372,25 @@ pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDoma
                 GuichetDurationClass::Normale => ClasseDuree::Normale,
                 GuichetDurationClass::Longue => ClasseDuree::Longue,
             };
-            ensure_canonical(&claim.canonical_request, &wire, "delegate", &payload)?;
+            // La forme canonique appartient au contrat filaire public. Le
+            // type privé ci-dessus garde le décodage strict, mais son ordre de
+            // champs ne doit jamais créer une seconde canonisation.
+            let canonical_payload = ServiceRequestPayload::Delegate {
+                goal: payload.goal.clone(),
+                review_target: payload.review_target.clone(),
+                explicit_target: payload.explicit_target.clone(),
+                required_tags: payload.required_tags.clone(),
+                duration: payload.duration,
+                suite: payload.suite.clone(),
+                depends_on: payload.depends_on.clone(),
+                references: payload.references.clone(),
+            };
+            ensure_canonical(
+                &claim.canonical_request,
+                &wire,
+                "delegate",
+                &canonical_payload,
+            )?;
             RequeteGuichet::Delegate(DemandeDelegation {
                 goal: payload.goal,
                 explicit_target: payload.explicit_target,
